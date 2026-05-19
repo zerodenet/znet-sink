@@ -1,0 +1,57 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::errors::AppError;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreIpcOptions {
+    pub socket: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreEndpoint {
+    pub transport: &'static str,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreEventSubscription {
+    pub generation: u64,
+    pub event_name: &'static str,
+    pub status_event_name: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreCallResult {
+    pub available: bool,
+    pub endpoint: CoreEndpoint,
+    pub response: Option<Value>,
+    pub error: Option<AppError>,
+}
+
+impl CoreCallResult {
+    pub(crate) fn from_core_result(
+        endpoint: CoreEndpoint,
+        result: Result<Value, AppError>,
+    ) -> CoreCallResult {
+        match result {
+            Ok(response) => CoreCallResult {
+                available: true,
+                endpoint,
+                response: Some(response),
+                error: None,
+            },
+            Err(error) => CoreCallResult {
+                available: !error.is_unavailable(),
+                endpoint,
+                response: None,
+                error: Some(error),
+            },
+        }
+    }
+}
