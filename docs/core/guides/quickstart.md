@@ -36,8 +36,8 @@ cargo build --release
       }
     }
   ],
+  "mode": { "type": "global", "outbound": "proxy" },
   "route": {
-    "mode": { "type": "global", "outbound": "proxy" },
     "rules": [],
     "final": { "type": "direct" }
   },
@@ -94,8 +94,8 @@ curl -s http://127.0.0.1:9090/api/v1/runtime
 
 ```json
 {
+  "mode": { "type": "rule" },
   "route": {
-    "mode": { "type": "rule" },
     "rules": [
       {
         "condition": { "type": "domain", "values": ["geosite:cn"] },

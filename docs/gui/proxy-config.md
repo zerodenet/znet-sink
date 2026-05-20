@@ -2,6 +2,8 @@
 
 代理配置属于 GUI Rust 应用层能力。前端不直接解析配置内容；Rust 负责解析能力、识别本地入站端口、持久化配置。
 
+`ProxyConfigProfile.id` 是 GUI 存储主键，只用于前端调用 `get` / `set_active` / `remove` 等命令；它不是 zero 内核配置里的 `tag` 或 `name`，也不参与路由引用。zero 内核语义仍以 `content` 内部的 `tag` / `name` / `route` 为准。
+
 ## 命令
 
 | 命令 | 说明 |
@@ -28,7 +30,7 @@
 
 ```json
 {
-  "id": "proxy-config-1",
+  "id": "proxy-config_18f6b2a7c9f42",
   "name": "默认配置",
   "kernel": "zero",
   "format": "zero-base64-json",
@@ -57,7 +59,7 @@
 ```ts
 await invoke('proxy_config_upsert', {
   input: {
-    id: 'proxy-config-1',
+    id: 'proxy-config_18f6b2a7c9f42',
     name: '默认配置',
     kernel: 'zero',
     format: 'json',
@@ -119,6 +121,28 @@ Rust 会从 zero JSON 中读取：
 ```
 
 如果配置没有 `inbounds[].listen.port`，则不覆盖应用层本地代理配置。
+
+## 代理模式切换
+
+前端不应直接改写 `content.route`。代理模式切换使用 Zero 适配层命令：
+
+| 命令 | 说明 |
+| --- | --- |
+| `gui_proxy_mode_status` | 读取 active 配置的当前代理模式 |
+| `gui_set_proxy_mode` | 写入代理模式、保存 active 配置、导出给 Zero |
+
+支持的 GUI 模式：
+
+| 模式 | 语义 | 当前 zero 0.0.3 写入方式 |
+| --- | --- | --- |
+| `global` | 全局代理 | `mode = { "type": "global", "outbound": "<globalOutbound>" }` |
+| `rule` | 规则分流 | `mode = { "type": "rule" }`，并保留 `route.rules` 和既有 `route.final` |
+| `direct` | 全部直连 | `mode = { "type": "direct" }` |
+
+切换模式不删除规则、规则集、策略组或节点。简约模式和专业模式都可以使用该能力；专业模式仍可管理规则等高级配置。
+
+当前打包的 zero 0.0.3 实测支持顶层 `mode` 字段；Rust 读取状态时也兼容旧配置中的 `route.final`。
+当前 zero 0.0.3 仍要求配置中存在 `route`；Rust 写入顶层 `mode` 时会保留或补齐 `route.final`。
 
 ## 能力识别规则
 

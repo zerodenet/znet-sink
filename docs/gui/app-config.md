@@ -50,6 +50,7 @@ await invoke('app_config_update', {
     "maxEntries": 500
   },
   "ui": {
+    "uiMode": "lite",
     "sidebarCollapsed": false,
     "hiddenMenuKeys": [],
     "defaultRoute": null
@@ -87,11 +88,14 @@ UI 偏好是用户偏好，不等价于业务能力。
 
 | 字段 | 说明 |
 | --- | --- |
+| `uiMode` | 当前交互模式，取值为 `lite` 或 `pro`；语义见 [交互模式约束](./interaction-modes.md) |
 | `sidebarCollapsed` | 侧栏是否折叠 |
 | `hiddenMenuKeys` | 用户手动隐藏的菜单 key，Rust 会去空、去重、排序 |
 | `defaultRoute` | 用户默认打开路由 |
 
 能力驱动的菜单显隐应使用 [能力快照](./capabilities.md)，不要写入 `hiddenMenuKeys`。
+
+`uiMode` 是应用级交互策略。切换模式只改变 GUI 可见和可操作的交互面，不得删除、禁用或改写已有代理配置、规则集、订阅或内核配置。
 
 ### `localProxy`
 

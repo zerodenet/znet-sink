@@ -2,6 +2,8 @@
 
 规则集配置属于 GUI Rust 应用层能力，当前是配置管理和持久化脚手架，不直接写入内核运行状态。
 
+`RuleSetProfile.id` 是 GUI 存储主键，只用于管理这条规则集记录；它不是 zero 内核规则集 `tag`。后续如果要把 GUI 规则集注入 zero 配置，需要单独定义 `tag` 映射规则。
+
 ## 命令
 
 | 命令 | 说明 |
@@ -24,7 +26,7 @@
 
 ```json
 {
-  "id": "rule-set-1",
+  "id": "rule-set_18f6b2a7c9f42",
   "name": "GeoIP CN",
   "format": "json",
   "enabled": true,

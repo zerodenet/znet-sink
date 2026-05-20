@@ -6,8 +6,10 @@
 
 - Rust 负责数据层、能力层、配置解析、订阅同步、内核 IPC、进程托管、文件持久化。
 - 前端负责交互行为和展示，包括菜单布局、卡片展示、禁用态、跳转流程。
-- 能力驱动的显隐来自 `gui_capabilities_snapshot`。
+- 菜单和操作显隐来自 `gui_interaction_surface_snapshot`。
+- `gui_capabilities_snapshot` 仅用于内部诊断，不作为用户菜单入口。
 - 用户偏好的显隐来自 `app_config_get().ui.hiddenMenuKeys`。
+- 当前阶段以自测可用为目标，可以先用 `gui_self_test_snapshot` 定位阻塞项，再跑 `gui_connect` / `gui_set_proxy_mode` / `gui_disconnect`。
 
 ## 通用调用约定
 
@@ -46,10 +48,11 @@ const config = await invoke('app_config_get');
 ## 文档索引
 
 - [应用配置](./app-config.md)
+- [交互模式约束](./interaction-modes.md)
 - [能力快照](./capabilities.md)
+- [Zero 适配层接口](./zero-adapter.md)
 - [内核接入](./core.md)
 - [代理配置](./proxy-config.md)
 - [订阅管理](./subscriptions.md)
 - [规则集配置](./rule-sets.md)
 - [日志](./logs.md)
-

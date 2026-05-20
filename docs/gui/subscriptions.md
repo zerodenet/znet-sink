@@ -2,6 +2,8 @@
 
 订阅管理属于 GUI Rust 应用层能力。当前 GUI 只支持自研 zero 内核订阅格式。
 
+`SubscriptionProfile.id` 和 `targetProxyConfigId` 都是 GUI 存储主键，用于管理订阅记录和其生成的代理配置记录；它们不是 zero 内核 `tag`。
+
 ## 命令
 
 | 命令 | 说明 |
@@ -26,13 +28,13 @@
 
 ```json
 {
-  "id": "subscription-1",
+  "id": "subscription_18f6b2a7c9f42",
   "name": "机场订阅",
   "url": "https://example.com/sub",
   "enabled": true,
   "kernel": "zero",
   "format": "auto",
-  "targetProxyConfigId": "proxy-config-1",
+  "targetProxyConfigId": "proxy-config_18f6b2a7c9f43",
   "updatedAtUnixMs": 1713500000000,
   "lastSyncAtUnixMs": 1713500000000,
   "lastError": null

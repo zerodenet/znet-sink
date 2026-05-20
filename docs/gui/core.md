@@ -130,9 +130,21 @@ zero run --control-socket <zero-dir>/zero-control.sock <configPath>
 
 进程托管不依赖 IPC。
 
+业务前端通常不应直接串联 `core_config_export_active`、`core_process_start`、`system_proxy_enable`。总览页的一键连接/断开应使用 [Zero 适配层接口](./zero-adapter.md) 中的 `gui_connect`、`gui_disconnect` 和 `gui_connection_status`。
+
 ## IPC 控制面
 
 IPC 只面向运行中的内核。GUI 没启动内核或内核未运行时，IPC 命令可能返回 `core_unavailable`。
+
+业务前端不应直接使用低层 IPC 命令构造 Zero 原始请求。常规页面应使用 [Zero 适配层接口](./zero-adapter.md) 中的 `gui_*` 命令，由 Rust 后端负责把 Zero 原始返回转换为稳定 DTO。
+
+`core_ipc_query`、`core_ipc_command`、`core_ipc_request` 保留为专业模式诊断入口，不作为常规业务接口。
+
+## 本地 GUI 统计
+
+GUI 的实时流量统计不使用 Zero `Push Connector`。Push Connector 属于节点主动上报外部管理端点的远程集成通道，适合远程面板、监控系统或少量远程命令，不作为本地 GUI 统计链路。
+
+本地 GUI 应通过 Rust 后端的 [Zero 适配层接口](./zero-adapter.md) 使用 `gui_traffic_snapshot`。Rust 后端从本地控制面 `Stats` 获取累计值，并负责计算 `uploadBps` / `downloadBps`，前端只负责展示。
 
 | 命令 | 内核请求 | 说明 |
 | --- | --- | --- |
@@ -205,6 +217,8 @@ IPC 只面向运行中的内核。GUI 没启动内核或内核未运行时，IPC
 | --- | --- |
 | `core_events_start` | 启动内核事件订阅 |
 | `core_events_stop` | 停止当前事件订阅 generation |
+
+`core_events_start` 转发 Zero 原始事件，仅作为专业模式诊断入口。业务前端应使用 [Zero 适配层接口](./zero-adapter.md) 中的 `gui_events_start`，接收 Rust 归一化后的 `gui:event`。
 
 调用参数：
 
