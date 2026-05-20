@@ -43,7 +43,7 @@
         style="width: 36px; left: {store.uiMode === 'lite' ? '2px' : '42px'}"
       ></div>
       <button
-        onclick={() => store.switchUIMode('lite')}
+        onclick={async () => await store.switchUIMode('lite')}
         class="relative z-10 w-9 text-center py-0.5 rounded-md font-bold transition-colors duration-200 {store.uiMode === 'lite' ? 'text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
         aria-label="切换到简约模式"
         title="切换到简约模式"
@@ -51,7 +51,7 @@
         简约
       </button>
       <button
-        onclick={() => store.switchUIMode('pro')}
+        onclick={async () => await store.switchUIMode('pro')}
         class="relative z-10 w-9 text-center py-0.5 rounded-md font-bold transition-colors duration-200 {store.uiMode === 'pro' ? 'text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
         aria-label="切换到专业模式"
         title="切换到专业模式"

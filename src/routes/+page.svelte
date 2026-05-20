@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { store } from '$lib/services/store.svelte';
-  import { overviewData } from '$lib/services/overview-data.svelte';
+  import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
-  import { getAppConfig, enableSystemProxy } from '$lib/services/core';
   import { initTheme, applyTheme } from '$lib/services/theme.svelte';
   import TitleBar from '$lib/components/TitleBar.svelte';
   import AppHeader from '$lib/components/AppHeader.svelte';
   import TabContent from '$lib/components/TabContent.svelte';
-  import WelcomeGuide from '$lib/components/WelcomeGuide.svelte';
+  import { WelcomeGuide } from '$lib/components/WelcomeGuide';
+  import Toast from '$lib/components/Toast.svelte';
 
   onMount(() => {
     initTheme();
@@ -20,26 +20,16 @@
     return () => mediaQuery.removeEventListener('change', onSystemThemeChange);
   });
 
-  async function tryAutoConnect() {
-    try {
-      const config = await getAppConfig();
-      if (config.core.autoConnect) {
-        await enableSystemProxy();
-      }
-    } catch { /* best-effort: core may not be running yet */ }
-  }
-
   $effect(() => {
     if (store.isInitialized) {
-      overviewData.start();
+      guiState.initialize();
       coreEvents.start();
-      tryAutoConnect();
     } else {
-      overviewData.stop();
+      guiState.destroy();
       coreEvents.stop();
     }
     return () => {
-      overviewData.stop();
+      guiState.destroy();
       coreEvents.stop();
     };
   });
@@ -59,4 +49,6 @@
       {/if}
     </div>
   </div>
+
+  <Toast />
 </main>
