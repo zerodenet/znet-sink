@@ -3,6 +3,7 @@
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
   import type { AppConfig } from '$lib/types/app-config';
+  import { Switch } from '$lib/components/ui/switch';
 
   let config = $state<AppConfig | null>(null);
   let loading = $state(false);
@@ -42,17 +43,20 @@
   <h3 class="text-sm font-bold text-foreground mb-4">应用配置</h3>
 
   {#if !config}
-    <div class="text-xs text-muted-foreground">加载中...</div>
+    <div class="text-xs text-muted-foreground py-4">加载中...</div>
   {:else}
     <div class="space-y-4">
       <!-- 主题设置 -->
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between py-1">
         <span class="text-xs text-muted-foreground">主题</span>
-        <div class="flex bg-muted rounded-lg p-0.5 text-[10px] font-bold">
+        <div class="flex bg-muted rounded-xl p-0.5 text-[10px] font-bold shadow-inner">
           {#each ['light', 'dark', 'system'] as theme}
             <button
               onclick={() => handleThemeChange(theme as ThemeMode)}
-              class="px-3 py-1 rounded-md transition-all {store.selectedTheme === theme ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
+              class="px-3 py-1.5 rounded-lg transition-all duration-200
+                     {store.selectedTheme === theme 
+                       ? 'bg-primary text-primary-foreground shadow-sm' 
+                       : 'text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10'}"
             >
               {theme === 'light' ? '明亮' : theme === 'dark' ? '暗黑' : '跟随系统'}
             </button>
@@ -61,18 +65,24 @@
       </div>
 
       <!-- UI模式 -->
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between py-1">
         <span class="text-xs text-muted-foreground">界面模式</span>
-        <div class="flex bg-muted rounded-lg p-0.5 text-[10px] font-bold">
+        <div class="flex bg-muted rounded-xl p-0.5 text-[10px] font-bold shadow-inner">
           <button
-            onclick={() => store.switchUIMode('lite')}
-            class="px-3 py-1 rounded-md transition-all {store.uiMode === 'lite' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={async () => await store.switchUIMode('lite')}
+            class="px-3 py-1.5 rounded-lg transition-all duration-200
+                   {store.uiMode === 'lite' 
+                     ? 'bg-primary text-primary-foreground shadow-sm' 
+                     : 'text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10'}"
           >
             简约
           </button>
           <button
-            onclick={() => store.switchUIMode('pro')}
-            class="px-3 py-1 rounded-md transition-all {store.uiMode === 'pro' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={async () => await store.switchUIMode('pro')}
+            class="px-3 py-1.5 rounded-lg transition-all duration-200
+                   {store.uiMode === 'pro' 
+                     ? 'bg-primary text-primary-foreground shadow-sm' 
+                     : 'text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10'}"
           >
             专业
           </button>
@@ -80,55 +90,30 @@
       </div>
 
       <!-- 自动启动内核 -->
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between py-1">
         <span class="text-xs text-muted-foreground">开机自动启动内核</span>
-        <button
-          onclick={() => toggleCoreSetting('autoStart')}
+        <Switch
+          checked={config.core.autoStart}
+          onCheckedChange={() => toggleCoreSetting('autoStart')}
           disabled={loading}
-          class="w-9 h-5 rounded-full relative transition-colors disabled:opacity-50 {config.core.autoStart ? 'bg-primary' : 'bg-muted'}"
-        >
-          <div class="w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all shadow {config.core.autoStart ? 'left-4' : 'left-0.5'}"></div>
-        </button>
+          aria-label="开机自动启动内核"
+        />
       </div>
 
       <!-- 自动连接 -->
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between py-1">
         <span class="text-xs text-muted-foreground">启动后自动连接</span>
-        <button
-          onclick={() => toggleCoreSetting('autoConnect')}
+        <Switch
+          checked={config.core.autoConnect}
+          onCheckedChange={() => toggleCoreSetting('autoConnect')}
           disabled={loading}
-          class="w-9 h-5 rounded-full relative transition-colors disabled:opacity-50 {config.core.autoConnect ? 'bg-primary' : 'bg-muted'}"
-        >
-          <div class="w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all shadow {config.core.autoConnect ? 'left-4' : 'left-0.5'}"></div>
-        </button>
+          aria-label="启动后自动连接"
+        />
       </div>
 
       <!-- 页面可见性 -->
-      <div>
-        <div class="text-xs text-muted-foreground mb-2">页面可见性</div>
-        <div class="flex flex-wrap gap-1">
-          {#each [
-            { id: 'overview', label: '概览' },
-            { id: 'profiles', label: '配置' },
-            { id: 'subscriptions', label: '订阅' },
-            { id: 'rules', label: '规则' },
-            { id: 'connections', label: '连接' },
-            { id: 'logs', label: '日志' },
-            { id: 'settings', label: '设置' }
-          ] as tab}
-            <button
-              onclick={() => tab.id !== 'settings' && store.toggleTabVisibility(tab.id)}
-              class="px-2 py-1 rounded text-[10px] font-bold transition-all whitespace-nowrap
-                     {store.visibleTabs.includes(tab.id)
-                       ? 'bg-primary text-primary-foreground shadow-sm'
-                       : 'bg-muted text-muted-foreground hover:text-foreground'}
-                     {tab.id === 'settings' ? 'cursor-not-allowed' : ''}"
-            >
-              {tab.label}
-            </button>
-          {/each}
-        </div>
-      </div>
+      <!-- 页面可见性由 Rust 后端 InteractionSurfaceSnapshot 控制 -->
+      <!-- 用户偏好设置需通过后端 API 更新后自动同步 -->
     </div>
   {/if}
 </div>
