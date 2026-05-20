@@ -3,7 +3,7 @@ use tauri::State;
 use crate::errors::{AppError, AppResult};
 use crate::models::rule_set::{RuleSetProfile, RuleSetSource, RuleSetUpsert};
 use crate::services::common::{
-    generated_id, lock, normalize_optional, normalize_required, now_unix_ms,
+    generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
 use crate::services::domain_store;
 use crate::state::app_state::AppState;
@@ -24,8 +24,7 @@ pub fn get(state: State<'_, AppState>, id: String) -> AppResult<RuleSetProfile> 
 pub fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResult<RuleSetProfile> {
     let name = normalize_required(input.name, "name")?;
     let source = normalize_source(input.source)?;
-    let id = normalize_optional(input.id)
-        .unwrap_or_else(|| generated_id("rule-set", state.next_record_id()));
+    let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("rule-set"));
 
     let profile = RuleSetProfile {
         id: id.clone(),

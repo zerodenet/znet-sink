@@ -3,10 +3,12 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::thread::JoinHandle;
 
 use crate::models::{
     app_config::AppConfig,
     core_process::{CoreProcessState, CoreProcessStatus},
+    gui_core::GuiTrafficStats,
     logs::LogEntry,
     proxy_config::ProxyConfigProfile,
     rule_set::RuleSetProfile,
@@ -15,17 +17,26 @@ use crate::models::{
 
 pub struct AppState {
     core_event_generation: Arc<AtomicU64>,
+    gui_event_generation: Arc<AtomicU64>,
     next_record_id: AtomicU64,
     app_config: Mutex<AppConfig>,
     proxy_configs: Mutex<Vec<ProxyConfigProfile>>,
     subscriptions: Mutex<Vec<SubscriptionProfile>>,
     rule_sets: Mutex<Vec<RuleSetProfile>>,
     logs: Mutex<Vec<LogEntry>>,
+    traffic_sample: Mutex<Option<TrafficSample>>,
     core_process: Mutex<ManagedCoreProcess>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrafficSample {
+    pub stats: GuiTrafficStats,
+    pub sampled_at_unix_ms: u64,
 }
 
 pub(crate) struct ManagedCoreProcess {
     pub child: Option<Child>,
+    pub stderr_handle: Option<JoinHandle<()>>,
     pub status: CoreProcessStatus,
 }
 
@@ -37,7 +48,7 @@ impl Default for AppState {
 
 impl AppState {
     pub(crate) fn new(app_config: AppConfig) -> Self {
-        Self::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new())
+        Self::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new())
     }
 
     pub(crate) fn with_domain_data(
@@ -45,15 +56,18 @@ impl AppState {
         proxy_configs: Vec<ProxyConfigProfile>,
         subscriptions: Vec<SubscriptionProfile>,
         rule_sets: Vec<RuleSetProfile>,
+        logs: Vec<LogEntry>,
     ) -> Self {
         Self {
             core_event_generation: Arc::new(AtomicU64::default()),
+            gui_event_generation: Arc::new(AtomicU64::default()),
             next_record_id: AtomicU64::default(),
             app_config: Mutex::new(app_config),
             proxy_configs: Mutex::new(proxy_configs),
             subscriptions: Mutex::new(subscriptions),
             rule_sets: Mutex::new(rule_sets),
-            logs: Mutex::default(),
+            logs: Mutex::new(logs),
+            traffic_sample: Mutex::new(None),
             core_process: Mutex::new(ManagedCoreProcess::default()),
         }
     }
@@ -64,6 +78,14 @@ impl AppState {
 
     pub(crate) fn core_event_generation(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.core_event_generation)
+    }
+
+    pub(crate) fn next_gui_event_generation(&self) -> u64 {
+        self.gui_event_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub(crate) fn gui_event_generation(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.gui_event_generation)
     }
 
     pub(crate) fn next_record_id(&self) -> u64 {
@@ -90,6 +112,10 @@ impl AppState {
         &self.logs
     }
 
+    pub(crate) fn traffic_sample(&self) -> &Mutex<Option<TrafficSample>> {
+        &self.traffic_sample
+    }
+
     pub(crate) fn core_process(&self) -> &Mutex<ManagedCoreProcess> {
         &self.core_process
     }
@@ -99,6 +125,7 @@ impl Default for ManagedCoreProcess {
     fn default() -> Self {
         Self {
             child: None,
+            stderr_handle: None,
             status: CoreProcessStatus {
                 state: CoreProcessState::NotStarted,
                 pid: None,

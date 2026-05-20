@@ -168,9 +168,8 @@ fn extract_prop<'a>(output: &'a str, key: &str) -> Option<&'a str> {
 #[cfg(target_os = "windows")]
 fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
     use std::ptr;
-    use windows_sys::Win32::Networking::WinINet::{
-        InternetSetOptionW, INTERNET_OPTION_PROXY_SETTINGS_CHANGED,
-        INTERNET_OPTION_REFRESH,
+    use windows_sys::Win32::Networking::WinInet::{
+        InternetSetOptionW, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH,
     };
 
     // Use registry to set system proxy on Windows
@@ -196,7 +195,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
         .output();
 
     if enable && !proxy_enable.is_empty() {
-        Command::new("reg")
+        let _ = Command::new("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -213,8 +212,13 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
 
     // Notify system of proxy change
     unsafe {
-        InternetSetOptionW(0, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, ptr::null_mut(), 0);
-        InternetSetOptionW(0, INTERNET_OPTION_REFRESH, ptr::null_mut(), 0);
+        InternetSetOptionW(
+            ptr::null(),
+            INTERNET_OPTION_PROXY_SETTINGS_CHANGED,
+            ptr::null(),
+            0,
+        );
+        InternetSetOptionW(ptr::null(), INTERNET_OPTION_REFRESH, ptr::null(), 0);
     }
 
     output
@@ -292,12 +296,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
 
     if gsettings_result.is_ok() && enable {
         let _ = Command::new("gsettings")
-            .args([
-                "set",
-                "org.gnome.system.proxy.http",
-                "host",
-                host,
-            ])
+            .args(["set", "org.gnome.system.proxy.http", "host", host])
             .output();
         let _ = Command::new("gsettings")
             .args([
@@ -308,12 +307,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
             ])
             .output();
         let _ = Command::new("gsettings")
-            .args([
-                "set",
-                "org.gnome.system.proxy.https",
-                "host",
-                host,
-            ])
+            .args(["set", "org.gnome.system.proxy.https", "host", host])
             .output();
         let _ = Command::new("gsettings")
             .args([

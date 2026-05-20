@@ -43,11 +43,12 @@ impl CoreConfigSnapshot {
                 self.working_dir.as_deref().unwrap_or_default()
             ));
         }
-        if let Some(false) = self.config_exists {
-            return Err(format!(
-                "core config file does not exist: {}",
-                self.config_path.as_deref().unwrap_or_default()
-            ));
+        let config_path = self
+            .config_path
+            .as_deref()
+            .ok_or_else(|| "core config file is not configured".to_string())?;
+        if !self.config_exists.unwrap_or(false) {
+            return Err(format!("core config file does not exist: {config_path}"));
         }
 
         Ok(())

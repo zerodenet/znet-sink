@@ -26,6 +26,7 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Networking_WinInet",
   "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_IO",

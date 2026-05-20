@@ -12,12 +12,17 @@ use crate::commands::capability as capability_commands;
 use crate::commands::core as core_commands;
 use crate::commands::core_config as core_config_commands;
 use crate::commands::core_process as core_process_commands;
+use crate::commands::gui_connection as gui_connection_commands;
+use crate::commands::gui_core as gui_core_commands;
+use crate::commands::gui_events as gui_events_commands;
+use crate::commands::gui_self_test as gui_self_test_commands;
 use crate::commands::logs as logs_commands;
 use crate::commands::proxy_config as proxy_config_commands;
+use crate::commands::proxy_mode as proxy_mode_commands;
 use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
-use crate::services::{app_config_store, core_process, domain_store};
+use crate::services::{app_config_store, core_process, domain_store, log_store};
 use crate::state::app_state::AppState;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -29,6 +34,8 @@ pub fn run() {
     let app_config =
         app_config_store::load_or_default(&app_config_path).expect("failed to load app config");
     let domain_data = domain_store::load_all().expect("failed to load domain data");
+    let logs = log_store::load_recent(app_config.logs.max_entries).expect("failed to load logs");
+    log_store::rotate(app_config.logs.max_entries).expect("failed to rotate logs");
 
     tauri::Builder::default()
         .manage(AppState::with_domain_data(
@@ -36,6 +43,7 @@ pub fn run() {
             domain_data.proxy_configs,
             domain_data.subscriptions,
             domain_data.rule_sets,
+            logs,
         ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -62,6 +70,27 @@ pub fn run() {
             core_process_commands::core_process_start,
             core_process_commands::core_process_stop,
             core_config_commands::core_config_export_active,
+            gui_core_commands::gui_core_overview,
+            gui_core_commands::gui_core_health,
+            gui_core_commands::gui_zero_capabilities,
+            gui_core_commands::gui_traffic_stats,
+            gui_core_commands::gui_traffic_snapshot,
+            gui_core_commands::gui_policy_groups,
+            gui_core_commands::gui_select_policy,
+            gui_core_commands::gui_connections,
+            gui_core_commands::gui_connection_detail,
+            gui_core_commands::gui_close_connection,
+            gui_core_commands::gui_dns_status,
+            gui_core_commands::gui_tun_status,
+            gui_core_commands::gui_rule_status,
+            gui_connection_commands::gui_connection_status,
+            gui_connection_commands::gui_connect,
+            gui_connection_commands::gui_disconnect,
+            gui_events_commands::gui_events_start,
+            gui_events_commands::gui_events_stop,
+            gui_self_test_commands::gui_self_test_snapshot,
+            proxy_mode_commands::gui_proxy_mode_status,
+            proxy_mode_commands::gui_set_proxy_mode,
             app_config_commands::app_config_get,
             app_config_commands::app_config_update,
             proxy_config_commands::proxy_config_list,
@@ -83,6 +112,7 @@ pub fn run() {
             logs_commands::logs_append,
             logs_commands::logs_clear,
             capability_commands::gui_capabilities_snapshot,
+            capability_commands::gui_interaction_surface_snapshot,
             system_proxy_commands::system_proxy_enable,
             system_proxy_commands::system_proxy_disable,
             system_proxy_commands::system_proxy_status
@@ -100,7 +130,7 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let state = app_handle.state::<AppState>();
-                    let _ = core_process::start(state);
+                    let _ = core_process::start(app_handle.clone(), state);
                 });
             }
 

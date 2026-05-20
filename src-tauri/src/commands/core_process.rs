@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
 use crate::models::core_process::CoreProcessStatus;
@@ -11,8 +11,11 @@ pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessS
 }
 
 #[tauri::command]
-pub fn core_process_start(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    core_process::start(state)
+pub fn core_process_start(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<CoreProcessStatus> {
+    core_process::start(app_handle, state)
 }
 
 #[tauri::command]

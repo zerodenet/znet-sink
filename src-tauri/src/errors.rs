@@ -37,6 +37,22 @@ impl AppError {
         }
     }
 
+    pub(crate) fn mode_restricted(
+        feature: &'static str,
+        required_mode: &'static str,
+        current_mode: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: "mode_restricted",
+            message: format!("{feature} is only available in {required_mode} mode"),
+            details: Some(json!({
+                "feature": feature,
+                "requiredUiMode": required_mode,
+                "uiMode": current_mode.into(),
+            })),
+        }
+    }
+
     pub(crate) fn connection_closed(endpoint: &CoreEndpoint) -> Self {
         Self {
             code: "connection_closed",

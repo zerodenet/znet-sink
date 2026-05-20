@@ -70,13 +70,15 @@ pub fn snapshot_from_config(config: &AppCoreConfig) -> AppResult<CoreConfigSnaps
     let launch_args = launch_args(config_path.as_deref(), socket.as_deref());
 
     let mut warnings = Vec::new();
-    if config.auto_start && !executable_exists {
+    if executable_path.is_none() {
+        warnings.push("core executable path is not configured".to_string());
+    } else if !executable_exists {
         warnings.push("core executable does not exist".to_string());
     }
-    if let Some(path) = config_path.as_deref() {
-        if !path.is_file() {
-            warnings.push("core config file does not exist".to_string());
-        }
+    if config_path.is_none() {
+        warnings.push("core config file is not configured".to_string());
+    } else if !config_path.as_deref().unwrap().is_file() {
+        warnings.push("core config file does not exist".to_string());
     }
     if let Some(path) = working_dir.as_deref() {
         if !path.is_dir() {

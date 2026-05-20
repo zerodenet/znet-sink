@@ -18,3 +18,23 @@ pub struct GuiCapabilitySnapshot {
     pub active_proxy_config_id: Option<String>,
     pub active_proxy_config_capabilities: ProxyConfigCapabilities,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionSurfaceSnapshot {
+    pub ui_mode: String,
+    pub navigation: Vec<InteractionSurfaceItem>,
+    pub actions: Vec<InteractionSurfaceItem>,
+    pub features: Vec<InteractionSurfaceItem>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionSurfaceItem {
+    pub key: String,
+    pub category: String,
+    pub visible: bool,
+    pub operable: bool,
+    pub readonly: bool,
+    pub reason: Option<String>,
+}

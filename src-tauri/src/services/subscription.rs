@@ -7,7 +7,7 @@ use crate::errors::{AppError, AppResult};
 use crate::models::proxy_config::ProxyConfigProfile;
 use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert};
 use crate::services::common::{
-    generated_id, lock, normalize_optional, normalize_required, now_unix_ms,
+    generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
 use crate::services::domain_store;
 use crate::services::proxy_config;
@@ -36,8 +36,7 @@ pub fn upsert(
     let url = normalize_required(input.url, "url")?;
     validate_http_url(&url)?;
 
-    let id = normalize_optional(input.id)
-        .unwrap_or_else(|| generated_id("subscription", state.next_record_id()));
+    let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("subscription"));
     let profile = SubscriptionProfile {
         id: id.clone(),
         name,
@@ -126,7 +125,7 @@ async fn sync_subscription(
     let target_proxy_config_id = subscription
         .target_proxy_config_id
         .clone()
-        .unwrap_or_else(|| generated_id("proxy-config", state.next_record_id()));
+        .unwrap_or_else(|| generated_store_id("proxy-config"));
 
     upsert_synced_proxy_config(state, &subscription, &target_proxy_config_id, parsed, now)?;
     update_sync_success(state, &subscription.id, target_proxy_config_id, now)

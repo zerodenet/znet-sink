@@ -3,6 +3,7 @@ use tauri::State;
 use crate::errors::AppResult;
 use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogQuery, LogSource};
 use crate::services::common::{lock, normalize_required, now_unix_ms};
+use crate::services::log_store;
 use crate::state::app_state::AppState;
 
 pub fn list(state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<Vec<LogEntry>> {
@@ -67,11 +68,14 @@ pub(crate) fn append_entry(
         let remove_count = entries.len() - max_entries;
         entries.drain(0..remove_count);
     }
+    log_store::append(&entry)?;
+    log_store::rotate(max_entries)?;
 
     Ok(entry)
 }
 
 pub fn clear(state: State<'_, AppState>) -> AppResult<()> {
     lock(state.logs(), "logs")?.clear();
+    log_store::clear()?;
     Ok(())
 }

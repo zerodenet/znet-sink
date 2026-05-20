@@ -8,7 +8,7 @@ use crate::models::proxy_config::{
     ProxyConfigCapabilities, ProxyConfigImport, ProxyConfigProfile, ProxyConfigUpsert,
 };
 use crate::services::common::{
-    generated_id, lock, normalize_optional, normalize_required, now_unix_ms,
+    generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
 use crate::services::domain_store;
 use crate::services::{app_config, app_config_store};
@@ -32,8 +32,7 @@ pub fn upsert(
     input: ProxyConfigUpsert,
 ) -> AppResult<ProxyConfigProfile> {
     let name = normalize_required(input.name, "name")?;
-    let id = normalize_optional(input.id)
-        .unwrap_or_else(|| generated_id("proxy-config", state.next_record_id()));
+    let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("proxy-config"));
     let kernel = normalize_optional(input.kernel).unwrap_or_else(|| "zero".to_string());
     let format = normalize_optional(input.format).unwrap_or_else(|| "zero".to_string());
     let path = normalize_optional(input.path);
