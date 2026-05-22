@@ -13,6 +13,7 @@ export interface AppCoreConfig {
   autoConnect: boolean;
   autoStart: boolean;
   executablePath?: string;
+  downloadUrl?: string;
   configPath?: string;
   workingDir?: string;
   socket?: string;
@@ -51,6 +52,7 @@ export interface AppCoreConfigPatch {
   autoConnect?: boolean;
   autoStart?: boolean;
   executablePath?: string | null;
+  downloadUrl?: string | null;
   configPath?: string | null;
   workingDir?: string | null;
   socket?: string | null;

@@ -58,10 +58,13 @@ impl AppState {
         rule_sets: Vec<RuleSetProfile>,
         logs: Vec<LogEntry>,
     ) -> Self {
+        let next_record_id = logs.iter().map(|entry| entry.id).max().unwrap_or(0);
+        let proxy_configs = normalize_proxy_configs(proxy_configs);
+
         Self {
             core_event_generation: Arc::new(AtomicU64::default()),
             gui_event_generation: Arc::new(AtomicU64::default()),
-            next_record_id: AtomicU64::default(),
+            next_record_id: AtomicU64::new(next_record_id),
             app_config: Mutex::new(app_config),
             proxy_configs: Mutex::new(proxy_configs),
             subscriptions: Mutex::new(subscriptions),
@@ -119,6 +122,115 @@ impl AppState {
     pub(crate) fn core_process(&self) -> &Mutex<ManagedCoreProcess> {
         &self.core_process
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppState;
+    use crate::models::{
+        app_config::AppConfig,
+        logs::{LogEntry, LogLevel, LogSource},
+        proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile},
+    };
+
+    #[test]
+    fn next_record_id_continues_after_loaded_logs() {
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                LogEntry {
+                    id: 2,
+                    source: LogSource::App,
+                    level: LogLevel::Info,
+                    message: "a".to_string(),
+                    fields: None,
+                    occurred_at_unix_ms: 1,
+                },
+                LogEntry {
+                    id: 7,
+                    source: LogSource::Core,
+                    level: LogLevel::Error,
+                    message: "b".to_string(),
+                    fields: None,
+                    occurred_at_unix_ms: 2,
+                },
+            ],
+        );
+
+        assert_eq!(state.next_record_id(), 8);
+        assert_eq!(state.next_record_id(), 9);
+    }
+
+    #[test]
+    fn loaded_proxy_configs_keep_only_one_active() {
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![
+                proxy_profile("a", false),
+                proxy_profile("b", true),
+                proxy_profile("c", true),
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let profiles = state.proxy_configs().lock().unwrap();
+        assert!(!profiles[0].active);
+        assert!(profiles[1].active);
+        assert!(!profiles[2].active);
+    }
+
+    #[test]
+    fn loaded_proxy_configs_promote_first_when_none_active() {
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![proxy_profile("a", false), proxy_profile("b", false)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let profiles = state.proxy_configs().lock().unwrap();
+        assert!(profiles[0].active);
+        assert!(!profiles[1].active);
+    }
+
+    fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {
+        ProxyConfigProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            kernel: "zero".to_string(),
+            format: "json".to_string(),
+            path: None,
+            content: None,
+            active,
+            updated_at_unix_ms: 1,
+            capabilities: ProxyConfigCapabilities::default(),
+        }
+    }
+}
+
+fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyConfigProfile> {
+    let mut active_index = None;
+    for (index, profile) in profiles.iter_mut().enumerate() {
+        if profile.active {
+            if active_index.is_none() {
+                active_index = Some(index);
+            } else {
+                profile.active = false;
+            }
+        }
+    }
+
+    if !profiles.is_empty() && active_index.is_none() {
+        profiles[0].active = true;
+    }
+
+    profiles
 }
 
 impl Default for ManagedCoreProcess {

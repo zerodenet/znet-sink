@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use tauri::State;
 
@@ -8,17 +9,23 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     app_config::AppCoreConfig,
     core::{CoreEndpoint, CoreIpcOptions},
-    core_config::{CoreConfigExportResult, CoreConfigSnapshot},
+    core_config::{CoreConfigExportResult, CoreConfigSnapshot, CoreKernelInfo},
 };
 use crate::services::app_config_store;
 use crate::services::common::{lock, normalize_optional};
 use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
+const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerdenet/zero/releases/latest";
 
 pub fn snapshot(state: State<'_, AppState>) -> AppResult<CoreConfigSnapshot> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
     snapshot_from_config(&config)
+}
+
+pub fn inspect(state: State<'_, AppState>) -> AppResult<CoreKernelInfo> {
+    let config = lock(state.app_config(), "app_config")?.core.clone();
+    inspect_from_config(&config)
 }
 
 pub fn export_active(state: State<'_, AppState>) -> AppResult<CoreConfigExportResult> {
@@ -103,10 +110,48 @@ pub fn snapshot_from_config(config: &AppCoreConfig) -> AppResult<CoreConfigSnaps
     })
 }
 
+pub fn inspect_from_config(config: &AppCoreConfig) -> AppResult<CoreKernelInfo> {
+    let executable_path = resolve_executable_path(config);
+    let executable_exists = executable_path.as_ref().is_some_and(|path| path.is_file());
+    let metadata = executable_path
+        .as_ref()
+        .and_then(|path| fs::metadata(path).ok());
+    let file_name = executable_path.as_ref().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    });
+    let size_bytes = metadata.as_ref().map(|meta| meta.len());
+    let modified_at_unix_ms = metadata
+        .as_ref()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(system_time_to_unix_ms);
+
+    let mut warnings = Vec::new();
+    if executable_path.is_none() {
+        warnings.push("core executable path is not configured".to_string());
+    } else if !executable_exists {
+        warnings.push("core executable does not exist".to_string());
+    }
+
+    Ok(CoreKernelInfo {
+        kernel: config.kernel.clone(),
+        executable_path: executable_path.as_deref().map(path_to_string),
+        executable_exists,
+        file_name,
+        size_bytes,
+        modified_at_unix_ms,
+        recommended_install_dir: recommended_install_dir(),
+        download_url: config
+            .download_url
+            .clone()
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| Some(DEFAULT_CORE_DOWNLOAD_URL.to_string())),
+        warnings,
+    })
+}
+
 pub fn resolve_executable_path(config: &AppCoreConfig) -> Option<PathBuf> {
-    normalize_optional(config.executable_path.clone())
-        .map(PathBuf::from)
-        .or_else(|| default_embedded_executable_path(&config.kernel))
+    normalize_optional(config.executable_path.clone()).map(PathBuf::from)
 }
 
 pub fn resolve_socket(config: &AppCoreConfig) -> Option<PathBuf> {
@@ -135,15 +180,6 @@ fn resolve_working_dir(config: &AppCoreConfig, executable_path: Option<&Path>) -
                 .and_then(Path::parent)
                 .map(Path::to_path_buf)
         })
-}
-
-fn default_embedded_executable_path(kernel: &str) -> Option<PathBuf> {
-    if !kernel.eq_ignore_ascii_case("zero") {
-        return None;
-    }
-
-    let name = if cfg!(windows) { "zero.exe" } else { "zero" };
-    Some(workspace_root().join("build").join("core").join(name))
 }
 
 fn default_socket_path(config: &AppCoreConfig) -> Option<PathBuf> {
@@ -214,13 +250,19 @@ fn app_data_dir() -> AppResult<PathBuf> {
         .join(".znet-sink"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
-}
-
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn system_time_to_unix_ms(time: SystemTime) -> Option<u64> {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
+fn recommended_install_dir() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|dir| dir.join("core"))
+        .map(|path| path_to_string(&path))
 }

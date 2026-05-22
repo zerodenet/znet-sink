@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { store } from '$lib/services/store.svelte';
+  import { store, type SettingsSection } from '$lib/services/store.svelte';
   import AppConfigPanel from '$lib/components/settings/AppConfigPanel.svelte';
   import CoreConfigPanel from '$lib/components/settings/CoreConfigPanel.svelte';
   import AboutPanel from '$lib/components/settings/AboutPanel.svelte';
 
-  let activeSection = $state('general');
+  let activeSection = $state(store.settingsSection);
 
-  const sections = [
+  $effect(() => {
+    if (store.activeTab === 'settings') {
+      activeSection = store.settingsSection;
+    }
+  });
+
+  const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '通用' },
     { id: 'core',    label: '内核' },
     { id: 'plugins', label: '插件' },
@@ -20,7 +26,10 @@
     <div class="settings-nav-header">设置</div>
     {#each sections as section}
       <button
-        onclick={() => activeSection = section.id}
+        onclick={() => {
+          activeSection = section.id;
+          store.settingsSection = section.id;
+        }}
         class="settings-nav-item {activeSection === section.id ? 'active' : ''}"
       >
         {section.label}

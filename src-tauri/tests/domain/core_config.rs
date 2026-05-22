@@ -1,19 +1,18 @@
 use gui_lib::models::app_config::AppCoreConfig;
-use gui_lib::services::core_config::{snapshot_from_config, write_core_config};
+use gui_lib::services::core_config::{inspect_from_config, snapshot_from_config, write_core_config};
 use serde_json::json;
 
 #[test]
-fn default_zero_core_config_uses_embedded_binary() {
+fn default_zero_core_config_requires_explicit_executable() {
     let snapshot = snapshot_from_config(&AppCoreConfig::default()).unwrap();
 
     assert_eq!(snapshot.kernel, "zero");
+    assert!(snapshot.executable_path.is_none());
+    assert!(!snapshot.executable_exists);
     assert!(snapshot
-        .executable_path
-        .as_deref()
-        .is_some_and(|path| path.ends_with(expected_zero_binary_suffix())));
-
-    #[cfg(windows)]
-    assert!(snapshot.executable_exists);
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("core executable path is not configured")));
 
     #[cfg(windows)]
     {
@@ -24,14 +23,23 @@ fn default_zero_core_config_uses_embedded_binary() {
     #[cfg(unix)]
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert!(snapshot
-            .endpoint
-            .path
-            .ends_with("build/core/zero-control.sock"));
-        assert!(snapshot
-            .launch_args
-            .contains(&"--control-socket".to_string()));
+        assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
+        assert!(!snapshot.launch_args.contains(&"--control-socket".to_string()));
     }
+}
+
+#[test]
+fn core_inspection_exposes_read_only_public_info() {
+    let info = inspect_from_config(&AppCoreConfig::default()).unwrap();
+
+    assert_eq!(info.kernel, "zero");
+    assert!(!info.executable_exists);
+    assert!(info.executable_path.is_none());
+    assert!(info.download_url.is_some());
+    assert!(info
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("core executable path is not configured")));
 }
 
 #[test]
@@ -62,18 +70,6 @@ fn core_config_writer_persists_json_object() {
     assert_eq!(saved, content);
 
     let _ = std::fs::remove_dir_all(dir);
-}
-
-fn expected_zero_binary_suffix() -> &'static str {
-    #[cfg(windows)]
-    {
-        r"build\core\zero.exe"
-    }
-
-    #[cfg(unix)]
-    {
-        "build/core/zero"
-    }
 }
 
 fn custom_socket() -> String {

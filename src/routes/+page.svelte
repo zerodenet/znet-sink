@@ -12,6 +12,12 @@
 
   onMount(() => {
     initTheme();
+    void (async () => {
+      await store.loadFromBackend();
+      if (!store.isInitialized) {
+        store.startApp('lite');
+      }
+    })();
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemThemeChange = () => {
       if (store.selectedTheme === 'system') applyTheme('system');

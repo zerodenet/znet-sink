@@ -1,12 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { warning } from './toast.svelte';
-import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError } from '$lib/types/core';
+import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo } from '$lib/types/core';
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
 import type { SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, ProxyMode } from '$lib/types/gui-api';
 
-export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
+export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
 export function handleAppError(error: unknown, fallbackMessage: string): void {
   const appError = error as { code?: string; message?: string };
@@ -173,7 +173,7 @@ export async function stopGuiEvents(): Promise<number> {
 
 // ── Core config ──
 
-export async function getCoreConfigSnapshot(): Promise<CoreConfigSnapshot> {
+export async function getCoreConfigSnapshot(): Promise<CoreKernelInfo> {
   return invoke('core_config_get');
 }
 
@@ -243,33 +243,201 @@ export async function getGuiSelfTestSnapshot(): Promise<SelfTestSnapshot> {
 }
 
 export async function getGuiConnectionStatus(): Promise<ConnectionStatus> {
-  return invoke('gui_connection_status');
+  const raw = await invoke<Record<string, unknown>>('gui_connection_status');
+  return mapConnectionStatus(raw);
 }
 
 export async function guiConnect(): Promise<ConnectionStatus> {
-  return invoke('gui_connect');
+  const raw = await invoke<Record<string, unknown>>('gui_connect');
+  return mapConnectionStatus(raw);
 }
 
 export async function guiDisconnect(): Promise<ConnectionStatus> {
-  return invoke('gui_disconnect');
+  const raw = await invoke<Record<string, unknown>>('gui_disconnect');
+  return mapConnectionStatus(raw);
 }
 
 export async function getGuiProxyModeStatus(): Promise<ProxyModeStatus> {
-  return invoke('gui_proxy_mode_status');
+  const raw = await invoke<Record<string, unknown>>('gui_proxy_mode_status');
+  return mapProxyModeStatus(raw);
 }
 
 export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = true): Promise<ProxyModeStatus> {
-  return invoke('gui_set_proxy_mode', { input: { mode, restartCore } });
+  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore } });
+  return mapProxyModeStatus(raw);
 }
 
 export async function getGuiCoreOverview(): Promise<CoreOverview> {
-  return invoke('gui_core_overview');
+  const raw = await invoke<Record<string, unknown>>('gui_core_overview');
+  return mapCoreOverview(raw);
 }
 
 export async function getGuiTrafficStats(): Promise<TrafficStats> {
-  return invoke('gui_traffic_stats');
+  const raw = await invoke<Record<string, unknown>>('gui_traffic_snapshot');
+  return mapTrafficStats(raw);
 }
 
 export async function getGuiPolicyGroups(): Promise<PolicyGroup[]> {
-  return invoke('gui_policy_groups');
+  const raw = await invoke<Record<string, unknown>[]>('gui_policy_groups');
+  return mapPolicyGroups(raw);
+}
+
+function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {
+  const connected = boolFrom(raw, ['connected']) ?? false;
+  const stage = stringFrom(raw, ['stage']) ?? 'disconnected';
+  const process = objectFrom(raw, ['process']);
+  const stats = objectFrom(raw, ['stats']);
+  const systemProxy = objectFrom(raw, ['system_proxy', 'systemProxy']);
+
+  return {
+    state: connected ? 'connected' : stageToState(stage),
+    message: stringFrom(raw, ['last_error', 'lastError', 'message']) ?? (connected ? undefined : stage),
+    uptimeMs: uptimeFromProcess(process),
+    activeConnections: numberFrom(stats, ['active_sessions', 'activeSessions']) ?? 0,
+    systemProxyEnabled: boolFrom(systemProxy, ['enabled']) ?? false,
+  };
+}
+
+function mapProxyModeStatus(raw: Record<string, unknown>): ProxyModeStatus {
+  return {
+    currentMode: (stringFrom(raw, ['mode']) as ProxyMode) ?? 'rule',
+    availableModes: ['global', 'rule', 'direct'],
+    message: stringFrom(raw, ['reason']),
+  };
+}
+
+function mapCoreOverview(raw: Record<string, unknown>): CoreOverview {
+  const process = objectFrom(raw, ['process']);
+  const health = objectFrom(raw, ['health']);
+  const stats = objectFrom(raw, ['stats']);
+
+  return {
+    coreState: processStateToCoreState(stringFrom(process, ['state'])),
+    version: stringFrom(health, ['engine_version', 'engineVersion', 'version']),
+    uptimeMs: uptimeFromProcess(process),
+    memoryUsageBytes: numberFrom(stats, ['memory_usage_bytes', 'memoryUsageBytes']),
+    cpuUsagePercent: numberFrom(stats, ['cpu_usage_percent', 'cpuUsagePercent']),
+  };
+}
+
+function mapTrafficStats(raw: Record<string, unknown>): TrafficStats {
+  const totals = objectFrom(raw, ['totals']);
+  const rates = objectFrom(raw, ['rates']);
+
+  return {
+    uploadBytesPerSec: numberFrom(rates, ['upload_bps', 'uploadBps']) ?? 0,
+    downloadBytesPerSec: numberFrom(rates, ['download_bps', 'downloadBps']) ?? 0,
+    totalUploadBytes: numberFrom(totals, ['bytes_up', 'bytesUp']) ?? 0,
+    totalDownloadBytes: numberFrom(totals, ['bytes_down', 'bytesDown']) ?? 0,
+    connectionCount: numberFrom(totals, ['active_sessions', 'activeSessions']) ?? 0,
+  };
+}
+
+function mapPolicyGroups(raw: Record<string, unknown>[]): PolicyGroup[] {
+  return raw.map((group) => {
+    const members = valuesFromContainer(group, ['members', 'targets', 'children', 'proxies', 'items']);
+    return {
+      name: stringFrom(group, ['tag', 'policy_tag', 'policyTag', 'name', 'id']) ?? 'unknown',
+      selected: stringFrom(group, ['selected', 'current', 'now', 'target']),
+      outbounds: members
+        .map((member) => {
+          if (!member || typeof member !== 'object') return null;
+          const item = member as Record<string, unknown>;
+          const tag = stringFrom(item, ['tag', 'target_tag', 'targetTag', 'name', 'id', 'target']);
+          if (!tag) return null;
+          return {
+            tag,
+            type: stringFrom(item, ['kind', 'type', 'protocol']) ?? 'unknown',
+          };
+        })
+        .filter((item): item is { tag: string; type: string } => Boolean(item)),
+    };
+  });
+}
+
+function valuesFromContainer(value: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (Array.isArray(candidate)) return candidate;
+    if (candidate && typeof candidate === 'object') return Object.values(candidate as Record<string, unknown>);
+  }
+  return [];
+}
+
+function objectFrom(value: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
+function stringFrom(value: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function numberFrom(value: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === 'string') {
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function boolFrom(value: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'boolean') return candidate;
+    if (typeof candidate === 'string') {
+      const normalized = candidate.toLowerCase();
+      if (['true', '1', 'yes'].includes(normalized)) return true;
+      if (['false', '0', 'no'].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+}
+
+function uptimeFromProcess(process: Record<string, unknown>): number | undefined {
+  const startedAt = numberFrom(process, ['started_at_unix_ms', 'startedAtUnixMs']);
+  return startedAt ? Math.max(0, Date.now() - startedAt) : undefined;
+}
+
+function processStateToCoreState(state?: string): CoreOverview['coreState'] {
+  switch (state) {
+    case 'running':
+      return 'running';
+    case 'starting':
+      return 'starting';
+    case 'stopping':
+      return 'stopping';
+    case 'failed':
+      return 'error';
+    case 'exited':
+      return 'stopped';
+    default:
+      return 'stopped';
+  }
+}
+
+function stageToState(stage: string): ConnectionStatus['state'] {
+  switch (stage) {
+    case 'connected':
+      return 'connected';
+    case 'connecting':
+      return 'connecting';
+    case 'failed':
+      return 'error';
+    default:
+      return 'disconnected';
+  }
 }

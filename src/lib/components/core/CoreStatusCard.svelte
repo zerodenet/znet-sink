@@ -1,10 +1,11 @@
 <script lang="ts">
   import { getCoreProcessStatus, startCoreProcess, stopCoreProcess, getCoreConfigSnapshot, disableSystemProxy, getSystemProxyStatus } from '$lib/services/core';
-  import type { CoreProcessStatus, CoreConfigSnapshot } from '$lib/types/core';
+  import type { CoreProcessStatus, CoreKernelInfo } from '$lib/types/core';
   import { error as toastError, success, info, warning } from '$lib/services/toast.svelte';
+  import { store } from '$lib/services/store.svelte';
 
   let status = $state<CoreProcessStatus | null>(null);
-  let snapshot = $state<CoreConfigSnapshot | null>(null);
+  let snapshot = $state<CoreKernelInfo | null>(null);
   let loading = $state(false);
   let prevIsRunning = $state(false);
   let retryCount = $state(0);
@@ -201,6 +202,9 @@
       </svg>
       <span class="truncate">{snapshot.warnings[0]}</span>
     </div>
+    <button class="core-link" onclick={() => store.openSettings('core')}>
+      配置内核
+    </button>
   {/if}
 
   <!-- Toggle button -->
@@ -324,6 +328,17 @@
     color: var(--warning);
     overflow: hidden;
     flex-shrink: 0;
+  }
+
+  .core-link {
+    align-self: flex-start;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 0;
+    cursor: pointer;
   }
 
   /* ---- Error ---- */

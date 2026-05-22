@@ -25,6 +25,7 @@ fn hidden_menu_keys_are_normalized() {
         "".to_string(),
         "logs".to_string(),
         "core".to_string(),
+        "settings".to_string(),
     ]);
 
     assert_eq!(keys, vec!["core".to_string(), "logs".to_string()]);

@@ -39,6 +39,8 @@ pub struct AppCoreConfig {
     #[serde(default)]
     pub executable_path: Option<String>,
     #[serde(default)]
+    pub download_url: Option<String>,
+    #[serde(default)]
     pub config_path: Option<String>,
     #[serde(default)]
     pub working_dir: Option<String>,
@@ -53,6 +55,7 @@ impl Default for AppCoreConfig {
             auto_connect: true,
             auto_start: false,
             executable_path: None,
+            download_url: None,
             config_path: None,
             working_dir: None,
             socket: None,
@@ -142,6 +145,7 @@ pub struct AppCoreConfigPatch {
     pub auto_connect: Option<bool>,
     pub auto_start: Option<bool>,
     pub executable_path: Option<Option<String>>,
+    pub download_url: Option<Option<String>>,
     pub config_path: Option<Option<String>>,
     pub working_dir: Option<Option<String>>,
     pub socket: Option<Option<String>>,

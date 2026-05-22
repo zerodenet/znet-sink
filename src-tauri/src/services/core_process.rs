@@ -21,9 +21,25 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     let config = lock(state.app_config(), "app_config")?.core.clone();
     let snapshot = core_config::snapshot_from_config(&config)?;
 
-    snapshot
-        .validate_launchable()
-        .map_err(AppError::invalid_argument)?;
+    if let Err(error) = snapshot.validate_launchable() {
+        let message = format!("failed to start core process: {error}");
+        let _ = logs::append_entry(
+            state.inner(),
+            LogSource::App,
+            LogLevel::Error,
+            message.clone(),
+            Some(json!({
+                "kernel": snapshot.kernel.clone(),
+                "executablePath": snapshot.executable_path.clone(),
+                "configPath": snapshot.config_path.clone(),
+                "workingDir": snapshot.working_dir.clone(),
+                "endpointPath": snapshot.endpoint.path.clone(),
+                "warnings": snapshot.warnings.clone(),
+                "reason": error,
+            })),
+        );
+        return Err(AppError::invalid_argument(error));
+    }
     let executable_path = snapshot.executable_path.as_deref().unwrap_or_default();
 
     {

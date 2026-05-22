@@ -142,7 +142,7 @@
     {#if filteredLogs.length === 0}
       <div class="log-empty">暂无日志</div>
     {:else}
-      {#each filteredLogs as log (log.id)}
+      {#each filteredLogs as log, index (`${log.id}-${log.occurredAtUnixMs}-${index}`)}
         <div class="log-row">
           <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
           <span class="log-src" class:app={log.source === 'app'} class:core={log.source === 'core'}>

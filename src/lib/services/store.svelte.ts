@@ -4,11 +4,13 @@ import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from 
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
+export type SettingsSection = 'general' | 'core' | 'plugins' | 'about';
 
 class AppStateStore {
   isInitialized = $state(false);
   uiMode = $state<UIMode>('lite');
   activeTab = $state('overview');
+  settingsSection = $state<SettingsSection>('general');
   selectedNodeId = $state('node-1');
   selectedTheme = $state<ThemeMode>('system');
   visibleTabs = $state<string[]>([]);
@@ -59,6 +61,10 @@ class AppStateStore {
         features: new Map(surface.features.map(item => [item.key, item])),
       };
 
+      if (config.ui.defaultRoute && this.isNavVisible(config.ui.defaultRoute)) {
+        this.activeTab = config.ui.defaultRoute;
+      }
+
       this.isInitialized = true;
       if (browser) {
         localStorage.setItem('znet-is-init', 'true');
@@ -89,6 +95,15 @@ class AppStateStore {
       localStorage.setItem('znet-is-init', 'true');
     }
     this.persistUiMode(mode);
+  }
+
+  openSettings(section: SettingsSection = 'core') {
+    this.isInitialized = true;
+    this.activeTab = 'settings';
+    this.settingsSection = section;
+    if (browser) {
+      localStorage.setItem('znet-is-init', 'true');
+    }
   }
 
   async switchUIMode(mode: UIMode) {
@@ -167,6 +182,7 @@ class AppStateStore {
   resetApp() {
     this.isInitialized = false;
     this.activeTab = 'overview';
+    this.settingsSection = 'general';
     this.selectedTheme = 'system';
     if (browser) {
       localStorage.removeItem('znet-is-init');

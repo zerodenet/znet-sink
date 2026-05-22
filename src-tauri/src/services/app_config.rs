@@ -24,7 +24,11 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             if kernel.is_empty() {
                 return Err(AppError::invalid_argument("core.kernel must not be empty"));
             }
-            config.core.kernel = kernel;
+            let current_kernel = config.core.kernel.trim().to_ascii_lowercase();
+            if kernel != current_kernel {
+                return Err(AppError::invalid_argument("core.kernel is read-only"));
+            }
+            config.core.kernel = current_kernel;
         }
         if let Some(auto_connect) = core.auto_connect {
             config.core.auto_connect = auto_connect;
@@ -34,6 +38,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         }
         if let Some(executable_path) = core.executable_path {
             config.core.executable_path = normalize_optional(executable_path);
+        }
+        if let Some(download_url) = core.download_url {
+            config.core.download_url = normalize_optional(download_url);
         }
         if let Some(config_path) = core.config_path {
             config.core.config_path = normalize_optional(config_path);
@@ -129,8 +136,8 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {
     keys.into_iter()
         .filter_map(|key| {
-            let key = key.trim().to_string();
-            (!key.is_empty()).then_some(key)
+            let key = key.trim().to_ascii_lowercase();
+            (!key.is_empty() && key != "settings").then_some(key)
         })
         .collect::<BTreeSet<_>>()
         .into_iter()

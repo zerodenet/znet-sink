@@ -22,6 +22,20 @@ pub struct CoreConfigSnapshot {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CoreKernelInfo {
+    pub kernel: String,
+    pub executable_path: Option<String>,
+    pub executable_exists: bool,
+    pub file_name: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub modified_at_unix_ms: Option<u64>,
+    pub recommended_install_dir: Option<String>,
+    pub download_url: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoreConfigExportResult {
     pub proxy_config_id: String,
     pub path: String,

@@ -66,7 +66,6 @@ fn domain_store_roundtrips_profiles() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-
 fn isolated_data_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -14,6 +14,35 @@ use crate::services::domain_store;
 use crate::services::{app_config, app_config_store};
 use crate::state::app_state::AppState;
 
+fn normalize_config_format(input: Option<String>) -> AppResult<String> {
+    let Some(format) = normalize_optional(input) else {
+        return Ok("json".to_string());
+    };
+
+    if format.trim().eq_ignore_ascii_case("json") {
+        Ok("json".to_string())
+    } else {
+        Err(AppError::invalid_argument("proxy config format must be json"))
+    }
+}
+
+fn normalize_active_flag(items: &mut [ProxyConfigProfile]) {
+    let mut active_index = None;
+    for (index, item) in items.iter_mut().enumerate() {
+        if item.active {
+            if active_index.is_none() {
+                active_index = Some(index);
+            } else {
+                item.active = false;
+            }
+        }
+    }
+
+    if !items.is_empty() && active_index.is_none() {
+        items[0].active = true;
+    }
+}
+
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<ProxyConfigProfile>> {
     Ok(lock(state.proxy_configs(), "proxy_config")?.clone())
 }
@@ -34,9 +63,14 @@ pub fn upsert(
     let name = normalize_required(input.name, "name")?;
     let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("proxy-config"));
     let kernel = normalize_optional(input.kernel).unwrap_or_else(|| "zero".to_string());
-    let format = normalize_optional(input.format).unwrap_or_else(|| "zero".to_string());
+    let format = normalize_config_format(input.format)?;
     let path = normalize_optional(input.path);
-    let active = input.active.unwrap_or(false);
+    let active = input.active.unwrap_or_else(|| {
+        let profiles = lock(state.proxy_configs(), "proxy_config")
+            .map(|profiles| profiles.is_empty())
+            .unwrap_or(false);
+        profiles
+    });
     let updated_at_unix_ms = now_unix_ms();
     let capabilities = analyze_capabilities(input.content.as_ref());
 
@@ -65,6 +99,12 @@ pub fn upsert(
         }
         None => profiles.push(profile.clone()),
     }
+    normalize_active_flag(&mut profiles);
+    let profile = profiles
+        .iter()
+        .find(|item| item.id == id)
+        .cloned()
+        .ok_or_else(|| AppError::internal("failed to persist proxy config"))?;
     domain_store::save_proxy_configs(&profiles)?;
     if profile.active {
         sync_local_proxy_from_profile(state.inner(), &profile)?;
@@ -98,7 +138,7 @@ pub fn import(
             id: input.id,
             name: input.name,
             kernel: input.kernel,
-            format: input.format.or_else(|| Some("json".to_string())),
+            format: Some(normalize_config_format(input.format)?),
             path: input.path,
             content: Some(parsed),
             active: input.active,
@@ -114,19 +154,19 @@ pub fn set_active(state: State<'_, AppState>, id: String) -> AppResult<ProxyConf
         return Err(AppError::not_found("proxy_config", id));
     }
 
-    let mut active = None;
     for profile in profiles.iter_mut() {
         profile.active = profile.id == id;
-        if profile.active {
-            active = Some(profile.clone());
-        }
     }
+    normalize_active_flag(&mut profiles);
+    let active = profiles
+        .iter()
+        .find(|profile| profile.active)
+        .cloned()
+        .ok_or_else(|| AppError::internal("failed to activate proxy config"))?;
     domain_store::save_proxy_configs(&profiles)?;
-    if let Some(profile) = active.as_ref() {
-        sync_local_proxy_from_profile(state.inner(), profile)?;
-    }
+    sync_local_proxy_from_profile(state.inner(), &active)?;
 
-    active.ok_or_else(|| AppError::internal("failed to activate proxy config"))
+    Ok(active)
 }
 
 pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
@@ -137,6 +177,10 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
 
     if profiles.len() == before {
         return Err(AppError::not_found("proxy_config", id));
+    }
+    normalize_active_flag(&mut profiles);
+    if let Some(profile) = profiles.iter().find(|profile| profile.active).cloned() {
+        sync_local_proxy_from_profile(state.inner(), &profile)?;
     }
     domain_store::save_proxy_configs(&profiles)?;
 

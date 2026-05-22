@@ -44,10 +44,14 @@ pub async fn interaction_surface(
     let zero_features = crate::services::zero_adapter::capability_feature_keys(state.inner())
         .await
         .unwrap_or_default();
+    let hidden_menu_keys = lock(state.app_config(), "app_config")?
+        .ui
+        .hidden_menu_keys
+        .clone();
 
     Ok(InteractionSurfaceSnapshot {
         ui_mode,
-        navigation: navigation_items(is_pro),
+        navigation: navigation_items(is_pro, &hidden_menu_keys),
         actions: action_items(is_pro, &zero_features),
         features: feature_surface_items(is_pro, &zero_features),
     })
@@ -101,8 +105,8 @@ fn feature(key: &str, enabled: bool, missing_active_reason: &Option<String>) -> 
     }
 }
 
-fn navigation_items(is_pro: bool) -> Vec<InteractionSurfaceItem> {
-    vec![
+fn navigation_items(is_pro: bool, hidden_menu_keys: &[String]) -> Vec<InteractionSurfaceItem> {
+    let mut items = vec![
         shared("overview", "navigation"),
         pro_only("profiles", "navigation", is_pro),
         shared("subscriptions", "navigation"),
@@ -110,7 +114,22 @@ fn navigation_items(is_pro: bool) -> Vec<InteractionSurfaceItem> {
         pro_only("connections", "navigation", is_pro),
         shared("logs", "navigation"),
         shared("settings", "navigation"),
-    ]
+    ];
+
+    for item in &mut items {
+        if item.key != "settings"
+            && hidden_menu_keys
+                .iter()
+                .any(|key| key.eq_ignore_ascii_case(&item.key))
+        {
+            item.visible = false;
+            item.operable = false;
+            item.readonly = true;
+            item.reason = Some("hidden by ui.hiddenMenuKeys".to_string());
+        }
+    }
+
+    items
 }
 
 fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfaceItem> {

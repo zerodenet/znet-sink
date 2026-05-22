@@ -101,6 +101,18 @@ export interface CoreConfigSnapshot {
   warnings: string[];
 }
 
+export interface CoreKernelInfo {
+  kernel: string;
+  executablePath?: string;
+  executableExists: boolean;
+  fileName?: string;
+  sizeBytes?: number;
+  modifiedAtUnixMs?: number;
+  recommendedInstallDir?: string;
+  downloadUrl?: string;
+  warnings: string[];
+}
+
 export interface CoreConfigExportResult {
   proxyConfigId: string;
   path: string;
