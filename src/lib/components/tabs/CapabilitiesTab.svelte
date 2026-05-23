@@ -41,7 +41,7 @@
       <!-- 管理能力 -->
       <div>
         <h4 class="text-xs font-medium text-foreground mb-2">管理能力</h4>
-        <div class="grid grid-cols-3 md:grid-cols-4 gap-2">
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
           {#each snapshot.management as item (item.key)}
             <div class="bg-muted/30 border border-card-border rounded-lg p-2 flex flex-col gap-1">
               <div class="flex items-center justify-between">
@@ -56,7 +56,7 @@
       <!-- 代理特性 -->
       <div>
         <h4 class="text-xs font-medium text-foreground mb-2">代理特性</h4>
-        <div class="grid grid-cols-3 md:grid-cols-4 gap-2">
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
           {#each snapshot.proxyFeatures as item (item.key)}
             <div class="bg-muted/30 border border-card-border rounded-lg p-2 flex flex-col gap-1">
               <div class="flex items-center justify-between">

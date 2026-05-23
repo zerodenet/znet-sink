@@ -22,6 +22,8 @@ use crate::commands::proxy_mode as proxy_mode_commands;
 use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
+use crate::models::app_config::AppConfig;
+use crate::services::domain_store::DomainStoreData;
 use crate::services::{app_config_store, core_process, domain_store, log_store};
 use crate::state::app_state::AppState;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -29,13 +31,25 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_config_path =
-        app_config_store::default_config_path().expect("failed to resolve app config path");
-    let app_config =
-        app_config_store::load_or_default(&app_config_path).expect("failed to load app config");
-    let domain_data = domain_store::load_all().expect("failed to load domain data");
-    let logs = log_store::load_recent(app_config.logs.max_entries).expect("failed to load logs");
-    log_store::rotate(app_config.logs.max_entries).expect("failed to rotate logs");
+    let app_config_path = app_config_store::default_config_path().unwrap_or_else(|e| {
+        eprintln!("warning: failed to resolve app config path: {e:?}, using fallback");
+        std::path::PathBuf::from("app-config.json")
+    });
+    let app_config = app_config_store::load_or_default(&app_config_path).unwrap_or_else(|e| {
+        eprintln!("warning: failed to load app config: {e:?}, using defaults");
+        AppConfig::default()
+    });
+    let domain_data = domain_store::load_all().unwrap_or_else(|e| {
+        eprintln!("warning: failed to load domain data: {e:?}, using empty data");
+        DomainStoreData::default()
+    });
+    let logs = log_store::load_recent(app_config.logs.max_entries).unwrap_or_else(|e| {
+        eprintln!("warning: failed to load logs: {e:?}, using empty log buffer");
+        Vec::new()
+    });
+    if let Err(e) = log_store::rotate(app_config.logs.max_entries) {
+        eprintln!("warning: failed to rotate logs: {e:?}");
+    }
 
     tauri::Builder::default()
         .manage(AppState::with_domain_data(

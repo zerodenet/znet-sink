@@ -172,14 +172,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
         InternetSetOptionW, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH,
     };
 
-    // Use registry to set system proxy on Windows
-    let proxy_enable = if enable {
-        format!("{host}:{port}")
-    } else {
-        String::new()
-    };
-
-    // Set via registry
+    // Set ProxyEnable via registry
     let output = Command::new("reg")
         .args([
             "add",
@@ -192,10 +185,21 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
             if enable { "1" } else { "0" },
             "/f",
         ])
-        .output();
+        .output()
+        .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
 
-    if enable && !proxy_enable.is_empty() {
-        let _ = Command::new("reg")
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::internal(format!(
+            "failed to set Windows ProxyEnable: {}",
+            stderr.trim()
+        )));
+    }
+
+    // Set ProxyServer via registry
+    if enable {
+        let proxy_server = format!("{host}:{port}");
+        let server_output = Command::new("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -204,10 +208,19 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
                 "/t",
                 "REG_SZ",
                 "/d",
-                &proxy_enable,
+                &proxy_server,
                 "/f",
             ])
-            .output();
+            .output()
+            .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
+
+        if !server_output.status.success() {
+            let stderr = String::from_utf8_lossy(&server_output.stderr);
+            return Err(AppError::internal(format!(
+                "failed to set Windows ProxyServer: {}",
+                stderr.trim()
+            )));
+        }
     }
 
     // Notify system of proxy change
@@ -221,9 +234,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
         InternetSetOptionW(ptr::null(), INTERNET_OPTION_REFRESH, ptr::null(), 0);
     }
 
-    output
-        .map(|_| ())
-        .map_err(|e| AppError::internal(format!("failed to configure Windows proxy: {e}")))
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -242,7 +253,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
     let enabled = stdout.contains("0x1");
 
     if enabled {
-        let server_output = Command::new("reg")
+        let server_output = match Command::new("reg")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -250,7 +261,14 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
                 "ProxyServer",
             ])
             .output()
-            .unwrap_or_else(|_| output.clone());
+        {
+            Ok(o) => o,
+            Err(e) => {
+                return Err(AppError::internal(format!(
+                    "failed to query Windows ProxyServer: {e}"
+                )))
+            }
+        };
 
         let server_stdout = String::from_utf8_lossy(&server_output.stdout);
         let server = server_stdout

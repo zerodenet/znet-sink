@@ -1,30 +1,96 @@
 <script lang="ts">
-  import { queryFlows, closeFlow, type FlowInfo } from '$lib/services/core';
+  import { getGuiConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
+  import { coreEvents } from '$lib/services/core-events.svelte';
+  import type { GuiConnectionItem } from '$lib/types/gui-api';
 
-  let flows = $state<FlowInfo[]>([]);
+  type DisplayConnection = {
+    flowId: string;
+    source: string;
+    destination: string;
+    protocol: string;
+    bytesUp: number;
+    bytesDown: number;
+    startedAtUnixMs: number;
+    policyTag?: string;
+    outboundTag?: string;
+    routeMode?: string;
+  };
+
+  let connections = $state<DisplayConnection[]>([]);
   let loading = $state(true);
   let closingId = $state<string | null>(null);
 
   async function refresh() {
     loading = true;
     try {
-      flows = await queryFlows();
-    } catch (e) {
-      console.error('Failed to query flows:', e);
+      connections = await fetchConnections();
+    } catch {
+      // Silent — keep stale data visible
     } finally {
       loading = false;
     }
   }
 
+  async function fetchConnections(): Promise<DisplayConnection[]> {
+    try {
+      const result = await getGuiConnections({ limit: 200 });
+      return result.items.map(mapGuiConnection);
+    } catch (e) {
+      const appError = e as { code?: string };
+      // Fallback to raw core IPC if GUI layer is unavailable (e.g. Lite mode)
+      if (appError.code === 'mode_restricted') {
+        const flows = await queryFlows();
+        return flows.map(mapFlowInfo);
+      }
+      throw e;
+    }
+  }
+
+  function mapGuiConnection(c: GuiConnectionItem): DisplayConnection {
+    return {
+      flowId: c.flowId,
+      source: c.source ?? '-',
+      destination: c.destination,
+      protocol: c.network,
+      bytesUp: c.bytesUp,
+      bytesDown: c.bytesDown,
+      startedAtUnixMs: c.startedAtUnixMs ?? Date.now(),
+      policyTag: c.policyTag,
+      outboundTag: c.outboundTag,
+      routeMode: c.routeMode,
+    };
+  }
+
+  function mapFlowInfo(f: FlowInfo): DisplayConnection {
+    return {
+      flowId: f.flowId,
+      source: f.source,
+      destination: f.destination,
+      protocol: f.protocol,
+      bytesUp: f.bytesUp,
+      bytesDown: f.bytesDown,
+      startedAtUnixMs: f.startedAtUnixMs,
+    };
+  }
+
   async function handleClose(flowId: string) {
     closingId = flowId;
     try {
-      await closeFlow(flowId);
-      flows = flows.filter(f => f.flowId !== flowId);
+      try {
+        await guiCloseConnection(flowId);
+      } catch (e) {
+        const appError = e as { code?: string };
+        if (appError.code === 'mode_restricted') {
+          await closeFlow(flowId);
+        } else {
+          throw e;
+        }
+      }
+      connections = connections.filter(c => c.flowId !== flowId);
     } catch (e) {
-      console.error('Failed to close flow:', e);
+      handleAppError(e, '关闭连接失败');
     } finally {
       closingId = null;
     }
@@ -48,10 +114,31 @@
     return `${hr}h ${min % 60}m`;
   }
 
+  function modeLabel(mode?: string): string {
+    switch (mode) {
+      case 'global': return '全局';
+      case 'rule': return '规则';
+      case 'direct': return '直连';
+      default: return mode ?? '-';
+    }
+  }
+
+  let _lastEventTick = -1;
+
+  // Poll on mount + every 3s
   $effect(() => {
     refresh();
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);
+  });
+
+  // React to live connection events from core event stream
+  $effect(() => {
+    const tick = coreEvents.connectionTick;
+    if (tick > 0 && tick !== _lastEventTick) {
+      _lastEventTick = tick;
+      refresh();
+    }
   });
 </script>
 
@@ -60,7 +147,7 @@
   <div class="panel-header">
     <div class="panel-title-row">
       <span class="panel-title">活跃连接</span>
-      <span class="count-badge">{overviewData.activeConnections} 个</span>
+      <span class="count-badge">{connections.length} 个</span>
     </div>
     <button class="action-btn" onclick={refresh}>
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -71,42 +158,48 @@
   </div>
 
   <!-- Content -->
-  {#if loading && flows.length === 0}
+  {#if loading && connections.length === 0}
     <div class="panel-empty">加载中...</div>
-  {:else if flows.length === 0}
+  {:else if connections.length === 0}
     <div class="panel-empty-block">
       <span class="empty-title">无活跃连接</span>
       <span class="empty-desc">内核未运行或暂无流量</span>
     </div>
   {:else}
     <div class="list-scroll">
-      {#each flows as flow (flow.flowId)}
+      {#each connections as conn (conn.flowId)}
         <div class="flow-row">
           <div class="flow-main">
-            <!-- Top line: ID + protocol -->
             <div class="flow-top">
-              <span class="flow-id">{flow.flowId}</span>
-              <span class="row-tag flow-protocol">{flow.protocol}</span>
+              <span class="flow-id">{conn.flowId}</span>
+              <span class="row-tag flow-protocol">{conn.protocol}</span>
+              {#if conn.policyTag}
+                <span class="row-tag flow-policy">{conn.policyTag}</span>
+              {/if}
+              {#if conn.routeMode}
+                <span class="row-tag flow-route-mode">{modeLabel(conn.routeMode)}</span>
+              {/if}
             </div>
-            <!-- Middle line: source → destination -->
             <div class="flow-route">
-              <span class="flow-src">{flow.source}</span>
+              <span class="flow-src">{conn.source}</span>
               <span class="flow-arrow">→</span>
-              <span class="flow-dst">{flow.destination}</span>
+              <span class="flow-dst">{conn.destination}</span>
+              {#if conn.outboundTag}
+                <span class="flow-outbound">{conn.outboundTag}</span>
+              {/if}
             </div>
-            <!-- Bottom line: stats -->
             <div class="flow-stats">
-              <span class="flow-stat up">↑ {formatBytes(flow.bytesUp)}</span>
-              <span class="flow-stat down">↓ {formatBytes(flow.bytesDown)}</span>
-              <span class="flow-dur">{formatDuration(flow.startedAtUnixMs)}</span>
+              <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
+              <span class="flow-stat down">↓ {formatBytes(conn.bytesDown)}</span>
+              <span class="flow-dur">{formatDuration(conn.startedAtUnixMs)}</span>
             </div>
           </div>
 
           {#if store.isActionOperable('core.flow.close')}
             <button
               class="flow-close"
-              onclick={() => handleClose(flow.flowId)}
-              disabled={closingId === flow.flowId}
+              onclick={() => handleClose(conn.flowId)}
+              disabled={closingId === conn.flowId}
               title="关闭连接"
             >
               <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
@@ -121,7 +214,6 @@
 </div>
 
 <style>
-  /* Panel */
   .panel-header {
     display: flex;
     align-items: center;
@@ -190,10 +282,7 @@
     padding: 28px;
   }
 
-  .empty-title {
-    font-size: 12px;
-    color: var(--muted-foreground);
-  }
+  .empty-title { font-size: 12px; color: var(--muted-foreground); }
 
   .empty-desc {
     font-size: 12px;
@@ -201,7 +290,6 @@
     opacity: 0.6;
   }
 
-  /* List */
   .list-scroll {
     flex: 1;
     overflow-y: auto;
@@ -212,7 +300,6 @@
     min-height: 0;
   }
 
-  /* Flow row */
   .flow-row {
     display: flex;
     align-items: flex-start;
@@ -240,6 +327,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
   }
 
   .flow-id {
@@ -250,20 +338,27 @@
   }
 
   .row-tag {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.04em;
-    padding: 2px 6px;
+    padding: 1px 5px;
     border-radius: 4px;
+  }
+
+  .flow-protocol {
+    text-transform: uppercase;
     background: var(--muted);
     color: var(--muted-foreground);
   }
 
-  .flow-protocol {
-    padding: 1px 5px;
-    font-size: 12px;
-    letter-spacing: 0.06em;
+  .flow-policy {
+    background: rgba(168, 85, 247, 0.1);
+    color: #A855F7;
+  }
+
+  .flow-route-mode {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3B82F6;
   }
 
   .flow-route {
@@ -282,14 +377,22 @@
     white-space: nowrap;
   }
 
-  .flow-src { max-width: 140px; }
-  .flow-dst { max-width: 160px; }
+  .flow-src { max-width: min(200px, 35%); }
+  .flow-dst { max-width: min(240px, 45%); }
 
   .flow-arrow {
     flex-shrink: 0;
     font-size: 12px;
     opacity: 0.4;
     padding: 0 1px;
+  }
+
+  .flow-outbound {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted-foreground);
+    opacity: 0.6;
+    margin-left: 4px;
   }
 
   .flow-stats {

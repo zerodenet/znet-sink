@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from '$lib/services/store.svelte';
   import OverviewTab from './tabs/OverviewTab.svelte';
+  import NodesTab from './tabs/NodesTab.svelte';
   import ProfilesTab from './tabs/ProfilesTab.svelte';
   import SubscriptionsTab from './tabs/SubscriptionsTab.svelte';
   import RulesTab from './tabs/RulesTab.svelte';
@@ -13,6 +14,8 @@
 
 {#if store.activeTab === 'overview'}
   <OverviewTab />
+{:else if store.activeTab === 'nodes'}
+  <NodesTab />
 {:else if store.activeTab === 'profiles'}
   <ProfilesTab />
 {:else if store.activeTab === 'subscriptions'}

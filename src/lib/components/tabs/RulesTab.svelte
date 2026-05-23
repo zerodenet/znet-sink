@@ -166,107 +166,89 @@
 
 <!-- Modal -->
 {#if showForm}
-  <div
-    class="modal-backdrop"
-    onclick={() => showForm = false}
-    onkeydown={(e) => e.key === 'Escape' && (showForm = false)}
-    role="button"
-    tabindex="0"
-    aria-label="关闭弹窗"
-  >
-    <div
-      class="modal-box"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-    >
-      <h4 class="modal-title">{editingId ? '编辑' : '新增'}规则集</h4>
+  <div class="modal-overlay" role="presentation" onkeydown={(e) => e.key === 'Escape' && (showForm = false)}>
+    <div class="modal-box" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h4 class="modal-title">{editingId ? '编辑' : '新增'}规则集</h4>
+      </div>
 
-      <div class="modal-fields">
-        <div class="field-row">
-          <label for="rules-name" class="field-label">名称 <span class="required">*</span></label>
-          <input
-            id="rules-name"
-            bind:value={form.name}
-            placeholder="例如: 广告拦截规则"
-            class="field-input"
-          />
+      <div class="modal-body">
+        <div class="form-item">
+          <span class="form-label">名称 <span class="required">*</span></span>
+          <div class="form-input-wrap">
+            <input id="rules-name" bind:value={form.name} placeholder="例如: 广告拦截规则" class="field-input" />
+          </div>
         </div>
 
-        <div class="field-row">
-          <label for="rules-format" class="field-label">格式</label>
-          <select id="rules-format" bind:value={form.format} class="field-input">
-            <option value="auto">自动检测</option>
-            <option value="yaml">YAML</option>
-            <option value="json">JSON</option>
-            <option value="text">纯文本</option>
-          </select>
+        <div class="form-item">
+          <span class="form-label">格式</span>
+          <div class="form-input-wrap">
+            <select id="rules-format" bind:value={form.format} class="field-input">
+              <option value="auto">自动检测</option>
+              <option value="yaml">YAML</option>
+              <option value="json">JSON</option>
+              <option value="text">纯文本</option>
+            </select>
+          </div>
         </div>
 
-        <div class="field-row">
-          <span class="field-label">来源类型</span>
-          <div class="kind-seg">
-            {#each ['remote', 'file', 'inline'] as kind}
-              <button
-                onclick={() => form.kind = kind as typeof form.kind}
-                class="kind-btn {form.kind === kind ? 'on' : ''}"
-                aria-pressed={form.kind === kind}
-              >
-                {kindLabels[kind]}
-              </button>
-            {/each}
+        <div class="form-item">
+          <span class="form-label">来源类型</span>
+          <div class="form-input-wrap">
+            <div class="kind-seg">
+              {#each ['remote', 'file', 'inline'] as kind}
+                <button
+                  onclick={() => form.kind = kind as typeof form.kind}
+                  class="kind-btn {form.kind === kind ? 'on' : ''}"
+                  aria-pressed={form.kind === kind}
+                >
+                  {kindLabels[kind]}
+                </button>
+              {/each}
+            </div>
           </div>
         </div>
 
         {#if form.kind === 'remote'}
-          <div class="field-row">
-            <label for="rules-url" class="field-label">URL <span class="required">*</span></label>
-            <input
-              id="rules-url"
-              bind:value={form.url}
-              placeholder="https://example.com/rules.yaml"
-              class="field-input field-mono"
-            />
+          <div class="form-item">
+            <span class="form-label">URL <span class="required">*</span></span>
+            <div class="form-input-wrap">
+              <input id="rules-url" bind:value={form.url} placeholder="https://example.com/rules.yaml" class="field-input field-mono" />
+            </div>
           </div>
         {:else if form.kind === 'file'}
-          <div class="field-row">
-            <label for="rules-path" class="field-label">文件路径 <span class="required">*</span></label>
-            <input
-              id="rules-path"
-              bind:value={form.path}
-              placeholder="/path/to/rules.yaml"
-              class="field-input field-mono"
-            />
+          <div class="form-item">
+            <span class="form-label">文件路径 <span class="required">*</span></span>
+            <div class="form-input-wrap">
+              <input id="rules-path" bind:value={form.path} placeholder="/path/to/rules.yaml" class="field-input field-mono" />
+            </div>
           </div>
         {:else}
-          <div class="field-row">
-            <label for="rules-content" class="field-label">内联 JSON 内容</label>
-            <textarea
-              id="rules-content"
-              bind:value={form.content}
-              placeholder='内联规则 JSON...'
-              rows={6}
-              class="field-input field-mono resize-y"
-            ></textarea>
+          <div class="form-item">
+            <span class="form-label">内联内容</span>
+            <div class="form-input-wrap">
+              <textarea id="rules-content" bind:value={form.content} placeholder="内联规则 JSON..." rows={6} class="field-input field-mono resize-y"></textarea>
+            </div>
           </div>
         {/if}
 
-        <div class="field-row field-toggle">
-          <span class="field-label">启用规则集</span>
-          <button
-            onclick={() => form.enabled = !form.enabled}
-            class="toggle-btn {form.enabled ? 'on' : ''}"
-            role="switch"
-            aria-checked={form.enabled}
-          >
-            <span class="toggle-thumb"></span>
-          </button>
+        <div class="form-item">
+          <span class="form-label">启用</span>
+          <div class="form-input-wrap flex items-center">
+            <button
+              onclick={() => form.enabled = !form.enabled}
+              class="toggle-btn {form.enabled ? 'on' : ''}"
+              role="switch"
+              aria-checked={form.enabled}
+              aria-label="启用规则集"
+            >
+              <span class="toggle-thumb"></span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="modal-actions">
+      <div class="modal-footer">
         <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
         <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim()}>
           {saving ? '保存中...' : '保存'}
@@ -417,63 +399,65 @@
   }
 
   /* Modal */
-  .modal-backdrop {
+  .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 50;
-    backdrop-filter: blur(4px);
   }
-
-  :global(.dark) .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
 
   .modal-box {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 14px;
     padding: 18px;
-    width: 420px;
-    max-height: 80vh;
+    width: min(420px, 90vw);
+    max-height: 85vh;
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   }
 
-  :global(.dark) .modal-box { box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+  :global(.dark) .modal-box { box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5); }
 
-  .modal-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--foreground);
+  .modal-header {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
     margin-bottom: 16px;
   }
 
-  .modal-fields {
+  .modal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--foreground);
+  }
+
+  .modal-body {
     display: flex;
     flex-direction: column;
-    gap: 11px;
+    gap: 14px;
   }
 
-  .field-row {
+  .form-item {
     display: flex;
-    flex-direction: column;
-    gap: 5px;
+    align-items: flex-start;
+    gap: 12px;
   }
 
-  .field-toggle {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 0 5px;
-    border-top: 1px solid var(--border);
-  }
-
-  .field-label {
-    font-size: 11px;
+  .form-label {
+    flex-shrink: 0;
+    width: 72px;
+    padding-top: 7px;
+    font-size: 12px;
     font-weight: 500;
-    color: var(--muted-foreground);
+    color: var(--foreground);
+    text-align: right;
+  }
+
+  .form-input-wrap {
+    flex: 1;
+    min-width: 0;
   }
 
   .required { color: var(--destructive); }
@@ -485,13 +469,22 @@
     background: var(--muted);
     border: 1px solid var(--border);
     color: var(--foreground);
-    font-size: 12px;
+    font-size: 12.5px;
     outline: none;
     transition: border-color 0.12s ease;
   }
 
   .field-input:focus { border-color: rgba(99, 102, 241, 0.4); }
-  .field-mono { font-family: var(--font-mono); }
+  .field-mono { font-family: var(--font-mono); font-size: 12px; }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
 
   /* Kind segmented control */
   .kind-seg {
@@ -555,13 +548,6 @@
   .toggle-btn.on .toggle-thumb {
     transform: translateX(14px);
     background: var(--primary-foreground);
-  }
-
-  /* Actions */
-  .modal-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 16px;
   }
 
   .btn-ghost {

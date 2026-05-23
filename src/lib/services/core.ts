@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, ProxyMode } from '$lib/types/gui-api';
+import type { SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult } from '$lib/types/gui-api';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
@@ -280,6 +280,58 @@ export async function getGuiTrafficStats(): Promise<TrafficStats> {
 export async function getGuiPolicyGroups(): Promise<PolicyGroup[]> {
   const raw = await invoke<Record<string, unknown>[]>('gui_policy_groups');
   return mapPolicyGroups(raw);
+}
+
+// ── Core health ──
+
+export async function getGuiCoreHealth(): Promise<GuiCoreHealth> {
+  return invoke('gui_core_health');
+}
+
+// ── Zero capabilities ──
+
+export async function getGuiZeroCapabilities(): Promise<GuiZeroCapabilities> {
+  return invoke('gui_zero_capabilities');
+}
+
+// ── Policy selection ──
+
+export async function guiSelectPolicy(policyTag: string, targetTag: string): Promise<GuiPolicySelectionResult> {
+  return invoke('gui_select_policy', { policyTag, targetTag });
+}
+
+// ── Feature status (TUN / DNS / Rules) ──
+
+export async function getGuiTunStatus(): Promise<GuiFeatureStatus> {
+  return invoke('gui_tun_status');
+}
+
+export async function getGuiDnsStatus(): Promise<GuiFeatureStatus> {
+  return invoke('gui_dns_status');
+}
+
+export async function getGuiRuleStatus(): Promise<GuiFeatureStatus> {
+  return invoke('gui_rule_status');
+}
+
+// ── GUI connections (Pro mode) ──
+
+export interface GuiConnectionListOptions {
+  limit?: number;
+  inboundTag?: string;
+  principalKey?: string;
+}
+
+export async function getGuiConnections(options?: GuiConnectionListOptions): Promise<GuiConnectionList> {
+  return invoke('gui_connections', { options });
+}
+
+export async function getGuiConnectionDetail(flowId: string): Promise<GuiConnectionItem> {
+  return invoke('gui_connection_detail', { flowId });
+}
+
+export async function guiCloseConnection(flowId: string): Promise<GuiConnectionCloseResult> {
+  return invoke('gui_close_connection', { flowId });
 }
 
 function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {

@@ -1,39 +1,13 @@
 <script lang="ts">
-  import { getCoreProcessStatus, getSystemProxyStatus } from '$lib/services/core';
-  import type { CoreProcessStatus } from '$lib/types/core';
-  import { store } from '$lib/services/store.svelte';
+  import { guiState } from '$lib/services/gui-state.svelte';
 
-  type ProxyStatus = { enabled: boolean };
-  let coreStatus = $state<CoreProcessStatus | null>(null);
-  let proxyStatus = $state<ProxyStatus | null>(null);
+  const isCoreRunning = $derived(guiState.connection?.state === 'connected');
+  const isCoreStarting = $derived(guiState.connection?.state === 'connecting');
+  const isProxyEnabled = $derived(guiState.connection?.systemProxyEnabled === true);
 
-  async function refresh() {
-    try {
-      [coreStatus, proxyStatus] = await Promise.all([
-        getCoreProcessStatus(),
-        getSystemProxyStatus(),
-      ]);
-    } catch (e) {
-      console.error('Failed to refresh status:', e);
-    }
-  }
-
-  $effect(() => {
-    if (store.isInitialized) {
-      refresh();
-      const interval = setInterval(refresh, 3000);
-      return () => clearInterval(interval);
-    }
-  });
-
-  const isCoreRunning = $derived(coreStatus?.state === 'running');
-  const isCoreStarting = $derived(coreStatus?.state === 'starting');
-  const isCoreCrashed = $derived(coreStatus?.exitReason === 'crashed');
-  const isProxyEnabled = $derived(proxyStatus?.enabled === true);
-
-  type Status = 'off' | 'core-only' | 'proxy-active' | 'crashed';
+  type Status = 'off' | 'core-only' | 'proxy-active' | 'error';
   const status: Status = $derived(
-    isCoreCrashed ? 'crashed' :
+    guiState.connection?.state === 'error' ? 'error' :
     isProxyEnabled && isCoreRunning ? 'proxy-active' :
     isCoreRunning || isCoreStarting ? 'core-only' :
     'off'
@@ -42,22 +16,22 @@
   const dotColor = $derived(
     status === 'proxy-active' ? '#22C55E' :
     status === 'core-only'   ? '#F59E0B' :
-    status === 'crashed'     ? '#EF4444' :
+    status === 'error'       ? '#EF4444' :
     'var(--muted-foreground)'
   );
 
   const label = $derived(
     status === 'proxy-active' ? '运行中' :
     status === 'core-only'   ? '内核运行' :
-    status === 'crashed'     ? '异常' :
+    status === 'error'       ? '异常' :
     '未激活'
   );
 </script>
 
-<div class="status-badge" class:crashed={status === 'crashed'} class:active={status === 'proxy-active'}>
+<div class="status-badge" class:error={status === 'error'} class:active={status === 'proxy-active'}>
   <span
     class="status-dot"
-    class:pulse={status === 'crashed' || status === 'core-only'}
+    class:pulse={status === 'error' || status === 'core-only'}
     style="background: {dotColor};"
   ></span>
   <span class="status-label">{label}</span>
@@ -93,7 +67,7 @@
     white-space: nowrap;
   }
 
-  .status-badge.crashed .status-label {
+  .status-badge.error .status-label {
     color: var(--destructive);
   }
 

@@ -174,10 +174,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 7px 12px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    gap: 8px;
+    gap: 4px;
+    row-gap: 6px;
   }
 
   .log-title {

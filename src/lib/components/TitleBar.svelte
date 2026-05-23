@@ -44,7 +44,7 @@
   "
 >
   <!-- Left: App identity + mode switch inline -->
-  <div class="flex items-center gap-2 pl-3.5 min-w-0">
+  <div class="flex items-center gap-2 pl-3.5 min-w-0 overflow-hidden">
     <!-- Logo: 暗黑模式下反转为白色 -->
     <img
       src="/favicon.png"
@@ -54,8 +54,8 @@
     />
     <!-- App name -->
     <span
-      class="font-semibold text-foreground/90 tracking-tight flex-shrink-0"
-      style="font-size: 13px; letter-spacing: -0.01em;"
+      class="font-semibold text-foreground/90 tracking-tight overflow-hidden text-ellipsis whitespace-nowrap"
+      style="font-size: 13px; letter-spacing: -0.01em; max-width: 120px;"
     >
       {appName}
     </span>

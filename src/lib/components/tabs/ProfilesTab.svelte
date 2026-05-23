@@ -377,9 +377,7 @@
 </div>
 
 {#if showEditor}
-  <div class="modal-layer">
-    <button type="button" class="modal-backdrop" aria-label="关闭代理配置编辑器" onclick={closeEditor}></button>
-
+  <div class="modal-layer" role="presentation" onkeydown={(e) => e.key === 'Escape' && closeEditor()}>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="proxy-config-title">
       <div class="modal-header">
         <div class="modal-copy">
@@ -394,13 +392,16 @@
       </div>
 
       <div class="modal-body">
-        <div class="field">
-          <div class="field-label">配置名称</div>
-          <Input bind:value={draft.name} placeholder="例如：香港节点、办公配置" disabled={saving} />
+        <div class="form-item">
+          <span class="form-label">名称 <span class="required">*</span></span>
+          <div class="form-input-wrap">
+            <Input bind:value={draft.name} placeholder="例如：香港节点、办公配置" disabled={saving} />
+          </div>
         </div>
 
-        <div class="field">
-          <div class="field-label">导入方式</div>
+        <div class="form-item">
+          <span class="form-label">导入方式</span>
+          <div class="form-input-wrap">
           <div class="source-switch">
             <button
               type="button"
@@ -423,11 +424,13 @@
               <span>粘贴 JSON</span>
             </button>
           </div>
+          </div>
         </div>
 
         {#if draft.sourceMode === 'file'}
-          <div class="field">
-            <div class="field-label">配置文件</div>
+          <div class="form-item">
+            <span class="form-label">配置文件</span>
+            <div class="form-input-wrap">
             <div class="file-picker-row">
               <Input value={draft.sourcePath} readonly placeholder="请选择本地配置文件" class="mono" />
               <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving}>
@@ -435,25 +438,28 @@
                 <span>选择</span>
               </Button>
             </div>
-            <div class="field-hint">保存时会直接读取这个文件并解析为 JSON。</div>
+            <div class="form-hint">保存时会直接读取这个文件并解析为 JSON。</div>
+            </div>
           </div>
         {:else}
-          <div class="field">
-            <div class="field-label">JSON 内容</div>
-            <textarea
-              bind:value={draft.content}
-              class="json-editor mono"
-              placeholder="粘贴代理配置 JSON..."
-              rows={16}
-              disabled={saving}
-            ></textarea>
-            <div class="field-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
+          <div class="form-item">
+            <span class="form-label">JSON 内容</span>
+            <div class="form-input-wrap">
+              <textarea
+                bind:value={draft.content}
+                class="json-editor mono"
+                placeholder="粘贴代理配置 JSON..."
+                rows={16}
+                disabled={saving}
+              ></textarea>
+              <div class="form-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
+            </div>
           </div>
         {/if}
 
-        <div class="field">
-          <div class="field-label">设为当前配置</div>
-          <div class="switch-row">
+        <div class="form-item">
+          <span class="form-label">设为当前</span>
+          <div class="form-input-wrap flex items-center">
             <span class="switch-copy">{draft.active ? '保存后立即切换到这份配置' : '仅保存，不切换当前配置'}</span>
             <Switch bind:checked={draft.active} disabled={saving} />
           </div>
@@ -524,7 +530,7 @@
 
   .subtitle,
   .modal-desc,
-  .field-hint,
+  .form-hint,
   .switch-copy {
     font-size: 11.5px;
     color: var(--muted-foreground);
@@ -700,14 +706,6 @@
     padding: 20px;
   }
 
-  .modal-backdrop {
-    position: absolute;
-    inset: 0;
-    border: 0;
-    padding: 0;
-    background: rgba(15, 23, 42, 0.5);
-  }
-
   .modal {
     position: relative;
     z-index: 1;
@@ -722,20 +720,22 @@
     overflow: hidden;
   }
 
-  .modal-header,
-  .modal-footer {
+  .modal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 14px;
+    padding: 0 0 14px 0;
     border-bottom: 1px solid var(--border);
   }
 
   .modal-footer {
-    border-bottom: 0;
-    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 0 0 0;
+    border-top: 1px solid var(--border);
   }
 
   .modal-body {
@@ -746,17 +746,30 @@
     overflow-y: auto;
   }
 
-  .field {
+  .form-item {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    align-items: flex-start;
+    gap: 12px;
   }
 
-  .field-label {
-    font-size: 11.5px;
-    font-weight: 600;
+  .form-label {
+    flex-shrink: 0;
+    width: 72px;
+    padding-top: 7px;
+    font-size: 12px;
+    font-weight: 500;
     color: var(--foreground);
+    text-align: right;
   }
+
+  .form-input-wrap {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .required { color: var(--destructive); }
+
+  .form-hint { margin-top: 4px; }
 
   .source-switch {
     display: inline-grid;
@@ -786,8 +799,7 @@
     color: var(--foreground);
   }
 
-  .file-picker-row,
-  .switch-row {
+  .file-picker-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -851,8 +863,7 @@
     .row-actions,
     .modal-header,
     .modal-footer,
-    .file-picker-row,
-    .switch-row {
+    .file-picker-row {
       flex-direction: column;
       align-items: stretch;
     }

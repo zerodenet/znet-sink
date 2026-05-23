@@ -12,12 +12,7 @@
 
   onMount(() => {
     initTheme();
-    void (async () => {
-      await store.loadFromBackend();
-      if (!store.isInitialized) {
-        store.startApp('lite');
-      }
-    })();
+    void store.loadFromBackend();
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemThemeChange = () => {
       if (store.selectedTheme === 'system') applyTheme('system');
@@ -56,8 +51,12 @@
   <div class="flex-shrink-0 mx-5" style="height: 1px; background: var(--border); opacity: 0.5;"></div>
 
   <!-- Main content area -->
-  <div class="flex-1 min-h-0 px-5 py-3.5 flex flex-col overflow-hidden">
-    {#if !store.isInitialized}
+  <div class="flex-1 min-h-0 px-3 sm:px-5 py-2 sm:py-3.5 flex flex-col overflow-hidden">
+    {#if store.appLoading}
+      <div class="flex-1 flex items-center justify-center">
+        <span style="font-size: 13px; color: var(--muted-foreground); opacity: 0.5;">加载中…</span>
+      </div>
+    {:else if !store.isInitialized}
       <WelcomeGuide />
     {:else}
       <TabContent />

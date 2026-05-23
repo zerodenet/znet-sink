@@ -12,18 +12,17 @@
 <header class="w-full flex-shrink-0">
   <div class="w-full flex items-center justify-between" style="height: 38px;">
 
-    <!-- Left spacer (mirrors status badge width) -->
-    <div class="flex-shrink-0" style="width: 120px;"></div>
+    <!-- Left spacer: flexible, shrinks when window is narrow -->
+    <div class="flex-1 min-w-0 hidden sm:block" style="max-width: 120px;"></div>
 
     <!-- Center: Main navigation -->
-    <nav class="flex items-center gap-0.5" role="navigation" aria-label="主导航">
+    <nav class="flex items-center gap-0.5 overflow-x-auto flex-shrink-0 max-w-full" aria-label="主导航">
       {#each NAV_TABS as tab}
         {#if store.isNavVisible(tab.id)}
           <button
             onclick={() => store.isNavOperable(tab.id) && (store.activeTab = tab.id)}
             disabled={!store.isNavOperable(tab.id)}
             class="nav-tab-btn {store.activeTab === tab.id ? 'active' : ''} {!store.isNavOperable(tab.id) ? 'disabled' : ''}"
-            aria-selected={store.activeTab === tab.id}
             aria-current={store.activeTab === tab.id ? 'page' : undefined}
           >
             {tab.label}
@@ -32,8 +31,8 @@
       {/each}
     </nav>
 
-    <!-- Right: Connection status -->
-    <div class="flex-shrink-0 flex items-center justify-end" style="width: 120px;">
+    <!-- Right: Connection status, flexible on small windows -->
+    <div class="flex items-center justify-end flex-shrink-0" style="min-width: 60px; max-width: 120px;">
       <ConnectionStatusBadge />
     </div>
 
@@ -71,7 +70,7 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   }
 
-  .dark .nav-tab-btn.active {
+  :global(.dark) .nav-tab-btn.active {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
   }
 

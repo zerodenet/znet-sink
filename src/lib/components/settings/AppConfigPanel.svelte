@@ -203,6 +203,22 @@
   {/if}
 </div>
 
+<div class="config-separator"></div>
+
+<div class="config-section">
+  <div class="config-section-title">其他</div>
+
+  <div class="config-row">
+    <div class="config-row-label">
+      <span class="label-text">重置引导</span>
+      <span class="label-desc">清除本地状态，重启后重新显示欢迎引导。</span>
+    </div>
+    <button class="reset-btn" onclick={() => { store.resetApp(); location.reload(); }}>
+      重置
+    </button>
+  </div>
+</div>
+
 <style>
   .config-section {
     display: flex;
@@ -356,6 +372,24 @@
     padding: 14px 0;
     text-align: center;
     opacity: 0.6;
+  }
+
+  .reset-btn {
+    height: 28px;
+    padding: 0 16px;
+    border-radius: 7px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--destructive, #EF4444);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.13s ease;
+    white-space: nowrap;
+  }
+
+  .reset-btn:hover {
+    background: rgba(239, 68, 68, 0.12);
   }
 
   @media (max-width: 760px) {

@@ -8,6 +8,7 @@ export type SettingsSection = 'general' | 'core' | 'plugins' | 'about';
 
 class AppStateStore {
   isInitialized = $state(false);
+  appLoading = $state(true);
   uiMode = $state<UIMode>('lite');
   activeTab = $state('overview');
   settingsSection = $state<SettingsSection>('general');
@@ -27,16 +28,18 @@ class AppStateStore {
   constructor() {
     if (browser) {
       this.hydrateFromLocalStorage();
+      if (localStorage.getItem('znet-reset') === '1') {
+        this.isInitialized = false;
+        this.appLoading = false;
+      }
     }
   }
 
   private hydrateFromLocalStorage() {
     const savedMode = localStorage.getItem('znet-ui-mode') as UIMode | null;
-    const savedInit = localStorage.getItem('znet-is-init');
     const savedTheme = localStorage.getItem('znet-theme') as ThemeMode | null;
 
     if (savedMode) this.uiMode = savedMode;
-    if (savedInit === 'true') this.isInitialized = true;
     if (savedTheme) this.selectedTheme = savedTheme;
   }
 
@@ -65,12 +68,15 @@ class AppStateStore {
         this.activeTab = config.ui.defaultRoute;
       }
 
-      this.isInitialized = true;
-      if (browser) {
-        localStorage.setItem('znet-is-init', 'true');
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('znet-reset') === '1') {
+        localStorage.removeItem('znet-reset');
+      } else {
+        this.isInitialized = true;
       }
     } catch {
-      // Backend may not be available yet — use localStorage fallback
+      // Backend unavailable — WelcomeGuide will handle onboarding
+    } finally {
+      this.appLoading = false;
     }
   }
 
@@ -87,23 +93,22 @@ class AppStateStore {
     }
   }
 
-  startApp(mode: UIMode) {
+  async startApp(mode: UIMode) {
     this.uiMode = mode;
-    this.isInitialized = true;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
-      localStorage.setItem('znet-is-init', 'true');
     }
-    this.persistUiMode(mode);
+    await this.loadFromBackend();
+    if (!this.isInitialized) {
+      this.isInitialized = true;
+    }
+    await this.persistUiMode(mode);
   }
 
   openSettings(section: SettingsSection = 'core') {
     this.isInitialized = true;
     this.activeTab = 'settings';
     this.settingsSection = section;
-    if (browser) {
-      localStorage.setItem('znet-is-init', 'true');
-    }
   }
 
   async switchUIMode(mode: UIMode) {
@@ -143,7 +148,7 @@ class AppStateStore {
 
   private getFallbackNavVisible(key: string): boolean {
     // 后端不可用时，简约模式默认可见的导航
-    const liteModeNav = ['overview', 'profiles', 'subscriptions', 'settings'];
+    const liteModeNav = ['overview', 'nodes', 'profiles', 'subscriptions', 'settings'];
     return liteModeNav.includes(key);
   }
 
@@ -188,6 +193,7 @@ class AppStateStore {
       localStorage.removeItem('znet-is-init');
       localStorage.removeItem('znet-ui-mode');
       localStorage.removeItem('znet-theme');
+      localStorage.setItem('znet-reset', '1');
     }
   }
 }

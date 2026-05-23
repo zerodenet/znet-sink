@@ -169,45 +169,39 @@
 
 <!-- Modal -->
 {#if showForm}
-  <div
-    class="modal-backdrop"
-    onclick={() => showForm = false}
-    onkeydown={(e) => e.key === 'Escape' && (showForm = false)}
-    role="button"
-    tabindex="0"
-    aria-label="关闭弹窗"
-  >
-    <div
-      class="modal-box"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-    >
-      <h4 class="modal-title">{editingId ? '编辑' : '新增'}订阅</h4>
+  <div class="modal-overlay" role="presentation" onkeydown={(e) => e.key === 'Escape' && (showForm = false)}>
+    <div class="modal-box" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h4 class="modal-title">{editingId ? '编辑' : '新增'}订阅</h4>
+      </div>
 
-      <div class="modal-fields">
-        <div class="field-row">
-          <label for="sub-name" class="field-label">名称 <span class="required">*</span></label>
-          <input id="sub-name" bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" />
+      <div class="modal-body">
+        <div class="form-item">
+          <span class="form-label">名称 <span class="required">*</span></span>
+          <div class="form-input-wrap">
+            <input id="sub-name" bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" />
+          </div>
         </div>
 
-        <div class="field-row">
-          <label for="sub-url" class="field-label">订阅 URL <span class="required">*</span></label>
-          <input id="sub-url" bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" />
+        <div class="form-item">
+          <span class="form-label">订阅 URL <span class="required">*</span></span>
+          <div class="form-input-wrap">
+            <input id="sub-url" bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" />
+          </div>
         </div>
 
-        <div class="field-row">
-          <label for="sub-format" class="field-label">格式</label>
-          <select id="sub-format" bind:value={form.format} class="field-input">
-            <option value="auto">自动检测</option>
-            <option value="zero-base64-json">Zero Base64 JSON</option>
-          </select>
+        <div class="form-item">
+          <span class="form-label">格式</span>
+          <div class="form-input-wrap">
+            <select id="sub-format" bind:value={form.format} class="field-input">
+              <option value="auto">自动检测</option>
+              <option value="zero-base64-json">Zero Base64 JSON</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      <div class="modal-actions">
+      <div class="modal-footer">
         <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
         <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim()}>
           {saving ? '保存中...' : '保存'}
@@ -342,7 +336,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 220px;
+    max-width: min(320px, 100%);
   }
 
   .row-sep { opacity: 0.4; }
@@ -403,53 +397,65 @@
   }
 
   /* Modal */
-  .modal-backdrop {
+  .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 50;
-    backdrop-filter: blur(4px);
   }
-
-  :global(.dark) .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
 
   .modal-box {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 18px;
-    width: 420px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+    padding: 20px 24px;
+    width: min(440px, 90vw);
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
   }
 
   :global(.dark) .modal-box { box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
 
-  .modal-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--foreground);
+  .modal-header {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
     margin-bottom: 16px;
   }
 
-  .modal-fields {
-    display: flex;
-    flex-direction: column;
-    gap: 11px;
+  .modal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--foreground);
   }
 
-  .field-row {
+  .modal-body {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 14px;
   }
 
-  .field-label {
-    font-size: 11px;
+  .form-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .form-label {
+    flex-shrink: 0;
+    width: 80px;
+    padding-top: 7px;
+    font-size: 12px;
     font-weight: 500;
-    color: var(--muted-foreground);
+    color: var(--foreground);
+    text-align: right;
+  }
+
+  .form-input-wrap {
+    flex: 1;
+    min-width: 0;
   }
 
   .required { color: var(--destructive); }
@@ -461,18 +467,21 @@
     background: var(--muted);
     border: 1px solid var(--border);
     color: var(--foreground);
-    font-size: 12px;
+    font-size: 12.5px;
     outline: none;
     transition: border-color 0.12s ease;
   }
 
   .field-input:focus { border-color: rgba(99, 102, 241, 0.4); }
-  .field-mono { font-family: var(--font-mono); }
+  .field-mono { font-family: var(--font-mono); font-size: 12px; }
 
-  .modal-actions {
+  .modal-footer {
     display: flex;
+    justify-content: flex-end;
     gap: 8px;
-    margin-top: 16px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
   }
 
   .btn-ghost {

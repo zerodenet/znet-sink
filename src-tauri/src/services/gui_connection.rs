@@ -1,4 +1,3 @@
-use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
 
@@ -117,7 +116,11 @@ async fn wait_for_health(state: &AppState) -> AppResult<GuiCoreHealth> {
             Ok(health) => return Ok(health),
             Err(error) => {
                 last_error = Some(error);
-                thread::sleep(HEALTH_WAIT_INTERVAL);
+                // Run blocking sleep on a dedicated thread to avoid blocking the async runtime
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    std::thread::sleep(HEALTH_WAIT_INTERVAL);
+                })
+                .await;
             }
         }
     }

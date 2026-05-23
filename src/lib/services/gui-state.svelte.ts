@@ -30,6 +30,7 @@ class GuiStateStore {
   
   isLoading = $state(false);
   isConnecting = $state(false);
+  isDisconnecting = $state(false);
   isSwitchingMode = $state(false);
   
   private pollingInterval: number | null = null;
@@ -117,11 +118,11 @@ class GuiStateStore {
   }
 
   async disconnect() {
-    this.isConnecting = true;
+    this.isDisconnecting = true;
     try {
       this.connection = await guiDisconnect();
     } finally {
-      this.isConnecting = false;
+      this.isDisconnecting = false;
     }
   }
 
@@ -161,11 +162,11 @@ class GuiStateStore {
   }
 
   get canConnect(): boolean {
-    return !!this.selfTest?.ready && !this.isConnecting && this.connection?.state !== 'connected';
+    return !!this.selfTest?.ready && !this.isConnecting && !this.isDisconnecting && this.connection?.state !== 'connected';
   }
 
   get canDisconnect(): boolean {
-    return !this.isConnecting && this.connection?.state === 'connected';
+    return !this.isConnecting && !this.isDisconnecting && this.connection?.state === 'connected';
   }
 
   get blockingIssues(): string[] {

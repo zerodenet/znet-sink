@@ -255,8 +255,7 @@
 </div>
 
 {#if installOpen}
-  <div class="modal-layer">
-    <button type="button" class="modal-backdrop" aria-label="关闭安装对话框" onclick={closeInstallDialog}></button>
+  <div class="modal-layer" role="presentation" onkeydown={(e) => e.key === 'Escape' && closeInstallDialog()}>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="install-core-title">
       <div class="modal-header">
         <div class="modal-title" id="install-core-title">安装内核</div>
@@ -474,13 +473,6 @@
     padding: 20px;
   }
 
-  .modal-backdrop {
-    position: absolute;
-    inset: 0;
-    border: 0;
-    background: rgba(15, 23, 42, 0.42);
-    padding: 0;
-  }
 
   .modal {
     position: relative;

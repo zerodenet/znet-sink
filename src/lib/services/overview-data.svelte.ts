@@ -1,7 +1,7 @@
 import { getCorePolicies, getCoreStats, getCoreRuntime } from '$lib/services/core';
 import type { ProxyNode } from '$lib/types/protocol';
 
-const MAX_HISTORY = 45;
+const MAX_HISTORY = 300; // 5 minutes at 1-second sampling
 const STATS_INTERVAL_MS = 1000;
 const RUNTIME_INTERVAL_MS = 30_000;
 

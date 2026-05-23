@@ -76,12 +76,13 @@
 
   /* ---- Sidebar nav ---- */
   .settings-nav {
-    width: 130px;
+    width: min(130px, 30vw);
+    min-width: 80px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 1px;
-    padding: 14px 10px;
+    padding: 14px 8px;
     border-right: 1px solid var(--border);
     background: var(--surface, rgba(0,0,0,0.018));
   }
@@ -131,8 +132,18 @@
   .settings-content {
     flex: 1;
     overflow-y: auto;
-    padding: 18px 20px;
+    padding: 14px 16px;
     min-height: 0;
+  }
+
+  @media (max-width: 500px) {
+    .settings-content {
+      padding: 10px 12px;
+    }
+    .settings-nav-item {
+      padding: 6px 6px;
+      font-size: 11px;
+    }
   }
 
   .settings-placeholder {

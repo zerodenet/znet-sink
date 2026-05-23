@@ -60,7 +60,7 @@
 
   <!-- SVG chart -->
   <div class="chart-body">
-    <svg viewBox="0 0 400 120" class="chart-svg" preserveAspectRatio="none" aria-hidden="true">
+    <svg viewBox="0 0 400 120" class="chart-svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       <!-- Grid lines -->
       {#each [0, 30, 60, 90, 120] as y}
         <line x1="0" y1={y} x2="400" y2={y} stroke="currentColor" stroke-opacity="0.06" stroke-width="1"/>

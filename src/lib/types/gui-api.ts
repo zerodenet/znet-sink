@@ -1,10 +1,13 @@
 // GUI 层业务接口类型定义
 // 对应 Rust 后端的 gui_* 命令 DTO
 
+export type SelfTestCheckStatus = 'pass' | 'warn' | 'fail';
+
 export interface SelfTestCheckItem {
-  name: string;
-  passed: boolean;
-  message?: string;
+  key: string;
+  status: SelfTestCheckStatus;
+  message: string;
+  details?: unknown;
 }
 
 export interface SelfTestSnapshot {
@@ -57,4 +60,73 @@ export interface PolicyGroup {
   name: string;
   selected?: string;
   outbounds: PolicyOutbound[];
+}
+
+export interface GuiCoreHealth {
+  healthy: boolean;
+  engineVersion?: string;
+  startedAtUnixMs?: number;
+}
+
+export interface GuiZeroCapabilities {
+  available: boolean;
+  apiVersion?: string;
+  schemaVersion?: string;
+  features: string[];
+  permissions: string[];
+  adapters: GuiCapabilityEndpoint[];
+  sinks: GuiCapabilityEndpoint[];
+  error?: string;
+}
+
+export interface GuiCapabilityEndpoint {
+  kind: string;
+  enabled: boolean;
+}
+
+export interface GuiFeatureStatus {
+  key: string;
+  supported: boolean;
+  enabled: boolean;
+  state: string;
+  reason?: string;
+}
+
+export interface GuiPolicySelectionResult {
+  policyTag: string;
+  targetTag: string;
+  selected?: string;
+  accepted: boolean;
+  message?: string;
+}
+
+export interface GuiConnectionItem {
+  flowId: string;
+  network: string;
+  source?: string;
+  destination: string;
+  inboundTag?: string;
+  outboundTag?: string;
+  policyTag?: string;
+  routeMode?: string;
+  outcome?: string;
+  bytesUp: number;
+  bytesDown: number;
+  throughputUpBps?: number;
+  throughputDownBps?: number;
+  startedAtUnixMs?: number;
+  updatedAtUnixMs?: number;
+  durationMs?: number;
+}
+
+export interface GuiConnectionList {
+  items: GuiConnectionItem[];
+  total?: number;
+  limit: number;
+}
+
+export interface GuiConnectionCloseResult {
+  flowId: string;
+  closed: boolean;
+  message?: string;
 }

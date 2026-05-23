@@ -10,6 +10,7 @@ class CoreEventsService {
   isSubscribed = $state(false);
   status = $state<'idle' | 'subscribed' | 'offline' | 'error' | 'disconnected'>('idle');
   lastError = $state<string | null>(null);
+  connectionTick = $state(0);
 
   private _unlistenEvent: UnlistenFn | null = null;
   private _unlistenStatus: UnlistenFn | null = null;
@@ -144,14 +145,14 @@ class CoreEventsService {
       return;
     }
 
-    // Connection / flow events
+    // Connection / flow events — signal live change so listeners can refresh
     if (
       type === 'flow' ||
       type === 'connection' ||
       typeof obj['flow_id'] === 'string' ||
       typeof obj['flowId'] === 'string'
     ) {
-      // Future: route to connection store
+      this.connectionTick++;
       return;
     }
   }

@@ -225,7 +225,7 @@
     display: flex;
     flex-direction: column;
     gap: 7px;
-    height: 96px;
+    min-height: 96px;
     padding: 11px 13px;
     background: var(--card);
     border: 1px solid var(--border);
