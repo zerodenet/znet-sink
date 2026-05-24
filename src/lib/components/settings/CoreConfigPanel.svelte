@@ -5,11 +5,11 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Badge } from '$lib/components/ui/badge';
-  import { getAppConfig, getCoreConfigSnapshot, updateAppConfig } from '$lib/services/core';
+  import { getAppConfig, getCoreConfigSnapshot, updateAppConfig, downloadLatestCore, type CoreDownloadResult } from '$lib/services/core';
   import type { AppConfig } from '$lib/types/app-config';
   import type { CoreKernelInfo } from '$lib/types/core';
 
-  const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerdenet/zero/releases/latest';
+  const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/zero/releases/latest';
 
   let appConfig = $state<AppConfig | null>(null);
   let kernelInfo = $state<CoreKernelInfo | null>(null);
@@ -19,6 +19,7 @@
   let saving = $state(false);
   let installOpen = $state(false);
   let installBusy = $state(false);
+  let installResult = $state<CoreDownloadResult | null>(null);
   let message = $state<string | null>(null);
 
   const kernelName = $derived(kernelInfo?.kernel ?? appConfig?.core.kernel ?? 'zero');
@@ -91,26 +92,28 @@
     installOpen = false;
   }
 
-  async function openDownloadLink() {
+  async function handleDownload() {
     installBusy = true;
+    installResult = null;
     message = null;
     try {
-      const currentUrl = installDownloadUrl;
-      if (appConfig && currentUrl !== (appConfig.core.downloadUrl ?? '')) {
-        appConfig = await updateAppConfig({
-          core: { downloadUrl: currentUrl },
-        });
+      const result = await downloadLatestCore(recommendedInstallDir || undefined);
+      installResult = result;
+      if (result.success) {
+        executablePathDraft = result.executablePath;
+        await saveExecutablePath();
+      } else {
+        message = result.message;
       }
-      await openLink(currentUrl);
-      installOpen = false;
-      message = recommendedInstallDir
-        ? `已打开下载链接，建议安装到 ${recommendedInstallDir}`
-        : '已打开下载链接';
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     } finally {
       installBusy = false;
     }
+  }
+
+  async function openDownloadLink() {
+    await openLink(installDownloadUrl);
   }
 
   function formatBytes(value?: number): string {
@@ -266,19 +269,43 @@
       </div>
 
       <div class="modal-body">
-        <div class="field">
-          <div class="field-label">下载地址</div>
-          <Input bind:value={downloadUrlDraft} class="mono" placeholder={FALLBACK_DOWNLOAD_URL} />
-          <div class="field-hint">默认安装目录：{recommendedInstallDir || '当前工作目录'}</div>
-        </div>
+        {#if installResult?.success}
+          <div class="install-success">
+            <svg width="16" height="16" viewBox="0 0 10 10" fill="none" stroke="#22C55E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+            <div class="install-success-text">
+              <span class="font-semibold">安装成功</span>
+              {#if installResult?.version}
+                <span class="text-xs text-muted-foreground">版本 {installResult.version}</span>
+              {/if}
+              <span class="text-xs text-muted-foreground">{installResult.executablePath}</span>
+            </div>
+          </div>
+        {:else}
+          <div class="field">
+            <div class="field-label">下载地址</div>
+            <Input bind:value={downloadUrlDraft} class="mono" placeholder={FALLBACK_DOWNLOAD_URL} />
+            <div class="field-hint">安装目录：{recommendedInstallDir || '当前工作目录'}</div>
+            {#if message}
+              <div class="field-error">{message}</div>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <div class="modal-actions">
-        <Button variant="outline" onclick={closeInstallDialog} disabled={installBusy}>取消</Button>
-        <Button onclick={openDownloadLink} disabled={installBusy}>
-          <Download class="h-3.5 w-3.5" />
-          <span>{installBusy ? '处理中...' : '打开下载链接'}</span>
-        </Button>
+        {#if installResult?.success}
+          <Button variant="outline" onclick={closeInstallDialog}>关闭</Button>
+        {:else}
+          <Button variant="outline" onclick={closeInstallDialog} disabled={installBusy}>取消</Button>
+          <Button onclick={handleDownload} disabled={installBusy}>
+            <Download class="h-3.5 w-3.5" />
+            <span>{installBusy ? '下载中...' : '自动下载'}</span>
+          </Button>
+          <button class="link-btn" onclick={openDownloadLink} disabled={installBusy} title="手动打开下载页">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
+            手动下载
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -415,6 +442,50 @@
     color: var(--muted-foreground);
     line-height: 1.4;
   }
+
+  .field-error {
+    font-size: 12px;
+    color: var(--destructive);
+    margin-top: 4px;
+  }
+
+  .install-success {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(34, 197, 94, 0.06);
+    border: 1px solid rgba(34, 197, 94, 0.15);
+  }
+
+  .install-success-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 13px;
+  }
+
+  .link-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+
+  .link-btn:hover:not(:disabled) {
+    color: var(--foreground);
+    background: var(--muted);
+  }
+
+  .link-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .path-row {
     display: grid;

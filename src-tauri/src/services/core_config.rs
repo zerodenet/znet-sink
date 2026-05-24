@@ -4,19 +4,22 @@ use std::time::SystemTime;
 
 use tauri::State;
 
+use std::io::Read;
+use std::process::Command;
+
 use crate::core::ipc;
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     app_config::AppCoreConfig,
     core::{CoreEndpoint, CoreIpcOptions},
-    core_config::{CoreConfigExportResult, CoreConfigSnapshot, CoreKernelInfo},
+    core_config::{CoreConfigExportResult, CoreConfigSnapshot, CoreDownloadResult, CoreKernelInfo},
 };
 use crate::services::app_config_store;
 use crate::services::common::{lock, normalize_optional};
 use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
-const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerdenet/zero/releases/latest";
+const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerodenet/zero/releases/latest";
 
 pub fn snapshot(state: State<'_, AppState>) -> AppResult<CoreConfigSnapshot> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
@@ -265,4 +268,134 @@ fn recommended_install_dir() -> Option<String> {
         .ok()
         .map(|dir| dir.join("core"))
         .map(|path| path_to_string(&path))
+}
+
+pub fn download_latest(install_dir: Option<String>) -> AppResult<CoreDownloadResult> {
+    let dir = match install_dir {
+        Some(d) if !d.trim().is_empty() => PathBuf::from(d.trim()),
+        _ => app_data_dir()?.join("core"),
+    };
+    fs::create_dir_all(&dir).map_err(|e| AppError::internal(
+        format!("failed to create install dir: {e}"),
+    ))?;
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("znet-sink")
+        .build()
+        .map_err(|e| AppError::internal(format!("failed to create http client: {e}")))?;
+
+    // Fetch latest release info
+    let mut resp = client
+        .get("https://api.github.com/repos/zerodenet/zero/releases/latest")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|e| AppError::internal(format!("failed to fetch release info: {e}")))?;
+
+    let mut body = String::new();
+    resp.read_to_string(&mut body)
+        .map_err(|e| AppError::internal(format!("failed to read response: {e}")))?;
+
+    let release: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| AppError::internal(format!("failed to parse release info: {e}")))?;
+
+    let version = release["tag_name"].as_str().map(|s: &str| s.to_string());
+    let assets = release["assets"].as_array().ok_or_else(|| {
+        AppError::internal("no assets found in latest release")
+    })?;
+
+    // Determine platform asset name
+    let asset_name = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "zero-darwin-aarch64.tar.gz"
+    } else if cfg!(target_os = "macos") {
+        "zero-darwin-x86_64.tar.gz"
+    } else if cfg!(target_os = "linux") {
+        "zero-linux-x86_64.tar.gz"
+    } else if cfg!(target_os = "windows") {
+        "zero-windows-x86_64.zip"
+    } else {
+        return Err(AppError::internal("unsupported platform"));
+    };
+
+    let asset = assets.iter().find(|a| {
+        a["name"].as_str().map(|n| n == asset_name).unwrap_or(false)
+    }).ok_or_else(|| {
+        AppError::internal(format!("asset not found for platform: {asset_name}"))
+    })?;
+
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .ok_or_else(|| AppError::internal("no download url in asset"))?;
+
+    // Download
+    let ext = if asset_name.ends_with(".tar.gz") { "tar.gz" } else { "zip" };
+    let temp_file = dir.join(format!("zero-download.{}", ext));
+
+    let mut response = client
+        .get(download_url)
+        .send()
+        .map_err(|e| AppError::internal(format!("failed to download: {e}")))?;
+
+    let mut bytes = Vec::new();
+    response.read_to_end(&mut bytes)
+        .map_err(|e| AppError::internal(format!("failed to read download: {e}")))?;
+
+    fs::write(&temp_file, &bytes)
+        .map_err(|e| AppError::internal(format!("failed to write download: {e}")))?;
+
+    // Extract
+    if ext == "tar.gz" {
+        let status = Command::new("tar")
+            .args(["-xzf", &path_to_string(&temp_file), "-C", &path_to_string(&dir)])
+            .status()
+            .map_err(|e| AppError::internal(format!("failed to extract: {e}")))?;
+        if !status.success() {
+            let _ = fs::remove_file(&temp_file);
+            return Err(AppError::internal("failed to extract archive"));
+        }
+    } else {
+        let status = Command::new("powershell")
+            .args([
+                "-NoProfile", "-Command",
+                &format!("Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+                    path_to_string(&temp_file), path_to_string(&dir)),
+            ])
+            .status()
+            .map_err(|e| AppError::internal(format!("failed to extract: {e}")))?;
+        if !status.success() {
+            let _ = fs::remove_file(&temp_file);
+            return Err(AppError::internal("failed to extract archive"));
+        }
+    }
+
+    // Clean up temp file
+    let _ = fs::remove_file(&temp_file);
+
+    let executable_path = dir.join(if cfg!(windows) { "zero.exe" } else { "zero" });
+    if !executable_path.is_file() {
+        return Err(AppError::internal(format!(
+            "extracted but could not find binary at: {}",
+            executable_path.display()
+        )));
+    }
+
+    // Make executable on unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&executable_path)
+            .map_err(|e| AppError::internal(format!("failed to read permissions: {e}")))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&executable_path, perms)
+            .map_err(|e| AppError::internal(format!("failed to set executable permissions: {e}")))?;
+    }
+
+    let message = format!("zero {} installed to {}", version.as_deref().unwrap_or("?"), path_to_string(&dir));
+
+    Ok(CoreDownloadResult {
+        success: true,
+        executable_path: path_to_string(&executable_path),
+        version,
+        message,
+    })
 }

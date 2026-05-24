@@ -9,6 +9,16 @@
   let showForm = $state(false);
   let saving = $state(false);
   let editingId = $state<string | null>(null);
+  let searchQuery = $state('');
+
+  const filtered = $derived(
+    searchQuery.trim()
+      ? ruleSets.filter(r =>
+          r.name.toLowerCase().includes(searchQuery.trim().toLowerCase()) ||
+          r.format?.toLowerCase().includes(searchQuery.trim().toLowerCase())
+        )
+      : ruleSets
+  );
 
   let form = $state({
     name: '',
@@ -111,14 +121,19 @@
   <!-- Panel header -->
   <div class="panel-header">
     <span class="panel-title">规则集</span>
-    {#if store.isActionOperable('ruleSets.upsert')}
-      <button class="action-btn" onclick={openCreate}>
+    <div class="flex items-center gap-2">
+      {#if ruleSets.length > 0}
+        <input bind:value={searchQuery} placeholder="搜索…" class="search-input" />
+      {/if}
+      {#if store.isActionOperable('ruleSets.upsert')}
+        <button class="action-btn" onclick={openCreate}>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
         </svg>
         新增
       </button>
     {/if}
+    </div>
   </div>
 
   <!-- Content -->
@@ -128,7 +143,10 @@
     <div class="panel-empty">暂无规则集，点击新增添加</div>
   {:else}
     <div class="list-scroll">
-      {#each ruleSets as rs (rs.id)}
+      {#if filtered.length === 0 && searchQuery}
+        <div class="panel-empty">无匹配结果</div>
+      {/if}
+      {#each filtered as rs (rs.id)}
         <div
           role="button"
           tabindex="0"
@@ -274,6 +292,24 @@
     font-weight: 600;
     color: var(--foreground);
     letter-spacing: -0.01em;
+  }
+
+  .search-input {
+    width: 130px;
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--foreground);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.12s ease, width 0.15s ease;
+  }
+
+  .search-input:focus {
+    border-color: rgba(99, 102, 241, 0.4);
+    width: 170px;
   }
 
   .panel-empty {

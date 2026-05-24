@@ -181,6 +181,17 @@ export async function exportActiveCoreConfig(): Promise<CoreConfigExportResult> 
   return invoke('core_config_export_active');
 }
 
+export interface CoreDownloadResult {
+  success: boolean;
+  executablePath: string;
+  version?: string;
+  message: string;
+}
+
+export async function downloadLatestCore(installDir?: string): Promise<CoreDownloadResult> {
+  return invoke('core_download_latest', { installDir });
+}
+
 // ── App config ──
 
 export async function getAppConfig(): Promise<AppConfig> {

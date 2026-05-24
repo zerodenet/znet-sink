@@ -42,6 +42,15 @@ pub struct CoreConfigExportResult {
     pub app_config: CoreConfigSnapshot,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreDownloadResult {
+    pub success: bool,
+    pub executable_path: String,
+    pub version: Option<String>,
+    pub message: String,
+}
+
 impl CoreConfigSnapshot {
     pub fn validate_launchable(&self) -> Result<(), String> {
         let executable_path = self

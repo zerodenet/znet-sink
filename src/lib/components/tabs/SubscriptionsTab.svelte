@@ -7,9 +7,20 @@
   let subscriptions = $state<SubscriptionProfile[]>([]);
   let loading = $state(true);
   let syncingId = $state<string | null>(null);
+  let syncingAll = $state<{ done: number; total: number } | null>(null);
   let showForm = $state(false);
   let saving = $state(false);
   let editingId = $state<string | null>(null);
+  let searchQuery = $state('');
+
+  const filtered = $derived(
+    searchQuery.trim()
+      ? subscriptions.filter(s =>
+          s.name.toLowerCase().includes(searchQuery.trim().toLowerCase()) ||
+          s.url.toLowerCase().includes(searchQuery.trim().toLowerCase())
+        )
+      : subscriptions
+  );
 
   let form = $state({ name: '', url: '', format: 'auto' });
 
@@ -33,6 +44,27 @@
       handleAppError(e, '同步订阅失败');
     } finally {
       syncingId = null;
+    }
+  }
+
+  async function handleSyncAll() {
+    const list = subscriptions;
+    if (list.length === 0 || syncingAll) return;
+    syncingAll = { done: 0, total: list.length };
+    try {
+      for (const sub of list) {
+        try {
+          await syncSubscription(sub.id);
+        } catch {
+          // individual failure doesn't stop the batch
+        }
+        syncingAll.done++;
+      }
+      await refresh();
+    } catch {
+      // batch-level failure
+    } finally {
+      syncingAll = null;
     }
   }
 
@@ -93,12 +125,40 @@
   <!-- Panel header -->
   <div class="panel-header">
     <span class="panel-title">订阅管理</span>
-    <button class="action-btn" onclick={openCreate}>
+    <div class="flex items-center gap-2">
+      {#if subscriptions.length > 0}
+        <input
+          bind:value={searchQuery}
+          placeholder="搜索…"
+          class="search-input"
+        />
+      {/if}
+      {#if subscriptions.length > 0}
+        <button
+          class="action-btn"
+          onclick={handleSyncAll}
+          disabled={syncingAll !== null}
+        >
+          {#if syncingAll}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="spin">
+              <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
+            </svg>
+            {syncingAll.done}/{syncingAll.total}
+          {:else}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
+            </svg>
+            全部同步
+          {/if}
+        </button>
+      {/if}
+      <button class="action-btn" onclick={openCreate}>
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
         <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
       </svg>
       新增
-    </button>
+      </button>
+    </div>
   </div>
 
   <!-- Content -->
@@ -108,7 +168,10 @@
     <div class="panel-empty">暂无订阅，点击新增添加</div>
   {:else}
     <div class="list-scroll">
-      {#each subscriptions as sub (sub.id)}
+      {#if filtered.length === 0 && searchQuery}
+        <div class="panel-empty">无匹配结果</div>
+      {/if}
+      {#each filtered as sub (sub.id)}
         <div
           role="button"
           tabindex="0"
@@ -226,6 +289,24 @@
     font-weight: 600;
     color: var(--foreground);
     letter-spacing: -0.01em;
+  }
+
+  .search-input {
+    width: 130px;
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--foreground);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.12s ease, width 0.15s ease;
+  }
+
+  .search-input:focus {
+    border-color: rgba(99, 102, 241, 0.4);
+    width: 170px;
   }
 
   .panel-empty {

@@ -85,6 +85,7 @@ pub fn run() {
             core_process_commands::core_process_start,
             core_process_commands::core_process_stop,
             core_config_commands::core_config_export_active,
+            core_config_commands::core_download_latest,
             gui_core_commands::gui_core_overview,
             gui_core_commands::gui_core_health,
             gui_core_commands::gui_zero_capabilities,

@@ -15,7 +15,6 @@
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '通用' },
     { id: 'core',    label: '内核' },
-    { id: 'plugins', label: '插件' },
     { id: 'about',   label: '关于' }
   ];
 </script>
@@ -45,17 +44,6 @@
       <CoreConfigPanel />
     {:else if activeSection === 'about'}
       <AboutPanel />
-    {:else}
-      <div class="settings-placeholder">
-        <div class="settings-placeholder-icon">
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity="0.3">
-            <circle cx="11" cy="11" r="8.5"/>
-            <path d="M11 6.5v4.5"/>
-            <circle cx="11" cy="15" r="0.6" fill="currentColor"/>
-          </svg>
-        </div>
-        <span>开发中</span>
-      </div>
     {/if}
   </div>
 </section>
@@ -146,15 +134,4 @@
     }
   }
 
-  .settings-placeholder {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 10px;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    opacity: 0.5;
-  }
 </style>

@@ -16,11 +16,28 @@
     policyTag?: string;
     outboundTag?: string;
     routeMode?: string;
+    inboundTag?: string;
+    outcome?: string;
+    throughputUpBps?: number;
+    throughputDownBps?: number;
+    updatedAtUnixMs?: number;
+    durationMs?: number;
   };
 
   let connections = $state<DisplayConnection[]>([]);
   let loading = $state(true);
   let closingId = $state<string | null>(null);
+  let expandedIds = $state<Set<string>>(new Set());
+
+  function toggleExpand(id: string) {
+    const next = new Set(expandedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    expandedIds = next;
+  }
 
   async function refresh() {
     loading = true;
@@ -60,6 +77,12 @@
       policyTag: c.policyTag,
       outboundTag: c.outboundTag,
       routeMode: c.routeMode,
+      inboundTag: c.inboundTag,
+      outcome: c.outcome,
+      throughputUpBps: c.throughputUpBps,
+      throughputDownBps: c.throughputDownBps,
+      updatedAtUnixMs: c.updatedAtUnixMs,
+      durationMs: c.durationMs,
     };
   }
 
@@ -168,31 +191,35 @@
   {:else}
     <div class="list-scroll">
       {#each connections as conn (conn.flowId)}
-        <div class="flow-row">
-          <div class="flow-main">
-            <div class="flow-top">
-              <span class="flow-id">{conn.flowId}</span>
-              <span class="row-tag flow-protocol">{conn.protocol}</span>
-              {#if conn.policyTag}
-                <span class="row-tag flow-policy">{conn.policyTag}</span>
-              {/if}
-              {#if conn.routeMode}
-                <span class="row-tag flow-route-mode">{modeLabel(conn.routeMode)}</span>
-              {/if}
-            </div>
-            <div class="flow-route">
-              <span class="flow-src">{conn.source}</span>
-              <span class="flow-arrow">→</span>
-              <span class="flow-dst">{conn.destination}</span>
-              {#if conn.outboundTag}
-                <span class="flow-outbound">{conn.outboundTag}</span>
-              {/if}
-            </div>
-            <div class="flow-stats">
+        <div class="flow-group" class:expanded={expandedIds.has(conn.flowId)}>
+          <div class="flow-row" onclick={() => toggleExpand(conn.flowId)} onkeydown={(e) => e.key === 'Enter' && toggleExpand(conn.flowId)} role="button" tabindex="0">
+            <div class="flow-main">
+              <div class="flow-top">
+                <span class="flow-id">{conn.flowId}</span>
+                <span class="row-tag flow-protocol">{conn.protocol}</span>
+                {#if conn.policyTag}
+                  <span class="row-tag flow-policy">{conn.policyTag}</span>
+                {/if}
+                {#if conn.routeMode}
+                  <span class="row-tag flow-route-mode">{modeLabel(conn.routeMode)}</span>
+                {/if}
+              </div>
+              <div class="flow-route">
+                <span class="flow-src">{conn.source}</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-dst">{conn.destination}</span>
+                {#if conn.outboundTag}
+                  <span class="flow-outbound">{conn.outboundTag}</span>
+                {/if}
+              </div>
+              <div class="flow-stats">
               <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
               <span class="flow-stat down">↓ {formatBytes(conn.bytesDown)}</span>
               <span class="flow-dur">{formatDuration(conn.startedAtUnixMs)}</span>
             </div>
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="expand-chevron" class:expanded={expandedIds.has(conn.flowId)}>
+              <polyline points="3 5 7 9 11 5"/>
+            </svg>
           </div>
 
           {#if store.isActionOperable('core.flow.close')}
@@ -206,6 +233,69 @@
                 <line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/>
               </svg>
             </button>
+            {/if}
+          </div>
+
+          <!-- Expanded detail -->
+          {#if expandedIds.has(conn.flowId)}
+            <div class="flow-detail">
+              <div class="detail-grid">
+                {#if conn.inboundTag}
+                  <div class="detail-item">
+                    <span class="detail-key">入口</span>
+                    <span class="detail-val">{conn.inboundTag}</span>
+                  </div>
+                {/if}
+                {#if conn.outboundTag}
+                  <div class="detail-item">
+                    <span class="detail-key">出口</span>
+                    <span class="detail-val">{conn.outboundTag}</span>
+                  </div>
+                {/if}
+                {#if conn.policyTag}
+                  <div class="detail-item">
+                    <span class="detail-key">策略</span>
+                    <span class="detail-val">{conn.policyTag}</span>
+                  </div>
+                {/if}
+                {#if conn.routeMode}
+                  <div class="detail-item">
+                    <span class="detail-key">路由</span>
+                    <span class="detail-val">{modeLabel(conn.routeMode)}</span>
+                  </div>
+                {/if}
+                {#if conn.outcome}
+                  <div class="detail-item">
+                    <span class="detail-key">结果</span>
+                    <span class="detail-val">{conn.outcome}</span>
+                  </div>
+                {/if}
+                {#if conn.throughputDownBps !== undefined}
+                  <div class="detail-item">
+                    <span class="detail-key">下行速率</span>
+                    <span class="detail-val">{formatBytes(conn.throughputDownBps)}/s</span>
+                  </div>
+                {/if}
+                {#if conn.throughputUpBps !== undefined}
+                  <div class="detail-item">
+                    <span class="detail-key">上行速率</span>
+                    <span class="detail-val">{formatBytes(conn.throughputUpBps)}/s</span>
+                  </div>
+                {/if}
+                {#if conn.durationMs !== undefined}
+                  <div class="detail-item">
+                    <span class="detail-key">持续时间</span>
+                    <span class="detail-val">{formatDuration(conn.startedAtUnixMs)}</span>
+                  </div>
+                {/if}
+                {#if conn.updatedAtUnixMs}
+                  <div class="detail-item">
+                    <span class="detail-key">最后更新</span>
+                    <span class="detail-val">{new Date(conn.updatedAtUnixMs).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+                  </div>
+                {/if}
+              </div>
+            </div>
           {/if}
         </div>
       {/each}
@@ -300,19 +390,35 @@
     min-height: 0;
   }
 
+  .flow-group {
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .flow-group.expanded {
+    background: var(--muted);
+    border: 1px solid var(--border);
+  }
+
   .flow-row {
     display: flex;
     align-items: flex-start;
     gap: 8px;
     padding: 10px 11px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    transition: background 0.12s ease, border-color 0.12s ease;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+
+  .flow-group.expanded .flow-row {
+    border-bottom: 1px solid var(--border);
   }
 
   .flow-row:hover {
     background: var(--muted);
-    border-color: var(--border);
+  }
+
+  .flow-group.expanded .flow-row:hover {
+    background: transparent;
   }
 
   .flow-main {
@@ -441,4 +547,50 @@
   }
 
   .flow-close:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .expand-chevron {
+    margin-top: 2px;
+    flex-shrink: 0;
+    opacity: 0.4;
+    transition: transform 0.2s ease, opacity 0.12s ease;
+  }
+
+  .flow-row:hover .expand-chevron { opacity: 0.7; }
+  .expand-chevron.expanded { transform: rotate(180deg); opacity: 0.7; }
+
+  /* ---- Detail panel ---- */
+  .flow-detail {
+    padding: 10px 14px 12px;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 6px 16px;
+  }
+
+  .detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .detail-key {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+    opacity: 0.7;
+  }
+
+  .detail-val {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>

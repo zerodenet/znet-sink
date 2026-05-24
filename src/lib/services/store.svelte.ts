@@ -4,7 +4,7 @@ import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from 
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
-export type SettingsSection = 'general' | 'core' | 'plugins' | 'about';
+export type SettingsSection = 'general' | 'core' | 'about';
 
 class AppStateStore {
   isInitialized = $state(false);
