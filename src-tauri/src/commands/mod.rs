@@ -7,6 +7,7 @@ pub mod gui_connection;
 pub mod gui_core;
 pub mod gui_events;
 pub mod gui_self_test;
+pub mod kernel_version;
 pub mod logs;
 pub mod proxy_config;
 pub mod proxy_mode;

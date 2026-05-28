@@ -11,6 +11,7 @@ pub mod gui_connection;
 pub mod gui_events;
 pub mod gui_self_test;
 pub mod interaction_mode;
+pub mod kernel_manager;
 pub mod log_store;
 pub mod logs;
 pub mod proxy_config;

@@ -16,6 +16,7 @@ use crate::commands::gui_connection as gui_connection_commands;
 use crate::commands::gui_core as gui_core_commands;
 use crate::commands::gui_events as gui_events_commands;
 use crate::commands::gui_self_test as gui_self_test_commands;
+use crate::commands::kernel_version as kernel_version_commands;
 use crate::commands::logs as logs_commands;
 use crate::commands::proxy_config as proxy_config_commands;
 use crate::commands::proxy_mode as proxy_mode_commands;
@@ -131,7 +132,10 @@ pub fn run() {
             capability_commands::gui_interaction_surface_snapshot,
             system_proxy_commands::system_proxy_enable,
             system_proxy_commands::system_proxy_disable,
-            system_proxy_commands::system_proxy_status
+            system_proxy_commands::system_proxy_status,
+            kernel_version_commands::kernel_list_versions,
+            kernel_version_commands::kernel_install_version,
+            kernel_version_commands::kernel_detect_version
         ])
         .setup(|app| {
             // 创建系统托盘菜单
