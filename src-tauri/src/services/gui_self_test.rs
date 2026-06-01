@@ -30,17 +30,18 @@ pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapsh
     checks.push(check_system_proxy(&connection));
     checks.push(check_core_health(state.inner()).await);
 
-    let blocking_issues = checks
+    let blocking_issues: Vec<String> = checks
         .iter()
         .filter(|check| check.status == GuiSelfTestCheckStatus::Fail)
-        .count();
+        .map(|check| check.message.clone())
+        .collect();
     let warning_count = checks
         .iter()
         .filter(|check| check.status == GuiSelfTestCheckStatus::Warn)
         .count();
 
     Ok(GuiSelfTestSnapshot {
-        ready: blocking_issues == 0,
+        ready: blocking_issues.is_empty(),
         blocking_issues,
         warning_count,
         active_proxy_config_id: active.as_ref().map(|profile| profile.id.clone()),

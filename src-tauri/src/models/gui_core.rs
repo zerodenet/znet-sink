@@ -68,7 +68,8 @@ pub struct GuiProxyModeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct GuiSelfTestSnapshot {
     pub ready: bool,
-    pub blocking_issues: usize,
+    /// Human-readable messages for blocking (Fail) checks.
+    pub blocking_issues: Vec<String>,
     pub warning_count: usize,
     pub active_proxy_config_id: Option<String>,
     pub active_proxy_config_name: Option<String>,
