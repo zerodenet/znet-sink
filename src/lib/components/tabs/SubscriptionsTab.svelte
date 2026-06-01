@@ -2,6 +2,7 @@
   import { store } from '$lib/services/store.svelte';
   import { handleAppError } from '$lib/services/core';
   import { listSubscriptions, syncSubscription, removeSubscription, upsertSubscription } from '$lib/services/config';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
   import type { SubscriptionProfile, SubscriptionUpsert } from '$lib/types/domain';
 
   let subscriptions = $state<SubscriptionProfile[]>([]);
@@ -231,48 +232,43 @@
 </div>
 
 <!-- Modal -->
-{#if showForm}
-  <div class="modal-overlay" role="presentation" onkeydown={(e) => e.key === 'Escape' && (showForm = false)}>
-    <div class="modal-box" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <h4 class="modal-title">{editingId ? '编辑' : '新增'}订阅</h4>
-      </div>
-
-      <div class="modal-body">
-        <div class="form-item">
-          <span class="form-label">名称 <span class="required">*</span></span>
-          <div class="form-input-wrap">
-            <input id="sub-name" bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" />
-          </div>
-        </div>
-
-        <div class="form-item">
-          <span class="form-label">订阅 URL <span class="required">*</span></span>
-          <div class="form-input-wrap">
-            <input id="sub-url" bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" />
-          </div>
-        </div>
-
-        <div class="form-item">
-          <span class="form-label">格式</span>
-          <div class="form-input-wrap">
-            <select id="sub-format" bind:value={form.format} class="field-input">
-              <option value="auto">自动检测</option>
-              <option value="zero-base64-json">Zero Base64 JSON</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="modal-footer">
-        <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
-        <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim()}>
-          {saving ? '保存中...' : '保存'}
-        </button>
+<DraggableModal
+  title="{editingId ? '编辑' : '新增'}订阅"
+  open={showForm}
+  onClose={() => showForm = false}
+  width="min(440px, 90vw)"
+>
+    <div class="form-item">
+      <span class="form-label">名称 <span class="required">*</span></span>
+      <div class="form-input-wrap">
+        <input id="sub-name" bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" />
       </div>
     </div>
-  </div>
-{/if}
+
+    <div class="form-item">
+      <span class="form-label">订阅 URL <span class="required">*</span></span>
+      <div class="form-input-wrap">
+        <input id="sub-url" bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" />
+      </div>
+    </div>
+
+    <div class="form-item">
+      <span class="form-label">格式</span>
+      <div class="form-input-wrap">
+        <select id="sub-format" bind:value={form.format} class="field-input">
+          <option value="auto">自动检测</option>
+          <option value="zero-base64-json">Zero Base64 JSON</option>
+        </select>
+      </div>
+    </div>
+
+  {#snippet footer()}
+    <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
+    <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim()}>
+      {saving ? '保存中...' : '保存'}
+    </button>
+  {/snippet}
+</DraggableModal>
 
 <style>
   .panel-header {
@@ -478,45 +474,7 @@
   }
 
   /* Modal */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-
-  .modal-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px 24px;
-    width: min(440px, 90vw);
-    max-height: 85vh;
-    overflow-y: auto;
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
-  }
-
-  :global(.dark) .modal-box { box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
-
-  .modal-header {
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 16px;
-  }
-
-  .modal-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--foreground);
-  }
-
-  .modal-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
+  /* Form styles (layout provided by DraggableModal) */
 
   .form-item {
     display: flex;
@@ -555,15 +513,6 @@
 
   .field-input:focus { border-color: rgba(99, 102, 241, 0.4); }
   .field-mono { font-family: var(--font-mono); font-size: 12px; }
-
-  .modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 18px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }
 
   .btn-ghost {
     flex: 1;

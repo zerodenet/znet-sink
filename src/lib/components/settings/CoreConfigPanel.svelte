@@ -26,6 +26,7 @@
     KernelDownloadProgress,
     KernelInstallResult,
   } from '$lib/types/kernel-version';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
 
   const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/zero/releases/latest';
@@ -343,120 +344,114 @@
   {/if}
 </div>
 
-{#if versionManagerOpen}
-  <div class="modal-layer" role="presentation" onkeydown={(e) => e.key === 'Escape' && closeVersionManager()}>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="version-manager-title">
-      <div class="modal-header">
-        <div class="modal-title" id="version-manager-title">内核版本管理</div>
-        <div class="modal-header-actions">
-          <Button variant="ghost" size="icon-sm" onclick={loadVersions} disabled={versionListLoading || installBusy}>
-            <RefreshCcw class="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" onclick={closeVersionManager} disabled={installBusy}>
-            <X class="h-3.5 w-3.5" />
-          </Button>
+<DraggableModal
+  title="内核版本管理"
+  open={versionManagerOpen}
+  onClose={closeVersionManager}
+  closeDisabled={installBusy}
+  width="min(560px, 90vw)"
+>
+  {#snippet headerActions()}
+    <Button variant="ghost" size="icon-sm" onclick={loadVersions} disabled={versionListLoading || installBusy}>
+      <RefreshCcw class="h-3.5 w-3.5" />
+    </Button>
+  {/snippet}
+
+    <div class="channel-tabs">
+      {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
+        <button
+          class="channel-tab"
+          class:active={activeChannel === ch}
+          onclick={() => { activeChannel = ch; installResult = null; downloadProgress = null; }}
+          disabled={installBusy}
+        >
+          {CHANNEL_LABELS[ch]}
+        </button>
+      {/each}
+    </div>
+
+    {#if installResult?.success}
+      <div class="install-success">
+        <svg width="16" height="16" viewBox="0 0 10 10" fill="none" stroke="#22C55E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+        <div class="install-success-text">
+          <span class="font-semibold">安装成功</span>
+          <span class="text-xs text-muted-foreground">版本 {installResult.version}</span>
+          <span class="text-xs text-muted-foreground">{installResult.executablePath}</span>
+          {#if installResult.checksumVerified}
+            <Badge variant="secondary" class="text-xs">SHA256 已校验</Badge>
+          {/if}
         </div>
       </div>
-
-      <div class="channel-tabs">
-        {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
-          <button
-            class="channel-tab"
-            class:active={activeChannel === ch}
-            onclick={() => { activeChannel = ch; installResult = null; downloadProgress = null; }}
-            disabled={installBusy}
-          >
-            {CHANNEL_LABELS[ch]}
-          </button>
-        {/each}
+    {:else if downloadProgress && installBusy}
+      <div class="progress-container">
+        <div class="progress-label">
+          下载中 v{downloadProgress.version}...
+          {downloadProgress.percent ? `${downloadProgress.percent.toFixed(1)}%` : ''}
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: {downloadProgress.percent ?? 0}%"></div>
+        </div>
+        <div class="progress-detail">
+          {formatBytes(downloadProgress.bytesDownloaded)}
+          {downloadProgress.bytesTotal ? `/ ${formatBytes(downloadProgress.bytesTotal)}` : ''}
+        </div>
       </div>
-
-      <div class="modal-body">
-        {#if installResult?.success}
-          <div class="install-success">
-            <svg width="16" height="16" viewBox="0 0 10 10" fill="none" stroke="#22C55E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
-            <div class="install-success-text">
-              <span class="font-semibold">安装成功</span>
-              <span class="text-xs text-muted-foreground">版本 {installResult.version}</span>
-              <span class="text-xs text-muted-foreground">{installResult.executablePath}</span>
-              {#if installResult.checksumVerified}
-                <Badge variant="secondary" class="text-xs">SHA256 已校验</Badge>
+    {:else if versionListLoading}
+      <div class="loading">获取版本列表中...</div>
+    {:else if channelFilteredVersions.length === 0}
+      <div class="empty-versions">该渠道暂无可用版本</div>
+    {:else}
+      <div class="version-list">
+        {#each channelFilteredVersions as release (release.version)}
+          <div class="version-row" class:current={isCurrentVersion(release.version)}>
+            <div class="version-info">
+              <span class="version-tag">v{release.version}</span>
+              {#if isCurrentVersion(release.version)}
+                <Badge variant="secondary" class="text-xs">当前</Badge>
               {/if}
             </div>
-          </div>
-        {:else if downloadProgress && installBusy}
-          <div class="progress-container">
-            <div class="progress-label">
-              下载中 v{downloadProgress.version}...
-              {downloadProgress.percent ? `${downloadProgress.percent.toFixed(1)}%` : ''}
+            <div class="version-meta">
+              <span class="version-date">{formatDate(release.publishedAtUnixMs)}</span>
+              {#if release.assetSizeBytes}
+                <span class="version-size">{formatBytes(release.assetSizeBytes)}</span>
+              {/if}
             </div>
-            <div class="progress-track">
-              <div class="progress-fill" style="width: {downloadProgress.percent ?? 0}%"></div>
-            </div>
-            <div class="progress-detail">
-              {formatBytes(downloadProgress.bytesDownloaded)}
-              {downloadProgress.bytesTotal ? `/ ${formatBytes(downloadProgress.bytesTotal)}` : ''}
+            <div class="version-actions">
+              {#if release.releaseNotesUrl}
+                <button class="link-btn" onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
+                </button>
+              {/if}
+              <Button
+                size="sm"
+                onclick={() => handleInstallVersion(release)}
+                disabled={installBusy || !release.assetDownloadUrl}
+              >
+                {#if installingVersion === release.version}
+                  <span>安装中...</span>
+                {:else if isCurrentVersion(release.version)}
+                  <span>重装</span>
+                {:else}
+                  <Download class="h-3.5 w-3.5" />
+                  <span>安装</span>
+                {/if}
+              </Button>
             </div>
           </div>
-        {:else if versionListLoading}
-          <div class="loading">获取版本列表中...</div>
-        {:else if channelFilteredVersions.length === 0}
-          <div class="empty-versions">该渠道暂无可用版本</div>
-        {:else}
-          <div class="version-list">
-            {#each channelFilteredVersions as release (release.version)}
-              <div class="version-row" class:current={isCurrentVersion(release.version)}>
-                <div class="version-info">
-                  <span class="version-tag">v{release.version}</span>
-                  {#if isCurrentVersion(release.version)}
-                    <Badge variant="secondary" class="text-xs">当前</Badge>
-                  {/if}
-                </div>
-                <div class="version-meta">
-                  <span class="version-date">{formatDate(release.publishedAtUnixMs)}</span>
-                  {#if release.assetSizeBytes}
-                    <span class="version-size">{formatBytes(release.assetSizeBytes)}</span>
-                  {/if}
-                </div>
-                <div class="version-actions">
-                  {#if release.releaseNotesUrl}
-                    <button class="link-btn" onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
-                    </button>
-                  {/if}
-                  <Button
-                    size="sm"
-                    onclick={() => handleInstallVersion(release)}
-                    disabled={installBusy || !release.assetDownloadUrl}
-                  >
-                    {#if installingVersion === release.version}
-                      <span>安装中...</span>
-                    {:else if isCurrentVersion(release.version)}
-                      <span>重装</span>
-                    {:else}
-                      <Download class="h-3.5 w-3.5" />
-                      <span>安装</span>
-                    {/if}
-                  </Button>
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
+        {/each}
       </div>
+    {/if}
 
-      <div class="modal-footer">
-        <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
-          {installResult?.success ? '关闭' : '取消'}
-        </Button>
-        <button class="link-btn" onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
-          <span>手动下载</span>
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
+  {#snippet footer()}
+    <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
+      {installResult?.success ? '关闭' : '取消'}
+    </Button>
+    <button class="link-btn" onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
+      <span>手动下载</span>
+    </button>
+  {/snippet}
+</DraggableModal>
 
 <style>
   .panel {
@@ -631,63 +626,7 @@
     color: var(--foreground);
   }
 
-  /* Modal */
-  .modal-layer {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  .modal {
-    position: relative;
-    z-index: 1;
-    width: min(560px, 100%);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .modal-header-actions {
-    display: flex;
-    gap: 4px;
-  }
-
-  .modal-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .modal-body {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 120px;
-  }
-
-  .modal-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-  }
+  /* Modal content styles (layout provided by DraggableModal) */
 
   /* Channel tabs */
   .channel-tabs {
@@ -908,19 +847,6 @@
 
     .path-row {
       grid-template-columns: 1fr;
-    }
-
-    .modal {
-      max-height: 90vh;
-      overflow-y: auto;
-    }
-
-    .modal-footer {
-      flex-direction: column-reverse;
-    }
-
-    .modal-footer :global(button) {
-      width: 100%;
     }
 
     .version-row {

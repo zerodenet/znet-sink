@@ -15,6 +15,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2, X } from '@lucide/svelte';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
 
   type SourceMode = 'file' | 'inline';
 
@@ -376,112 +377,101 @@
   </div>
 </div>
 
-{#if showEditor}
-  <div class="modal-layer" role="presentation" onkeydown={(e) => e.key === 'Escape' && closeEditor()}>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="proxy-config-title">
-      <div class="modal-header">
-        <div class="modal-copy">
-          <div class="modal-title" id="proxy-config-title">{editorTitle}</div>
-          <div class="modal-desc">仅支持固定 JSON 配置。选择文件或直接粘贴内容，解析失败会直接报错。</div>
-        </div>
-
-        <Button variant="ghost" size="icon-sm" onclick={closeEditor} disabled={saving}>
-          <X class="h-3.5 w-3.5" />
-          <span class="sr-only">关闭</span>
-        </Button>
-      </div>
-
-      <div class="modal-body">
-        <div class="form-item">
-          <span class="form-label">名称 <span class="required">*</span></span>
-          <div class="form-input-wrap">
-            <Input bind:value={draft.name} placeholder="例如：香港节点、办公配置" disabled={saving} />
-          </div>
-        </div>
-
-        <div class="form-item">
-          <span class="form-label">导入方式</span>
-          <div class="form-input-wrap">
-          <div class="source-switch">
-            <button
-              type="button"
-              class="source-btn"
-              class:active={draft.sourceMode === 'file'}
-              onclick={() => setSourceMode('file')}
-              disabled={saving}
-            >
-              <FolderOpen class="h-3.5 w-3.5" />
-              <span>本地文件</span>
-            </button>
-            <button
-              type="button"
-              class="source-btn"
-              class:active={draft.sourceMode === 'inline'}
-              onclick={() => setSourceMode('inline')}
-              disabled={saving}
-            >
-              <FileJson class="h-3.5 w-3.5" />
-              <span>粘贴 JSON</span>
-            </button>
-          </div>
-          </div>
-        </div>
-
-        {#if draft.sourceMode === 'file'}
-          <div class="form-item">
-            <span class="form-label">配置文件</span>
-            <div class="form-input-wrap">
-            <div class="file-picker-row">
-              <Input value={draft.sourcePath} readonly placeholder="请选择本地配置文件" class="mono" />
-              <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving}>
-                <FolderOpen class="h-3.5 w-3.5" />
-                <span>选择</span>
-              </Button>
-            </div>
-            <div class="form-hint">保存时会直接读取这个文件并解析为 JSON。</div>
-            </div>
-          </div>
-        {:else}
-          <div class="form-item">
-            <span class="form-label">JSON 内容</span>
-            <div class="form-input-wrap">
-              <textarea
-                bind:value={draft.content}
-                class="json-editor mono"
-                placeholder="粘贴代理配置 JSON..."
-                rows={16}
-                disabled={saving}
-              ></textarea>
-              <div class="form-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
-            </div>
-          </div>
-        {/if}
-
-        <div class="form-item">
-          <span class="form-label">设为当前</span>
-          <div class="form-input-wrap flex items-center">
-            <span class="switch-copy">{draft.active ? '保存后立即切换到这份配置' : '仅保存，不切换当前配置'}</span>
-            <Switch bind:checked={draft.active} disabled={saving} />
-          </div>
-        </div>
-
-        {#if validationMessage}
-          <div class="validation-row">
-            <AlertTriangle class="h-3.5 w-3.5" />
-            <span>{validationMessage}</span>
-          </div>
-        {/if}
-      </div>
-
-      <div class="modal-footer">
-        <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
-        <Button onclick={handleSave} disabled={!canSave}>
-          <span>{saving ? '保存中...' : getSaveLabel()}</span>
-        </Button>
+<DraggableModal
+  title={editorTitle}
+  description="仅支持固定 JSON 配置。选择文件或直接粘贴内容，解析失败会直接报错。"
+  open={showEditor}
+  onClose={closeEditor}
+  closeDisabled={saving}
+  width="min(680px, 90vw)"
+>
+    <div class="form-item">
+      <span class="form-label">名称 <span class="required">*</span></span>
+      <div class="form-input-wrap">
+        <Input bind:value={draft.name} placeholder="例如：香港节点、办公配置" disabled={saving} />
       </div>
     </div>
-  </div>
-{/if}
+
+    <div class="form-item">
+      <span class="form-label">导入方式</span>
+      <div class="form-input-wrap">
+      <div class="source-switch">
+        <button
+          type="button"
+          class="source-btn"
+          class:active={draft.sourceMode === 'file'}
+          onclick={() => setSourceMode('file')}
+          disabled={saving}
+        >
+          <FolderOpen class="h-3.5 w-3.5" />
+          <span>本地文件</span>
+        </button>
+        <button
+          type="button"
+          class="source-btn"
+          class:active={draft.sourceMode === 'inline'}
+          onclick={() => setSourceMode('inline')}
+          disabled={saving}
+        >
+          <FileJson class="h-3.5 w-3.5" />
+          <span>粘贴 JSON</span>
+        </button>
+      </div>
+      </div>
+    </div>
+
+    {#if draft.sourceMode === 'file'}
+      <div class="form-item">
+        <span class="form-label">配置文件</span>
+        <div class="form-input-wrap">
+        <div class="file-picker-row">
+          <Input value={draft.sourcePath} readonly placeholder="请选择本地配置文件" class="mono" />
+          <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving}>
+            <FolderOpen class="h-3.5 w-3.5" />
+            <span>选择</span>
+          </Button>
+        </div>
+        <div class="form-hint">保存时会直接读取这个文件并解析为 JSON。</div>
+        </div>
+      </div>
+    {:else}
+      <div class="form-item">
+        <span class="form-label">JSON 内容</span>
+        <div class="form-input-wrap">
+          <textarea
+            bind:value={draft.content}
+            class="json-editor mono"
+            placeholder="粘贴代理配置 JSON..."
+            rows={16}
+            disabled={saving}
+          ></textarea>
+          <div class="form-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
+        </div>
+      </div>
+    {/if}
+
+    <div class="form-item">
+      <span class="form-label">设为当前</span>
+      <div class="form-input-wrap flex items-center">
+        <span class="switch-copy">{draft.active ? '保存后立即切换到这份配置' : '仅保存，不切换当前配置'}</span>
+        <Switch bind:checked={draft.active} disabled={saving} />
+      </div>
+    </div>
+
+    {#if validationMessage}
+      <div class="validation-row">
+        <AlertTriangle class="h-3.5 w-3.5" />
+        <span>{validationMessage}</span>
+      </div>
+    {/if}
+
+  {#snippet footer()}
+    <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
+    <Button onclick={handleSave} disabled={!canSave}>
+      <span>{saving ? '保存中...' : getSaveLabel()}</span>
+    </Button>
+  {/snippet}
+</DraggableModal>
 
 <style>
   .profiles-root {
@@ -513,23 +503,20 @@
     gap: 12px;
   }
 
-  .title-block,
-  .modal-copy {
+  .title-block {
     display: flex;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
   }
 
-  .title,
-  .modal-title {
+  .title {
     font-size: 13px;
     font-weight: 700;
     color: var(--foreground);
   }
 
   .subtitle,
-  .modal-desc,
   .form-hint,
   .switch-copy {
     font-size: 11.5px;
@@ -696,55 +683,7 @@
     line-height: 1.5;
   }
 
-  .modal-layer {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-  }
-
-  .modal {
-    position: relative;
-    z-index: 1;
-    width: min(680px, 100%);
-    max-height: min(88vh, 840px);
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--card);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
-    overflow: hidden;
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 0 0 14px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .modal-footer {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 14px 0 0 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .modal-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 14px;
-    overflow-y: auto;
-  }
+  /* Form styles (layout provided by DraggableModal) */
 
   .form-item {
     display: flex;
@@ -861,8 +800,6 @@
 
   @media (max-width: 640px) {
     .row-actions,
-    .modal-header,
-    .modal-footer,
     .file-picker-row {
       flex-direction: column;
       align-items: stretch;

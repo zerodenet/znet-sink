@@ -2,6 +2,7 @@
   import { store } from '$lib/services/store.svelte';
   import { listRuleSets, removeRuleSet, upsertRuleSet } from '$lib/services/config';
   import { handleAppError } from '$lib/services/core';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
   import type { RuleSetProfile, RuleSetUpsert } from '$lib/types/domain';
 
   let ruleSets = $state<RuleSetProfile[]>([]);
@@ -183,98 +184,93 @@
 </div>
 
 <!-- Modal -->
-{#if showForm}
-  <div class="modal-overlay" role="presentation" onkeydown={(e) => e.key === 'Escape' && (showForm = false)}>
-    <div class="modal-box" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <h4 class="modal-title">{editingId ? '编辑' : '新增'}规则集</h4>
+<DraggableModal
+  title="{editingId ? '编辑' : '新增'}规则集"
+  open={showForm}
+  onClose={() => showForm = false}
+  width="min(420px, 90vw)"
+>
+    <div class="form-item">
+      <span class="form-label">名称 <span class="required">*</span></span>
+      <div class="form-input-wrap">
+        <input id="rules-name" bind:value={form.name} placeholder="例如: 广告拦截规则" class="field-input" />
       </div>
+    </div>
 
-      <div class="modal-body">
-        <div class="form-item">
-          <span class="form-label">名称 <span class="required">*</span></span>
-          <div class="form-input-wrap">
-            <input id="rules-name" bind:value={form.name} placeholder="例如: 广告拦截规则" class="field-input" />
-          </div>
-        </div>
+    <div class="form-item">
+      <span class="form-label">格式</span>
+      <div class="form-input-wrap">
+        <select id="rules-format" bind:value={form.format} class="field-input">
+          <option value="auto">自动检测</option>
+          <option value="yaml">YAML</option>
+          <option value="json">JSON</option>
+          <option value="text">纯文本</option>
+        </select>
+      </div>
+    </div>
 
-        <div class="form-item">
-          <span class="form-label">格式</span>
-          <div class="form-input-wrap">
-            <select id="rules-format" bind:value={form.format} class="field-input">
-              <option value="auto">自动检测</option>
-              <option value="yaml">YAML</option>
-              <option value="json">JSON</option>
-              <option value="text">纯文本</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-item">
-          <span class="form-label">来源类型</span>
-          <div class="form-input-wrap">
-            <div class="kind-seg">
-              {#each ['remote', 'file', 'inline'] as kind}
-                <button
-                  onclick={() => form.kind = kind as typeof form.kind}
-                  class="kind-btn {form.kind === kind ? 'on' : ''}"
-                  aria-pressed={form.kind === kind}
-                >
-                  {kindLabels[kind]}
-                </button>
-              {/each}
-            </div>
-          </div>
-        </div>
-
-        {#if form.kind === 'remote'}
-          <div class="form-item">
-            <span class="form-label">URL <span class="required">*</span></span>
-            <div class="form-input-wrap">
-              <input id="rules-url" bind:value={form.url} placeholder="https://example.com/rules.yaml" class="field-input field-mono" />
-            </div>
-          </div>
-        {:else if form.kind === 'file'}
-          <div class="form-item">
-            <span class="form-label">文件路径 <span class="required">*</span></span>
-            <div class="form-input-wrap">
-              <input id="rules-path" bind:value={form.path} placeholder="/path/to/rules.yaml" class="field-input field-mono" />
-            </div>
-          </div>
-        {:else}
-          <div class="form-item">
-            <span class="form-label">内联内容</span>
-            <div class="form-input-wrap">
-              <textarea id="rules-content" bind:value={form.content} placeholder="内联规则 JSON..." rows={6} class="field-input field-mono resize-y"></textarea>
-            </div>
-          </div>
-        {/if}
-
-        <div class="form-item">
-          <span class="form-label">启用</span>
-          <div class="form-input-wrap flex items-center">
+    <div class="form-item">
+      <span class="form-label">来源类型</span>
+      <div class="form-input-wrap">
+        <div class="kind-seg">
+          {#each ['remote', 'file', 'inline'] as kind}
             <button
-              onclick={() => form.enabled = !form.enabled}
-              class="toggle-btn {form.enabled ? 'on' : ''}"
-              role="switch"
-              aria-checked={form.enabled}
-              aria-label="启用规则集"
+              onclick={() => form.kind = kind as typeof form.kind}
+              class="kind-btn {form.kind === kind ? 'on' : ''}"
+              aria-pressed={form.kind === kind}
             >
-              <span class="toggle-thumb"></span>
+              {kindLabels[kind]}
             </button>
-          </div>
+          {/each}
         </div>
       </div>
+    </div>
 
-      <div class="modal-footer">
-        <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
-        <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim()}>
-          {saving ? '保存中...' : '保存'}
+    {#if form.kind === 'remote'}
+      <div class="form-item">
+        <span class="form-label">URL <span class="required">*</span></span>
+        <div class="form-input-wrap">
+          <input id="rules-url" bind:value={form.url} placeholder="https://example.com/rules.yaml" class="field-input field-mono" />
+        </div>
+      </div>
+    {:else if form.kind === 'file'}
+      <div class="form-item">
+        <span class="form-label">文件路径 <span class="required">*</span></span>
+        <div class="form-input-wrap">
+          <input id="rules-path" bind:value={form.path} placeholder="/path/to/rules.yaml" class="field-input field-mono" />
+        </div>
+      </div>
+    {:else}
+      <div class="form-item">
+        <span class="form-label">内联内容</span>
+        <div class="form-input-wrap">
+          <textarea id="rules-content" bind:value={form.content} placeholder="内联规则 JSON..." rows={6} class="field-input field-mono resize-y"></textarea>
+        </div>
+      </div>
+    {/if}
+
+    <div class="form-item">
+      <span class="form-label">启用</span>
+      <div class="form-input-wrap flex items-center">
+        <button
+          onclick={() => form.enabled = !form.enabled}
+          class="toggle-btn {form.enabled ? 'on' : ''}"
+          role="switch"
+          aria-checked={form.enabled}
+          aria-label="启用规则集"
+        >
+          <span class="toggle-thumb"></span>
         </button>
       </div>
     </div>
-  </div>
-{/if}
+
+  {#snippet footer()}
+    <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
+    <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim()}>
+      {saving ? '保存中...' : '保存'}
+    </button>
+  {/snippet}
+</DraggableModal>
 
 <style>
   /* Panel */
@@ -435,45 +431,7 @@
   }
 
   /* Modal */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-
-  .modal-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 18px;
-    width: min(420px, 90vw);
-    max-height: 85vh;
-    overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-  }
-
-  :global(.dark) .modal-box { box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5); }
-
-  .modal-header {
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 16px;
-  }
-
-  .modal-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--foreground);
-  }
-
-  .modal-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
+  /* Form styles (layout provided by DraggableModal) */
 
   .form-item {
     display: flex;
@@ -512,15 +470,6 @@
 
   .field-input:focus { border-color: rgba(99, 102, 241, 0.4); }
   .field-mono { font-family: var(--font-mono); font-size: 12px; }
-
-  .modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 18px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
-  }
 
   /* Kind segmented control */
   .kind-seg {
