@@ -64,13 +64,46 @@
     const viewW = window.innerWidth;
     const viewH = window.innerHeight;
     const elW = containerEl?.offsetWidth ?? 400;
+    const elH = containerEl?.offsetHeight ?? 300;
+
+    // Dialog is centered by flex in the overlay — its natural position is
+    // left: (viewW - elW)/2, top: (viewH - elH)/2.
+    // translate(x, y) offsets from that center, so the dialog's actual
+    // screen rect is:
+    //   left   = (viewW - elW)/2 + x
+    //   top    = (viewH - elH)/2 + y
+    //   right  = left + elW
+    //   bottom = top  + elH
+    const halfW = (viewW - elW) / 2;
+    const halfH = (viewH - elH) / 2;
+
+    // Margin (px) — keep at least this much of the header visible on every edge
+    const MARGIN = 40;
+
+    // Constrain: keep MARGIN px of the dialog visible on each side
+    const minX = MARGIN - halfW;
+    const maxX = halfW - MARGIN;
+    const minY = MARGIN - halfH;
+    const maxY = halfH - MARGIN;
+
+    // If the dialog is larger than the viewport in either axis,
+    // just keep it centered (min > max, so clamp to 0)
+    const clampX = minX <= maxX;
+    const clampY = minY <= maxY;
 
     let newX = e.clientX - dragAnchorX;
     let newY = e.clientY - dragAnchorY;
 
-    // Keep at least 60 px of the title bar visible on all edges
-    newX = Math.max(-elW + 60, Math.min(viewW - 60, newX));
-    newY = Math.max(0, Math.min(viewH - 40, newY));
+    if (clampX) {
+      newX = Math.max(minX, Math.min(maxX, newX));
+    } else {
+      newX = 0;
+    }
+    if (clampY) {
+      newY = Math.max(minY, Math.min(maxY, newY));
+    } else {
+      newY = 0;
+    }
 
     pos = { x: newX, y: newY };
   }
@@ -184,7 +217,7 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--dialog-overlay-bg);
     animation: dm-fade-in 0.15s ease;
   }
 
@@ -199,17 +232,10 @@
     flex-direction: column;
     border: 1px solid var(--border);
     border-radius: 10px;
-    background: var(--card);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+    background: var(--dialog-bg);
+    box-shadow: var(--dialog-shadow);
     max-height: min(90vh, 840px);
     animation: dm-scale-in 0.15s ease;
-    /* Opaque — no transparency on the dialog itself */
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
-  :global(.dark) .dm-container {
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
   }
 
   .dm-fullscreen {

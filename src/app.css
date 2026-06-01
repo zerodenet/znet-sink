@@ -72,6 +72,11 @@
   --titlebar:          rgba(242, 242, 245, 0.82);
   --titlebar-border:   rgba(0, 0, 0, 0.065);
 
+  /* Dialog = opaque elevated surface */
+  --dialog-bg:         #FFFFFF;
+  --dialog-overlay-bg: rgba(0, 0, 0, 0.35);
+  --dialog-shadow:     0 24px 60px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
   /* Segmented control */
   --segment-bg:        rgba(0, 0, 0, 0.055);
   --segment-active-bg: #FFFFFF;
@@ -109,6 +114,10 @@
 
   --titlebar:          rgba(15, 16, 20, 0.88);
   --titlebar-border:   rgba(255, 255, 255, 0.07);
+
+  --dialog-bg:         #1C1E26;
+  --dialog-overlay-bg: rgba(0, 0, 0, 0.55);
+  --dialog-shadow:     0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
 
   --segment-bg:        rgba(255, 255, 255, 0.06);
   --segment-active-bg: rgba(255, 255, 255, 0.12);
