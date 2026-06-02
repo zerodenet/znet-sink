@@ -213,13 +213,9 @@ pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersi
             match output {
                 Ok(output) if output.status.success() => {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let version = stdout
-                        .trim()
-                        .strip_prefix('v')
-                        .unwrap_or(stdout.trim())
-                        .to_string();
+                    let version = extract_semver(&stdout);
                     Ok(KernelVersionDetect {
-                        version: Some(version),
+                        version,
                         source: "cli".to_string(),
                     })
                 }
@@ -234,6 +230,33 @@ pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersi
             source: "none".to_string(),
         }),
     }
+}
+
+/// Extract a semver version from arbitrary `--version` output.
+///
+/// Handles formats like:
+///   `v0.0.5`
+///   `zero v0.0.5 (abcdef12 2026-06-02)`
+///   `zero 0.0.5\nBuild: abc1234\nTarget: x86_64`
+///
+/// Returns the version **without** a leading `v`.
+fn extract_semver(raw: &str) -> Option<String> {
+    for token in raw.split_whitespace() {
+        let candidate = token.trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == ';');
+        let version_part = candidate.strip_prefix('v').unwrap_or(candidate);
+        if version_part.starts_with(|c: char| c.is_ascii_digit())
+            && version_part.chars().filter(|&c| c == '.').count() >= 2
+        {
+            let semver: String = version_part
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if !semver.is_empty() {
+                return Some(semver);
+            }
+        }
+    }
+    None
 }
 
 fn parse_release(
