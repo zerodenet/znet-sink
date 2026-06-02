@@ -9,24 +9,27 @@ permissions:
   contents: write
 
 jobs:
-  # ── Build matrix across platforms ──
+  # ── Build across platforms ──
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Windows: x86_64 only, NSIS exe + MSI
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: bundle/msi
-            ext: msi
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: bundle/deb
-            ext: deb
+            platform-key: windows-x86_64
+          # macOS: Intel + Apple Silicon
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform-key: darwin-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: bundle/dmg
-            ext: dmg
+            platform-key: darwin-aarch64
+          # Linux: x86_64, deb + AppImage
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform-key: linux-x86_64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -54,7 +57,7 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app
+      - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,42 +69,53 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }}
 
-  # ── Generate update manifest (latest.json) ──
-  publish-update:
+  # ── Generate and upload update manifest (latest.json) ──
+  generate-update-manifest:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate latest.json update manifest
+      - name: Generate latest.json
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           REPO="zerodenet/znet-sink"
+          RELEASE_NOTES_URL="https://github.com/${REPO}/releases/tag/${TAG}"
 
+          # Tauri 2 updater looks for this file at the configured endpoint.
+          # GitHub's /releases/latest/download/ redirects to the most recent
+          # non-draft, non-prerelease release → every tag push gets its own
+          # latest.json, and the "latest" pointer is automatic.
+          #
+          # Asset names below must match Tauri bundler output.
+          # Verify on first release and adjust if needed.
           cat <<EOF > latest.json
           {
             "version": "${VERSION}",
-            "notes": "See release notes: https://github.com/${REPO}/releases/tag/${TAG}",
+            "notes": "See release notes: ${RELEASE_NOTES_URL}",
             "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
               "windows-x86_64": {
                 "signature": "",
-                "url": "https://github.com/${REPO}/releases/download/${TAG}/ZNet-Sink_${VERSION}_x64_en-US.msi"
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/ZNet%20Sink_${VERSION}_x64-setup.exe"
+              },
+              "darwin-x86_64": {
+                "signature": "",
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/ZNet%20Sink_${VERSION}_x64.dmg"
+              },
+              "darwin-aarch64": {
+                "signature": "",
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/ZNet%20Sink_${VERSION}_aarch64.dmg"
               },
               "linux-x86_64": {
                 "signature": "",
                 "url": "https://github.com/${REPO}/releases/download/${TAG}/znet-sink_${VERSION}_amd64.deb"
-              },
-              "darwin-aarch64": {
-                "signature": "",
-                "url": "https://github.com/${REPO}/releases/download/${TAG}/ZNet-Sink_${VERSION}_aarch64.dmg"
               }
             }
           }
           EOF
 
+          echo "Generated latest.json:"
           cat latest.json
 
       - name: Upload latest.json to release
