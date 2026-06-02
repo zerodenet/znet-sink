@@ -175,6 +175,15 @@ pub async fn tun_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
     feature_status(state, "tun", &["tun", "tun-status", "tun-snapshot"]).await
 }
 
+pub async fn stack_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
+    feature_status(
+        state,
+        "stack",
+        &["system-stack", "stack", "stack-status"],
+    )
+    .await
+}
+
 pub async fn rule_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
     feature_status(
         state,

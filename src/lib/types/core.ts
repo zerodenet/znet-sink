@@ -57,6 +57,11 @@ export type GuiEventType =
   | 'policy.selected'
   | 'policy.probeCompleted'
   | 'traffic.sampled'
+  // v0.0.5+: TUN virtual network interface
+  | 'tun.statusChanged'
+  | 'tun.error'
+  // v0.0.5+: Network stack (SystemStack / proxy)
+  | 'stack.statusChanged'
   | 'core.unknownEvent';
 
 export interface GuiEventEnvelope {
@@ -118,6 +123,21 @@ export interface CoreConfigExportResult {
   proxyConfigId: string;
   path: string;
   appConfig: CoreConfigSnapshot;
+}
+
+// v0.0.5+: TUN virtual network interface status
+export interface TunStatusEvent {
+  state: 'started' | 'stopped' | 'error';
+  interfaceName?: string;
+  address?: string;
+  message?: string;
+}
+
+// v0.0.5+: Network stack status (SystemStack / proxy)
+export interface StackStatusEvent {
+  state: 'started' | 'stopped' | 'degraded';
+  mode?: string;
+  message?: string;
 }
 
 export interface AppError {

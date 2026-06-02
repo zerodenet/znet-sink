@@ -88,6 +88,12 @@ pub async fn gui_tun_status(state: State<'_, AppState>) -> AppResult<GuiFeatureS
 }
 
 #[tauri::command]
+pub async fn gui_stack_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
+    interaction_mode::require_pro_mode(state.inner(), "stack")?;
+    zero_adapter::stack_status(state.inner()).await
+}
+
+#[tauri::command]
 pub async fn gui_rule_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
     interaction_mode::require_pro_mode(state.inner(), "rules")?;
     zero_adapter::rule_status(state.inner()).await

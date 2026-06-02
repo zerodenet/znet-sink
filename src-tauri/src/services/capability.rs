@@ -227,6 +227,20 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
             &["query", "runtime-snapshot"],
         ),
         feature_required(
+            "tun.status",
+            "action",
+            is_pro,
+            zero_features,
+            &["tun", "tun-status", "tun-snapshot"],
+        ),
+        feature_required(
+            "stack.status",
+            "action",
+            is_pro,
+            zero_features,
+            &["system-stack", "stack", "stack-status"],
+        ),
+        feature_required(
             "traffic.snapshot",
             "action",
             true,
@@ -324,6 +338,13 @@ fn feature_surface_items(is_pro: bool, zero_features: &[String]) -> Vec<Interact
             is_pro,
             zero_features,
             &["tun", "tun-status", "tun-snapshot"],
+        ),
+        feature_required(
+            "systemStack",
+            "feature",
+            is_pro,
+            zero_features,
+            &["system-stack", "stack", "stack-status"],
         ),
         feature_required(
             "scripting",

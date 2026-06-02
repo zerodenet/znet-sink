@@ -16,7 +16,8 @@ use crate::models::{
     gui_core::{
         GuiConfigChangedEvent, GuiCoreHealth, GuiEvent, GuiEventData, GuiEventPayload,
         GuiEventStatus, GuiEventSubscription, GuiPolicyMember, GuiPolicyProbeCompletedEvent,
-        GuiPolicySelectedEvent, GuiUnknownEvent, GuiWarningEvent,
+        GuiPolicySelectedEvent, GuiStackStatusEvent, GuiTunStatusEvent, GuiUnknownEvent,
+        GuiWarningEvent,
     },
 };
 use crate::services::control_plane::{endpoint_from_options, timeout_from_options};
@@ -176,6 +177,43 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 unknown_payload("invalid policy.probe.completed event payload", payload)
             }),
         "stats.sampled" => GuiEventData::TrafficStats(zero_adapter::parse_stats(payload)),
+        // v0.0.5+: TUN virtual network interface events
+        "tun.started" => GuiEventData::TunStatus(GuiTunStatusEvent {
+            state: "started".to_string(),
+            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            address: zero_adapter::string_at(payload, &["address", "ip", "bind"]),
+            message: None,
+        }),
+        "tun.stopped" => GuiEventData::TunStatus(GuiTunStatusEvent {
+            state: "stopped".to_string(),
+            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            address: None,
+            message: zero_adapter::string_at(payload, &["message", "reason"]),
+        }),
+        "tun.error" => GuiEventData::TunStatus(GuiTunStatusEvent {
+            state: "error".to_string(),
+            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            address: None,
+            message: zero_adapter::string_at(payload, &["message", "error", "reason"])
+                .or_else(|| Some("TUN interface error".to_string())),
+        }),
+        // v0.0.5+: Network stack status (SystemStack / proxy stack)
+        "stack.started" => GuiEventData::StackStatus(GuiStackStatusEvent {
+            state: "started".to_string(),
+            mode: zero_adapter::string_at(payload, &["mode", "stack_mode", "stackMode"]),
+            message: None,
+        }),
+        "stack.stopped" => GuiEventData::StackStatus(GuiStackStatusEvent {
+            state: "stopped".to_string(),
+            mode: zero_adapter::string_at(payload, &["mode", "stack_mode", "stackMode"]),
+            message: zero_adapter::string_at(payload, &["message", "reason"]),
+        }),
+        "stack.degraded" => GuiEventData::StackStatus(GuiStackStatusEvent {
+            state: "degraded".to_string(),
+            mode: zero_adapter::string_at(payload, &["mode", "stack_mode", "stackMode"]),
+            message: zero_adapter::string_at(payload, &["message", "reason"])
+                .or_else(|| Some("stack operating in degraded mode".to_string())),
+        }),
         _ => unknown_payload("unsupported zero event type", payload),
     }
 }
@@ -244,6 +282,11 @@ fn gui_event_type(source_event_type: &str) -> &'static str {
         "policy.selected" => "policy.selected",
         "policy.probe.completed" => "policy.probeCompleted",
         "stats.sampled" => "traffic.sampled",
+        // v0.0.5+: TUN virtual network interface
+        "tun.started" | "tun.stopped" => "tun.statusChanged",
+        "tun.error" => "tun.error",
+        // v0.0.5+: Network stack (SystemStack / proxy)
+        "stack.started" | "stack.stopped" | "stack.degraded" => "stack.statusChanged",
         _ => "core.unknownEvent",
     }
 }

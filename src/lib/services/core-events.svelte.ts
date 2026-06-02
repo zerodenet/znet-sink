@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime } from '$lib/services/core';
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
-import type { CoreEventStatus, GuiEventPayload } from '$lib/types/core';
+import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
 import type { GuiConnectionItem } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
@@ -36,6 +36,14 @@ class CoreEventsService {
   // 内核警告
   lastWarning = $state<CoreWarning | null>(null);
   warnings = $state<CoreWarning[]>([]);
+
+  // v0.0.5+: TUN 虚拟网卡状态
+  tunState = $state<'idle' | 'started' | 'stopped' | 'error'>('idle');
+  tunStateMessage = $state<string | null>(null);
+
+  // v0.0.5+: 网络栈状态（SystemStack / proxy）
+  stackState = $state<'idle' | 'started' | 'stopped' | 'degraded'>('idle');
+  stackMode = $state<string | null>(null);
 
   // 连接增量事件
   private _deltaSeq = $state(0);
@@ -175,6 +183,23 @@ class CoreEventsService {
       return;
     }
 
+    // ── v0.0.5+: TUN 虚拟网卡状态变化 ──
+    if (eventType === 'tun.statusChanged') {
+      this._handleTunStatus(data);
+      return;
+    }
+
+    if (eventType === 'tun.error') {
+      this._handleTunError(data);
+      return;
+    }
+
+    // ── v0.0.5+: 网络栈状态变化（SystemStack / proxy stack）──
+    if (eventType === 'stack.statusChanged') {
+      this._handleStackStatus(data);
+      return;
+    }
+
     // ── 连接实时事件（增量更新）──
     if (eventType === 'connection.started' || eventType === 'connection.updated') {
       const conn = this._parseConnectionEvent(data);
@@ -277,6 +302,41 @@ class CoreEventsService {
       awaitIgnore(this._fetchInitialState());
     }
     this.statusTick++;
+  }
+
+  // ── v0.0.5+: TUN 虚拟网卡事件 ──
+
+  private _handleTunStatus(data: unknown) {
+    const obj = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+    const state = (typeof obj['state'] === 'string' ? obj['state'] : 'idle') as TunStatusEvent['state'];
+    this.tunState = state;
+    this.tunStateMessage = typeof obj['message'] === 'string' ? obj['message'] : null;
+
+    if (state === 'error') {
+      const msg = this.tunStateMessage ?? 'TUN interface error';
+      showWarningToast(`TUN: ${msg}`, 5000);
+    }
+  }
+
+  private _handleTunError(data: unknown) {
+    const obj = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+    this.tunState = 'error';
+    this.tunStateMessage = typeof obj['message'] === 'string' ? obj['message'] : 'TUN interface error';
+    showWarningToast(`TUN 错误: ${this.tunStateMessage}`, 6000);
+  }
+
+  // ── v0.0.5+: 网络栈状态事件（SystemStack / proxy stack）──
+
+  private _handleStackStatus(data: unknown) {
+    const obj = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+    const state = (typeof obj['state'] === 'string' ? obj['state'] : 'idle') as StackStatusEvent['state'];
+    this.stackState = state;
+    this.stackMode = typeof obj['mode'] === 'string' ? obj['mode'] : null;
+
+    if (state === 'degraded') {
+      const msg = typeof obj['message'] === 'string' ? obj['message'] : 'stack degraded';
+      showWarningToast(`网络栈降级: ${msg}`, 5000);
+    }
   }
 
   // ── 连接增量 ──

@@ -288,6 +288,10 @@ pub enum GuiEventData {
     PolicySelected(GuiPolicySelectedEvent),
     PolicyProbeCompleted(GuiPolicyProbeCompletedEvent),
     TrafficStats(GuiTrafficStats),
+    /// TUN virtual network interface lifecycle (v0.0.5+)
+    TunStatus(GuiTunStatusEvent),
+    /// Network stack status change — SystemStack / proxy stack (v0.0.5+)
+    StackStatus(GuiStackStatusEvent),
     Unknown(GuiUnknownEvent),
 }
 
@@ -319,6 +323,26 @@ pub struct GuiPolicyProbeCompletedEvent {
     pub policy_tag: String,
     pub selected: Option<String>,
     pub members: Vec<GuiPolicyMember>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiTunStatusEvent {
+    /// "started" | "stopped" | "error"
+    pub state: String,
+    pub interface_name: Option<String>,
+    pub address: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiStackStatusEvent {
+    /// "started" | "stopped" | "degraded"
+    pub state: String,
+    /// "system" (SystemStack) | "proxy" | "mixed"
+    pub mode: Option<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -116,6 +116,7 @@ pub fn run() {
             gui_core_commands::gui_close_connection,
             gui_core_commands::gui_dns_status,
             gui_core_commands::gui_tun_status,
+            gui_core_commands::gui_stack_status,
             gui_core_commands::gui_rule_status,
             gui_connection_commands::gui_connection_status,
             gui_connection_commands::gui_connect,

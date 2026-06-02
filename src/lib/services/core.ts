@@ -321,6 +321,10 @@ export async function getGuiDnsStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_dns_status');
 }
 
+export async function getGuiStackStatus(): Promise<GuiFeatureStatus> {
+  return invoke('gui_stack_status');
+}
+
 export async function getGuiRuleStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_rule_status');
 }
