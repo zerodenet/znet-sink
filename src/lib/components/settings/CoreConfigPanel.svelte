@@ -88,7 +88,7 @@
       // Get running version from health API
       try {
         const health = await getGuiCoreHealth();
-        runningVersion = health.engineVersion ?? null;
+        runningVersion = health.engineVersion ? stripV(health.engineVersion) : null;
       } catch {
         runningVersion = null;
       }
@@ -216,8 +216,13 @@
     }).format(value);
   }
 
+  /** Strip leading 'v' so all version comparisons are prefix-free. */
+  function stripV(v: string): string {
+    return v.startsWith('v') ? v.slice(1) : v;
+  }
+
   function isCurrentVersion(version: string): boolean {
-    if (currentVersion) return version === currentVersion;
+    if (currentVersion) return stripV(version) === currentVersion;
     return false;
   }
 

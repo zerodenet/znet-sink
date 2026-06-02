@@ -138,7 +138,10 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
     match source_event_type {
         "engine.started" => GuiEventData::CoreStatus(GuiCoreHealth {
             healthy: true,
-            engine_version: zero_adapter::string_at(payload, &["version", "engine_version"]),
+            engine_version: zero_adapter::normalize_version(zero_adapter::string_at(
+                payload,
+                &["version", "engine_version"],
+            )),
             started_at_unix_ms: zero_adapter::u64_at(
                 payload,
                 &["started_at_unix_ms", "startedAtUnixMs"],
@@ -146,7 +149,10 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
         }),
         "engine.stopped" => GuiEventData::CoreStatus(GuiCoreHealth {
             healthy: false,
-            engine_version: zero_adapter::string_at(payload, &["version", "engine_version"]),
+            engine_version: zero_adapter::normalize_version(zero_adapter::string_at(
+                payload,
+                &["version", "engine_version"],
+            )),
             started_at_unix_ms: zero_adapter::u64_at(
                 payload,
                 &["started_at_unix_ms", "startedAtUnixMs"],

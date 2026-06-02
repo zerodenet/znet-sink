@@ -262,7 +262,10 @@ fn unwrap_core_envelope(response: Value) -> AppResult<Value> {
 fn parse_health(value: &Value) -> GuiCoreHealth {
     GuiCoreHealth {
         healthy: bool_at(value, &["healthy"]).unwrap_or(true),
-        engine_version: string_at(value, &["engine_version", "engineVersion", "version"]),
+        engine_version: normalize_version(string_at(
+            value,
+            &["engine_version", "engineVersion", "version"],
+        )),
         started_at_unix_ms: u64_at(
             value,
             &["started_at_unix_ms", "startedAtUnixMs", "started_at"],
@@ -619,6 +622,13 @@ fn bool_at(value: &Value, keys: &[&str]) -> Option<bool> {
             })
         })
     })
+}
+
+/// Strip leading 'v' from version strings so all comparisons are prefix-free.
+/// Both kernel CLI (`zero --version`) and GitHub tags use v-prefixed names,
+/// but internal comparisons and the updater expect bare semver.
+pub(crate) fn normalize_version(version: Option<String>) -> Option<String> {
+    version.map(|v| v.strip_prefix('v').unwrap_or(&v).to_string())
 }
 
 fn normalize_non_empty(value: String, field: &'static str) -> AppResult<String> {

@@ -10,6 +10,11 @@
   let checking = $state(false);
   let mounted = $state(false);
 
+  /** Strip leading 'v' so all version comparisons are prefix-free. */
+  function stripV(v: string): string {
+    return v.startsWith('v') ? v.slice(1) : v;
+  }
+
   const hasVersion = $derived(currentVersion !== null);
   const latestVersion = $derived(latestStable?.version ?? null);
 
@@ -18,13 +23,13 @@
     try {
       // Detect current installed version
       const detect = await detectKernelVersion();
-      currentVersion = detect.version ?? null;
+      currentVersion = detect.version ? stripV(detect.version) : null;
 
       // Also check running version (may be newer)
       try {
         const health = await getGuiCoreHealth();
         if (health.engineVersion) {
-          currentVersion = health.engineVersion;
+          currentVersion = stripV(health.engineVersion);
         }
       } catch { /* health API may be unavailable if core not running */ }
 
