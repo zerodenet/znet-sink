@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getCoreProcessStatus, startCoreProcess, stopCoreProcess, getCoreConfigSnapshot, disableSystemProxy, getSystemProxyStatus } from '$lib/services/core';
+  import { getCoreProcessStatus, guiConnect, guiDisconnect, getCoreConfigSnapshot, disableSystemProxy, getSystemProxyStatus } from '$lib/services/core';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import type { CoreProcessStatus, CoreKernelInfo } from '$lib/types/core';
   import { error as toastError, success, info, warning } from '$lib/services/toast.svelte';
@@ -9,12 +9,14 @@
   let snapshot = $state<CoreKernelInfo | null>(null);
   let loading = $state(false);
   let prevIsRunning = $state(false);
+  let proxyEnabled = $state(false);
 
   const isRunning  = $derived(status?.state === 'running');
   const isStarting = $derived(status?.state === 'starting');
   const isStopped  = $derived(status?.exitReason === 'stopped');
   const isCrashed  = $derived(status?.exitReason === 'crashed');
   const hasFailed  = $derived(status?.state === 'failed');
+  const isConnected = $derived(isRunning && proxyEnabled);
 
   const canStart = $derived(
     !isRunning && !isStarting &&
@@ -23,17 +25,18 @@
   );
 
   const stateLabel = $derived(
-    loading     ? '处理中…'  :
-    isRunning   ? '运行中'   :
-    isStarting  ? '启动中'   :
-    hasFailed   ? '启动失败' :
-    isCrashed   ? '异常退出' :
-    '已停止'
+    loading       ? '处理中…'  :
+    isConnected   ? '已连接'   :
+    isRunning     ? '运行中'   :
+    isStarting    ? '启动中'   :
+    hasFailed     ? '启动失败' :
+    isCrashed     ? '异常退出' :
+    '已断开'
   );
 
   const dotColor = $derived(
-    isRunning   ? '#22C55E' :
-    isStarting  ? '#F59E0B' :
+    isConnected  ? '#22C55E' :
+    isStarting   ? '#F59E0B' :
     (hasFailed || isCrashed) ? '#EF4444' :
     'var(--muted-foreground)'
   );
@@ -45,6 +48,12 @@
       status = await getCoreProcessStatus();
     } catch (e) {
       console.error('Failed to get core status:', e);
+    }
+    try {
+      const proxyStatus = await getSystemProxyStatus();
+      proxyEnabled = proxyStatus.enabled;
+    } catch {
+      proxyEnabled = false;
     }
   }
 
@@ -62,15 +71,15 @@
     loading = true;
     try {
       if (isRunning) {
-        await stopCoreProcess();
-        success('内核已停止');
+        await guiDisconnect();
+        success('已断开连接');
       } else {
-        await startCoreProcess();
-        success('内核已启动');
+        await guiConnect();
+        success('已连接');
       }
       await refreshStatus();
     } catch (e: any) {
-      toastError(`操作失败: ${e.message ?? e ?? '未知错误'}`);
+      toastError(`连接失败: ${e.message ?? e ?? '未知错误'}`);
     } finally {
       loading = false;
     }
@@ -136,8 +145,10 @@
         <span class="meta-val">{status.pid ?? '—'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">内核</span>
-        <span class="meta-val">{status.kernel}</span>
+        <span class="meta-key">代理</span>
+        <span class="meta-val" class:connected={proxyEnabled}>
+          {proxyEnabled ? `${status.endpointPath}` : '未设置'}
+        </span>
       </div>
     </div>
   {:else if status?.exitReason && status.state === 'exited'}
@@ -181,10 +192,11 @@
     disabled={loading || (!isRunning && !canStart)}
     class="core-toggle"
     class:running={isRunning}
+    class:connected={isConnected}
     class:startable={canStart && !isRunning}
     title={!canStart && snapshot?.warnings.length ? snapshot.warnings.join('; ') : ''}
   >
-    {loading ? '处理中…' : isRunning ? '停止内核' : canStart ? '启动内核' : '配置不完整'}
+    {loading ? '处理中…' : isRunning ? '断开连接' : canStart ? '连接' : '配置不完整'}
   </button>
 </div>
 
@@ -287,6 +299,9 @@
 
   .meta-val.danger { color: var(--destructive); }
 
+  .meta-val.connected { color: #16A34A; }
+  :global(.dark) .meta-val.connected { color: #4ADE80; }
+
   /* ---- Warning ---- */
   .core-warning {
     display: flex;
@@ -367,5 +382,23 @@
     background: rgba(34, 197, 94, 0.14);
   }
 
-  :global(.dark) .core-toggle.startable { color: #4ADE80; }
+  .core-toggle.connected {
+    background: rgba(34, 197, 94, 0.10);
+    border-color: rgba(34, 197, 94, 0.30);
+    color: #16A34A;
+  }
+
+  .core-toggle.connected:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.25);
+    color: var(--destructive);
+  }
+
+  :global(.dark) .core-toggle.startable,
+  :global(.dark) .core-toggle.connected { color: #4ADE80; }
+
+  :global(.dark) .core-toggle.connected:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--destructive);
+  }
 </style>
