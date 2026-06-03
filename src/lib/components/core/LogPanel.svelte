@@ -61,9 +61,10 @@
   let _lastLogTick = -1;
   let logBodyEl: HTMLDivElement | undefined = $state();
 
-  function scrollLogToBottom() {
+  // 日志最新在最上面，自动滚动到顶部
+  function scrollToLatest() {
     if (!logBodyEl || !autoScroll) return;
-    logBodyEl.scrollTop = logBodyEl.scrollHeight;
+    logBodyEl.scrollTop = 0;
   }
 
   // 挂载时初始加载
@@ -80,11 +81,10 @@
     }
   });
 
-  // 日志更新后自动滚动
+  // 日志更新后自动滚动到最新（顶部）
   $effect(() => {
-    // 读取 filteredLogs 作为依赖
     void filteredLogs.length;
-    scrollLogToBottom();
+    scrollToLatest();
   });
 </script>
 
@@ -341,13 +341,14 @@
     display: flex;
     align-items: baseline;
     gap: 5px;
-    padding: 2px 0;
+    padding: 2px 4px;
     font-size: 12.5px;
     line-height: 1.6;
     border-radius: 3px;
     transition: background 0.1s ease;
     user-select: text;
     cursor: pointer;
+    min-width: 0;
   }
 
   .log-row:hover {
@@ -407,10 +408,9 @@
   .log-msg {
     color: var(--foreground);
     opacity: 0.82;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     min-width: 0;
     flex: 1;
+    word-break: break-all;
+    line-height: 1.5;
   }
 </style>
