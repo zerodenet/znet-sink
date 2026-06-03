@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
@@ -13,6 +13,7 @@ use crate::models::kernel_version::{
     KernelVersionList, KernelVersionDetect,
 };
 use super::data_dir;
+use crate::services::common;
 use crate::services::core_config;
 
 const GITHUB_RELEASES_URL: &str =
@@ -205,7 +206,7 @@ pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersi
 
     match executable_path {
         Some(path) if path.is_file() => {
-            let output = Command::new(&path)
+            let output = common::background_command(path.to_str().unwrap_or("zero"))
                 .arg("--version")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -373,11 +374,11 @@ fn extract_archive(archive: &Path, dest: &Path) -> AppResult<()> {
     let dest_str = path_to_string(dest);
 
     let status = if archive_str.ends_with(".tar.gz") {
-        Command::new("tar")
+        common::background_command("tar")
             .args(["-xzf", &archive_str, "-C", &dest_str])
             .status()
     } else {
-        Command::new("powershell")
+        common::background_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",

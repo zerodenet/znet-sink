@@ -1,8 +1,20 @@
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::{AppError, AppResult};
+
+/// Create a `Command` that never spawns a visible console window on Windows.
+/// All external process invocations must use this instead of `Command::new`.
+pub(crate) fn background_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
 
 static STORE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

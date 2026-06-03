@@ -55,10 +55,14 @@ pub async fn interaction_surface(
         .iter()
         .any(|p| p.active);
 
-    eprintln!(
-        "[ZNet] interaction_surface: mode={ui_mode}, {} features, took {:?}",
-        zero_features.len(),
-        start.elapsed(),
+    crate::services::logs::znet_log(
+        Some(state.inner()),
+        crate::models::logs::LogLevel::Debug,
+        format!(
+            "interaction_surface: mode={ui_mode}, {} features, took {:?}",
+            zero_features.len(),
+            start.elapsed(),
+        ),
     );
 
     Ok(InteractionSurfaceSnapshot {
@@ -90,7 +94,11 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
         .unwrap_or(false);
 
     if !core_running {
-        eprintln!("[ZNet] zero_features: core not running, skipping IPC query");
+        crate::services::logs::znet_log(
+            Some(state),
+            crate::models::logs::LogLevel::Debug,
+            "zero_features: core not running, skipping IPC query",
+        );
         // Return cached features even if expired, or empty if never queried
         if let Ok(cache) = lock(state.zero_features_cache(), "zero_features_cache") {
             if let Some(ref cached) = *cache {
@@ -105,10 +113,14 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
     let features = crate::services::zero_adapter::capability_feature_keys(state)
         .await
         .unwrap_or_default();
-    eprintln!(
-        "[ZNet] zero_features cache miss: core query took {:?}, got {} features",
-        query_start.elapsed(),
-        features.len(),
+    crate::services::logs::znet_log(
+        Some(state),
+        crate::models::logs::LogLevel::Debug,
+        format!(
+            "zero_features cache miss: core query took {:?}, got {} features",
+            query_start.elapsed(),
+            features.len(),
+        ),
     );
 
     // Update cache

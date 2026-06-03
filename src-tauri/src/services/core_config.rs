@@ -5,7 +5,6 @@ use std::time::SystemTime;
 use tauri::State;
 
 use std::io::Read;
-use std::process::Command;
 
 use crate::core::ipc;
 use crate::errors::{AppError, AppResult};
@@ -16,7 +15,7 @@ use crate::models::{
 };
 use super::data_dir;
 use crate::services::app_config_store;
-use crate::services::common::{lock, normalize_optional};
+use crate::services::common::{self, lock, normalize_optional};
 use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
@@ -321,7 +320,7 @@ pub fn download_latest(install_dir: Option<String>) -> AppResult<CoreDownloadRes
 
     // Extract
     if ext == "tar.gz" {
-        let status = Command::new("tar")
+        let status = common::background_command("tar")
             .args(["-xzf", &path_to_string(&temp_file), "-C", &path_to_string(&dir)])
             .status()
             .map_err(|e| AppError::internal(format!("failed to extract: {e}")))?;
@@ -330,7 +329,7 @@ pub fn download_latest(install_dir: Option<String>) -> AppResult<CoreDownloadRes
             return Err(AppError::internal("failed to extract archive"));
         }
     } else {
-        let status = Command::new("powershell")
+        let status = common::background_command("powershell")
             .args([
                 "-NoProfile", "-Command",
                 &format!("Expand-Archive -Path '{}' -DestinationPath '{}' -Force",

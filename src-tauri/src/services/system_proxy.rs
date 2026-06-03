@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::process::Command;
+use crate::services::common;
 
 use crate::errors::{AppError, AppResult};
 
@@ -99,7 +99,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
 #[cfg(target_os = "macos")]
 fn active_network_services() -> AppResult<Vec<String>> {
     // List hardware ports to find active network services
-    let output = Command::new("networksetup")
+    let output = common::background_command("networksetup")
         .args(["-listallhardwareports"])
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
@@ -129,7 +129,7 @@ fn active_network_services() -> AppResult<Vec<String>> {
 
 #[cfg(target_os = "macos")]
 fn run_networksetup(args: &[&str]) -> AppResult<()> {
-    let output = Command::new("networksetup")
+    let output = common::background_command("networksetup")
         .args(args)
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
@@ -146,7 +146,7 @@ fn run_networksetup(args: &[&str]) -> AppResult<()> {
 
 #[cfg(target_os = "macos")]
 fn run_networksetup_output(args: &[&str]) -> AppResult<String> {
-    let output = Command::new("networksetup")
+    let output = common::background_command("networksetup")
         .args(args)
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
@@ -173,7 +173,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
     };
 
     // Set ProxyEnable via registry
-    let output = Command::new("reg")
+    let output = common::background_command("reg")
         .args([
             "add",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -199,7 +199,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
     // Set ProxyServer via registry
     if enable {
         let proxy_server = format!("{host}:{port}");
-        let server_output = Command::new("reg")
+        let server_output = common::background_command("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -239,7 +239,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
 
 #[cfg(target_os = "windows")]
 fn status_platform() -> AppResult<SystemProxyStatus> {
-    let output = Command::new("reg")
+    let output = common::background_command("reg")
         .args([
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -253,7 +253,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
     let enabled = stdout.contains("0x1");
 
     if enabled {
-        let server_output = match Command::new("reg")
+        let server_output = match common::background_command("reg")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -308,15 +308,15 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
     };
 
     // Try gsettings (GNOME)
-    let gsettings_result = Command::new("gsettings")
+    let gsettings_result = common::background_command("gsettings")
         .args(["set", "org.gnome.system.proxy", "mode", mode])
         .output();
 
     if gsettings_result.is_ok() && enable {
-        let _ = Command::new("gsettings")
+        let _ = common::background_command("gsettings")
             .args(["set", "org.gnome.system.proxy.http", "host", host])
             .output();
-        let _ = Command::new("gsettings")
+        let _ = common::background_command("gsettings")
             .args([
                 "set",
                 "org.gnome.system.proxy.http",
@@ -324,10 +324,10 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
                 &port.to_string(),
             ])
             .output();
-        let _ = Command::new("gsettings")
+        let _ = common::background_command("gsettings")
             .args(["set", "org.gnome.system.proxy.https", "host", host])
             .output();
-        let _ = Command::new("gsettings")
+        let _ = common::background_command("gsettings")
             .args([
                 "set",
                 "org.gnome.system.proxy.https",
@@ -352,7 +352,7 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
 
 #[cfg(target_os = "linux")]
 fn status_platform() -> AppResult<SystemProxyStatus> {
-    let output = Command::new("gsettings")
+    let output = common::background_command("gsettings")
         .args(["get", "org.gnome.system.proxy", "mode"])
         .output()
         .map_err(|e| AppError::internal(format!("failed to query Linux proxy: {e}")))?;
@@ -361,7 +361,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
     let enabled = stdout.contains("manual");
 
     if enabled {
-        let host_output = Command::new("gsettings")
+        let host_output = common::background_command("gsettings")
             .args(["get", "org.gnome.system.proxy.http", "host"])
             .output()
             .unwrap_or_else(|_| output.clone());
@@ -370,7 +370,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
             .trim_matches('\'')
             .to_string();
 
-        let port_output = Command::new("gsettings")
+        let port_output = common::background_command("gsettings")
             .args(["get", "org.gnome.system.proxy.http", "port"])
             .output()
             .unwrap_or_else(|_| output.clone());

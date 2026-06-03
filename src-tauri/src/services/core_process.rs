@@ -1,5 +1,7 @@
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::services::common;
 
 use serde_json::json;
 use tauri::Manager;
@@ -65,7 +67,7 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
         };
     }
 
-    let mut command = Command::new(executable_path);
+    let mut command = common::background_command(executable_path);
     command.args(&snapshot.launch_args);
     if let Some(working_dir) = snapshot.working_dir.as_deref() {
         command.current_dir(working_dir);

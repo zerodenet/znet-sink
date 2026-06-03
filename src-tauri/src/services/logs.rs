@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use tauri::State;
 
 use crate::errors::AppResult;
@@ -5,6 +7,69 @@ use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogQuery, LogSource};
 use crate::services::common::{lock, normalize_required, now_unix_ms};
 use crate::services::log_store;
 use crate::state::app_state::AppState;
+
+/// Minimum log level for stderr output, controlled by `ZNET_LOG` env var.
+static MIN_STDERR_LEVEL: OnceLock<LogLevel> = OnceLock::new();
+
+fn stderr_level() -> LogLevel {
+    MIN_STDERR_LEVEL
+        .get_or_init(|| {
+            std::env::var("ZNET_LOG")
+                .ok()
+                .and_then(|v| match v.to_ascii_lowercase().as_str() {
+                    "trace" => Some(LogLevel::Trace),
+                    "debug" => Some(LogLevel::Debug),
+                    "info" => Some(LogLevel::Info),
+                    "warn" => Some(LogLevel::Warn),
+                    "error" => Some(LogLevel::Error),
+                    _ => None,
+                })
+                .unwrap_or(LogLevel::Info)
+        })
+        .clone()
+}
+
+const LEVEL_ORDER: &[LogLevel] = &[
+    LogLevel::Error,
+    LogLevel::Warn,
+    LogLevel::Info,
+    LogLevel::Debug,
+    LogLevel::Trace,
+];
+
+fn level_meets(level: &LogLevel, min: &LogLevel) -> bool {
+    LEVEL_ORDER.iter().position(|l| l == level)
+        <= LEVEL_ORDER.iter().position(|l| l == min)
+}
+
+/// Write a log entry visible in production.
+///
+/// - Always writes to stderr if `level` meets the `ZNET_LOG` threshold.
+/// - If `state` is provided, also writes to the in-memory log buffer
+///   (visible in the frontend LogPanel).
+pub(crate) fn znet_log(
+    state: Option<&AppState>,
+    level: LogLevel,
+    message: impl Into<String>,
+) {
+    let msg: String = message.into();
+    let min = stderr_level();
+
+    if level_meets(&level, &min) {
+        let prefix = match level {
+            LogLevel::Error => "[ZNet] ERROR",
+            LogLevel::Warn => "[ZNet] WARN",
+            LogLevel::Info => "[ZNet]",
+            LogLevel::Debug => "[ZNet] DEBUG",
+            LogLevel::Trace => "[ZNet] TRACE",
+        };
+        eprintln!("{prefix} {msg}");
+    }
+
+    if let Some(state) = state {
+        let _ = append_entry(state, LogSource::App, level, msg, None);
+    }
+}
 
 pub fn list(state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<Vec<LogEntry>> {
     let query = query.unwrap_or_default();
