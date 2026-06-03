@@ -6,17 +6,24 @@ use crate::services::system_proxy::{self, SystemProxyStatus};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
-pub fn system_proxy_enable(state: State<'_, AppState>) -> AppResult<SystemProxyStatus> {
-    let config = lock(state.app_config(), "app_config")?;
-    system_proxy::enable(&config.local_proxy.host, config.local_proxy.port)
+pub async fn system_proxy_enable(state: State<'_, AppState>) -> AppResult<SystemProxyStatus> {
+    let host = { lock(state.app_config(), "app_config")?.local_proxy.host.clone() };
+    let port = { lock(state.app_config(), "app_config")?.local_proxy.port };
+    tauri::async_runtime::spawn_blocking(move || system_proxy::enable(&host, port))
+        .await
+        .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?
 }
 
 #[tauri::command]
-pub fn system_proxy_disable() -> AppResult<SystemProxyStatus> {
-    system_proxy::disable()
+pub async fn system_proxy_disable() -> AppResult<SystemProxyStatus> {
+    tauri::async_runtime::spawn_blocking(|| system_proxy::disable())
+        .await
+        .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?
 }
 
 #[tauri::command]
-pub fn system_proxy_status() -> AppResult<SystemProxyStatus> {
-    system_proxy::status()
+pub async fn system_proxy_status() -> AppResult<SystemProxyStatus> {
+    tauri::async_runtime::spawn_blocking(|| system_proxy::status())
+        .await
+        .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?
 }
