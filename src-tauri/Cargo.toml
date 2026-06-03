@@ -1,6 +1,6 @@
 [package]
 name = "gui"
-version = "0.0.2"
+version = "0.0.3"
 description = "ZNet Sink - 零域网络代理客户端"
 authors = ["ZeroDenet <zerodenet.org>"]
 edition = "2021"
