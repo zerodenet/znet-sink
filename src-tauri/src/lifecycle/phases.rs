@@ -8,7 +8,7 @@ use crate::models::app_config::AppConfig;
 use crate::services::domain_store::DomainStoreData;
 use crate::services::{app_config_store, domain_store, log_store, system_proxy_guard};
 
-use super::{Lifecycle, Phase, OnPhase};
+use super::{Lifecycle, OnPhase, Phase};
 
 // ── Data built during Config phase, consumed by State phase ──
 
@@ -55,23 +55,43 @@ impl OnPhase for ConfigPhase {
     }
     fn run(&self) -> AppResult<()> {
         let config_path = app_config_store::default_config_path().unwrap_or_else(|e| {
-            crate::services::logs::znet_log(None, crate::models::logs::LogLevel::Warn, format!("failed to resolve app config path: {e:?}, using fallback"));
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to resolve app config path: {e:?}, using fallback"),
+            );
             PathBuf::from("app-config.json")
         });
         let app_config = app_config_store::load_or_default(&config_path).unwrap_or_else(|e| {
-            crate::services::logs::znet_log(None, crate::models::logs::LogLevel::Warn, format!("failed to load app config: {e:?}, using defaults"));
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to load app config: {e:?}, using defaults"),
+            );
             AppConfig::default()
         });
         let domain_data = domain_store::load_all().unwrap_or_else(|e| {
-            crate::services::logs::znet_log(None, crate::models::logs::LogLevel::Warn, format!("failed to load domain data: {e:?}, using empty data"));
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to load domain data: {e:?}, using empty data"),
+            );
             DomainStoreData::default()
         });
         let logs = log_store::load_recent(app_config.logs.max_entries).unwrap_or_else(|e| {
-            crate::services::logs::znet_log(None, crate::models::logs::LogLevel::Warn, format!("failed to load logs: {e:?}, using empty log buffer"));
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to load logs: {e:?}, using empty log buffer"),
+            );
             Vec::new()
         });
         if let Err(e) = log_store::rotate(app_config.logs.max_entries) {
-            crate::services::logs::znet_log(None, crate::models::logs::LogLevel::Warn, format!("failed to rotate logs: {e:?}"));
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to rotate logs: {e:?}"),
+            );
         }
 
         *self.data.lock().expect("startup data lock") = Some(StartupData {

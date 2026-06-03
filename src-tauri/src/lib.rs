@@ -25,10 +25,10 @@ use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
 use crate::lifecycle::phases;
-use crate::services::{core_process, system_proxy_guard};
+use crate::services::{core_process, system_proxy_guard, zero_adapter};
 use crate::state::app_state::AppState;
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -117,6 +117,8 @@ pub fn run() {
             gui_core_commands::gui_close_connection,
             gui_core_commands::gui_dns_status,
             gui_core_commands::gui_tun_status,
+            gui_core_commands::gui_tun_enable,
+            gui_core_commands::gui_tun_disable,
             gui_core_commands::gui_stack_status,
             gui_core_commands::gui_rule_status,
             gui_connection_commands::gui_connection_status,
@@ -166,21 +168,40 @@ pub fn run() {
                 .unwrap_or(false);
             if auto_start {
                 let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn_blocking(move || {
+                tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<AppState>();
-                    let _ = core_process::start(app_handle.clone(), state);
+                    if zero_adapter::core_readiness_health(state.inner())
+                        .await
+                        .is_ok()
+                    {
+                        return;
+                    }
+                    drop(state);
+
+                    let app_handle_start = app_handle.clone();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        let state = app_handle_start.state::<AppState>();
+                        let _ = core_process::start(app_handle_start.clone(), state);
+                    })
+                    .await;
                 });
             }
 
             // System tray
-            let show_item =
-                tauri::menu::MenuItemBuilder::new("显示").id("show").build(app)?;
-            let quit_item =
-                tauri::menu::MenuItemBuilder::new("退出").id("quit").build(app)?;
+            let show_item = tauri::menu::MenuItemBuilder::new("显示")
+                .id("show")
+                .build(app)?;
+            let quit_item = tauri::menu::MenuItemBuilder::new("退出")
+                .id("quit")
+                .build(app)?;
 
             let tray_menu = tauri::menu::Menu::with_items(
                 app,
-                &[&show_item, &tauri::menu::PredefinedMenuItem::separator(app)?, &quit_item],
+                &[
+                    &show_item,
+                    &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &quit_item,
+                ],
             )?;
 
             let _tray_menu = TrayIconBuilder::with_id("main-tray")
@@ -200,7 +221,12 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button, button_state, .. } = event {
+                    if let TrayIconEvent::Click {
+                        button,
+                        button_state,
+                        ..
+                    } = event
+                    {
                         if button == MouseButton::Left && button_state == MouseButtonState::Up {
                             if let Some(window) = tray.app_handle().get_webview_window("main") {
                                 if window.is_visible().unwrap_or(false) {

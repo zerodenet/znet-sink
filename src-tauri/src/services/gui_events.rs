@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicU64, Ordering},
 };
 use std::time::Duration;
 use tauri::AppHandle;
@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use crate::core::ipc;
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
-    emit_gui_event, emit_gui_event_status, GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME,
+    GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME, emit_gui_event, emit_gui_event_status,
 };
 use crate::models::{
     core::{CoreEndpoint, CoreIpcOptions},
@@ -186,19 +186,28 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
         // v0.0.5+: TUN virtual network interface events
         "tun.started" => GuiEventData::TunStatus(GuiTunStatusEvent {
             state: "started".to_string(),
-            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            interface_name: zero_adapter::string_at(
+                payload,
+                &["interface_name", "interfaceName", "tun_name", "tunName"],
+            ),
             address: zero_adapter::string_at(payload, &["address", "ip", "bind"]),
             message: None,
         }),
         "tun.stopped" => GuiEventData::TunStatus(GuiTunStatusEvent {
             state: "stopped".to_string(),
-            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            interface_name: zero_adapter::string_at(
+                payload,
+                &["interface_name", "interfaceName", "tun_name", "tunName"],
+            ),
             address: None,
             message: zero_adapter::string_at(payload, &["message", "reason"]),
         }),
         "tun.error" => GuiEventData::TunStatus(GuiTunStatusEvent {
             state: "error".to_string(),
-            interface_name: zero_adapter::string_at(payload, &["interface_name", "interfaceName", "tun_name", "tunName"]),
+            interface_name: zero_adapter::string_at(
+                payload,
+                &["interface_name", "interfaceName", "tun_name", "tunName"],
+            ),
             address: None,
             message: zero_adapter::string_at(payload, &["message", "error", "reason"])
                 .or_else(|| Some("TUN interface error".to_string())),

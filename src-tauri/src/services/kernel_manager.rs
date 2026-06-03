@@ -6,14 +6,14 @@ use std::process::Stdio;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
+use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppCoreConfig;
-use crate::models::logs::{LogLevel, LogSource};
 use crate::models::kernel_version::{
-    KernelDownloadProgress, KernelInstallResult, KernelRelease, ReleaseChannel,
-    KernelVersionList, KernelVersionDetect,
+    KernelDownloadProgress, KernelInstallResult, KernelRelease, KernelVersionDetect,
+    KernelVersionList, ReleaseChannel,
 };
-use super::data_dir;
+use crate::models::logs::{LogLevel, LogSource};
 use crate::services::common;
 use crate::services::core_config;
 
@@ -72,7 +72,9 @@ pub fn install_version(
     {
         let state = app.state::<crate::state::app_state::AppState>();
         let _ = crate::services::logs::append_entry(
-            &state, LogSource::App, LogLevel::Info,
+            &state,
+            LogSource::App,
+            LogLevel::Info,
             format!("kernel install: v{version} → {}", dir.display()),
             None,
         );
@@ -92,22 +94,23 @@ pub fn install_version(
 
     let _ = crate::services::logs::append_entry(
         &app.state::<crate::state::app_state::AppState>(),
-        LogSource::App, LogLevel::Info,
+        LogSource::App,
+        LogLevel::Info,
         format!("kernel download: GET {download_url}"),
         None,
     );
 
-    let mut response = client
-        .get(&download_url)
-        .send()
-        .map_err(|e| {
-            let msg = format!("kernel download failed: {e}");
-            let _ = crate::services::logs::append_entry(
-                &app.state::<crate::state::app_state::AppState>(),
-                LogSource::App, LogLevel::Error, msg.clone(), None,
-            );
-            AppError::internal(msg)
-        })?;
+    let mut response = client.get(&download_url).send().map_err(|e| {
+        let msg = format!("kernel download failed: {e}");
+        let _ = crate::services::logs::append_entry(
+            &app.state::<crate::state::app_state::AppState>(),
+            LogSource::App,
+            LogLevel::Error,
+            msg.clone(),
+            None,
+        );
+        AppError::internal(msg)
+    })?;
 
     let bytes_total = response
         .headers()
@@ -206,8 +209,9 @@ pub fn install_version(
             .map_err(|e| AppError::internal(format!("failed to read permissions: {e}")))?
             .permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&executable_path, perms)
-            .map_err(|e| AppError::internal(format!("failed to set executable permissions: {e}")))?;
+        fs::set_permissions(&executable_path, perms).map_err(|e| {
+            AppError::internal(format!("failed to set executable permissions: {e}"))
+        })?;
     }
 
     let channel = classify_channel(&version, false);
@@ -218,11 +222,7 @@ pub fn install_version(
         version: version.clone(),
         channel,
         checksum_verified,
-        message: format!(
-            "zero {} installed to {}",
-            version,
-            path_to_string(&dir)
-        ),
+        message: format!("zero {} installed to {}", version, path_to_string(&dir)),
     })
 }
 
@@ -393,7 +393,6 @@ fn resolve_install_dir(install_dir: Option<String>) -> AppResult<PathBuf> {
     }
 }
 
-
 fn extract_archive(archive: &Path, dest: &Path) -> AppResult<()> {
     let archive_str = path_to_string(archive);
     let dest_str = path_to_string(dest);
@@ -435,18 +434,12 @@ fn parse_iso8601_to_unix_ms(s: &str) -> Option<u64> {
         return None;
     }
 
-    let date_parts: Vec<u32> = parts[0]
-        .split('-')
-        .filter_map(|p| p.parse().ok())
-        .collect();
+    let date_parts: Vec<u32> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
     if date_parts.len() != 3 {
         return None;
     }
 
-    let time_parts: Vec<u32> = parts[1]
-        .split(':')
-        .filter_map(|p| p.parse().ok())
-        .collect();
+    let time_parts: Vec<u32> = parts[1].split(':').filter_map(|p| p.parse().ok()).collect();
     if time_parts.len() < 2 {
         return None;
     }

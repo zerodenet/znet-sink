@@ -12,7 +12,7 @@ use crate::models::{
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
     logs::{LogLevel, LogSource},
 };
-use crate::services::{common::lock, core_config, logs};
+use crate::services::{common::lock, core_config, logs, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
@@ -20,9 +20,14 @@ pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
 }
 
 pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    let config = {
-        lock(state.app_config(), "app_config")?.core.clone()
-    };
+    let has_active_proxy_config = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .any(|profile| profile.active);
+    if has_active_proxy_config {
+        core_config::export_active(state.clone())?;
+    }
+
+    let config = { lock(state.app_config(), "app_config")?.core.clone() };
     let snapshot = core_config::snapshot_from_config(&config)?;
 
     // Require config_path — the kernel's `run` command needs a config file
@@ -105,13 +110,8 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
                         if !cleaned.trim().is_empty() {
                             let state = app_handle_stderr.state::<AppState>();
                             let level = classify_stderr_level(&cleaned);
-                            let _ = logs::append_entry(
-                                &state,
-                                LogSource::Core,
-                                level,
-                                cleaned,
-                                None,
-                            );
+                            let _ =
+                                logs::append_entry(&state, LogSource::Core, level, cleaned, None);
                         }
                     }
                 }
@@ -171,14 +171,25 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
                             Some(crate::services::common::now_unix_ms());
                         process.child = None;
                         drop(process);
-                        let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
-                        let _ = logs::append_entry(&state, LogSource::App, LogLevel::Warn, msg.clone(), None);
+                        let _ = system_proxy_guard::disable_with_guard();
+                        let msg =
+                            format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
+                        let _ = logs::append_entry(
+                            &state,
+                            LogSource::App,
+                            LogLevel::Warn,
+                            msg.clone(),
+                            None,
+                        );
                         // Notify frontend so UI updates in real time
-                        let _ = app_handle_mon.emit("core:process-exited", json!({
-                            "reason": reason_str,
-                            "code": code,
-                            "message": msg,
-                        }));
+                        let _ = app_handle_mon.emit(
+                            "core:process-exited",
+                            json!({
+                                "reason": reason_str,
+                                "code": code,
+                                "message": msg,
+                            }),
+                        );
                         break;
                     }
                 }
@@ -219,6 +230,7 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
 }
 
 pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+    let proxy_result = system_proxy_guard::disable_with_guard();
     let (child, stderr_handle) = {
         let mut process = lock(state.core_process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;
@@ -226,6 +238,7 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     };
 
     let Some(mut child) = child else {
+        proxy_result?;
         return refresh_status(state.inner());
     };
 
@@ -255,6 +268,7 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
                 Some(json!({ "pid": pid, "exitCode": status.code() })),
             )?;
 
+            proxy_result?;
             Ok(process.status.clone())
         }
         (Err(error), _) | (_, Err(error)) => {
@@ -311,6 +325,8 @@ fn refresh_locked_status(
             if let Some(handle) = process.stderr_handle.take() {
                 let _ = handle.join();
             }
+
+            let _ = system_proxy_guard::disable_with_guard();
 
             let (level, message) =
                 if process.status.exit_reason == Some(CoreProcessExitReason::Crashed) {

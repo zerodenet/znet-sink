@@ -1,13 +1,18 @@
-use tauri::State;
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, State};
 
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult};
+use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::{
     GuiConnection, GuiConnectionCloseResult, GuiConnectionList, GuiConnectionListOptions,
     GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup, GuiPolicySelectionResult,
     GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
-use crate::services::{interaction_mode, zero_adapter};
+use crate::services::{core_process, interaction_mode, zero_adapter};
 use crate::state::app_state::AppState;
+
+const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
+const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[tauri::command]
 pub async fn gui_core_overview(state: State<'_, AppState>) -> AppResult<GuiCoreOverview> {
@@ -83,8 +88,21 @@ pub async fn gui_dns_status(state: State<'_, AppState>) -> AppResult<GuiFeatureS
 
 #[tauri::command]
 pub async fn gui_tun_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
-    interaction_mode::require_pro_mode(state.inner(), "tun")?;
     zero_adapter::tun_status(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn gui_tun_enable(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<GuiFeatureStatus> {
+    ensure_core_ready(app_handle, state.clone()).await?;
+    zero_adapter::enable_tun(state.inner()).await
+}
+
+#[tauri::command]
+pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
+    zero_adapter::disable_tun(state.inner()).await
 }
 
 #[tauri::command]
@@ -97,4 +115,50 @@ pub async fn gui_stack_status(state: State<'_, AppState>) -> AppResult<GuiFeatur
 pub async fn gui_rule_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
     interaction_mode::require_pro_mode(state.inner(), "rules")?;
     zero_adapter::rule_status(state.inner()).await
+}
+
+async fn ensure_core_ready(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    if zero_adapter::core_readiness_health(state.inner())
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    let app_handle_start = app_handle.clone();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle_start.state::<AppState>();
+        core_process::start(app_handle_start.clone(), state)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("core start thread panicked: {error}")))??;
+
+    if status.state != CoreProcessState::Running {
+        return Err(AppError::internal(
+            "core process did not enter running state",
+        ));
+    }
+
+    wait_for_core_ready(app_handle.state::<AppState>().inner()).await
+}
+
+async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
+    let started = Instant::now();
+    let mut last_error = None;
+
+    while started.elapsed() < CORE_READY_WAIT_TIMEOUT {
+        match zero_adapter::core_readiness_health(state).await {
+            Ok(health) if health.healthy => return Ok(()),
+            Ok(_) => return Err(AppError::internal("core readiness check reported unhealthy")),
+            Err(error) => {
+                last_error = Some(error);
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    std::thread::sleep(CORE_READY_WAIT_INTERVAL);
+                })
+                .await;
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| AppError::internal("core readiness check timed out")))
 }

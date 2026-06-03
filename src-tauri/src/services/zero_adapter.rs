@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
@@ -30,7 +30,7 @@ pub async fn core_overview(state: &AppState) -> AppResult<GuiCoreOverview> {
         ..GuiZeroCapabilities::default()
     });
 
-    let health = match core_health(state).await {
+    let health = match core_readiness_health(state).await {
         Ok(health) => Some(health),
         Err(error) => {
             last_error.get_or_insert(error.message);
@@ -64,10 +64,28 @@ pub async fn core_overview(state: &AppState) -> AppResult<GuiCoreOverview> {
 }
 
 pub async fn core_health(state: &AppState) -> AppResult<GuiCoreHealth> {
-    // Use a shorter timeout for health polling (1s instead of default 3s)
-    // so the wait_for_health retry loop can make more attempts within its window.
-    let value = query_result_with_timeout(state, json!("Health"), 1_000).await?;
+    // Use a short timeout for health polling (300ms instead of default 3s)
+    // so the wait_for_health retry loop can make many attempts within its window.
+    // Each failed attempt only burns 300ms instead of 1-3s, giving us ~20+ retries
+    // in the 8s window instead of just 4.
+    let value = query_result_with_timeout(state, json!("Health"), 300).await?;
     Ok(parse_health(&value))
+}
+
+pub async fn core_readiness_health(state: &AppState) -> AppResult<GuiCoreHealth> {
+    match core_health(state).await {
+        Ok(health) => Ok(health),
+        Err(health_error) => {
+            let ping = control_plane::ping(default_options(state)?).await?;
+            unwrap_call_result(ping.response, ping.error)?;
+            let _ = health_error;
+            Ok(GuiCoreHealth {
+                healthy: true,
+                engine_version: None,
+                started_at_unix_ms: None,
+            })
+        }
+    }
 }
 
 pub async fn traffic_stats(state: &AppState) -> AppResult<GuiTrafficStats> {
@@ -174,16 +192,44 @@ pub async fn dns_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
 }
 
 pub async fn tun_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
-    feature_status(state, "tun", &["tun", "tun-status", "tun-snapshot"]).await
+    let fallback = feature_status(state, "tun", &["tun", "tun-status", "tun-snapshot"]).await;
+
+    for request in [json!("TunStatus"), json!("Tun")] {
+        if let Ok(value) = query_result(state, request).await {
+            return Ok(parse_feature_runtime_status("tun", &value, fallback.as_ref().ok()));
+        }
+    }
+
+    if let Ok(value) = command_result(state, "tun.status", json!({})).await {
+        return Ok(parse_feature_runtime_status("tun", &value, fallback.as_ref().ok()));
+    }
+
+    fallback
+}
+
+pub async fn enable_tun(state: &AppState) -> AppResult<GuiFeatureStatus> {
+    core_readiness_health(state).await?;
+    let tun = { lock(state.app_config(), "app_config")?.tun.clone() };
+    let mut params = Map::new();
+    if let Some(name) = normalize_optional(tun.name) {
+        params.insert("name".to_string(), json!(name));
+    }
+    params.insert("addr".to_string(), json!(tun.addr));
+    params.insert("tag".to_string(), json!(tun.tag));
+    params.insert("mtu".to_string(), json!(tun.mtu));
+
+    let value = command_result(state, "tun.start", Value::Object(params)).await?;
+    Ok(parse_feature_runtime_status("tun", &value, None))
+}
+
+pub async fn disable_tun(state: &AppState) -> AppResult<GuiFeatureStatus> {
+    core_readiness_health(state).await?;
+    let value = command_result(state, "tun.stop", json!({})).await?;
+    Ok(parse_feature_runtime_status("tun", &value, None))
 }
 
 pub async fn stack_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
-    feature_status(
-        state,
-        "stack",
-        &["system-stack", "stack", "stack-status"],
-    )
-    .await
+    feature_status(state, "stack", &["system-stack", "stack", "stack-status"]).await
 }
 
 pub async fn rule_status(state: &AppState) -> AppResult<GuiFeatureStatus> {
@@ -210,7 +256,7 @@ async fn feature_status(
     Ok(GuiFeatureStatus {
         key: key.to_string(),
         supported,
-        enabled: supported,
+        enabled: false,
         state: if supported {
             "available"
         } else {
@@ -219,6 +265,37 @@ async fn feature_status(
         .to_string(),
         reason: (!supported).then(|| format!("zero capability does not declare {key}")),
     })
+}
+
+fn parse_feature_runtime_status(
+    key: &'static str,
+    value: &Value,
+    fallback: Option<&GuiFeatureStatus>,
+) -> GuiFeatureStatus {
+    let status = nested_value(value, &["result"])
+        .or_else(|| nested_value(value, &["status"]))
+        .or_else(|| nested_value(value, &[key]))
+        .unwrap_or(value);
+    let enabled = bool_at(status, &["running", "enabled", "active"])
+        .or_else(|| string_at(status, &["state", "status"]).map(|state| {
+            matches!(
+                state.to_ascii_lowercase().as_str(),
+                "running" | "started" | "active" | "enabled"
+            )
+        }))
+        .unwrap_or(false);
+    let state = string_at(status, &["state", "status"])
+        .unwrap_or_else(|| if enabled { "running" } else { "stopped" }.to_string());
+    let reason = string_at(status, &["reason", "message", "error"])
+        .or_else(|| fallback.and_then(|fallback| fallback.reason.clone()));
+
+    GuiFeatureStatus {
+        key: key.to_string(),
+        supported: fallback.map(|fallback| fallback.supported).unwrap_or(true),
+        enabled,
+        state,
+        reason,
+    }
 }
 
 async fn query_result(state: &AppState, request: Value) -> AppResult<Value> {
@@ -242,9 +319,8 @@ async fn query_result_with_timeout(
     request: Value,
     timeout_ms: u64,
 ) -> AppResult<Value> {
-    let mut opts = core_config::ipc_options_from_app_config(
-        &lock(state.app_config(), "app_config")?.core,
-    );
+    let mut opts =
+        core_config::ipc_options_from_app_config(&lock(state.app_config(), "app_config")?.core);
     opts.timeout_ms = Some(timeout_ms);
     let call = control_plane::query(request, Some(opts)).await?;
     unwrap_call_result(call.response, call.error)
