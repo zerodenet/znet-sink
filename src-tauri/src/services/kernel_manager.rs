@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppCoreConfig;
+use crate::models::logs::{LogLevel, LogSource};
 use crate::models::kernel_version::{
     KernelDownloadProgress, KernelInstallResult, KernelRelease, ReleaseChannel,
     KernelVersionList, KernelVersionDetect,
@@ -67,6 +68,16 @@ pub fn install_version(
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
 
+    // Log install attempt so user can trace in LogPanel
+    {
+        let state = app.state::<crate::state::app_state::AppState>();
+        let _ = crate::services::logs::append_entry(
+            &state, LogSource::App, LogLevel::Info,
+            format!("kernel install: v{version} → {}", dir.display()),
+            None,
+        );
+    }
+
     let ext = if download_url.contains(".tar.gz") {
         "tar.gz"
     } else {
@@ -79,10 +90,24 @@ pub fn install_version(
         .build()
         .map_err(|e| AppError::internal(format!("failed to create http client: {e}")))?;
 
+    let _ = crate::services::logs::append_entry(
+        &app.state::<crate::state::app_state::AppState>(),
+        LogSource::App, LogLevel::Info,
+        format!("kernel download: GET {download_url}"),
+        None,
+    );
+
     let mut response = client
         .get(&download_url)
         .send()
-        .map_err(|e| AppError::internal(format!("failed to start download: {e}")))?;
+        .map_err(|e| {
+            let msg = format!("kernel download failed: {e}");
+            let _ = crate::services::logs::append_entry(
+                &app.state::<crate::state::app_state::AppState>(),
+                LogSource::App, LogLevel::Error, msg.clone(), None,
+            );
+            AppError::internal(msg)
+        })?;
 
     let bytes_total = response
         .headers()
