@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::services::system_proxy;
 
@@ -32,24 +33,6 @@ fn marker_path() -> AppResult<PathBuf> {
 }
 
 /// Resolve the application data directory.
-/// Mirrors the logic in `domain_store` and `app_config_store`.
-fn data_dir() -> AppResult<PathBuf> {
-    if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        return Ok(PathBuf::from(app_data).join("ZNet Sink"));
-    }
-    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(config_home).join("znet-sink"));
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
-    }
-    Ok(std::env::current_dir()
-        .map_err(|e| AppError::internal(format!("failed to resolve current dir: {e}")))?
-        .join(".znet-sink"))
-}
 
 // ── Public API ──
 

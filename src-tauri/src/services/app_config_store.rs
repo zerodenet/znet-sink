@@ -1,13 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppConfig;
 
 const CONFIG_FILE_NAME: &str = "app-config.json";
 
 pub fn default_config_path() -> AppResult<PathBuf> {
-    Ok(app_config_dir()?.join(CONFIG_FILE_NAME))
+    Ok(data_dir()?.join(CONFIG_FILE_NAME))
 }
 
 pub fn load_or_default(path: &Path) -> AppResult<AppConfig> {
@@ -50,24 +51,3 @@ pub fn save(path: &Path, config: &AppConfig) -> AppResult<()> {
     })
 }
 
-fn app_config_dir() -> AppResult<PathBuf> {
-    if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        return Ok(PathBuf::from(app_data).join("ZNet Sink"));
-    }
-
-    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(config_home).join("znet-sink"));
-    }
-
-    if let Some(home) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
-    }
-
-    Ok(std::env::current_dir()
-        .map_err(|error| AppError::internal(format!("failed to resolve current dir: {error}")))?
-        .join(".znet-sink"))
-}

@@ -12,6 +12,7 @@ use crate::models::kernel_version::{
     KernelDownloadProgress, KernelInstallResult, KernelRelease, ReleaseChannel,
     KernelVersionList, KernelVersionDetect,
 };
+use super::data_dir;
 use crate::services::core_config;
 
 const GITHUB_RELEASES_URL: &str =
@@ -362,27 +363,10 @@ fn fetch_checksums(
 fn resolve_install_dir(install_dir: Option<String>) -> AppResult<PathBuf> {
     match install_dir {
         Some(d) if !d.trim().is_empty() => Ok(PathBuf::from(d.trim())),
-        _ => app_data_dir().map(|dir| dir.join("core")),
+        _ => data_dir().map(|dir| dir.join("core")),
     }
 }
 
-fn app_data_dir() -> AppResult<PathBuf> {
-    if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        return Ok(PathBuf::from(app_data).join("ZNet Sink"));
-    }
-    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(config_home).join("znet-sink"));
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
-    }
-    Ok(std::env::current_dir()
-        .map_err(|e| AppError::internal(format!("failed to resolve current dir: {e}")))?
-        .join(".znet-sink"))
-}
 
 fn extract_archive(archive: &Path, dest: &Path) -> AppResult<()> {
     let archive_str = path_to_string(archive);
