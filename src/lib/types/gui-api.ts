@@ -26,7 +26,16 @@ export interface ConnectionStatus {
   message?: string;
   uptimeMs?: number;
   activeConnections?: number;
+  coreAvailable?: boolean;
   systemProxyEnabled?: boolean;
+  /** Process details from backend CoreProcessStatus */
+  processState?: string;
+  processPid?: number | null;
+  processExitCode?: number | null;
+  processExitReason?: string;
+  processEndpointPath?: string;
+  localProxyHost?: string;
+  localProxyPort?: number;
 }
 
 export interface ProxyModeStatus {

@@ -317,6 +317,14 @@ export async function getGuiTunStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_tun_status');
 }
 
+export async function enableGuiTun(): Promise<GuiFeatureStatus> {
+  return invoke('gui_tun_enable');
+}
+
+export async function disableGuiTun(): Promise<GuiFeatureStatus> {
+  return invoke('gui_tun_disable');
+}
+
 export async function getGuiDnsStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_dns_status');
 }
@@ -352,6 +360,7 @@ export async function guiCloseConnection(flowId: string): Promise<GuiConnectionC
 function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {
   const connected = boolFrom(raw, ['connected']) ?? false;
   const stage = stringFrom(raw, ['stage']) ?? 'disconnected';
+  const coreAvailable = boolFrom(raw, ['core_available', 'coreAvailable']) ?? connected;
   const process = objectFrom(raw, ['process']);
   const stats = objectFrom(raw, ['stats']);
   const systemProxy = objectFrom(raw, ['system_proxy', 'systemProxy']);
@@ -361,7 +370,15 @@ function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {
     message: stringFrom(raw, ['last_error', 'lastError', 'message']) ?? (connected ? undefined : stage),
     uptimeMs: uptimeFromProcess(process),
     activeConnections: numberFrom(stats, ['active_sessions', 'activeSessions']) ?? 0,
+    coreAvailable,
     systemProxyEnabled: boolFrom(systemProxy, ['enabled']) ?? false,
+    processState: stringFrom(process, ['state']),
+    processPid: numberFrom(process, ['pid']) ?? null,
+    processExitCode: numberFrom(process, ['exit_code', 'exitCode']) ?? null,
+    processExitReason: stringFrom(process, ['exit_reason', 'exitReason']),
+    processEndpointPath: stringFrom(process, ['endpoint_path', 'endpointPath']),
+    localProxyHost: stringFrom(raw, ['local_proxy_host', 'localProxyHost']),
+    localProxyPort: numberFrom(raw, ['local_proxy_port', 'localProxyPort']),
   };
 }
 
@@ -377,9 +394,10 @@ function mapCoreOverview(raw: Record<string, unknown>): CoreOverview {
   const process = objectFrom(raw, ['process']);
   const health = objectFrom(raw, ['health']);
   const stats = objectFrom(raw, ['stats']);
+  const available = boolFrom(raw, ['available']) ?? false;
 
   return {
-    coreState: processStateToCoreState(stringFrom(process, ['state'])),
+    coreState: available ? 'running' : processStateToCoreState(stringFrom(process, ['state'])),
     version: stringFrom(health, ['engine_version', 'engineVersion', 'version']),
     uptimeMs: uptimeFromProcess(process),
     memoryUsageBytes: numberFrom(stats, ['memory_usage_bytes', 'memoryUsageBytes']),

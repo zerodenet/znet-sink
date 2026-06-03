@@ -6,6 +6,7 @@ export interface AppConfig {
   logs: AppLogConfig;
   ui: AppUiConfig;
   localProxy: AppLocalProxyConfig;
+  tun: AppTunConfig;
 }
 
 export interface AppCoreConfig {
@@ -38,6 +39,13 @@ export interface AppLocalProxyConfig {
   sourceProxyConfigId?: string;
 }
 
+export interface AppTunConfig {
+  name?: string;
+  addr: string;
+  tag: string;
+  mtu: number;
+}
+
 // Patch types for partial updates
 
 export interface AppConfigPatch {
@@ -45,6 +53,7 @@ export interface AppConfigPatch {
   logs?: AppLogConfigPatch;
   ui?: AppUiConfigPatch;
   localProxy?: AppLocalProxyConfigPatch;
+  tun?: AppTunConfigPatch;
 }
 
 export interface AppCoreConfigPatch {
@@ -75,4 +84,11 @@ export interface AppLocalProxyConfigPatch {
   host?: string;
   port?: number;
   sourceProxyConfigId?: string | null;
+}
+
+export interface AppTunConfigPatch {
+  name?: string | null;
+  addr?: string;
+  tag?: string;
+  mtu?: number;
 }

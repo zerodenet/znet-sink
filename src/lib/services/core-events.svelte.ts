@@ -41,7 +41,7 @@ class CoreEventsService {
   tunState = $state<'idle' | 'started' | 'stopped' | 'error'>('idle');
   tunStateMessage = $state<string | null>(null);
 
-  // v0.0.5+: 网络栈状态（SystemStack / proxy）
+  // v0.0.5+: 内核网络栈状态（不是 GUI 系统代理开关）
   stackState = $state<'idle' | 'started' | 'stopped' | 'degraded'>('idle');
   stackMode = $state<string | null>(null);
 
@@ -202,7 +202,7 @@ class CoreEventsService {
       return;
     }
 
-    // ── v0.0.5+: 网络栈状态变化（SystemStack / proxy stack）──
+    // ── v0.0.5+: 内核网络栈状态变化（不是 GUI 系统代理开关）──
     if (eventType === 'stack.statusChanged') {
       this._handleStackStatus(data);
       return;
@@ -341,7 +341,7 @@ class CoreEventsService {
     }
   }
 
-  // ── v0.0.5+: 网络栈状态事件（SystemStack / proxy stack）──
+  // ── v0.0.5+: 内核网络栈状态事件（不是 GUI 系统代理开关）──
 
   private _handleStackStatus(data: unknown) {
     const obj = data && typeof data === 'object' ? data as Record<string, unknown> : {};
