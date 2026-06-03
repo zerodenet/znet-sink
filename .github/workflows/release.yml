@@ -135,9 +135,18 @@ jobs:
           TAG="${{ github.ref_name }}"
           REPO="${{ github.repository }}"
 
+          # Find previous version tag for changelog range
+          PREV_TAG=$(git tag --sort=-version:refname --list 'v*' | grep -A1 "^$TAG\$" | tail -1)
+
           echo "## Changes in $TAG" > release-notes.md
           echo >> release-notes.md
-          git log --oneline --no-merges --pretty=format:"- %s" >> release-notes.md
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ]; then
+            echo "**Full diff:** https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}" >> release-notes.md
+            echo >> release-notes.md
+            git log --oneline --no-merges --pretty=format:"- %s" "${PREV_TAG}..${TAG}" >> release-notes.md
+          else
+            git log --oneline --no-merges --pretty=format:"- %s" >> release-notes.md
+          fi
 
           gh release edit "$TAG" \
             --repo "$REPO" \
