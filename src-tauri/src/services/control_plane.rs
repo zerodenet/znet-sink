@@ -65,26 +65,14 @@ pub async fn command(
 pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult<CoreCallResult> {
     let endpoint = endpoint_from_options(options.as_ref())?;
     let timeout = timeout_from_options(options.as_ref())?;
-    let frame_type = frame
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
     let frame = ipc::serialize_frame(&frame)?;
     let result_endpoint = endpoint.clone();
 
-    let start = std::time::Instant::now();
     let response = tauri::async_runtime::spawn_blocking(move || {
         ipc::send_json_line_request(endpoint, frame, timeout)
     })
     .await
     .map_err(|error| AppError::internal(format!("IPC worker failed: {error}")))?;
-
-    let elapsed = start.elapsed();
-    let ok = response.is_ok();
-    eprintln!(
-        "[ZNet] IPC {frame_type}: {ok}, took {elapsed:?}"
-    );
 
     Ok(CoreCallResult::from_core_result(result_endpoint, response))
 }

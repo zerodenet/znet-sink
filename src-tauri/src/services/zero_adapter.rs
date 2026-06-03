@@ -64,7 +64,9 @@ pub async fn core_overview(state: &AppState) -> AppResult<GuiCoreOverview> {
 }
 
 pub async fn core_health(state: &AppState) -> AppResult<GuiCoreHealth> {
-    let value = query_result(state, json!("Health")).await?;
+    // Use a shorter timeout for health polling (1s instead of default 3s)
+    // so the wait_for_health retry loop can make more attempts within its window.
+    let value = query_result_with_timeout(state, json!("Health"), 1_000).await?;
     Ok(parse_health(&value))
 }
 
@@ -233,6 +235,19 @@ async fn command_result(state: &AppState, method: &str, params: Value) -> AppRes
 fn default_options(state: &AppState) -> AppResult<Option<CoreIpcOptions>> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
     Ok(Some(core_config::ipc_options_from_app_config(&config)))
+}
+
+async fn query_result_with_timeout(
+    state: &AppState,
+    request: Value,
+    timeout_ms: u64,
+) -> AppResult<Value> {
+    let mut opts = core_config::ipc_options_from_app_config(
+        &lock(state.app_config(), "app_config")?.core,
+    );
+    opts.timeout_ms = Some(timeout_ms);
+    let call = control_plane::query(request, Some(opts)).await?;
+    unwrap_call_result(call.response, call.error)
 }
 
 fn unwrap_call_result(response: Option<Value>, error: Option<AppError>) -> AppResult<Value> {
