@@ -101,13 +101,14 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
                     if let Ok(line) = line {
-                        if !line.trim().is_empty() {
+                        let cleaned = strip_ansi(&line);
+                        if !cleaned.trim().is_empty() {
                             let state = app_handle_stderr.state::<AppState>();
                             let _ = logs::append_entry(
                                 &state,
                                 LogSource::Core,
                                 LogLevel::Error,
-                                line,
+                                cleaned,
                                 None,
                             );
                         }
@@ -345,4 +346,28 @@ fn refresh_locked_status(
     }
 
     Ok(())
+}
+
+/// Remove ANSI escape codes (CSI sequences) from stderr output.
+/// Matches patterns like ESC[...m, ESC[...K, etc.
+fn strip_ansi(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Skip ESC[ ... until a terminal byte (letter A-Z or a-z)
+            i += 2;
+            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1; // skip the terminal byte
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
