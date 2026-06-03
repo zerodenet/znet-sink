@@ -5,7 +5,7 @@ use crate::services::common;
 
 use serde_json::json;
 use tauri::Manager;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
@@ -144,7 +144,13 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
                         process.child = None;
                         drop(process);
                         let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
-                        let _ = logs::append_entry(&state, LogSource::App, LogLevel::Warn, msg, None);
+                        let _ = logs::append_entry(&state, LogSource::App, LogLevel::Warn, msg.clone(), None);
+                        // Notify frontend so UI updates in real time
+                        let _ = app_handle_mon.emit("core:process-exited", json!({
+                            "reason": reason_str,
+                            "code": code,
+                            "message": msg,
+                        }));
                         break;
                     }
                 }

@@ -53,6 +53,7 @@ class CoreEventsService {
 
   private _unlistenEvent: UnlistenFn | null = null;
   private _unlistenStatus: UnlistenFn | null = null;
+  private _unlistenProcess: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
 
   async start(events?: string[]) {
@@ -65,6 +66,11 @@ class CoreEventsService {
     if (!this._unlistenStatus) {
       this._unlistenStatus = await listen<CoreEventStatus>(STATUS_NAME, (event) => {
         this._handleStatus(event.payload);
+      });
+    }
+    if (!this._unlistenProcess) {
+      this._unlistenProcess = await listen<{ reason: string; code: number | null; message: string }>('core:process-exited', (event) => {
+        this._handleProcessExited(event.payload);
       });
     }
 
@@ -84,8 +90,10 @@ class CoreEventsService {
     this.status = 'idle';
     this._unlistenEvent?.();
     this._unlistenStatus?.();
+    this._unlistenProcess?.();
     this._unlistenEvent = null;
     this._unlistenStatus = null;
+    this._unlistenProcess = null;
     this._pendingDeltas = [];
   }
 
@@ -323,6 +331,14 @@ class CoreEventsService {
     this.tunState = 'error';
     this.tunStateMessage = typeof obj['message'] === 'string' ? obj['message'] : 'TUN interface error';
     showWarningToast(`TUN 错误: ${this.tunStateMessage}`, 6000);
+  }
+
+  // ── 内核进程退出（崩溃监控线程通知）──
+  private _handleProcessExited(payload: { reason: string; code: number | null; message: string }) {
+    this.statusTick++;
+    if (payload.reason === 'crashed') {
+      showWarningToast(`内核崩溃 (code=${payload.code ?? '?'})`, 8000);
+    }
   }
 
   // ── v0.0.5+: 网络栈状态事件（SystemStack / proxy stack）──
