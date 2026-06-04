@@ -62,6 +62,8 @@
   const proxyEnabled = $derived(guiState.isSystemProxyEnabled);
   const isCoreRunning = $derived(guiState.isProcessRunning);
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
+  const hasConfig = $derived(guiState.proxyMode != null);
+  const hasNodes = $derived(guiState.policyGroups.length > 0);
   const powerLabel = $derived(
     guiState.isConnecting ? '启用中' :
     guiState.isDisconnecting ? '关闭中' :
@@ -248,52 +250,52 @@
       {/if}
     </div>
 
-    <!-- Row 3: Chart + Current node (traffic speeds inline in TrafficChart header) -->
-    {#if store.isFeatureVisible('policySelection')}
-      <div class="flex-1 w-full flex flex-col lg:flex-row gap-3 overflow-hidden min-h-0" style="min-height: 180px;">
-        <div class="w-full lg:w-2/3 overflow-hidden min-h-[120px]">
-          <TrafficChart history={overviewData.speedHistory} />
-        </div>
-        <div class="w-full lg:w-1/3 min-h-[80px]">
-          <div class="overview-card h-full flex flex-col gap-2">
-            <div class="flex items-center justify-between flex-shrink-0">
-              <span class="card-label">当前节点</span>
-              <button
-                class="node-link-btn"
-                onclick={() => store.activeTab = 'nodes'}
-                aria-label="管理节点"
-              >
-                管理
-              </button>
-            </div>
-            {#if currentNode}
-              <div class="flex-1 flex flex-col justify-center min-h-0">
-                <span class="active-node-name truncate">{currentNode.tag}</span>
-                <span class="active-node-meta">
-                  {currentNode.type}
-                  {#if currentNode.delayMs != null && currentNode.delayMs > 0}
-                    · {currentNode.delayMs} ms
-                  {:else}
-                    · 延迟未知
-                  {/if}
-                  {#if currentNode.alive === false}
-                    · <span class="text-destructive">离线</span>
-                  {/if}
-                </span>
-              </div>
-            {:else if guiState.isConnected}
-              <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-                等待节点数据…
-              </div>
-            {:else}
-              <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-                未连接
-              </div>
-            {/if}
+    <!-- Row 3: Chart + Current node (only when config is active or nodes loaded) -->
+    <div class="flex-1 w-full flex flex-col lg:flex-row gap-3 overflow-hidden min-h-0" style="min-height: 180px;">
+      <div class="w-full {store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) ? 'lg:w-2/3' : ''} overflow-hidden min-h-[120px]">
+        <TrafficChart history={overviewData.speedHistory} />
+      </div>
+      {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes)}
+      <div class="w-full lg:w-1/3 min-h-[80px]">
+        <div class="overview-card h-full flex flex-col gap-2">
+          <div class="flex items-center justify-between flex-shrink-0">
+            <span class="card-label">当前节点</span>
+            <button
+              class="node-link-btn"
+              onclick={() => store.activeTab = 'nodes'}
+              aria-label="管理节点"
+            >
+              管理
+            </button>
           </div>
+          {#if currentNode}
+            <div class="flex-1 flex flex-col justify-center min-h-0">
+              <span class="active-node-name truncate">{currentNode.tag}</span>
+              <span class="active-node-meta">
+                {currentNode.type}
+                {#if currentNode.delayMs != null && currentNode.delayMs > 0}
+                  · {currentNode.delayMs} ms
+                {:else}
+                  · 延迟未知
+                {/if}
+                {#if currentNode.alive === false}
+                  · <span class="text-destructive">离线</span>
+                {/if}
+              </span>
+            </div>
+          {:else if guiState.isConnected}
+            <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+              等待节点数据…
+            </div>
+          {:else}
+            <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+              未连接
+            </div>
+          {/if}
         </div>
       </div>
-    {/if}
+      {/if}
+    </div>
 
     <!-- Row 5: Log panel -->
     {#if store.isNavVisible('logs')}
@@ -308,7 +310,8 @@
   <!-- ============ LITE MODE ============ -->
   <div class="lite-root animate-fade-in">
 
-    <!-- Node selector dropdown -->
+    <!-- Node selector: only show when config is active or nodes are loaded -->
+    {#if hasConfig || hasNodes}
     <div class="lite-node-wrap" bind:this={dropdownRef}>
       <button class="lite-node-trigger" onclick={() => nodeDropdownOpen = !nodeDropdownOpen}>
         <svg width="13" height="13" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="lite-node-icon">
@@ -350,6 +353,7 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- Main row: stats | button | mode switches -->
     <div class="lite-main">
