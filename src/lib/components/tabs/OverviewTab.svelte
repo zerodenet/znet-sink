@@ -64,6 +64,19 @@
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
+
+  // Diagnostic: unconditionally log when config nodes change
+  $effect(() => {
+    console.warn('[overview] state:', {
+      configNodes: guiState.configNodes.length,
+      policyGroups: guiState.policyGroups.length,
+      proxyMode: guiState.proxyMode?.currentMode,
+      hasConfig,
+      hasNodes,
+      tags: guiState.configNodes.map(n => `${n.tag}(${n.protocol},sel=${n.isSelector})`),
+    });
+  });
+
   const powerLabel = $derived(
     guiState.isConnecting ? '启用中' :
     guiState.isDisconnecting ? '关闭中' :
