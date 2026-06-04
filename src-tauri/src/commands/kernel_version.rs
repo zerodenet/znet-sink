@@ -3,7 +3,7 @@ use tauri::State;
 use crate::errors::AppResult;
 use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::services::{common, interaction_mode, kernel_manager};
+use crate::services::{app_config_store, common, interaction_mode, kernel_manager};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -26,11 +26,24 @@ pub async fn kernel_install_version(
     app: tauri::AppHandle,
 ) -> AppResult<KernelInstallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         kernel_manager::install_version(version, download_url, expected_sha256, install_dir, app)
     })
     .await
-    .map_err(|e| crate::errors::AppError::internal(format!("install thread panicked: {e}")))?
+    .map_err(|e| crate::errors::AppError::internal(format!("install thread panicked: {e}")))??;
+
+    // Persist the new executable path so subsequent starts and version
+    // detection pick up the freshly installed binary.
+    let executable_path = result.executable_path.clone();
+    {
+        let mut app_config = common::lock(state.app_config(), "app_config")?;
+        app_config.core.executable_path = Some(executable_path);
+        let snapshot = app_config.clone();
+        drop(app_config);
+        app_config_store::save(&app_config_store::default_config_path()?, &snapshot)?;
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
