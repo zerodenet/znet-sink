@@ -108,18 +108,34 @@ pub async fn capability_feature_keys(state: &AppState) -> AppResult<Vec<String>>
 }
 
 pub async fn policy_groups(state: &AppState) -> AppResult<Vec<GuiPolicyGroup>> {
-    let value = query_result(state, json!({"type":"policies"})).await?;
-    let groups = parse_policy_groups(&value);
     crate::services::logs::znet_log(
         Some(state),
         crate::models::logs::LogLevel::Info,
-        format!(
-            "policies query returned {} groups from core, raw result: {}",
-            groups.len(),
-            serde_json::to_string(&value).unwrap_or_else(|_| "<non-serializable>".to_string())
-        ),
+        "policies query: sending request to core".to_string(),
     );
-    Ok(groups)
+    match query_result(state, json!({"type":"policies"})).await {
+        Ok(value) => {
+            let groups = parse_policy_groups(&value);
+            crate::services::logs::znet_log(
+                Some(state),
+                crate::models::logs::LogLevel::Info,
+                format!(
+                    "policies query: got {} groups, raw={}",
+                    groups.len(),
+                    serde_json::to_string(&value).unwrap_or_else(|_| "<err>".to_string())
+                ),
+            );
+            Ok(groups)
+        }
+        Err(error) => {
+            crate::services::logs::znet_log(
+                Some(state),
+                crate::models::logs::LogLevel::Warn,
+                format!("policies query failed: {}", error.message),
+            );
+            Err(error)
+        }
+    }
 }
 
 pub async fn select_policy(
