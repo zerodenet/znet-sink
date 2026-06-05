@@ -110,7 +110,12 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
 
     // Cache miss + core running — query core
     let query_start = std::time::Instant::now();
-    let features = crate::services::zero_adapter::capability_feature_keys(state)
+    let features = {
+        let opts = crate::services::core_config::ipc_options_from_app_config(
+            &lock(state.app_config(), "app_config").map(|c| c.core.clone()).unwrap_or_default(),
+        );
+        crate::kernel::zero::queries::capability_feature_keys(Some(opts))
+    }
         .await
         .unwrap_or_default();
     crate::services::logs::znet_log(

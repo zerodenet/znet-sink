@@ -1,8 +1,8 @@
 pub mod commands;
 pub mod config;
-pub mod core;
 pub mod errors;
 pub mod events;
+pub mod kernel;
 pub mod lifecycle;
 pub mod models;
 pub mod services;
@@ -25,7 +25,8 @@ use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
 use crate::lifecycle::phases;
-use crate::services::{core_process, system_proxy_guard, zero_adapter};
+use crate::services::{core_process, system_proxy_guard};
+use crate::kernel::adapter::KernelAdapter;
 use crate::state::app_state::AppState;
 use tauri::Manager;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -113,6 +114,9 @@ pub fn run() {
             gui_core_commands::gui_policy_groups,
             gui_core_commands::gui_proxy_nodes,
             gui_core_commands::gui_select_policy,
+            gui_core_commands::gui_probe_target,
+            gui_core_commands::gui_client_probe_node,
+            gui_core_commands::gui_client_probe_start,
             gui_core_commands::gui_connections,
             gui_core_commands::gui_connection_detail,
             gui_core_commands::gui_close_connection,
@@ -171,10 +175,11 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<AppState>();
-                    if zero_adapter::core_readiness_health(state.inner())
-                        .await
-                        .is_ok()
-                    {
+                    let adapter = crate::kernel::zero::ZeroAdapter::new();
+                    let opts = crate::services::core_config::ipc_options_from_app_config(
+                        &state.app_config().lock().map(|c| c.core.clone()).unwrap_or_default()
+                    );
+                    if adapter.readiness_health(opts).await.is_ok() {
                         return;
                     }
                     drop(state);

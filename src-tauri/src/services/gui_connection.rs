@@ -2,13 +2,14 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
 
 use crate::errors::{AppError, AppResult};
+use crate::kernel::adapter::KernelAdapter;
+use crate::kernel::zero::ZeroAdapter;
 use crate::models::{
     core_process::CoreProcessState,
     gui_core::{GuiConnectionStatus, GuiCoreHealth},
 };
 use crate::services::{
     common::lock, core_config, core_process, local_proxy, system_proxy, system_proxy_guard,
-    zero_adapter,
 };
 use crate::state::app_state::AppState;
 
@@ -34,10 +35,9 @@ pub async fn connect(
     // for it, it's a stale instance left by a previous session. Kill it so
     // we can start a fresh one with the current config instead of blocking.
     if !managed_running {
-        if zero_adapter::core_readiness_health(state.inner())
-            .await
-            .is_ok()
-        {
+        let opts = default_ipc_opts(state.inner());
+        let adapter = ZeroAdapter::new();
+        if adapter.readiness_health(opts).await.is_ok() {
             core_process::kill_external(state.inner())?;
         }
     }
@@ -145,8 +145,11 @@ async fn build_status(
     error: Option<String>,
 ) -> AppResult<GuiConnectionStatus> {
     let process = core_process::refresh_status(state)?;
-    let health = zero_adapter::core_readiness_health(state).await.ok();
-    let stats = zero_adapter::traffic_stats(state).await.unwrap_or_default();
+    let adapter = ZeroAdapter::new();
+    let opts = default_ipc_opts(state);
+    let health = adapter.readiness_health(opts).await.ok();
+    let opts = default_ipc_opts(state);
+    let stats = adapter.traffic_stats(opts).await.unwrap_or_default();
     let active_proxy_config_id = active_proxy_config_id(state).ok().flatten();
     let (local_proxy_host, local_proxy_port) = local_proxy_endpoint(state)?;
     let core_available = process.state == CoreProcessState::Running
@@ -189,8 +192,6 @@ fn cleanup_failed_connect(state: State<'_, AppState>, started_this_call: bool) {
 
 async fn wait_for_health(state: &AppState) -> AppResult<GuiCoreHealth> {
     // Give the core a moment to create its IPC pipe before we start hammering it.
-    // Without this, WaitNamedPipeW blocks for the full per-attempt timeout on every
-    // call while the pipe doesn't exist yet, burning through the retry window.
     let _ = tauri::async_runtime::spawn_blocking(|| {
         std::thread::sleep(HEALTH_WAIT_INITIAL_DELAY);
     })
@@ -199,8 +200,10 @@ async fn wait_for_health(state: &AppState) -> AppResult<GuiCoreHealth> {
     let started = Instant::now();
     let mut last_error = None;
 
+    let adapter = ZeroAdapter::new();
     while started.elapsed() < HEALTH_WAIT_TIMEOUT {
-        match zero_adapter::core_readiness_health(state).await {
+        let opts = default_ipc_opts(state);
+        match adapter.readiness_health(opts).await {
             Ok(health) if health.healthy => return Ok(health),
             Ok(health) => return Ok(health),
             Err(error) => {
@@ -226,4 +229,12 @@ fn active_proxy_config_id(state: &AppState) -> AppResult<Option<String>> {
 fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16)> {
     let config = lock(state.app_config(), "app_config")?;
     Ok((config.local_proxy.host.clone(), config.local_proxy.port))
+}
+
+fn default_ipc_opts(state: &AppState) -> crate::models::core::CoreIpcOptions {
+    core_config::ipc_options_from_app_config(
+        &lock(state.app_config(), "app_config")
+            .map(|c| c.core.clone())
+            .unwrap_or_default(),
+    )
 }

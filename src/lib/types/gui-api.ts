@@ -75,6 +75,7 @@ export interface PolicyOutbound {
 
 export interface PolicyGroup {
   name: string;
+  kind?: string;
   selected?: string;
   outbounds: PolicyOutbound[];
 }
@@ -114,6 +115,15 @@ export interface GuiPolicySelectionResult {
   targetTag: string;
   selected?: string;
   accepted: boolean;
+  message?: string;
+}
+
+export interface GuiTargetProbeResult {
+  targetTag: string;
+  reachable: boolean;
+  latencyMs?: number;
+  server?: string;
+  port?: number;
   message?: string;
 }
 

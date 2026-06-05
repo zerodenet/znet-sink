@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult } from '$lib/types/gui-api';
+import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult } from '$lib/types/gui-api';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
@@ -101,7 +101,7 @@ export interface FlowInfo {
 
 export async function queryFlows(): Promise<FlowInfo[]> {
   const result = await invoke<CoreCallResult>('core_ipc_query', {
-    request: 'Flows',
+    request: { type: 'active_flows', limit: 100, filter: {} },
     options: undefined,
   });
   if (!result.available || !result.response) return [];
@@ -315,6 +315,43 @@ export async function guiSelectPolicy(policyTag: string, targetTag: string): Pro
   return invoke('gui_select_policy', { policyTag, targetTag });
 }
 
+export async function guiProbeTarget(targetTag: string): Promise<GuiTargetProbeResult> {
+  return invoke('gui_probe_target', { targetTag });
+}
+
+// ── Client-side probe ──
+
+export interface ClientProbeResult {
+  targetTag: string;
+  reachable: boolean;
+  latencyMs?: number;
+  message?: string;
+}
+
+export interface ProbeProgress {
+  done: number;
+  total: number;
+}
+
+/** Probe a single node, returns result directly. */
+export async function guiClientProbeNode(targetTag: string): Promise<ClientProbeResult> {
+  return invoke('gui_client_probe_node', { targetTag });
+}
+
+/**
+ * Start a batch probe (returns immediately).
+ * Listen for events:
+ *   `probe:result`   → ClientProbeResult
+ *   `probe:progress` → { done, total }
+ *   `probe:complete` → { total, reachable, failed }
+ */
+export async function guiClientProbeStart(
+  targetTags: string[],
+  maxConcurrent?: number,
+): Promise<void> {
+  return invoke('gui_client_probe_start', { targetTags, maxConcurrent });
+}
+
 // ── Feature status (TUN / DNS / Rules) ──
 
 export async function getGuiTunStatus(): Promise<GuiFeatureStatus> {
@@ -428,6 +465,7 @@ function mapPolicyGroups(raw: Record<string, unknown>[]): PolicyGroup[] {
     return {
       name: stringFrom(group, ['tag', 'policy_tag', 'policyTag', 'name', 'id']) ?? 'unknown',
       selected: stringFrom(group, ['selected', 'current', 'now', 'target']),
+      kind: stringFrom(group, ['kind', 'type', 'policy_kind', 'policyKind']),
       outbounds: members
         .reduce((acc: PolicyOutbound[], member) => {
           if (!member || typeof member !== 'object') return acc;

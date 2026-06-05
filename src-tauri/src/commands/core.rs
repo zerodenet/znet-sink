@@ -2,9 +2,10 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
+use crate::kernel::protocol as ipc;
 use crate::models::core::{CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreIpcOptions};
 use crate::services::common::lock;
-use crate::services::{control_plane, core_config, core_events, interaction_mode};
+use crate::services::{core_config, core_events, interaction_mode};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -18,7 +19,7 @@ pub async fn core_status(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::status(resolve_options(&state, options)?).await
+    ipc::ping(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -26,7 +27,7 @@ pub async fn core_ipc_ping(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::ping(resolve_options(&state, options)?).await
+    ipc::ping(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -36,7 +37,7 @@ pub async fn core_ipc_query(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
-    control_plane::query(request, resolve_options(&state, options)?).await
+    ipc::query(request, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -47,7 +48,7 @@ pub async fn core_ipc_command(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
-    control_plane::command(method, params, resolve_options(&state, options)?).await
+    ipc::command(method, params, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -57,7 +58,7 @@ pub async fn core_ipc_request(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
-    control_plane::request(frame, resolve_options(&state, options)?).await
+    ipc::request(frame, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -66,7 +67,7 @@ pub async fn core_get_capabilities(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "diagnostics")?;
-    control_plane::get_capabilities(resolve_options(&state, options)?).await
+    ipc::get_capabilities(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -74,7 +75,7 @@ pub async fn core_get_health(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::get_health(resolve_options(&state, options)?).await
+    ipc::get_health(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -83,7 +84,7 @@ pub async fn core_get_config(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-    control_plane::get_config(resolve_options(&state, options)?).await
+    ipc::get_config(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -91,7 +92,7 @@ pub async fn core_get_runtime(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::get_runtime(resolve_options(&state, options)?).await
+    ipc::get_runtime(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -99,7 +100,7 @@ pub async fn core_get_stats(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::get_stats(resolve_options(&state, options)?).await
+    ipc::get_stats(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -107,7 +108,7 @@ pub async fn core_get_policies(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::get_policies(resolve_options(&state, options)?).await
+    ipc::get_policies(resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -117,7 +118,7 @@ pub async fn core_select_policy(
     target_tag: String,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    control_plane::select_policy(policy_tag, target_tag, resolve_options(&state, options)?).await
+    ipc::select_policy(policy_tag, target_tag, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -127,7 +128,7 @@ pub async fn core_probe_policy(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "policyProbe")?;
-    control_plane::probe_policy(policy_tag, resolve_options(&state, options)?).await
+    ipc::probe_policy(policy_tag, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -137,7 +138,7 @@ pub async fn core_close_flow(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "connections")?;
-    control_plane::close_flow(flow_id, resolve_options(&state, options)?).await
+    ipc::close_flow(flow_id, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -147,7 +148,7 @@ pub async fn core_validate_config(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-    control_plane::validate_config(config, resolve_options(&state, options)?).await
+    ipc::validate_config(config, resolve_options(&state, options)?).await
 }
 
 #[tauri::command]
@@ -194,5 +195,5 @@ fn resolve_options(
 
 fn default_options(state: &State<'_, AppState>) -> AppResult<CoreIpcOptions> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
-    Ok(control_plane::options_from_core_config(&config))
+    Ok(core_config::ipc_options_from_app_config(&config))
 }

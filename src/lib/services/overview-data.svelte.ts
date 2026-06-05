@@ -63,12 +63,12 @@ function parseNode(item: unknown, index: number): ProxyNode | null {
 }
 
 function extractPolicyNodes(data: unknown): ProxyNode[] {
-  const groups = valuesFromContainer(data, ['policies', 'policy_groups', 'policyGroups', 'groups', 'items']);
+  const groups = valuesFromContainer(data, ['policies', 'outbound_groups', 'outboundGroups', 'policy_groups', 'policyGroups', 'groups', 'items']);
   const nodes = groups.flatMap((group) => {
     if (!group || typeof group !== 'object') return [];
     const obj = group as Record<string, unknown>;
     const selected = stringFrom(obj, ['selected', 'current', 'now', 'target']);
-    return valuesFromContainer(obj, ['members', 'targets', 'children', 'proxies', 'items'])
+    return valuesFromContainer(obj, ['members', 'targets', 'children', 'outbounds', 'proxies', 'items'])
       .map((member, idx) => parsePolicyMember(member, selected, idx))
       .filter(Boolean) as ProxyNode[];
   });

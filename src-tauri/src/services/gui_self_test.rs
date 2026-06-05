@@ -2,6 +2,8 @@ use serde_json::json;
 use tauri::State;
 
 use crate::errors::AppResult;
+use crate::kernel::adapter::KernelAdapter;
+use crate::kernel::zero::ZeroAdapter;
 use crate::models::{
     core_process::CoreProcessState,
     gui_core::{
@@ -9,7 +11,7 @@ use crate::models::{
     },
 };
 use crate::services::{
-    common::lock, core_config, core_process, gui_connection, proxy_mode, zero_adapter,
+    common::lock, core_config, core_process, gui_connection, proxy_mode,
 };
 use crate::state::app_state::AppState;
 
@@ -223,7 +225,14 @@ async fn check_core_health(state: &AppState) -> GuiSelfTestCheck {
         );
     }
 
-    match zero_adapter::core_health(state).await {
+    let opts = core_config::ipc_options_from_app_config(
+        &lock(state.app_config(), "app_config")
+            .map(|c| c.core.clone())
+            .unwrap_or_default(),
+    );
+    let adapter = ZeroAdapter::new();
+
+    match adapter.health(opts).await {
         Ok(health) if health.healthy => pass(
             "coreHealth",
             "core health check is healthy",

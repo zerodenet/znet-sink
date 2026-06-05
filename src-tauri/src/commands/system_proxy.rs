@@ -2,14 +2,26 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
+use crate::kernel::adapter::KernelAdapter;
+use crate::kernel::zero::ZeroAdapter;
+use crate::models::core::CoreIpcOptions;
 use crate::models::core_process::CoreProcessState;
 use crate::services::common::lock;
+use crate::services::core_config;
 use crate::services::system_proxy::{self, SystemProxyStatus};
-use crate::services::{core_process, local_proxy, system_proxy_guard, zero_adapter};
+use crate::services::{core_process, local_proxy, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+
+fn default_ipc_opts(state: &AppState) -> CoreIpcOptions {
+    core_config::ipc_options_from_app_config(
+        &lock(state.app_config(), "app_config")
+            .map(|c| c.core.clone())
+            .unwrap_or_default(),
+    )
+}
 
 #[tauri::command]
 pub async fn system_proxy_enable(
@@ -54,10 +66,9 @@ pub async fn system_proxy_status() -> AppResult<SystemProxyStatus> {
 }
 
 async fn ensure_core_ready(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    if zero_adapter::core_readiness_health(state.inner())
-        .await
-        .is_ok()
-    {
+    let adapter = ZeroAdapter::new();
+    let opts = default_ipc_opts(state.inner());
+    if adapter.readiness_health(opts).await.is_ok() {
         return Ok(());
     }
 
@@ -81,9 +92,11 @@ async fn ensure_core_ready(app_handle: AppHandle, state: State<'_, AppState>) ->
 async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
     let started = Instant::now();
     let mut last_error = None;
+    let adapter = ZeroAdapter::new();
 
     while started.elapsed() < CORE_READY_WAIT_TIMEOUT {
-        match zero_adapter::core_readiness_health(state).await {
+        let opts = default_ipc_opts(state);
+        match adapter.readiness_health(opts).await {
             Ok(health) if health.healthy => return Ok(()),
             Ok(_) => {
                 return Err(AppError::internal(

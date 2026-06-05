@@ -1,30 +1,5 @@
-use serde_json::json;
-
 use crate::models::gui_core::GuiTrafficStats;
-use crate::services::zero_adapter::{
-    build_traffic_snapshot, bytes_delta_per_second, calculate_rates, parse_stats,
-};
-use crate::state::app_state::AppState;
-
-#[test]
-fn parse_stats_accepts_current_zero_fields() {
-    let stats = parse_stats(&json!({
-        "active_sessions": 2,
-        "total_started": 10,
-        "completed_sessions": 7,
-        "failed_sessions": 1,
-        "blocked_sessions": 1,
-        "direct_sessions": 3,
-        "chained_sessions": 4,
-        "bytes_up": 1200,
-        "bytes_down": 3400
-    }));
-
-    assert_eq!(stats.active_sessions, 2);
-    assert_eq!(stats.total_started, 10);
-    assert_eq!(stats.bytes_up, 1200);
-    assert_eq!(stats.bytes_down, 3400);
-}
+use crate::kernel::zero::adapter::*;
 
 #[test]
 fn traffic_rates_use_byte_delta_over_interval() {
@@ -52,17 +27,15 @@ fn traffic_rates_treat_counter_reset_as_zero_rate() {
 
 #[test]
 fn first_traffic_snapshot_is_unstable_baseline() {
-    let state = AppState::default();
     let snapshot = build_traffic_snapshot(
-        &state,
         GuiTrafficStats {
             bytes_up: 100,
             bytes_down: 200,
             ..GuiTrafficStats::default()
         },
+        None,
         1_000,
-    )
-    .unwrap();
+    );
 
     assert!(!snapshot.stable);
     assert_eq!(snapshot.rates.upload_bps, 0);
@@ -71,31 +44,51 @@ fn first_traffic_snapshot_is_unstable_baseline() {
 
 #[test]
 fn second_traffic_snapshot_reports_rates() {
-    let state = AppState::default();
-    build_traffic_snapshot(
-        &state,
-        GuiTrafficStats {
+    let previous = TrafficSample {
+        stats: GuiTrafficStats {
             bytes_up: 100,
             bytes_down: 200,
             ..GuiTrafficStats::default()
         },
-        1_000,
-    )
-    .unwrap();
+        sampled_at_unix_ms: 1_000,
+    };
 
     let snapshot = build_traffic_snapshot(
-        &state,
         GuiTrafficStats {
             bytes_up: 1_100,
             bytes_down: 2_200,
             ..GuiTrafficStats::default()
         },
+        Some(&previous),
         2_000,
-    )
-    .unwrap();
+    );
 
     assert!(snapshot.stable);
     assert_eq!(snapshot.interval_ms, Some(1_000));
     assert_eq!(snapshot.rates.upload_bps, 1_000);
     assert_eq!(snapshot.rates.download_bps, 2_000);
+}
+
+#[test]
+fn snapshot_with_short_interval_is_unstable() {
+    let previous = TrafficSample {
+        stats: GuiTrafficStats {
+            bytes_up: 100,
+            bytes_down: 200,
+            ..GuiTrafficStats::default()
+        },
+        sampled_at_unix_ms: 1_000,
+    };
+
+    let snapshot = build_traffic_snapshot(
+        GuiTrafficStats {
+            bytes_up: 200,
+            bytes_down: 300,
+            ..GuiTrafficStats::default()
+        },
+        Some(&previous),
+        1_200, // 200ms interval, below 500ms threshold
+    );
+
+    assert!(!snapshot.stable);
 }

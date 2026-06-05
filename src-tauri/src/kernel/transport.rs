@@ -1,3 +1,11 @@
+//! Platform transport layer for kernel IPC.
+//!
+//! Raw socket (Unix) / named-pipe (Windows) I/O, JSON-line framing,
+//! and `EventStream` for persistent subscriptions.
+//!
+//! This module is kernel-agnostic — any kernel using JSON-line IPC
+//! over domain sockets or named pipes can reuse it unchanged.
+
 use serde_json::Value;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::time::Duration;
@@ -31,19 +39,26 @@ trait ReadWrite: Read + Write + Send {}
 
 impl<T> ReadWrite for T where T: Read + Write + Send {}
 
-pub(crate) struct EventStream {
+// ── Public API ──────────────────────────────────────────────────────
+
+pub struct EventStream {
     endpoint: CoreEndpoint,
     reader: BufReader<Box<dyn ReadWrite>>,
 }
 
-pub(crate) fn default_endpoint() -> AppResult<CoreEndpoint> {
+/// Return the platform-specific default endpoint for the given kernel name.
+///
+/// On Windows, uses a well-known named pipe: `\\.\pipe\{name}-control`.
+/// On Unix, resolves `<executable_dir>/{name}-control.sock`.
+pub fn default_endpoint(kernel_name: &str) -> AppResult<CoreEndpoint> {
     Ok(CoreEndpoint {
         transport: transport_name(),
-        path: default_socket_path()?,
+        path: default_socket_path(kernel_name)?,
     })
 }
 
-pub(crate) fn send_json_line_request(
+/// Connect to `endpoint`, send a single JSON-line `frame`, read one JSON response.
+pub fn send_json_line_request(
     endpoint: CoreEndpoint,
     frame: Vec<u8>,
     timeout: Duration,
@@ -60,7 +75,8 @@ pub(crate) fn send_json_line_request(
     read_json_line(&mut reader, &endpoint)
 }
 
-pub(crate) fn subscribe(
+/// Connect to `endpoint`, send a subscribe `frame`, return a persistent `EventStream`.
+pub fn subscribe(
     endpoint: CoreEndpoint,
     frame: Vec<u8>,
     timeout: Duration,
@@ -79,13 +95,8 @@ pub(crate) fn subscribe(
     })
 }
 
-impl EventStream {
-    pub(crate) fn read_next(&mut self) -> AppResult<Value> {
-        read_json_line(&mut self.reader, &self.endpoint)
-    }
-}
-
-pub(crate) fn serialize_frame(frame: &Value) -> AppResult<Vec<u8>> {
+/// Serialize a `Value` into a JSON-line frame (trailing `\n`).
+pub fn serialize_frame(frame: &Value) -> AppResult<Vec<u8>> {
     if !frame.is_object() {
         return Err(AppError::invalid_argument(
             "IPC frame must be a JSON object",
@@ -100,6 +111,53 @@ pub(crate) fn serialize_frame(frame: &Value) -> AppResult<Vec<u8>> {
     bytes.push(b'\n');
     Ok(bytes)
 }
+
+// ── EventStream ─────────────────────────────────────────────────────
+
+impl EventStream {
+    /// Read the next JSON-line frame (skips SSE comments and blank lines).
+    pub fn read_next(&mut self) -> AppResult<Value> {
+        read_json_line(&mut self.reader, &self.endpoint)
+    }
+}
+
+// ── Platform helpers ────────────────────────────────────────────────
+
+pub fn transport_name() -> &'static str {
+    if cfg!(windows) {
+        "named-pipe"
+    } else {
+        "unix-socket"
+    }
+}
+
+#[cfg(windows)]
+fn default_socket_path(kernel_name: &str) -> AppResult<String> {
+    Ok(format!(r"\\.\pipe\{kernel_name}-control"))
+}
+
+#[cfg(unix)]
+fn default_socket_path(kernel_name: &str) -> AppResult<String> {
+    Ok(default_socket_path_for_executable(
+        std::env::current_exe().ok().as_deref(),
+        kernel_name,
+    ))
+}
+
+#[cfg(unix)]
+pub fn default_socket_path_for_executable(
+    executable: Option<&std::path::Path>,
+    kernel_name: &str,
+) -> String {
+    executable
+        .and_then(std::path::Path::parent)
+        .map(|parent| parent.join(format!("{kernel_name}-control.sock")))
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{kernel_name}-control.sock")))
+        .to_string_lossy()
+        .to_string()
+}
+
+// ── Internal ────────────────────────────────────────────────────────
 
 fn read_json_line(
     reader: &mut BufReader<Box<dyn ReadWrite>>,
@@ -133,38 +191,6 @@ fn read_json_line(
     }
 }
 
-#[cfg(windows)]
-pub(crate) fn default_socket_path() -> AppResult<String> {
-    Ok(r"\\.\pipe\zero-control".to_string())
-}
-
-#[cfg(unix)]
-pub(crate) fn default_socket_path() -> AppResult<String> {
-    Ok(default_socket_path_for_executable(
-        std::env::current_exe().ok().as_deref(),
-    ))
-}
-
-#[cfg(unix)]
-pub(crate) fn default_socket_path_for_executable(executable: Option<&std::path::Path>) -> String {
-    executable
-        .and_then(std::path::Path::parent)
-        .map(|parent| parent.join("zero-control.sock"))
-        .unwrap_or_else(|| std::path::PathBuf::from("zero-control.sock"))
-        .to_string_lossy()
-        .to_string()
-}
-
-#[cfg(windows)]
-pub(crate) fn transport_name() -> &'static str {
-    "named-pipe"
-}
-
-#[cfg(unix)]
-pub(crate) fn transport_name() -> &'static str {
-    "unix-socket"
-}
-
 struct StreamTimeouts {
     read: Option<Duration>,
     write: Option<Duration>,
@@ -190,16 +216,7 @@ fn connect(endpoint: &CoreEndpoint, timeouts: StreamTimeouts) -> AppResult<Box<d
     connect_platform(endpoint, timeouts)
 }
 
-#[cfg(windows)]
-fn connect_platform(
-    endpoint: &CoreEndpoint,
-    timeouts: StreamTimeouts,
-) -> AppResult<Box<dyn ReadWrite>> {
-    let pipe = NamedPipeClient::connect(&endpoint.path, timeouts)
-        .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?;
-
-    Ok(Box::new(pipe))
-}
+// ── Unix transport ──────────────────────────────────────────────────
 
 #[cfg(unix)]
 fn connect_platform(
@@ -218,6 +235,19 @@ fn connect_platform(
     Ok(Box::new(stream))
 }
 
+// ── Windows transport (overlapped named pipe) ───────────────────────
+
+#[cfg(windows)]
+fn connect_platform(
+    endpoint: &CoreEndpoint,
+    timeouts: StreamTimeouts,
+) -> AppResult<Box<dyn ReadWrite>> {
+    let pipe = NamedPipeClient::connect(&endpoint.path, timeouts)
+        .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?;
+
+    Ok(Box::new(pipe))
+}
+
 #[cfg(windows)]
 struct NamedPipeClient {
     handle: HANDLE,
@@ -225,8 +255,6 @@ struct NamedPipeClient {
     write_timeout: Option<Duration>,
 }
 
-// The pipe handle is owned by this client and all operations happen through &mut self on
-// Tauri's blocking worker thread.
 #[cfg(windows)]
 unsafe impl Send for NamedPipeClient {}
 
@@ -235,12 +263,6 @@ impl NamedPipeClient {
     fn connect(path: &str, timeouts: StreamTimeouts) -> io::Result<Self> {
         let path_wide = wide_null(path);
 
-        // When a previous client timed out on a query the core didn't
-        // respond to, the pipe instance may still be in a connected-but-
-        // abandoned state.  The server needs to call DisconnectNamedPipe +
-        // ConnectNamedPipe to recycle it — during that window CreateFileW
-        // returns ERROR_PIPE_BUSY (231).  Retry a few times with a short
-        // back-off so the server has time to recover.
         const MAX_RETRIES: u32 = 5;
         for retry in 0..MAX_RETRIES {
             if let Some(write_timeout) = timeouts.write {
@@ -277,8 +299,6 @@ impl NamedPipeClient {
             });
         }
 
-        // All retries exhausted — should be unreachable, but satisfy the
-        // compiler.
         Err(io::Error::last_os_error())
     }
 
@@ -299,9 +319,6 @@ impl NamedPipeClient {
             )
         };
 
-        // Synchronous completion: ReadFile returned TRUE and already filled
-        // `bytes_read`. The overlapped event is NOT signaled in this case, so
-        // we must return immediately — WaitForSingleObject would time out.
         if started != 0 {
             return Ok(bytes_read as usize);
         }
@@ -326,8 +343,6 @@ impl NamedPipeClient {
             )
         };
 
-        // Synchronous completion: WriteFile returned TRUE and already set
-        // `bytes_written`. Same rationale as read_overlapped.
         if started != 0 {
             return Ok(bytes_written as usize);
         }
@@ -335,8 +350,6 @@ impl NamedPipeClient {
         self.finish_overlapped(operation.overlapped_mut(), self.write_timeout)
     }
 
-    /// Wait for an overlapped I/O operation that returned ERROR_IO_PENDING.
-    /// Must ONLY be called when ReadFile/WriteFile returned FALSE (started == 0).
     fn finish_overlapped(
         &self,
         overlapped: *mut OVERLAPPED,

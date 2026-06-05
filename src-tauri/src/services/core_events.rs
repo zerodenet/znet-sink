@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -6,13 +6,12 @@ use std::sync::{
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::core::ipc;
+use crate::kernel::{protocol, transport};
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
     CORE_EVENT_NAME, CORE_EVENT_STATUS_NAME, emit_core_event, emit_core_event_status,
 };
 use crate::models::core::{CoreEndpoint, CoreEventSubscription, CoreIpcOptions};
-use crate::services::control_plane::{endpoint_from_options, timeout_from_options};
 
 pub fn start(
     app: AppHandle,
@@ -21,8 +20,8 @@ pub fn start(
     events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreEventSubscription> {
-    let endpoint = endpoint_from_options(options.as_ref())?;
-    let timeout = timeout_from_options(options.as_ref())?;
+    let endpoint = protocol::endpoint_from_options(options.as_ref())?;
+    let timeout = protocol::timeout_from_options(options.as_ref())?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let result = subscribe_and_forward_events(
@@ -70,11 +69,11 @@ fn subscribe_and_forward_events(
     timeout: Duration,
 ) -> AppResult<()> {
     let frame = match events {
-        Some(events) => json!({ "type": "subscribe", "events": events }),
-        None => json!({ "type": "subscribe" }),
+        Some(events) => serde_json::json!({ "type": "subscribe", "events": events }),
+        None => serde_json::json!({ "type": "subscribe" }),
     };
-    let frame = ipc::serialize_frame(&frame)?;
-    let mut stream = ipc::subscribe(endpoint, frame, timeout)?;
+    let frame = transport::serialize_frame(&frame)?;
+    let mut stream = transport::subscribe(endpoint, frame, timeout)?;
 
     let response = stream.read_next()?;
     if response.get("ok").and_then(Value::as_bool) != Some(true) {

@@ -5,10 +5,10 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
+use crate::kernel::zero::adapter::TrafficSample;
 use crate::models::{
     app_config::AppConfig,
     core_process::{CoreProcessState, CoreProcessStatus},
-    gui_core::GuiTrafficStats,
     logs::LogEntry,
     proxy_config::ProxyConfigProfile,
     rule_set::RuleSetProfile,
@@ -27,12 +27,6 @@ pub struct AppState {
     traffic_sample: Mutex<Option<TrafficSample>>,
     core_process: Mutex<ManagedCoreProcess>,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TrafficSample {
-    pub stats: GuiTrafficStats,
-    pub sampled_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug)]

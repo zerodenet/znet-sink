@@ -241,6 +241,17 @@ pub struct GuiPolicySelectionResult {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuiTargetProbeResult {
+    pub target_tag: String,
+    pub reachable: bool,
+    pub latency_ms: Option<u64>,
+    pub server: Option<String>,
+    pub port: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuiConnectionCloseResult {
     pub flow_id: String,
     pub closed: bool,

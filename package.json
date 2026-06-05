@@ -20,7 +20,7 @@
     }
   },
   "author": "ZeroDenet <zerodenet.org>",
-  "license": "MIT",
+  "license": "MPL-2.0",
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",

@@ -7,7 +7,7 @@ use tauri::State;
 use std::io::Read;
 
 use super::data_dir;
-use crate::core::ipc;
+use crate::kernel::transport;
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     app_config::AppCoreConfig,
@@ -170,10 +170,10 @@ pub fn resolve_socket(config: &AppCoreConfig) -> Option<PathBuf> {
 pub fn endpoint_from_socket(socket: Option<&Path>) -> AppResult<CoreEndpoint> {
     match socket {
         Some(socket) => Ok(CoreEndpoint {
-            transport: ipc::transport_name(),
+            transport: transport::transport_name(),
             path: path_to_string(socket),
         }),
-        None => ipc::default_endpoint(),
+        None => transport::default_endpoint("zero"),
     }
 }
 

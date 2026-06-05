@@ -32,6 +32,8 @@ export interface CoreIpcOptions {
 export interface CoreCallResult {
   available: boolean;
   endpoint: CoreEndpoint;
+  requestId?: unknown;
+  responseId?: unknown;
   response?: unknown;
   error?: AppError;
 }
