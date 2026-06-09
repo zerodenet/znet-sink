@@ -257,6 +257,7 @@
       <div class="form-input-wrap">
         <select id="sub-format" bind:value={form.format} class="field-input">
           <option value="auto">自动检测</option>
+          <option value="clash-yaml">Clash YAML</option>
           <option value="zero-base64-json">Zero Base64 JSON</option>
         </select>
       </div>

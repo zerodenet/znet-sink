@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
@@ -12,14 +13,29 @@
   import Toast from '$lib/components/Toast.svelte';
 
   onMount(() => {
+    let unlistenNavigate: UnlistenFn | null = null;
     initTheme();
     void store.loadFromBackend();
+    void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
+      const { tab, section } = event.payload;
+      if (tab === 'settings') {
+        store.openSettings(section === 'core' || section === 'config' || section === 'about' ? section : 'general');
+      } else if (tab) {
+        store.isInitialized = true;
+        store.activeTab = tab;
+      }
+    }).then((unlisten) => {
+      unlistenNavigate = unlisten;
+    });
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemThemeChange = () => {
       if (store.selectedTheme === 'system') applyTheme('system');
     };
     mediaQuery.addEventListener('change', onSystemThemeChange);
-    return () => mediaQuery.removeEventListener('change', onSystemThemeChange);
+    return () => {
+      mediaQuery.removeEventListener('change', onSystemThemeChange);
+      unlistenNavigate?.();
+    };
   });
 
   $effect(() => {

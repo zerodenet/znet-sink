@@ -2,6 +2,7 @@
   import { store, type SettingsSection } from '$lib/services/store.svelte';
   import AppConfigPanel from '$lib/components/settings/AppConfigPanel.svelte';
   import CoreConfigPanel from '$lib/components/settings/CoreConfigPanel.svelte';
+  import ConfigEditorPanel from '$lib/components/settings/ConfigEditorPanel.svelte';
   import AboutPanel from '$lib/components/settings/AboutPanel.svelte';
 
   let activeSection = $state(store.settingsSection);
@@ -15,6 +16,7 @@
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '通用' },
     { id: 'core',    label: '内核' },
+    { id: 'config',  label: '配置' },
     { id: 'about',   label: '关于' }
   ];
 </script>
@@ -42,6 +44,8 @@
       <AppConfigPanel />
     {:else if activeSection === 'core'}
       <CoreConfigPanel />
+    {:else if activeSection === 'config'}
+      <ConfigEditorPanel />
     {:else if activeSection === 'about'}
       <AboutPanel />
     {/if}

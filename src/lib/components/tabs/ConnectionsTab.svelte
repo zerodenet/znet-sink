@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getGuiConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
+  import { getGuiConnections, getGuiRecentConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { coreEvents, type ConnectionDelta } from '$lib/services/core-events.svelte';
@@ -52,11 +52,39 @@
 
   async function fetchConnections(): Promise<DisplayConnection[]> {
     try {
-      const result = await getGuiConnections({ limit: 200 });
-      return result.items.map(mapGuiConnection);
+      // Fetch both active and recent connections in parallel
+      const [activeResult, recentResult] = await Promise.allSettled([
+        getGuiConnections({ limit: 200 }),
+        getGuiRecentConnections({ limit: 50 }),
+      ]);
+
+      const activeItems = activeResult.status === 'fulfilled'
+        ? activeResult.value.items.map(mapGuiConnection)
+        : [];
+
+      const recentItems = recentResult.status === 'fulfilled'
+        ? recentResult.value.items
+            .filter(r => !activeItems.some(a => a.flowId === r.flowId))
+            .map(mapGuiConnection)
+        : [];
+
+      // Deduplicate: active connections take priority
+      const all = [...activeItems, ...recentItems];
+      if (all.length > 0) return all;
+
+      // If both failed with mode_restricted, fallback to raw IPC
+      if (activeResult.status === 'rejected') {
+        const appError = activeResult.reason as { code?: string };
+        if (appError.code === 'mode_restricted') {
+          const flows = await queryFlows();
+          return flows.map(mapFlowInfo);
+        }
+        throw activeResult.reason;
+      }
+
+      return [];
     } catch (e) {
       const appError = e as { code?: string };
-      // Fallback to raw core IPC if GUI layer is unavailable (e.g. Lite mode)
       if (appError.code === 'mode_restricted') {
         const flows = await queryFlows();
         return flows.map(mapFlowInfo);
@@ -244,7 +272,7 @@
   <!-- Panel header -->
   <div class="panel-header">
     <div class="panel-title-row">
-      <span class="panel-title">活跃连接</span>
+      <span class="panel-title">连接</span>
       <span class="count-badge">{connections.length} 个</span>
     </div>
     <button class="action-btn" onclick={refresh}>
@@ -260,7 +288,7 @@
     <div class="panel-empty">加载中...</div>
   {:else if connections.length === 0}
     <div class="panel-empty-block">
-      <span class="empty-title">无活跃连接</span>
+      <span class="empty-title">无连接</span>
       <span class="empty-desc">内核未运行或暂无流量</span>
     </div>
   {:else}

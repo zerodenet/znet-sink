@@ -7,6 +7,7 @@
   let currentVersion = $state<string | null>(null);
   let latestStable = $state<KernelRelease | null>(null);
   let updateAvailable = $state(false);
+  let installed = $state(false);
   let checking = $state(false);
   let error = $state<string | null>(null);
   let mounted = $state(false);
@@ -24,6 +25,7 @@
   }
 
   const hasVersion = $derived(currentVersion !== null);
+  const hasInstall = $derived(hasVersion || installed);
   const latestVersion = $derived(latestStable?.version ?? null);
 
   async function checkVersion() {
@@ -32,9 +34,11 @@
     try {
       const detect = await detectKernelVersion();
       currentVersion = detect.version ? stripV(detect.version) : null;
+      installed = detect.executableExists;
     } catch (e) {
       error = `版本检测失败: ${e instanceof Error ? e.message : String(e)}`;
       currentVersion = null;
+      installed = false;
     }
 
     // Running version from health API
@@ -42,6 +46,7 @@
       const health = await getGuiCoreHealth();
       if (health.engineVersion) {
         currentVersion = stripV(health.engineVersion);
+        installed = true;
       }
     } catch { /* health API may be unavailable if core not running */ }
 
@@ -87,6 +92,11 @@
         <span class="kernel-dot" class:upgrade={updateAvailable}></span>
         v{currentVersion}
       </span>
+    {:else if hasInstall}
+      <span class="kernel-state">
+        <span class="kernel-dot"></span>
+        已安装
+      </span>
     {:else}
       <span class="kernel-state muted">未安装</span>
     {/if}
@@ -108,10 +118,14 @@
         <div class="up-to-date">已是最新</div>
       {/if}
     </div>
+  {:else if hasInstall}
+    <div class="kernel-meta">
+      <div class="up-to-date">版本未知</div>
+    </div>
   {/if}
 
   <button class="kernel-link" onclick={openKernelSettings}>
-    {hasVersion ? '管理版本' : '安装内核'}
+    {hasInstall ? '管理版本' : '安装内核'}
   </button>
 </div>
 
