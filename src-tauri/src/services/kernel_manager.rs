@@ -187,17 +187,55 @@ pub fn install_version(
     fs::write(&temp_file, &all_bytes)
         .map_err(|e| AppError::internal(format!("failed to write download: {e}")))?;
 
-    // Extract
-    extract_archive(&temp_file, &dir)?;
+    // Extract into a staging subdirectory first so we don't overwrite
+    // the running binary mid-extraction.  After successful extraction
+    // we move files into the target directory.
+    let staging = dir.join(".staging");
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)
+        .map_err(|e| AppError::internal(format!("failed to create staging dir: {e}")))?;
+
+    extract_archive(&temp_file, &staging)?;
 
     // Clean up temp file
     let _ = fs::remove_file(&temp_file);
 
     let executable_name = if cfg!(windows) { "zero.exe" } else { "zero" };
+
+    // The archive may contain the binary directly or nested inside a
+    // subdirectory (e.g. zero-windows-x86_64/zero.exe).  Search for it.
+    let staged_binary = find_file_recursive(&staging, executable_name)
+        .ok_or_else(|| {
+            let _ = fs::remove_dir_all(&staging);
+            AppError::internal(format!(
+                "extracted but could not find '{}' in staging directory",
+                executable_name
+            ))
+        })?;
+
+    // Target path in the install directory
     let executable_path = dir.join(executable_name);
+
+    // Remove old binary.  The kernel was killed before we got here but
+    // Windows may hold the file handle briefly.  Retry a few times.
+    if executable_path.exists() {
+        remove_file_with_retry(&executable_path, 5)?;
+    }
+
+    // Move the new binary into place
+    if fs::rename(&staged_binary, &executable_path).is_err() {
+        // Cross-device or other rename failure — fall back to copy
+        fs::copy(&staged_binary, &executable_path).map_err(|e| {
+            AppError::internal(format!("failed to copy binary to install dir: {e}"))
+        })?;
+    }
+
+    // Clean up staging directory
+    let _ = fs::remove_dir_all(&staging);
+
     if !executable_path.is_file() {
         return Err(AppError::internal(format!(
-            "extracted but could not find binary at: {}",
+            "binary missing after install: {}",
             executable_path.display()
         )));
     }
@@ -231,32 +269,52 @@ pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersi
 
     match executable_path {
         Some(path) if path.is_file() => {
-            let output = common::background_command(path.to_str().unwrap_or("zero"))
-                .arg("--version")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .output();
-
-            match output {
-                Ok(output) if output.status.success() => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let version = extract_semver(&stdout);
-                    Ok(KernelVersionDetect {
-                        version,
-                        source: "cli".to_string(),
-                    })
-                }
-                _ => Ok(KernelVersionDetect {
-                    version: None,
-                    source: "none".to_string(),
-                }),
-            }
+            let path_string = path_to_string(&path);
+            let version = detect_cli_version(&path);
+            Ok(KernelVersionDetect {
+                source: if version.is_some() { "cli" } else { "file" }.to_string(),
+                version,
+                executable_path: Some(path_string),
+                executable_exists: true,
+            })
         }
-        _ => Ok(KernelVersionDetect {
+        Some(path) => Ok(KernelVersionDetect {
+            version: None,
+            source: "missing".to_string(),
+            executable_path: Some(path_to_string(&path)),
+            executable_exists: false,
+        }),
+        None => Ok(KernelVersionDetect {
             version: None,
             source: "none".to_string(),
+            executable_path: None,
+            executable_exists: false,
         }),
     }
+}
+
+fn detect_cli_version(path: &Path) -> Option<String> {
+    let program = path.to_str()?;
+    for args in [["--version"].as_slice(), ["version"].as_slice()] {
+        let output = common::background_command(program)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if let Some(version) = extract_semver(&stdout) {
+                return Some(version);
+            }
+            if let Some(version) = extract_semver(&stderr) {
+                return Some(version);
+            }
+        }
+    }
+
+    None
 }
 
 /// Extract a semver version from arbitrary `--version` output.
@@ -420,6 +478,41 @@ fn extract_archive(archive: &Path, dest: &Path) -> AppResult<()> {
         return Err(AppError::internal("failed to extract archive"));
     }
     Ok(())
+}
+
+/// Recursively search for a file named `name` inside `dir`.
+fn find_file_recursive(dir: &Path, name: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file_recursive(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Try to remove a file, retrying with short sleeps between attempts.
+/// On Windows the OS may briefly hold a file handle after the process
+/// that used it has been killed.
+fn remove_file_with_retry(path: &Path, max_attempts: u32) -> AppResult<()> {
+    for attempt in 0..max_attempts {
+        if fs::remove_file(path).is_ok() {
+            return Ok(());
+        }
+        if attempt + 1 < max_attempts {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+    Err(AppError::internal(format!(
+        "failed to remove '{}' after {} attempts — is the kernel still running?",
+        path.display(),
+        max_attempts
+    )))
 }
 
 fn path_to_string(path: &Path) -> String {
