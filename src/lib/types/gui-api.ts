@@ -94,12 +94,25 @@ export interface GuiZeroCapabilities {
   permissions: string[];
   adapters: GuiCapabilityEndpoint[];
   sinks: GuiCapabilityEndpoint[];
+  protocols: GuiProtocolCapability[];
+  buildFeatures: string[];
   error?: string;
 }
 
 export interface GuiCapabilityEndpoint {
   kind: string;
   enabled: boolean;
+}
+
+export interface GuiProtocolCapability {
+  name: string;
+  status: 'supported' | 'partial' | 'experimental';
+  inboundTcp: boolean;
+  inboundUdp: boolean;
+  outboundTcp: boolean;
+  outboundUdp: boolean;
+  mux: boolean;
+  limitations: string[];
 }
 
 export interface GuiFeatureStatus {
@@ -156,4 +169,28 @@ export interface GuiConnectionCloseResult {
   flowId: string;
   closed: boolean;
   message?: string;
+}
+
+// ── Config plan-apply impact analysis ──
+
+export interface ConfigImpactItem {
+  /** Top-level config section (e.g. "outbounds", "listeners", "rules", "tun"). */
+  section: string;
+  /** Specific tags/identifiers within the section that changed. */
+  tags: string[];
+  /** Human-readable description of the change. */
+  detail: string;
+}
+
+export interface ConfigPlanApplyResult {
+  /** Whether the proposed config is syntactically and semantically valid. */
+  valid: boolean;
+  /** Sections that can be hot-reloaded without restarting the kernel. */
+  hotReload: ConfigImpactItem[];
+  /** Sections that require a kernel restart to take effect. */
+  requiresRestart: ConfigImpactItem[];
+  /** Non-blocking warnings about side effects. */
+  warnings: string[];
+  /** Validation errors (present when `valid` is false). */
+  errors: string[];
 }

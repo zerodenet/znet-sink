@@ -34,4 +34,6 @@ export interface KernelInstallResult {
 export interface KernelVersionDetect {
   version?: string;
   source: string;
+  executablePath?: string;
+  executableExists: boolean;
 }

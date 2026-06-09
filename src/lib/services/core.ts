@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult } from '$lib/types/gui-api';
+import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
@@ -29,6 +29,10 @@ export async function startCoreProcess(): Promise<CoreProcessStatus> {
 
 export async function stopCoreProcess(): Promise<CoreProcessStatus> {
   return invoke('core_process_stop');
+}
+
+export async function restartCoreProcess(): Promise<CoreProcessStatus> {
+  return invoke('core_process_restart');
 }
 
 // ── Core IPC ──
@@ -101,7 +105,7 @@ export interface FlowInfo {
 
 export async function queryFlows(): Promise<FlowInfo[]> {
   const result = await invoke<CoreCallResult>('core_ipc_query', {
-    request: { type: 'active_flows', limit: 100, filter: {} },
+    request: { active_flows: { limit: 100, filter: {} } },
     options: undefined,
   });
   if (!result.available || !result.response) return [];
@@ -273,7 +277,7 @@ export async function getGuiProxyModeStatus(): Promise<ProxyModeStatus> {
   return mapProxyModeStatus(raw);
 }
 
-export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = true): Promise<ProxyModeStatus> {
+export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false): Promise<ProxyModeStatus> {
   const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore } });
   return mapProxyModeStatus(raw);
 }
@@ -396,6 +400,54 @@ export async function getGuiConnectionDetail(flowId: string): Promise<GuiConnect
 
 export async function guiCloseConnection(flowId: string): Promise<GuiConnectionCloseResult> {
   return invoke('gui_close_connection', { flowId });
+}
+
+export async function getGuiRecentConnections(options?: GuiConnectionListOptions): Promise<GuiConnectionList> {
+  return invoke('gui_recent_connections', { options });
+}
+
+// ── Config hot-reload ──
+
+export async function guiApplyConfig(config: Record<string, unknown>): Promise<unknown> {
+  return invoke('gui_apply_config', { config });
+}
+
+export async function guiValidateConfig(config: Record<string, unknown>): Promise<unknown> {
+  return invoke('gui_validate_config', { config });
+}
+
+export async function guiPlanApplyConfig(config: Record<string, unknown>): Promise<ConfigPlanApplyResult> {
+  return invoke('gui_plan_apply_config', { config });
+}
+
+// ── Mode hot-switch ──
+
+export async function guiSetMode(mode: string, outbound?: string): Promise<unknown> {
+  return invoke('gui_set_mode', { mode, outbound });
+}
+
+// ── Policy probe ──
+
+export async function guiProbePolicy(policyTag: string): Promise<unknown> {
+  return invoke('gui_probe_policy', { policyTag });
+}
+
+// ── Diagnostics ──
+
+export async function guiDnsLookup(hostname: string): Promise<unknown> {
+  return invoke('gui_dns_lookup', { hostname });
+}
+
+export async function guiTraceRoute(target: string, port?: number, protocol?: string): Promise<unknown> {
+  return invoke('gui_trace_route', { target, port, protocol });
+}
+
+export async function getGuiSinks(): Promise<unknown> {
+  return invoke('gui_sinks');
+}
+
+export async function getGuiDiagnostics(): Promise<unknown> {
+  return invoke('gui_diagnostics');
 }
 
 function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {
