@@ -48,7 +48,7 @@ pub(crate) fn kill_external(state: &AppState) -> AppResult<()> {
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
+        let _ = common::background_command("taskkill")
             .args(["/F", "/IM", executable_name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -57,7 +57,7 @@ pub(crate) fn kill_external(state: &AppState) -> AppResult<()> {
 
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("pkill")
+        let _ = common::background_command("pkill")
             .args(["-9", executable_name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
