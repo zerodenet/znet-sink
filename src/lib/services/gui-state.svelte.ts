@@ -5,6 +5,7 @@ import {
   guiDisconnect,
   startCoreProcess,
   stopCoreProcess,
+  restartCoreProcess,
   enableSystemProxy as enableSystemProxyCommand,
   disableSystemProxy as disableSystemProxyCommand,
   getGuiTunStatus,
@@ -217,6 +218,23 @@ class GuiStateStore {
       await this.refreshRuntimeState();
     } catch (e: any) {
       toastError(`停止内核失败: ${this.errorMessage(e)}`);
+      await this.refreshRuntimeState();
+    } finally {
+      this.isStoppingCore = false;
+    }
+  }
+
+  /** Restart the managed kernel — stop then immediately start again. */
+  async restartCore() {
+    if (!this.canStopCore) return;
+    this.isStoppingCore = true;
+    try {
+      await restartCoreProcess();
+      toastSuccess('内核已重启');
+      await this.refreshRuntimeState();
+      await this.refreshSelfTest();
+    } catch (e: any) {
+      toastError(`重启内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
     } finally {
       this.isStoppingCore = false;

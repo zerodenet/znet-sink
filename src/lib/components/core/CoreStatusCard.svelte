@@ -52,8 +52,8 @@
 
   const coreActionLabel = $derived(
     guiState.isStartingCore ? '启动中…' :
-    guiState.isStoppingCore ? '停止中…' :
-    isProcessRunning ? '停止内核' :
+    guiState.isStoppingCore ? '重启中…' :
+    isProcessRunning ? '重启内核' :
     isCoreAvailable ? '外部内核' :
     '启动内核'
   );
@@ -125,12 +125,12 @@
   {#if store.uiMode === 'pro'}
     <div class="core-actions">
       <button
-        onclick={() => isProcessRunning ? guiState.stopCore() : guiState.startCore()}
+        onclick={() => isProcessRunning ? guiState.restartCore() : guiState.startCore()}
         disabled={isCoreAvailable ? !isProcessRunning || !guiState.canStopCore : !guiState.canStartCore}
         class="core-action"
         class:active={isCoreAvailable}
         class:danger={isProcessRunning}
-        title={isCoreAvailable && !isProcessRunning ? '检测到外部内核，无法由本应用停止' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
+        title={isCoreAvailable && !isProcessRunning ? '检测到外部内核，无法由本应用管理' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
       >
         {coreActionLabel}
       </button>
