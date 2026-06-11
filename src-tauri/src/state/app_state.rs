@@ -9,7 +9,6 @@ use crate::kernel::zero::adapter::TrafficSample;
 use crate::models::{
     app_config::AppConfig,
     core_process::{CoreProcessState, CoreProcessStatus},
-    debug::DebugFrame,
     logs::LogEntry,
     proxy_config::ProxyConfigProfile,
     rule_set::RuleSetProfile,
@@ -28,8 +27,6 @@ pub struct AppState {
     traffic_sample: Mutex<Option<TrafficSample>>,
     core_process: Mutex<ManagedCoreProcess>,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
-    /// Ring buffer for diagnostic IPC frame capture (debug page).
-    debug_frames: Mutex<Vec<DebugFrame>>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +85,6 @@ impl AppState {
             traffic_sample: Mutex::new(None),
             core_process: Mutex::new(ManagedCoreProcess::default()),
             zero_features_cache: Mutex::new(None),
-            debug_frames: Mutex::new(Vec::with_capacity(256)),
         }
     }
 
@@ -144,9 +140,6 @@ impl AppState {
         &self.zero_features_cache
     }
 
-    pub(crate) fn debug_frames(&self) -> &Mutex<Vec<DebugFrame>> {
-        &self.debug_frames
-    }
 }
 
 #[cfg(test)]
