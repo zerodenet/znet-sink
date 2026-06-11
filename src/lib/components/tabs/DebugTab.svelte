@@ -61,7 +61,7 @@
   }
 
   function dirLabel(d: string): string {
-    return d === 'tx' ? 'TX' : 'RX';
+    return d === 'tx' ? '发送' : '接收';
   }
 
   function formatTime(ms: number): string {
@@ -221,10 +221,10 @@
 
   .debug-dir {
     font-weight: 700;
-    font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.04em;
-    min-width: 24px;
+    min-width: 28px;
+    flex-shrink: 0;
   }
 
   .debug-type {
@@ -288,6 +288,8 @@
     color: var(--destructive);
     font-size: 11px;
     font-family: var(--font-mono);
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .debug-payload {
@@ -303,5 +305,7 @@
     white-space: pre;
     max-height: 360px;
     overflow-y: auto;
+    user-select: text;
+    -webkit-user-select: text;
   }
 </style>
