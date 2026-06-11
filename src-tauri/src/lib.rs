@@ -266,9 +266,23 @@ pub fn run() {
                         timeout_ms: Some(200),
                         ..base_opts.clone()
                     };
-                    let kernel_alive = crate::kernel::protocol::ping(Some(probe_opts))
-                        .await
-                        .is_ok_and(|r| r.error.is_none());
+                    // Use a short-lived connection for the probe — the kernel
+                    // closes non-subscribe connections after responding, and we
+                    // don't want to poison the global multiplexed connection.
+                    let kernel_alive = {
+                        let frame = serde_json::json!({"type":"ping"});
+                        let endpoint = crate::kernel::protocol::endpoint_from_options(Some(&probe_opts)).ok();
+                        let timeout = crate::kernel::protocol::timeout_from_options(Some(&probe_opts)).ok();
+                        match (endpoint, timeout) {
+                            (Some(ep), Some(to)) => {
+                                let frame_bytes = crate::kernel::transport::serialize_frame(&frame).ok();
+                                frame_bytes.and_then(|fb| {
+                                    crate::kernel::transport::send_json_line_request(ep, fb, to).ok()
+                                }).is_some()
+                            }
+                            _ => false,
+                        }
+                    };
 
                     if kernel_alive {
                         eprintln!("[ZNet] kernel already running (fast probe ok), connecting");
