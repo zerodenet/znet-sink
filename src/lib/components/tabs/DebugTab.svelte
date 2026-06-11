@@ -122,9 +122,19 @@
             </span>
             <span class="debug-type">{frame.frameType}</span>
             {#if frame.elapsedMs != null}
-              <span class="debug-elapsed" class:slow={frame.elapsedMs > 500}>
+              <span
+                class="debug-elapsed"
+                class:slow={frame.elapsedMs > 200}
+                class:very-slow={frame.elapsedMs > 500}
+                title="请求 → 响应耗时"
+              >
                 {frame.elapsedMs}ms
               </span>
+              <!-- Timing bar: width proportional to elapsed, max 1000ms -->
+              <span
+                class="debug-timing-bar"
+                style="width: {Math.min(frame.elapsedMs / 10, 100)}px; background: {frame.elapsedMs > 500 ? 'var(--destructive)' : frame.elapsedMs > 200 ? 'var(--warning)' : '#22C55E'};"
+              ></span>
             {/if}
             <span class="debug-time">{formatTime(frame.atMs)}</span>
             <span class="debug-seq">#{frame.id}</span>
@@ -243,8 +253,19 @@
     font-size: 10px;
     color: var(--muted-foreground);
     min-width: 32px;
+    text-align: right;
   }
   .debug-elapsed.slow { color: var(--warning); font-weight: 600; }
+  .debug-elapsed.very-slow { color: var(--destructive); font-weight: 700; }
+
+  .debug-timing-bar {
+    height: 3px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    opacity: 0.6;
+    min-width: 0;
+    transition: width 0.15s ease;
+  }
 
   .debug-time {
     font-family: var(--font-mono);

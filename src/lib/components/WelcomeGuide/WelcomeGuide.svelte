@@ -118,6 +118,7 @@
 
 <style>
   .welcome-icon {
+    --logo-radius: 8px;
     width: 52px;
     height: 52px;
     border-radius: 13px;
@@ -127,10 +128,6 @@
     align-items: center;
     justify-content: center;
     margin: 0 auto 10px;
-  }
-
-  .welcome-logo :global(.app-logo-img) {
-    border-radius: 8px;
   }
 
   .welcome-title {

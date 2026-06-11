@@ -143,8 +143,8 @@
     justify-content: center;
   }
 
-  .loading-logo :global(.app-logo-img) {
-    border-radius: 8px;
+  .loading-logo-ring {
+    --logo-radius: 8px;
   }
 
   .loading-title {

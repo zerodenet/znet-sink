@@ -47,7 +47,9 @@
   <!-- Left: App identity + mode switch inline -->
   <div class="flex items-center gap-2 pl-3.5 min-w-0 overflow-hidden">
     <!-- Logo: theme-aware icon -->
-    <AppLogo size={18} class="titlebar-logo" />
+    <div class="titlebar-logo" style="--logo-radius: 3px; opacity: 0.9; transition: opacity 0.15s ease">
+      <AppLogo size={18} />
+    </div>
     <!-- App name -->
     <span
       class="font-semibold text-foreground/90 tracking-tight overflow-hidden text-ellipsis whitespace-nowrap"
@@ -130,12 +132,9 @@
 <style>
   /* Logo container in titlebar */
   .titlebar-logo {
+    --logo-radius: 3px;
     opacity: 0.9;
     transition: opacity 0.15s ease;
-  }
-
-  .titlebar-logo :global(.app-logo-img) {
-    border-radius: 3px;
   }
 
   /* 分隔线 */

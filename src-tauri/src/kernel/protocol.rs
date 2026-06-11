@@ -143,7 +143,6 @@ pub async fn request(
     let timeout = timeout_from_options(options.as_ref())?;
     let (frame_value, request_id) = ensure_request_id(frame)?;
     let frame_type = frame_type_for_debug(&frame_value);
-    let t0 = std::time::Instant::now();
     let result_endpoint = endpoint.clone();
 
     // Capture outgoing frame
@@ -158,16 +157,17 @@ pub async fn request(
     });
 
     let expected_id = request_id.clone();
-    let response: Result<Value, AppError> = tauri::async_runtime::spawn_blocking(move || {
-        let conn = super::connection::get_or_connect(endpoint, timeout)?;
-        let response = conn.send_request(frame_value, timeout)?;
-        validate_response_id(&response, expected_id.as_ref())?;
-        Ok(response)
-    })
-    .await
-    .map_err(|error| AppError::internal(format!("IPC worker failed: {error}")))?;
-
-    let elapsed = t0.elapsed().as_millis() as u64;
+    let (elapsed, response): (u64, Result<Value, AppError>) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let t0 = std::time::Instant::now();
+            let conn = super::connection::get_or_connect(endpoint, timeout)?;
+            let response = conn.send_request(frame_value, timeout)?;
+            validate_response_id(&response, expected_id.as_ref())?;
+            let elapsed = t0.elapsed().as_millis() as u64;
+            Ok((elapsed, Ok(response)))
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("IPC worker failed: {error}")))??;
 
     // Capture response frame
     match &response {

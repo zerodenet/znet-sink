@@ -56,7 +56,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    border-radius: 10px;
+    border-radius: var(--logo-radius, 8px);
     display: block;
     object-fit: contain;
     transition: opacity 0.15s ease;

@@ -508,3 +508,4 @@ fn wide_null(value: &str) -> Vec<u16> {
 fn duration_to_millis(duration: Duration) -> u32 {
     duration.as_millis().min(u32::MAX as u128) as u32
 }
+
