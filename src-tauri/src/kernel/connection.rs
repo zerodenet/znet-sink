@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 use std::time::Duration;
 
 use serde_json::Value;
@@ -24,10 +26,8 @@ use crate::models::core::CoreEndpoint;
 
 use super::transport;
 
-type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AppError>>>>>;
+type PendingRequests = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>>;
 type EventSender = tokio::sync::broadcast::Sender<Value>;
-
-static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A read or write view over a shared OS pipe handle.
 struct SharedStream(Arc<UnsafeCell<Box<dyn transport::ReadWrite>>>);
@@ -90,19 +90,27 @@ impl MultiplexedIpc {
         Ok(conn)
     }
 
-    pub fn send_request(self: &Arc<Self>, frame: Value, timeout: Duration) -> AppResult<Value> {
-        let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let mut frame = frame;
+    pub fn send_request(self: &Arc<Self>, mut frame: Value, timeout: Duration) -> AppResult<Value> {
+        // Use the id already set on the frame by protocol::ensure_request_id.
+        // This is a string like "znet-sink-5" — must match the response's id.
+        let req_id = frame
+            .as_object()
+            .and_then(|obj| obj.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("auto-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed)));
+
+        // Ensure id is set on the frame
         if let Some(obj) = frame.as_object_mut() {
             if !obj.contains_key("id") {
-                obj.insert("id".to_string(), Value::Number(id.into()));
+                obj.insert("id".to_string(), Value::String(req_id.clone()));
             }
         }
 
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().map_err(|_| AppError::internal("pending lock poisoned"))?;
-            pending.insert(id, tx);
+            pending.insert(req_id.clone(), tx);
         }
 
         {
@@ -115,12 +123,12 @@ impl MultiplexedIpc {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => match handle.block_on(tokio::time::timeout(timeout, rx)) {
                 Ok(Ok(response)) => response,
-                Ok(Err(_)) => { let _ = self.pending.lock().map(|mut p| p.remove(&id)); Err(AppError::internal("IPC connection closed")) }
-                Err(_) => { let _ = self.pending.lock().map(|mut p| p.remove(&id)); Err(AppError::internal(format!("IPC request timed out after {}ms", timeout.as_millis()))) }
+                Ok(Err(_)) => { let _ = self.pending.lock().map(|mut p| p.remove(&req_id)); Err(AppError::internal("IPC connection closed")) }
+                Err(_) => { let _ = self.pending.lock().map(|mut p| p.remove(&req_id)); Err(AppError::internal(format!("IPC request timed out after {}ms", timeout.as_millis()))) }
             },
             Err(_) => match rx.blocking_recv() {
                 Ok(response) => response,
-                Err(_) => { let _ = self.pending.lock().map(|mut p| p.remove(&id)); Err(AppError::internal("IPC connection closed")) }
+                Err(_) => { let _ = self.pending.lock().map(|mut p| p.remove(&req_id)); Err(AppError::internal("IPC connection closed")) }
             },
         }
     }
@@ -153,7 +161,8 @@ impl MultiplexedIpc {
 
     fn route_frame(value: Value, pending: &PendingRequests, events: &EventSender) {
         if value.as_object().map_or(false, |obj| obj.contains_key("ok")) {
-            let id = value.as_object().and_then(|obj| obj.get("id")).and_then(|v| v.as_u64());
+            // Response id is a string like "znet-sink-5" from ensure_request_id
+            let id = value.as_object().and_then(|obj| obj.get("id")).and_then(|v| v.as_str()).map(|s| s.to_string());
             let response: Result<Value, AppError> = if value.as_object().and_then(|obj| obj.get("ok")).and_then(|v| v.as_bool()) == Some(true) {
                 Ok(value)
             } else {
