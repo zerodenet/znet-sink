@@ -119,6 +119,7 @@ impl MultiplexedIpc {
             writer.write_all(&frame_bytes).map_err(|e| AppError::from_io("failed to write IPC frame", &self.endpoint, e))?;
             writer.flush().map_err(|e| AppError::from_io("failed to flush IPC frame", &self.endpoint, e))?;
         }
+        eprintln!("[ZNet] send_request: wrote frame id={req_id}, waiting for response...");
 
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => match handle.block_on(tokio::time::timeout(timeout, rx)) {
@@ -153,26 +154,29 @@ impl MultiplexedIpc {
         loop {
             buf.clear();
             match Self::read_json_line(&mut reader, &mut buf, &endpoint) {
-                Ok(value) => Self::route_frame(value, &pending, &events),
-                Err(_) => break,
+                Ok(value) => {
+                    let keys: Vec<&str> = value.as_object().map(|o| o.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+                    eprintln!("[ZNet] read_loop: got frame keys={keys:?}");
+                    Self::route_frame(value, &pending, &events);
+                }
+                Err(e) => { eprintln!("[ZNet] read_loop: error={e:?}"); break; }
             }
         }
     }
 
     fn route_frame(value: Value, pending: &PendingRequests, events: &EventSender) {
         if value.as_object().map_or(false, |obj| obj.contains_key("ok")) {
-            // Response id is a string like "znet-sink-5" from ensure_request_id
             let id = value.as_object().and_then(|obj| obj.get("id")).and_then(|v| v.as_str()).map(|s| s.to_string());
-            let response: Result<Value, AppError> = if value.as_object().and_then(|obj| obj.get("ok")).and_then(|v| v.as_bool()) == Some(true) {
-                Ok(value)
-            } else {
-                Err(AppError::core_response(value))
-            };
-            if let Some(id) = id {
+            let ok = value.as_object().and_then(|obj| obj.get("ok")).and_then(|v| v.as_bool()) == Some(true);
+            eprintln!("[ZNet] route_frame: response ok={ok} id={id:?} pending_keys={:?}",
+                pending.lock().map(|p| p.keys().cloned().collect::<Vec<_>>()).unwrap_or_default());
+            let response: Result<Value, AppError> = if ok { Ok(value) } else { Err(AppError::core_response(value)) };
+            if let Some(ref id) = id {
                 if let Ok(mut pending) = pending.lock() {
-                    if let Some(tx) = pending.remove(&id) { let _ = tx.send(response); }
+                    if let Some(tx) = pending.remove(id) { let _ = tx.send(response); }
+                    else { eprintln!("[ZNet] route_frame: no pending request for id={id}"); }
                 }
-            }
+            } else { eprintln!("[ZNet] route_frame: response has no id field"); }
         } else if value.as_object().map_or(false, |obj| obj.contains_key("schema_id")) {
             let _ = events.send(value);
         }
