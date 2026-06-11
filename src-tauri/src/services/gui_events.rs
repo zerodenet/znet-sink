@@ -1,4 +1,3 @@
-use serde_json::Value;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -6,7 +5,7 @@ use std::sync::{
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::kernel::{protocol, transport};
+use crate::kernel::protocol;
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
     GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME, emit_gui_event, emit_gui_event_status,
@@ -25,10 +24,11 @@ pub fn start(
     let endpoint = protocol::endpoint_from_options(options.as_ref())?;
     let timeout = protocol::timeout_from_options(options.as_ref())?;
 
+    let gen = Arc::clone(&active_generation);
     tauri::async_runtime::spawn_blocking(move || {
         let result = subscribe_and_forward_events(
             app.clone(),
-            active_generation.clone(),
+            gen,
             generation,
             endpoint,
             event_types,
@@ -68,25 +68,38 @@ fn subscribe_and_forward_events(
     generation: u64,
     endpoint: CoreEndpoint,
     event_types: Option<Vec<String>>,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> AppResult<()> {
-    let frame = match event_types {
-        Some(types) => serde_json::json!({ "type": "subscribe", "events": types }),
-        None => serde_json::json!({ "type": "subscribe" }),
-    };
-    let frame = transport::serialize_frame(&frame)?;
-    let mut stream = transport::subscribe(endpoint, frame, timeout)?;
+    // Subscribe via the global multiplexed connection — uses the SAME
+    // persistent pipe as all query/command/ping traffic.  The subscribe
+    // confirmation is a regular response frame (ok:true) routed through
+    // the pending-request map; events come through the broadcast channel.
+    let event_types_ref: Option<Vec<String>> = event_types;
+    let event_types_slice: Option<&[String]> = event_types_ref.as_ref().map(|v| v.as_slice());
+    let mut rx = crate::kernel::connection::subscribe_events(
+        endpoint,
+        event_types_slice,
+    )?;
 
-    let response = stream.read_next()?;
-    if response.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(AppError::core_response(response));
-    }
     emit_status(&app, generation, "subscribed", None);
 
-    while active_generation.load(Ordering::SeqCst) == generation {
-        let source_event = stream.read_next()?;
-        let event = events::normalize_event(&source_event);
-        emit_gui_event(&app, GuiEventPayload { generation, event });
+    loop {
+        if active_generation.load(Ordering::SeqCst) != generation {
+            break;
+        }
+
+        match rx.blocking_recv() {
+            Ok(source_event) => {
+                let event = events::normalize_event(&source_event);
+                emit_gui_event(&app, GuiEventPayload { generation, event });
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                eprintln!("[ZNet] event stream lagged by {n} events, skipping");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break;
+            }
+        }
     }
 
     Ok(())

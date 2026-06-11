@@ -35,7 +35,7 @@ use windows_sys::Win32::{
     },
 };
 
-trait ReadWrite: Read + Write + Send {}
+pub(crate) trait ReadWrite: Read + Write + Send {}
 
 impl<T> ReadWrite for T where T: Read + Write + Send {}
 
@@ -219,6 +219,13 @@ impl StreamTimeouts {
             write: Some(timeout),
         }
     }
+}
+
+pub(crate) fn connect_raw(
+    endpoint: &CoreEndpoint,
+    timeout: Duration,
+) -> AppResult<Box<dyn ReadWrite>> {
+    connect_platform(endpoint, StreamTimeouts::event_stream(timeout))
 }
 
 fn connect(endpoint: &CoreEndpoint, timeouts: StreamTimeouts) -> AppResult<Box<dyn ReadWrite>> {

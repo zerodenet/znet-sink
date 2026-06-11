@@ -131,6 +131,10 @@ pub async fn command(
 }
 
 /// Send a raw IPC frame and return the response.
+///
+/// Uses the global multiplexed connection — all query, command, ping,
+/// and subscribe frames share a SINGLE persistent pipe, matching the
+/// kernel's recommended pattern and avoiding ERROR_PIPE_BUSY (231).
 pub async fn request(
     frame: Value,
     options: Option<CoreIpcOptions>,
@@ -140,10 +144,11 @@ pub async fn request(
     let (frame_value, request_id) = ensure_request_id(frame)?;
     let frame_type = frame_type_for_debug(&frame_value);
     let t0 = std::time::Instant::now();
+    let result_endpoint = endpoint.clone();
 
-    // Capture outgoing frame (before serialization so we keep the Value)
+    // Capture outgoing frame
     debug_push(DebugFrame {
-        id: 0, // filled by debug_push
+        id: 0,
         at_ms: crate::services::common::now_unix_ms(),
         direction: "tx",
         frame_type: frame_type.clone(),
@@ -152,12 +157,10 @@ pub async fn request(
         error: None,
     });
 
-    let frame = transport::serialize_frame(&frame_value)?;
-    let result_endpoint = endpoint.clone();
     let expected_id = request_id.clone();
-
     let response: Result<Value, AppError> = tauri::async_runtime::spawn_blocking(move || {
-        let response = transport::send_json_line_request(endpoint, frame, timeout)?;
+        let conn = super::connection::get_or_connect(endpoint, timeout)?;
+        let response = conn.send_request(frame_value, timeout)?;
         validate_response_id(&response, expected_id.as_ref())?;
         Ok(response)
     })
