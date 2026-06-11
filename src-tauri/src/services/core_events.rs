@@ -1,4 +1,3 @@
-use serde_json::Value;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -6,8 +5,8 @@ use std::sync::{
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::kernel::{protocol, transport};
-use crate::errors::{AppError, AppResult};
+use crate::kernel::{connection, protocol};
+use crate::errors::AppResult;
 use crate::events::emitter::{
     CORE_EVENT_NAME, CORE_EVENT_STATUS_NAME, emit_core_event, emit_core_event_status,
 };
@@ -17,7 +16,11 @@ pub fn start(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
     generation: u64,
-    events: Option<Vec<String>>,
+    // NOTE: per-type event filtering used to be delegated to the kernel's
+    // `subscribe` frame. The multiplexed connection now subscribes to every
+    // event (it is shared across consumers), so this filter is currently
+    // unused — retained for API compatibility with the command layer.
+    _events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreEventSubscription> {
     let endpoint = protocol::endpoint_from_options(options.as_ref())?;
@@ -29,7 +32,6 @@ pub fn start(
             active_generation.clone(),
             generation,
             endpoint,
-            events,
             timeout,
         );
 
@@ -65,25 +67,26 @@ fn subscribe_and_forward_events(
     active_generation: Arc<AtomicU64>,
     generation: u64,
     endpoint: CoreEndpoint,
-    events: Option<Vec<String>>,
     timeout: Duration,
 ) -> AppResult<()> {
-    let frame = match events {
-        Some(events) => serde_json::json!({ "type": "subscribe", "events": events }),
-        None => serde_json::json!({ "type": "subscribe" }),
-    };
-    let frame = transport::serialize_frame(&frame)?;
-    let mut stream = transport::subscribe(endpoint, frame, timeout)?;
+    // The multiplexed connection already sent `subscribe` when it was
+    // established, so attaching as a broadcast receiver is all that's needed.
+    let conn = connection::get_or_connect(endpoint, timeout)?;
+    emit_core_event_status(&app, generation, "subscribed", None, None);
 
-    let response = stream.read_next()?;
-    if response.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(AppError::core_response(response));
-    }
-    emit_core_event_status(&app, generation, "subscribed", None, Some(response));
-
+    let mut receiver = conn.subscribe_events();
     while active_generation.load(Ordering::SeqCst) == generation {
-        let event = stream.read_next()?;
-        emit_core_event(&app, generation, event);
+        match receiver.blocking_recv() {
+            Ok(event) => emit_core_event(&app, generation, event),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // Slow consumer: some events were dropped. Keep going.
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                // Connection torn down — the outer status will reflect it.
+                break;
+            }
+        }
     }
 
     Ok(())

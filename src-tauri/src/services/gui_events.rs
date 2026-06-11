@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::kernel::{protocol, transport};
+use crate::kernel::{connection, protocol};
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
     GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME, emit_gui_event, emit_gui_event_status,
@@ -18,7 +18,9 @@ pub fn start(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
     generation: u64,
-    event_types: Option<Vec<String>>,
+    // See `core_events::start`: per-type filtering is currently unused because
+    // the shared multiplexed connection subscribes to every event.
+    _event_types: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiEventSubscription> {
     let endpoint = protocol::endpoint_from_options(options.as_ref())?;
@@ -26,14 +28,8 @@ pub fn start(
 
     let gen = Arc::clone(&active_generation);
     tauri::async_runtime::spawn_blocking(move || {
-        let result = subscribe_and_forward_events(
-            app.clone(),
-            gen,
-            generation,
-            endpoint,
-            event_types,
-            timeout,
-        );
+        let result =
+            subscribe_and_forward_events(app.clone(), gen, generation, endpoint, timeout);
 
         match result {
             Ok(()) => {
@@ -67,26 +63,23 @@ fn subscribe_and_forward_events(
     active_generation: Arc<AtomicU64>,
     generation: u64,
     endpoint: CoreEndpoint,
-    event_types: Option<Vec<String>>,
     timeout: Duration,
 ) -> AppResult<()> {
-    let frame = match event_types {
-        Some(types) => serde_json::json!({ "type": "subscribe", "events": types }),
-        None => serde_json::json!({ "type": "subscribe" }),
-    };
-    let frame = transport::serialize_frame(&frame)?;
-    let mut stream = transport::subscribe(endpoint, frame, timeout)?;
-
-    let response = stream.read_next()?;
-    if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-        return Err(AppError::core_response(response));
-    }
+    // The multiplexed connection already sent `subscribe` when it was
+    // established, so attaching as a broadcast receiver is all that's needed.
+    let conn = connection::get_or_connect(endpoint, timeout)?;
     emit_status(&app, generation, "subscribed", None);
 
+    let mut receiver = conn.subscribe_events();
     while active_generation.load(Ordering::SeqCst) == generation {
-        let source_event = stream.read_next()?;
-        let event = events::normalize_event(&source_event);
-        emit_gui_event(&app, GuiEventPayload { generation, event });
+        match receiver.blocking_recv() {
+            Ok(source_event) => {
+                let event = events::normalize_event(&source_event);
+                emit_gui_event(&app, GuiEventPayload { generation, event });
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
     }
 
     Ok(())

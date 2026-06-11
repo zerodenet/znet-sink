@@ -51,7 +51,7 @@ fn debug_push(mut frame: DebugFrame) {
         frames.push(frame);
     }
 }
-use crate::kernel::transport;
+use crate::kernel::{connection, transport};
 use crate::models::core::{response_id, CoreCallResult, CoreEndpoint, CoreIpcOptions};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -146,8 +146,6 @@ pub async fn request(
     let timeout = timeout_from_options(options.as_ref())?;
     let (frame_value, request_id) = ensure_request_id(frame)?;
     let frame_type = frame_type_for_debug(&frame_value);
-    let result_endpoint = endpoint.clone();
-
     // Capture outgoing frame
     debug_push(DebugFrame {
         id: 0,
@@ -160,18 +158,35 @@ pub async fn request(
     });
 
     let frame_bytes = transport::serialize_frame(&frame_value)?;
-    let expected_id = request_id.clone();
+    let request_id_str = request_id
+        .as_ref()
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| {
+            AppError::invalid_argument("IPC request frame must carry a string id")
+        })?;
 
-    let (elapsed, response): (u64, Result<Value, AppError>) =
-        tauri::async_runtime::spawn_blocking(move || {
-            let t0 = std::time::Instant::now();
-            let response = transport::send_json_line_request(endpoint, frame_bytes, timeout)?;
-            validate_response_id(&response, expected_id.as_ref())?;
-            let elapsed = t0.elapsed().as_millis() as u64;
-            Ok((elapsed, Ok(response)))
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("IPC worker failed: {error}")))??;
+    // Acquire the shared multiplexed connection (blocking connect when cold,
+    // cheap lock + clone on the hot path). The connection is kept alive by
+    // the kernel because its first frame was `subscribe`.
+    let connect_endpoint = endpoint.clone();
+    let conn = tauri::async_runtime::spawn_blocking(move || {
+        connection::get_or_connect(connect_endpoint, timeout)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("IPC connect worker failed: {error}")))??;
+
+    // Send the request and await its response over the multiplexed connection.
+    let t0 = std::time::Instant::now();
+    let raw_response = conn.request(frame_bytes, request_id_str, timeout).await;
+    let elapsed = t0.elapsed().as_millis() as u64;
+
+    // Verify the echoed request id matches (defends against response
+    // mis-pairing). Consumes `raw_response` so there is no borrow conflict.
+    let response: Result<Value, AppError> = match raw_response {
+        Ok(value) => validate_response_id(&value, request_id.as_ref()).map(|_| value),
+        Err(error) => Err(error),
+    };
 
     // Capture response frame
     match &response {
@@ -200,7 +215,7 @@ pub async fn request(
     }
 
     Ok(CoreCallResult::from_core_result(
-        result_endpoint,
+        endpoint,
         request_id,
         response,
     ))

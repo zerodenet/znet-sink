@@ -29,6 +29,7 @@
 //! ```
 
 pub mod adapter;
+pub mod connection;
 pub mod protocol;
 pub mod transport;
 pub mod zero;

@@ -327,6 +327,9 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
 
 pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     let proxy_result = system_proxy_guard::disable_with_guard();
+    // Drop the multiplexed connection so the next request opens a fresh one
+    // instead of reusing a handle whose peer (the kernel) is about to die.
+    crate::kernel::connection::reset();
     let (child, stderr_handle) = {
         let mut process = lock(state.core_process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;

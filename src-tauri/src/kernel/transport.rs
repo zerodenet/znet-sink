@@ -1,10 +1,20 @@
 //! Platform transport layer for kernel IPC.
 //!
-//! Raw socket (Unix) / named-pipe (Windows) I/O, JSON-line framing,
-//! and `EventStream` for persistent subscriptions.
+//! Raw socket (Unix) / named-pipe (Windows) I/O with JSON-line framing.
 //!
-//! This module is kernel-agnostic — any kernel using JSON-line IPC
-//! over domain sockets or named pipes can reuse it unchanged.
+//! Two connection modes are supported:
+//! - **Single-shot** ([`send_json_line_request`]): opens a fresh connection
+//!   per call. The kernel closes non-subscribe connections after responding,
+//!   so this is only suitable for one-off probes.
+//! - **Split / multiplexed** ([`connect_split`] → [`KernelReader`] +
+//!   [`KernelWriter`]): opens one connection and returns independent
+//!   read/write halves so a long-lived connection can run a background reader
+//!   while the request path writes frames. This is what
+//!   [`crate::kernel::connection`] uses to multiplex requests and events over
+//!   a single subscribe connection.
+//!
+//! This module is kernel-agnostic — any kernel using JSON-line IPC over
+//! domain sockets or named pipes can reuse it unchanged.
 
 use serde_json::Value;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -21,6 +31,8 @@ use std::mem;
 use std::os::unix::net::UnixStream;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::sync::Arc;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{
@@ -48,7 +60,7 @@ pub struct EventStream {
 
 /// Return the platform-specific default endpoint for the given kernel name.
 ///
-/// On Windows, uses a well-known named pipe: `\\.\pipe\zero-control`.
+/// On Windows, uses a well known named pipe: `\\.\pipe\zero-control`.
 /// On Unix, uses the Zero daemon default: `~/.zero/control.sock`.
 pub fn default_endpoint(kernel_name: &str) -> AppResult<CoreEndpoint> {
     Ok(CoreEndpoint {
@@ -58,6 +70,11 @@ pub fn default_endpoint(kernel_name: &str) -> AppResult<CoreEndpoint> {
 }
 
 /// Connect to `endpoint`, send a single JSON-line `frame`, read one JSON response.
+///
+/// Opens a fresh connection per call. Only suitable for one-off probes — the
+/// kernel closes non-subscribe connections after responding, so this cannot
+/// be used for request multiplexing. For the multiplexed path see
+/// [`crate::kernel::connection`].
 pub fn send_json_line_request(
     endpoint: CoreEndpoint,
     frame: Vec<u8>,
@@ -76,6 +93,10 @@ pub fn send_json_line_request(
 }
 
 /// Connect to `endpoint`, send a subscribe `frame`, return a persistent `EventStream`.
+///
+/// Retained for one-off subscribers; the multiplexed path in
+/// [`crate::kernel::connection`] supersedes this for normal operation.
+#[allow(dead_code)]
 pub fn subscribe(
     endpoint: CoreEndpoint,
     frame: Vec<u8>,
@@ -116,6 +137,7 @@ pub fn serialize_frame(frame: &Value) -> AppResult<Vec<u8>> {
 
 impl EventStream {
     /// Read the next JSON-line frame (skips SSE comments and blank lines).
+    #[allow(dead_code)]
     pub fn read_next(&mut self) -> AppResult<Value> {
         read_json_line(&mut self.reader, &self.endpoint)
     }
@@ -166,10 +188,12 @@ pub fn default_socket_path_for_executable(
         .to_string()
 }
 
-// ── Internal ────────────────────────────────────────────────────────
+// ── JSON-line framing ───────────────────────────────────────────────
 
-fn read_json_line(
-    reader: &mut BufReader<Box<dyn ReadWrite>>,
+/// Read one JSON object terminated by `\n`. SSE-style lines starting with
+/// `:` (heartbeat) and blank lines are skipped silently.
+pub(crate) fn read_json_line<R: Read>(
+    reader: &mut BufReader<R>,
     endpoint: &CoreEndpoint,
 ) -> AppResult<Value> {
     let mut line = String::new();
@@ -200,6 +224,8 @@ fn read_json_line(
     }
 }
 
+// ── Connection timeouts ─────────────────────────────────────────────
+
 struct StreamTimeouts {
     read: Option<Duration>,
     write: Option<Duration>,
@@ -221,6 +247,9 @@ impl StreamTimeouts {
     }
 }
 
+// ── Single-shot connection (probes) ─────────────────────────────────
+
+#[allow(dead_code)]
 pub(crate) fn connect_raw(
     endpoint: &CoreEndpoint,
     timeout: Duration,
@@ -230,6 +259,49 @@ pub(crate) fn connect_raw(
 
 fn connect(endpoint: &CoreEndpoint, timeouts: StreamTimeouts) -> AppResult<Box<dyn ReadWrite>> {
     connect_platform(endpoint, timeouts)
+}
+
+// ── Split connection (multiplexed IPC) ──────────────────────────────
+//
+// `connect_split` opens one connection and returns independent reader and
+// writer halves. The halves share the underlying handle on Windows (named
+// pipes support concurrent overlapped I/O on a single handle) and are cloned
+// file descriptors on Unix. This lets a background reader task drain frames
+// while the request path writes — the foundation of request multiplexing.
+
+/// Read half of a split kernel connection.
+#[cfg(unix)]
+pub struct KernelReader(UnixStream);
+/// Write half of a split kernel connection.
+#[cfg(unix)]
+pub struct KernelWriter(UnixStream);
+
+/// Connect once and return `(reader, writer)` halves for a multiplexed
+/// connection. The read half has no timeout (the reader task blocks waiting
+/// for frames); the write half inherits `timeout`.
+pub fn connect_split(
+    endpoint: &CoreEndpoint,
+    timeout: Duration,
+) -> AppResult<(KernelReader, KernelWriter)> {
+    connect_split_platform(endpoint, StreamTimeouts::event_stream(timeout))
+}
+
+#[cfg(unix)]
+impl Read for KernelReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+#[cfg(unix)]
+impl Write for KernelWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
 }
 
 // ── Unix transport ──────────────────────────────────────────────────
@@ -251,6 +323,27 @@ fn connect_platform(
     Ok(Box::new(stream))
 }
 
+#[cfg(unix)]
+fn connect_split_platform(
+    endpoint: &CoreEndpoint,
+    timeouts: StreamTimeouts,
+) -> AppResult<(KernelReader, KernelWriter)> {
+    let reader = UnixStream::connect(&endpoint.path)
+        .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?;
+    reader
+        .set_read_timeout(timeouts.read)
+        .map_err(|error| AppError::from_io("failed to set IPC read timeout", endpoint, error))?;
+    reader
+        .set_write_timeout(timeouts.write)
+        .map_err(|error| AppError::from_io("failed to set IPC write timeout", endpoint, error))?;
+    // Duplicate the fd so the reader and writer can live on independent
+    // threads without sharing a single owner.
+    let writer = reader
+        .try_clone()
+        .map_err(|error| AppError::from_io("failed to clone IPC stream for writer half", endpoint, error))?;
+    Ok((KernelReader(reader), KernelWriter(writer)))
+}
+
 // ── Windows transport (overlapped named pipe) ───────────────────────
 
 #[cfg(windows)]
@@ -264,18 +357,58 @@ fn connect_platform(
     Ok(Box::new(pipe))
 }
 
+/// Single-owner named pipe client used by the single-shot connect path.
+///
+/// Thin wrapper over an [`SharedPipe`] (reference-counted so the same handle
+/// can also back the split [`KernelReader`] / [`KernelWriter`] halves).
 #[cfg(windows)]
-struct NamedPipeClient {
+struct NamedPipeClient(Arc<SharedPipe>);
+
+#[cfg(windows)]
+impl NamedPipeClient {
+    fn connect(path: &str, timeouts: StreamTimeouts) -> io::Result<Self> {
+        Ok(Self(Arc::new(SharedPipe::connect(path, timeouts)?)))
+    }
+}
+
+#[cfg(windows)]
+impl Read for NamedPipeClient {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read_overlapped(buffer)
+    }
+}
+
+#[cfg(windows)]
+impl Write for NamedPipeClient {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write_overlapped(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Underlying named pipe handle, reference-counted so it can be shared
+/// between a reader half and a writer half.
+///
+/// Windows permits multiple overlapped operations in flight on a single pipe
+/// handle simultaneously (each uses its own `OVERLAPPED` + event), so a
+/// reader blocked in `ReadFile` does not block a concurrent `WriteFile`.
+#[cfg(windows)]
+struct SharedPipe {
     handle: HANDLE,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
 }
 
 #[cfg(windows)]
-unsafe impl Send for NamedPipeClient {}
+unsafe impl Send for SharedPipe {}
+#[cfg(windows)]
+unsafe impl Sync for SharedPipe {}
 
 #[cfg(windows)]
-impl NamedPipeClient {
+impl SharedPipe {
     /// Connect to a named pipe with a bounded timeout.
     ///
     /// `WaitNamedPipeW` distinguishes two failure modes by error code:
@@ -288,14 +421,9 @@ impl NamedPipeClient {
     /// kernel is running but briefly has no free pipe instances.
     fn connect(path: &str, timeouts: StreamTimeouts) -> io::Result<Self> {
         let path_wide = wide_null(path);
-        let write_timeout_ms = timeouts
-            .write
-            .map(duration_to_millis)
-            .unwrap_or(2_000);
+        let write_timeout_ms = timeouts.write.map(duration_to_millis).unwrap_or(2_000);
 
-        let waited = unsafe {
-            WaitNamedPipeW(path_wide.as_ptr(), write_timeout_ms)
-        };
+        let waited = unsafe { WaitNamedPipeW(path_wide.as_ptr(), write_timeout_ms) };
 
         // WaitNamedPipeW returns 0 on failure — check the specific error.
         // Only ERROR_FILE_NOT_FOUND means "pipe doesn't exist at all";
@@ -433,16 +561,37 @@ impl NamedPipeClient {
 }
 
 #[cfg(windows)]
-impl Read for NamedPipeClient {
+impl Drop for SharedPipe {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
+// ── Windows split halves ────────────────────────────────────────────
+
+#[cfg(windows)]
+pub struct KernelReader {
+    shared: Arc<SharedPipe>,
+}
+
+#[cfg(windows)]
+pub struct KernelWriter {
+    shared: Arc<SharedPipe>,
+}
+
+#[cfg(windows)]
+impl Read for KernelReader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.read_overlapped(buffer)
+        self.shared.read_overlapped(buffer)
     }
 }
 
 #[cfg(windows)]
-impl Write for NamedPipeClient {
+impl Write for KernelWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.write_overlapped(buffer)
+        self.shared.write_overlapped(buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -451,13 +600,23 @@ impl Write for NamedPipeClient {
 }
 
 #[cfg(windows)]
-impl Drop for NamedPipeClient {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.handle);
-        }
-    }
+fn connect_split_platform(
+    endpoint: &CoreEndpoint,
+    timeouts: StreamTimeouts,
+) -> AppResult<(KernelReader, KernelWriter)> {
+    let shared = Arc::new(
+        SharedPipe::connect(&endpoint.path, timeouts)
+            .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?,
+    );
+    Ok((
+        KernelReader {
+            shared: Arc::clone(&shared),
+        },
+        KernelWriter { shared },
+    ))
 }
+
+// ── Windows overlapped helpers ──────────────────────────────────────
 
 #[cfg(windows)]
 struct OverlappedOperation {
@@ -508,4 +667,3 @@ fn wide_null(value: &str) -> Vec<u16> {
 fn duration_to_millis(duration: Duration) -> u32 {
     duration.as_millis().min(u32::MAX as u128) as u32
 }
-
