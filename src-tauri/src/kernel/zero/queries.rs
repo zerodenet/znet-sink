@@ -147,22 +147,19 @@ pub async fn dns_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeature
     feature_status("dns", &["dns", "dns-status", "dns-snapshot"], options).await
 }
 
-/// TUN status with runtime fallback queries.
+/// TUN status via the documented `tun_status` query variant.
+///
+/// Falls back to a capability-based feature check when the kernel does not
+/// support the `tun_status` query (pre-v0.0.12 kernels).  The legacy
+/// `tun.status` command was never a valid kernel method and has been
+/// removed — the kernel only exposes `tun.start` / `tun.stop` commands.
 pub async fn tun_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeatureStatus> {
-    let fallback = feature_status("tun", &["tun", "tun-status", "tun-snapshot"], options.clone()).await;
+    let fallback =
+        feature_status("tun", &["tun", "tun-status", "tun-snapshot"], options.clone()).await;
 
     // Primary: use the documented tun_status query with variant unwrapping
-    if let Ok(value) = query_variant(json!({"tun_status": {}}), "tun_status", options.clone()).await {
-        return Ok(parse_feature_runtime_status(
-            "tun",
-            &value,
-            fallback.as_ref().ok(),
-        ));
-    }
-
-    // Fallback: try the legacy tun.status command for older kernel versions
     if let Ok(value) =
-        super::commands::run_command("tun.status", json!({}), options).await
+        query_variant(json!({"tun_status": {}}), "tun_status", options.clone()).await
     {
         return Ok(parse_feature_runtime_status(
             "tun",
