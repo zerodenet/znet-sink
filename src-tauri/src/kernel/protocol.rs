@@ -207,7 +207,11 @@ pub async fn request(
                 at_ms: crate::services::common::now_unix_ms(),
                 direction: "rx",
                 frame_type,
-                payload: json!({}),
+                payload: json!({
+                    "errorCode": error.code,
+                    "requestId": request_id,
+                    "endpoint": endpoint.path,
+                }),
                 elapsed_ms: Some(elapsed),
                 error: Some(error.message.clone()),
             });

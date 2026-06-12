@@ -211,14 +211,24 @@ impl MultiplexedConnection {
             }
         }
 
+        eprintln!(
+            "[zgi] req id={request_id} waiting response timeout={}ms",
+            response_timeout.as_millis()
+        );
         match timeout(response_timeout, rx).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => {
+                eprintln!("[zgi] req id={request_id} OK");
+                result
+            }
             Ok(Err(_)) => {
                 // Sender dropped without sending — the reader tore the
                 // connection down and drained pending waiters.
+                eprintln!("[zgi] req id={request_id} CONNECTION_CLOSED (reader drained)");
                 Err(AppError::connection_closed(&endpoint))
             }
             Err(_) => {
+                eprintln!("[zgi] req id={request_id} TIMEOUT after {}ms",
+                    response_timeout.as_millis());
                 self.inner.remove_pending(&request_id);
                 Err(AppError {
                     code: "timeout",
@@ -290,6 +300,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             // If this is the subscribe ack, signal the connect() caller
             // and then drop it — no query waiter exists for this id.
             if frame_id.as_deref() == Some(SUBSCRIBE_FRAME_ID) {
+                eprintln!("[zgi] reader SUBSCRIBE_ACK");
                 if let Some(tx) = inner
                     .subscribe_ack_tx
                     .lock()
@@ -303,18 +314,31 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
 
             // Response frame: pair by id with the waiting waiter, if any.
             if let Some(id) = frame_id.as_deref() {
-                if let Some(sender) = inner
+                let ok = frame.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                let sender = inner
                     .pending
                     .lock()
                     .expect("IPC pending mutex poisoned")
-                    .remove(id)
-                {
+                    .remove(id);
+                let matched = sender.is_some();
+                if let Some(sender) = sender {
                     let _ = sender.send(Ok(frame));
                 }
+                eprintln!(
+                    "[zgi] reader RESP id={id} matched={matched} ok={ok}"
+                );
+            } else {
+                eprintln!("[zgi] reader RESP no-id (dropped)");
             }
             // Response with no matching id → drop.
         } else {
             // Event frame: fan out to every subscriber. No subscriber → ignore.
+            let event_type = frame
+                .get("event_type")
+                .or_else(|| frame.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            eprintln!("[zgi] reader EVENT type={event_type}");
             let _ = inner.event_tx.send(frame);
         }
     }
