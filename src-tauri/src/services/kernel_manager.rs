@@ -433,11 +433,20 @@ fn parse_release(
     })
 }
 
+/// Classify a release tag into a channel.
+///
+/// The kernel's own versioning strategy (docs.zerodenet.org) is:
+/// - `x-beta` → internal test (Beta)
+/// - `x-rc`   → pre-release candidate (Beta)
+/// - no suffix → stable release (Stable)
+///
+/// We also respect GitHub's `prerelease` flag and explicit nightly/dev/canary
+/// keywords so that mislabeled releases are still routed correctly.
 fn classify_channel(tag: &str, prerelease: bool) -> ReleaseChannel {
     let tag_lower = tag.to_ascii_lowercase();
     if tag_lower.contains("nightly") || tag_lower.contains("dev") || tag_lower.contains("canary") {
         ReleaseChannel::Nightly
-    } else if prerelease {
+    } else if tag_lower.contains("-beta") || tag_lower.contains("-rc") || prerelease {
         ReleaseChannel::Beta
     } else {
         ReleaseChannel::Stable
