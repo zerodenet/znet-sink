@@ -1,6 +1,6 @@
 {
   "name": "znetsink",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "ZNet Sink - 零域网络代理客户端",
   "type": "module",
   "scripts": {

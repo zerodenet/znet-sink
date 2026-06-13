@@ -1,6 +1,6 @@
 [package]
 name = "gui"
-version = "0.0.3"
+version = "0.0.4"
 description = "ZNet Sink - 零域网络代理客户端"
 authors = ["ZeroDenet <zerodenet.org>"]
 license = "MPL-2.0"
