@@ -285,39 +285,69 @@ pub fn run() {
                         }
                     };
 
-                    if kernel_alive {
-                        eprintln!("[ZNet] kernel already running (fast probe ok), connecting");
-
-                        // Update the process state so the UI reflects the
-                        // actual kernel status.  Without this the UI shows
-                        // "not started" even though the kernel is alive,
-                        // which confuses users and also means stop() won't
-                        // know to kill the external process.
-                        {
-                            let mut process = match state.core_process().lock() {
-                                Ok(p) => p,
-                                Err(_) => return,
-                            };
-                            process.status.state =
-                                crate::models::core_process::CoreProcessState::Running;
-                            process.status.kernel = "zero".to_string();
-                            // No child — we don't own this process, so
-                            // stop() will fall through to kill_external().
-                        }
-                        return;
-                    }
-
-                    // Kernel not running — check if auto_start is enabled
-                    let auto_start = state
+                    // Extract values needed for decision-making before
+                    // consuming `state`.  All three are needed regardless of
+                    // which branch we take below.
+                    let core_config = state
                         .app_config()
                         .lock()
-                        .map(|config| config.core.auto_start)
-                        .unwrap_or(true);
+                        .map(|c| c.core.clone())
+                        .unwrap_or_default();
+                    let auto_start = core_config.auto_start;
+                    let configured_path = core_config.executable_path.clone();
+
+                    if kernel_alive {
+                        // Check whether the running kernel matches the
+                        // configured executable path.  If the user changed
+                        // the path between sessions the old kernel is still
+                        // listening on the pipe but is no longer the binary
+                        // the user intended.
+                        let snapshot = crate::services::core_config::snapshot_from_config(
+                            &core_config,
+                        ).ok();
+
+                        let path_matches = match (&configured_path, &snapshot) {
+                            (Some(configured), Some(snap)) => {
+                                snap.executable_path.as_deref() == Some(configured.as_str())
+                                    || configured.is_empty()
+                            }
+                            _ => true, // no custom path → any running kernel is fine
+                        };
+
+                        if !path_matches {
+                            eprintln!("[ZNet] kernel alive but path mismatch, restarting");
+                            // Use fresh State — the outer `state` is not `Copy`.
+                            let _ = core_process::stop(app_handle.state::<AppState>());
+                            crate::kernel::connection::reset();
+                            // Fall through to start the configured kernel.
+                        } else {
+                            eprintln!("[ZNet] kernel already running (fast probe ok), connecting");
+
+                            // Update the process state so the UI reflects the
+                            // actual kernel status.  Without this the UI shows
+                            // "not started" even though the kernel is alive,
+                            // which confuses users and also means stop() won't
+                            // know to kill the external process.
+                            {
+                                let mut process = match state.core_process().lock() {
+                                    Ok(p) => p,
+                                    Err(_) => return,
+                                };
+                                process.status.state =
+                                    crate::models::core_process::CoreProcessState::Running;
+                                process.status.kernel = "zero".to_string();
+                                // No child — we don't own this process, so
+                                // stop() will fall through to kill_external().
+                            }
+                            return;
+                        }
+                    }
+
+                    // Kernel not running (or was restarted due to path mismatch).
                     if !auto_start {
                         eprintln!("[ZNet] auto_start disabled, not starting kernel");
                         return;
                     }
-                    drop(state);
 
                     let app_handle_start = app_handle.clone();
                     let _ = tauri::async_runtime::spawn_blocking(move || {
