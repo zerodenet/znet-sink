@@ -197,10 +197,16 @@ jobs:
           # Merge: use first file as the base (carries version, notes,
           # pub_date), then fold every file's platforms into one dict.
           # jq '*' merges objects — each platform's signature & url are preserved.
+          #
+          # Bind the slurped array to $all BEFORE rebinding context to $base.
+          # After `| $base` the `.` no longer refers to the file list, so `.[]`
+          # would iterate over $base's own values (the version string, etc.),
+          # making `$item.platforms` null and crashing `{} * null`.
           jq -s '
-            (.[0] // {}) as $base
+            . as $all
+            | (.[0] // {}) as $base
             | $base
-            | .platforms = (reduce .[] as $item ({}; . * $item.platforms))
+            | .platforms = (reduce $all[] as $item ({}; . * ($item.platforms // {})))
           ' artifacts/updater-json-*/latest.json > latest.json
 
           echo "=== Merged latest.json ==="
