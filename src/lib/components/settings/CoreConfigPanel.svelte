@@ -5,6 +5,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Badge } from '$lib/components/ui/badge';
+  import { Switch } from '$lib/components/ui/switch';
   import {
     getAppConfig,
     getCoreConfigSnapshot,
@@ -112,6 +113,25 @@
       appConfig = updated;
       message = executablePathDraft.trim() ? '已保存内核路径' : '已清空内核路径';
       await refresh();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function toggleDownloadProxyAuto(value: boolean) {
+    if (!appConfig) return;
+    saving = true;
+    message = null;
+    try {
+      const updated = await updateAppConfig({
+        core: { downloadProxyAuto: value },
+      });
+      appConfig = updated;
+      message = value
+        ? '内核下载已启用跟随系统代理（HTTPS_PROXY / HTTP_PROXY）'
+        : '内核下载已切换为直连（绕过所有代理）';
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     } finally {
@@ -348,6 +368,20 @@
           {/each}
         </div>
       {/if}
+
+      <div class="proxy-toggle-row">
+        <div class="proxy-toggle-text">
+          <span class="proxy-toggle-title">下载跟随系统代理</span>
+          <span class="proxy-toggle-desc">
+            内核下载与版本列表请求是否使用 HTTPS_PROXY / HTTP_PROXY 环境变量。关闭则直连（绕过所有代理），适用于代理本身不可用或下载源可直连的场景。
+          </span>
+        </div>
+        <Switch
+          checked={appConfig?.core.downloadProxyAuto ?? true}
+          disabled={loading || saving}
+          onCheckedChange={toggleDownloadProxyAuto}
+        />
+      </div>
     </div>
   {/if}
 
@@ -633,6 +667,36 @@
     font-size: 12px;
     color: var(--warning);
     line-height: 1.4;
+  }
+
+  .proxy-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+  }
+
+  .proxy-toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .proxy-toggle-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--foreground);
+  }
+
+  .proxy-toggle-desc {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    line-height: 1.5;
   }
 
   .message {

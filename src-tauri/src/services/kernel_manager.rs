@@ -61,6 +61,14 @@ fn build_http_client(proxy_auto: bool) -> AppResult<reqwest::blocking::Client> {
                 builder = builder.proxy(p);
             }
         }
+        // NOTE: do NOT call `.no_proxy()` here — that would wipe the
+        // proxy we just configured. When no env proxy is set, reqwest
+        // connects directly by default.
+    } else {
+        // proxy_auto == false: bypass ALL proxies (including reqwest's
+        // default env-var auto-detection) so management traffic goes
+        // direct, avoiding a circular dependency through the kernel's
+        // own system proxy.
         builder = builder.no_proxy();
     }
 
@@ -142,7 +150,12 @@ pub fn install_version(
     );
 
     let mut response = client.get(&download_url).send().map_err(|e| {
-        let msg = format!("kernel download failed: {e}");
+        let proxy_hint = if proxy_auto {
+            "（已启用跟随系统代理：请确认 HTTPS_PROXY/HTTP_PROXY 环境变量指向可用代理；若无需代理可在设置中关闭「下载跟随系统代理」）"
+        } else {
+            "（已直连：若 GitHub 在当前网络不可达，可在设置中开启「下载跟随系统代理」）"
+        };
+        let msg = format!("kernel download failed: {e} {proxy_hint}");
         let _ = crate::services::logs::append_entry(
             &app.state::<crate::state::app_state::AppState>(),
             LogSource::App,
