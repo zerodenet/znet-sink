@@ -65,6 +65,24 @@ class UpdaterService {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+
+      // A malformed update manifest (e.g. missing `version` field, bad
+      // JSON) is not actionable for the user and would otherwise spam the
+      // log panel on every startup.  These errors come from the updater
+      // plugin's serde deserialization — detect them and treat as a
+      // benign "no update info" state instead of a hard failure.
+      if (isManifestParseError(msg)) {
+        this.updateAvailable = false;
+        this.latestVersion = null;
+        this.status = 'up-to-date';
+        void appendLog({
+          source: 'app',
+          level: 'debug',
+          message: `更新清单暂不可用，跳过更新检查 (v${this.currentVersion})`,
+        });
+        return false;
+      }
+
       this.lastError = msg;
       this.status = 'error';
       void appendLog({ source: 'app', level: 'warn', message: `更新检查失败: ${msg}` });
@@ -127,3 +145,21 @@ class UpdaterService {
 }
 
 export const updater = new UpdaterService();
+
+/**
+ * Detect updater errors caused by a malformed/invalid manifest rather than
+ * network failures.  These originate from the updater plugin's serde
+ * deserialization (e.g. the published `latest.json` is `{"platforms":{}}`
+ * with no `version` field, which happens when a release was built without
+ * `TAURI_SIGNING_PRIVATE_KEY`).  Such errors are not actionable and should
+ * be treated as "no update info available".
+ */
+function isManifestParseError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('missing field')
+    || lower.includes('invalid type')
+    || lower.includes('expected')
+    || lower.includes('deserialize')
+    || lower.includes('json')
+    || lower.includes('parse');
+}

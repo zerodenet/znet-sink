@@ -113,6 +113,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify updater signing key is configured
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set."
+            echo "::error::Without it the updater cannot sign bundles, so no"
+            echo "::error::latest.json is generated and the published manifest"
+            echo "::error::becomes an invalid {\"platforms\":{}} that breaks"
+            echo "::error::update checks for every installed client."
+            echo "::error::"
+            echo "::error::Generate a key pair and configure the secret:"
+            echo "::error::  pnpm tauri signer generate -w ~/.tauri/znet-sink.key"
+            echo "::error::Then add the private key to repo Settings > Secrets"
+            echo "::error::> Actions as TAURI_SIGNING_PRIVATE_KEY."
+            exit 1
+          fi
+        shell: bash
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -208,6 +227,20 @@ jobs:
             | $base
             | .platforms = (reduce $all[] as $item ({}; . * ($item.platforms // {})))
           ' artifacts/updater-json-*/latest.json > latest.json
+
+          # Guarantee the top-level fields the updater plugin requires
+          # (version, pub_date) exist even when every platform fell back to
+          # the empty placeholder — otherwise serde fails with
+          # "missing field `version`" on the client.  The version comes
+          # from the git tag (e.g. v0.0.6 → 0.0.6).
+          VERSION="${GITHUB_REF_NAME#v}"
+          jq --arg version "$VERSION" \
+             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             --arg notes "" \
+             '.version   = (.version   // $version)
+              | .pub_date = (.pub_date // $pub_date)
+              | .notes    = (.notes    // $notes)' \
+             latest.json > latest.json.tmp && mv latest.json.tmp latest.json
 
           echo "=== Merged latest.json ==="
           cat latest.json
