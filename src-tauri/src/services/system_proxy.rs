@@ -1,5 +1,5 @@
 use crate::services::common;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::errors::{AppError, AppResult};
 
@@ -9,6 +9,32 @@ pub struct SystemProxyStatus {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+}
+
+/// Snapshot of the user's original system-proxy configuration, captured
+/// immediately before the GUI overrides it. Persisted inside the proxy
+/// marker so a later "disable" can *restore* the user's settings instead of
+/// blanking them — which is what previously destroyed users' pre-existing
+/// proxies (e.g. their own `127.0.0.1:1080`) whenever the kernel stopped or
+/// the app exited.
+///
+/// The Windows-specific `override_bypass` (`ProxyOverride`) and
+/// `auto_config_url` (`AutoConfigURL`) fields use `None` to mean "the value
+/// was absent before we touched anything". Because the GUI never creates
+/// those values, `None` also means "leave untouched" on restore.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyBackup {
+    /// Whether the OS proxy was enabled before the GUI touched it.
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    /// Windows `ProxyOverride` (bypass list), e.g. `<local>;192.168.*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_bypass: Option<String>,
+    /// Windows `AutoConfigURL` (PAC script), if configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_config_url: Option<String>,
 }
 
 pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
@@ -29,6 +55,13 @@ pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
     })
 }
 
+/// Blank the system proxy unconditionally.
+///
+/// This is a **destructive** operation — it discards whatever proxy was
+/// configured. The GUI lifecycle should normally go through
+/// [`crate::services::system_proxy_guard`], which captures a [`ProxyBackup`]
+/// on enable and [`restore`]s it on disable, so the user's original settings
+/// are recovered instead of being wiped.
 pub fn disable() -> AppResult<SystemProxyStatus> {
     set_proxy_platform("", 0, false)?;
 
@@ -41,6 +74,19 @@ pub fn disable() -> AppResult<SystemProxyStatus> {
 
 pub fn status() -> AppResult<SystemProxyStatus> {
     status_platform()
+}
+
+/// Read the current OS proxy settings into a [`ProxyBackup`] so they can be
+/// restored later. Must be called *before* overwriting anything.
+pub fn capture_backup() -> AppResult<ProxyBackup> {
+    capture_backup_platform()
+}
+
+/// Restore the OS proxy settings from a [`ProxyBackup`] — the inverse of
+/// [`capture_backup`]. Used by the proxy guard instead of the destructive
+/// [`disable`] so the user's original configuration is recovered.
+pub fn restore(backup: &ProxyBackup) -> AppResult<()> {
+    restore_platform(backup)
 }
 
 // ── macOS ──
@@ -94,6 +140,27 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
         host: String::new(),
         port: 0,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn capture_backup_platform() -> AppResult<ProxyBackup> {
+    let status = status_platform()?;
+    Ok(ProxyBackup {
+        enabled: status.enabled,
+        host: status.host,
+        port: status.port,
+        override_bypass: None,
+        auto_config_url: None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
+    if backup.enabled {
+        set_proxy_platform(&backup.host, backup.port, true)
+    } else {
+        set_proxy_platform("", 0, false)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -166,122 +233,31 @@ fn extract_prop<'a>(output: &'a str, key: &str) -> Option<&'a str> {
 // ── Windows ──
 
 #[cfg(target_os = "windows")]
+const INTERNET_SETTINGS_KEY: &str =
+    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+
+#[cfg(target_os = "windows")]
 fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
-    use std::ptr;
-    use windows_sys::Win32::Networking::WinInet::{
-        INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH, InternetSetOptionW,
-    };
-
-    // Set ProxyEnable via registry
-    let output = common::background_command("reg")
-        .args([
-            "add",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            "/v",
-            "ProxyEnable",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            if enable { "1" } else { "0" },
-            "/f",
-        ])
-        .output()
-        .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::internal(format!(
-            "failed to set Windows ProxyEnable: {}",
-            stderr.trim()
-        )));
-    }
+    write_internet_setting_dword("ProxyEnable", if enable { 1 } else { 0 })?;
 
     // Set ProxyServer via registry
     if enable {
-        let proxy_server = format!("{host}:{port}");
-        let server_output = common::background_command("reg")
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                "/v",
-                "ProxyServer",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &proxy_server,
-                "/f",
-            ])
-            .output()
-            .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
-
-        if !server_output.status.success() {
-            let stderr = String::from_utf8_lossy(&server_output.stderr);
-            return Err(AppError::internal(format!(
-                "failed to set Windows ProxyServer: {}",
-                stderr.trim()
-            )));
-        }
+        write_internet_setting_sz("ProxyServer", &format!("{host}:{port}"))?;
     }
 
-    // Notify system of proxy change
-    unsafe {
-        InternetSetOptionW(
-            ptr::null(),
-            INTERNET_OPTION_PROXY_SETTINGS_CHANGED,
-            ptr::null(),
-            0,
-        );
-        InternetSetOptionW(ptr::null(), INTERNET_OPTION_REFRESH, ptr::null(), 0);
-    }
-
+    notify_settings_changed();
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
 fn status_platform() -> AppResult<SystemProxyStatus> {
-    let output = common::background_command("reg")
-        .args([
-            "query",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            "/v",
-            "ProxyEnable",
-        ])
-        .output()
-        .map_err(|e| AppError::internal(format!("failed to query Windows proxy: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let enabled = stdout.contains("0x1");
+    let enabled = query_internet_setting("ProxyEnable")
+        .map(|v| v.trim() == "0x1")
+        .unwrap_or(false);
 
     if enabled {
-        let server_output = match common::background_command("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                "/v",
-                "ProxyServer",
-            ])
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
-                return Err(AppError::internal(format!(
-                    "failed to query Windows ProxyServer: {e}"
-                )));
-            }
-        };
-
-        let server_stdout = String::from_utf8_lossy(&server_output.stdout);
-        let server = server_stdout
-            .lines()
-            .find(|l| l.contains("ProxyServer"))
-            .and_then(|l| l.split_whitespace().last())
-            .unwrap_or("");
-
-        let (host, port) = server
-            .split_once(':')
-            .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap_or(0)))
-            .unwrap_or_default();
-
+        let server = query_internet_setting("ProxyServer").unwrap_or_default();
+        let (host, port) = parse_server(&server);
         Ok(SystemProxyStatus {
             enabled: true,
             host,
@@ -294,6 +270,177 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
             port: 0,
         })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn capture_backup_platform() -> AppResult<ProxyBackup> {
+    let enabled = query_internet_setting("ProxyEnable")
+        .map(|v| v.trim() == "0x1")
+        .unwrap_or(false);
+    let server = query_internet_setting("ProxyServer").unwrap_or_default();
+    let (host, port) = parse_server(&server);
+    Ok(ProxyBackup {
+        enabled,
+        host,
+        port,
+        override_bypass: query_internet_setting("ProxyOverride"),
+        auto_config_url: query_internet_setting("AutoConfigURL"),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
+    // ProxyEnable — always written so it reflects the original state.
+    write_internet_setting_dword("ProxyEnable", if backup.enabled { 1 } else { 0 })?;
+
+    // ProxyServer — restore the original value if one existed; otherwise
+    // delete the value so the GUI's own server doesn't linger (it would be
+    // inert because ProxyEnable is off, but we keep the registry clean).
+    if !backup.host.is_empty() {
+        write_internet_setting_sz("ProxyServer", &format!("{}:{}", backup.host, backup.port))?;
+    } else {
+        delete_internet_setting("ProxyServer");
+    }
+
+    // ProxyOverride / AutoConfigURL — only restore when the user actually
+    // had them. The GUI never creates these values, so `None` means they
+    // were absent and untouched; leaving them alone is correct.
+    if let Some(bypass) = &backup.override_bypass {
+        write_internet_setting_sz("ProxyOverride", bypass)?;
+    }
+    if let Some(url) = &backup.auto_config_url {
+        write_internet_setting_sz("AutoConfigURL", url)?;
+    }
+
+    notify_settings_changed();
+    Ok(())
+}
+
+/// Query a single value from the Internet Settings registry key.
+/// Returns `None` if the value is absent or unreadable.
+#[cfg(target_os = "windows")]
+fn query_internet_setting(value_name: &str) -> Option<String> {
+    let output = common::background_command("reg")
+        .args(["query", INTERNET_SETTINGS_KEY, "/v", value_name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // A matching line looks like:
+    //   "    ProxyServer    REG_SZ    127.0.0.1:1080"
+    //   "    ProxyEnable    REG_DWORD    0x1"
+    for line in stdout.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix(value_name) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        // rest = "REG_SZ    <value>" — skip the type token to get the value.
+        let kind_end = rest.find(' ')?;
+        return Some(rest[kind_end..].trim().to_string());
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn write_internet_setting_dword(value_name: &str, value: u32) -> AppResult<()> {
+    let output = common::background_command("reg")
+        .args([
+            "add",
+            INTERNET_SETTINGS_KEY,
+            "/v",
+            value_name,
+            "/t",
+            "REG_DWORD",
+            "/d",
+            &value.to_string(),
+            "/f",
+        ])
+        .output()
+        .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::internal(format!(
+            "failed to set Windows {}: {}",
+            value_name,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn write_internet_setting_sz(value_name: &str, value: &str) -> AppResult<()> {
+    let output = common::background_command("reg")
+        .args([
+            "add",
+            INTERNET_SETTINGS_KEY,
+            "/v",
+            value_name,
+            "/t",
+            "REG_SZ",
+            "/d",
+            value,
+            "/f",
+        ])
+        .output()
+        .map_err(|e| AppError::internal(format!("failed to run reg.exe: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::internal(format!(
+            "failed to set Windows {}: {}",
+            value_name,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Best-effort deletion of a single value. Silently ignored if the value
+/// is absent (which is the common case we want to tolerate on restore).
+#[cfg(target_os = "windows")]
+fn delete_internet_setting(value_name: &str) {
+    let _ = common::background_command("reg")
+        .args([
+            "delete",
+            INTERNET_SETTINGS_KEY,
+            "/v",
+            value_name,
+            "/f",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(target_os = "windows")]
+fn notify_settings_changed() {
+    use std::ptr;
+    use windows_sys::Win32::Networking::WinInet::{
+        INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH, InternetSetOptionW,
+    };
+
+    unsafe {
+        InternetSetOptionW(
+            ptr::null(),
+            INTERNET_OPTION_PROXY_SETTINGS_CHANGED,
+            ptr::null(),
+            0,
+        );
+        InternetSetOptionW(ptr::null(), INTERNET_OPTION_REFRESH, ptr::null(), 0);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn parse_server(server: &str) -> (String, u16) {
+    server
+        .split_once(':')
+        .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap_or(0)))
+        .unwrap_or_default()
 }
 
 // ── Linux ──
@@ -390,5 +537,26 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
             host: String::new(),
             port: 0,
         })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn capture_backup_platform() -> AppResult<ProxyBackup> {
+    let status = status_platform()?;
+    Ok(ProxyBackup {
+        enabled: status.enabled,
+        host: status.host,
+        port: status.port,
+        override_bypass: None,
+        auto_config_url: None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
+    if backup.enabled {
+        set_proxy_platform(&backup.host, backup.port, true)
+    } else {
+        set_proxy_platform("", 0, false)
     }
 }
