@@ -216,7 +216,7 @@ class GuiStateStore {
     try {
       this.connection = await guiDisconnect();
       this.syncTrayStatus();
-      toastSuccess('系统代理已关闭，内核已停止');
+      toastSuccess('服务已关闭，内核已停止');
       await Promise.allSettled([
         this.refreshProxyMode(),
         this.refreshCoreOverview(),
@@ -252,7 +252,7 @@ class GuiStateStore {
     this.isStoppingCore = true;
     try {
       await stopCoreProcess();
-      toastSuccess('内核已停止，系统代理已关闭');
+      toastSuccess('内核已停止');
       await this.refreshRuntimeState();
     } catch (e: any) {
       toastError(`停止内核失败: ${this.errorMessage(e)}`);

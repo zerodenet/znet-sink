@@ -135,6 +135,10 @@ export interface DelayStyle {
  *   - > 500ms    → slow
  */
 export function gradeDelay(delay: number, alive?: boolean): DelayStyle {
+  if (delay < 0) {
+    // Timeout / unreachable — e.g. kernel not running or probe failed.
+    return { level: 'dead', color: 'var(--destructive)', bg: 'rgba(239,68,68,0.10)', bar: '#EF4444', grade: 'timeout' };
+  }
   if (alive === false && delay <= 0) {
     return { level: 'dead', color: 'var(--destructive)', bg: 'rgba(239,68,68,0.10)', bar: '#EF4444', grade: '离线' };
   }
@@ -155,6 +159,7 @@ export function gradeDelay(delay: number, alive?: boolean): DelayStyle {
 
 /** Format a delay value for compact display. */
 export function formatDelay(delay: number): string {
+  if (delay < 0) return 'timeout';
   if (delay <= 0) return '—';
   if (delay < 1000) return String(delay);
   return `${(delay / 1000).toFixed(1)}s`;
@@ -162,6 +167,7 @@ export function formatDelay(delay: number): string {
 
 /** Delay bar width as percentage (clamped, max 1000ms → 100%). */
 export function delayBarWidth(delay: number): string {
+  if (delay < 0) return '100%'; // timeout — full red bar
   if (delay <= 0) return '0%';
   return `${Math.min(100, (delay / 1000) * 100)}%`;
 }

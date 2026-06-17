@@ -216,14 +216,36 @@
     });
   }
 
+  /** Recursively collect real-node tags in a group, expanding nested groups
+   *  (a group whose outbounds reference another group). Guards against
+   *  cycles. Fixes "组套组" — selecting a parent group must show the child
+   *  group's nodes too, and the count must reflect real nodes, not group
+   *  references. */
+  function collectGroupNodeTags(groupName: string, visited: Set<string> = new Set()): Set<string> {
+    if (visited.has(groupName)) return new Set();
+    visited.add(groupName);
+    const group = groups.find((g) => g.name === groupName);
+    if (!group) return new Set();
+    const groupTags = new Set(groups.map((g) => g.name));
+    const tags = new Set<string>();
+    for (const ob of group.outbounds) {
+      if (groupTags.has(ob.tag)) {
+        // Nested group — recurse into its members.
+        for (const t of collectGroupNodeTags(ob.tag, visited)) tags.add(t);
+      } else {
+        tags.add(ob.tag);
+      }
+    }
+    return tags;
+  }
+
   const filteredNodes = $derived.by(() => {
     const q = searchQuery.trim().toLowerCase();
     let nodes = allNodes.filter((n) => matchesSearch(n, q));
 
     if (selectedGroup) {
-      const group = groups.find((g) => g.name === selectedGroup);
-      if (group && group.outbounds.length > 0) {
-        const tags = new Set(group.outbounds.map((o) => o.tag));
+      const tags = collectGroupNodeTags(selectedGroup);
+      if (tags.size > 0) {
         const matched = nodes.filter((n) => tags.has(n.tag));
         // Only apply group filter if it doesn't empty the list (a group may
         // exist in config but not yet loaded from the kernel).
@@ -423,6 +445,38 @@
     if (alive.length === 0) return '—';
     return String(Math.round(alive.reduce((a, b) => a + b.delay, 0) / alive.length));
   }
+
+  // ── Portal popover: rendered outside .nodes-root with position:fixed so it
+  //     escapes any ancestor overflow:hidden / transform-induced containing
+  //     block.  The @keyframes fade-in animation on .nodes-root creates a new
+  //     CSS containing block (via `transform`), trapping descendants inside
+  //     overflow:hidden boundaries. ──
+  interface PopoverState {
+    visible: boolean;
+    anchor: DOMRect | null;
+    node: ProxyNode | null;
+    hist: DelayEntry[];
+  }
+  let popover = $state<PopoverState>({ visible: false, anchor: null, node: null, hist: [] });
+
+  function showPopover(e: MouseEvent, node: ProxyNode) {
+    const hist = delayHistory.getHistory(node.tag);
+    if (hist.length < 2) return;
+    const el = e.currentTarget as HTMLElement;
+    popover = { visible: true, anchor: el.getBoundingClientRect(), node, hist };
+  }
+
+  function hidePopover() {
+    popover = { visible: false, anchor: null, node: null, hist: [] };
+  }
+
+  function popoverStyle(): string {
+    if (!popover.anchor) return '';
+    const r = popover.anchor;
+    const top = r.top - 6;
+    const left = r.left + r.width / 2;
+    return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; transform:translate(-50%, -100%); z-index:9999;`;
+  }
 </script>
 
 <div class="nodes-root animate-fade-in">
@@ -465,7 +519,7 @@
             </span>
           {/if}
         </div>
-        <span class="group-count">{group.outbounds.length}</span>
+        <span class="group-count">{collectGroupNodeTags(group.name).size}</span>
       </button>
     {/each}
 
@@ -652,6 +706,29 @@
   </div>
 </div>
 
+<!-- Portal popover: rendered outside .nodes-root so it escapes
+     overflow:hidden clipping and the CSS transform containing block
+     created by the @keyframes fade-in animation.  position:fixed
+     anchors to the viewport because no ancestor here has a transform. -->
+{#if popover.visible && popover.node}
+  {@const pnode = popover.node}
+  {@const pds = gradeDelay(pnode.delay, pnode.alive)}
+  {@const spark = buildSparkline(popover.hist)}
+  <div class="delay-portal-popover" style={popoverStyle()}>
+    <span class="popover-title">历史延迟 ({popover.hist.length})</span>
+    <svg class="sparkline" width="120" height="32" viewBox="0 0 120 32" preserveAspectRatio="none">
+      <polyline points={sparklinePath(spark)} fill="none" stroke={pds.bar} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+      {#each spark.points as p}
+        <circle cx={p.x.toFixed(1)} cy={p.y.toFixed(1)} r="1.5" fill={p.alive ? pds.bar : 'var(--destructive)'} />
+      {/each}
+    </svg>
+    <span class="popover-stats">
+      最新 {popover.hist[popover.hist.length - 1].delay > 0 ? popover.hist[popover.hist.length - 1].delay + 'ms' : '超时'}
+      · 均 {meanDelay(popover.hist)}ms
+    </span>
+  </div>
+{/if}
+
 <!-- ═══════════════════════════════════════
      NODE ROW SNIPPET (list view)
      ═══════════════════════════════════════ -->
@@ -662,9 +739,8 @@
   {@const ds = gradeDelay(node.delay, node.alive)}
   {@const ps = getProtocolStyle(node.protocol)}
   {@const chips = getNodeChips(node)}
-  {@const hist = delayHistory.getHistory(node.tag)}
 
-  <div class="node-row {isActive ? 'active' : ''}">
+  <div class="node-row {isActive ? 'active' : ''}" role="listitem">
     <!-- Main click area: select node -->
     <button
       class="node-main"
@@ -701,8 +777,11 @@
 
     <!-- Right side: delay + probe -->
     <div class="node-actions">
-      <!-- Delay pill with hover sparkline popover -->
-      <div class="delay-wrap">
+      <!-- Delay pill: hover triggers portal popover -->
+      <div class="delay-wrap" role="presentation"
+        onmouseenter={(e) => showPopover(e, node)}
+        onmouseleave={hidePopover}
+      >
         <span class="delay-pill" style="color: {ds.color}; background: {ds.bg};">
           {formatDelay(node.delay)}
           {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
@@ -710,22 +789,6 @@
             <span class="delay-grade">{ds.grade}</span>
           {/if}
         </span>
-        {#if hist.length >= 2}
-          {@const spark = buildSparkline(hist)}
-          <div class="delay-popover">
-            <span class="popover-title">历史延迟 ({hist.length})</span>
-            <svg class="sparkline" width="120" height="32" viewBox="0 0 120 32" preserveAspectRatio="none">
-              <polyline points={sparklinePath(spark)} fill="none" stroke={ds.bar} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
-              {#each spark.points as p}
-                <circle cx={p.x.toFixed(1)} cy={p.y.toFixed(1)} r="1.5" fill={p.alive ? ds.bar : 'var(--destructive)'} />
-              {/each}
-            </svg>
-            <span class="popover-stats">
-              最新 {hist[hist.length - 1].delay > 0 ? hist[hist.length - 1].delay + 'ms' : '超时'}
-              · 均 {meanDelay(hist)}ms
-            </span>
-          </div>
-        {/if}
       </div>
 
       <!-- Delay bar -->
@@ -761,12 +824,17 @@
 {#snippet nodeCard(node: ProxyNode)}
   {@const isActive = activeNodeId === node.tag}
   {@const isSwitching = switching === node.id}
+  {@const isProbing = probing === node.id}
   {@const ds = gradeDelay(node.delay, node.alive)}
   {@const ps = getProtocolStyle(node.protocol)}
   {@const chips = getNodeChips(node)}
-  {@const hist = delayHistory.getHistory(node.tag)}
 
-  <div class="grid-card-wrap">
+  <div
+    class="grid-card-wrap"
+    role="listitem"
+    onmouseenter={(e) => showPopover(e, node)}
+    onmouseleave={hidePopover}
+  >
     <button
       class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
       onclick={() => handleSelect(node)}
@@ -813,19 +881,18 @@
       </div>
     </button>
 
-    {#if hist.length >= 2}
-      {@const spark = buildSparkline(hist)}
-      <div class="grid-delay-popover">
-        <span class="popover-title">历史延迟 ({hist.length})</span>
-        <svg class="sparkline" width="120" height="32" viewBox="0 0 120 32" preserveAspectRatio="none">
-          <polyline points={sparklinePath(spark)} fill="none" stroke={ds.bar} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
-        </svg>
-        <span class="popover-stats">
-          最新 {hist[hist.length - 1].delay > 0 ? hist[hist.length - 1].delay + 'ms' : '超时'}
-          · 均 {meanDelay(hist)}ms
-        </span>
-      </div>
-    {/if}
+    <!-- Independent probe button (P3-D): the whole card selects the node;
+         this button only probes latency. Placed OUTSIDE the card <button>
+         so its clicks never trigger selection (avoiding the old mis-fire). -->
+    <button
+      class="grid-probe-btn"
+      onclick={() => handleProbe(node)}
+      disabled={isProbing || probingAll}
+      title="测试延迟"
+      aria-label="测试 {node.name} 延迟"
+    >
+      {#if isProbing}<span class="grid-probe-spin">⟳</span>{:else}测速{/if}
+    </button>
   </div>
 {/snippet}
 
@@ -1584,34 +1651,24 @@
     margin-left: 2px;
   }
 
-  /* Sparkline popover (list view) */
-  .delay-popover {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    right: 0;
-    z-index: 20;
+  /* ── Portal delay-popover (position:fixed escapes overflow clipping) ── */
+  .delay-portal-popover {
+    position: fixed; /* overwritten by inline style for top/left/transform */
+    z-index: 9999;
     min-width: 148px;
     padding: 8px 10px;
     border-radius: 8px;
     background: var(--dialog-bg, #fff);
     border: 1px solid var(--border);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.05);
-    opacity: 0;
-    transform: translateY(4px);
-    pointer-events: none;
-    transition: opacity 0.15s ease, transform 0.15s ease;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    pointer-events: none;
   }
 
-  :global(.dark) .delay-popover {
+  :global(.dark) .delay-portal-popover {
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-  }
-
-  .delay-wrap:hover .delay-popover {
-    opacity: 1;
-    transform: translateY(0);
   }
 
   .popover-title {
@@ -1680,10 +1737,13 @@
      GRID VIEW
      ═══════════════════════════════════════ */
   .node-grid {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
     padding: 10px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 10px;
     align-content: start;
   }
 
@@ -1694,9 +1754,9 @@
   .grid-card {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     width: 100%;
-    padding: 10px 11px 12px;
+    padding: 12px 13px 14px;
     background: var(--card);
     border: 1.5px solid var(--border);
     border-radius: 8px;
@@ -1828,6 +1888,43 @@
     animation: spin 0.8s linear infinite;
   }
 
+  /* Independent probe button on the card (P3-D) — top-right corner, a
+     separate click target from the card's "select node" action so probing
+     never accidentally switches the active node. */
+  .grid-probe-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    z-index: 2;
+    transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+  }
+  .grid-probe-btn:hover:not(:disabled) {
+    background: var(--accent, var(--muted));
+    color: var(--foreground);
+    border-color: var(--primary);
+  }
+  .grid-probe-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .grid-probe-spin {
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
+
   /* Grid delay bar (bottom strip) */
   .grid-bar-track {
     position: absolute;
@@ -1850,36 +1947,6 @@
   .grid-card:hover .grid-bar-track,
   .grid-card.active .grid-bar-track {
     opacity: 0.5;
-  }
-
-  /* Grid hover popover */
-  .grid-delay-popover {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%) translateY(4px);
-    z-index: 20;
-    min-width: 148px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--dialog-bg, #fff);
-    border: 1px solid var(--border);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.05);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  :global(.dark) .grid-delay-popover {
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-  }
-
-  .grid-card-wrap:hover .grid-delay-popover {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
   }
 
   /* ═══════════════════════════════════════
