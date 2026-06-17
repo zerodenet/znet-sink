@@ -5,14 +5,15 @@
   import { coreEvents, type ConnectionDelta } from '$lib/services/core-events.svelte';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
 
-  type DisplayConnection = {
-    flowId: string;
-    source: string;
-    destination: string;
-    protocol: string;
-    bytesUp: number;
-    bytesDown: number;
-    startedAtUnixMs: number;
+ type DisplayConnection = {
+   flowId: string;
+   source: string;
+   destination: string;
+   origin: 'active' | 'recent';
+   protocol: string;
+   bytesUp: number;
+   bytesDown: number;
+   startedAtUnixMs: number;
     policyTag?: string;
     outboundTag?: string;
     routeMode?: string;
@@ -24,12 +25,53 @@
     durationMs?: number;
   };
 
-  let connections = $state<DisplayConnection[]>([]);
-  let loading = $state(true);
-  let closingId = $state<string | null>(null);
-  let expandedIds = $state<Set<string>>(new Set());
+ let connections = $state<DisplayConnection[]>([]);
+ let loading = $state(true);
+ let closingId = $state<string | null>(null);
+ let expandedIds = $state<Set<string>>(new Set());
+ let activeTab = $state<'live' | 'history'>('live');
+ let searchQuery = $state('');
+ let flowSupported = $state(true);
+ const MAX_CONNECTIONS = 500;
+ const MAX_RENDER = 120;
+ let pendingDeltas: ConnectionDelta[] = [];
+ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function toggleExpand(id: string) {
+ function matchesSearch(c: DisplayConnection): boolean {
+   const q = searchQuery.trim().toLowerCase();
+   if (!q) return true;
+   return (
+     c.destination.toLowerCase().includes(q) ||
+     c.source.toLowerCase().includes(q) ||
+     c.flowId.toLowerCase().includes(q) ||
+     (c.policyTag?.toLowerCase().includes(q) ?? false) ||
+     (c.outboundTag?.toLowerCase().includes(q) ?? false)
+   );
+ }
+
+ const tabConnections = $derived(
+   connections
+     .filter((c) => (activeTab === 'live' ? c.origin === 'active' : c.origin === 'recent'))
+     .filter(matchesSearch),
+ );
+
+ const visibleConnections = $derived(tabConnections.slice(0, MAX_RENDER));
+ const liveCount = $derived(connections.filter((c) => c.origin === 'active').length);
+ const historyCount = $derived(connections.filter((c) => c.origin === 'recent').length);
+
+ function clearList() {
+   connections = connections.filter((c) => c.origin !== (activeTab === 'live' ? 'active' : 'recent'));
+   expandedIds = new Set();
+ }
+
+ function flushDeltas() {
+   if (pendingDeltas.length === 0) return;
+   const deltas = pendingDeltas;
+   pendingDeltas = [];
+   applyDeltas(deltas);
+ }
+
+ function toggleExpand(id: string) {
     const next = new Set(expandedIds);
     if (next.has(id)) {
       next.delete(id);
@@ -43,9 +85,10 @@
     loading = true;
     try {
       connections = await fetchConnections();
-    } catch {
-      // Silent — keep stale data visible
-    } finally {
+   } catch {
+     // If the kernel doesn't support flow queries at all, mark unsupported.
+     flowSupported = false;
+   } finally {
       loading = false;
     }
   }
@@ -58,18 +101,19 @@
         getGuiRecentConnections({ limit: 50 }),
       ]);
 
-      const activeItems = activeResult.status === 'fulfilled'
-        ? activeResult.value.items.map(mapGuiConnection)
-        : [];
+     const activeItems = activeResult.status === 'fulfilled'
+       ? activeResult.value.items.map((c) => mapGuiConnection(c))
+       : [];
 
-      const recentItems = recentResult.status === 'fulfilled'
-        ? recentResult.value.items
-            .filter(r => !activeItems.some(a => a.flowId === r.flowId))
-            .map(mapGuiConnection)
-        : [];
+     const recentItems = recentResult.status === 'fulfilled'
+       ? recentResult.value.items
+           .filter(r => !activeItems.some(a => a.flowId === r.flowId))
+           .map((c) => mapGuiConnection(c, 'recent'))
+       : [];
 
-      // Deduplicate: active connections take priority
-      const all = [...activeItems, ...recentItems];
+     flowSupported = true;
+     // Deduplicate: active connections take priority
+     const all = [...activeItems, ...recentItems];
       if (all.length > 0) return all;
 
       // If both failed with mode_restricted, fallback to raw IPC
@@ -93,12 +137,13 @@
     }
   }
 
-  function mapGuiConnection(c: GuiConnectionItem): DisplayConnection {
-    return {
-      flowId: c.flowId,
-      source: c.source ?? '-',
-      destination: c.destination,
-      protocol: c.network,
+function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'active'): DisplayConnection {
+  return {
+    flowId: c.flowId,
+    source: c.source ?? '-',
+    destination: c.destination,
+    origin,
+    protocol: c.network,
       bytesUp: c.bytesUp,
       bytesDown: c.bytesDown,
       startedAtUnixMs: c.startedAtUnixMs ?? Date.now(),
@@ -114,12 +159,13 @@
     };
   }
 
-  function mapFlowInfo(f: FlowInfo): DisplayConnection {
-    return {
-      flowId: f.flowId,
-      source: f.source,
-      destination: f.destination,
-      protocol: f.protocol,
+ function mapFlowInfo(f: FlowInfo): DisplayConnection {
+   return {
+     flowId: f.flowId,
+     source: f.source,
+     destination: f.destination,
+     origin: 'active',
+     protocol: f.protocol,
       bytesUp: f.bytesUp,
       bytesDown: f.bytesDown,
       startedAtUnixMs: f.startedAtUnixMs,
@@ -194,10 +240,14 @@
     const seq = coreEvents.deltaSeq;
     if (seq === 0) return;
 
-    const deltas = coreEvents.drainDeltas();
-    if (deltas.length === 0) return;
+   const deltas = coreEvents.drainDeltas();
+   if (deltas.length === 0) return;
 
-    applyDeltas(deltas);
+    // Throttle: batch deltas and flush at most every 300ms to avoid
+    // high-frequency DOM churn from burst event streams.
+    pendingDeltas.push(...deltas);
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(flushDeltas, 300);
   });
 
   function applyDeltas(deltas: ConnectionDelta[]) {
@@ -237,28 +287,32 @@
 
     if (addMap.size === 0 && updateMap.size === 0 && removeSet.size === 0) return;
 
-    connections = [
-      ...Array.from(addMap.values()),
-      ...connections
-        .filter(c => !removeSet.has(c.flowId) && !addMap.has(c.flowId))
-        .map(c => {
-          const update = updateMap.get(c.flowId);
-          if (!update) return c;
-          return {
-            ...c,
-            bytesUp: update.bytesUp ?? c.bytesUp,
-            bytesDown: update.bytesDown ?? c.bytesDown,
-            throughputUpBps: update.throughputUpBps ?? c.throughputUpBps,
-            throughputDownBps: update.throughputDownBps ?? c.throughputDownBps,
-            updatedAtUnixMs: update.updatedAtUnixMs ?? c.updatedAtUnixMs,
-            durationMs: update.durationMs ?? c.durationMs,
-            outcome: update.outcome ?? c.outcome,
-            routeMode: update.routeMode ?? c.routeMode,
-          };
-        }),
-    ];
+   connections = [
+     ...Array.from(addMap.values()),
+     ...connections
+       .filter(c => !removeSet.has(c.flowId) && !addMap.has(c.flowId))
+       .map(c => {
+         const update = updateMap.get(c.flowId);
+         if (!update) return c;
+         return {
+           ...c,
+           bytesUp: update.bytesUp ?? c.bytesUp,
+           bytesDown: update.bytesDown ?? c.bytesDown,
+           throughputUpBps: update.throughputUpBps ?? c.throughputUpBps,
+           throughputDownBps: update.throughputDownBps ?? c.throughputDownBps,
+           updatedAtUnixMs: update.updatedAtUnixMs ?? c.updatedAtUnixMs,
+           durationMs: update.durationMs ?? c.durationMs,
+           outcome: update.outcome ?? c.outcome,
+           routeMode: update.routeMode ?? c.routeMode,
+         };
+       }),
+   ];
+   // Cap total to avoid unbounded growth (oldest/recent items dropped first)
+   if (connections.length > MAX_CONNECTIONS) {
+     connections = connections.slice(0, MAX_CONNECTIONS);
+   }
 
-    // 清理已移除连接的展开状态
+   // 清理已移除连接的展开状态
     if (removeSet.size > 0) {
       const nextExpanded = new Set([...expandedIds].filter(id => !removeSet.has(id)));
       if (nextExpanded.size !== expandedIds.size) {
@@ -269,31 +323,62 @@
 </script>
 
 <div class="desk-card flex-1 overflow-hidden flex flex-col animate-fade-in">
-  <!-- Panel header -->
-  <div class="panel-header">
-    <div class="panel-title-row">
-      <span class="panel-title">连接</span>
-      <span class="count-badge">{connections.length} 个</span>
-    </div>
-    <button class="action-btn" onclick={refresh}>
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
-      </svg>
-      刷新
-    </button>
-  </div>
+ <!-- Panel header -->
+ <div class="panel-header">
+   <div class="panel-title-row">
+     <span class="panel-title">连接</span>
+     <span class="count-badge">{activeTab === 'live' ? liveCount : historyCount} 个</span>
+   </div>
+   <!-- Tab switcher: live connections vs connection history -->
+   <div class="tab-switcher">
+     <button class="tab-btn {activeTab === 'live' ? 'active' : ''}" onclick={() => activeTab = 'live'}>实时连接</button>
+     <button class="tab-btn {activeTab === 'history' ? 'active' : ''}" onclick={() => activeTab = 'history'}>连接记录</button>
+   </div>
+   <button class="action-btn" onclick={refresh}>
+     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+       <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
+     </svg>
+     刷新
+   </button>
+   {#if tabConnections.length > 0}
+     <button class="action-btn danger" onclick={clearList} title="清空当前列表">
+       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+         <path d="M3 4H9M5 4V3A1 1 0 0 1 6 2H6A1 1 0 0 1 7 3V4M4 4L4.5 10A1 1 0 0 0 5.5 11H6.5A1 1 0 0 0 7.5 10L8 4"/>
+       </svg>
+       清空
+     </button>
+   {/if}
+ </div>
 
-  <!-- Content -->
-  {#if loading && connections.length === 0}
-    <div class="panel-empty">加载中...</div>
-  {:else if connections.length === 0}
-    <div class="panel-empty-block">
-      <span class="empty-title">无连接</span>
-      <span class="empty-desc">内核未运行或暂无流量</span>
-    </div>
-  {:else}
-    <div class="list-scroll">
-      {#each connections as conn (conn.flowId)}
+ <!-- Search / filter -->
+ <div class="search-bar">
+   <svg class="search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+     <circle cx="6" cy="6" r="4"/><path d="M9 9L12 12"/>
+   </svg>
+   <input class="search-input" type="text" placeholder="搜索目标地址、来源、标签..." bind:value={searchQuery}>
+ </div>
+
+ <!-- Content -->
+ {#if loading && connections.length === 0}
+   <div class="panel-empty">加载中...</div>
+ {:else if !flowSupported}
+   <div class="panel-empty-block">
+     <span class="empty-title">内核不支持实时连接</span>
+     <span class="empty-desc">当前内核版本未启用 flow-snapshot 能力</span>
+   </div>
+ {:else if connections.length === 0}
+   <div class="panel-empty-block">
+     <span class="empty-title">无连接</span>
+     <span class="empty-desc">内核未运行或暂无流量</span>
+   </div>
+ {:else if tabConnections.length === 0}
+   <div class="panel-empty-block">
+     <span class="empty-title">{searchQuery ? '无匹配结果' : '无记录'}</span>
+     <span class="empty-desc">{searchQuery ? '尝试更换搜索关键词' : (activeTab === 'live' ? '内核未运行或暂无活跃连接' : '暂无连接记录')}</span>
+   </div>
+ {:else}
+   <div class="list-scroll">
+     {#each visibleConnections as conn (conn.flowId)}
         <div class="flow-group" class:expanded={expandedIds.has(conn.flowId)}>
           <div class="flow-row" onclick={() => toggleExpand(conn.flowId)} onkeydown={(e) => e.key === 'Enter' && toggleExpand(conn.flowId)} role="button" tabindex="0">
             <div class="flow-main">
@@ -401,9 +486,12 @@
             </div>
           {/if}
         </div>
-      {/each}
-    </div>
-  {/if}
+     {/each}
+     {#if tabConnections.length > visibleConnections.length}
+       <div class="list-truncated">显示 {visibleConnections.length} / {tabConnections.length} 条，滚动查看更多</div>
+     {/if}
+   </div>
+ {/if}
 </div>
 
 <style>
@@ -454,9 +542,78 @@
     transition: background 0.12s ease;
   }
 
-  .action-btn:hover { background: var(--surface); }
+ .action-btn:hover { background: var(--surface); }
 
-  .panel-empty {
+ .action-btn.danger:hover {
+   background: rgba(239, 68, 68, 0.08);
+   color: var(--destructive);
+ }
+
+ /* ---- Tab switcher ---- */
+ .tab-switcher {
+   display: flex;
+   gap: 2px;
+   background: var(--muted);
+   border-radius: 7px;
+   padding: 2px;
+ }
+
+ .tab-btn {
+   padding: 4px 10px;
+   border-radius: 5px;
+   font-size: 11.5px;
+   font-weight: 500;
+   background: transparent;
+   color: var(--muted-foreground);
+   border: none;
+   cursor: pointer;
+   transition: all 0.12s ease;
+ }
+
+ .tab-btn:hover { color: var(--foreground); }
+ .tab-btn.active {
+   background: var(--card);
+   color: var(--foreground);
+   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+ }
+
+ /* ---- Search bar ---- */
+ .search-bar {
+   display: flex;
+   align-items: center;
+   gap: 7px;
+   padding: 7px 14px;
+   border-bottom: 1px solid var(--border);
+   flex-shrink: 0;
+ }
+
+ .search-icon {
+   color: var(--muted-foreground);
+   opacity: 0.5;
+   flex-shrink: 0;
+ }
+
+ .search-input {
+   flex: 1;
+   border: none;
+   background: transparent;
+   font-size: 12px;
+   color: var(--foreground);
+   outline: none;
+ }
+
+ .search-input::placeholder { color: var(--muted-foreground); opacity: 0.5; }
+
+ /* ---- Truncation footer ---- */
+ .list-truncated {
+   text-align: center;
+   font-size: 11px;
+   color: var(--muted-foreground);
+   opacity: 0.5;
+   padding: 8px;
+ }
+
+ .panel-empty {
     flex: 1;
     display: flex;
     align-items: center;
