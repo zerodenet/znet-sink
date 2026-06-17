@@ -313,11 +313,35 @@
     return undefined;
   });
 
-  // ── Actions ──
-  async function handleSelect(node: ProxyNode) {
-    if (switching) return;
-    switching = node.id;
-    lastError = null;
+ // ── Actions ──
+ /// Resolve the PolicyGroup a node belongs to (by selectedGroup sidebar,
+ /// runtime overlay, or outbound membership), mirroring handleSelect logic.
+function groupForNode(node: ProxyNode): PolicyGroup | undefined {
+  const byName = (name: string | null | undefined) =>
+    name ? groups.find((g) => g.name === name) : undefined;
+  return (
+     byName(selectedGroup) ??
+     byName(runtimeOverlay.get(node.tag)?.groupName) ??
+     groups.find((g) => g.outbounds.some((o) => o.tag === node.tag))
+   );
+ }
+
+ /// Only "selector" groups honor a user-picked outbound. url-test /
+ /// fallback / load-balance auto-select, so manual selection is meaningless.
+ function isNodeSelectable(node: ProxyNode): boolean {
+   const group = groupForNode(node);
+   if (!group) return true; // no group info yet — allow (backend guards)
+   return group.kind?.toLowerCase() === 'selector';
+ }
+
+ async function handleSelect(node: ProxyNode) {
+   if (switching) return;
+   if (!isNodeSelectable(node)) {
+     lastError = 'auto-select group — manual selection not available';
+     return;
+   }
+   switching = node.id;
+   lastError = null;
     try {
       const policyTag =
         selectedGroup
@@ -742,12 +766,12 @@
 
   <div class="node-row {isActive ? 'active' : ''}" role="listitem">
     <!-- Main click area: select node -->
-    <button
-      class="node-main"
-      onclick={() => handleSelect(node)}
-      disabled={switching !== null || !store.isActionOperable('policies.select')}
-    >
-      <!-- Radio indicator -->
+   <button
+     class="node-main"
+     onclick={() => handleSelect(node)}
+     disabled={switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
+   >
+     <!-- Radio indicator -->
       <span class="node-radio {isActive ? 'on' : ''}">
         {#if isSwitching}
           <span class="node-spin-inline">⟳</span>
@@ -836,11 +860,11 @@
     onmouseleave={hidePopover}
   >
     <button
-      class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
-      onclick={() => handleSelect(node)}
-      disabled={switching !== null || !store.isActionOperable('policies.select')}
-    >
-      <!-- Header: name + status -->
+     class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
+     onclick={() => handleSelect(node)}
+     disabled={switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
+   >
+     <!-- Header: name + status -->
       <div class="grid-card-header">
         <span class="grid-card-name" class:active-name={isActive}>
           {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}

@@ -25,7 +25,21 @@ pub async fn select_policy(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiPolicySelectionResult> {
     let policy_tag = normalize_non_empty(policy_tag, "policyTag")?;
-    let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+   let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+    // Reject manual selection for auto-selecting group types
+    // (url-test / fallback / load-balance). Only "selector" groups honor a
+    // user-picked outbound; in other types the kernel silently ignores it.
+    let groups = super::queries::policy_groups(options.clone())
+        .await
+        .unwrap_or_default();
+    if let Some(group) = groups.iter().find(|g| g.name == policy_tag) {
+        if !group.kind.eq_ignore_ascii_case("selector") {
+            return Err(crate::errors::AppError::invalid_argument(format!(
+                "group '{}' is type '{}' — only selector groups support manual selection",
+                policy_tag, group.kind
+            )));
+        }
+    }
     let value = run_command(
         "policies.select",
         json!({
