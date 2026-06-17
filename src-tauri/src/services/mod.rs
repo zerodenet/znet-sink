@@ -21,6 +21,7 @@ pub mod rule_set;
 pub mod subscription;
 pub mod system_proxy;
 pub mod system_proxy_guard;
+pub mod traffic_sampler;
 
 #[cfg(test)]
 mod proxy_mode_tests;
