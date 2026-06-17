@@ -12,7 +12,7 @@ const MAX_NODES = 500; // bound total memory footprint
 const PRUNE_AFTER_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
 export interface DelayEntry {
-  /** Latency in ms; 0 means "probed but unreachable". */
+  /** Latency in ms. `-1` = timeout/unreachable, `0` = idle/zero, `>0` = latency. */
   delay: number;
   /** Unix-ms timestamp of the probe. */
   at: number;
@@ -42,7 +42,9 @@ class DelayHistoryStore {
   /** Record a probe result for a node. */
   record(tag: string, delayMs: number | undefined, reachable: boolean): void {
     if (!tag) return;
-    const value = reachable ? Math.max(0, delayMs ?? 0) : 0;
+    // `-1` marks a timeout / unreachable probe (e.g. kernel not running) so
+    // the UI can show "timeout" instead of mistaking it for "never probed".
+    const value = reachable ? Math.max(0, delayMs ?? 0) : -1;
     const entry: DelayEntry = { delay: value, at: Date.now() };
 
     const existing = this.history[tag] ?? [];
