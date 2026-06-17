@@ -40,6 +40,13 @@ pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
             // Zero outbound format: {"tag":"...", "protocol":{"type":"shadowsocks", ...}}
             // Also support flat format: {"tag":"...", "type":"shadowsocks"}
             let protocol = resolve_outbound_protocol(node).to_string();
+            // Skip built-in outbounds (direct/block/reject/dns) — they are
+            // internal routing chains injected by the kernel/subscription,
+            // not real proxy nodes, and must never appear in the node list
+            // or as group members.
+            if is_builtin_outbound(&protocol) {
+                return None;
+            }
             let protocol_obj = node.get("protocol").and_then(|p| p.as_object());
             Some(ConfigProxyNode {
                 tag: tag.to_string(),
@@ -65,6 +72,17 @@ pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
             })
         })
         .collect()
+}
+
+/// Whether a protocol/tag names a built-in outbound — an internal routing
+/// chain like `direct`/`block`/`reject` rather than a real proxy node. Used
+/// to filter built-ins out of both the node list and group members so they
+/// never show up in the UI.
+fn is_builtin_outbound(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "direct" | "block" | "reject" | "dns" | "pass"
+    )
 }
 
 /// Resolve the protocol name from an outbound definition.
@@ -260,6 +278,11 @@ fn parse_config_policy_member(
             &["tag", "target_tag", "targetTag", "name", "id", "target"],
         )?,
     };
+    // Skip built-in outbounds referenced as group members — they are not
+    // selectable proxy nodes.
+    if is_builtin_outbound(&tag) {
+        return None;
+    }
     let kind = value
         .as_object()
         .and_then(|_| string_at(&value, &["kind", "type", "protocol"]))
