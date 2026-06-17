@@ -13,8 +13,9 @@
     return `${(mb * 1000).toFixed(0)} KB`;
   }
 
-  const { history }: {
+  const { history, unsupported = false }: {
     history: { up: number; down: number }[];
+    unsupported?: boolean;
   } = $props();
 
   const currentDown = $derived(history.length > 0 ? history[history.length - 1].down : 0);
@@ -25,7 +26,10 @@
 <div class="chart-card">
   <!-- Header row: title + live speeds -->
   <div class="chart-header">
-    <span class="chart-title">实时速率</span>
+    <div class="chart-title">
+      <span class="chart-title-text">实时速率</span>
+      <span class="chart-subtitle">代理流量</span>
+    </div>
     <div class="chart-speeds">
       <div class="speed-item down">
         <span class="speed-dot" class:pulse={hasTraffic}></span>
@@ -116,8 +120,10 @@
       </defs>
     </svg>
 
-    {#if !hasTraffic}
+    {#if !hasTraffic && !unsupported}
       <div class="chart-empty">等待网络数据…</div>
+    {:else if !hasTraffic && unsupported}
+      <div class="chart-empty">内核不支持流量查询</div>
     {/if}
   </div>
 </div>
@@ -145,9 +151,22 @@
   }
 
   .chart-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .chart-title-text,
+  .chart-subtitle {
     font-size: 11px;
     font-weight: 500;
     color: var(--muted-foreground);
+  }
+
+  .chart-subtitle {
+    font-weight: 400;
+    font-size: 10px;
+    opacity: 0.6;
   }
 
   .chart-speeds {

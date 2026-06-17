@@ -314,7 +314,7 @@
     <!-- Row 3: Chart + Current node (only when config is active or nodes loaded) -->
     <div class="flex-1 w-full flex flex-col lg:flex-row gap-3 overflow-hidden min-h-0" style="min-height: 180px;">
       <div class="w-full {store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) ? 'lg:w-2/3' : ''} overflow-hidden min-h-[120px]">
-        <TrafficChart history={overviewData.speedHistory} />
+        <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
       </div>
       {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes)}
       <div class="w-full lg:w-1/3 min-h-[80px]">
@@ -454,7 +454,7 @@
 
     <!-- Traffic chart -->
     <div class="lite-chart">
-      <TrafficChart history={overviewData.speedHistory} />
+      <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
     </div>
 
   </div>

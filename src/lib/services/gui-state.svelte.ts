@@ -15,8 +15,9 @@ import {
   guiSetProxyMode,
   getGuiCoreOverview,
   getGuiPolicyGroups,
-  getConfigProxyNodes,
-  getConfigPolicyGroups,
+ getConfigProxyNodes,
+ getConfigPolicyGroups,
+  getGuiZeroCapabilities,
   trayUpdateStatus,
 } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
@@ -38,11 +39,15 @@ class GuiStateStore {
   proxyMode = $state<ProxyModeStatus | null>(null);
   coreOverview = $state<CoreOverview | null>(null);
   policyGroups = $state<PolicyGroup[]>([]);
-  tunStatus = $state<GuiFeatureStatus | null>(null);
-  configNodes = $state<ConfigProxyNode[]>([]);
-  configPolicyGroups = $state<PolicyGroup[]>([]);
+ tunStatus = $state<GuiFeatureStatus | null>(null);
+ configNodes = $state<ConfigProxyNode[]>([]);
+ configPolicyGroups = $state<PolicyGroup[]>([]);
+  // Whether the kernel supports live traffic stats (needs "query" or
+  // "runtime-snapshot" capability). When false, the traffic chart shows
+  // a downgrade hint instead of silently reading 0.
+  supportsTrafficStats = $state(true);
 
-  isInitializing = $state(true); // true until first refreshAll completes
+ isInitializing = $state(true); // true until first refreshAll completes
   isLoading = $state(false);
   isConnecting = $state(false);
   isDisconnecting = $state(false);
@@ -77,16 +82,17 @@ class GuiStateStore {
   }
 
   async refreshAll() {
-    await Promise.allSettled([
-      this.refreshSelfTest(),
-      this.refreshConnectionStatus(),
-      this.refreshProxyMode(),
-      this.refreshCoreOverview(),
-      this.refreshConfigNodes(),
-      this.refreshConfigPolicyGroups(),
-      this.refreshPolicyGroups(),
-      this.refreshTunStatus(),
-    ]);
+   await Promise.allSettled([
+     this.refreshSelfTest(),
+     this.refreshConnectionStatus(),
+     this.refreshProxyMode(),
+     this.refreshCoreOverview(),
+     this.refreshConfigNodes(),
+     this.refreshConfigPolicyGroups(),
+     this.refreshPolicyGroups(),
+     this.refreshTunStatus(),
+     this.refreshCapabilities(),
+   ]);
   }
 
   /** Refresh connection + overview on core process events. */
@@ -160,22 +166,37 @@ class GuiStateStore {
     }
   }
 
-  async refreshTunStatus() {
+ async refreshTunStatus() {
+   try {
+     this.tunStatus = await getGuiTunStatus();
+   } catch {
+     this.tunStatus = null;
+   }
+ }
+
+  /** Probe kernel capabilities to determine feature support (e.g. traffic). */
+  async refreshCapabilities() {
     try {
-      this.tunStatus = await getGuiTunStatus();
+      const caps = await getGuiZeroCapabilities();
+      const features = caps?.features ?? [];
+      // Traffic stats require either "query" or "runtime-snapshot" — both
+      // are the same IPC permission gate in the zero kernel.
+      this.supportsTrafficStats =
+        caps.available && (features.includes('query') || features.includes('runtime-snapshot'));
     } catch {
-      this.tunStatus = null;
+      // Kernel not connected yet — assume supported (default optimistic).
     }
   }
 
-  private async refreshRuntimeState() {
+ private async refreshRuntimeState() {
     await Promise.allSettled([
       this.refreshConnectionStatus(),
       this.refreshCoreOverview(),
-      this.refreshPolicyGroups(),
-      this.refreshTunStatus(),
-    ]);
-  }
+     this.refreshPolicyGroups(),
+     this.refreshTunStatus(),
+     this.refreshCapabilities(),
+   ]);
+ }
 
   private errorMessage(e: any): string {
     return e?.message ?? e ?? '未知错误';
