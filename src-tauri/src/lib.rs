@@ -170,13 +170,27 @@ pub fn run() {
 
     // Register core-process shutdown guard: stop core on exit.
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
+    let shutdown_flag = app_state.shutting_down_handle();
     shutdown_coord.register(
         lifecycle::Phase::Runtime,
         "stop_core_process",
         Box::new(|| {
-            // ManagedCoreProcess::Drop kills + waits on the child process.
-            // This guard runs first so logs appear in correct order.
-            eprintln!("[ZNet] shutdown: stopping core process (via Drop)");
+            // Explicitly kill the kernel so it exits with the GUI. Relying
+            // on ManagedCoreProcess::Drop alone is unreliable — Drop may not
+            // run (external kernel, or process exit without unwinding).
+            eprintln!("[ZNet] shutdown: stopping core process");
+            core_process::kill_core_default();
+        }),
+    );
+    // Registered AFTER stop_core_process so LIFO ordering runs it FIRST:
+    // the watchdog must see the shutdown flag before we tear the process
+    // down, otherwise it would immediately try to restart the kernel.
+    shutdown_coord.register(
+        lifecycle::Phase::Runtime,
+        "mark_shutting_down",
+        Box::new(move || {
+            shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("[ZNet] shutdown: marking shutdown (watchdog will stop restarting)");
         }),
     );
     shutdown_coord.register(
@@ -497,6 +511,10 @@ pub fn run() {
             // that interval elapses. The first pass is delayed to let
             // the kernel and network come up.
             crate::services::subscription::spawn_auto_sync_scheduler(app.handle().clone());
+
+            // Spawn the traffic sampler so the overview chart updates live —
+            // the kernel doesn't push traffic events on its own (TODO P5).
+            crate::services::traffic_sampler::spawn(app.handle().clone());
 
             Ok(())
         })

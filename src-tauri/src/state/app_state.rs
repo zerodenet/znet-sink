@@ -1,7 +1,7 @@
 use std::process::Child;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -27,6 +27,10 @@ pub struct AppState {
     traffic_sample: Mutex<Option<TrafficSample>>,
     core_process: Mutex<ManagedCoreProcess>,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
+    /// Set to `true` the moment shutdown begins. Long-lived background
+    /// tasks (core-process watchdog, event streams) poll this to stop
+    /// restarting/reconnecting instead of fighting the shutdown sequence.
+    shutting_down: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +89,7 @@ impl AppState {
             traffic_sample: Mutex::new(None),
             core_process: Mutex::new(ManagedCoreProcess::default()),
             zero_features_cache: Mutex::new(None),
+            shutting_down: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -138,6 +143,17 @@ impl AppState {
 
     pub(crate) fn zero_features_cache(&self) -> &Mutex<Option<ZeroFeaturesCache>> {
         &self.zero_features_cache
+    }
+
+    /// Returns `true` once shutdown has begun.
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
+    }
+
+    /// Cloneable handle to the shutdown flag, so shutdown callbacks
+    /// registered in `lib.rs` (which can't borrow `AppState`) can flip it.
+    pub(crate) fn shutting_down_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.shutting_down)
     }
 
 }
