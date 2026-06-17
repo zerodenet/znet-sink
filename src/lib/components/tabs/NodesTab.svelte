@@ -291,17 +291,21 @@
       }
     }
 
-    const out: NodeSection[] = [];
-    for (const name of groupOrder) {
-      const items = buckets.get(name);
-      if (items && items.length > 0) {
-        const g = groups.find((x) => x.name === name);
-        out.push({ name, kind: g?.kind, nodes: sortNodes(items) });
-      }
-    }
-    if (orphan.length > 0) {
-      out.push({ name: '其他', nodes: sortNodes(orphan) });
-    }
+   const out: NodeSection[] = [];
+   for (const name of groupOrder) {
+     const items = buckets.get(name);
+     if (items && items.length > 0) {
+       const g = groups.find((x) => x.name === name);
+       out.push({ name, kind: g?.kind, nodes: sortNodes(items) });
+     }
+   }
+    // When policy groups exist, hide ungrouped (plain) nodes so the view
+    // shows real groups first. Only fall back to the orphan bucket when
+    // no group section rendered anything (e.g. groups exist but haven't
+    // loaded their node data yet).
+    if (orphan.length > 0 && out.length === 0) {
+     out.push({ name: '其他', nodes: sortNodes(orphan) });
+   }
     return out;
   });
 
