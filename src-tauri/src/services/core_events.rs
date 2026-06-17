@@ -62,6 +62,9 @@ pub fn start(
     })
 }
 
+/// Cooldown between a lost connection and the next reconnect attempt.
+const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+
 fn subscribe_and_forward_events(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
@@ -69,25 +72,69 @@ fn subscribe_and_forward_events(
     endpoint: CoreEndpoint,
     timeout: Duration,
 ) -> AppResult<()> {
-    // The multiplexed connection already sent `subscribe` when it was
-    // established, so attaching as a broadcast receiver is all that's needed.
-    let conn = connection::get_or_connect(endpoint, timeout)?;
-    emit_core_event_status(&app, generation, "subscribed", None, None);
+    // Reconnect loop: the multiplexed connection is torn down whenever the
+    // kernel exits, so instead of giving up on the first `Closed`/connect
+    // failure we back off and re-subscribe. This lets the event stream
+    // self-heal after the watchdog restarts the kernel, without the
+    // frontend having to re-issue `start`.
+    loop {
+        // Stop promptly if a newer generation took over.
+        if active_generation.load(Ordering::SeqCst) != generation {
+            return Ok(());
+        }
 
-    let mut receiver = conn.subscribe_events();
-    while active_generation.load(Ordering::SeqCst) == generation {
-        match receiver.blocking_recv() {
-            Ok(event) => emit_core_event(&app, generation, event),
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                // Slow consumer: some events were dropped. Keep going.
+        let conn = match connection::get_or_connect(endpoint.clone(), timeout) {
+            Ok(conn) => conn,
+            Err(error) => {
+                // Kernel likely down — tell the frontend, then wait for the
+                // watchdog to bring it back.
+                emit_core_event_status(&app, generation, "offline", Some(error), None);
+                sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
                 continue;
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                // Connection torn down — the outer status will reflect it.
-                break;
+        };
+        emit_core_event_status(&app, generation, "subscribed", None, None);
+
+        let mut receiver = conn.subscribe_events();
+        let mut closed = false;
+        while active_generation.load(Ordering::SeqCst) == generation {
+            match receiver.blocking_recv() {
+                Ok(event) => emit_core_event(&app, generation, event),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Slow consumer: some events were dropped. Keep going.
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    closed = true;
+                    break;
+                }
             }
         }
-    }
 
-    Ok(())
+        // Generation advanced → the caller stopped us.
+        if active_generation.load(Ordering::SeqCst) != generation {
+            return Ok(());
+        }
+        // Otherwise the connection was torn down (kernel crash/restart).
+        if closed {
+            emit_core_event_status(&app, generation, "reconnecting", None, None);
+            sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
+        }
+    }
+}
+
+/// Sleep for `total`, waking early if the subscription generation is
+/// superseded — so `stop` takes effect promptly instead of waiting out the
+/// full reconnect backoff.
+fn sleep_interruptible(active_generation: &AtomicU64, generation: u64, total: Duration) {
+    let step = Duration::from_millis(200);
+    let mut waited = Duration::ZERO;
+    while waited < total {
+        if active_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let sleep = step.min(total - waited);
+        std::thread::sleep(sleep);
+        waited += sleep;
+    }
 }

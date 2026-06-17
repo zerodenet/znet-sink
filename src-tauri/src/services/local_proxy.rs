@@ -1,4 +1,4 @@
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use crate::errors::{AppError, AppResult};
@@ -6,6 +6,26 @@ use crate::errors::{AppError, AppResult};
 const LOCAL_PROXY_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCAL_PROXY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Best-effort check that the local proxy port is free *before* the kernel
+/// is spawned.
+///
+/// Tries to bind the port; if that fails, something is already listening
+/// (another proxy, a stale process from a previous session, etc.) and the
+/// kernel would fail to bind too. Surfacing the conflict here — instead of
+/// letting the kernel spawn and die silently — avoids the cascade where a
+/// crashed kernel triggers a destructive system-proxy wipe.
+///
+/// The listener is dropped immediately, so this only holds the port for an
+/// instant; the kernel rebinds it right after.
+pub(crate) fn check_port_available(host: &str, port: u16) -> AppResult<()> {
+    match TcpListener::bind((host, port)) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(AppError::invalid_argument(format!(
+            "local proxy port {host}:{port} is already in use; free it or change the local proxy port in settings (another proxy or a stale process may occupy it): {error}"
+        ))),
+    }
+}
 
 pub(crate) fn wait_until_listening(host: &str, port: u16) -> AppResult<()> {
     let started = Instant::now();

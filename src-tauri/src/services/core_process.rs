@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use crate::services::common;
 
@@ -9,10 +10,12 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
+    core::CoreEndpoint,
+    core_config::CoreConfigSnapshot,
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
     logs::{LogLevel, LogSource},
 };
-use crate::services::{common::lock, core_config, logs, system_proxy_guard};
+use crate::services::{common::lock, core_config, local_proxy, logs, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
@@ -71,6 +74,36 @@ pub(crate) fn kill_external(state: &AppState) -> AppResult<()> {
     Ok(())
 }
 
+/// Kill the kernel by its default binary name (`zero.exe` / `zero`).
+///
+/// Unlike [`kill_external`] this needs no [`AppState`], so the shutdown
+/// coordinator can call it from a bare `Fn()` callback. This guarantees the
+/// kernel exits with the GUI even when the managed child handle is gone —
+/// e.g. the GUI connected to an already-running (external) kernel and never
+/// owned a child, or `ManagedCoreProcess::Drop` didn't run because the
+/// process exited without full Rust destructor unwinding.
+pub fn kill_core_default() {
+    let name = if cfg!(windows) { "zero.exe" } else { "zero" };
+    #[cfg(windows)]
+    {
+        let _ = common::background_command("taskkill")
+            .args(["/F", "/IM", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = common::background_command("pkill")
+            .args(["-9", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    // Give the OS a moment to release the pipe handle.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+}
+
 pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     let has_active_proxy_config = lock(state.proxy_configs(), "proxy_config")?
         .iter()
@@ -120,7 +153,6 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
         );
         return Err(AppError::invalid_argument(error));
     }
-    let executable_path = snapshot.executable_path.as_deref().unwrap_or_default();
 
     {
         let mut process = lock(state.core_process(), "core_process")?;
@@ -150,8 +182,54 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     // named pipe and the whole flow blocks.
     let _ = kill_external(state.inner());
 
+    // Pre-check the local proxy port before spawning. If something else
+    // already occupies it (another proxy, a stale process), the kernel
+    // will fail to bind and die immediately — which previously cascaded
+    // into a destructive system-proxy disable. Surface the conflict now.
+    let (proxy_host, proxy_port) = {
+        let config = lock(state.app_config(), "app_config")?;
+        (config.local_proxy.host.clone(), config.local_proxy.port)
+    };
+    if let Err(error) = local_proxy::check_port_available(&proxy_host, proxy_port) {
+        let message = error.message.clone();
+        let _ = logs::append_entry(
+            state.inner(),
+            LogSource::App,
+            LogLevel::Error,
+            format!("core process: {message}"),
+            Some(json!({ "host": proxy_host, "port": proxy_port })),
+        );
+        let mut process = lock(state.core_process(), "core_process")?;
+        process.status.state = CoreProcessState::Failed;
+        process.status.last_error = Some(message);
+        process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
+        return Err(error);
+    }
+
+    let status = spawn_core_child(state.inner(), &snapshot, &app_handle)?;
+    // Spawn the watchdog once. It reuses spawn_core_child to restart after
+    // crashes, so on restart it must NOT spawn another monitor — that would
+    // multiply monitors on every crash.
+    spawn_monitor(app_handle.clone(), snapshot);
+    Ok(status)
+}
+
+/// Spawn the kernel child process, wire up its stderr pump, and record the
+/// running status. Shared between the initial [`start`] and the watchdog's
+/// crash-restart path so neither duplicates the other's bookkeeping.
+///
+/// Does NOT spawn the watchdog monitor — [`start`] does that exactly once,
+/// and the monitor reuses this function to restart without spawning another
+/// monitor (which would otherwise multiply on every crash).
+fn spawn_core_child(
+    state: &AppState,
+    snapshot: &CoreConfigSnapshot,
+    app_handle: &AppHandle,
+) -> AppResult<CoreProcessStatus> {
+    let executable_path = snapshot.executable_path.as_deref().unwrap_or_default();
+
     let _ = logs::append_entry(
-        state.inner(),
+        state,
         LogSource::App,
         LogLevel::Info,
         format!(
@@ -170,136 +248,8 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     command.stdout(Stdio::null());
     command.stderr(Stdio::piped());
 
-    match command.spawn() {
-        Ok(mut child) => {
-            let pid = child.id();
-            let stderr = child.stderr.take().unwrap();
-
-            let app_handle_stderr = app_handle.clone();
-            let stderr_handle = std::thread::spawn(move || {
-                let reader = BufReader::new(stderr);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        let cleaned = strip_ansi(&line);
-                        if !cleaned.trim().is_empty() {
-                            let state = app_handle_stderr.state::<AppState>();
-                            let (level, fields) = parse_kernel_log_line(&cleaned);
-                            let _ = logs::append_entry(
-                                &state,
-                                LogSource::Core,
-                                level,
-                                cleaned,
-                                Some(fields),
-                            );
-                        }
-                    }
-                }
-            });
-
-            let mut process = lock(state.core_process(), "core_process")?;
-            process.status = CoreProcessStatus {
-                state: CoreProcessState::Running,
-                pid: Some(pid),
-                kernel: snapshot.kernel.clone(),
-                executable_path: snapshot.executable_path.clone(),
-                working_dir: snapshot.working_dir.clone(),
-                config_path: snapshot.config_path.clone(),
-                endpoint_path: snapshot.endpoint.path.clone(),
-                started_at_unix_ms: Some(crate::services::common::now_unix_ms()),
-                exited_at_unix_ms: None,
-                exit_code: None,
-                exit_reason: None,
-                last_error: None,
-            };
-            process.child = Some(child);
-            process.stderr_handle = Some(stderr_handle);
-
-            // Monitor thread: poll child process exit so UI updates in real time
-            let app_handle_mon = app_handle.clone();
-            std::thread::spawn(move || {
-                let state = app_handle_mon.state::<AppState>();
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    let mut process = match lock(state.core_process(), "core_process") {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    };
-                    let exited_info = if let Some(ref mut child) = process.child {
-                        match child.try_wait() {
-                            Ok(Some(es)) => Some(es),
-                            _ => None,
-                        }
-                    } else {
-                        // child already removed — synthesize an exit status so we still clean up
-                        None
-                    };
-                    if exited_info.is_some() || process.child.is_none() {
-                        // If stop() already took the child and set the exit
-                        // reason, don't overwrite it with a false "crashed"
-                        // event.  The status was handled in stop() above.
-                        if process.child.is_none()
-                            && matches!(
-                                process.status.exit_reason,
-                                Some(CoreProcessExitReason::Stopped)
-                            )
-                        {
-                            break;
-                        }
-
-                        let code = exited_info.as_ref().and_then(|es| es.code());
-                        // code == None ⇒ killed by signal (Unix) → crashed
-                        // code == Some(_) ⇒ normal exit (any code, including 1) → exited
-                        let reason = if code.is_none() {
-                            CoreProcessExitReason::Crashed
-                        } else {
-                            CoreProcessExitReason::Exited
-                        };
-                        let reason_str = if code.is_none() { "crashed" } else { "exited" };
-                        process.status.exit_code = code;
-                        process.status.state = CoreProcessState::Exited;
-                        process.status.exit_reason = Some(reason);
-                        process.status.exited_at_unix_ms =
-                            Some(crate::services::common::now_unix_ms());
-                        process.child = None;
-                        drop(process);
-                        let _ = system_proxy_guard::disable_with_guard();
-                        let msg =
-                            format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
-                        let _ = logs::append_entry(
-                            &state,
-                            LogSource::App,
-                            LogLevel::Warn,
-                            msg.clone(),
-                            None,
-                        );
-                        // Notify frontend so UI updates in real time
-                        let _ = app_handle_mon.emit(
-                            "core:process-exited",
-                            json!({
-                                "reason": reason_str,
-                                "code": code,
-                                "message": msg,
-                            }),
-                        );
-                        break;
-                    }
-                }
-            });
-
-            logs::append_entry(
-                state.inner(),
-                LogSource::App,
-                LogLevel::Info,
-                "core process started".to_string(),
-                Some(json!({
-                    "pid": pid,
-                    "executablePath": process.status.executable_path,
-                    "args": snapshot.launch_args,
-                })),
-            )?;
-
-            Ok(process.status.clone())
-        }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) => {
             let message = format!("failed to spawn core process: {error}");
             let mut process = lock(state.core_process(), "core_process")?;
@@ -307,8 +257,8 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
             process.status.last_error = Some(message.clone());
             process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
 
-            logs::append_entry(
-                state.inner(),
+            let _ = logs::append_entry(
+                state,
                 LogSource::Core,
                 LogLevel::Error,
                 message.clone(),
@@ -318,11 +268,294 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
                     "workingDir": snapshot.working_dir,
                     "configPath": snapshot.config_path,
                 })),
-            )?;
-
-            Err(AppError::internal(message))
+            );
+            return Err(AppError::internal(message));
         }
-    }
+    };
+
+    let pid = child.id();
+    let stderr = child.stderr.take().unwrap();
+
+    let app_handle_stderr = app_handle.clone();
+    let stderr_handle = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                let cleaned = strip_ansi(&line);
+                if !cleaned.trim().is_empty() {
+                    let state = app_handle_stderr.state::<AppState>();
+                    let (level, fields) = parse_kernel_log_line(&cleaned);
+                    let _ = logs::append_entry(
+                        &state,
+                        LogSource::Core,
+                        level,
+                        cleaned,
+                        Some(fields),
+                    );
+                }
+            }
+        }
+    });
+
+    let (status, executable_path_for_log) = {
+        let mut process = lock(state.core_process(), "core_process")?;
+        process.status = CoreProcessStatus {
+            state: CoreProcessState::Running,
+            pid: Some(pid),
+            kernel: snapshot.kernel.clone(),
+            executable_path: snapshot.executable_path.clone(),
+            working_dir: snapshot.working_dir.clone(),
+            config_path: snapshot.config_path.clone(),
+            endpoint_path: snapshot.endpoint.path.clone(),
+            started_at_unix_ms: Some(crate::services::common::now_unix_ms()),
+            exited_at_unix_ms: None,
+            exit_code: None,
+            exit_reason: None,
+            last_error: None,
+        };
+        process.child = Some(child);
+        process.stderr_handle = Some(stderr_handle);
+        (
+            process.status.clone(),
+            process.status.executable_path.clone(),
+        )
+    };
+
+    let _ = logs::append_entry(
+        state,
+        LogSource::App,
+        LogLevel::Info,
+        "core process started".to_string(),
+        Some(json!({
+            "pid": pid,
+            "executablePath": executable_path_for_log,
+            "args": snapshot.launch_args,
+        })),
+    );
+
+    Ok(status)
+}
+
+/// Background watchdog for the kernel child process.
+///
+/// Polls the child for exit and, when it dies unexpectedly (crash / abnormal
+/// exit), restarts it with backoff up to a capped number of attempts. The
+/// loop bails out — without restarting — when:
+///   - the user explicitly stopped the kernel (`exit_reason == Stopped`),
+///   - app shutdown has begun (`AppState::is_shutting_down`),
+///   - the crash-restart budget is exhausted.
+///
+/// A run lasting at least `STABLE_RUN` resets the restart budget, so a
+/// kernel that flaps occasionally still recovers, while a genuinely broken
+/// kernel eventually gives up instead of looping forever.
+fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
+    /// How often to poll the child for exit.
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+    /// Cooldown between a crash and the next restart attempt.
+    const RESTART_BACKOFF: Duration = Duration::from_secs(3);
+    /// Max consecutive crash-restarts before giving up.
+    const MAX_RESTARTS: u32 = 5;
+    /// A run lasting at least this long counts as "stable" — the next crash
+    /// resets the restart budget instead of accumulating toward the cap.
+    const STABLE_RUN: Duration = Duration::from_secs(60);
+    /// How often to ping the kernel to detect a hung-but-alive process.
+    const PING_INTERVAL: Duration = Duration::from_secs(10);
+    /// Per-ping timeout. Short, so a hung kernel is detected without long
+    /// stalls in the poll loop.
+    const PING_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Consecutive ping failures before the kernel is considered hung and
+    /// killed (so the exit path restarts it).
+    const MAX_PING_FAILURES: u32 = 3;
+
+    std::thread::spawn(move || {
+        let state = app_handle.state::<AppState>();
+        let endpoint = snapshot.endpoint.clone();
+        let mut restart_budget: u32 = 0;
+        let mut last_started_at = Instant::now();
+        let mut last_ping_at = Instant::now();
+        let mut ping_failures: u32 = 0;
+
+        'outer: loop {
+            // ── Phase 1: monitor the current child until it exits ──
+            let was_stable = loop {
+                std::thread::sleep(POLL_INTERVAL);
+                if state.is_shutting_down() {
+                    return;
+                }
+
+                // Periodic health ping: catch a kernel that is alive as a
+                // process but hung on IPC (invisible to try_wait). A run of
+                // failures ⇒ kill so the exit path below restarts it.
+                if last_ping_at.elapsed() >= PING_INTERVAL {
+                    last_ping_at = Instant::now();
+                    if state.is_shutting_down() {
+                        return;
+                    }
+                    if ping_kernel(&endpoint, PING_TIMEOUT) {
+                        ping_failures = 0;
+                    } else {
+                        ping_failures += 1;
+                        eprintln!(
+                            "[ZNet] watchdog: kernel ping failed ({}/{})",
+                            ping_failures, MAX_PING_FAILURES
+                        );
+                        if ping_failures >= MAX_PING_FAILURES {
+                            let _ = logs::append_entry(
+                                &state,
+                                LogSource::App,
+                                LogLevel::Error,
+                                format!(
+                                    "kernel unresponsive for {} consecutive pings; killing to force restart",
+                                    ping_failures
+                                ),
+                                None,
+                            );
+                            ping_failures = 0;
+                            if let Ok(mut process) = lock(state.core_process(), "core_process") {
+                                if let Some(child) = process.child.as_mut() {
+                                    let _ = child.kill();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut process = match lock(state.core_process(), "core_process") {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let exited_info = match process.child.as_mut() {
+                    Some(child) => child.try_wait().ok().flatten(),
+                    None => None,
+                };
+                // Still running → keep polling.
+                if exited_info.is_none() && process.child.is_some() {
+                    continue;
+                }
+                // Either the child exited, or stop() took it. A user-
+                // initiated stop must NOT trigger a restart.
+                if process.child.is_none()
+                    && matches!(process.status.exit_reason, Some(CoreProcessExitReason::Stopped))
+                {
+                    return;
+                }
+                let code = exited_info.as_ref().and_then(|es| es.code());
+                let was_stable = last_started_at.elapsed() >= STABLE_RUN;
+                let reason = if code.is_none() {
+                    CoreProcessExitReason::Crashed
+                } else {
+                    CoreProcessExitReason::Exited
+                };
+                let reason_str = if code.is_none() { "crashed" } else { "exited" };
+                process.status.exit_code = code;
+                process.status.state = CoreProcessState::Exited;
+                process.status.exit_reason = Some(reason);
+                process.status.exited_at_unix_ms =
+                    Some(crate::services::common::now_unix_ms());
+                process.child = None;
+                drop(process);
+
+                let _ = system_proxy_guard::disable_with_guard();
+                let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
+                let _ = logs::append_entry(
+                    &state,
+                    LogSource::App,
+                    LogLevel::Warn,
+                    msg.clone(),
+                    None,
+                );
+                let _ = app_handle.emit(
+                    "core:process-exited",
+                    json!({
+                        "reason": reason_str,
+                        "code": code,
+                        "message": msg,
+                    }),
+                );
+                break was_stable;
+            };
+
+            // ── Phase 2: restart with backoff (handles spawn retries too) ──
+            if state.is_shutting_down() {
+                return;
+            }
+            if was_stable {
+                restart_budget = 0;
+                eprintln!("[ZNet] watchdog: previous run was stable, reset restart budget");
+            }
+            loop {
+                restart_budget += 1;
+                if restart_budget > MAX_RESTARTS {
+                    let msg = format!(
+                        "core process crashed {} times consecutively; giving up auto-restart",
+                        MAX_RESTARTS
+                    );
+                    let _ = logs::append_entry(
+                        &state,
+                        LogSource::App,
+                        LogLevel::Error,
+                        msg.clone(),
+                        None,
+                    );
+                    let _ = app_handle.emit(
+                        "core:process-exited",
+                        json!({ "reason": "gave_up", "code": null, "message": msg }),
+                    );
+                    return;
+                }
+                eprintln!(
+                    "[ZNet] watchdog: kernel exited, restarting in {:?} (attempt {}/{})",
+                    RESTART_BACKOFF, restart_budget, MAX_RESTARTS
+                );
+                let _ = logs::append_entry(
+                    &state,
+                    LogSource::App,
+                    LogLevel::Info,
+                    format!(
+                        "core process: auto-restart in {:?} (attempt {}/{})",
+                        RESTART_BACKOFF, restart_budget, MAX_RESTARTS
+                    ),
+                    None,
+                );
+                std::thread::sleep(RESTART_BACKOFF);
+                if state.is_shutting_down() {
+                    return;
+                }
+                match spawn_core_child(state.inner(), &snapshot, &app_handle) {
+                    Ok(_) => {
+                        last_started_at = Instant::now();
+                        let _ = app_handle.emit(
+                            "core:process-restarted",
+                            json!({ "attempt": restart_budget }),
+                        );
+                        continue 'outer; // back to Phase 1 with the new child
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[ZNet] watchdog: restart spawn failed: {:?}; will retry",
+                            error
+                        );
+                        // spawn_core_child already set status=Failed. Loop:
+                        // budget++ and another backed-off retry.
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Send a short-lived `ping` to the kernel to check it is responsive on IPC.
+///
+/// Uses a fresh connection (not the multiplexed one) so a hung kernel can't
+/// poison the shared connection — the kernel closes non-subscribe
+/// connections right after responding.
+fn ping_kernel(endpoint: &CoreEndpoint, timeout: Duration) -> bool {
+    let frame = serde_json::json!({"type":"ping"});
+    let Ok(frame_bytes) = crate::kernel::transport::serialize_frame(&frame) else {
+        return false;
+    };
+    crate::kernel::transport::send_json_line_request(endpoint.clone(), frame_bytes, timeout)
+        .is_ok()
 }
 
 pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
