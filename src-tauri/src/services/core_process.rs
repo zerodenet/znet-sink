@@ -122,9 +122,7 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
         let temp_path = core_config::write_minimal_temp_config()?;
         {
             let mut app_config = lock(state.app_config(), "app_config")?;
-            app_config.core.config_path = Some(
-                temp_path.to_string_lossy().to_string(),
-            );
+            app_config.core.config_path = Some(temp_path.to_string_lossy().to_string());
             let config_path = crate::services::app_config_store::default_config_path()?;
             crate::services::app_config_store::save(&config_path, &app_config)?;
         }
@@ -285,13 +283,8 @@ fn spawn_core_child(
                 if !cleaned.trim().is_empty() {
                     let state = app_handle_stderr.state::<AppState>();
                     let (level, fields) = parse_kernel_log_line(&cleaned);
-                    let _ = logs::append_entry(
-                        &state,
-                        LogSource::Core,
-                        level,
-                        cleaned,
-                        Some(fields),
-                    );
+                    let _ =
+                        logs::append_entry(&state, LogSource::Core, level, cleaned, Some(fields));
                 }
             }
         }
@@ -435,7 +428,10 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
                 // Either the child exited, or stop() took it. A user-
                 // initiated stop must NOT trigger a restart.
                 if process.child.is_none()
-                    && matches!(process.status.exit_reason, Some(CoreProcessExitReason::Stopped))
+                    && matches!(
+                        process.status.exit_reason,
+                        Some(CoreProcessExitReason::Stopped)
+                    )
                 {
                     return;
                 }
@@ -450,20 +446,14 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
                 process.status.exit_code = code;
                 process.status.state = CoreProcessState::Exited;
                 process.status.exit_reason = Some(reason);
-                process.status.exited_at_unix_ms =
-                    Some(crate::services::common::now_unix_ms());
+                process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
                 process.child = None;
                 drop(process);
 
                 let _ = system_proxy_guard::disable_with_guard();
                 let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
-                let _ = logs::append_entry(
-                    &state,
-                    LogSource::App,
-                    LogLevel::Warn,
-                    msg.clone(),
-                    None,
-                );
+                let _ =
+                    logs::append_entry(&state, LogSource::App, LogLevel::Warn, msg.clone(), None);
                 let _ = app_handle.emit(
                     "core:process-exited",
                     json!({
@@ -554,8 +544,7 @@ fn ping_kernel(endpoint: &CoreEndpoint, timeout: Duration) -> bool {
     let Ok(frame_bytes) = crate::kernel::transport::serialize_frame(&frame) else {
         return false;
     };
-    crate::kernel::transport::send_json_line_request(endpoint.clone(), frame_bytes, timeout)
-        .is_ok()
+    crate::kernel::transport::send_json_line_request(endpoint.clone(), frame_bytes, timeout).is_ok()
 }
 
 pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
@@ -817,7 +806,9 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     let bytes = msg.as_bytes();
     while i < bytes.len() {
         // Check for key=value pattern at current position
-        if i == 0 || bytes[i - 1] == b' ' {
+        if (i == 0 || bytes[i - 1] == b' ')
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+        {
             let key_start = i;
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
@@ -856,6 +847,9 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
                 }
                 continue;
             }
+
+            msg_without_kv.push_str(&msg[key_start..i]);
+            continue;
         }
 
         // Regular character — append to message
@@ -874,4 +868,32 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     );
 
     (level, serde_json::Value::Object(fields))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_kernel_log_line;
+    use crate::models::logs::LogLevel;
+
+    #[test]
+    fn parse_kernel_log_line_keeps_plain_trailing_word() {
+        let (level, fields) =
+            parse_kernel_log_line("2026-06-10T10:33:23.610135Z INFO kernel started");
+
+        assert_eq!(level, LogLevel::Info);
+        assert_eq!(fields["message"], "kernel started");
+        assert_eq!(fields["timestamp"], "2026-06-10T10:33:23.610135Z");
+        assert_eq!(fields["level"], "INFO");
+    }
+
+    #[test]
+    fn parse_kernel_log_line_extracts_fields_without_dropping_message_words() {
+        let (_, fields) = parse_kernel_log_line(
+            "2026-06-10T10:33:23.610135Z INFO ipc client connected pipe=\\\\.\\pipe\\zero-control active=3",
+        );
+
+        assert_eq!(fields["message"], "ipc client connected");
+        assert_eq!(fields["pipe"], "\\\\.\\pipe\\zero-control");
+        assert_eq!(fields["active"], "3");
+    }
 }
