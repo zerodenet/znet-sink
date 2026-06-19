@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
@@ -17,6 +17,7 @@
     getGroupKindStyle,
     getNodeChips,
   } from '$lib/services/node-utils';
+  import { createBatchProbeState } from '$lib/components/tabs/nodes-probe-state.js';
   import { delayHistory, type DelayEntry } from '$lib/services/delay-history.svelte';
 
   // ── View state ──
@@ -29,10 +30,15 @@
 
   // ── Action state ──
   let switching = $state<string | null>(null);
-  let probing = $state<string | null>(null);
+  let probingNodeIds = $state<Set<string>>(new Set());
   let probingAll = $state(false);
   let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
+  let activeProbeResultUnlisten = $state<UnlistenFn | null>(null);
+  let activeProbeProgressUnlisten = $state<UnlistenFn | null>(null);
+  let activeProbeCompleteUnlisten = $state<UnlistenFn | null>(null);
+  let activeProbeCompletionResolve = $state<(() => void) | null>(null);
+  let activeBatchProbeState = $state<ReturnType<typeof createBatchProbeState> | null>(null);
 
   // ── Collapsible group sections (persisted to localStorage) ──
   const COLLAPSE_KEY = 'znet-nodes-collapsed';
@@ -73,6 +79,34 @@
       guiState.refreshPolicyGroups(),
     ]);
   });
+
+  onDestroy(() => {
+    cleanupProbeListeners();
+  });
+
+  function addProbingNodeIds(ids: Iterable<string>) {
+    const next = new Set(probingNodeIds);
+    for (const id of ids) next.add(id);
+    probingNodeIds = next;
+  }
+
+  function removeProbingNodeIds(ids: Iterable<string>) {
+    const next = new Set(probingNodeIds);
+    for (const id of ids) next.delete(id);
+    probingNodeIds = next;
+  }
+
+  function cleanupProbeListeners() {
+    activeProbeResultUnlisten?.();
+    activeProbeProgressUnlisten?.();
+    activeProbeCompleteUnlisten?.();
+    activeProbeCompletionResolve?.();
+    activeProbeResultUnlisten = null;
+    activeProbeProgressUnlisten = null;
+    activeProbeCompleteUnlisten = null;
+    activeProbeCompletionResolve = null;
+    activeBatchProbeState = null;
+  }
 
   // ── Kernel interaction: keep runtime overlay fresh while this tab is open.
   //     CoreStatusCard normally drives refreshOnTick, but it only mounts in
@@ -368,64 +402,78 @@ function groupForNode(node: ProxyNode): PolicyGroup | undefined {
   }
 
   async function handleProbe(node: ProxyNode) {
-    if (probing) return;
-    probing = node.id;
+    if (probingAll || probingNodeIds.has(node.id)) return;
+    addProbingNodeIds([node.id]);
     lastError = null;
     try {
-      const result = await guiClientProbeNode(node.name);
+      const result = await guiClientProbeNode(node.tag);
       delayHistory.record(node.tag, result.latencyMs, result.reachable);
       await guiState.refreshPolicyGroups();
     } catch (e) {
       lastError = String(e);
     } finally {
-      probing = null;
+      removeProbingNodeIds([node.id]);
     }
   }
 
   async function handleProbeAll() {
     if (probingAll) return;
     probingAll = true;
-    probeProgress = { done: 0, total: filteredNodes.length };
+    const batchNodes = [...filteredNodes];
+    const tags = batchNodes.map((n) => n.tag);
+    const batchProbeState = createBatchProbeState(batchNodes);
+    activeBatchProbeState = batchProbeState;
+    probingNodeIds = batchProbeState.probingNodeIds();
+    probeProgress = { done: 0, total: batchNodes.length };
     lastError = null;
 
-    const tags = filteredNodes.map((n) => n.name);
-
-    let unlistenResult: UnlistenFn | undefined;
-    let unlistenProgress: UnlistenFn | undefined;
-    let unlistenComplete: UnlistenFn | undefined;
-
     try {
-      unlistenResult = await listen<{ targetTag: string; reachable: boolean; latencyMs?: number }>(
+      cleanupProbeListeners();
+
+      let resolveCompletion: (() => void) | null = null;
+      const completion = new Promise<void>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      activeProbeCompletionResolve = resolveCompletion;
+
+      activeProbeResultUnlisten = await listen<{ targetTag: string; reachable: boolean; latencyMs?: number }>(
         'probe:result',
         (event) => {
           const { targetTag, reachable, latencyMs } = event.payload;
           delayHistory.record(targetTag, latencyMs, reachable);
+          batchProbeState.resolveTag(targetTag);
+          probingNodeIds = batchProbeState.probingNodeIds();
         },
       );
 
-      unlistenProgress = await listen<{ done: number; total: number }>(
+      activeProbeProgressUnlisten = await listen<{ done: number; total: number }>(
         'probe:progress',
         (event) => {
           probeProgress = { done: event.payload.done, total: event.payload.total };
         },
       );
 
-      unlistenComplete = await listen<{ total: number; reachable: number; failed: number }>(
+      activeProbeCompleteUnlisten = await listen<{ total: number; reachable: number; failed: number }>(
         'probe:complete',
         async () => {
+          batchProbeState.clear();
+          probingNodeIds = batchProbeState.probingNodeIds();
           await guiState.refreshPolicyGroups();
           probingAll = false;
+          resolveCompletion?.();
+          activeProbeCompletionResolve = null;
         },
       );
 
       await guiClientProbeStart(tags);
+      await completion;
     } catch (e) {
       lastError = String(e);
       probingAll = false;
+      batchProbeState.clear();
+      probingNodeIds = batchProbeState.probingNodeIds();
     } finally {
-      unlistenResult?.();
-      unlistenProgress?.();
-      unlistenComplete?.();
+      cleanupProbeListeners();
     }
   }
 
@@ -763,7 +811,7 @@ function groupForNode(node: ProxyNode): PolicyGroup | undefined {
 {#snippet nodeRow(node: ProxyNode)}
   {@const isActive = activeNodeId === node.tag}
   {@const isSwitching = switching === node.id}
-  {@const isProbing = probing === node.id}
+  {@const isProbing = probingNodeIds.has(node.id)}
   {@const ds = gradeDelay(node.delay, node.alive)}
   {@const ps = getProtocolStyle(node.protocol)}
   {@const chips = getNodeChips(node)}
@@ -852,7 +900,7 @@ function groupForNode(node: ProxyNode): PolicyGroup | undefined {
 {#snippet nodeCard(node: ProxyNode)}
   {@const isActive = activeNodeId === node.tag}
   {@const isSwitching = switching === node.id}
-  {@const isProbing = probing === node.id}
+  {@const isProbing = probingNodeIds.has(node.id)}
   {@const ds = gradeDelay(node.delay, node.alive)}
   {@const ps = getProtocolStyle(node.protocol)}
   {@const chips = getNodeChips(node)}
