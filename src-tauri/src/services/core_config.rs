@@ -7,8 +7,8 @@ use tauri::State;
 use std::io::Read;
 
 use super::data_dir;
-use crate::kernel::transport;
 use crate::errors::{AppError, AppResult};
+use crate::kernel::transport;
 use crate::models::{
     app_config::AppCoreConfig,
     core::{CoreEndpoint, CoreIpcOptions},
@@ -197,9 +197,7 @@ fn default_socket_path(_config: &AppCoreConfig) -> Option<PathBuf> {
         return None;
     }
 
-    dirs::home_dir().map(|home| {
-        home.join(".zero").join("zero-control.sock")
-    })
+    dirs::home_dir().map(|home| home.join(".zero").join("zero-control.sock"))
 }
 
 fn launch_args(config_path: Option<&Path>, socket: Option<&Path>) -> Vec<String> {

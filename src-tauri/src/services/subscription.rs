@@ -1,14 +1,12 @@
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
-use base64::{Engine as _, engine::general_purpose};
-use serde_json::{Map, Value, json};
+use base64::{engine::general_purpose, Engine as _};
+use serde_json::{json, Map, Value};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::proxy_config::ProxyConfigProfile;
-use crate::models::subscription::{
-    SubscriptionProfile, SubscriptionUpsert, SyncMetadata,
-};
+use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert, SyncMetadata};
 use crate::services::common::{
     generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
@@ -141,9 +139,9 @@ fn validate_http_url(url: &str) -> AppResult<()> {
 fn validate_update_interval(value: Option<u64>) -> AppResult<Option<u64>> {
     match value {
         None | Some(0) => Ok(None),
-        Some(secs) if secs < MIN_AUTO_SYNC_INTERVAL_SECS => Err(AppError::invalid_argument(format!(
-            "update interval must be at least {MIN_AUTO_SYNC_INTERVAL_SECS} seconds"
-        ))),
+        Some(secs) if secs < MIN_AUTO_SYNC_INTERVAL_SECS => Err(AppError::invalid_argument(
+            format!("update interval must be at least {MIN_AUTO_SYNC_INTERVAL_SECS} seconds"),
+        )),
         Some(secs) => Ok(Some(secs)),
     }
 }
@@ -228,7 +226,13 @@ async fn sync_subscription(
     };
 
     upsert_synced_proxy_config(state, &subscription, &target_proxy_config_id, parsed, now)?;
-    update_sync_success(state, &subscription.id, target_proxy_config_id, metadata, now)
+    update_sync_success(
+        state,
+        &subscription.id,
+        target_proxy_config_id,
+        metadata,
+        now,
+    )
 }
 
 /// Raw response captured from the subscription endpoint, including
@@ -240,13 +244,21 @@ struct SubscriptionFetch {
     userinfo: SubscriptionUserinfo,
 }
 
-async fn fetch_subscription_content(url: String, user_agent: String) -> AppResult<SubscriptionFetch> {
-    tauri::async_runtime::spawn_blocking(move || fetch_subscription_content_blocking(&url, &user_agent))
-        .await
-        .map_err(|error| AppError::internal(format!("subscription worker failed: {error}")))?
+async fn fetch_subscription_content(
+    url: String,
+    user_agent: String,
+) -> AppResult<SubscriptionFetch> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_subscription_content_blocking(&url, &user_agent)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("subscription worker failed: {error}")))?
 }
 
-fn fetch_subscription_content_blocking(url: &str, user_agent: &str) -> AppResult<SubscriptionFetch> {
+fn fetch_subscription_content_blocking(
+    url: &str,
+    user_agent: &str,
+) -> AppResult<SubscriptionFetch> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(SUBSCRIPTION_FETCH_TIMEOUT_SECONDS))
         .user_agent(user_agent)
@@ -301,7 +313,9 @@ impl SubscriptionUserinfo {
     /// Convert the header's seconds-based expiry to milliseconds,
     /// matching the rest of the model.
     fn expire_ms(&self) -> Option<u64> {
-        self.expire_secs.filter(|secs| *secs > 0).map(|secs| secs * 1000)
+        self.expire_secs
+            .filter(|secs| *secs > 0)
+            .map(|secs| secs * 1000)
     }
 }
 
@@ -350,7 +364,9 @@ pub fn parse_subscription_content(
         "zero" | "zero-json" => parse_zero_json_subscription_content(content),
         "zero-base64-json" | "base64-json" => parse_base64_json_subscription_content(content),
         "clash" | "clash-yaml" | "yaml" => parse_clash_yaml_subscription_content(content),
-        "clash-base64-yaml" | "base64-yaml" => parse_base64_clash_yaml_subscription_content(content),
+        "clash-base64-yaml" | "base64-yaml" => {
+            parse_base64_clash_yaml_subscription_content(content)
+        }
         _ => Err(AppError::invalid_argument(format!(
             "unsupported subscription format: {format}"
         ))),
@@ -466,7 +482,9 @@ fn parse_clash_yaml_subscription_content(content: &str) -> AppResult<ParsedSubsc
     })
 }
 
-fn parse_base64_clash_yaml_subscription_content(content: &str) -> AppResult<ParsedSubscriptionConfig> {
+fn parse_base64_clash_yaml_subscription_content(
+    content: &str,
+) -> AppResult<ParsedSubscriptionConfig> {
     let decoded = decode_base64(content)?;
     let decoded = String::from_utf8(decoded).map_err(|error| AppError {
         code: "invalid_argument",
@@ -515,7 +533,9 @@ fn is_countable_proxy(protocol: &str) -> bool {
         "load_balance",
         "relay",
     ];
-    !GROUPS_AND_SPECIAL.iter().any(|kind| protocol.eq_ignore_ascii_case(kind))
+    !GROUPS_AND_SPECIAL
+        .iter()
+        .any(|kind| protocol.eq_ignore_ascii_case(kind))
 }
 
 fn resolve_outbound_protocol(node: &Value) -> &str {
@@ -534,7 +554,9 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
     let proxies = root
         .get("proxies")
         .and_then(Value::as_array)
-        .ok_or_else(|| AppError::invalid_argument("subscription Clash YAML must contain proxies"))?;
+        .ok_or_else(|| {
+            AppError::invalid_argument("subscription Clash YAML must contain proxies")
+        })?;
 
     let mut outbounds = Vec::new();
     outbounds.push(json!({ "tag": "direct", "type": "direct" }));
@@ -726,7 +748,10 @@ fn clash_match_outbound(
 ) -> Option<String> {
     let raw = rule.as_str()?.trim();
     let parts = raw.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.first().is_some_and(|part| part.eq_ignore_ascii_case("MATCH")) {
+    if parts
+        .first()
+        .is_some_and(|part| part.eq_ignore_ascii_case("MATCH"))
+    {
         return normalize_outbound_ref(parts.last()?, known_tags);
     }
     None
@@ -758,7 +783,6 @@ fn string_field(map: &Map<String, Value>, key: &str) -> Option<String> {
 fn normalize_clash_key(key: &str) -> String {
     key.replace('-', "_")
 }
-
 
 fn decode_base64(content: &str) -> AppResult<Vec<u8>> {
     let compact = content.split_whitespace().collect::<String>();
@@ -948,11 +972,9 @@ mod tests {
 
     #[test]
     fn auto_detect_accepts_raw_zero_json() {
-        let parsed = parse_subscription_content(
-            r#"{"outbounds":[{"tag":"hk","type":"trojan"}]}"#,
-            "auto",
-        )
-        .unwrap();
+        let parsed =
+            parse_subscription_content(r#"{"outbounds":[{"tag":"hk","type":"trojan"}]}"#, "auto")
+                .unwrap();
         assert_eq!(parsed.format, "zero-json");
         assert!(parsed.content.get("outbounds").is_some());
     }

@@ -95,7 +95,9 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
     let core_running = state
         .core_process()
         .try_lock()
-        .map(|process| process.status.state == crate::models::core_process::CoreProcessState::Running)
+        .map(|process| {
+            process.status.state == crate::models::core_process::CoreProcessState::Running
+        })
         .unwrap_or(false);
 
     if !core_running {
@@ -116,12 +118,14 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
     let query_start = std::time::Instant::now();
     let features = {
         let opts = crate::services::core_config::ipc_options_from_app_config(
-            &lock(state.app_config(), "app_config").map(|c| c.core.clone()).unwrap_or_default(),
+            &lock(state.app_config(), "app_config")
+                .map(|c| c.core.clone())
+                .unwrap_or_default(),
         );
         crate::kernel::zero::queries::capability_feature_keys(Some(opts))
     }
-        .await
-        .unwrap_or_default();
+    .await
+    .unwrap_or_default();
     crate::services::logs::znet_log(
         Some(state),
         crate::models::logs::LogLevel::Debug,

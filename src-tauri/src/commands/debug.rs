@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::errors::AppResult;
-use crate::models::debug::{DebugFrame, clear_debug_frames, snapshot_debug_frames};
+use crate::models::debug::{clear_debug_frames, snapshot_debug_frames, DebugFrame};
 use crate::state::app_state::AppState;
 
 #[tauri::command]

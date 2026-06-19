@@ -1,5 +1,7 @@
 use gui_lib::models::app_config::AppCoreConfig;
-use gui_lib::services::core_config::{inspect_from_config, snapshot_from_config, write_core_config};
+use gui_lib::services::core_config::{
+    inspect_from_config, snapshot_from_config, write_core_config,
+};
 use serde_json::json;
 
 #[test]
@@ -24,7 +26,9 @@ fn default_zero_core_config_requires_explicit_executable() {
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
         assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
-        assert!(!snapshot.launch_args.contains(&"--control-socket".to_string()));
+        assert!(!snapshot
+            .launch_args
+            .contains(&"--control-socket".to_string()));
     }
 }
 

@@ -1,5 +1,5 @@
-use serde_json::json;
 use gui_lib::kernel::zero::parsing;
+use serde_json::json;
 
 // ── stats ──
 
@@ -325,7 +325,10 @@ fn full_capabilities_roundtrip_with_variant() {
     let caps = parsing::parse_capabilities(&inner, None);
 
     assert!(caps.available);
-    assert_eq!(caps.features, vec!["query", "config_snapshot", "runtime_snapshot"]);
+    assert_eq!(
+        caps.features,
+        vec!["query", "config_snapshot", "runtime_snapshot"]
+    );
 }
 
 #[test]
@@ -358,7 +361,10 @@ fn full_active_flows_roundtrip_with_variant() {
 #[test]
 fn string_at_finds_first_matching_key() {
     let v = json!({ "b": "found" });
-    assert_eq!(parsing::string_at(&v, &["a", "b", "c"]), Some("found".to_string()));
+    assert_eq!(
+        parsing::string_at(&v, &["a", "b", "c"]),
+        Some("found".to_string())
+    );
 }
 
 #[test]
@@ -375,8 +381,14 @@ fn bool_at_handles_string_booleans() {
 
 #[test]
 fn normalize_version_strips_v_prefix() {
-    assert_eq!(parsing::normalize_version(Some("v0.0.5".to_string())), Some("0.0.5".to_string()));
-    assert_eq!(parsing::normalize_version(Some("0.0.5".to_string())), Some("0.0.5".to_string()));
+    assert_eq!(
+        parsing::normalize_version(Some("v0.0.5".to_string())),
+        Some("0.0.5".to_string())
+    );
+    assert_eq!(
+        parsing::normalize_version(Some("0.0.5".to_string())),
+        Some("0.0.5".to_string())
+    );
     assert_eq!(parsing::normalize_version(None), None);
 }
 
@@ -407,7 +419,10 @@ fn plan_apply_parses_full_impact_analysis() {
     assert_eq!(result.requires_restart.len(), 1);
     assert_eq!(result.requires_restart[0].section, "listeners");
     assert_eq!(result.requires_restart[0].tags, vec!["mixed-in"]);
-    assert_eq!(result.warnings, vec!["Active connections may be interrupted"]);
+    assert_eq!(
+        result.warnings,
+        vec!["Active connections may be interrupted"]
+    );
     assert!(result.errors.is_empty());
 }
 
@@ -591,10 +606,8 @@ fn target_probe_handles_unreachable() {
 
 #[test]
 fn target_probe_uses_fallback_tag_when_missing() {
-    let result = parsing::parse_target_probe(
-        &json!({ "reachable": true }),
-        "fallback-tag".to_string(),
-    );
+    let result =
+        parsing::parse_target_probe(&json!({ "reachable": true }), "fallback-tag".to_string());
 
     assert_eq!(result.target_tag, "fallback-tag");
 }

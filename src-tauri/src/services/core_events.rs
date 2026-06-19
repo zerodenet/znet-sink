@@ -1,15 +1,15 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::kernel::{connection, protocol};
 use crate::errors::AppResult;
 use crate::events::emitter::{
-    CORE_EVENT_NAME, CORE_EVENT_STATUS_NAME, emit_core_event, emit_core_event_status,
+    emit_core_event, emit_core_event_status, CORE_EVENT_NAME, CORE_EVENT_STATUS_NAME,
 };
+use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreEventSubscription, CoreIpcOptions};
 
 pub fn start(

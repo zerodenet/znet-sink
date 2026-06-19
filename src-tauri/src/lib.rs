@@ -13,10 +13,10 @@ use crate::commands::capability as capability_commands;
 use crate::commands::core as core_commands;
 use crate::commands::core_config as core_config_commands;
 use crate::commands::core_process as core_process_commands;
+use crate::commands::debug as debug_commands;
 use crate::commands::gui_connection as gui_connection_commands;
 use crate::commands::gui_core as gui_core_commands;
 use crate::commands::gui_events as gui_events_commands;
-use crate::commands::debug as debug_commands;
 use crate::commands::gui_self_test as gui_self_test_commands;
 use crate::commands::kernel_version as kernel_version_commands;
 use crate::commands::logs as logs_commands;
@@ -28,8 +28,8 @@ use crate::commands::system_proxy as system_proxy_commands;
 use crate::lifecycle::phases;
 use crate::services::{core_process, local_proxy, system_proxy_guard};
 use crate::state::app_state::AppState;
-use tauri::{Emitter, Manager};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 
 fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -317,7 +317,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<AppState>();
                     let base_opts = crate::services::core_config::ipc_options_from_app_config(
-                        &state.app_config().lock().map(|c| c.core.clone()).unwrap_or_default()
+                        &state
+                            .app_config()
+                            .lock()
+                            .map(|c| c.core.clone())
+                            .unwrap_or_default(),
                     );
 
                     // Fast probe: try a ping with a 200ms timeout.  On local
@@ -334,14 +338,20 @@ pub fn run() {
                     // don't want to poison the global multiplexed connection.
                     let kernel_alive = {
                         let frame = serde_json::json!({"type":"ping"});
-                        let endpoint = crate::kernel::protocol::endpoint_from_options(Some(&probe_opts)).ok();
-                        let timeout = crate::kernel::protocol::timeout_from_options(Some(&probe_opts)).ok();
+                        let endpoint =
+                            crate::kernel::protocol::endpoint_from_options(Some(&probe_opts)).ok();
+                        let timeout =
+                            crate::kernel::protocol::timeout_from_options(Some(&probe_opts)).ok();
                         match (endpoint, timeout) {
                             (Some(ep), Some(to)) => {
-                                let frame_bytes = crate::kernel::transport::serialize_frame(&frame).ok();
-                                frame_bytes.and_then(|fb| {
-                                    crate::kernel::transport::send_json_line_request(ep, fb, to).ok()
-                                }).is_some()
+                                let frame_bytes =
+                                    crate::kernel::transport::serialize_frame(&frame).ok();
+                                frame_bytes
+                                    .and_then(|fb| {
+                                        crate::kernel::transport::send_json_line_request(ep, fb, to)
+                                            .ok()
+                                    })
+                                    .is_some()
                             }
                             _ => false,
                         }
@@ -364,9 +374,8 @@ pub fn run() {
                         // the path between sessions the old kernel is still
                         // listening on the pipe but is no longer the binary
                         // the user intended.
-                        let snapshot = crate::services::core_config::snapshot_from_config(
-                            &core_config,
-                        ).ok();
+                        let snapshot =
+                            crate::services::core_config::snapshot_from_config(&core_config).ok();
 
                         let path_matches = match (&configured_path, &snapshot) {
                             (Some(configured), Some(snap)) => {

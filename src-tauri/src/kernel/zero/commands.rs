@@ -9,8 +9,8 @@ use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConfigPlanApplyResult, GuiConnectionCloseResult, GuiFeatureStatus,
-    GuiPolicySelectionResult, GuiTargetProbeResult,
+    GuiConfigPlanApplyResult, GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult,
+    GuiTargetProbeResult,
 };
 
 use super::parsing::{
@@ -25,7 +25,7 @@ pub async fn select_policy(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiPolicySelectionResult> {
     let policy_tag = normalize_non_empty(policy_tag, "policyTag")?;
-   let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+    let target_tag = normalize_non_empty(target_tag, "targetTag")?;
     // Reject manual selection for auto-selecting group types
     // (url-test / fallback / load-balance). Only "selector" groups honor a
     // user-picked outbound; in other types the kernel silently ignores it.
@@ -54,12 +54,14 @@ pub async fn select_policy(
 }
 
 /// Probe a url_test policy group (triggers latency measurement).
-pub async fn probe_policy(
-    policy_tag: String,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
+pub async fn probe_policy(policy_tag: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     let policy_tag = normalize_non_empty(policy_tag, "policyTag")?;
-    run_command("policies.probe", json!({ "policy_tag": policy_tag }), options).await
+    run_command(
+        "policies.probe",
+        json!({ "policy_tag": policy_tag }),
+        options,
+    )
+    .await
 }
 
 /// Probe a single target for reachability and latency.
@@ -89,10 +91,7 @@ pub async fn close_connection(
 }
 
 /// Hot-apply a full config without restarting the kernel.
-pub async fn apply_config(
-    config: Value,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
+pub async fn apply_config(config: Value, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     if !config.is_object() {
         return Err(crate::errors::AppError::invalid_argument(
             "config must be a JSON object",
@@ -102,10 +101,7 @@ pub async fn apply_config(
 }
 
 /// Validate a config without applying it.
-pub async fn validate_config(
-    config: Value,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
+pub async fn validate_config(config: Value, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     if !config.is_object() {
         return Err(crate::errors::AppError::invalid_argument(
             "config must be a JSON object",
@@ -147,12 +143,14 @@ pub async fn set_mode(
 }
 
 /// DNS lookup diagnostic.
-pub async fn dns_lookup(
-    hostname: String,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
+pub async fn dns_lookup(hostname: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     let hostname = normalize_non_empty(hostname, "hostname")?;
-    run_command("diagnostics.dns_lookup", json!({ "hostname": hostname }), options).await
+    run_command(
+        "diagnostics.dns_lookup",
+        json!({ "hostname": hostname }),
+        options,
+    )
+    .await
 }
 
 /// Route trace diagnostic.

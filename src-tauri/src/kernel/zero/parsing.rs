@@ -8,20 +8,16 @@ use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::gui_core::{
-    GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult,
-    GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember,
-    GuiPolicySelectionResult, GuiTargetProbeResult, GuiProtocolCapability,
+    GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
+    GuiConnectionCloseResult, GuiConnectionList, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability, GuiTargetProbeResult,
     GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
 
 /// Unwrap a `CoreCallResult`'s optional response/error into a raw `Value`.
-pub fn unwrap_call_result(
-    response: Option<Value>,
-    error: Option<AppError>,
-) -> AppResult<Value> {
+pub fn unwrap_call_result(response: Option<Value>, error: Option<AppError>) -> AppResult<Value> {
     if let Some(error) = error {
         return Err(error);
     }
@@ -61,10 +57,7 @@ pub fn unwrap_core_envelope(response: Value) -> AppResult<Value> {
 /// variant unwrapping in queries.rs). This combined helper is kept for
 /// test ergonomics.
 #[allow(dead_code)]
-pub fn unwrap_query_variant(
-    response: Value,
-    variant: &str,
-) -> AppResult<Value> {
+pub fn unwrap_query_variant(response: Value, variant: &str) -> AppResult<Value> {
     let inner = unwrap_core_envelope(response)?;
 
     // Try to unwrap the variant key: result.{variant}
@@ -541,4 +534,3 @@ fn protocol_array_at(value: &Value, key: &str) -> Vec<GuiProtocolCapability> {
         })
         .unwrap_or_default()
 }
-

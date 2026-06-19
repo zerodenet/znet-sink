@@ -162,9 +162,7 @@ pub fn disable_with_guard() -> AppResult<()> {
     let marker = match read_marker(&path) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!(
-                "[ZNet] proxy guard: marker corrupt ({e}), removing without restoring"
-            );
+            eprintln!("[ZNet] proxy guard: marker corrupt ({e}), removing without restoring");
             remove_marker_file(&path);
             return Ok(());
         }
@@ -214,8 +212,9 @@ fn read_marker(path: &PathBuf) -> Result<ProxyMarker, String> {
 fn write_marker(host: &str, port: u16, previous: system_proxy::ProxyBackup) -> AppResult<()> {
     let path = marker_path()?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| crate::errors::AppError::internal(format!("failed to create marker dir: {e}")))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            crate::errors::AppError::internal(format!("failed to create marker dir: {e}"))
+        })?;
     }
     let marker = ProxyMarker {
         host: host.to_string(),
@@ -223,15 +222,15 @@ fn write_marker(host: &str, port: u16, previous: system_proxy::ProxyBackup) -> A
         enabled_at_unix_ms: crate::services::common::now_unix_ms(),
         previous,
     };
-    let json = serde_json::to_string_pretty(&marker)
-        .map_err(|e| crate::errors::AppError::internal(format!("failed to serialize proxy marker: {e}")))?;
-    fs::write(&path, json)
-        .map_err(|e| crate::errors::AppError::internal(format!("failed to write proxy marker: {e}")))?;
+    let json = serde_json::to_string_pretty(&marker).map_err(|e| {
+        crate::errors::AppError::internal(format!("failed to serialize proxy marker: {e}"))
+    })?;
+    fs::write(&path, json).map_err(|e| {
+        crate::errors::AppError::internal(format!("failed to write proxy marker: {e}"))
+    })?;
     eprintln!(
         "[ZNet] proxy guard: marker written ({}:{}; backup enabled={})",
-        host,
-        port,
-        marker.previous.enabled
+        host, port, marker.previous.enabled
     );
     Ok(())
 }

@@ -1,20 +1,24 @@
 use tauri::State;
 
 use crate::errors::AppResult;
-use crate::models::{app_config::AppCoreConfig, logs::LogSource, logs::LogLevel};
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::services::{app_config_store, common, core_process, interaction_mode, kernel_manager, logs};
+use crate::models::{app_config::AppCoreConfig, logs::LogLevel, logs::LogSource};
+use crate::services::{
+    app_config_store, common, core_process, interaction_mode, kernel_manager, logs,
+};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
 pub async fn kernel_list_versions(state: State<'_, AppState>) -> AppResult<KernelVersionList> {
     // Read-only — available in both lite and pro mode
-    let proxy_auto = common::lock(state.app_config(), "app_config")?.core.download_proxy_auto;
-    tauri::async_runtime::spawn_blocking(move || kernel_manager::list_available_versions(proxy_auto))
-        .await
-        .map_err(|e| {
-            crate::errors::AppError::internal(format!("version list thread panicked: {e}"))
-        })?
+    let proxy_auto = common::lock(state.app_config(), "app_config")?
+        .core
+        .download_proxy_auto;
+    tauri::async_runtime::spawn_blocking(move || {
+        kernel_manager::list_available_versions(proxy_auto)
+    })
+    .await
+    .map_err(|e| crate::errors::AppError::internal(format!("version list thread panicked: {e}")))?
 }
 
 #[tauri::command]
@@ -46,10 +50,19 @@ pub async fn kernel_install_version(
         None,
     );
 
-    let proxy_auto = common::lock(state.app_config(), "app_config")?.core.download_proxy_auto;
+    let proxy_auto = common::lock(state.app_config(), "app_config")?
+        .core
+        .download_proxy_auto;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        kernel_manager::install_version(version, download_url, expected_sha256, install_dir, proxy_auto, app)
+        kernel_manager::install_version(
+            version,
+            download_url,
+            expected_sha256,
+            install_dir,
+            proxy_auto,
+            app,
+        )
     })
     .await
     .map_err(|e| crate::errors::AppError::internal(format!("install thread panicked: {e}")))??;

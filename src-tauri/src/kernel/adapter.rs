@@ -10,10 +10,9 @@
 use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConfigPlanApplyResult, ConfigProxyNode,
-    GuiConnection, GuiConnectionCloseResult, GuiConnectionList, GuiConnectionListOptions,
-    GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup, GuiPolicySelectionResult,
-    GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
+    ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
+    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 use serde_json::Value;
@@ -179,8 +178,5 @@ pub trait KernelAdapter {
 
     /// Extract policy groups from the active config file content.
     /// Works even when the kernel is not running.
-    fn policy_groups_from_config(
-        &self,
-        config_content: &Value,
-    ) -> AppResult<Vec<GuiPolicyGroup>>;
+    fn policy_groups_from_config(&self, config_content: &Value) -> AppResult<Vec<GuiPolicyGroup>>;
 }

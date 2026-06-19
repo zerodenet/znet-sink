@@ -146,7 +146,9 @@ pub async fn run_probe_batch(
     );
 }
 
-fn default_ipc_options(state: &AppState) -> Result<Option<crate::models::core::CoreIpcOptions>, AppError> {
+fn default_ipc_options(
+    state: &AppState,
+) -> Result<Option<crate::models::core::CoreIpcOptions>, AppError> {
     let config = common::lock(state.app_config(), "app_config")?.core.clone();
     Ok(Some(core_config::ipc_options_from_app_config(&config)))
 }

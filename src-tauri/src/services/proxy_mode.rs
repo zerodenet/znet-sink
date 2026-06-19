@@ -75,11 +75,8 @@ pub fn set(
     if core_was_running {
         // Try mode.set hot-switch first (no restart, no connection interruption)
         if !restart_core {
-            hot_switched = try_hot_mode_set(
-                &requested_mode,
-                global_outbound.as_deref(),
-                state.inner(),
-            );
+            hot_switched =
+                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner());
         }
 
         // Fallback: restart kernel if hot-switch failed or user explicitly requested restart
@@ -105,11 +102,7 @@ pub fn set(
 /// Try the kernel's `mode.set` command for hot mode switching.
 /// Returns `true` if the command succeeded, `false` otherwise.
 /// Does not error — the caller falls back to kernel restart on failure.
-fn try_hot_mode_set(
-    mode: &GuiProxyMode,
-    outbound: Option<&str>,
-    state: &AppState,
-) -> bool {
+fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &AppState) -> bool {
     let mode_str = match mode {
         GuiProxyMode::Global => "global",
         GuiProxyMode::Rule => "rule",
@@ -123,14 +116,12 @@ fn try_hot_mode_set(
     );
 
     let adapter = crate::kernel::zero::ZeroAdapter::new();
-    match tauri::async_runtime::block_on(
-        crate::kernel::adapter::KernelAdapter::set_mode(
-            &adapter,
-            mode_str.to_string(),
-            outbound.map(String::from),
-            opts,
-        ),
-    ) {
+    match tauri::async_runtime::block_on(crate::kernel::adapter::KernelAdapter::set_mode(
+        &adapter,
+        mode_str.to_string(),
+        outbound.map(String::from),
+        opts,
+    )) {
         Ok(_) => {
             eprintln!("[ZNet] mode.set hot-switch succeeded: {mode_str}");
             true

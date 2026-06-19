@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{mpsc, Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -43,7 +43,7 @@ use tokio::time::timeout;
 use crate::errors::{AppError, AppResult};
 use crate::kernel::transport::{self, KernelReader, KernelWriter};
 use crate::models::core::CoreEndpoint;
-use crate::models::debug::{DebugFrame, push_debug_frame};
+use crate::models::debug::{push_debug_frame, DebugFrame};
 
 /// `id` used for the initial `subscribe` frame. Distinct from the
 /// `znet-sink-<n>` request ids so it can never collide with a pending
@@ -105,15 +105,10 @@ impl MultiplexedConnection {
         });
         let subscribe_bytes = transport::serialize_frame(&subscribe_frame)?;
         {
-            let mut writer = inner
-                .writer
-                .lock()
-                .expect("IPC writer mutex poisoned");
-            writer
-                .write_all(&subscribe_bytes)
-                .map_err(|error| {
-                    AppError::from_io("failed to write IPC subscribe frame", &endpoint, error)
-                })?;
+            let mut writer = inner.writer.lock().expect("IPC writer mutex poisoned");
+            writer.write_all(&subscribe_bytes).map_err(|error| {
+                AppError::from_io("failed to write IPC subscribe frame", &endpoint, error)
+            })?;
             writer.flush().map_err(|error| {
                 AppError::from_io("failed to flush IPC subscribe frame", &endpoint, error)
             })?;
@@ -137,8 +132,7 @@ impl MultiplexedConnection {
                 inner.alive.store(false, Ordering::Release);
                 return Err(AppError {
                     code: "connection_closed",
-                    message: "timed out waiting for kernel subscribe acknowledgement"
-                        .to_string(),
+                    message: "timed out waiting for kernel subscribe acknowledgement".to_string(),
                     details: Some(serde_json::json!({
                         "endpoint": endpoint.path,
                         "timeoutMs": connect_timeout.as_millis(),
@@ -171,7 +165,11 @@ impl MultiplexedConnection {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = self.inner.pending.lock().expect("IPC pending mutex poisoned");
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .expect("IPC pending mutex poisoned");
             pending.insert(request_id.clone(), tx);
         }
 
@@ -198,16 +196,14 @@ impl MultiplexedConnection {
             error: None,
         });
         let writer_inner = Arc::clone(&self.inner);
-        let write_result = tauri::async_runtime::spawn_blocking(
-            move || -> std::io::Result<()> {
-                let mut writer = writer_inner
-                    .writer
-                    .lock()
-                    .expect("IPC writer mutex poisoned");
-                writer.write_all(&frame_bytes)?;
-                writer.flush()
-            },
-        )
+        let write_result = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
+            let mut writer = writer_inner
+                .writer
+                .lock()
+                .expect("IPC writer mutex poisoned");
+            writer.write_all(&frame_bytes)?;
+            writer.flush()
+        })
         .await;
 
         let endpoint = self.inner.endpoint.clone();
@@ -274,10 +270,7 @@ impl MultiplexedConnection {
                         "timeoutMs": response_timeout.as_millis(),
                     }),
                     elapsed_ms: Some(response_timeout.as_millis() as u64),
-                    error: Some(format!(
-                        "timeout after {}ms",
-                        response_timeout.as_millis()
-                    )),
+                    error: Some(format!("timeout after {}ms", response_timeout.as_millis())),
                 });
                 self.inner.remove_pending(&request_id);
                 Err(AppError {
@@ -398,8 +391,8 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             } else {
                 // No id on this response — log a snippet so we can identify
                 // what the kernel is sending.
-                let snippet: String = serde_json::to_string(&frame)
-                    .unwrap_or_else(|_| "<invalid>".to_string());
+                let snippet: String =
+                    serde_json::to_string(&frame).unwrap_or_else(|_| "<invalid>".to_string());
                 let preview: String = if snippet.len() > 200 {
                     format!("{}…", &snippet[..200])
                 } else {

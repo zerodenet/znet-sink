@@ -11,7 +11,8 @@ pub(crate) fn background_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     #[cfg(target_os = "windows")]
     {
-        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x08000000); // CREATE_NO_WINDOW
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x08000000);
+        // CREATE_NO_WINDOW
     }
     cmd
 }
@@ -47,7 +48,11 @@ pub(crate) fn normalize_required(value: String, field: &'static str) -> AppResul
 pub(crate) fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let value = value.trim().to_string();
-        if value.is_empty() { None } else { Some(value) }
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
     })
 }
 

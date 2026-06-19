@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use crate::config::{DEFAULT_IPC_TIMEOUT_MS, MAX_IPC_TIMEOUT_MS};
 use crate::errors::{AppError, AppResult};
-use crate::models::debug::{DebugFrame, push_debug_frame};
 use crate::kernel::{connection, transport};
 use crate::models::core::{response_id, CoreCallResult, CoreEndpoint, CoreIpcOptions};
+use crate::models::debug::{push_debug_frame, DebugFrame};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -101,10 +101,7 @@ pub async fn command(
 }
 
 /// Send a raw IPC frame and return the response.
-pub async fn request(
-    frame: Value,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
+pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult<CoreCallResult> {
     let endpoint = endpoint_from_options(options.as_ref())?;
     let timeout = timeout_from_options(options.as_ref())?;
     let (frame_value, request_id) = ensure_request_id(frame)?;
@@ -125,9 +122,7 @@ pub async fn request(
         .as_ref()
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
-        .ok_or_else(|| {
-            AppError::invalid_argument("IPC request frame must carry a string id")
-        })?;
+        .ok_or_else(|| AppError::invalid_argument("IPC request frame must carry a string id"))?;
 
     // Acquire the shared multiplexed connection (blocking connect when cold,
     // cheap lock + clone on the hot path). The connection is kept alive by
@@ -182,9 +177,7 @@ pub async fn request(
     }
 
     Ok(CoreCallResult::from_core_result(
-        endpoint,
-        request_id,
-        response,
+        endpoint, request_id, response,
     ))
 }
 
@@ -306,18 +299,15 @@ pub async fn validate_config(
 // ── Internal helpers ────────────────────────────────────────────────
 
 fn ensure_request_id(mut frame: Value) -> AppResult<(Value, Option<Value>)> {
-    let object = frame.as_object_mut().ok_or_else(|| {
-        AppError::invalid_argument("IPC frame must be a JSON object")
-    })?;
+    let object = frame
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("IPC frame must be a JSON object"))?;
 
-    let id = object
-        .get("id")
-        .cloned()
-        .unwrap_or_else(|| {
-            let id = Value::String(next_request_id());
-            object.insert("id".to_string(), id.clone());
-            id
-        });
+    let id = object.get("id").cloned().unwrap_or_else(|| {
+        let id = Value::String(next_request_id());
+        object.insert("id".to_string(), id.clone());
+        id
+    });
 
     Ok((frame, Some(id)))
 }
@@ -379,14 +369,17 @@ mod tests {
 
     #[test]
     fn matching_response_id_is_accepted() {
-        validate_response_id(&json!({ "id": "caller-1", "ok": true }), Some(&json!("caller-1")))
-            .unwrap();
+        validate_response_id(
+            &json!({ "id": "caller-1", "ok": true }),
+            Some(&json!("caller-1")),
+        )
+        .unwrap();
     }
 
     #[test]
     fn missing_response_id_is_rejected() {
-        let error = validate_response_id(&json!({ "ok": true }), Some(&json!("caller-1")))
-            .unwrap_err();
+        let error =
+            validate_response_id(&json!({ "ok": true }), Some(&json!("caller-1"))).unwrap_err();
 
         assert_eq!(error.code, "invalid_response");
     }

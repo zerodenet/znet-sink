@@ -3,8 +3,8 @@ use tauri::{AppHandle, State};
 use crate::errors::AppResult;
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::models::core_process::CoreProcessState;
-use crate::services::{app_config, core_process};
 use crate::services::common::lock;
+use crate::services::{app_config, core_process};
 use crate::state::app_state::AppState;
 
 #[tauri::command]

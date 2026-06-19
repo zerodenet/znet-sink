@@ -7,9 +7,7 @@
 
 use serde_json::Value;
 
-use crate::models::gui_core::{
-    ConfigProxyNode, GuiPolicyGroup, GuiPolicyMember,
-};
+use crate::models::gui_core::{ConfigProxyNode, GuiPolicyGroup, GuiPolicyMember};
 
 use super::parsing::{string_at, values_from_container};
 
@@ -153,7 +151,8 @@ fn resolve_tls(
 // read directly from a `Map` so we can dig into the nested `protocol` object.
 
 fn string_at_obj(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|k| obj.get(*k).and_then(Value::as_str).map(String::from))
+    keys.iter()
+        .find_map(|k| obj.get(*k).and_then(Value::as_str).map(String::from))
 }
 
 fn u16_at_obj(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u16> {
@@ -180,11 +179,12 @@ fn bool_at_obj(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<bo
     keys.iter().find_map(|k| {
         obj.get(*k).and_then(|v| {
             v.as_bool().or_else(|| {
-                v.as_str().and_then(|s| match s.to_ascii_lowercase().as_str() {
-                    "true" | "yes" | "1" => Some(true),
-                    "false" | "no" | "0" => Some(false),
-                    _ => None,
-                })
+                v.as_str()
+                    .and_then(|s| match s.to_ascii_lowercase().as_str() {
+                        "true" | "yes" | "1" => Some(true),
+                        "false" | "no" | "0" => Some(false),
+                        _ => None,
+                    })
             })
         })
     })
@@ -194,11 +194,12 @@ fn bool_at_value(value: &Value, keys: &[&str]) -> Option<bool> {
     keys.iter().find_map(|k| {
         value.get(*k).and_then(|v| {
             v.as_bool().or_else(|| {
-                v.as_str().and_then(|s| match s.to_ascii_lowercase().as_str() {
-                    "true" | "yes" | "1" => Some(true),
-                    "false" | "no" | "0" => Some(false),
-                    _ => None,
-                })
+                v.as_str()
+                    .and_then(|s| match s.to_ascii_lowercase().as_str() {
+                        "true" | "yes" | "1" => Some(true),
+                        "false" | "no" | "0" => Some(false),
+                        _ => None,
+                    })
             })
         })
     })
@@ -307,4 +308,3 @@ pub fn outbound_kind_map(value: &Value) -> std::collections::HashMap<String, Str
         })
         .collect()
 }
-

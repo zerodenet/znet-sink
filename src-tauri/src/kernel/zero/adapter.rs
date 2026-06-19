@@ -11,9 +11,9 @@ use crate::kernel::adapter::KernelAdapter;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
-    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates,
-    GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates, GuiTrafficSnapshot,
+    GuiTrafficStats, GuiZeroCapabilities,
 };
 
 use super::{commands, config, queries};
@@ -93,8 +93,7 @@ impl ZeroAdapter {
             }
         };
 
-        let available =
-            capabilities.available || health.as_ref().is_some_and(|h| h.healthy);
+        let available = capabilities.available || health.as_ref().is_some_and(|h| h.healthy);
 
         CoreOverviewResult {
             process_running,
@@ -258,7 +257,14 @@ impl KernelAdapter for ZeroAdapter {
         // know about AppState. The caller extracts params and uses
         // `commands::enable_tun` directly when TUN config is needed.
         // This trait method uses sensible defaults.
-        commands::enable_tun(None, "10.0.0.1".to_string(), "tun-in".to_string(), 1500, Some(options)).await
+        commands::enable_tun(
+            None,
+            "10.0.0.1".to_string(),
+            "tun-in".to_string(),
+            1500,
+            Some(options),
+        )
+        .await
     }
 
     async fn disable_tun(&self, options: CoreIpcOptions) -> AppResult<GuiFeatureStatus> {
@@ -277,10 +283,7 @@ impl KernelAdapter for ZeroAdapter {
         Ok(config::proxy_nodes_from_config(config_content))
     }
 
-    fn policy_groups_from_config(
-        &self,
-        config_content: &Value,
-    ) -> AppResult<Vec<GuiPolicyGroup>> {
+    fn policy_groups_from_config(&self, config_content: &Value) -> AppResult<Vec<GuiPolicyGroup>> {
         Ok(config::policy_groups_from_config(config_content))
     }
 }
@@ -357,11 +360,7 @@ pub fn calculate_rates(
 
     GuiTrafficRates {
         upload_bps: bytes_delta_per_second(previous.bytes_up, current.bytes_up, interval_ms),
-        download_bps: bytes_delta_per_second(
-            previous.bytes_down,
-            current.bytes_down,
-            interval_ms,
-        ),
+        download_bps: bytes_delta_per_second(previous.bytes_down, current.bytes_down, interval_ms),
     }
 }
 
@@ -374,4 +373,3 @@ pub fn bytes_delta_per_second(previous: u64, current: u64, interval_ms: u64) -> 
     let rate = delta.saturating_mul(1000) / u128::from(interval_ms);
     rate.min(u128::from(u64::MAX)) as u64
 }
-

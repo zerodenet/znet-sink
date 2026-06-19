@@ -258,14 +258,13 @@ pub fn install_version(
 
     // The archive may contain the binary directly or nested inside a
     // subdirectory (e.g. zero-windows-x86_64/zero.exe).  Search for it.
-    let staged_binary = find_file_recursive(&staging, executable_name)
-        .ok_or_else(|| {
-            let _ = fs::remove_dir_all(&staging);
-            AppError::internal(format!(
-                "extracted but could not find '{}' in staging directory",
-                executable_name
-            ))
-        })?;
+    let staged_binary = find_file_recursive(&staging, executable_name).ok_or_else(|| {
+        let _ = fs::remove_dir_all(&staging);
+        AppError::internal(format!(
+            "extracted but could not find '{}' in staging directory",
+            executable_name
+        ))
+    })?;
 
     // Target path in the install directory
     let executable_path = dir.join(executable_name);

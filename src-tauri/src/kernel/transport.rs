@@ -36,14 +36,14 @@ use std::sync::Arc;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE,
+        CloseHandle, GetLastError, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE,
         INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
-    Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, ReadFile, WriteFile},
+    Storage::FileSystem::{CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, OPEN_EXISTING},
     System::{
-        IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
         Pipes::WaitNamedPipeW,
         Threading::{CreateEventW, WaitForSingleObject},
+        IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
     },
 };
 
@@ -338,9 +338,13 @@ fn connect_split_platform(
         .map_err(|error| AppError::from_io("failed to set IPC write timeout", endpoint, error))?;
     // Duplicate the fd so the reader and writer can live on independent
     // threads without sharing a single owner.
-    let writer = reader
-        .try_clone()
-        .map_err(|error| AppError::from_io("failed to clone IPC stream for writer half", endpoint, error))?;
+    let writer = reader.try_clone().map_err(|error| {
+        AppError::from_io(
+            "failed to clone IPC stream for writer half",
+            endpoint,
+            error,
+        )
+    })?;
     Ok((KernelReader(reader), KernelWriter(writer)))
 }
 

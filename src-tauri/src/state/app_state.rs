@@ -1,7 +1,7 @@
 use std::process::Child;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 use std::thread::JoinHandle;
 
@@ -155,7 +155,6 @@ impl AppState {
     pub(crate) fn shutting_down_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.shutting_down)
     }
-
 }
 
 #[cfg(test)]

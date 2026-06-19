@@ -7,10 +7,9 @@
 use serde_json::Value;
 
 use crate::models::gui_core::{
-    GuiConfigChangedEvent, GuiCoreHealth, GuiEvent, GuiEventData,
-    GuiIpcStatusEvent, GuiPolicyMember, GuiPolicyProbeCompletedEvent,
-    GuiPolicySelectedEvent, GuiStackStatusEvent, GuiTunStatusEvent,
-    GuiUnknownEvent, GuiWarningEvent,
+    GuiConfigChangedEvent, GuiCoreHealth, GuiEvent, GuiEventData, GuiIpcStatusEvent,
+    GuiPolicyMember, GuiPolicyProbeCompletedEvent, GuiPolicySelectedEvent, GuiStackStatusEvent,
+    GuiTunStatusEvent, GuiUnknownEvent, GuiWarningEvent,
 };
 
 use super::parsing::{normalize_version, parse_connection, parse_stats, string_at, u64_at};
@@ -68,10 +67,7 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 payload,
                 &["build_id", "version", "engine_version"],
             )),
-            started_at_unix_ms: u64_at(
-                payload,
-                &["started_at_unix_ms", "startedAtUnixMs"],
-            ),
+            started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
         }),
         "engine.stopped" => GuiEventData::CoreStatus(GuiCoreHealth {
             healthy: false,
@@ -79,24 +75,18 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 payload,
                 &["build_id", "version", "engine_version"],
             )),
-            started_at_unix_ms: u64_at(
-                payload,
-                &["started_at_unix_ms", "startedAtUnixMs"],
-            ),
+            started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
         }),
         "engine.warning" => GuiEventData::CoreWarning(GuiWarningEvent {
             code: string_at(payload, &["code"]),
-            message: string_at(payload, &["message"])
-                .unwrap_or_else(|| "core warning".to_string()),
+            message: string_at(payload, &["message"]).unwrap_or_else(|| "core warning".to_string()),
         }),
         "config.changed" => GuiEventData::ConfigChanged(GuiConfigChangedEvent {
             changed_at_unix_ms: u64_at(payload, &["changed_at_unix_ms", "changedAtUnixMs"]),
         }),
-        "flow.started" | "flow.updated" | "flow.completed" => {
-            parse_connection(payload)
-                .map(GuiEventData::Connection)
-                .unwrap_or_else(|| unknown_payload("invalid flow event payload", payload))
-        }
+        "flow.started" | "flow.updated" | "flow.completed" => parse_connection(payload)
+            .map(GuiEventData::Connection)
+            .unwrap_or_else(|| unknown_payload("invalid flow event payload", payload)),
         "policy.selected" => parse_policy_selected(payload)
             .map(GuiEventData::PolicySelected)
             .unwrap_or_else(|| unknown_payload("invalid policy.selected event payload", payload)),
@@ -111,7 +101,13 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
             state: "started".to_string(),
             interface_name: string_at(
                 payload,
-                &["interface_name", "interfaceName", "name", "tun_name", "tunName"],
+                &[
+                    "interface_name",
+                    "interfaceName",
+                    "name",
+                    "tun_name",
+                    "tunName",
+                ],
             ),
             address: string_at(payload, &["address", "addr", "ip", "bind"]),
             message: None,
@@ -120,7 +116,13 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
             state: "stopped".to_string(),
             interface_name: string_at(
                 payload,
-                &["interface_name", "interfaceName", "name", "tun_name", "tunName"],
+                &[
+                    "interface_name",
+                    "interfaceName",
+                    "name",
+                    "tun_name",
+                    "tunName",
+                ],
             ),
             address: None,
             message: string_at(payload, &["message", "reason"]),
@@ -129,7 +131,13 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
             state: "error".to_string(),
             interface_name: string_at(
                 payload,
-                &["interface_name", "interfaceName", "name", "tun_name", "tunName"],
+                &[
+                    "interface_name",
+                    "interfaceName",
+                    "name",
+                    "tun_name",
+                    "tunName",
+                ],
             ),
             address: None,
             message: string_at(payload, &["message", "error", "reason"])
@@ -206,10 +214,7 @@ fn parse_policy_probe_member(payload: &Value, selected: Option<&str>) -> Option<
             .get("healthy")
             .and_then(Value::as_bool)
             .or_else(|| payload.get("alive").and_then(Value::as_bool)),
-        delay_ms: u64_at(
-            payload,
-            &["latency_ms", "latencyMs", "delay_ms", "delayMs"],
-        ),
+        delay_ms: u64_at(payload, &["latency_ms", "latencyMs", "delay_ms", "delayMs"]),
     })
 }
 

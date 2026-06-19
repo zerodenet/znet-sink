@@ -1,5 +1,7 @@
+use gui_lib::kernel::zero::adapter::{
+    build_traffic_snapshot, bytes_delta_per_second, calculate_rates, TrafficSample,
+};
 use gui_lib::models::gui_core::GuiTrafficStats;
-use gui_lib::kernel::zero::adapter::{TrafficSample, build_traffic_snapshot, calculate_rates, bytes_delta_per_second};
 
 #[test]
 fn traffic_rates_use_byte_delta_over_interval() {

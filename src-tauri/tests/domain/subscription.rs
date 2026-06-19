@@ -63,15 +63,24 @@ rules:
     assert_eq!(parsed.content["outbounds"][2]["tag"], "hk-1");
     assert_eq!(parsed.content["outbounds"][2]["type"], "shadowsocks");
     assert_eq!(parsed.content["outbound_groups"][0]["tag"], "Proxy");
-    assert_eq!(parsed.content["outbound_groups"][0]["outbounds"][1], "direct");
-    assert_eq!(parsed.content["route"]["rules"][0]["condition"]["type"], "domain_suffix");
-    assert_eq!(parsed.content["route"]["rules"][1]["action"]["outbound"], "direct");
+    assert_eq!(
+        parsed.content["outbound_groups"][0]["outbounds"][1],
+        "direct"
+    );
+    assert_eq!(
+        parsed.content["route"]["rules"][0]["condition"]["type"],
+        "domain_suffix"
+    );
+    assert_eq!(
+        parsed.content["route"]["rules"][1]["action"]["outbound"],
+        "direct"
+    );
     assert_eq!(parsed.content["route"]["final"]["outbound"], "Proxy");
 }
 
 #[test]
 fn subscription_parser_converts_base64_clash_yaml() {
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     let yaml = "proxies:\n  - {name: hk-1, type: ss, server: s, port: 1}\n";
     let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
 

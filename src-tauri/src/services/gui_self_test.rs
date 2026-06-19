@@ -10,9 +10,7 @@ use crate::models::{
         GuiConnectionStatus, GuiSelfTestCheck, GuiSelfTestCheckStatus, GuiSelfTestSnapshot,
     },
 };
-use crate::services::{
-    common::lock, core_config, core_process, gui_connection, proxy_mode,
-};
+use crate::services::{common::lock, core_config, core_process, gui_connection, proxy_mode};
 use crate::state::app_state::AppState;
 
 pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapshot> {

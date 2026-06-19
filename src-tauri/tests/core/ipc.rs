@@ -1,6 +1,6 @@
-use gui_lib::models::core::CoreIpcOptions;
 use gui_lib::kernel::protocol;
 use gui_lib::kernel::transport;
+use gui_lib::models::core::CoreIpcOptions;
 use serde_json::json;
 
 #[test]

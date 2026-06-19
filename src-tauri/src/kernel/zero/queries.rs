@@ -10,8 +10,8 @@ use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConnection, GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth,
-    GuiFeatureStatus, GuiPolicyGroup, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnection, GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus,
+    GuiPolicyGroup, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 use super::parsing::{
@@ -154,12 +154,15 @@ pub async fn dns_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeature
 /// `tun.status` command was never a valid kernel method and has been
 /// removed — the kernel only exposes `tun.start` / `tun.stop` commands.
 pub async fn tun_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeatureStatus> {
-    let fallback =
-        feature_status("tun", &["tun", "tun-status", "tun-snapshot"], options.clone()).await;
+    let fallback = feature_status(
+        "tun",
+        &["tun", "tun-status", "tun-snapshot"],
+        options.clone(),
+    )
+    .await;
 
     // Primary: use the documented tun_status query with variant unwrapping
-    if let Ok(value) =
-        query_variant(json!({"tun_status": {}}), "tun_status", options.clone()).await
+    if let Ok(value) = query_variant(json!({"tun_status": {}}), "tun_status", options.clone()).await
     {
         return Ok(parse_feature_runtime_status(
             "tun",
@@ -173,12 +176,7 @@ pub async fn tun_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeature
 
 /// Network stack status.
 pub async fn stack_status(options: Option<CoreIpcOptions>) -> AppResult<GuiFeatureStatus> {
-    feature_status(
-        "stack",
-        &["system-stack", "stack", "stack-status"],
-        options,
-    )
-    .await
+    feature_status("stack", &["system-stack", "stack", "stack-status"], options).await
 }
 
 /// Rule engine status.

@@ -405,13 +405,7 @@ fn write_internet_setting_sz(value_name: &str, value: &str) -> AppResult<()> {
 #[cfg(target_os = "windows")]
 fn delete_internet_setting(value_name: &str) {
     let _ = common::background_command("reg")
-        .args([
-            "delete",
-            INTERNET_SETTINGS_KEY,
-            "/v",
-            value_name,
-            "/f",
-        ])
+        .args(["delete", INTERNET_SETTINGS_KEY, "/v", value_name, "/f"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -421,7 +415,7 @@ fn delete_internet_setting(value_name: &str) {
 fn notify_settings_changed() {
     use std::ptr;
     use windows_sys::Win32::Networking::WinInet::{
-        INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH, InternetSetOptionW,
+        InternetSetOptionW, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH,
     };
 
     unsafe {

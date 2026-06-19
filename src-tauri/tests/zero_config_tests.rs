@@ -1,5 +1,5 @@
-use serde_json::json;
 use gui_lib::kernel::zero::config;
+use serde_json::json;
 
 #[test]
 fn proxy_nodes_extracts_outbounds() {
@@ -178,11 +178,7 @@ fn real_world_config_extracts_nodes_and_policy_group() {
     assert_eq!(groups[0].kind, "selector");
     assert_eq!(groups[0].selected, None, "no selected field in this config");
 
-    let member_tags: Vec<&str> = groups[0]
-        .outbounds
-        .iter()
-        .map(|m| m.tag.as_str())
-        .collect();
+    let member_tags: Vec<&str> = groups[0].outbounds.iter().map(|m| m.tag.as_str()).collect();
     assert_eq!(member_tags, vec!["ss-in", "tr-sg"]); // `direct` filtered
 
     let member_kinds: Vec<&str> = groups[0]

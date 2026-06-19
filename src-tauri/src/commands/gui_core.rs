@@ -2,17 +2,17 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::zero::{self, ZeroAdapter, TrafficSample, build_traffic_snapshot};
 use crate::kernel::adapter::KernelAdapter;
+use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
     GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicySelectionResult, GuiTrafficSnapshot,
-    GuiTrafficStats, GuiZeroCapabilities,
+    GuiPolicyGroup, GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats,
+    GuiZeroCapabilities,
 };
-use crate::services::{core_config, core_process, interaction_mode, probe, proxy_config};
 use crate::services::common;
+use crate::services::{core_config, core_process, interaction_mode, probe, proxy_config};
 use crate::state::app_state::AppState;
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -31,10 +31,9 @@ pub async fn gui_core_overview(state: State<'_, AppState>) -> AppResult<GuiCoreO
     let process = core_process::refresh_status(state.inner())?;
     let adapter = ZeroAdapter::new();
     let opts = default_opts(state.inner());
-    let result = adapter.core_overview(
-        process.state == CoreProcessState::Running,
-        opts,
-    ).await;
+    let result = adapter
+        .core_overview(process.state == CoreProcessState::Running, opts)
+        .await;
 
     let health = result.health;
     let config = result.config;
@@ -81,7 +80,11 @@ pub async fn gui_traffic_snapshot(state: State<'_, AppState>) -> AppResult<GuiTr
     let totals = adapter.traffic_stats(opts).await?;
     let sampled_at_unix_ms = common::now_unix_ms();
 
-    let previous = state.traffic_sample().lock().ok().and_then(|guard| guard.clone());
+    let previous = state
+        .traffic_sample()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
     let snapshot = build_traffic_snapshot(totals.clone(), previous.as_ref(), sampled_at_unix_ms);
     if let Ok(mut sample) = state.traffic_sample().lock() {
         *sample = Some(TrafficSample {
@@ -123,8 +126,7 @@ pub async fn gui_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<GuiP
         }
         Ok(_) | Err(_) => {
             // Fallback: extract from static config
-            let config_content =
-                active_content.unwrap_or(serde_json::json!({}));
+            let config_content = active_content.unwrap_or(serde_json::json!({}));
             adapter.policy_groups_from_config(&config_content)
         }
     }
@@ -137,7 +139,9 @@ pub async fn gui_select_policy(
     target_tag: String,
 ) -> AppResult<GuiPolicySelectionResult> {
     let opts = default_opts(state.inner());
-    ZeroAdapter::new().select_policy(policy_tag, target_tag, opts).await
+    ZeroAdapter::new()
+        .select_policy(policy_tag, target_tag, opts)
+        .await
 }
 
 /// Probe a single target's connectivity.
@@ -214,14 +218,7 @@ pub async fn gui_tun_enable(
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
     let opts = default_opts(state.inner());
-    zero::commands::enable_tun(
-        tun.name,
-        tun.addr,
-        tun.tag,
-        tun.mtu,
-        Some(opts),
-    )
-    .await
+    zero::commands::enable_tun(tun.name, tun.addr, tun.tag, tun.mtu, Some(opts)).await
 }
 
 #[tauri::command]
@@ -332,7 +329,9 @@ pub async fn gui_apply_config(
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "apply_config")?;
     let opts = default_opts(state.inner());
-    let result = ZeroAdapter::new().apply_config(config.clone(), opts).await?;
+    let result = ZeroAdapter::new()
+        .apply_config(config.clone(), opts)
+        .await?;
     // The kernel accepted the config — mirror it into the active profile so
     // that config-derived views (proxy nodes, policy groups) and the next
     // core-process start reflect the live configuration.
@@ -419,7 +418,9 @@ pub async fn gui_trace_route(
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "trace_route")?;
     let opts = default_opts(state.inner());
-    ZeroAdapter::new().trace_route(target, port.unwrap_or(80), protocol, opts).await
+    ZeroAdapter::new()
+        .trace_route(target, port.unwrap_or(80), protocol, opts)
+        .await
 }
 
 /// Query recently completed connections.
@@ -482,7 +483,11 @@ async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
         let opts = default_opts(state);
         match adapter.readiness_health(opts).await {
             Ok(health) if health.healthy => return Ok(()),
-            Ok(_) => return Err(AppError::internal("core readiness check reported unhealthy")),
+            Ok(_) => {
+                return Err(AppError::internal(
+                    "core readiness check reported unhealthy",
+                ))
+            }
             Err(error) => {
                 last_error = Some(error);
                 let _ = tauri::async_runtime::spawn_blocking(|| {

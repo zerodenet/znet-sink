@@ -1,18 +1,18 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use std::time::Duration;
 use tauri::AppHandle;
 
-use crate::kernel::{connection, protocol};
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
-    GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME, emit_gui_event, emit_gui_event_status,
+    emit_gui_event, emit_gui_event_status, GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME,
 };
+use crate::kernel::zero::events;
+use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{GuiEventPayload, GuiEventStatus, GuiEventSubscription};
-use crate::kernel::zero::events;
 
 pub fn start(
     app: AppHandle,
@@ -28,8 +28,7 @@ pub fn start(
 
     let gen = Arc::clone(&active_generation);
     tauri::async_runtime::spawn_blocking(move || {
-        let result =
-            subscribe_and_forward_events(app.clone(), gen, generation, endpoint, timeout);
+        let result = subscribe_and_forward_events(app.clone(), gen, generation, endpoint, timeout);
 
         match result {
             Ok(()) => {
