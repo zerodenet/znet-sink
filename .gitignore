@@ -13,8 +13,10 @@ vite.config.ts.timestamp-*
 *.pem
 *.p12
 *.pfx
+.pnpm-store
 src-tauri/target/
 # Local agent / tooling config dirs (project-local, not shared in repo)
 .agents/
 .claude/
 .codex/
+.opencode/
