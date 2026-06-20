@@ -44,7 +44,7 @@ class AppStateStore {
     if (savedTheme) this.selectedTheme = savedTheme;
   }
 
-  /** Load app config from Rust backend and merge into store state. */
+  /** Load app config from Rust backend and merge it into store state. */
   async loadFromBackend() {
     try {
       const [config, surface] = await Promise.all([
@@ -60,9 +60,9 @@ class AppStateStore {
       }
 
       this.interactionSurface = {
-        navigation: new Map(surface.navigation.map(item => [item.key, item])),
-        actions: new Map(surface.actions.map(item => [item.key, item])),
-        features: new Map(surface.features.map(item => [item.key, item])),
+        navigation: new Map(surface.navigation.map((item) => [item.key, item])),
+        actions: new Map(surface.actions.map((item) => [item.key, item])),
+        features: new Map(surface.features.map((item) => [item.key, item])),
       };
 
       if (config.ui.defaultRoute && this.isNavVisible(config.ui.defaultRoute)) {
@@ -75,13 +75,13 @@ class AppStateStore {
         this.isInitialized = true;
       }
     } catch (e) {
-      this.loadError = `后端加载失败: ${e instanceof Error ? e.message : String(e)}`;
+      this.loadError = `\u540e\u7aef\u52a0\u8f7d\u5931\u8d25: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       this.appLoading = false;
     }
   }
 
-  /** Persist theme to Rust backend (and localStorage fallback). */
+  /** Persist theme to Rust backend and localStorage. */
   async persistTheme(theme: ThemeMode) {
     this.selectedTheme = theme;
     if (browser) {
@@ -90,7 +90,7 @@ class AppStateStore {
     try {
       await updateAppConfig({ ui: { theme } });
     } catch {
-      // Backend may not be available
+      // Backend may not be available.
     }
   }
 
@@ -116,20 +116,18 @@ class AppStateStore {
     const previousMode = this.uiMode;
     console.time('[ZNet] switchUIMode');
 
-    // Optimistic update — UI responds instantly
+    // Optimistic update so the UI responds instantly.
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
     }
 
     try {
-      // Both operations are independent — run in parallel
-      await Promise.all([
-        this.persistUiMode(mode),
-        this.refreshInteractionSurface(),
-      ]);
+      // Both operations are independent, so run them in parallel.
+      await Promise.all([this.persistUiMode(mode), this.refreshInteractionSurface()]);
 
-      // If current tab is no longer visible after surface refresh, navigate away
+      // If the active tab is no longer visible after the surface refresh,
+      // move the user back to a safe tab.
       const navItem = this.interactionSurface.navigation.get(this.activeTab);
       if (!navItem?.visible) {
         this.activeTab = 'overview';
@@ -139,7 +137,6 @@ class AppStateStore {
     } catch (e) {
       console.error('[ZNet] switchUIMode failed:', e);
       console.timeEnd('[ZNet] switchUIMode');
-      // Revert optimistic update on failure
       this.uiMode = previousMode;
       if (browser) {
         localStorage.setItem('znet-ui-mode', previousMode);
@@ -152,9 +149,9 @@ class AppStateStore {
       console.time('[ZNet] refreshInteractionSurface');
       const surface = await getGuiInteractionSurfaceSnapshot();
       this.interactionSurface = {
-        navigation: new Map(surface.navigation.map(item => [item.key, item])),
-        actions: new Map(surface.actions.map(item => [item.key, item])),
-        features: new Map(surface.features.map(item => [item.key, item])),
+        navigation: new Map(surface.navigation.map((item) => [item.key, item])),
+        actions: new Map(surface.actions.map((item) => [item.key, item])),
+        features: new Map(surface.features.map((item) => [item.key, item])),
       };
       console.timeEnd('[ZNet] refreshInteractionSurface');
     } catch (e) {
@@ -163,8 +160,7 @@ class AppStateStore {
   }
 
   private getFallbackNavVisible(key: string): boolean {
-    // 后端不可用时，简约模式默认可见的导航
-    // nodes 由 Rust interaction_surface 根据活跃配置动态控制，不在此硬编码
+    // When capability metadata is unavailable, keep the Lite mode tabs usable.
     const liteModeNav = ['overview', 'profiles', 'subscriptions', 'settings'];
     return liteModeNav.includes(key);
   }
@@ -182,13 +178,13 @@ class AppStateStore {
 
   isActionOperable(key: string): boolean {
     const item = this.interactionSurface.actions.get(key);
-    return item?.operable ?? this.getFallbackNavVisible(key);
+    return item?.operable ?? true;
   }
 
   isFeatureVisible(key: string): boolean {
     const item = this.interactionSurface.features.get(key);
     if (item) return item.visible;
-    // 简约模式默认隐藏高级功能
+    // Hide advanced features by default when capability metadata is missing.
     const liteModeFeatures = ['connections'];
     return liteModeFeatures.includes(key);
   }
