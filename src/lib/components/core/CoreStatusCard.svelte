@@ -1,22 +1,9 @@
 <script lang="ts">
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { coreEvents } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
-
-  let _lastTick = -1;
-
-  // Event-driven refresh
-  $effect(() => {
-    const tick = coreEvents.statusTick;
-    if (tick > 0 && tick !== _lastTick) {
-      _lastTick = tick;
-      guiState.refreshOnTick(tick);
-    }
-  });
 
   const c = $derived(guiState.connection);
 
-  // Derived process state
   const isCoreAvailable = $derived(c?.coreAvailable === true || c?.processState === 'running');
   const isProcessRunning = $derived(c?.processState === 'running');
   const isProcessStarting = $derived(c?.processState === 'starting');
@@ -25,79 +12,116 @@
   const isStopped = $derived(c?.processExitReason === 'stopped');
   const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
   const localProxyEndpoint = $derived(
-    c?.localProxyHost && c?.localProxyPort ? `${c.localProxyHost}:${c.localProxyPort}` : '已设置'
+    c?.localProxyHost && c?.localProxyPort
+      ? `${c.localProxyHost}:${c.localProxyPort}`
+      : '\u5df2\u8bbe\u7f6e'
   );
 
-  // Label
   const stateLabel = $derived(
-    guiState.isInitializing  ? '连接中…' :
-    guiState.isConnecting    ? '启用中…' :
-    guiState.isDisconnecting ? '关闭中…' :
-    guiState.isStartingCore  ? '启动中'   :
-    guiState.isStoppingCore  ? '重启中'   :
-    isSystemProxyEnabled     ? '服务中'   :
-    isCoreAvailable          ? '监听中'   :
-    isProcessStarting        ? '启动中'   :
-    isProcessFailed          ? '启动失败' :
-    isCrashed                ? '异常退出' :
-    '已断开'
+    guiState.isInitializing
+      ? '\u521d\u59cb\u5316\u4e2d'
+      : guiState.isConnecting
+        ? '\u8fde\u63a5\u4e2d'
+        : guiState.isDisconnecting
+          ? '\u65ad\u5f00\u4e2d'
+          : guiState.isStartingCore
+            ? '\u542f\u52a8\u4e2d'
+            : guiState.isStoppingCore
+              ? '\u505c\u6b62\u4e2d'
+              : isSystemProxyEnabled
+                ? '\u670d\u52a1\u4e2d'
+                : isCoreAvailable
+                  ? '\u76d1\u542c\u4e2d'
+                  : isProcessStarting
+                    ? '\u542f\u52a8\u4e2d'
+                    : isProcessFailed
+                      ? '\u542f\u52a8\u5931\u8d25'
+                      : isCrashed
+                        ? '\u5f02\u5e38\u9000\u51fa'
+                        : '\u5df2\u65ad\u5f00'
   );
 
   const dotColor = $derived(
-    isSystemProxyEnabled      ? '#22C55E' :
-    isCoreAvailable           ? '#F59E0B' :
-    (guiState.isConnecting || guiState.isStartingCore || isProcessStarting) ? '#F59E0B' :
-    (isProcessFailed || isCrashed) ? '#EF4444' :
-    'var(--muted-foreground)'
+    isSystemProxyEnabled
+      ? '#22C55E'
+      : isCoreAvailable
+        ? '#F59E0B'
+        : (guiState.isConnecting || guiState.isStartingCore || isProcessStarting)
+          ? '#F59E0B'
+          : (isProcessFailed || isCrashed)
+            ? '#EF4444'
+            : 'var(--muted-foreground)'
   );
 
   const coreActionLabel = $derived(
-    guiState.isStartingCore ? '启动中…' :
-    guiState.isStoppingCore ? '重启中…' :
-    isProcessRunning ? '重启内核' :
-    isCoreAvailable ? '外部内核' :
-    '启动内核'
+    guiState.isStartingCore
+      ? '\u542f\u52a8\u4e2d'
+      : guiState.isStoppingCore
+        ? '\u505c\u6b62\u4e2d'
+        : isProcessRunning
+          ? '\u91cd\u542f\u5185\u6838'
+          : isCoreAvailable
+            ? '\u5916\u90e8\u5185\u6838'
+            : '\u542f\u52a8\u5185\u6838'
   );
+
   const proxyActionLabel = $derived(
-    guiState.isSwitchingSystemProxy ? '切换中…' :
-    isSystemProxyEnabled ? '关闭系统代理' : '开启系统代理'
+    guiState.isSwitchingSystemProxy
+      ? '\u5207\u6362\u4e2d'
+      : isSystemProxyEnabled
+        ? '\u5173\u95ed\u7cfb\u7edf\u4ee3\u7406'
+        : '\u5f00\u542f\u7cfb\u7edf\u4ee3\u7406'
+  );
+
+  const liteActionLabel = $derived(
+    guiState.isConnecting
+      ? '\u8fde\u63a5\u4e2d'
+      : guiState.isDisconnecting
+        ? '\u65ad\u5f00\u4e2d'
+        : guiState.isConnected
+          ? '\u5173\u95ed\u670d\u52a1'
+          : guiState.canConnect
+            ? '\u5f00\u542f\u670d\u52a1'
+            : '\u914d\u7f6e\u4e0d\u5b8c\u6574'
   );
 </script>
 
 <div class="core-card">
-  <!-- Header -->
   <div class="core-header">
-    <span class="core-label">内核状态</span>
+    <span class="core-label">{`\u5185\u6838\u72b6\u6001`}</span>
     <div class="core-state">
-      <span class="core-dot" class:pulse={guiState.isConnecting || guiState.isStartingCore || guiState.isStoppingCore || isProcessStarting} style="background: {dotColor};"></span>
+      <span
+        class="core-dot"
+        class:pulse={guiState.isConnecting || guiState.isStartingCore || guiState.isStoppingCore || isProcessStarting}
+        style="background: {dotColor};"
+      ></span>
       <span class="core-state-text">{stateLabel}</span>
     </div>
   </div>
 
-  <!-- Process info when running -->
   {#if isCoreAvailable && c}
     <div class="core-meta">
       <div class="core-meta-row">
         <span class="meta-key">PID</span>
-        <span class="meta-val">{isProcessRunning ? (c.processPid ?? '—') : '外部'}</span>
+        <span class="meta-val">{isProcessRunning ? (c.processPid ?? '\u2014') : '\u5916\u90e8'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">系统代理</span>
+        <span class="meta-key">{`\u7cfb\u7edf\u4ee3\u7406`}</span>
         <span class="meta-val" class:connected={isSystemProxyEnabled}>
-          {c.systemProxyEnabled ? localProxyEndpoint : '未设置'}
+          {c.systemProxyEnabled ? localProxyEndpoint : '\u672a\u8bbe\u7f6e'}
         </span>
       </div>
     </div>
   {:else if c?.processExitReason && c?.processState === 'exited'}
     <div class="core-meta">
       <div class="core-meta-row">
-        <span class="meta-key">退码</span>
-        <span class="meta-val">{c.processExitCode ?? '—'}</span>
+        <span class="meta-key">{`\u9000\u51fa\u7801`}</span>
+        <span class="meta-val">{c.processExitCode ?? '\u2014'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">原因</span>
+        <span class="meta-key">{`\u539f\u56e0`}</span>
         <span class="meta-val" class:danger={isCrashed}>
-          {isStopped ? '手动停止' : isCrashed ? '崩溃' : '自行退出'}
+          {isStopped ? '\u624b\u52a8\u505c\u6b62' : isCrashed ? '\u5d29\u6e83' : '\u81ea\u884c\u9000\u51fa'}
         </span>
       </div>
       {#if isCrashed && c.message}
@@ -108,7 +132,6 @@
     <div class="core-error">{c.message}</div>
   {/if}
 
-  <!-- Self-test warnings (when not connected) -->
   {#if !guiState.isConnected && !isCoreAvailable && !isProcessStarting && guiState.blockingIssues.length > 0}
     <div class="core-warning" title={guiState.blockingIssues.join('; ')}>
       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -119,7 +142,7 @@
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
     <button class="core-link" onclick={() => store.openSettings('core')}>
-      配置内核
+      {`\u914d\u7f6e\u5185\u6838`}
     </button>
   {/if}
 
@@ -131,7 +154,7 @@
         class="core-action"
         class:active={isCoreAvailable}
         class:danger={isProcessRunning}
-        title={isCoreAvailable && !isProcessRunning ? '检测到外部内核，无法由本应用管理' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
+        title={isCoreAvailable && !isProcessRunning ? '\u68c0\u6d4b\u5230\u5916\u90e8\u5185\u6838\uff0c\u65e0\u6cd5\u7531\u5f53\u524d\u5e94\u7528\u7ba1\u7406' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
       >
         {coreActionLabel}
       </button>
@@ -146,7 +169,6 @@
       </button>
     </div>
   {:else}
-    <!-- Lite mode one-click flow: start core, wait for local inbound, then set GUI-managed system proxy. -->
     <button
       onclick={() => guiState.isConnected ? guiState.disconnect() : guiState.connect()}
       disabled={guiState.isConnecting || guiState.isDisconnecting || (!guiState.isConnected && !guiState.canConnect)}
@@ -155,7 +177,7 @@
       class:startable={guiState.canConnect && !guiState.isConnected}
       title={!guiState.canConnect && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
     >
-      {guiState.isConnecting ? '启用中…' : guiState.isDisconnecting ? '关闭中…' : guiState.isConnected ? '关闭服务' : guiState.canConnect ? '开启服务' : '配置不完整'}
+      {liteActionLabel}
     </button>
   {/if}
 </div>
@@ -191,36 +213,49 @@
   }
 
   .core-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
-
   .core-state { display: flex; align-items: center; gap: 5px; }
 
   .core-dot {
-    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
+
   .core-dot.pulse { animation: pulse-dot 1.4s ease-in-out infinite; }
 
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
-    50%       { opacity: 0.3; }
+    50% { opacity: 0.3; }
   }
 
   .core-state-text { font-size: 12.5px; font-weight: 600; color: var(--foreground); }
 
   .core-meta {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 1px 8px; flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px 8px;
+    flex-shrink: 0;
   }
 
   .core-meta-row {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 4px; overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    overflow: hidden;
   }
 
   .meta-key { font-size: 11px; color: var(--muted-foreground); flex-shrink: 0; }
 
   .meta-val {
-    font-size: 11.5px; font-family: var(--font-mono, monospace); font-weight: 600;
-    color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px;
+    font-family: var(--font-mono, monospace);
+    font-weight: 600;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .meta-val.danger { color: var(--destructive); }
@@ -228,19 +263,33 @@
   :global(.dark) .meta-val.connected { color: #4ADE80; }
 
   .core-warning {
-    display: flex; align-items: center; gap: 4px;
-    font-size: 11px; color: var(--warning); overflow: hidden; flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--warning);
+    overflow: hidden;
+    flex-shrink: 0;
   }
 
   .core-link {
-    align-self: flex-start; border: none; background: transparent;
-    color: var(--primary); font-size: 11.5px; font-weight: 600;
-    padding: 0; cursor: pointer;
+    align-self: flex-start;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 0;
+    cursor: pointer;
   }
 
   .core-error {
-    font-size: 11px; color: var(--destructive); overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0;
+    font-size: 11px;
+    color: var(--destructive);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .core-actions {
@@ -297,12 +346,25 @@
   :global(.dark) .core-action.danger:hover:not(:disabled) { color: #EF4444; }
 
   .core-toggle {
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; height: 26px; padding: 0 8px; border-radius: 7px;
-    border: 1px solid var(--border); background: var(--muted);
-    color: var(--muted-foreground); font-size: 11.5px; font-weight: 600;
-    cursor: pointer; transition: all 0.13s ease; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; margin-top: auto; flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.13s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: auto;
+    flex-shrink: 0;
   }
 
   .core-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -312,6 +374,7 @@
     border-color: rgba(34, 197, 94, 0.30);
     color: #16A34A;
   }
+
   .core-toggle.running:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.08);
     border-color: rgba(239, 68, 68, 0.25);
@@ -323,6 +386,7 @@
     border-color: rgba(34, 197, 94, 0.25);
     color: #16A34A;
   }
+
   .core-toggle.startable:hover:not(:disabled) { background: rgba(34, 197, 94, 0.14); }
 
   :global(.dark) .core-toggle.running,
