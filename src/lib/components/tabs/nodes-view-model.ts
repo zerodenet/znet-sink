@@ -1,0 +1,252 @@
+import { parseNodeName } from '$lib/services/node-utils';
+import type { PolicyGroup, ConfigProxyNode } from '$lib/types/gui-api';
+import type { ProxyNode } from '$lib/types/protocol';
+
+export interface RuntimeOverlay {
+  delayMs?: number;
+  alive?: boolean;
+  selected?: boolean;
+  groupName?: string;
+}
+
+export interface NodeSection {
+  name: string;
+  kind?: string;
+  nodes: ProxyNode[];
+}
+
+export type NodeSortMode = 'delay' | 'name';
+
+export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeOverlay> {
+  const map = new Map<string, RuntimeOverlay>();
+  for (const group of groups) {
+    for (const outbound of group.outbounds) {
+      const existing = map.get(outbound.tag);
+      map.set(outbound.tag, {
+        delayMs: outbound.delayMs ?? existing?.delayMs,
+        alive: outbound.alive ?? existing?.alive,
+        selected: existing?.selected || group.selected === outbound.tag,
+        // Keep the first matching group so the runtime overlay stays
+        // consistent with the all-nodes section assignment.
+        groupName: existing?.groupName ?? group.name,
+      });
+    }
+  }
+  return map;
+}
+
+export function buildAllNodes(options: {
+  configNodes: ConfigProxyNode[];
+  groups: PolicyGroup[];
+  runtimeOverlay: Map<string, RuntimeOverlay>;
+  latestDelay: (tag: string) => number | undefined;
+  fallbackNodes: ProxyNode[];
+}): ProxyNode[] {
+  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes } = options;
+
+  if (configNodes.length > 0) {
+    return configNodes
+      .filter((configNode) => !configNode.isSelector)
+      .map<ProxyNode>((configNode) => {
+        const runtime = runtimeOverlay.get(configNode.tag);
+        const parsed = parseNodeName(configNode.tag);
+        const delay = runtime?.delayMs ?? latestDelay(configNode.tag) ?? 0;
+        return {
+          id: configNode.tag,
+          tag: configNode.tag,
+          name: configNode.tag,
+          emoji: parsed.emoji,
+          cleanName: parsed.cleanName,
+          protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
+          delay,
+          selected: runtime?.selected,
+          alive: runtime?.alive,
+          domain: runtime?.groupName ?? 'policy',
+          server: configNode.server,
+          port: configNode.port,
+          udp: configNode.udp,
+          network: configNode.network,
+          tls: configNode.tls,
+          sni: configNode.sni,
+          cipher: configNode.cipher,
+        };
+      });
+  }
+
+  const seen = new Set<string>();
+  const runtimeNodes: ProxyNode[] = [];
+  for (const group of groups) {
+    for (const outbound of group.outbounds) {
+      const key = outbound.tag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const parsed = parseNodeName(outbound.tag);
+      runtimeNodes.push({
+        id: `${group.name}:${outbound.tag}`,
+        tag: outbound.tag,
+        name: outbound.tag,
+        emoji: parsed.emoji,
+        cleanName: parsed.cleanName,
+        protocol: outbound.type || 'proxy',
+        delay: outbound.delayMs ?? latestDelay(outbound.tag) ?? 0,
+        selected: group.selected === outbound.tag,
+        alive: outbound.alive,
+        domain: group.name,
+      });
+    }
+  }
+
+  return runtimeNodes.length > 0 ? runtimeNodes : fallbackNodes;
+}
+
+export function matchesSearch(node: ProxyNode, query: string): boolean {
+  if (!query) return true;
+  const haystack = `${node.name} ${node.protocol} ${node.server ?? ''} ${node.cleanName ?? ''}`.toLowerCase();
+  return haystack.includes(query);
+}
+
+function delaySortRank(delay: number): number {
+  if (delay > 0) return 0;
+  if (delay < 0) return 1;
+  return 2;
+}
+
+export function sortNodes(nodes: ProxyNode[], sortMode: NodeSortMode): ProxyNode[] {
+  return [...nodes].sort((a, b) => {
+    if (sortMode === 'delay') {
+      const rankDiff = delaySortRank(a.delay) - delaySortRank(b.delay);
+      if (rankDiff !== 0) return rankDiff;
+      if (a.delay > 0 && b.delay > 0) return a.delay - b.delay;
+      return a.name.localeCompare(b.name);
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
+export function collectGroupNodeTags(
+  groups: PolicyGroup[],
+  groupName: string,
+  visited: Set<string> = new Set(),
+): Set<string> {
+  if (visited.has(groupName)) return new Set();
+  visited.add(groupName);
+  const group = groups.find((item) => item.name === groupName);
+  if (!group) return new Set();
+
+  const groupTags = new Set(groups.map((item) => item.name));
+  const tags = new Set<string>();
+
+  for (const outbound of group.outbounds) {
+    if (groupTags.has(outbound.tag)) {
+      for (const tag of collectGroupNodeTags(groups, outbound.tag, visited)) tags.add(tag);
+    } else {
+      tags.add(outbound.tag);
+    }
+  }
+
+  return tags;
+}
+
+export function filterNodes(options: {
+  allNodes: ProxyNode[];
+  groups: PolicyGroup[];
+  query: string;
+  selectedGroup: string | null;
+  sortMode: NodeSortMode;
+}): ProxyNode[] {
+  const { allNodes, groups, query, selectedGroup, sortMode } = options;
+  let nodes = allNodes.filter((node) => matchesSearch(node, query));
+
+  if (selectedGroup) {
+    const tags = collectGroupNodeTags(groups, selectedGroup);
+    if (tags.size > 0) {
+      const matched = nodes.filter((node) => tags.has(node.tag));
+      if (matched.length > 0) nodes = matched;
+    }
+  }
+
+  return sortNodes(nodes, sortMode);
+}
+
+export function buildSections(options: {
+  allNodes: ProxyNode[];
+  groups: PolicyGroup[];
+  query: string;
+  sortMode: NodeSortMode;
+  orphanSectionName?: string;
+}): NodeSection[] {
+  const { allNodes, groups, query, sortMode, orphanSectionName = '\u5176\u4ed6' } = options;
+  const filtered = allNodes.filter((node) => matchesSearch(node, query));
+  if (filtered.length === 0) return [];
+
+  const tagToGroup = new Map<string, string>();
+  for (const group of groups) {
+    for (const outbound of group.outbounds) {
+      if (!tagToGroup.has(outbound.tag)) tagToGroup.set(outbound.tag, group.name);
+    }
+  }
+
+  const buckets = new Map<string, ProxyNode[]>();
+  const orphan: ProxyNode[] = [];
+
+  for (const node of filtered) {
+    const groupName = tagToGroup.get(node.tag);
+    if (groupName) {
+      if (!buckets.has(groupName)) buckets.set(groupName, []);
+      buckets.get(groupName)!.push(node);
+    } else {
+      orphan.push(node);
+    }
+  }
+
+  const sections: NodeSection[] = [];
+  for (const group of groups) {
+    const items = buckets.get(group.name);
+    if (items && items.length > 0) {
+      sections.push({ name: group.name, kind: group.kind, nodes: sortNodes(items, sortMode) });
+    }
+  }
+
+  if (orphan.length > 0) {
+    sections.push({ name: orphanSectionName, nodes: sortNodes(orphan, sortMode) });
+  }
+
+  return sections;
+}
+
+export function getActiveNodeTag(groups: PolicyGroup[]): string | undefined {
+  for (const group of groups) {
+    if (group.selected) return group.selected;
+  }
+  return undefined;
+}
+
+export function normalizeSelectedGroup(
+  selectedGroup: string | null,
+  groups: PolicyGroup[],
+): string | null {
+  if (!selectedGroup) return null;
+  return groups.some((group) => group.name === selectedGroup) ? selectedGroup : null;
+}
+
+export function resolveNodeGroup(options: {
+  groups: PolicyGroup[];
+  runtimeOverlay: Map<string, RuntimeOverlay>;
+  selectedGroup: string | null;
+  nodeTag: string;
+}): PolicyGroup | undefined {
+  const { groups, runtimeOverlay, selectedGroup, nodeTag } = options;
+  const byName = (name: string | null | undefined) =>
+    name ? groups.find((group) => group.name === name) : undefined;
+
+  return (
+    byName(selectedGroup) ??
+    byName(runtimeOverlay.get(nodeTag)?.groupName) ??
+    groups.find((group) => group.outbounds.some((outbound) => outbound.tag === nodeTag))
+  );
+}
+
+export function isSelectableGroup(group?: PolicyGroup): boolean {
+  if (!group) return true;
+  return group.kind?.toLowerCase() === 'selector';
+}

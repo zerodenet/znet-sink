@@ -1,13 +1,17 @@
 {
   "name": "znetsink",
   "version": "0.0.6",
-  "description": "ZNet Sink - 零域网络代理客户端",
+  "description": "ZNet Sink desktop client for ZeroDenet",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test:nodes": "pnpm test:nodes-probe && pnpm test:nodes-view-model && pnpm test:nodes-select",
+    "test:nodes-probe": "node scripts/test-nodes-probe-state.mjs && node scripts/test-nodes-probe-controller.mjs",
+    "test:nodes-view-model": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-view-model.mjs",
+    "test:nodes-select": "node scripts/test-nodes-select-args.mjs",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
     "prepare": "husky",
