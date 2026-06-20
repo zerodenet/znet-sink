@@ -200,6 +200,8 @@ git commit -m "fix(ipc): handle named pipe disconnect gracefully"
 - [提交规范](COMMIT_CONVENTION.md) — 统一的 Conventional Commit 格式
 - [GUI 接入契约](docs/gui/README.md) — 前端-后端交互边界与调用约定
 - [内核接入](docs/gui/core.md) — Zero 内核 IPC 协议文档
+- [Nodes Manual QA](docs/gui/nodes-manual-qa.md) — 节点页与批量测速验收清单
+- [Worktree Commit Plan](docs/gui/worktree-commit-plan.md) — 当前工作树分组提交计划
 
 ### 开发工具推荐
 

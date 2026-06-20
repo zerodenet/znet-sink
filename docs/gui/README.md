@@ -56,3 +56,5 @@ const config = await invoke('app_config_get');
 - [订阅管理](./subscriptions.md)
 - [规则集配置](./rule-sets.md)
 - [日志](./logs.md)
+- [Nodes Manual QA](./nodes-manual-qa.md)
+- [Worktree Commit Plan](./worktree-commit-plan.md)
