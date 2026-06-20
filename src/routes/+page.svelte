@@ -22,7 +22,9 @@
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
       const { tab, section } = event.payload;
       if (tab === 'settings') {
-        store.openSettings(section === 'core' || section === 'config' || section === 'about' ? section : 'general');
+        store.openSettings(
+          section === 'core' || section === 'config' || section === 'about' ? section : 'general',
+        );
       } else if (tab) {
         store.isInitialized = true;
         store.activeTab = tab;
@@ -45,8 +47,10 @@
     if (store.isInitialized) {
       guiState.initialize();
       coreEvents.start();
-      // 启动后延迟检查更新（不阻塞 UI）
-      setTimeout(() => { updater.checkForUpdate(); }, 3000);
+      // Start delayed update checks after initialization without blocking UI.
+      setTimeout(() => {
+        updater.checkForUpdate();
+      }, 3000);
     } else {
       guiState.destroy();
       coreEvents.stop();
@@ -58,9 +62,10 @@
   });
 </script>
 
-<main class="h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200"
-  style="background: var(--background); color: var(--foreground); font-family: var(--font-sans, system-ui);">
-
+<main
+  class="h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200"
+  style="background: var(--background); color: var(--foreground); font-family: var(--font-sans, system-ui);"
+>
   <!-- Title bar: 44px, drag region -->
   <TitleBar />
 
@@ -70,13 +75,19 @@
   </div>
 
   <!-- Separator -->
-  <div class="flex-shrink-0 mx-5" style="height: 1px; background: var(--border); opacity: 0.5;"></div>
+  <div
+    class="flex-shrink-0 mx-5"
+    style="height: 1px; background: var(--border); opacity: 0.5;"
+  ></div>
 
   <!-- Main content area -->
   <div class="flex-1 min-h-0 px-3 sm:px-5 py-2 sm:py-3.5 flex flex-col overflow-hidden">
     {#if store.appLoading}
-      <!-- ── Loading screen: logo + spinner with animated entry ── -->
-      <div class="flex-1 flex flex-col items-center justify-center gap-5" transition:fade={{ duration: 200 }}>
+      <!-- Loading screen -->
+      <div
+        class="flex-1 flex flex-col items-center justify-center gap-5"
+        transition:fade={{ duration: 200 }}
+      >
         <div class="loading-logo-ring">
           <div class="loading-logo-inner">
             <AppLogo size={36} class="loading-logo" />
@@ -86,18 +97,30 @@
           <span class="loading-title">ZNet Sink</span>
           <div class="flex items-center gap-2">
             <Spinner size="sm" color="default" />
-            <span class="loading-hint">正在加载配置…</span>
+            <span class="loading-hint">{'\u6b63\u5728\u52a0\u8f7d\u914d\u7f6e...'}</span>
           </div>
         </div>
       </div>
     {:else if store.loadError}
-      <div class="flex-1 flex flex-col items-center justify-center gap-3" transition:fade={{ duration: 200 }}>
-        <span style="font-size: 14px; color: var(--destructive); font-weight: 600;">启动失败</span>
-        <span style="font-size: 12px; color: var(--muted-foreground); max-width: 360px; text-align: center;">{store.loadError}</span>
+      <div
+        class="flex-1 flex flex-col items-center justify-center gap-3"
+        transition:fade={{ duration: 200 }}
+      >
+        <span style="font-size: 14px; color: var(--destructive); font-weight: 600;"
+          >{'\u542f\u52a8\u5931\u8d25'}</span
+        >
+        <span
+          style="font-size: 12px; color: var(--muted-foreground); max-width: 360px; text-align: center;"
+          >{store.loadError}</span
+        >
         <button
           class="retry-btn"
-          onclick={() => { store.loadError = null; store.appLoading = true; store.loadFromBackend(); }}
-        >重试</button>
+          onclick={() => {
+            store.loadError = null;
+            store.appLoading = true;
+            store.loadFromBackend();
+          }}>{'\u91cd\u8bd5'}</button
+        >
       </div>
     {:else if !store.isInitialized}
       <WelcomeGuide />
@@ -114,7 +137,7 @@
 </main>
 
 <style>
-  /* ── Loading screen ── */
+  /* Loading screen */
   .loading-logo-ring {
     width: 72px;
     height: 72px;
@@ -161,11 +184,15 @@
   }
 
   @keyframes loading-ring-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
-  /* ── Retry button ── */
+  /* Retry button */
   .retry-btn {
     height: 32px;
     padding: 0 16px;
@@ -178,6 +205,7 @@
     cursor: pointer;
     transition: background 0.13s ease, box-shadow 0.13s ease;
   }
+
   .retry-btn:hover {
     background: var(--muted);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);

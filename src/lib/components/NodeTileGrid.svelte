@@ -7,37 +7,37 @@
     nodes: ProxyNode[];
     showCheck?: boolean;
   }
+
   let { nodes, showCheck = false }: Props = $props();
 
   let switching = $state<string | null>(null);
 
-  // Protocol color mapping
   const PROTOCOL_STYLES: Record<string, { bg: string; color: string }> = {
-    shadowsocks: { bg: 'rgba(139,92,246,0.12)', color: '#8B5CF6' },
-    vmess:       { bg: 'rgba(59,130,246,0.12)',  color: '#3B82F6' },
-    vless:       { bg: 'rgba(16,185,129,0.12)',  color: '#10B981' },
-    trojan:      { bg: 'rgba(239,68,68,0.12)',   color: '#EF4444' },
-    hysteria:    { bg: 'rgba(249,115,22,0.12)',  color: '#F97316' },
-    hysteria2:   { bg: 'rgba(249,115,22,0.12)',  color: '#F97316' },
-    wireguard:   { bg: 'rgba(20,184,166,0.12)',  color: '#14B8A6' },
-    tuic:        { bg: 'rgba(99,102,241,0.12)',  color: '#6366F1' },
+    shadowsocks: { bg: 'rgba(139,92,246,0.12)', color: '#8b5cf6' },
+    vmess: { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
+    vless: { bg: 'rgba(16,185,129,0.12)', color: '#10b981' },
+    trojan: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444' },
+    hysteria: { bg: 'rgba(249,115,22,0.12)', color: '#f97316' },
+    hysteria2: { bg: 'rgba(249,115,22,0.12)', color: '#f97316' },
+    wireguard: { bg: 'rgba(20,184,166,0.12)', color: '#14b8a6' },
+    tuic: { bg: 'rgba(99,102,241,0.12)', color: '#6366f1' },
   };
 
-  const DEFAULT_STYLE = { bg: 'rgba(107,114,128,0.10)', color: '#6B7280' };
+  const DEFAULT_STYLE = { bg: 'rgba(107,114,128,0.10)', color: '#6b7280' };
 
   function getProtoStyle(protocol: string) {
     const key = protocol.toLowerCase().replace(/[-_]/g, '');
-    for (const [k, v] of Object.entries(PROTOCOL_STYLES)) {
-      if (key.includes(k)) return v;
+    for (const [name, style] of Object.entries(PROTOCOL_STYLES)) {
+      if (key.includes(name)) return style;
     }
     return DEFAULT_STYLE;
   }
 
   function getDelayColor(delay: number): string {
     if (delay <= 0) return 'var(--muted-foreground)';
-    if (delay < 200) return '#22C55E';
-    if (delay < 500) return '#F59E0B';
-    return '#EF4444';
+    if (delay < 200) return '#22c55e';
+    if (delay < 500) return '#f59e0b';
+    return '#ef4444';
   }
 
   function getDelayBg(delay: number): string {
@@ -51,8 +51,10 @@
     if (switching) return;
     switching = node.id;
     try {
-      const result = await selectPolicy('proxy', node.name);
-      if (!result.error) {
+      const result = await selectPolicy('proxy', node.tag);
+      if (!result.available) {
+        console.warn('Policy switch skipped: core unavailable');
+      } else if (!result.error) {
         store.selectedNodeId = node.id;
       }
     } catch (e) {
@@ -67,37 +69,43 @@
   {#each nodes as node}
     {@const isActive = store.selectedNodeId === node.id}
     {@const isSwitching = switching === node.id}
-    {@const ps = getProtoStyle(node.protocol)}
+    {@const protoStyle = getProtoStyle(node.protocol)}
 
     <button
       onclick={() => handleSelect(node)}
-      disabled={switching !== null}
+      disabled={switching !== null || !store.isActionOperable('policies.select')}
       class="tile {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
     >
-      <!-- Header: name + check -->
       <div class="tile-header">
         <span class="tile-name truncate">{node.name}</span>
         {#if showCheck && isActive}
           <span class="tile-check" aria-hidden="true">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="2,5 4,7 8,3"/>
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="2,5 4,7 8,3" />
             </svg>
           </span>
         {/if}
       </div>
 
-      <!-- Protocol badge -->
-      <span class="tile-proto" style="background: {ps.bg}; color: {ps.color};">
+      <span class="tile-proto" style="background: {protoStyle.bg}; color: {protoStyle.color};">
         {node.protocol}
       </span>
 
-      <!-- Bottom: delay -->
       <div class="tile-footer">
         {#if isSwitching}
           <span class="tile-switching">⟳</span>
         {:else}
           <span class="tile-delay" style="color: {getDelayColor(node.delay)}; background: {getDelayBg(node.delay)};">
-            {node.delay > 0 ? node.delay : '—'}
+            {node.delay > 0 ? node.delay : '\u2014'}
             {#if node.delay > 0}
               <span class="tile-delay-unit">ms</span>
             {/if}
@@ -105,7 +113,6 @@
         {/if}
       </div>
 
-      <!-- Delay indicator bar -->
       <div class="tile-bar">
         <div
           class="tile-bar-fill"
@@ -151,13 +158,13 @@
   .tile.active {
     background: rgba(99, 102, 241, 0.06);
     border-color: rgba(99, 102, 241, 0.3);
-    box-shadow: 0 0 0 1px rgba(99,102,241,0.08);
+    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.08);
   }
 
   :global(.dark) .tile.active {
     background: rgba(99, 102, 241, 0.1);
     border-color: rgba(165, 180, 252, 0.25);
-    box-shadow: 0 0 0 1px rgba(165,180,252,0.08);
+    box-shadow: 0 0 0 1px rgba(165, 180, 252, 0.08);
   }
 
   .tile.switching {
@@ -185,7 +192,7 @@
   }
 
   :global(.dark) .tile.active .tile-name {
-    color: #A5B4FC;
+    color: #a5b4fc;
   }
 
   .tile-proto {
@@ -230,7 +237,7 @@
   .tile-switching {
     font-size: 12px;
     color: var(--muted-foreground);
-    animation: pulse 1s infinite;
+    animation: tile-spin 0.8s linear infinite;
   }
 
   .tile-check {
@@ -240,15 +247,15 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: rgba(99,102,241,0.18);
+    background: rgba(99, 102, 241, 0.18);
     color: var(--accent-foreground);
     flex-shrink: 0;
     margin-top: 1px;
   }
 
   :global(.dark) .tile-check {
-    background: rgba(165,180,252,0.18);
-    color: #A5B4FC;
+    background: rgba(165, 180, 252, 0.18);
+    color: #a5b4fc;
   }
 
   .tile-bar {
@@ -258,7 +265,7 @@
     right: 0;
     height: 2.5px;
     background: var(--muted);
-    opacity: 0.2;
+    opacity: 0.25;
     border-radius: 0 0 8px 8px;
     overflow: hidden;
   }
@@ -274,8 +281,12 @@
     opacity: 0.5;
   }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+  @keyframes tile-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

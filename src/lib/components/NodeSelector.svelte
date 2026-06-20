@@ -3,19 +3,15 @@
   import type { ProxyNode } from '$lib/types/protocol';
   import { selectPolicy } from '$lib/services/core';
 
-  const { nodes, initialSelected = '' }: {
-    nodes: ProxyNode[];
-    initialSelected?: string;
-  } = $props();
+  const { nodes, initialSelected = '' }: { nodes: ProxyNode[]; initialSelected?: string } = $props();
 
   let selected = $state('');
+  let switching = $state<string | null>(null);
+  let lastError = $state<string | null>(null);
 
   $effect(() => {
     selected = initialSelected;
   });
-
-  let switching = $state<string | null>(null);
-  let lastError = $state<string | null>(null);
 
   async function handleSelect(node: ProxyNode) {
     if (switching) return;
@@ -23,8 +19,10 @@
     lastError = null;
 
     try {
-      const result = await selectPolicy('proxy', node.name);
-      if (result.error) {
+      const result = await selectPolicy('proxy', node.tag);
+      if (!result.available) {
+        lastError = '\u5185\u6838\u672a\u8fde\u63a5\uff0c\u65e0\u6cd5\u5207\u6362\u8282\u70b9';
+      } else if (result.error) {
         lastError = result.error.message;
       } else {
         selected = node.id;
@@ -38,9 +36,9 @@
 
   function getDelayColor(delay: number): string {
     if (delay <= 0) return 'var(--muted-foreground)';
-    if (delay < 200) return '#22C55E';
-    if (delay < 500) return '#F59E0B';
-    return '#EF4444';
+    if (delay < 200) return '#22c55e';
+    if (delay < 500) return '#f59e0b';
+    return '#ef4444';
   }
 
   function getDelayBg(delay: number): string {
@@ -53,57 +51,56 @@
   function getProtoStyle(protocol: string): { bg: string; color: string } {
     const key = protocol.toLowerCase();
     const map: Record<string, { bg: string; color: string }> = {
-      shadowsocks: { bg: 'rgba(139,92,246,0.12)', color: '#8B5CF6' },
-      vmess:       { bg: 'rgba(59,130,246,0.12)',  color: '#3B82F6' },
-      vless:       { bg: 'rgba(16,185,129,0.12)',  color: '#10B981' },
-      trojan:      { bg: 'rgba(239,68,68,0.12)',   color: '#EF4444' },
+      shadowsocks: { bg: 'rgba(139,92,246,0.12)', color: '#8b5cf6' },
+      vmess: { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
+      vless: { bg: 'rgba(16,185,129,0.12)', color: '#10b981' },
+      trojan: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444' },
     };
-    for (const [k, v] of Object.entries(map)) {
-      if (key.includes(k)) return v;
+    for (const [name, style] of Object.entries(map)) {
+      if (key.includes(name)) return style;
     }
-    return { bg: 'rgba(107,114,128,0.10)', color: '#6B7280' };
+    return { bg: 'rgba(107,114,128,0.10)', color: '#6b7280' };
   }
 </script>
 
 <div class="ns-root desk-card h-full flex flex-col overflow-hidden">
-  <!-- Header -->
   <div class="ns-header">
-    <span class="ns-label">核心策略出口</span>
+    <span class="ns-label">{'\u6838\u5fc3\u7b56\u7565\u51fa\u53e3'}</span>
     <span class="ns-badge">Radio</span>
   </div>
 
-  <!-- List -->
   {#if nodes.length === 0}
-    <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">等待节点数据...</div>
+    <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+      {'\u7b49\u5f85\u8282\u70b9\u6570\u636e...'}
+    </div>
   {:else}
     <div class="ns-list">
       {#each nodes as node}
         {@const isActive = selected === node.id}
-        {@const ps = getProtoStyle(node.protocol)}
+        {@const protoStyle = getProtoStyle(node.protocol)}
 
         <button
           class="ns-row {isActive ? 'active' : ''} {switching === node.id ? 'switching' : ''}"
           onclick={() => handleSelect(node)}
           disabled={switching !== null || !store.isActionOperable('policies.select')}
         >
-          <!-- Radio indicator -->
           <span class="ns-radio {isActive ? 'on' : ''}">
             {#if switching === node.id}
               <span class="ns-spin-dot">⟳</span>
             {/if}
           </span>
 
-          <!-- Name + proto -->
           <div class="ns-info">
             <span class="ns-name truncate">{node.name}</span>
-            <span class="ns-proto" style="background: {ps.bg}; color: {ps.color};">{node.protocol}</span>
+            <span class="ns-proto" style="background: {protoStyle.bg}; color: {protoStyle.color};">
+              {node.protocol}
+            </span>
           </div>
 
-          <!-- Delay pill -->
           <span class="ns-delay" style="color: {getDelayColor(node.delay)}; background: {getDelayBg(node.delay)};">
-            {node.delay > 0 ? node.delay : '—'}
+            {node.delay > 0 ? node.delay : '\u2014'}
             {#if node.delay > 0}
-              <span style="font-size:9px;opacity:0.55;font-weight:600;">ms</span>
+              <span style="font-size: 9px; opacity: 0.55; font-weight: 600;">ms</span>
             {/if}
           </span>
         </button>
@@ -111,7 +108,6 @@
     </div>
   {/if}
 
-  <!-- Error -->
   {#if lastError}
     <div class="ns-error" title={lastError}>{lastError}</div>
   {/if}
@@ -192,7 +188,6 @@
     pointer-events: none;
   }
 
-  /* Radio indicator */
   .ns-radio {
     width: 14px;
     height: 14px;
@@ -213,86 +208,76 @@
   }
 
   :global(.dark) .ns-radio.on {
-    border-color: #A5B4FC;
-    background: #A5B4FC;
+    border-color: #a5b4fc;
+    background: #a5b4fc;
   }
 
   .ns-spin-dot {
-    font-size: 8px;
-    color: var(--muted-foreground);
-    animation: spin 0.8s linear infinite;
-  }
-
-  .ns-radio.on .ns-spin-dot {
+    font-size: 10px;
+    line-height: 1;
     color: white;
+    animation: ns-spin 0.8s linear infinite;
   }
 
-  :global(.dark) .ns-radio.on .ns-spin-dot {
-    color: #0F1014;
+  :global(.dark) .ns-spin-dot {
+    color: #0f1014;
   }
 
   .ns-info {
+    min-width: 0;
+    flex: 1;
     display: flex;
     align-items: center;
     gap: 6px;
-    flex: 1;
-    min-width: 0;
   }
 
   .ns-name {
     font-size: 12px;
-    font-weight: 500;
     color: var(--foreground);
-    flex: 1;
     min-width: 0;
-    transition: color 0.12s ease;
   }
 
-  .ns-row.active .ns-name { font-weight: 600; }
-
   .ns-proto {
-    display: inline-flex;
-    align-items: center;
-    height: 16px;
-    padding: 0 5px;
-    border-radius: 3px;
     font-size: 9px;
     font-weight: 700;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.02em;
     text-transform: uppercase;
+    padding: 2px 5px;
+    border-radius: 4px;
     flex-shrink: 0;
   }
 
   .ns-delay {
     display: inline-flex;
-    align-items: center;
-    gap: 1px;
-    font-size: 12px;
-    font-family: var(--font-mono);
+    align-items: baseline;
+    gap: 2px;
+    min-width: 42px;
+    justify-content: center;
+    padding: 3px 7px;
+    border-radius: 5px;
+    font-size: 11px;
     font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 4px;
-    letter-spacing: -0.02em;
-    line-height: 1;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     flex-shrink: 0;
   }
 
   .ns-error {
     margin: 4px;
-    padding: 7px 10px;
-    background: rgba(239, 68, 68, 0.08);
-    border: 1px solid rgba(239, 68, 68, 0.16);
+    padding: 6px 8px;
     border-radius: 6px;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
     font-size: 11px;
-    color: var(--destructive);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex-shrink: 0;
+    line-height: 1.4;
   }
 
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
+  @keyframes ns-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

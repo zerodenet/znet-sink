@@ -139,6 +139,7 @@
 
   async function handleNodeSelect(groupName: string, tag: string) {
     if (nodeSwitching) return;
+    if (!isCoreRunning) return;
     nodeSwitching = tag;
     try {
       await selectPolicy(groupName, tag);
@@ -393,7 +394,7 @@
                 <button
                   class="lite-nitem {group.selected === node.tag ? 'active' : ''}"
                   onclick={() => handleNodeSelect(group.name, node.tag)}
-                  disabled={nodeSwitching !== null}
+                  disabled={nodeSwitching !== null || !isCoreRunning}
                 >
                   <span class="lite-nitem-dot {group.selected === node.tag ? 'on' : ''}"></span>
                   <span class="lite-nitem-name">{node.tag}</span>
