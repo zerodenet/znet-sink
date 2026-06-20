@@ -746,6 +746,13 @@ fn classify_stderr_level(line: &str) -> LogLevel {
 ///
 /// Extracts the timestamp and level, then converts `key=value` pairs
 /// into JSON fields so the frontend can display them in a structured way.
+fn is_structured_field_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     let mut fields = serde_json::Map::new();
 
@@ -796,68 +803,26 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
         classify_stderr_level(line)
     };
 
-    // Extract key=value pairs from the message
-    // The kernel uses `key=value` format for structured fields, e.g.:
-    //   `pipe=\\.\pipe\zero-control active=3`
-    // keys are alphanumeric with underscores; values are everything until
-    // the next space or end of line.
-    let mut msg_without_kv = String::new();
-    let mut i = 0;
-    let bytes = msg.as_bytes();
-    while i < bytes.len() {
-        // Check for key=value pattern at current position
-        if (i == 0 || bytes[i - 1] == b' ')
-            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-        {
-            let key_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            if i < bytes.len() && bytes[i] == b'=' && i > key_start {
-                let key = &msg[key_start..i];
-                i += 1; // skip '='
-
-                // Value: until next space or end of line
-                // Handle `\\.\pipe\...` paths (backslash escapes)
-                let val_start = i;
-                while i < bytes.len() {
-                    if bytes[i] == b' ' {
-                        // Check if this is likely part of a path
-                        // (backslash before space, or we're in key=value chain)
-                        if i + 1 < bytes.len()
-                            && (bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_')
-                        {
-                            // Next token looks like another key — end of value
-                            break;
-                        }
-                        // Otherwise it's a regular space, also end
-                        break;
-                    }
-                    i += 1;
-                }
-                let value = &msg[val_start..i];
+    // Extract key=value pairs conservatively. If a token is not a plain ASCII
+    // key=value field, keep it in the message instead of slicing through
+    // arbitrary byte offsets from kernel output.
+    let mut message_tokens = Vec::new();
+    for token in msg.split_whitespace() {
+        if let Some((key, value)) = token.split_once('=') {
+            if is_structured_field_key(key) {
                 fields.insert(
                     key.to_string(),
                     serde_json::Value::String(value.to_string()),
                 );
-
-                // Skip trailing space
-                if i < bytes.len() && bytes[i] == b' ' {
-                    i += 1;
-                }
-                continue;
+            } else {
+                message_tokens.push(token);
             }
-
-            msg_without_kv.push_str(&msg[key_start..i]);
-            continue;
+        } else {
+            message_tokens.push(token);
         }
-
-        // Regular character — append to message
-        msg_without_kv.push(bytes[i] as char);
-        i += 1;
     }
 
-    let clean_msg = msg_without_kv.trim().to_string();
+    let clean_msg = message_tokens.join(" ");
     fields.insert(
         "message".to_string(),
         serde_json::Value::String(if clean_msg.is_empty() {
@@ -896,4 +861,25 @@ mod tests {
         assert_eq!(fields["pipe"], "\\\\.\\pipe\\zero-control");
         assert_eq!(fields["active"], "3");
     }
+
+    #[test]
+    fn parse_kernel_log_line_handles_unicode_message_without_panicking() {
+        let (_, fields) = parse_kernel_log_line(
+            "2026-06-10T10:33:23.610135Z INFO 节点测速完成 target=HK-01 latency_ms=88",
+        );
+
+        assert_eq!(fields["message"], "节点测速完成");
+        assert_eq!(fields["target"], "HK-01");
+        assert_eq!(fields["latency_ms"], "88");
+    }
+
+    #[test]
+    fn parse_kernel_log_line_keeps_non_field_equals_text_in_message() {
+        let (_, fields) =
+            parse_kernel_log_line("2026-06-10T10:33:23.610135Z INFO invalid-key=value retry later");
+
+        assert_eq!(fields["message"], "invalid-key=value retry later");
+        assert!(fields.get("invalid-key").is_none());
+    }
 }
+
