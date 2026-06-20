@@ -296,17 +296,23 @@ pub async fn gui_client_probe_node(
 }
 
 /// Start a batch probe. Returns immediately; results arrive via Tauri events:
-/// - `probe:result`   — per-node ProbeResult
-/// - `probe:progress` — `{ done, total }`
-/// - `probe:complete` — `{ total, reachable, failed }`
+/// - `probe:result`   — `{ sessionId, targetTag, reachable, latencyMs?, message? }`
+/// - `probe:progress` — `{ sessionId, done, total }`
+/// - `probe:complete` — `{ sessionId, total, reachable, failed }`
 #[tauri::command]
 pub async fn gui_client_probe_start(
     app_handle: AppHandle,
     target_tags: Vec<String>,
+    session_id: String,
     max_concurrent: Option<usize>,
 ) -> AppResult<()> {
     if target_tags.is_empty() {
         return Ok(());
+    }
+    if session_id.trim().is_empty() {
+        return Err(AppError::invalid_argument(
+            "probe batch session_id must not be empty",
+        ));
     }
 
     let max_concurrent = max_concurrent.unwrap_or(probe::MAX_CONCURRENT_PROBES);
@@ -314,6 +320,7 @@ pub async fn gui_client_probe_start(
     // Spawn batch in background — command returns immediately
     tauri::async_runtime::spawn(probe::run_probe_batch(
         app_handle,
+        session_id,
         target_tags,
         max_concurrent,
     ));

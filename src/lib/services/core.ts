@@ -11,13 +11,13 @@ export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 export function handleAppError(error: unknown, fallbackMessage: string): void {
   const appError = error as { code?: string; message?: string };
   if (appError.code === 'mode_restricted') {
-    warning(`该功能仅在专业模式下可用：${appError.message}`);
+    warning(`\u8be5\u529f\u80fd\u4ec5\u5728\u4e13\u4e1a\u6a21\u5f0f\u4e0b\u53ef\u7528\uff1a${appError.message}`);
   } else {
     warning(appError.message || fallbackMessage);
   }
 }
 
-// ── Core process lifecycle ──
+// Core process lifecycle
 
 export async function getCoreProcessStatus(): Promise<CoreProcessStatus> {
   return invoke('core_process_status');
@@ -35,7 +35,7 @@ export async function restartCoreProcess(): Promise<CoreProcessStatus> {
   return invoke('core_process_restart');
 }
 
-// ── Core IPC ──
+// Core IPC
 
 export async function getCoreStatus(options?: CoreIpcOptions): Promise<CoreCallResult> {
   return invoke('core_status', { options });
@@ -77,7 +77,7 @@ export async function getCorePolicies(options?: CoreIpcOptions): Promise<CoreCal
   return invoke('core_get_policies', { options });
 }
 
-// ── Policies ──
+// Policies
 
 export async function getPolicies(options?: CoreIpcOptions): Promise<CoreCallResult> {
   return invoke('core_get_policies', { options });
@@ -91,7 +91,7 @@ export async function probePolicy(policyTag: string, options?: CoreIpcOptions): 
   return invoke('core_probe_policy', { policyTag, options });
 }
 
-// ── Flows ──
+// Flows
 
 export interface FlowInfo {
   flowId: string;
@@ -157,7 +157,7 @@ export async function closeFlow(flowId: string, options?: CoreIpcOptions): Promi
   return invoke('core_close_flow', { flowId, options });
 }
 
-// ── Core events ──
+// Core events
 
 export async function startCoreEvents(events?: string[], options?: CoreIpcOptions): Promise<CoreEventSubscription> {
   return invoke('core_events_start', { events, options });
@@ -175,7 +175,7 @@ export async function stopGuiEvents(): Promise<number> {
   return invoke('gui_events_stop');
 }
 
-// ── Core config ──
+// Core config
 
 export async function getCoreConfigSnapshot(): Promise<CoreKernelInfo> {
   return invoke('core_config_get');
@@ -196,7 +196,7 @@ export async function downloadLatestCore(installDir?: string): Promise<CoreDownl
   return invoke('core_download_latest', { installDir });
 }
 
-// ── App config ──
+// App config
 
 export async function getAppConfig(): Promise<AppConfig> {
   return invoke('app_config_get');
@@ -206,7 +206,7 @@ export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig>
   return invoke('app_config_update', { patch });
 }
 
-// ── Logs ──
+// Logs
 
 export async function getLogs(query?: LogQuery): Promise<LogEntry[]> {
   return invoke('logs_list', { query });
@@ -220,7 +220,7 @@ export async function clearLogs(): Promise<void> {
   return invoke('logs_clear');
 }
 
-// ── GUI capabilities snapshot ──
+// GUI capabilities snapshot
 
 export async function getGuiCapabilitiesSnapshot(): Promise<GuiCapabilitySnapshot> {
   return invoke('gui_capabilities_snapshot');
@@ -230,7 +230,7 @@ export async function getGuiInteractionSurfaceSnapshot(): Promise<InteractionSur
   return invoke('gui_interaction_surface_snapshot');
 }
 
-// ── System proxy ──
+// System proxy
 
 export interface SystemProxyStatus {
   enabled: boolean;
@@ -250,8 +250,8 @@ export async function getSystemProxyStatus(): Promise<SystemProxyStatus> {
   return invoke('system_proxy_status');
 }
 
-// ── GUI 业务层接口 ──
-// 所有核心业务应使用以下接口，而非直接调用 core_ipc_*
+// GUI runtime snapshots backed by dedicated gui_* commands.
+// These functions expose GUI-facing data instead of raw core_ipc_* results.
 
 export async function getGuiSelfTestSnapshot(): Promise<SelfTestSnapshot> {
   return invoke('gui_self_test_snapshot');
@@ -306,19 +306,19 @@ export async function getGuiPolicyGroups(): Promise<PolicyGroup[]> {
   return mapPolicyGroups(raw);
 }
 
-// ── Core health ──
+// Core health
 
 export async function getGuiCoreHealth(): Promise<GuiCoreHealth> {
   return invoke('gui_core_health');
 }
 
-// ── Zero capabilities ──
+// Zero capabilities
 
 export async function getGuiZeroCapabilities(): Promise<GuiZeroCapabilities> {
   return invoke('gui_zero_capabilities');
 }
 
-// ── Policy selection ──
+// Policy selection
 
 export async function guiSelectPolicy(policyTag: string, targetTag: string): Promise<GuiPolicySelectionResult> {
   return invoke('gui_select_policy', { policyTag, targetTag });
@@ -328,7 +328,7 @@ export async function guiProbeTarget(targetTag: string): Promise<GuiTargetProbeR
   return invoke('gui_probe_target', { targetTag });
 }
 
-// ── Client-side probe ──
+// Client-side probe
 
 export interface ClientProbeResult {
   targetTag: string;
@@ -342,6 +342,21 @@ export interface ProbeProgress {
   total: number;
 }
 
+export interface ClientProbeResultEvent extends ClientProbeResult {
+  sessionId: string;
+}
+
+export interface ClientProbeProgressEvent extends ProbeProgress {
+  sessionId: string;
+}
+
+export interface ClientProbeCompleteEvent {
+  sessionId: string;
+  total: number;
+  reachable: number;
+  failed: number;
+}
+
 /** Probe a single node, returns result directly. */
 export async function guiClientProbeNode(targetTag: string): Promise<ClientProbeResult> {
   return invoke('gui_client_probe_node', { targetTag });
@@ -350,18 +365,19 @@ export async function guiClientProbeNode(targetTag: string): Promise<ClientProbe
 /**
  * Start a batch probe (returns immediately).
  * Listen for events:
- *   `probe:result`   → ClientProbeResult
- *   `probe:progress` → { done, total }
- *   `probe:complete` → { total, reachable, failed }
+ *   `probe:result`   -> { sessionId, ...ClientProbeResult }
+ *   `probe:progress` -> { sessionId, done, total }
+ *   `probe:complete` -> { sessionId, total, reachable, failed }
  */
 export async function guiClientProbeStart(
   targetTags: string[],
+  sessionId: string,
   maxConcurrent?: number,
 ): Promise<void> {
-  return invoke('gui_client_probe_start', { targetTags, maxConcurrent });
+  return invoke('gui_client_probe_start', { targetTags, sessionId, maxConcurrent });
 }
 
-// ── Feature status (TUN / DNS / Rules) ──
+// Feature status (TUN / DNS / Rules)
 
 export async function getGuiTunStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_tun_status');
@@ -387,7 +403,7 @@ export async function getGuiRuleStatus(): Promise<GuiFeatureStatus> {
   return invoke('gui_rule_status');
 }
 
-// ── GUI connections (Pro mode) ──
+// GUI connections (Pro mode)
 
 export interface GuiConnectionListOptions {
   limit?: number;
@@ -411,7 +427,7 @@ export async function getGuiRecentConnections(options?: GuiConnectionListOptions
   return invoke('gui_recent_connections', { options });
 }
 
-// ── Config hot-reload ──
+// Config hot-reload
 
 export async function guiApplyConfig(config: Record<string, unknown>): Promise<unknown> {
   return invoke('gui_apply_config', { config });
@@ -425,30 +441,30 @@ export async function guiPlanApplyConfig(config: Record<string, unknown>): Promi
   return invoke('gui_plan_apply_config', { config });
 }
 
-// ── Mode hot-switch ──
+// Mode hot-switch
 
 export async function guiSetMode(mode: string, outbound?: string): Promise<unknown> {
   return invoke('gui_set_mode', { mode, outbound });
 }
 
-// ── Policy probe ──
+// Policy probe
 
 export async function guiProbePolicy(policyTag: string): Promise<unknown> {
   return invoke('gui_probe_policy', { policyTag });
 }
 
-// ── System tray status sync ──
+// System tray status sync
 
 /**
  * Push the current kernel / proxy state to the system-tray icon so the
  * tooltip and menu item enabled states stay in sync without the user
- * opening the window. Best-effort — no-op outside Tauri.
+ * opening the window. Best-effort no-op outside Tauri.
  */
 export async function trayUpdateStatus(running: boolean, connected: boolean): Promise<void> {
   return invoke('tray_update_status', { running, connected });
 }
 
-// ── Debug ──
+// Debug
 
 import type { DebugFrame } from '$lib/types/debug';
 
@@ -460,7 +476,7 @@ export async function clearDebugFrames(): Promise<void> {
   return invoke('gui_debug_clear');
 }
 
-// ── Diagnostics ──
+// Diagnostics
 
 export async function guiDnsLookup(hostname: string): Promise<unknown> {
   return invoke('gui_dns_lookup', { hostname });

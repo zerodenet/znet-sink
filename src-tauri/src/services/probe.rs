@@ -28,6 +28,31 @@ pub struct ProbeResult {
     pub message: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeResultEvent {
+    pub session_id: String,
+    #[serde(flatten)]
+    pub result: ProbeResult,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeProgressEvent {
+    pub session_id: String,
+    pub done: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeCompleteEvent {
+    pub session_id: String,
+    pub total: usize,
+    pub reachable: usize,
+    pub failed: usize,
+}
+
 /// Probe a single node via the core's probe command.
 /// No upfront health check — the probe itself handles timeout/failure.
 pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
@@ -79,6 +104,7 @@ pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
 /// - `probe:complete` — `{ total, reachable, failed }`
 pub async fn run_probe_batch(
     app_handle: AppHandle,
+    session_id: String,
     target_tags: Vec<String>,
     max_concurrent: usize,
 ) {
@@ -96,7 +122,11 @@ pub async fn run_probe_batch(
     // Emit initial progress
     let _ = app_handle.emit(
         "probe:progress",
-        serde_json::json!({ "done": 0, "total": total }),
+        ProbeProgressEvent {
+            session_id: session_id.clone(),
+            done: 0,
+            total,
+        },
     );
 
     let mut handles = Vec::with_capacity(total);
@@ -104,6 +134,7 @@ pub async fn run_probe_batch(
     for target_tag in target_tags {
         let permit = semaphore.clone().acquire_owned().await.ok();
         let app_handle = app_handle.clone();
+        let session_id = session_id.clone();
         let done_count = done_count.clone();
         let reachable_count = reachable_count.clone();
         let failed_count = failed_count.clone();
@@ -119,10 +150,20 @@ pub async fn run_probe_batch(
             }
             let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
 
-            let _ = app_handle.emit("probe:result", &result);
+            let _ = app_handle.emit(
+                "probe:result",
+                ProbeResultEvent {
+                    session_id: session_id.clone(),
+                    result: result.clone(),
+                },
+            );
             let _ = app_handle.emit(
                 "probe:progress",
-                serde_json::json!({ "done": done, "total": total }),
+                ProbeProgressEvent {
+                    session_id,
+                    done,
+                    total,
+                },
             );
 
             drop(permit);
@@ -138,11 +179,12 @@ pub async fn run_probe_batch(
 
     let _ = app_handle.emit(
         "probe:complete",
-        serde_json::json!({
-            "total": total,
-            "reachable": reachable_count.load(Ordering::Relaxed),
-            "failed": failed_count.load(Ordering::Relaxed),
-        }),
+        ProbeCompleteEvent {
+            session_id,
+            total,
+            reachable: reachable_count.load(Ordering::Relaxed),
+            failed: failed_count.load(Ordering::Relaxed),
+        },
     );
 }
 
@@ -151,4 +193,70 @@ fn default_ipc_options(
 ) -> Result<Option<crate::models::core::CoreIpcOptions>, AppError> {
     let config = common::lock(state.app_config(), "app_config")?.core.clone();
     Ok(Some(core_config::ipc_options_from_app_config(&config)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProbeCompleteEvent, ProbeProgressEvent, ProbeResult, ProbeResultEvent};
+    use serde_json::json;
+
+    #[test]
+    fn probe_result_event_serializes_session_id_and_result_fields() {
+        let payload = serde_json::to_value(ProbeResultEvent {
+            session_id: "session-1".to_string(),
+            result: ProbeResult {
+                target_tag: "HK".to_string(),
+                reachable: true,
+                latency_ms: Some(42),
+                message: None,
+            },
+        })
+        .expect("probe result payload should serialize");
+
+        assert_eq!(
+            payload,
+            json!({
+                "sessionId": "session-1",
+                "targetTag": "HK",
+                "reachable": true,
+                "latencyMs": 42,
+                "message": null
+            })
+        );
+    }
+
+    #[test]
+    fn probe_progress_and_complete_events_include_session_id() {
+        let progress = serde_json::to_value(ProbeProgressEvent {
+            session_id: "session-2".to_string(),
+            done: 1,
+            total: 3,
+        })
+        .expect("probe progress payload should serialize");
+        let complete = serde_json::to_value(ProbeCompleteEvent {
+            session_id: "session-2".to_string(),
+            total: 3,
+            reachable: 2,
+            failed: 1,
+        })
+        .expect("probe complete payload should serialize");
+
+        assert_eq!(
+            progress,
+            json!({
+                "sessionId": "session-2",
+                "done": 1,
+                "total": 3
+            })
+        );
+        assert_eq!(
+            complete,
+            json!({
+                "sessionId": "session-2",
+                "total": 3,
+                "reachable": 2,
+                "failed": 1
+            })
+        );
+    }
 }
