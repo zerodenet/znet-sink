@@ -60,13 +60,6 @@ fn tray_start_core(app: tauri::AppHandle) {
     });
 }
 
-fn tray_stop_core(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _ = core_process::stop(state);
-    });
-}
-
 fn tray_restart_core(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -105,7 +98,6 @@ fn tray_disable_system_proxy(_app: tauri::AppHandle) {
 /// the kernel is already running). Stored via `app.manage()`.
 struct TrayMenuItems {
     start_core: tauri::menu::MenuItem<tauri::Wry>,
-    stop_core: tauri::menu::MenuItem<tauri::Wry>,
     restart_core: tauri::menu::MenuItem<tauri::Wry>,
     enable_proxy: tauri::menu::MenuItem<tauri::Wry>,
     disable_proxy: tauri::menu::MenuItem<tauri::Wry>,
@@ -139,7 +131,6 @@ fn tray_update_status(
     // Mirror the actionable state into the menu so the user can't pick
     // an action that would no-op (e.g. "启动内核" while already running).
     let _ = state.start_core.set_enabled(!running);
-    let _ = state.stop_core.set_enabled(running);
     let _ = state.restart_core.set_enabled(running);
     let _ = state.enable_proxy.set_enabled(!connected);
     let _ = state.disable_proxy.set_enabled(connected);
@@ -231,7 +222,6 @@ pub fn run() {
             core_config_commands::core_config_get,
             core_process_commands::core_process_status,
             core_process_commands::core_process_start,
-            core_process_commands::core_process_stop,
             core_process_commands::core_process_restart,
             core_config_commands::core_config_export_active,
             core_config_commands::core_download_latest,
@@ -442,9 +432,6 @@ pub fn run() {
             let start_core_item = tauri::menu::MenuItemBuilder::new("启动内核")
                 .id("start_core")
                 .build(app)?;
-            let stop_core_item = tauri::menu::MenuItemBuilder::new("停止内核")
-                .id("stop_core")
-                .build(app)?;
             let restart_core_item = tauri::menu::MenuItemBuilder::new("重启内核")
                 .id("restart_core")
                 .build(app)?;
@@ -464,7 +451,6 @@ pub fn run() {
                     &disable_proxy_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &start_core_item,
-                    &stop_core_item,
                     &restart_core_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &settings_item,
@@ -477,7 +463,6 @@ pub fn run() {
             // `tray_update_status` can toggle their enabled state.
             app.manage(TrayMenuItems {
                 start_core: start_core_item,
-                stop_core: stop_core_item,
                 restart_core: restart_core_item,
                 enable_proxy: enable_proxy_item,
                 disable_proxy: disable_proxy_item,
@@ -493,7 +478,6 @@ pub fn run() {
                     "enable_proxy" => tray_enable_system_proxy(app.clone()),
                     "disable_proxy" => tray_disable_system_proxy(app.clone()),
                     "start_core" => tray_start_core(app.clone()),
-                    "stop_core" => tray_stop_core(app.clone()),
                     "restart_core" => tray_restart_core(app.clone()),
                     "settings" => open_main_window_route(app, "settings", Some("general")),
                     "quit" => {

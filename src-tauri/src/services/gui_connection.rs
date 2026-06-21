@@ -42,12 +42,10 @@ pub async fn connect(
         }
     }
 
-    let mut started_this_call = false;
     if managed_running {
         // We already manage a running core — no need to start another one.
     } else {
         let process = core_process::start(app_handle.clone(), state.clone())?;
-        started_this_call = process.state == CoreProcessState::Running;
         if process.state != CoreProcessState::Running {
             return build_status(
                 state.inner(),
@@ -61,7 +59,7 @@ pub async fn connect(
     let health = match wait_for_health(state.inner()).await {
         Ok(health) => health,
         Err(error) => {
-            cleanup_failed_connect(state.clone(), started_this_call);
+            cleanup_failed_connect(state.clone());
             return build_status(
                 state.inner(),
                 "failed",
@@ -71,7 +69,7 @@ pub async fn connect(
         }
     };
     if !health.healthy {
-        cleanup_failed_connect(state.clone(), started_this_call);
+        cleanup_failed_connect(state.clone());
         return build_status(
             state.inner(),
             "failed",
@@ -88,7 +86,7 @@ pub async fn connect(
     .await
     .map_err(|error| AppError::internal(format!("local proxy probe thread panicked: {error}")))?
     {
-        cleanup_failed_connect(state.clone(), started_this_call);
+        cleanup_failed_connect(state.clone());
         return build_status(
             state.inner(),
             "failed",
@@ -101,7 +99,7 @@ pub async fn connect(
     }
 
     if let Err(error) = system_proxy_guard::enable_with_guard(&host, port) {
-        cleanup_failed_connect(state.clone(), started_this_call);
+        cleanup_failed_connect(state.clone());
         return build_status(
             state.inner(),
             "failed",
@@ -120,12 +118,8 @@ pub async fn connect(
 
 pub async fn disconnect(state: State<'_, AppState>) -> AppResult<GuiConnectionStatus> {
     let proxy_result = system_proxy_guard::disable_with_guard();
-    let stop_result = core_process::stop(state.clone());
 
-    let error = proxy_result
-        .err()
-        .map(|error| error.message)
-        .or_else(|| stop_result.err().map(|error| error.message));
+    let error = proxy_result.err().map(|error| error.message);
 
     build_status(
         state.inner(),
@@ -184,10 +178,8 @@ async fn build_status(
     })
 }
 
-fn cleanup_failed_connect(state: State<'_, AppState>, started_this_call: bool) {
-    if started_this_call {
-        let _ = core_process::stop(state);
-    }
+fn cleanup_failed_connect(_state: State<'_, AppState>) {
+    let _ = system_proxy_guard::disable_with_guard();
 }
 
 async fn wait_for_health(state: &AppState) -> AppResult<GuiCoreHealth> {

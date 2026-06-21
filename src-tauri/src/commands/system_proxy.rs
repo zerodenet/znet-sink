@@ -28,6 +28,7 @@ pub async fn system_proxy_enable(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<SystemProxyStatus> {
+    ensure_active_proxy_config(state.inner())?;
     ensure_core_ready(app_handle, state.clone()).await?;
 
     let host = {
@@ -44,6 +45,26 @@ pub async fn system_proxy_enable(
     })
     .await
     .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?
+}
+
+fn ensure_active_proxy_config(state: &AppState) -> AppResult<()> {
+    let has_active_proxy_config =
+        lock(state.proxy_configs(), "proxy_config")?
+            .iter()
+            .any(|profile| {
+                profile.active
+                    && profile
+                        .content
+                        .as_ref()
+                        .is_some_and(|content| content.is_object())
+            });
+    if has_active_proxy_config {
+        Ok(())
+    } else {
+        Err(AppError::invalid_argument(
+            "no active proxy config; import or sync a config before enabling system proxy",
+        ))
+    }
 }
 
 #[tauri::command]
@@ -114,4 +135,56 @@ async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
     }
 
     Err(last_error.unwrap_or_else(|| AppError::internal("core readiness check timed out")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_active_proxy_config;
+    use crate::models::{
+        app_config::AppConfig,
+        proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile},
+    };
+    use crate::state::app_state::AppState;
+    use serde_json::json;
+
+    #[test]
+    fn enabling_system_proxy_requires_active_proxy_config_content() {
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let error = ensure_active_proxy_config(&state).unwrap_err();
+
+        assert_eq!(error.code, "invalid_argument");
+        assert!(error.message.contains("no active proxy config"));
+    }
+
+    #[test]
+    fn active_proxy_config_content_allows_system_proxy_enable_flow() {
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".to_string(),
+                name: "Active".to_string(),
+                kernel: "zero".to_string(),
+                format: "json".to_string(),
+                path: None,
+                content: Some(
+                    json!({ "outbounds": [], "route": { "final": { "type": "direct" } } }),
+                ),
+                active: true,
+                updated_at_unix_ms: 1,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        ensure_active_proxy_config(&state).unwrap();
+    }
 }
