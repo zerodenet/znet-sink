@@ -62,8 +62,8 @@ pub fn start(
     })
 }
 
-/// Cooldown between a lost connection and the next reconnect attempt.
-const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+const MIN_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 fn subscribe_and_forward_events(
     app: AppHandle,
@@ -72,6 +72,8 @@ fn subscribe_and_forward_events(
     endpoint: CoreEndpoint,
     timeout: Duration,
 ) -> AppResult<()> {
+    let mut backoff = MIN_RECONNECT_BACKOFF;
+
     // Reconnect loop: the multiplexed connection is torn down whenever the
     // kernel exits, so instead of giving up on the first `Closed`/connect
     // failure we back off and re-subscribe. This lets the event stream
@@ -89,10 +91,12 @@ fn subscribe_and_forward_events(
                 // Kernel likely down — tell the frontend, then wait for the
                 // watchdog to bring it back.
                 emit_core_event_status(&app, generation, "offline", Some(error), None);
-                sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
+                sleep_interruptible(&active_generation, generation, backoff);
+                backoff = next_reconnect_backoff(backoff);
                 continue;
             }
         };
+        backoff = MIN_RECONNECT_BACKOFF;
         emit_core_event_status(&app, generation, "subscribed", None, None);
 
         let mut receiver = conn.subscribe_events();
@@ -118,9 +122,14 @@ fn subscribe_and_forward_events(
         // Otherwise the connection was torn down (kernel crash/restart).
         if closed {
             emit_core_event_status(&app, generation, "reconnecting", None, None);
-            sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
+            sleep_interruptible(&active_generation, generation, backoff);
+            backoff = next_reconnect_backoff(backoff);
         }
     }
+}
+
+fn next_reconnect_backoff(current: Duration) -> Duration {
+    (current * 2).min(MAX_RECONNECT_BACKOFF)
 }
 
 /// Sleep for `total`, waking early if the subscription generation is

@@ -85,7 +85,7 @@ export interface GuiEventPayload {
   event: GuiEventEnvelope;
 }
 
-export type CoreEventStatusKind = 'subscribed' | 'disconnected' | 'stopped' | 'offline' | 'error';
+export type CoreEventStatusKind = 'subscribed' | 'reconnecting' | 'disconnected' | 'stopped' | 'offline' | 'error';
 
 export interface CoreEventStatus {
   generation: number;

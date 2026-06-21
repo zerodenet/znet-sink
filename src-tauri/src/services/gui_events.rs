@@ -1,3 +1,4 @@
+use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -11,7 +12,7 @@ use crate::events::emitter::{
 };
 use crate::kernel::zero::events;
 use crate::kernel::{connection, protocol};
-use crate::models::core::{CoreEndpoint, CoreIpcOptions};
+use crate::models::core::{CoreCallResult, CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{GuiEventPayload, GuiEventStatus, GuiEventSubscription};
 
 pub fn start(
@@ -37,7 +38,7 @@ pub fn start(
                 } else {
                     "stopped"
                 };
-                emit_status(&app, generation, status, None);
+                emit_status(&app, generation, status, None, None);
             }
             Err(error) => {
                 let status = if error.is_unavailable() {
@@ -45,7 +46,7 @@ pub fn start(
                 } else {
                     "error"
                 };
-                emit_status(&app, generation, status, Some(error));
+                emit_status(&app, generation, status, Some(error), None);
             }
         }
     });
@@ -57,8 +58,8 @@ pub fn start(
     })
 }
 
-/// Cooldown between a lost connection and the next reconnect attempt.
-const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+const MIN_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 fn subscribe_and_forward_events(
     app: AppHandle,
@@ -67,6 +68,8 @@ fn subscribe_and_forward_events(
     endpoint: CoreEndpoint,
     timeout: Duration,
 ) -> AppResult<()> {
+    let mut backoff = MIN_RECONNECT_BACKOFF;
+
     // Reconnect loop — see `core_events::subscribe_and_forward_events` for
     // the rationale. Lets the GUI event stream self-heal after the watchdog
     // restarts the kernel.
@@ -78,12 +81,15 @@ fn subscribe_and_forward_events(
         let conn = match connection::get_or_connect(endpoint.clone(), timeout) {
             Ok(conn) => conn,
             Err(error) => {
-                emit_status(&app, generation, "offline", Some(error));
-                sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
+                emit_status(&app, generation, "offline", Some(error), None);
+                sleep_interruptible(&active_generation, generation, backoff);
+                backoff = next_reconnect_backoff(backoff);
                 continue;
             }
         };
-        emit_status(&app, generation, "subscribed", None);
+        backoff = MIN_RECONNECT_BACKOFF;
+        let snapshot = resync_snapshot(endpoint.clone(), timeout);
+        emit_status(&app, generation, "subscribed", None, snapshot);
 
         let mut receiver = conn.subscribe_events();
         let mut closed = false;
@@ -105,10 +111,44 @@ fn subscribe_and_forward_events(
             return Ok(());
         }
         if closed {
-            emit_status(&app, generation, "reconnecting", None);
-            sleep_interruptible(&active_generation, generation, RECONNECT_BACKOFF);
+            emit_status(&app, generation, "reconnecting", None, None);
+            sleep_interruptible(&active_generation, generation, backoff);
+            backoff = next_reconnect_backoff(backoff);
         }
     }
+}
+
+fn next_reconnect_backoff(current: Duration) -> Duration {
+    (current * 2).min(MAX_RECONNECT_BACKOFF)
+}
+
+fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
+    tauri::async_runtime::block_on(async move {
+        let options = Some(CoreIpcOptions {
+            socket: Some(endpoint.path),
+            timeout_ms: Some(timeout.as_millis() as u64),
+        });
+
+        let runtime = protocol::get_runtime(options.clone()).await;
+        let stats = protocol::get_stats(options.clone()).await;
+        let policies = protocol::get_policies(options).await;
+
+        Some(json!({
+            "runtime": response_payload(runtime),
+            "stats": response_payload(stats),
+            "policies": response_payload(policies),
+        }))
+    })
+}
+
+fn response_payload(result: AppResult<CoreCallResult>) -> Option<Value> {
+    result.ok().and_then(|result| {
+        if result.available {
+            result.response
+        } else {
+            None
+        }
+    })
 }
 
 /// Sleep for `total`, waking early if the subscription generation is
@@ -127,13 +167,20 @@ fn sleep_interruptible(active_generation: &AtomicU64, generation: u64, total: Du
     }
 }
 
-fn emit_status(app: &AppHandle, generation: u64, status: &'static str, error: Option<AppError>) {
+fn emit_status(
+    app: &AppHandle,
+    generation: u64,
+    status: &'static str,
+    error: Option<AppError>,
+    response: Option<Value>,
+) {
     emit_gui_event_status(
         app,
         GuiEventStatus {
             generation,
             status,
             error,
+            response,
         },
     );
 }

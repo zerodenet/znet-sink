@@ -369,6 +369,7 @@ pub struct GuiEventStatus {
     pub generation: u64,
     pub status: &'static str,
     pub error: Option<crate::errors::AppError>,
+    pub response: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
