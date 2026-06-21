@@ -14,6 +14,8 @@ export interface SelfTestSnapshot {
   ready: boolean;
   blockingIssues: string[];
   warningCount: number;
+  activeProxyConfigId?: string;
+  activeProxyConfigName?: string;
   checks: SelfTestCheckItem[];
   suggestedFlow: 'setup' | 'ready' | 'troubleshoot';
 }

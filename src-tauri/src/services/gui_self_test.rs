@@ -76,9 +76,9 @@ fn check_active_proxy_config(
                 "format": profile.format,
             })),
         ),
-        None => fail(
+        None => warn(
             "activeProxyConfig",
-            "no active proxy config; import or sync a config first",
+            "no active proxy config; kernel can run but service cannot be enabled until a config is imported or synced",
             None,
         ),
     }
@@ -88,7 +88,11 @@ fn check_active_proxy_content(
     active: Option<&crate::models::proxy_config::ProxyConfigProfile>,
 ) -> GuiSelfTestCheck {
     let Some(profile) = active else {
-        return fail("activeProxyContent", "active proxy config is missing", None);
+        return warn(
+            "activeProxyContent",
+            "active proxy config is missing; kernel will start with a minimal temporary config",
+            None,
+        );
     };
     let Some(content) = profile.content.as_ref() else {
         return fail(
@@ -289,5 +293,29 @@ fn check(
         status,
         message: message.into(),
         details,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_active_proxy_config, check_active_proxy_content};
+    use crate::models::gui_core::GuiSelfTestCheckStatus;
+
+    #[test]
+    fn missing_active_proxy_config_is_warning_not_blocker() {
+        let check = check_active_proxy_config(None);
+
+        assert_eq!(check.key, "activeProxyConfig");
+        assert_eq!(check.status, GuiSelfTestCheckStatus::Warn);
+        assert!(check.message.contains("kernel can run"));
+    }
+
+    #[test]
+    fn missing_active_proxy_content_uses_minimal_temp_config_warning() {
+        let check = check_active_proxy_content(None);
+
+        assert_eq!(check.key, "activeProxyContent");
+        assert_eq!(check.status, GuiSelfTestCheckStatus::Warn);
+        assert!(check.message.contains("minimal temporary config"));
     }
 }

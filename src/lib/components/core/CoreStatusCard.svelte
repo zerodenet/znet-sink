@@ -150,7 +150,7 @@
     <div class="core-actions">
       <button
         onclick={() => isProcessRunning ? guiState.restartCore() : guiState.startCore()}
-        disabled={isCoreAvailable ? !isProcessRunning || !guiState.canStopCore : !guiState.canStartCore}
+        disabled={isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : !guiState.canStartCore}
         class="core-action"
         class:active={isCoreAvailable}
         class:danger={isProcessRunning}

@@ -4,7 +4,6 @@ import {
   guiConnect,
   guiDisconnect,
   startCoreProcess,
-  stopCoreProcess,
   restartCoreProcess,
   enableSystemProxy as enableSystemProxyCommand,
   disableSystemProxy as disableSystemProxyCommand,
@@ -238,7 +237,7 @@ class GuiStateStore {
     try {
       this.connection = await guiDisconnect();
       this.syncTrayStatus();
-      toastSuccess('\u670d\u52a1\u5df2\u5173\u95ed\uff0c\u5185\u6838\u5df2\u505c\u6b62');
+      toastSuccess('\u7cfb\u7edf\u4ee3\u7406\u5df2\u5173\u95ed\uff0c\u5185\u6838\u4fdd\u6301\u8fd0\u884c');
       await this.refreshPolicyPanels();
     } catch (e: any) {
       toastError(`\u65ad\u5f00\u5931\u8d25: ${this.errorMessage(e)}`);
@@ -265,24 +264,9 @@ class GuiStateStore {
     }
   }
 
-  async stopCore() {
-    if (!this.canStopCore) return;
-    this.isStoppingCore = true;
-    try {
-      await stopCoreProcess();
-      toastSuccess('\u5185\u6838\u5df2\u505c\u6b62');
-      await this.refreshRuntimeState();
-    } catch (e: any) {
-      toastError(`\u505c\u6b62\u5185\u6838\u5931\u8d25: ${this.errorMessage(e)}`);
-      await this.refreshRuntimeState();
-    } finally {
-      this.isStoppingCore = false;
-    }
-  }
-
   /** Restart the managed kernel by stopping it and starting it again immediately. */
   async restartCore() {
-    if (!this.canStopCore) return;
+    if (!this.canRestartCore) return;
     this.isStoppingCore = true;
     try {
       await restartCoreProcess();
@@ -422,7 +406,9 @@ class GuiStateStore {
   get canConnect(): boolean {
     if (this.isInitializing) return false;
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
+    const missingProxyConfig = this.selfTest !== null && !this.selfTest.activeProxyConfigId;
     return (!selfTestBlocking || this.isProcessRunning)
+      && !missingProxyConfig
       && !this.isConnecting
       && !this.isDisconnecting
       && !this.isConnected;
@@ -443,7 +429,7 @@ class GuiStateStore {
       && !this.isProcessRunning;
   }
 
-  get canStopCore(): boolean {
+  get canRestartCore(): boolean {
     return !this.isCoreBusy && !this.isConnecting && !this.isDisconnecting && this.isManagedProcessRunning;
   }
 

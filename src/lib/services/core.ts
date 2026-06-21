@@ -27,10 +27,6 @@ export async function startCoreProcess(): Promise<CoreProcessStatus> {
   return invoke('core_process_start');
 }
 
-export async function stopCoreProcess(): Promise<CoreProcessStatus> {
-  return invoke('core_process_stop');
-}
-
 export async function restartCoreProcess(): Promise<CoreProcessStatus> {
   return invoke('core_process_restart');
 }
