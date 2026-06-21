@@ -159,7 +159,7 @@ fn default_socket_path(kernel_name: &str) -> AppResult<String> {
 }
 
 #[cfg(unix)]
-fn default_socket_path(kernel_name: &str) -> AppResult<String> {
+fn default_socket_path(_kernel_name: &str) -> AppResult<String> {
     // Default Zero daemon socket: ~/.zero/control.sock
     let home = dirs::home_dir().ok_or_else(|| AppError {
         code: "internal",
@@ -168,7 +168,7 @@ fn default_socket_path(kernel_name: &str) -> AppResult<String> {
     })?;
     Ok(home
         .join(".zero")
-        .join(format!("{kernel_name}-control.sock"))
+        .join("control.sock")
         .to_string_lossy()
         .to_string())
 }

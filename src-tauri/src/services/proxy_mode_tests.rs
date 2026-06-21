@@ -4,7 +4,7 @@ use crate::models::gui_core::GuiProxyMode;
 use crate::services::proxy_mode::{apply_route_mode, detect_route_mode, route_global_outbound};
 
 #[test]
-fn direct_mode_writes_route_mode_and_preserves_rules() {
+fn direct_mode_writes_top_level_mode_and_preserves_rules() {
     let mut config = json!({
         "route": {
             "rules": [{ "condition": { "type": "domain", "values": ["example.com"] }, "action": { "type": "direct" } }],
@@ -15,8 +15,8 @@ fn direct_mode_writes_route_mode_and_preserves_rules() {
 
     apply_route_mode(&mut config, &GuiProxyMode::Direct, None).unwrap();
 
-    assert!(config["mode"].is_null());
-    assert_eq!(config["route"]["mode"], json!({ "type": "direct" }));
+    assert_eq!(config["mode"], json!({ "type": "direct" }));
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(
         config["route"]["final"],
         json!({ "type": "route", "outbound": "proxy" })
@@ -25,7 +25,7 @@ fn direct_mode_writes_route_mode_and_preserves_rules() {
 }
 
 #[test]
-fn rule_mode_writes_route_mode_and_preserves_existing_final() {
+fn rule_mode_writes_top_level_mode_and_preserves_existing_final() {
     let mut config = json!({
         "mode": { "type": "global", "outbound": "server-a" },
         "route": {
@@ -37,8 +37,8 @@ fn rule_mode_writes_route_mode_and_preserves_existing_final() {
 
     apply_route_mode(&mut config, &GuiProxyMode::Rule, None).unwrap();
 
-    assert!(config["mode"].is_null());
-    assert_eq!(config["route"]["mode"], json!({ "type": "rule" }));
+    assert_eq!(config["mode"], json!({ "type": "rule" }));
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(
         config["route"]["final"],
         json!({ "type": "route", "outbound": "proxy" })
@@ -57,7 +57,8 @@ fn rule_mode_adds_final_when_missing() {
 
     apply_route_mode(&mut config, &GuiProxyMode::Rule, None).unwrap();
 
-    assert_eq!(config["route"]["mode"], json!({ "type": "rule" }));
+    assert_eq!(config["mode"], json!({ "type": "rule" }));
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(
         config["route"]["final"],
         json!({ "type": "route", "outbound": "proxy" })
@@ -65,7 +66,7 @@ fn rule_mode_adds_final_when_missing() {
 }
 
 #[test]
-fn global_mode_writes_route_mode_with_outbound() {
+fn global_mode_writes_top_level_mode_with_outbound() {
     let mut config = json!({
         "proxy-groups": [
             { "name": "direct", "type": "select" },
@@ -77,9 +78,10 @@ fn global_mode_writes_route_mode_with_outbound() {
     apply_route_mode(&mut config, &GuiProxyMode::Global, None).unwrap();
 
     assert_eq!(
-        config["route"]["mode"],
+        config["mode"],
         json!({ "type": "global", "outbound": "proxy" })
     );
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(config["route"]["final"], json!({ "type": "direct" }));
 }
 
@@ -92,9 +94,10 @@ fn global_mode_uses_provided_outbound() {
     apply_route_mode(&mut config, &GuiProxyMode::Global, Some("server-a")).unwrap();
 
     assert_eq!(
-        config["route"]["mode"],
+        config["mode"],
         json!({ "type": "global", "outbound": "server-a" })
     );
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(config["route"]["final"], json!({ "type": "direct" }));
 }
 
@@ -106,7 +109,8 @@ fn direct_mode_adds_route_final_when_route_missing() {
 
     apply_route_mode(&mut config, &GuiProxyMode::Direct, None).unwrap();
 
-    assert_eq!(config["route"]["mode"], json!({ "type": "direct" }));
+    assert_eq!(config["mode"], json!({ "type": "direct" }));
+    assert!(config["route"].get("mode").is_none());
     assert_eq!(config["route"]["final"], json!({ "type": "direct" }));
 }
 
@@ -141,7 +145,7 @@ fn detects_route_mode_shape() {
 }
 
 #[test]
-fn route_mode_takes_precedence_over_legacy_top_level_mode() {
+fn top_level_mode_takes_precedence_over_legacy_route_mode() {
     let config = json!({
         "mode": { "type": "direct" },
         "route": {
@@ -152,7 +156,7 @@ fn route_mode_takes_precedence_over_legacy_top_level_mode() {
 
     let detected = detect_route_mode(&config).unwrap();
 
-    assert_eq!(detected.mode, GuiProxyMode::Global);
+    assert_eq!(detected.mode, GuiProxyMode::Direct);
     assert_eq!(route_global_outbound(&config), Some("proxy".to_string()));
 }
 

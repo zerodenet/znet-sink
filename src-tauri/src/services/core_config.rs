@@ -80,9 +80,10 @@ pub fn snapshot_from_config(config: &AppCoreConfig) -> AppResult<CoreConfigSnaps
     let executable_exists = executable_path.as_ref().is_some_and(|path| path.is_file());
     let working_dir = resolve_working_dir(config, executable_path.as_deref());
     let config_path = normalize_optional(config.config_path.clone()).map(PathBuf::from);
-    let socket = resolve_socket(config);
+    let socket = resolve_socket_for_runtime(config, executable_path.as_deref());
     let endpoint = endpoint_from_socket(socket.as_deref())?;
-    let launch_args = launch_args(config_path.as_deref(), socket.as_deref());
+    let launch_socket = resolve_launch_socket(config, executable_path.as_deref());
+    let launch_args = launch_args(config_path.as_deref(), launch_socket.as_deref());
 
     let mut warnings = Vec::new();
     // 仅可执行文件是用户必须配置的——其余（config 文件、工作目录）由系统自动管理
@@ -160,11 +161,18 @@ pub fn resolve_executable_path(config: &AppCoreConfig) -> Option<PathBuf> {
 }
 
 pub fn resolve_socket(config: &AppCoreConfig) -> Option<PathBuf> {
+    resolve_socket_for_runtime(config, resolve_executable_path(config).as_deref())
+}
+
+fn resolve_socket_for_runtime(
+    config: &AppCoreConfig,
+    executable_path: Option<&Path>,
+) -> Option<PathBuf> {
     if let Some(socket) = normalize_optional(config.socket.clone()) {
         return Some(PathBuf::from(socket));
     }
 
-    default_socket_path(config)
+    default_runtime_socket_path(config, executable_path)
 }
 
 pub fn endpoint_from_socket(socket: Option<&Path>) -> AppResult<CoreEndpoint> {
@@ -187,17 +195,69 @@ fn resolve_working_dir(config: &AppCoreConfig, executable_path: Option<&Path>) -
         })
 }
 
-/// Default socket path when user hasn't configured one explicitly.
+/// Socket path used when spawning a GUI-managed kernel.
 ///
 /// On Windows, the named pipe (`\\.\pipe\zero-control`) is resolved by
 /// `transport::default_endpoint` — no file path needed here.
 /// On Unix, defaults to the Zero daemon path: `~/.zero/control.sock`.
-fn default_socket_path(_config: &AppCoreConfig) -> Option<PathBuf> {
-    if cfg!(windows) {
-        return None;
+fn resolve_launch_socket(
+    config: &AppCoreConfig,
+    executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(socket) = normalize_optional(config.socket.clone()) {
+        return Some(PathBuf::from(socket));
     }
 
-    dirs::home_dir().map(|home| home.join(".zero").join("zero-control.sock"))
+    default_launch_socket_path(config, executable_path)
+}
+
+#[cfg(windows)]
+fn default_runtime_socket_path(
+    _config: &AppCoreConfig,
+    _executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(unix)]
+fn default_runtime_socket_path(
+    config: &AppCoreConfig,
+    executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    executable_path
+        .map(|path| {
+            PathBuf::from(transport::default_socket_path_for_executable(
+                Some(path),
+                &config.kernel,
+            ))
+        })
+        .or_else(external_default_socket_path)
+}
+
+#[cfg(windows)]
+fn default_launch_socket_path(
+    _config: &AppCoreConfig,
+    _executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(unix)]
+fn default_launch_socket_path(
+    config: &AppCoreConfig,
+    executable_path: Option<&Path>,
+) -> Option<PathBuf> {
+    executable_path.map(|path| {
+        PathBuf::from(transport::default_socket_path_for_executable(
+            Some(path),
+            &config.kernel,
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn external_default_socket_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".zero").join("control.sock"))
 }
 
 fn launch_args(config_path: Option<&Path>, socket: Option<&Path>) -> Vec<String> {
@@ -242,7 +302,13 @@ fn default_export_path() -> AppResult<PathBuf> {
 /// no proxy config" instead of treating this as a startup failure.
 pub fn write_minimal_temp_config() -> AppResult<PathBuf> {
     let path = data_dir()?.join("zero-temp-stub.json");
-    let minimal = serde_json::json!({
+    let minimal = minimal_temp_config_content();
+    write_core_config(&path, &minimal)?;
+    Ok(path)
+}
+
+fn minimal_temp_config_content() -> serde_json::Value {
+    serde_json::json!({
         "inbounds": [],
         "outbounds": [],
         "outbound_groups": [],
@@ -258,9 +324,7 @@ pub fn write_minimal_temp_config() -> AppResult<PathBuf> {
             "rules": [],
             "final": { "type": "direct" }
         }
-    });
-    write_core_config(&path, &minimal)?;
-    Ok(path)
+    })
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -428,17 +492,17 @@ pub fn download_latest(install_dir: Option<String>) -> AppResult<CoreDownloadRes
     })
 }
 
-/// Convert GUI-only routing state into the Zero config schema accepted by the core.
+/// Convert legacy GUI-only routing state into the Zero config schema accepted by the core.
 fn strip_gui_only_fields(content: &serde_json::Value) -> serde_json::Value {
     let mut cleaned = content.clone();
     if let Some(obj) = cleaned.as_object_mut() {
-        obj.remove("mode");
-        translate_route_mode_for_export(obj);
+        translate_legacy_route_mode_for_export(obj);
     }
     cleaned
 }
 
-fn translate_route_mode_for_export(root: &mut serde_json::Map<String, serde_json::Value>) {
+fn translate_legacy_route_mode_for_export(root: &mut serde_json::Map<String, serde_json::Value>) {
+    let has_top_level_mode = root.get("mode").is_some();
     let Some(route) = root
         .get_mut("route")
         .and_then(|route| route.as_object_mut())
@@ -449,6 +513,7 @@ fn translate_route_mode_for_export(root: &mut serde_json::Map<String, serde_json
     let Some(mode) = mode.as_ref() else {
         return;
     };
+    let mode_to_promote = (!has_top_level_mode).then(|| mode.clone());
 
     match route_mode_kind(mode).as_deref() {
         Some("global") => {
@@ -469,6 +534,10 @@ fn translate_route_mode_for_export(root: &mut serde_json::Map<String, serde_json
         }
         Some("rule") | None => {}
         Some(_) => {}
+    }
+    let _ = route;
+    if let Some(mode) = mode_to_promote {
+        root.insert("mode".to_string(), mode);
     }
 }
 
@@ -518,7 +587,10 @@ mod tests {
 
         let cleaned = strip_gui_only_fields(&content);
 
-        assert!(cleaned.get("mode").is_none());
+        assert_eq!(
+            cleaned["mode"],
+            json!({ "type": "global", "outbound": "legacy-proxy" })
+        );
         assert!(cleaned["route"].get("mode").is_none());
         assert_eq!(
             cleaned["route"]["final"],
@@ -540,6 +612,7 @@ mod tests {
 
         let cleaned = strip_gui_only_fields(&content);
 
+        assert_eq!(cleaned["mode"], json!({ "type": "direct" }));
         assert!(cleaned["route"].get("mode").is_none());
         assert_eq!(cleaned["route"]["final"], json!({ "type": "direct" }));
         assert_eq!(cleaned["route"]["rules"], json!([]));
@@ -557,6 +630,7 @@ mod tests {
 
         let cleaned = strip_gui_only_fields(&content);
 
+        assert_eq!(cleaned["mode"], json!({ "type": "rule" }));
         assert!(cleaned["route"].get("mode").is_none());
         assert_eq!(
             cleaned["route"]["rules"],
@@ -566,5 +640,20 @@ mod tests {
             cleaned["route"]["final"],
             json!({ "type": "route", "outbound": "proxy" })
         );
+    }
+
+    #[test]
+    fn minimal_temp_config_enables_control_plane_without_proxy_entries() {
+        let saved = super::minimal_temp_config_content();
+
+        assert_eq!(saved["inbounds"], json!([]));
+        assert_eq!(saved["outbounds"], json!([]));
+        assert_eq!(saved["api"]["control"]["enabled"], json!(true));
+        assert_eq!(
+            saved["api"]["control"]["listen"],
+            json!({ "address": "127.0.0.1", "port": 9090 })
+        );
+        assert_eq!(saved["mode"], json!({ "type": "rule" }));
+        assert_eq!(saved["route"]["final"], json!({ "type": "direct" }));
     }
 }

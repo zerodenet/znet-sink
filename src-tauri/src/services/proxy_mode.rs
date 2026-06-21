@@ -45,7 +45,7 @@ pub fn set(
     let core_was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
 
-    // Always update the config file with the new route.mode
+    // Always update the config file with the kernel-native top-level mode.
     {
         let mut profiles = common::lock(state.proxy_configs(), "proxy_config")?;
         let active = profiles
@@ -213,19 +213,19 @@ pub(crate) fn apply_route_mode(
     let root = content.as_object_mut().ok_or_else(|| {
         AppError::invalid_argument("active proxy config content must be a JSON object")
     })?;
-    root.remove("mode");
+    remove_legacy_route_mode(root);
 
     match mode {
         GuiProxyMode::Global => {
             let outbound = outbound.clone().unwrap_or_else(|| "proxy".to_string());
-            set_route_mode(
+            set_top_level_mode(
                 root,
                 serde_json::json!({ "type": "global", "outbound": outbound }),
             );
             ensure_route_final(root, serde_json::json!({ "type": "direct" }));
         }
         GuiProxyMode::Rule => {
-            set_route_mode(root, serde_json::json!({ "type": "rule" }));
+            set_top_level_mode(root, serde_json::json!({ "type": "rule" }));
             let outbound = outbound.clone().unwrap_or_else(|| "proxy".to_string());
             ensure_route_final(
                 root,
@@ -233,7 +233,7 @@ pub(crate) fn apply_route_mode(
             );
         }
         GuiProxyMode::Direct => {
-            set_route_mode(root, serde_json::json!({ "type": "direct" }));
+            set_top_level_mode(root, serde_json::json!({ "type": "direct" }));
             ensure_route_final(root, serde_json::json!({ "type": "direct" }));
         }
     };
@@ -255,9 +255,14 @@ fn ensure_object_field<'a>(
         .expect("route object is inserted before access")
 }
 
-fn set_route_mode(root: &mut Map<String, Value>, mode: Value) {
-    let route = ensure_object_field(root, "route");
-    route.insert("mode".to_string(), mode);
+fn set_top_level_mode(root: &mut Map<String, Value>, mode: Value) {
+    root.insert("mode".to_string(), mode);
+}
+
+fn remove_legacy_route_mode(root: &mut Map<String, Value>) {
+    if let Some(route) = root.get_mut("route").and_then(Value::as_object_mut) {
+        route.remove("mode");
+    }
 }
 
 fn ensure_route_final(root: &mut Map<String, Value>, default_final: Value) {
@@ -274,12 +279,12 @@ pub(crate) struct DetectedRouteMode {
 }
 
 pub(crate) fn detect_route_mode(content: &Value) -> Option<DetectedRouteMode> {
-    if let Some(mode_value) = content.get("route").and_then(|route| route.get("mode")) {
+    if let Some(mode_value) = content.get("mode") {
         if let Some(detected) = detect_mode_value(mode_value) {
             return Some(detected);
         }
     }
-    if let Some(mode_value) = content.get("mode") {
+    if let Some(mode_value) = content.get("route").and_then(|route| route.get("mode")) {
         if let Some(detected) = detect_mode_value(mode_value) {
             return Some(detected);
         }
@@ -306,8 +311,7 @@ pub(crate) fn detect_route_mode(content: &Value) -> Option<DetectedRouteMode> {
 
 pub(crate) fn route_global_outbound(content: &Value) -> Option<String> {
     content
-        .get("route")
-        .and_then(|route| route.get("mode"))
+        .get("mode")
         .and_then(|mode| mode.get("outbound"))
         .and_then(Value::as_str)
         .map(str::trim)
@@ -315,7 +319,8 @@ pub(crate) fn route_global_outbound(content: &Value) -> Option<String> {
         .map(ToString::to_string)
         .or_else(|| {
             content
-                .get("mode")
+                .get("route")
+                .and_then(|route| route.get("mode"))
                 .and_then(|mode| mode.get("outbound"))
                 .and_then(Value::as_str)
                 .map(str::trim)

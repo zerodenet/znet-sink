@@ -25,10 +25,30 @@ fn default_zero_core_config_requires_explicit_executable() {
     #[cfg(unix)]
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
+        assert!(snapshot.endpoint.path.ends_with(".zero/control.sock"));
         assert!(!snapshot
             .launch_args
             .contains(&"--control-socket".to_string()));
+    }
+}
+
+#[test]
+fn managed_unix_core_uses_socket_next_to_executable() {
+    #[cfg(unix)]
+    {
+        let config = AppCoreConfig {
+            executable_path: Some("/opt/znet/core/zero".to_string()),
+            ..AppCoreConfig::default()
+        };
+
+        let snapshot = snapshot_from_config(&config).unwrap();
+
+        assert_eq!(snapshot.endpoint.transport, "unix-socket");
+        assert_eq!(snapshot.endpoint.path, "/opt/znet/core/zero-control.sock");
+        assert!(snapshot
+            .launch_args
+            .windows(2)
+            .any(|args| args == ["--control-socket", "/opt/znet/core/zero-control.sock"]));
     }
 }
 
