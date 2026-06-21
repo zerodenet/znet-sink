@@ -23,7 +23,7 @@ export interface CoreWarning {
 
 class CoreEventsService {
   isSubscribed = $state(false);
-  status = $state<'idle' | 'subscribed' | 'offline' | 'error' | 'disconnected'>('idle');
+  status = $state<'idle' | 'subscribed' | 'reconnecting' | 'offline' | 'error' | 'disconnected'>('idle');
   lastError = $state<string | null>(null);
   connectionTick = $state(0);
 
@@ -56,18 +56,10 @@ class CoreEventsService {
   private _unlistenProcess: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
 
-  // Auto-reconnect state
-  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private _reconnectAttempts = 0;
-  private static readonly MAX_RECONNECT_DELAY_MS = 5_000;
-  private static readonly BASE_RECONNECT_DELAY_MS = 1_000;
-  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
   private _stopped = false;
 
   async start(events?: string[]) {
     this._stopped = false;
-    this._reconnectAttempts = 0;
-    this._clearReconnectTimer();
 
     // Listen before starting subscription so we don't miss status events
     if (!this._unlistenEvent) {
@@ -92,13 +84,11 @@ class CoreEventsService {
     } catch (e) {
       this.status = 'error';
       this.lastError = String(e);
-      this._scheduleReconnect(events);
     }
   }
 
   stop() {
     this._stopped = true;
-    this._clearReconnectTimer();
     stopGuiEvents();
     this._activeGeneration = null;
     this.isSubscribed = false;
@@ -132,8 +122,13 @@ class CoreEventsService {
         this.isSubscribed = true;
         this.status = 'subscribed';
         this.lastError = null;
-        // Fetch initial state snapshot to fill gaps
-        this._fetchInitialState();
+        awaitIgnore(this._applyResyncSnapshot(status.response));
+        this.statusTick++;
+        break;
+      case 'reconnecting':
+        this.isSubscribed = false;
+        this.status = 'reconnecting';
+        overviewData.isLive = false;
         this.statusTick++;
         break;
       case 'offline':
@@ -142,14 +137,12 @@ class CoreEventsService {
         this.lastError = status.error?.message ?? 'core is not available';
         overviewData.isLive = false;
         this.statusTick++;
-        this._scheduleReconnect();
         break;
       case 'disconnected':
         this.isSubscribed = false;
         this.status = 'disconnected';
         overviewData.isLive = false;
         this.statusTick++;
-        this._scheduleReconnect();
         break;
       case 'stopped':
         this.isSubscribed = false;
@@ -450,53 +443,33 @@ class CoreEventsService {
 
   // ── Auto-reconnect with exponential backoff ──
 
-  private _clearReconnectTimer() {
-    if (this._reconnectTimer !== null) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = null;
-    }
-  }
-
-  private _scheduleReconnect(events?: string[]) {
-    if (this._stopped) return;
-    if (this._reconnectAttempts >= CoreEventsService.MAX_RECONNECT_ATTEMPTS) {
-      console.warn('[ZNet] max reconnect attempts reached, giving up');
+  private async _applyResyncSnapshot(snapshot: unknown) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      await this._fetchInitialState();
       return;
     }
 
-    this._clearReconnectTimer();
+    const data = snapshot as Record<string, unknown>;
+    const stats = data['stats'];
+    const runtime = data['runtime'];
+    const policies = data['policies'];
 
-    // Exponential backoff: 1s, 2s, 4s, 5s, 5s, ...
-    const delay = Math.min(
-      CoreEventsService.BASE_RECONNECT_DELAY_MS * Math.pow(2, this._reconnectAttempts),
-      CoreEventsService.MAX_RECONNECT_DELAY_MS,
-    );
-    this._reconnectAttempts++;
+    if (stats && typeof stats === 'object') {
+      overviewData.applyStatsEvent(stats as Record<string, unknown>);
+    }
+    if (runtime && typeof runtime === 'object') {
+      overviewData.applyRuntimeEvent(runtime as Record<string, unknown>);
+    }
+    if (policies) {
+      overviewData.applyPolicyEvent(policies);
+    }
 
-    console.debug(`[ZNet] scheduling reconnect attempt ${this._reconnectAttempts} in ${delay}ms`);
-
-    this._reconnectTimer = setTimeout(() => {
-      this._reconnectTimer = null;
-      if (this._stopped) return;
-      console.debug('[ZNet] attempting event reconnect');
-      this._doReconnect(events).catch((e) => {
-        console.warn('[ZNet] reconnect failed:', e);
-        this._scheduleReconnect(events);
-      });
-    }, delay);
-  }
-
-  private async _doReconnect(events?: string[]) {
-    try {
-      const sub = await startGuiEvents(events);
-      this._activeGeneration = sub.generation;
-      // Reconnect succeeded — reset attempts and fetch fresh state
-      this._reconnectAttempts = 0;
-    } catch (e) {
-      this.lastError = String(e);
-      throw e;
+    if (!stats || !runtime || !policies) {
+      await this._fetchInitialState();
     }
   }
+
+  
 
   private async _fetchInitialState() {
     try {
