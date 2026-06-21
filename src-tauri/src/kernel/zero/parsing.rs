@@ -522,10 +522,12 @@ fn protocol_array_at(value: &Value, key: &str) -> Vec<GuiProtocolCapability> {
                         name: string_at(item, &["name", "protocol"])?,
                         status: string_at(item, &["status"])
                             .unwrap_or_else(|| "supported".to_string()),
-                        inbound_tcp: bool_at(item, &["inbound_tcp"]).unwrap_or(false),
-                        inbound_udp: bool_at(item, &["inbound_udp"]).unwrap_or(false),
-                        outbound_tcp: bool_at(item, &["outbound_tcp"]).unwrap_or(false),
-                        outbound_udp: bool_at(item, &["outbound_udp"]).unwrap_or(false),
+                        inbound_tcp: bool_at(item, &["inbound_tcp", "inboundTcp"]).unwrap_or(false),
+                        inbound_udp: bool_at(item, &["inbound_udp", "inboundUdp"]).unwrap_or(false),
+                        outbound_tcp: bool_at(item, &["outbound_tcp", "outboundTcp"])
+                            .unwrap_or(false),
+                        outbound_udp: bool_at(item, &["outbound_udp", "outboundUdp"])
+                            .unwrap_or(false),
                         mux: bool_at(item, &["mux"]).unwrap_or(false),
                         limitations: string_array_at(item, &["limitations"]),
                     })

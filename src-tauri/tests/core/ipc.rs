@@ -41,7 +41,7 @@ fn default_endpoint_uses_platform_transport() {
     #[cfg(unix)]
     {
         assert_eq!(endpoint.transport, "unix-socket");
-        assert!(endpoint.path.ends_with("zero-control.sock"));
+        assert!(endpoint.path.ends_with(".zero/control.sock"));
     }
 }
 
