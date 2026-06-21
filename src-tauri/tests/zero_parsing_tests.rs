@@ -83,6 +83,55 @@ fn parse_capabilities_maps_api_id_field() {
 }
 
 #[test]
+fn parse_capabilities_maps_protocol_matrix_and_build_features() {
+    let caps = parsing::parse_capabilities(
+        &json!({
+            "api_id": "zero.api.v1",
+            "build_features": ["tun", "quic"],
+            "protocols": [
+                {
+                    "name": "shadowsocks",
+                    "status": "supported",
+                    "inbound_tcp": true,
+                    "inbound_udp": true,
+                    "outbound_tcp": true,
+                    "outbound_udp": true,
+                    "mux": true,
+                    "limitations": []
+                },
+                {
+                    "protocol": "vmess",
+                    "status": "partial",
+                    "inboundTcp": true,
+                    "inboundUdp": false,
+                    "outboundTcp": true,
+                    "outboundUdp": false,
+                    "limitations": ["no_udp_relay"]
+                }
+            ]
+        }),
+        None,
+    );
+
+    assert_eq!(caps.build_features, vec!["tun", "quic"]);
+    assert_eq!(caps.protocols.len(), 2);
+    assert_eq!(caps.protocols[0].name, "shadowsocks");
+    assert_eq!(caps.protocols[0].status, "supported");
+    assert!(caps.protocols[0].inbound_tcp);
+    assert!(caps.protocols[0].inbound_udp);
+    assert!(caps.protocols[0].outbound_tcp);
+    assert!(caps.protocols[0].outbound_udp);
+    assert!(caps.protocols[0].mux);
+    assert_eq!(caps.protocols[1].name, "vmess");
+    assert_eq!(caps.protocols[1].status, "partial");
+    assert!(caps.protocols[1].inbound_tcp);
+    assert!(!caps.protocols[1].inbound_udp);
+    assert!(caps.protocols[1].outbound_tcp);
+    assert!(!caps.protocols[1].outbound_udp);
+    assert_eq!(caps.protocols[1].limitations, vec!["no_udp_relay"]);
+}
+
+#[test]
 fn parse_capabilities_captures_error() {
     let caps = parsing::parse_capabilities(&json!({}), Some("connection refused".to_string()));
 

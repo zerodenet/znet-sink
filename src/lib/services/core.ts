@@ -114,7 +114,7 @@ function parseFlows(data: unknown): FlowInfo[] {
   const obj = data as Record<string, unknown>;
   // Try known container keys
   let arr: unknown[] = [];
-  for (const key of ['flows', 'connections', 'data', 'items', 'result']) {
+  for (const key of ['active_flows', 'activeFlows', 'flows', 'connections', 'data', 'items', 'result']) {
     const val = obj[key];
     if (Array.isArray(val)) { arr = val; break; }
   }
