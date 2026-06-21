@@ -57,4 +57,5 @@ const config = await invoke('app_config_get');
 - [规则集配置](./rule-sets.md)
 - [日志](./logs.md)
 - [Nodes Manual QA](./nodes-manual-qa.md)
+- [Current Integration Status](./current-integration-status.md)
 - [Worktree Commit Plan](./worktree-commit-plan.md)

@@ -168,4 +168,26 @@ request: { type: 'active_flows', limit: 100, filter: {} }
 - `src-tauri/tauri.conf.json`
 - `src/lib/services/updater.svelte.ts`
 
+## Implementation Status 2026-06-21
+
+The production gap list above has been implemented or re-verified in order:
+
+- Item 0: ordinary disconnect now disables system proxy only; the managed kernel keeps running.
+- Item 1: IPC query responses are unwrapped by variant key for health, capabilities, active_flows, flow, tun_status, and related queries.
+- Item 2: external Unix default endpoint is `~/.zero/control.sock`; GUI-managed Unix kernels still use an executable-adjacent `zero-control.sock` and pass it explicitly.
+- Item 3: proxy mode writes the kernel-native top-level `mode`; legacy `route.mode` is read only as fallback.
+- Item 3.5: missing active proxy config is a warning for kernel startup; enabling system proxy still requires active proxy config content.
+- Item 3.6: ordinary UI stop/disconnect paths no longer expose stopping the kernel as a routine business action.
+- Item 4: config.apply, config.validate, config.plan_apply, mode.set, diagnostics.dns_lookup, diagnostics.trace_route, recent_flows, sinks, and diagnostics are wired through the adapter/commands/frontend API.
+- Item 5: capabilities DTOs include protocols and buildFeatures, including protocol TCP/UDP/MUX/limitations fields.
+- Item 6: GUI/core event subscriptions reconnect in the service layer with 1s to 5s backoff; GUI event status includes a resync snapshot for runtime, stats, and policies after subscription recovery.
+- Item 7: TUN status uses documented `tun_status` query handling. There is no `tun.status` command fallback in the kernel query path.
+- Item 8: frontend `queryFlows()` sends `{ active_flows: { limit: 100, filter: {} } }` and recognizes active_flows/activeFlows response containers.
+- Item 9: internal docs now record the external default daemon socket versus GUI-managed socket split and the current event/capability/control-command behavior.
+
+Verification run after implementation:
+
+- `pnpm check`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+
 这些变更未被本次报告任务触碰。
