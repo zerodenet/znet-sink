@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZNet Sink",
-  "version": "0.0.7-beta",
+  "version": "0.0.7",
   "identifier": "org.zerodenet.znetsink",
   "build": {
     "beforeDevCommand": "pnpm dev",
