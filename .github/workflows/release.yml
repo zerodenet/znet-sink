@@ -245,6 +245,33 @@ jobs:
           echo "=== Merged latest.json ==="
           cat latest.json
 
+          # Report which expected platforms made it into the manifest.
+          # A missing platform means its build job fell back to the empty
+          # placeholder — usually because TAURI_SIGNING_PRIVATE_KEY was
+          # missing or did not match the pubkey in tauri.conf.json.
+          EXPECTED_PLATFORMS="windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64"
+          echo "=== Platform coverage ==="
+          for p in $EXPECTED_PLATFORMS; do
+            if jq -e --arg p "$p" '.platforms[$p]' latest.json >/dev/null; then
+              echo "  ok: $p"
+            else
+              echo "::warning::Platform $p is missing — its build job produced no signed bundle"
+            fi
+          done
+
+          # Hard fail if NO platform contributed a signed entry.  An empty
+          # platforms object silently breaks update checks for every client
+          # (the updater finds no entry for its host platform and errors),
+          # so refuse to publish rather than ship a broken manifest again.
+          PLATFORM_COUNT=$(jq '.platforms | length' latest.json)
+          if [ -z "$PLATFORM_COUNT" ] || [ "$PLATFORM_COUNT" -eq 0 ]; then
+            echo "::error::Merged latest.json has no platform entries — refusing to publish."
+            echo "::error::Every build job fell back to the placeholder."
+            echo "::error::Verify TAURI_SIGNING_PRIVATE_KEY matches the pubkey in tauri.conf.json."
+            exit 1
+          fi
+          echo "Publishing manifest with $PLATFORM_COUNT platform entry/entries."
+
       - name: Upload merged latest.json to release
         uses: softprops/action-gh-release@v2
         with:

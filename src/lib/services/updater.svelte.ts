@@ -71,7 +71,7 @@ class UpdaterService {
       // log panel on every startup.  These errors come from the updater
       // plugin's serde deserialization — detect them and treat as a
       // benign "no update info" state instead of a hard failure.
-      if (isManifestParseError(msg)) {
+      if (isManifestUnavailable(msg)) {
         this.updateAvailable = false;
         this.latestVersion = null;
         this.status = 'up-to-date';
@@ -147,19 +147,29 @@ class UpdaterService {
 export const updater = new UpdaterService();
 
 /**
- * Detect updater errors caused by a malformed/invalid manifest rather than
- * network failures.  These originate from the updater plugin's serde
- * deserialization (e.g. the published `latest.json` is `{"platforms":{}}`
- * with no `version` field, which happens when a release was built without
- * `TAURI_SIGNING_PRIVATE_KEY`).  Such errors are not actionable and should
- * be treated as "no update info available".
+ * Detect updater errors that mean the published manifest is unusable —
+ * rather than genuine transport/network failures.  The caller treats these
+ * as a benign "no update info" state so they don't spam the log panel on
+ * every startup.
+ *
+ * Two families fall under this:
+ *  1. Malformed manifest — the updater plugin's serde fails with
+ *     "missing field" / "deserialize" / "parse" when the published
+ *     `latest.json` is `{"platforms":{}}` with no `version` field (happens
+ *     when a release was built without TAURI_SIGNING_PRIVATE_KEY).
+ *  2. Platform not found — the manifest is structurally valid but carries
+ *     no entry for the host platform ("none of the fallback platforms were
+ *     found in the response platforms object"), e.g. a partial release or
+ *     a manifest where every build job fell back to the placeholder.
  */
-function isManifestParseError(message: string): boolean {
+function isManifestUnavailable(message: string): boolean {
   const lower = message.toLowerCase();
   return lower.includes('missing field')
     || lower.includes('invalid type')
     || lower.includes('expected')
     || lower.includes('deserialize')
     || lower.includes('json')
-    || lower.includes('parse');
+    || lower.includes('parse')
+    || lower.includes('fallback platforms')
+    || lower.includes('platforms object');
 }
