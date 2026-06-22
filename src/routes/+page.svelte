@@ -60,6 +60,15 @@
       coreEvents.stop();
     };
   });
+
+  // Refresh runtime state when the core event stream signals a status change.
+  // guiState.refreshOnTick dedups internally, so no local tick mirror is needed.
+  $effect(() => {
+    const tick = coreEvents.statusTick;
+    if (tick > 0) {
+      guiState.refreshOnTick(tick);
+    }
+  });
 </script>
 
 <main
