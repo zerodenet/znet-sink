@@ -465,13 +465,3 @@ class GuiStateStore {
 }
 
 export const guiState = new GuiStateStore();
-
-let lastGuiStateRefreshTick = -1;
-
-$effect(() => {
-  const tick = coreEvents.statusTick;
-  if (tick > 0 && tick !== lastGuiStateRefreshTick) {
-    lastGuiStateRefreshTick = tick;
-    guiState.refreshOnTick(tick);
-  }
-});
