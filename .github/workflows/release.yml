@@ -167,8 +167,17 @@ jobs:
           releaseName: 'v__VERSION__'
           releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: false
-          args: --target ${{ matrix.target }}
+          # Prerelease tags (vX.Y.Z-beta.N / -rc.N / -dev) publish as GitHub
+          # prereleases so they do NOT become "latest" and push to every
+          # updater client.  Stable tags (vX.Y.Z) stay regular releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # MSI's ProductVersion rejects non-numeric prerelease identifiers
+          # ("beta" fails with "must be numeric-only and cannot be greater
+          # than 65535").  NSIS has no such restriction.  For prerelease
+          # tags on Windows, build NSIS only and skip MSI.
+          args: >-
+            --target ${{ matrix.target }}
+            ${{ (runner.os == 'Windows' && contains(github.ref_name, '-')) && '--bundles nsis' || '' }}
 
       # The Tauri bundler generates a platform-specific latest.json with
       # a real signature (signed by TAURI_SIGNING_PRIVATE_KEY).  Capture it
