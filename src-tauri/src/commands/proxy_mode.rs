@@ -11,10 +11,10 @@ pub fn gui_proxy_mode_status(state: State<'_, AppState>) -> AppResult<GuiProxyMo
 }
 
 #[tauri::command]
-pub fn gui_set_proxy_mode(
+pub async fn gui_set_proxy_mode(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
-    proxy_mode::set(app_handle, state, input)
+    proxy_mode::set(app_handle, state, input).await
 }

@@ -33,7 +33,7 @@ pub fn status(state: &AppState) -> AppResult<GuiProxyModeStatus> {
     ))
 }
 
-pub fn set(
+pub async fn set(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     input: GuiSetProxyModeInput,
@@ -76,7 +76,8 @@ pub fn set(
         // Try mode.set hot-switch first (no restart, no connection interruption)
         if !restart_core {
             hot_switched =
-                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner());
+                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner())
+                    .await;
         }
 
         // Fallback: restart kernel if hot-switch failed or user explicitly requested restart
@@ -102,7 +103,13 @@ pub fn set(
 /// Try the kernel's `mode.set` command for hot mode switching.
 /// Returns `true` if the command succeeded, `false` otherwise.
 /// Does not error — the caller falls back to kernel restart on failure.
-fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &AppState) -> bool {
+///
+/// `async` because `set_mode` is an async kernel-adapter call. A previous
+/// version used `tauri::async_runtime::block_on` here, which would panic
+/// with "Cannot start a runtime from within a runtime" if this code ever
+/// runs on a tokio worker (e.g. if an async Tauri command ends up in the
+/// call chain).
+async fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &AppState) -> bool {
     let mode_str = match mode {
         GuiProxyMode::Global => "global",
         GuiProxyMode::Rule => "rule",
@@ -116,12 +123,14 @@ fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &AppStat
     );
 
     let adapter = crate::kernel::zero::ZeroAdapter::new();
-    match tauri::async_runtime::block_on(crate::kernel::adapter::KernelAdapter::set_mode(
+    match crate::kernel::adapter::KernelAdapter::set_mode(
         &adapter,
         mode_str.to_string(),
         outbound.map(String::from),
         opts,
-    )) {
+    )
+    .await
+    {
         Ok(_) => {
             eprintln!("[ZNet] mode.set hot-switch succeeded: {mode_str}");
             true

@@ -47,6 +47,8 @@ pub fn spawn(app_handle: AppHandle) {
                     .unwrap_or_default(),
             );
             // traffic_stats is async; drive it from this dedicated thread.
+            // Safe to block_on: this loop runs on a `std::thread::spawn`
+            // thread, not a tokio worker, so there's no nested-runtime risk.
             let totals = match tauri::async_runtime::block_on(async {
                 ZeroAdapter::new().traffic_stats(opts).await
             }) {

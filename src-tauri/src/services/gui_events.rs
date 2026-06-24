@@ -123,6 +123,8 @@ fn next_reconnect_backoff(current: Duration) -> Duration {
 }
 
 fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
+    // Safe to block_on here: this runs on a `spawn_blocking` thread (see
+    // `start` above), not a tokio worker — so we don't nest runtimes.
     tauri::async_runtime::block_on(async move {
         let options = Some(CoreIpcOptions {
             socket: Some(endpoint.path),
