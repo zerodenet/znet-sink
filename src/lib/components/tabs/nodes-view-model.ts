@@ -51,7 +51,20 @@ export function buildAllNodes(options: {
       .map<ProxyNode>((configNode) => {
         const runtime = runtimeOverlay.get(configNode.tag);
         const parsed = parseNodeName(configNode.tag);
-        const delay = runtime?.delayMs ?? latestDelay(configNode.tag) ?? 0;
+        let delay = runtime?.delayMs ?? latestDelay(configNode.tag) ?? 0;
+        // Selector (group) nodes have no own latency — inherit the delay
+        // of the group's currently-selected outbound. Switching the
+        // selection only re-reads that node's stored delay from history;
+        // it never mutates other nodes' entries, so previous measurements
+        // remain visible.
+        if (configNode.isSelector) {
+          const group = groups.find((g) => g.name === configNode.tag);
+          const selectedTag = group?.selected;
+          if (selectedTag) {
+            const selectedRuntime = runtimeOverlay.get(selectedTag);
+            delay = selectedRuntime?.delayMs ?? latestDelay(selectedTag) ?? delay;
+          }
+        }
         return {
           id: configNode.tag,
           tag: configNode.tag,
