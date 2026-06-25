@@ -282,6 +282,7 @@
     {groups}
     allNodesCount={allNodes.length}
     {selectedGroup}
+    proxyMode={guiState.proxyMode?.currentMode}
     onSelectGroup={(groupName) => (selectedGroup = groupName)}
   />
 

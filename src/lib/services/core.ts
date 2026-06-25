@@ -553,7 +553,7 @@ function mapTrafficStats(raw: Record<string, unknown>): TrafficStats {
 
 function mapPolicyGroups(raw: Record<string, unknown>[]): PolicyGroup[] {
   return raw.map((group) => {
-    const members = valuesFromContainer(group, ['members', 'targets', 'children', 'proxies', 'items']);
+    const members = valuesFromContainer(group, ['outbounds', 'members', 'targets', 'children', 'proxies', 'items']);
     return {
       name: stringFrom(group, ['tag', 'policy_tag', 'policyTag', 'name', 'id']) ?? 'unknown',
       selected: stringFrom(group, ['selected', 'current', 'now', 'target']),

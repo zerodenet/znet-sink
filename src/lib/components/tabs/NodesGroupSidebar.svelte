@@ -7,10 +7,14 @@
     groups: PolicyGroup[];
     allNodesCount: number;
     selectedGroup: string | null;
+    proxyMode?: string | null;
     onSelectGroup: (groupName: string | null) => void;
   }
 
-  let { groups, allNodesCount, selectedGroup, onSelectGroup }: Props = $props();
+  let { groups, allNodesCount, selectedGroup, proxyMode, onSelectGroup }: Props = $props();
+
+  // "全部节点" 只在无分组或全局模式下显示 — 有分组时用户应按分组筛选。
+  const showAllNodes = $derived(groups.length === 0 || proxyMode === 'global');
 </script>
 
 <aside class="group-sidebar">
@@ -19,15 +23,17 @@
     <span class="group-header-count">{groups.length}</span>
   </div>
 
-  <button
-    class="group-item {!selectedGroup ? 'active' : ''}"
-    onclick={() => onSelectGroup(null)}
-  >
-    <div class="group-info">
-      <span class="group-name">{`全部节点`}</span>
-    </div>
-    <span class="group-count">{allNodesCount}</span>
-  </button>
+  {#if showAllNodes}
+    <button
+      class="group-item {!selectedGroup ? 'active' : ''}"
+      onclick={() => onSelectGroup(null)}
+    >
+      <div class="group-info">
+        <span class="group-name">{`全部节点`}</span>
+      </div>
+      <span class="group-count">{allNodesCount}</span>
+    </button>
+  {/if}
 
   {#each groups as group}
     <button
