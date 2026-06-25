@@ -91,7 +91,7 @@
   // Kernel connection state
   const isCoreAvailable = $derived(guiState.isProcessRunning);
   const probeDisabledReason = $derived(
-    !isCoreAvailable ? '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u6d4b\u901f' : null,
+    !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
   // On mount, reload config-derived data so the page reflects the active profile.
   // Also pull runtime policy groups once in case the kernel is already connected.
@@ -191,11 +191,11 @@
   async function handleSelect(node: ProxyNode) {
     if (switching) return;
     if (!isCoreAvailable) {
-      lastError = '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u5207\u6362\u8282\u70b9';
+      lastError = '内核未就绪，无法切换节点';
       return;
     }
     if (!isNodeSelectable(node)) {
-      lastError = '\u5f53\u524d\u7b56\u7565\u7ec4\u4e3a\u81ea\u52a8\u9009\u62e9\u7ec4\uff0c\u4e0d\u652f\u6301\u624b\u52a8\u5207\u6362\u8282\u70b9';
+      lastError = '当前策略组为自动选择组，不支持手动切换节点';
       return;
     }
     switching = node.id;
@@ -208,7 +208,7 @@
         ?? 'proxy';
       const result = await selectPolicy(policyTag, node.tag);
       if (!result.available) {
-        lastError = '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u5207\u6362\u8282\u70b9';
+        lastError = '内核未就绪，无法切换节点';
       } else if (result.error) {
         lastError = result.error.message;
       } else {
@@ -223,7 +223,7 @@
 
   async function handleProbe(node: ProxyNode) {
     if (!isCoreAvailable) {
-      lastError = '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u6d4b\u901f';
+      lastError = '内核未就绪，无法测速';
       return;
     }
     await probeController.handleProbe(node);
@@ -231,7 +231,7 @@
 
   async function handleProbeAll() {
     if (!isCoreAvailable) {
-      lastError = '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u6d4b\u901f';
+      lastError = '内核未就绪，无法测速';
       return;
     }
     if (probingAll || probingNodeIds.size > 0) {
@@ -316,20 +316,20 @@
           </svg>
         </div>
         {#if searchQuery}
-          <span class="empty-text">\u65e0\u5339\u914d\u8282\u70b9</span>
-          <button class="empty-clear" onclick={() => (searchQuery = '')}>\u6e05\u9664\u641c\u7d22</button>
+          <span class="empty-text">无匹配节点</span>
+          <button class="empty-clear" onclick={() => (searchQuery = '')}>清除搜索</button>
         {:else if allNodes.length === 0}
-          <span class="empty-text">\u6682\u65e0\u8282\u70b9\u6570\u636e</span>
+          <span class="empty-text">暂无节点数据</span>
           <span class="empty-hint">
             {#if !isCoreAvailable}
-              \u5185\u6838\u672a\u8fde\u63a5\uff0c\u4e14\u5f53\u524d\u6ca1\u6709\u751f\u6548\u7684\u4ee3\u7406\u914d\u7f6e\u3002\u8bf7\u5148\u5728\u201c\u914d\u7f6e\u201d\u9875\u5bfc\u5165\u5e76\u542f\u7528\u4e00\u4efd\u914d\u7f6e\u3002
+              内核未连接，且当前没有生效的代理配置。请先在“配置”页导入并启用一份配置。
             {:else}
-              \u5f53\u524d\u914d\u7f6e\u4e0d\u5305\u542b\u8282\u70b9\u3002\u8bf7\u5728\u201c\u914d\u7f6e\u201d\u9875\u5bfc\u5165\u4e00\u4efd\u5305\u542b outbounds \u7684\u4ee3\u7406\u914d\u7f6e\u3002
+              当前配置不包含节点。请在“配置”页导入一份包含 outbounds 的代理配置。
             {/if}
           </span>
-          <button class="empty-clear" onclick={() => (store.activeTab = 'profiles')}>\u524d\u5f80\u914d\u7f6e\u9875</button>
+          <button class="empty-clear" onclick={() => (store.activeTab = 'profiles')}>前往配置页</button>
         {:else}
-          <span class="empty-text">\u6682\u65e0\u8282\u70b9\u6570\u636e</span>
+          <span class="empty-text">暂无节点数据</span>
         {/if}
       </div>
     {:else if selectedGroup}
@@ -442,7 +442,7 @@
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
         <span>{lastError}</span>
-        <button class="error-dismiss" onclick={() => (lastError = null)} aria-label="\u5173\u95ed\u9519\u8bef\u63d0\u793a">
+        <button class="error-dismiss" onclick={() => (lastError = null)} aria-label="关闭错误提示">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
         </button>
       </div>

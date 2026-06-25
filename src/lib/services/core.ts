@@ -11,7 +11,7 @@ export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 export function handleAppError(error: unknown, fallbackMessage: string): void {
   const appError = error as { code?: string; message?: string };
   if (appError.code === 'mode_restricted') {
-    warning(`\u8be5\u529f\u80fd\u4ec5\u5728\u4e13\u4e1a\u6a21\u5f0f\u4e0b\u53ef\u7528\uff1a${appError.message}`);
+    warning(`该功能仅在专业模式下可用：${appError.message}`);
   } else {
     warning(appError.message || fallbackMessage);
   }

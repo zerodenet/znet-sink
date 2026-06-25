@@ -15,7 +15,7 @@
 
 <aside class="group-sidebar">
   <div class="group-header">
-    <span class="group-header-label">{`\u7b56\u7565\u7ec4`}</span>
+    <span class="group-header-label">{`策略组`}</span>
     <span class="group-header-count">{groups.length}</span>
   </div>
 
@@ -24,7 +24,7 @@
     onclick={() => onSelectGroup(null)}
   >
     <div class="group-info">
-      <span class="group-name">{`\u5168\u90e8\u8282\u70b9`}</span>
+      <span class="group-name">{`全部节点`}</span>
     </div>
     <span class="group-count">{allNodesCount}</span>
   </button>
@@ -57,9 +57,9 @@
 
   {#if groups.length === 0}
     {#if allNodesCount > 0}
-      <div class="group-empty">{`\u914d\u7f6e\u8282\u70b9`} ({allNodesCount})</div>
+      <div class="group-empty">{`配置节点`} ({allNodesCount})</div>
     {:else}
-      <div class="group-empty">{`\u7b49\u5f85\u6570\u636e\u2026`}</div>
+      <div class="group-empty">{`等待数据…`}</div>
     {/if}
   {/if}
 </aside>

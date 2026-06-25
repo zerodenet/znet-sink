@@ -106,7 +106,7 @@
           <span class="loading-title">ZNet Sink</span>
           <div class="flex items-center gap-2">
             <Spinner size="sm" color="default" />
-            <span class="loading-hint">{'\u6b63\u5728\u52a0\u8f7d\u914d\u7f6e...'}</span>
+            <span class="loading-hint">{'正在加载配置...'}</span>
           </div>
         </div>
       </div>
@@ -116,7 +116,7 @@
         transition:fade={{ duration: 200 }}
       >
         <span style="font-size: 14px; color: var(--destructive); font-weight: 600;"
-          >{'\u542f\u52a8\u5931\u8d25'}</span
+          >{'启动失败'}</span
         >
         <span
           style="font-size: 12px; color: var(--muted-foreground); max-width: 360px; text-align: center;"
@@ -128,7 +128,7 @@
             store.loadError = null;
             store.appLoading = true;
             store.loadFromBackend();
-          }}>{'\u91cd\u8bd5'}</button
+          }}>{'重试'}</button
         >
       </div>
     {:else if !store.isInitialized}

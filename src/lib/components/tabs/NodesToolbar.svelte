@@ -46,14 +46,14 @@
 
 <div class="node-toolbar">
   <div class="toolbar-left">
-    <span class="node-title">{selectedGroup || '\u5168\u90e8\u8282\u70b9'}</span>
+    <span class="node-title">{selectedGroup || '全部节点'}</span>
     <span class="node-count">{filteredCount}</span>
     <span
       class="conn-badge {isCoreAvailable ? 'on' : 'off'}"
-      title={isCoreAvailable ? '\u5185\u6838\u5df2\u5c31\u7eea' : '\u5185\u6838\u672a\u5c31\u7eea\uff0c\u5ef6\u8fdf\u4e0e\u5207\u6362\u4e0d\u53ef\u7528'}
+      title={isCoreAvailable ? '内核已就绪' : '内核未就绪，延迟与切换不可用'}
     >
       <span class="conn-dot"></span>
-      {isCoreAvailable ? '\u5df2\u5c31\u7eea' : '\u672a\u5c31\u7eea'}
+      {isCoreAvailable ? '已就绪' : '未就绪'}
     </span>
   </div>
 
@@ -75,7 +75,7 @@
       <input
         value={searchQuery}
         oninput={(event) => onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
-        placeholder={'\u641c\u7d22\u8282\u70b9'}
+        placeholder={'搜索节点'}
         class="search-input"
       />
     </div>
@@ -85,13 +85,13 @@
         class="sort-btn {sortMode === 'delay' ? 'active' : ''}"
         onclick={() => onSortModeChange('delay')}
       >
-        {`\u5ef6\u8fdf`}
+        {`延迟`}
       </button>
       <button
         class="sort-btn {sortMode === 'name' ? 'active' : ''}"
         onclick={() => onSortModeChange('name')}
       >
-        {`\u540d\u79f0`}
+        {`名称`}
       </button>
     </div>
 
@@ -100,8 +100,8 @@
         <button
           class="view-btn {viewMode === 'list' ? 'active' : ''}"
           onclick={() => onViewModeChange('list')}
-          title={'\u5217\u8868\u89c6\u56fe'}
-          aria-label={'\u5217\u8868\u89c6\u56fe'}
+          title={'列表视图'}
+          aria-label={'列表视图'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="8" y1="6" x2="21" y2="6"></line>
@@ -115,8 +115,8 @@
         <button
           class="view-btn {viewMode === 'grid' ? 'active' : ''}"
           onclick={() => onViewModeChange('grid')}
-          title={'\u7f51\u683c\u89c6\u56fe'}
-          aria-label={'\u7f51\u683c\u89c6\u56fe'}
+          title={'网格视图'}
+          aria-label={'网格视图'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <rect x="3" y="3" width="7" height="7"></rect>
@@ -145,7 +145,7 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
         </svg>
-        <span>{`\u6d4b\u901f`}</span>
+        <span>{`测速`}</span>
       {/if}
     </button>
   </div>

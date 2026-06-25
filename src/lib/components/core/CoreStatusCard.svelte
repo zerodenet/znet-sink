@@ -14,31 +14,31 @@
   const localProxyEndpoint = $derived(
     c?.localProxyHost && c?.localProxyPort
       ? `${c.localProxyHost}:${c.localProxyPort}`
-      : '\u5df2\u8bbe\u7f6e'
+      : '已设置'
   );
 
   const stateLabel = $derived(
     guiState.isInitializing
-      ? '\u521d\u59cb\u5316\u4e2d'
+      ? '初始化中'
       : guiState.isConnecting
-        ? '\u8fde\u63a5\u4e2d'
+        ? '连接中'
         : guiState.isDisconnecting
-          ? '\u65ad\u5f00\u4e2d'
+          ? '断开中'
           : guiState.isStartingCore
-            ? '\u542f\u52a8\u4e2d'
+            ? '启动中'
             : guiState.isStoppingCore
-              ? '\u505c\u6b62\u4e2d'
+              ? '停止中'
               : isSystemProxyEnabled
-                ? '\u670d\u52a1\u4e2d'
+                ? '服务中'
                 : isCoreAvailable
-                  ? '\u76d1\u542c\u4e2d'
+                  ? '监听中'
                   : isProcessStarting
-                    ? '\u542f\u52a8\u4e2d'
+                    ? '启动中'
                     : isProcessFailed
-                      ? '\u542f\u52a8\u5931\u8d25'
+                      ? '启动失败'
                       : isCrashed
-                        ? '\u5f02\u5e38\u9000\u51fa'
-                        : '\u5df2\u65ad\u5f00'
+                        ? '异常退出'
+                        : '已断开'
   );
 
   const dotColor = $derived(
@@ -55,40 +55,40 @@
 
   const coreActionLabel = $derived(
     guiState.isStartingCore
-      ? '\u542f\u52a8\u4e2d'
+      ? '启动中'
       : guiState.isStoppingCore
-        ? '\u505c\u6b62\u4e2d'
+        ? '停止中'
         : isProcessRunning
-          ? '\u91cd\u542f\u5185\u6838'
+          ? '重启内核'
           : isCoreAvailable
-            ? '\u5916\u90e8\u5185\u6838'
-            : '\u542f\u52a8\u5185\u6838'
+            ? '外部内核'
+            : '启动内核'
   );
 
   const proxyActionLabel = $derived(
     guiState.isSwitchingSystemProxy
-      ? '\u5207\u6362\u4e2d'
+      ? '切换中'
       : isSystemProxyEnabled
-        ? '\u5173\u95ed\u7cfb\u7edf\u4ee3\u7406'
-        : '\u5f00\u542f\u7cfb\u7edf\u4ee3\u7406'
+        ? '关闭系统代理'
+        : '开启系统代理'
   );
 
   const liteActionLabel = $derived(
     guiState.isConnecting
-      ? '\u8fde\u63a5\u4e2d'
+      ? '连接中'
       : guiState.isDisconnecting
-        ? '\u65ad\u5f00\u4e2d'
+        ? '断开中'
         : guiState.isConnected
-          ? '\u5173\u95ed\u670d\u52a1'
+          ? '关闭服务'
           : guiState.canConnect
-            ? '\u5f00\u542f\u670d\u52a1'
-            : '\u914d\u7f6e\u4e0d\u5b8c\u6574'
+            ? '开启服务'
+            : '配置不完整'
   );
 </script>
 
 <div class="core-card">
   <div class="core-header">
-    <span class="core-label">{`\u5185\u6838\u72b6\u6001`}</span>
+    <span class="core-label">{`内核状态`}</span>
     <div class="core-state">
       <span
         class="core-dot"
@@ -103,25 +103,25 @@
     <div class="core-meta">
       <div class="core-meta-row">
         <span class="meta-key">PID</span>
-        <span class="meta-val">{isProcessRunning ? (c.processPid ?? '\u2014') : '\u5916\u90e8'}</span>
+        <span class="meta-val">{isProcessRunning ? (c.processPid ?? '—') : '外部'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`\u7cfb\u7edf\u4ee3\u7406`}</span>
+        <span class="meta-key">{`系统代理`}</span>
         <span class="meta-val" class:connected={isSystemProxyEnabled}>
-          {c.systemProxyEnabled ? localProxyEndpoint : '\u672a\u8bbe\u7f6e'}
+          {c.systemProxyEnabled ? localProxyEndpoint : '未设置'}
         </span>
       </div>
     </div>
   {:else if c?.processExitReason && c?.processState === 'exited'}
     <div class="core-meta">
       <div class="core-meta-row">
-        <span class="meta-key">{`\u9000\u51fa\u7801`}</span>
-        <span class="meta-val">{c.processExitCode ?? '\u2014'}</span>
+        <span class="meta-key">{`退出码`}</span>
+        <span class="meta-val">{c.processExitCode ?? '—'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`\u539f\u56e0`}</span>
+        <span class="meta-key">{`原因`}</span>
         <span class="meta-val" class:danger={isCrashed}>
-          {isStopped ? '\u624b\u52a8\u505c\u6b62' : isCrashed ? '\u5d29\u6e83' : '\u81ea\u884c\u9000\u51fa'}
+          {isStopped ? '手动停止' : isCrashed ? '崩溃' : '自行退出'}
         </span>
       </div>
       {#if isCrashed && c.message}
@@ -142,7 +142,7 @@
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
     <button class="core-link" onclick={() => store.openSettings('core')}>
-      {`\u914d\u7f6e\u5185\u6838`}
+      {`配置内核`}
     </button>
   {/if}
 
@@ -154,7 +154,7 @@
         class="core-action"
         class:active={isCoreAvailable}
         class:danger={isProcessRunning}
-        title={isCoreAvailable && !isProcessRunning ? '\u68c0\u6d4b\u5230\u5916\u90e8\u5185\u6838\uff0c\u65e0\u6cd5\u7531\u5f53\u524d\u5e94\u7528\u7ba1\u7406' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
+        title={isCoreAvailable && !isProcessRunning ? '检测到外部内核，无法由当前应用管理' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
       >
         {coreActionLabel}
       </button>

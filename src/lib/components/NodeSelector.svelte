@@ -21,7 +21,7 @@
     try {
       const result = await selectPolicy('proxy', node.tag);
       if (!result.available) {
-        lastError = '\u5185\u6838\u672a\u8fde\u63a5\uff0c\u65e0\u6cd5\u5207\u6362\u8282\u70b9';
+        lastError = '内核未连接，无法切换节点';
       } else if (result.error) {
         lastError = result.error.message;
       } else {
@@ -65,13 +65,13 @@
 
 <div class="ns-root desk-card h-full flex flex-col overflow-hidden">
   <div class="ns-header">
-    <span class="ns-label">{'\u6838\u5fc3\u7b56\u7565\u51fa\u53e3'}</span>
+    <span class="ns-label">{'核心策略出口'}</span>
     <span class="ns-badge">Radio</span>
   </div>
 
   {#if nodes.length === 0}
     <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-      {'\u7b49\u5f85\u8282\u70b9\u6570\u636e...'}
+      {'等待节点数据...'}
     </div>
   {:else}
     <div class="ns-list">
@@ -98,7 +98,7 @@
           </div>
 
           <span class="ns-delay" style="color: {getDelayColor(node.delay)}; background: {getDelayBg(node.delay)};">
-            {node.delay > 0 ? node.delay : '\u2014'}
+            {node.delay > 0 ? node.delay : '—'}
             {#if node.delay > 0}
               <span style="font-size: 9px; opacity: 0.55; font-weight: 600;">ms</span>
             {/if}

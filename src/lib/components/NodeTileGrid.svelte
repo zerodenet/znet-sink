@@ -105,7 +105,7 @@
           <span class="tile-switching">⟳</span>
         {:else}
           <span class="tile-delay" style="color: {getDelayColor(node.delay)}; background: {getDelayBg(node.delay)};">
-            {node.delay > 0 ? node.delay : '\u2014'}
+            {node.delay > 0 ? node.delay : '—'}
             {#if node.delay > 0}
               <span class="tile-delay-unit">ms</span>
             {/if}

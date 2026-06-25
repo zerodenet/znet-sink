@@ -175,7 +175,7 @@ export function buildSections(options: {
   sortMode: NodeSortMode;
   orphanSectionName?: string;
 }): NodeSection[] {
-  const { allNodes, groups, query, sortMode, orphanSectionName = '\u5176\u4ed6' } = options;
+  const { allNodes, groups, query, sortMode, orphanSectionName = '其他' } = options;
   const filtered = allNodes.filter((node) => matchesSearch(node, query));
   if (filtered.length === 0) return [];
 

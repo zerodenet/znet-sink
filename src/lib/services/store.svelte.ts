@@ -75,7 +75,7 @@ class AppStateStore {
         this.isInitialized = true;
       }
     } catch (e) {
-      this.loadError = `\u540e\u7aef\u52a0\u8f7d\u5931\u8d25: ${e instanceof Error ? e.message : String(e)}`;
+      this.loadError = `后端加载失败: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       this.appLoading = false;
     }

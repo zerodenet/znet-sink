@@ -211,7 +211,7 @@ class GuiStateStore {
   }
 
   private errorMessage(e: any): string {
-    return e?.message ?? e ?? '\u672a\u77e5\u9519\u8bef';
+    return e?.message ?? e ?? '未知错误';
   }
 
   /**
@@ -227,11 +227,11 @@ class GuiStateStore {
     try {
       this.connection = await guiConnect();
       this.syncTrayStatus();
-      toastSuccess('\u7cfb\u7edf\u4ee3\u7406\u5df2\u5f00\u542f\uff0c\u670d\u52a1\u5df2\u751f\u6548');
+      toastSuccess('系统代理已开启，服务已生效');
       coreEvents.start();
       await this.refreshPolicyPanels();
     } catch (e: any) {
-      toastError(`\u8fde\u63a5\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`连接失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
     } finally {
       this.isConnecting = false;
@@ -243,10 +243,10 @@ class GuiStateStore {
     try {
       this.connection = await guiDisconnect();
       this.syncTrayStatus();
-      toastSuccess('\u7cfb\u7edf\u4ee3\u7406\u5df2\u5173\u95ed\uff0c\u5185\u6838\u4fdd\u6301\u8fd0\u884c');
+      toastSuccess('系统代理已关闭，内核保持运行');
       await this.refreshPolicyPanels();
     } catch (e: any) {
-      toastError(`\u65ad\u5f00\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`断开失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
     } finally {
       this.isDisconnecting = false;
@@ -258,12 +258,12 @@ class GuiStateStore {
     this.isStartingCore = true;
     try {
       await startCoreProcess();
-      toastSuccess('\u5185\u6838\u76d1\u542c\u5df2\u542f\u52a8');
+      toastSuccess('内核监听已启动');
       coreEvents.start();
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {
-      toastError(`\u542f\u52a8\u5185\u6838\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`启动内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
     } finally {
       this.isStartingCore = false;
@@ -276,11 +276,11 @@ class GuiStateStore {
     this.isStoppingCore = true;
     try {
       await restartCoreProcess();
-      toastSuccess('\u5185\u6838\u5df2\u91cd\u542f');
+      toastSuccess('内核已重启');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {
-      toastError(`\u91cd\u542f\u5185\u6838\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`重启内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
     } finally {
       this.isStoppingCore = false;
@@ -292,10 +292,10 @@ class GuiStateStore {
     this.isSwitchingSystemProxy = true;
     try {
       await enableSystemProxyCommand();
-      toastSuccess('\u7cfb\u7edf\u4ee3\u7406\u5df2\u5f00\u542f');
+      toastSuccess('系统代理已开启');
       await this.refreshRuntimeState();
     } catch (e: any) {
-      toastError(`\u5f00\u542f\u7cfb\u7edf\u4ee3\u7406\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
     } finally {
       this.isSwitchingSystemProxy = false;
@@ -307,10 +307,10 @@ class GuiStateStore {
     this.isSwitchingSystemProxy = true;
     try {
       await disableSystemProxyCommand();
-      toastSuccess('\u7cfb\u7edf\u4ee3\u7406\u5df2\u5173\u95ed');
+      toastSuccess('系统代理已关闭');
       await this.refreshConnectionStatus();
     } catch (e: any) {
-      toastError(`\u5173\u95ed\u7cfb\u7edf\u4ee3\u7406\u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`关闭系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
     } finally {
       this.isSwitchingSystemProxy = false;
@@ -330,10 +330,10 @@ class GuiStateStore {
     this.isSwitchingTun = true;
     try {
       this.tunStatus = await enableGuiTun();
-      toastSuccess('TUN \u5df2\u5f00\u542f');
+      toastSuccess('TUN 已开启');
       await this.refreshRuntimeState();
     } catch (e: any) {
-      toastError(`\u5f00\u542f TUN \u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`开启 TUN 失败: ${this.errorMessage(e)}`);
       await this.refreshTunStatus();
       await this.refreshConnectionStatus();
     } finally {
@@ -346,10 +346,10 @@ class GuiStateStore {
     this.isSwitchingTun = true;
     try {
       this.tunStatus = await disableGuiTun();
-      toastSuccess('TUN \u5df2\u5173\u95ed');
+      toastSuccess('TUN 已关闭');
       await this.refreshTunStatus();
     } catch (e: any) {
-      toastError(`\u5173\u95ed TUN \u5931\u8d25: ${this.errorMessage(e)}`);
+      toastError(`关闭 TUN 失败: ${this.errorMessage(e)}`);
       await this.refreshTunStatus();
     } finally {
       this.isSwitchingTun = false;
