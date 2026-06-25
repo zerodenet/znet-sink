@@ -211,8 +211,10 @@ fn navigation_items(
         pro_only("connections", "navigation", is_pro),
         shared("logs", "navigation"),
         shared("settings", "navigation"),
-        // Debug tab: hidden by default via hiddenMenuKeys, available in both lite/pro.
-        shared("debug", "navigation"),
+        // Debug tab: Pro-only — exposes low-level IPC/state inspection
+        // that lite-mode users shouldn't see. ui.hiddenMenuKeys can still
+        // hide it per-user in pro mode.
+        pro_only("debug", "navigation", is_pro),
     ];
 
     for item in &mut items {
