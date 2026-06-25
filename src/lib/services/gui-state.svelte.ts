@@ -179,6 +179,12 @@ class GuiStateStore {
     await Promise.allSettled([
       this.refreshConnectionStatus(),
       this.refreshCoreOverview(),
+      // configNodes is parsed from the active proxy config (no core
+      // required), but it must be re-read whenever the active config
+      // changes — which can happen after initialize() already ran.
+      // Without this the lite-mode node dropdown stays empty even after
+      // a config is activated post-startup.
+      this.refreshConfigNodes(),
       this.refreshPolicyGroups(),
       this.refreshTunStatus(),
       this.refreshCapabilities(),
