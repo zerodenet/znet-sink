@@ -41,12 +41,13 @@ export function buildAllNodes(options: {
   runtimeOverlay: Map<string, RuntimeOverlay>;
   latestDelay: (tag: string) => number | undefined;
   fallbackNodes: ProxyNode[];
+  includeGroups?: boolean;
 }): ProxyNode[] {
-  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes } = options;
+  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes, includeGroups = false } = options;
 
   if (configNodes.length > 0) {
     return configNodes
-      .filter((configNode) => !configNode.isSelector)
+      .filter((configNode) => includeGroups || !configNode.isSelector)
       .map<ProxyNode>((configNode) => {
         const runtime = runtimeOverlay.get(configNode.tag);
         const parsed = parseNodeName(configNode.tag);
