@@ -653,6 +653,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   .flow-group {
     border-radius: 8px;
     overflow: hidden;
+    flex-shrink: 0;
   }
 
   .flow-group.expanded {
