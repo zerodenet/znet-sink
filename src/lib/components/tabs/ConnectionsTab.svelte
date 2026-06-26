@@ -383,7 +383,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
           <div class="flow-row" onclick={() => toggleExpand(conn.flowId)} onkeydown={(e) => e.key === 'Enter' && toggleExpand(conn.flowId)} role="button" tabindex="0">
             <div class="flow-main">
               <div class="flow-top">
-                <span class="flow-id">{conn.flowId}</span>
+                <span class="flow-destination" title={conn.destination}>{conn.destination}</span>
                 <span class="row-tag flow-protocol">{conn.protocol}</span>
                 {#if conn.policyTag}
                   <span class="row-tag flow-policy">{conn.policyTag}</span>
@@ -394,11 +394,11 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
               </div>
               <div class="flow-route">
                 <span class="flow-src">{conn.source}</span>
-                <span class="flow-arrow">→</span>
-                <span class="flow-dst">{conn.destination}</span>
                 {#if conn.outboundTag}
+                  <span class="flow-arrow">→</span>
                   <span class="flow-outbound">{conn.outboundTag}</span>
                 {/if}
+                <span class="flow-id-minor">#{conn.flowId}</span>
               </div>
               <div class="flow-stats">
               <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
@@ -697,11 +697,25 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     flex-wrap: wrap;
   }
 
-  .flow-id {
-    font-size: 12px;
+  .flow-destination {
+    font-size: 12.5px;
     font-weight: 600;
     color: var(--foreground);
     font-family: var(--font-mono);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .flow-id-minor {
+    font-size: 10.5px;
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
+    opacity: 0.5;
+    flex-shrink: 0;
+    margin-left: auto;
   }
 
   .row-tag {
@@ -737,15 +751,13 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     overflow: hidden;
   }
 
-  .flow-src, .flow-dst {
+  .flow-src {
     font-family: var(--font-mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    max-width: min(200px, 35%);
   }
-
-  .flow-src { max-width: min(200px, 35%); }
-  .flow-dst { max-width: min(240px, 45%); }
 
   .flow-arrow {
     flex-shrink: 0;
