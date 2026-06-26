@@ -2,7 +2,7 @@
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { handleAppError } from '$lib/services/core';
+  import { guiApplyConfig, handleAppError, restartCoreProcess } from '$lib/services/core';
   import {
     importProxyConfig,
     listProxyConfigs,
@@ -249,7 +249,29 @@
 
     activatingId = id;
     try {
-      await setActiveProxyConfig(id);
+      const profile = await setActiveProxyConfig(id);
+      // Apply the new config to the running kernel silently. Try hot-apply
+      // first (no reconnection, no disruption); if that is unavailable
+      // (lite mode, kernel not connected, or the kernel rejected it) fall
+      // back to an automatic restart so the switch still takes effect
+      // without asking the user to do anything. Only a real restart failure
+      // surfaces to the user.
+      if (profile.content && typeof profile.content === 'object') {
+        let applied = false;
+        try {
+          await guiApplyConfig(profile.content as Record<string, unknown>);
+          applied = true;
+        } catch {
+          // Hot-apply unavailable — fall through to restart below.
+        }
+        if (!applied) {
+          try {
+            await restartCoreProcess();
+          } catch (restartError) {
+            handleAppError(restartError, '切换配置后自动重启内核失败');
+          }
+        }
+      }
       await refresh();
       // Propagate the new active config to GUI state so the node page
       // and overview render the freshly activated configuration instead
