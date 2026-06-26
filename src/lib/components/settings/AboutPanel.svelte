@@ -103,7 +103,7 @@
 
     <div class="config-row">
       <span class="config-label">许可证</span>
-      <span class="config-value">MIT</span>
+      <span class="config-value">Mozilla Public License 2.0</span>
     </div>
 
     <div class="config-row">
@@ -293,7 +293,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 220px;
+    max-width: 225px;
   }
 
   .config-value.mono {
