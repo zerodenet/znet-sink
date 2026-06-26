@@ -1,6 +1,11 @@
 <script lang="ts">
   import { getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
+  import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import type { DebugFrame } from '$lib/types/debug';
+
+  type SubTab = 'diagnostics' | 'frames';
+  // Default to the diagnostics tools; IPC frames stay one click away.
+  let subTab = $state<SubTab>('diagnostics');
 
   let frames = $state<DebugFrame[]>([]);
   let loading = $state(true);
@@ -121,6 +126,15 @@
 </script>
 
 <div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
+  <!-- Sub-tab switcher -->
+  <div class="debug-subtabs">
+    <button class:active={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</button>
+    <button class:active={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</button>
+  </div>
+
+  {#if subTab === 'diagnostics'}
+    <DiagnosticsPanel />
+  {:else}
   <!-- Header -->
   <div class="flex items-center justify-between flex-shrink-0">
     <div class="flex items-center gap-3">
@@ -185,9 +199,40 @@
       {/each}
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
+  .debug-subtabs {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .debug-subtabs button {
+    padding: 3px 12px;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: all 0.12s ease;
+  }
+
+  .debug-subtabs button:hover {
+    color: var(--foreground);
+    background: var(--muted);
+  }
+
+  .debug-subtabs button.active {
+    color: var(--primary);
+    background: var(--muted);
+  }
+
   .debug-filter { height: 22px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--card); color: var(--foreground); font-size: 10.5px; font-weight: 500; cursor: pointer; }
   .debug-toggle { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 5px; border: 1px solid var(--border); background: var(--card); color: var(--muted-foreground); font-size: 10px; cursor: pointer; transition: all 0.12s ease; }
   .debug-toggle.active { border-color: #22C55E; color: #22C55E; background: rgba(34, 197, 94, 0.06); }

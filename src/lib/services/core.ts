@@ -5,6 +5,7 @@ import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
 import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
+import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
@@ -474,12 +475,12 @@ export async function clearDebugFrames(): Promise<void> {
 
 // Diagnostics
 
-export async function guiDnsLookup(hostname: string): Promise<unknown> {
-  return invoke('gui_dns_lookup', { hostname });
+export async function guiDnsLookup(hostname: string): Promise<DnsLookupResult> {
+  return invoke<DnsLookupResult>('gui_dns_lookup', { hostname });
 }
 
-export async function guiTraceRoute(target: string, port?: number, protocol?: string): Promise<unknown> {
-  return invoke('gui_trace_route', { target, port, protocol });
+export async function guiTraceRoute(target: string, port?: number, protocol?: string): Promise<TraceRouteResult> {
+  return invoke<TraceRouteResult>('gui_trace_route', { target, port, protocol });
 }
 
 export async function getGuiSinks(): Promise<unknown> {
