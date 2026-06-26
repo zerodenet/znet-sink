@@ -19,6 +19,7 @@ pub mod shutdown;
 use std::fmt;
 
 use crate::errors::AppResult;
+use crate::services::file_logger;
 
 // ── Phases ──
 
@@ -135,13 +136,13 @@ impl Lifecycle {
         for hook in &self.hooks {
             let phase = hook.phase();
             if current_phase != Some(phase) {
-                eprintln!("[ZNet] lifecycle: entering phase {phase}");
+                file_logger::line(&format!("lifecycle: entering phase {phase}"));
                 current_phase = Some(phase);
             }
-            eprintln!("[ZNet] lifecycle:   → {}", hook.name());
+            file_logger::line(&format!("lifecycle:   → {}", hook.name()));
             hook.run()?;
         }
-        eprintln!("[ZNet] lifecycle: startup complete");
+        file_logger::line("lifecycle: startup complete");
         Ok(())
     }
 

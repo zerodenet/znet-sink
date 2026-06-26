@@ -138,6 +138,10 @@ fn tray_update_status(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // File logger + panic hook — first thing, so every later phase (and any
+    // crash) lands in <data_dir>/logs/gui.log.jsonl.
+    crate::services::file_logger::init();
+
     // ── Phase 1–2: Guard + Config (runs before Tauri builder) ──
     let (mut lifecycle, startup_data) = phases::build_builtin();
     lifecycle.startup().expect("lifecycle startup failed");
@@ -149,7 +153,7 @@ pub fn run() {
         .expect("startup data should be populated by Config phase");
 
     // ── Phase 3: State — construct AppState from loaded data ──
-    eprintln!("[ZNet] lifecycle: entering phase state");
+    crate::services::file_logger::line("lifecycle: entering phase state");
     let app_state = AppState::with_domain_data(
         data.app_config,
         data.domain_data.proxy_configs,
@@ -157,7 +161,7 @@ pub fn run() {
         data.domain_data.rule_sets,
         data.logs,
     );
-    eprintln!("[ZNet] lifecycle:   → app_state");
+    crate::services::file_logger::line("lifecycle:   → app_state");
 
     // Register core-process shutdown guard: stop core on exit.
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
@@ -193,6 +197,7 @@ pub fn run() {
         }),
     );
 
+    crate::services::file_logger::line("runtime: entering register/runtime phase");
     // ── Phase 4–5: Register + Runtime (inside Tauri builder) ──
     tauri::Builder::default()
         .manage(app_state)
@@ -299,6 +304,7 @@ pub fn run() {
         ])
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
+            crate::services::file_logger::line("runtime: setup begin");
             // Always check kernel health on startup. If the kernel is already
             // running (e.g. external daemon), just connect. If not, try to
             // start a managed kernel when auto_start is enabled (default).
@@ -376,13 +382,13 @@ pub fn run() {
                         };
 
                         if !path_matches {
-                            eprintln!("[ZNet] kernel alive but path mismatch, restarting");
+                            crate::services::file_logger::line("kernel alive but path mismatch, restarting");
                             // Use fresh State — the outer `state` is not `Copy`.
                             let _ = core_process::stop(app_handle.state::<AppState>());
                             crate::kernel::connection::reset();
                             // Fall through to start the configured kernel.
                         } else {
-                            eprintln!("[ZNet] kernel already running (fast probe ok), connecting");
+                            crate::services::file_logger::line("kernel already running (fast probe ok), connecting");
 
                             // Update the process state so the UI reflects the
                             // actual kernel status.  Without this the UI shows
@@ -407,7 +413,7 @@ pub fn run() {
 
                     // Kernel not running (or was restarted due to path mismatch).
                     if !auto_start {
-                        eprintln!("[ZNet] auto_start disabled, not starting kernel");
+                        crate::services::file_logger::line("auto_start disabled, not starting kernel");
                         let _ = crate::services::proxy_coordinator::update(&state);
                         return;
                     }
