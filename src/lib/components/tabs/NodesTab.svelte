@@ -32,7 +32,6 @@
   let viewMode = $state<ViewMode>(store.uiMode === 'lite' ? 'list' : 'grid');
   let isLite = $derived(store.uiMode === 'lite');
   let searchQuery = $state('');
-  let sortMode = $state<'delay' | 'name'>('delay');
   let selectedGroup = $state<string | null>(null);
 
   // Action state
@@ -151,7 +150,6 @@
       groups,
       query: searchQuery.trim().toLowerCase(),
       selectedGroup,
-      sortMode,
     });
   });
 
@@ -163,7 +161,6 @@
       allNodes,
       groups,
       query: searchQuery.trim().toLowerCase(),
-      sortMode,
     });
   });
 
@@ -293,7 +290,6 @@
       filteredCount={filteredNodes.length}
       isCoreAvailable={isCoreAvailable}
       {searchQuery}
-      {sortMode}
       {viewMode}
       {isLite}
       {probingAll}
@@ -301,7 +297,6 @@
       canProbeAll={isCoreAvailable && !probingAll && probingNodeIds.size === 0 && filteredNodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
-      onSortModeChange={(mode) => (sortMode = mode)}
       onViewModeChange={(mode) => (viewMode = mode)}
       onProbeAll={handleProbeAll}
     />

@@ -1,6 +1,5 @@
 <script lang="ts">
   type ViewMode = 'list' | 'grid';
-  type SortMode = 'delay' | 'name';
 
   interface ProbeProgress {
     done: number;
@@ -12,7 +11,6 @@
     filteredCount: number;
     isCoreAvailable: boolean;
     searchQuery: string;
-    sortMode: SortMode;
     viewMode: ViewMode;
     isLite: boolean;
     probingAll: boolean;
@@ -20,7 +18,6 @@
     canProbeAll: boolean;
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
-    onSortModeChange: (mode: SortMode) => void;
     onViewModeChange: (mode: ViewMode) => void;
     onProbeAll: () => void | Promise<void>;
   }
@@ -30,7 +27,6 @@
     filteredCount,
     isCoreAvailable,
     searchQuery,
-    sortMode,
     viewMode,
     isLite,
     probingAll,
@@ -38,7 +34,6 @@
     canProbeAll,
     probeDisabledReason = null,
     onSearchQueryChange,
-    onSortModeChange,
     onViewModeChange,
     onProbeAll,
   }: Props = $props();
@@ -78,21 +73,6 @@
         placeholder={'搜索节点'}
         class="search-input"
       />
-    </div>
-
-    <div class="sort-seg">
-      <button
-        class="sort-btn {sortMode === 'delay' ? 'active' : ''}"
-        onclick={() => onSortModeChange('delay')}
-      >
-        {`延迟`}
-      </button>
-      <button
-        class="sort-btn {sortMode === 'name' ? 'active' : ''}"
-        onclick={() => onSortModeChange('name')}
-      >
-        {`名称`}
-      </button>
     </div>
 
     {#if !isLite}
@@ -272,7 +252,6 @@
     width: 180px;
   }
 
-  .sort-seg,
   .view-seg {
     display: inline-flex;
     gap: 1px;
@@ -281,20 +260,6 @@
     border-radius: 6px;
   }
 
-  .sort-btn {
-    height: 24px;
-    padding: 0 9px;
-    border-radius: 4px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s ease;
-  }
-
-  .sort-btn.active,
   .view-btn.active {
     background: var(--segment-active-bg);
     color: var(--foreground);

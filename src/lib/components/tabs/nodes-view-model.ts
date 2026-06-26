@@ -15,8 +15,6 @@ export interface NodeSection {
   nodes: ProxyNode[];
 }
 
-export type NodeSortMode = 'delay' | 'name';
-
 export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeOverlay> {
   const map = new Map<string, RuntimeOverlay>();
   for (const group of groups) {
@@ -90,9 +88,18 @@ export function buildAllNodes(options: {
     // not enlarge the default view: the "全部节点" entry is gated to global
     // mode in NodesGroupSidebar, so in rule mode users still pick a specific
     // group and see only its direct members (nodes + nested-group cards).
+    // Only render a group as a node when it is nested inside another group
+    // (its tag appears in another group's outbounds). Top-level groups stay
+    // in the sidebar — clicking a top-level group card has no clear selection
+    // semantics and would duplicate the sidebar entries.
+    const memberTags = new Set<string>();
+    for (const g of groups) {
+      for (const o of g.outbounds) memberTags.add(o.tag);
+    }
     const existingTags = new Set(nodeItems.map((n) => n.tag));
     const groupItems: ProxyNode[] = [];
     for (const group of groups) {
+      if (!memberTags.has(group.name)) continue;
       if (existingTags.has(group.name)) continue;
       const parsed = parseNodeName(group.name);
       let delay = 0;
@@ -148,24 +155,6 @@ export function matchesSearch(node: ProxyNode, query: string): boolean {
   return haystack.includes(query);
 }
 
-function delaySortRank(delay: number): number {
-  if (delay > 0) return 0;
-  if (delay < 0) return 1;
-  return 2;
-}
-
-export function sortNodes(nodes: ProxyNode[], sortMode: NodeSortMode): ProxyNode[] {
-  return [...nodes].sort((a, b) => {
-    if (sortMode === 'delay') {
-      const rankDiff = delaySortRank(a.delay) - delaySortRank(b.delay);
-      if (rankDiff !== 0) return rankDiff;
-      if (a.delay > 0 && b.delay > 0) return a.delay - b.delay;
-      return a.name.localeCompare(b.name);
-    }
-    return a.name.localeCompare(b.name);
-  });
-}
-
 export function collectGroupNodeTags(
   groups: PolicyGroup[],
   groupName: string,
@@ -183,30 +172,36 @@ export function filterNodes(options: {
   groups: PolicyGroup[];
   query: string;
   selectedGroup: string | null;
-  sortMode: NodeSortMode;
 }): ProxyNode[] {
-  const { allNodes, groups, query, selectedGroup, sortMode } = options;
+  const { allNodes, groups, query, selectedGroup } = options;
   let nodes = allNodes.filter((node) => matchesSearch(node, query));
 
   if (selectedGroup) {
-    const tags = collectGroupNodeTags(groups, selectedGroup);
-    if (tags.size > 0) {
-      const matched = nodes.filter((node) => tags.has(node.tag));
-      if (matched.length > 0) nodes = matched;
+    const group = groups.find((g) => g.name === selectedGroup);
+    if (group) {
+      // Render members in the order declared in the group's outbounds, so a
+      // nested group listed first stays first — instead of being pushed after
+      // regular nodes by the allNodes ordering (which appends group cards at
+      // the tail).
+      const nodeMap = new Map(nodes.map((n) => [n.tag, n]));
+      const ordered = group.outbounds
+        .map((o) => o.tag)
+        .map((tag) => nodeMap.get(tag))
+        .filter((n): n is ProxyNode => n !== undefined);
+      if (ordered.length > 0) nodes = ordered;
     }
   }
 
-  return sortNodes(nodes, sortMode);
+  return nodes;
 }
 
 export function buildSections(options: {
   allNodes: ProxyNode[];
   groups: PolicyGroup[];
   query: string;
-  sortMode: NodeSortMode;
   orphanSectionName?: string;
 }): NodeSection[] {
-  const { allNodes, groups, query, sortMode, orphanSectionName = '其他' } = options;
+  const { allNodes, groups, query, orphanSectionName = '其他' } = options;
   const filtered = allNodes.filter((node) => matchesSearch(node, query));
   if (filtered.length === 0) return [];
 
@@ -234,12 +229,12 @@ export function buildSections(options: {
   for (const group of groups) {
     const items = buckets.get(group.name);
     if (items && items.length > 0) {
-      sections.push({ name: group.name, kind: group.kind, nodes: sortNodes(items, sortMode) });
+      sections.push({ name: group.name, kind: group.kind, nodes: items });
     }
   }
 
   if (orphan.length > 0) {
-    sections.push({ name: orphanSectionName, nodes: sortNodes(orphan, sortMode) });
+    sections.push({ name: orphanSectionName, nodes: orphan });
   }
 
   return sections;

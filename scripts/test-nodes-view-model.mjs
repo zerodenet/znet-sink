@@ -5,7 +5,6 @@ import {
   collectGroupNodeTags,
   filterNodes,
   normalizeSelectedGroup,
-  sortNodes,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 
 function node(tag, delay, extra = {}) {
@@ -28,29 +27,17 @@ function tags(list) {
   return list.map((item) => item.tag);
 }
 
-function testDelaySortRanksReachableBeforeTimeoutAndUntested() {
-  const sorted = sortNodes([
-    node('timeout', -1),
-    node('slow', 180),
-    node('fresh', 42),
-    node('untested', 0),
-  ], 'delay');
-
-  assert.deepEqual(tags(sorted), ['fresh', 'slow', 'timeout', 'untested']);
-}
-
 function testBuildSectionsKeepsOrphansWhenGroupsExist() {
   const sections = buildSections({
     allNodes: [node('HK', 30), node('JP', 70), node('orphan', 55)],
     groups: [group('Proxy', [{ tag: 'HK' }, { tag: 'JP' }])],
     query: '',
-    sortMode: 'delay',
   });
 
   assert.equal(sections.length, 2);
   assert.equal(sections[0].name, 'Proxy');
   assert.deepEqual(tags(sections[0].nodes), ['HK', 'JP']);
-  assert.equal(sections[1].name, '\u5176\u4ed6');
+  assert.equal(sections[1].name, '其他');
   assert.deepEqual(tags(sections[1].nodes), ['orphan']);
 }
 
@@ -67,7 +54,9 @@ function testNestedGroupFilteringShowsNestedGroupAsMember() {
   ];
 
   assert.deepEqual([...collectGroupNodeTags(groups, 'Auto')].sort(), ['Fallback', 'HK']);
-  assert.deepEqual(tags(filterNodes({ allNodes: nodes, groups, query: '', selectedGroup: 'Auto', sortMode: 'delay' })), ['HK', 'Fallback']);
+  // Members render in group.outbounds order (Fallback before HK), not in
+  // allNodes order (where the Fallback group card is appended at the tail).
+  assert.deepEqual(tags(filterNodes({ allNodes: nodes, groups, query: '', selectedGroup: 'Auto' })), ['Fallback', 'HK']);
 }
 
 function testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue() {
@@ -93,7 +82,6 @@ function testRuntimeOverlayKeepsFirstGroupForSharedNodeTag() {
   });
 }
 
-testDelaySortRanksReachableBeforeTimeoutAndUntested();
 testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();

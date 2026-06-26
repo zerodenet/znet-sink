@@ -13,8 +13,9 @@
 
   let { groups, allNodesCount, selectedGroup, proxyMode, onSelectGroup }: Props = $props();
 
-  // "全部节点" 只在无分组或全局模式下显示 — 有分组时用户应按分组筛选。
-  const showAllNodes = $derived(groups.length === 0 || proxyMode === 'global');
+  // "全部节点" 仅在全局模式下显示 — 非全局时用户按具体分组筛选；
+  // 不在此处回退到"全部"，否则会和全局模式语义混淆。
+  const showAllNodes = $derived(proxyMode === 'global');
 </script>
 
 <aside class="group-sidebar">
