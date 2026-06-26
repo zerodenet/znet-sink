@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { updater } from '$lib/services/updater.svelte';
+  import { updater, formatBytes } from '$lib/services/updater.svelte';
   import { warning } from '$lib/services/toast.svelte';
 
   // Per-session dismissal — banner returns on next app start so users who
@@ -34,9 +34,19 @@
       <path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M2.5 12.5h11" />
     </svg>
     <div class="update-content">
-      <span class="update-label">发现新版本</span>
-      <span class="update-version">v{updater.latestVersion}</span>
-      <span class="update-current">（当前 v{updater.currentVersion}）</span>
+      {#if updater.downloading}
+        <span class="update-label">下载更新中</span>
+        <span class="update-progress-text">
+          {updater.progressPct != null ? `${updater.progressPct}%` : '下载中'}
+          <span class="update-bytes">
+            · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}
+          </span>
+        </span>
+      {:else}
+        <span class="update-label">发现新版本</span>
+        <span class="update-version">v{updater.latestVersion}</span>
+        <span class="update-current">（当前 v{updater.currentVersion}）</span>
+      {/if}
     </div>
     <button class="update-action" onclick={handleUpdate} disabled={updater.downloading}>
       {updater.downloading ? '下载中…' : '立即更新'}
@@ -52,11 +62,21 @@
         <line x1="8" y1="2" x2="2" y2="8" />
       </svg>
     </button>
+    {#if updater.downloading}
+      <div class="update-progress-track" aria-hidden="true">
+        <div
+          class="update-progress-fill"
+          class:indeterminate={updater.progressPct == null}
+          style={updater.progressPct != null ? `width: ${updater.progressPct}%` : ''}
+        ></div>
+      </div>
+    {/if}
   </div>
 {/if}
 
 <style>
   .update-banner {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 9px;
@@ -65,6 +85,7 @@
     border: 1px solid rgba(245, 158, 11, 0.28);
     background: rgba(245, 158, 11, 0.08);
     flex-shrink: 0;
+    overflow: hidden;
   }
 
   .update-dot {
@@ -119,6 +140,44 @@
     font-size: 11px;
     color: var(--muted-foreground);
     font-variant-numeric: tabular-nums;
+  }
+
+  .update-progress-text {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--foreground);
+  }
+
+  .update-bytes {
+    color: var(--muted-foreground);
+    font-size: 11px;
+  }
+
+  .update-progress-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: rgba(245, 158, 11, 0.18);
+    overflow: hidden;
+  }
+
+  .update-progress-fill {
+    height: 100%;
+    background: #f59e0b;
+    transition: width 0.2s ease;
+  }
+
+  .update-progress-fill.indeterminate {
+    width: 30%;
+    animation: update-indeterminate 1.2s ease-in-out infinite;
+  }
+
+  @keyframes update-indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
   }
 
   .update-action {

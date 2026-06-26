@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getName, getVersion } from '@tauri-apps/api/app';
-  import { updater } from '$lib/services/updater.svelte';
+  import { updater, formatBytes } from '$lib/services/updater.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
 
   let appName = $state('ZNet Sink');
@@ -138,6 +138,21 @@
             <span class="update-notes">{updater.releaseNotes.slice(0, 200)}{updater.releaseNotes.length > 200 ? '…' : ''}</span>
           {/if}
         </div>
+        {#if updater.downloading}
+          <div class="update-progress">
+            <div class="update-progress-bar">
+              <div
+                class="update-progress-fill"
+                class:indeterminate={updater.progressPct == null}
+                style={updater.progressPct != null ? `width: ${updater.progressPct}%` : ''}
+              ></div>
+            </div>
+            <span class="update-progress-text">
+              {updater.progressPct != null ? `${updater.progressPct}%` : '下载中'}
+              · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}
+            </span>
+          </div>
+        {/if}
         <button
           class="update-btn"
           onclick={handleDownloadUpdate}
@@ -358,6 +373,43 @@
     color: var(--muted-foreground);
     line-height: 1.45;
     white-space: pre-line;
+  }
+
+  .update-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .update-progress-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(245, 158, 11, 0.18);
+    overflow: hidden;
+  }
+
+  .update-progress-fill {
+    height: 100%;
+    background: #D97706;
+    border-radius: 2px;
+    transition: width 0.2s ease;
+  }
+
+  .update-progress-fill.indeterminate {
+    width: 30%;
+    animation: about-indeterminate 1.2s ease-in-out infinite;
+  }
+
+  @keyframes about-indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+
+  .update-progress-text {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted-foreground);
   }
 
   .update-btn {

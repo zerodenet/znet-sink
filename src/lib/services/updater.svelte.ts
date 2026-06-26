@@ -13,8 +13,18 @@ class UpdaterService {
   checking = $state(false);
   downloading = $state(false);
   lastError = $state<string | null>(null);
+  /** Bytes downloaded so far in the current `downloadAndInstall` run. */
+  downloaded = $state(0);
+  /** Total bytes to download, or null when the server omitted Content-Length. */
+  total = $state<number | null>(null);
   /** Granular status for UI rendering. */
   status = $state<UpdaterStatus>('idle');
+
+  /** Download progress as 0–100, or null when total size is unknown (indeterminate). */
+  get progressPct(): number | null {
+    if (this.total == null || this.total <= 0) return null;
+    return Math.min(100, Math.round((this.downloaded / this.total) * 100));
+  }
 
   constructor() {
     // Resolve actual app version from Tauri (falls back to "unknown" in browser / dev).
@@ -100,6 +110,8 @@ class UpdaterService {
     if (this.downloading) return false;
     this.downloading = true;
     this.status = 'downloading';
+    this.downloaded = 0;
+    this.total = null;
     try {
       const update = await check();
       if (!update) {
@@ -108,17 +120,14 @@ class UpdaterService {
         return false;
       }
 
-      let downloaded = 0;
-      let total: number | undefined;
-
       await update.downloadAndInstall((event) => {
         switch (event.event) {
           case 'Started':
-            total = event.data.contentLength ?? undefined;
+            this.total = event.data.contentLength ?? null;
             info('开始下载更新…');
             break;
           case 'Progress':
-            downloaded += event.data.chunkLength;
+            this.downloaded += event.data.chunkLength;
             break;
           case 'Finished':
             info('下载完成，应用即将重启…');
@@ -148,6 +157,15 @@ class UpdaterService {
 }
 
 export const updater = new UpdaterService();
+
+/** Format a byte count as a compact human-readable string (B / KB / MB / GB). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 /**
  * Detect updater errors that mean the published manifest is unusable —
