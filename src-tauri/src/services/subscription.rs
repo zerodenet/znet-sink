@@ -259,9 +259,21 @@ fn fetch_subscription_content_blocking(
     url: &str,
     user_agent: &str,
 ) -> AppResult<SubscriptionFetch> {
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(SUBSCRIPTION_FETCH_TIMEOUT_SECONDS))
         .user_agent(user_agent)
+        // Subscription downloads must stay independent of the proxy kernel,
+        // which may be broken or absent exactly when the user needs a fresh
+        // subscription to fix it. Drop the proxy_coordinator env vars first
+        // (they may point at 127.0.0.1:7890 = the kernel), then opt back in
+        // to a real, non-loopback OS system proxy if one is set independently.
+        .no_proxy();
+    if let Some(proxy_url) = real_system_proxy_url() {
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    let client = builder
         .build()
         .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
 
@@ -294,6 +306,30 @@ fn fetch_subscription_content_blocking(
     })?;
 
     Ok(SubscriptionFetch { content, userinfo })
+}
+
+/// The OS system proxy URL when it points at a real remote proxy.
+///
+/// Returns None for loopback proxies (127.0.0.1 / localhost / ::1 / 0.0.0.0)
+/// so subscription downloads never route through the local kernel mixed-port,
+/// even when the GUI has enabled its own system proxy pointing at the kernel.
+/// This keeps subscription fetches independent of kernel health — the user
+/// can re-sync a subscription to repair a broken kernel without that fetch
+/// being tunneled through the kernel it is trying to fix.
+fn real_system_proxy_url() -> Option<String> {
+    let status = crate::services::system_proxy::status().ok()?;
+    if !status.enabled || status.host.is_empty() || status.port == 0 {
+        return None;
+    }
+    let is_loopback = status.host == "127.0.0.1"
+        || status.host == "localhost"
+        || status.host == "::1"
+        || status.host == "[::1]"
+        || status.host == "0.0.0.0";
+    if is_loopback {
+        return None;
+    }
+    Some(format!("http://{}:{}", status.host, status.port))
 }
 
 /// Parsed `subscription-userinfo` header.
@@ -559,8 +595,8 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
         })?;
 
     let mut outbounds = Vec::new();
-    outbounds.push(json!({ "tag": "direct", "type": "direct" }));
-    outbounds.push(json!({ "tag": "block", "type": "block" }));
+    outbounds.push(json!({ "tag": "direct", "protocol": { "type": "direct" } }));
+    outbounds.push(json!({ "tag": "block", "protocol": { "type": "block" } }));
     outbounds.extend(proxies.iter().filter_map(convert_clash_proxy));
 
     // Collect every resolvable tag up front — both proxy node tags and
@@ -636,30 +672,313 @@ fn convert_clash_proxy(proxy: &Value) -> Option<Value> {
     let tag = string_field(source, "name")?;
     let proxy_type = string_field(source, "type")?.to_ascii_lowercase();
 
-    let mapped_type = match proxy_type.as_str() {
-        "ss" | "shadowsocks" => "shadowsocks",
-        "ssr" => "shadowsocksr",
-        "vmess" => "vmess",
-        "vless" => "vless",
-        "trojan" => "trojan",
-        "socks5" | "socks" => "socks",
-        "http" | "https" => "http",
-        "hysteria" | "hysteria2" | "tuic" | "wireguard" => proxy_type.as_str(),
-        _ => proxy_type.as_str(),
+    // Build the nested `protocol` object per Zero's strict serde schema.
+    // Each protocol accepts only a specific field set; clash-only fields
+    // (udp, alterId, tfo, …) and clash aliases (skip-cert-verify, uuid, …)
+    // are normalized or dropped in the builders. See:
+    // https://docs.zerodenet.org/project/config#outbounds
+    let protocol = match proxy_type.as_str() {
+        "ss" | "shadowsocks" => build_shadowsocks(source)?,
+        "ssr" => build_shadowsocksr(source)?,
+        "vmess" => build_vmess(source)?,
+        "vless" => build_vless(source)?,
+        "trojan" => build_trojan(source)?,
+        "socks5" | "socks" => build_socks(source)?,
+        "http" | "https" => build_http(source)?,
+        "hysteria2" | "hysteria" => build_hysteria2(source)?,
+        other => {
+            // Unknown protocol — emit clash's own type tag so the kernel can
+            // surface a clear "unsupported protocol" error instead of the node
+            // silently disappearing from the outbound list.
+            let mut p = Map::new();
+            p.insert("type".to_string(), Value::String(other.to_string()));
+            p
+        }
     };
 
     let mut outbound = Map::new();
     outbound.insert("tag".to_string(), Value::String(tag));
-    outbound.insert("type".to_string(), Value::String(mapped_type.to_string()));
-
-    for (key, value) in source {
-        if key == "name" || key == "type" {
-            continue;
-        }
-        outbound.insert(normalize_clash_key(key), value.clone());
-    }
-
+    outbound.insert("protocol".to_string(), Value::Object(protocol));
     Some(Value::Object(outbound))
+}
+
+// ── per-protocol builders ──
+//
+// Each builder returns the inner `protocol` object. `server_port` and the
+// TLS/transport helpers below normalize clash's flat fields into the shape
+// Zero's serde expects.
+
+fn server_port(source: &Map<String, Value>) -> Option<(String, u64)> {
+    let server = string_field(source, "server")?;
+    let port = source
+        .get("port")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))?;
+    Some((server, port))
+}
+
+fn build_shadowsocks(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let password = string_field(s, "password")?;
+    let cipher = string_field(s, "cipher").unwrap_or_else(|| "chacha20-ietf-poly1305".to_string());
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("shadowsocks"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("password".to_string(), json!(password));
+    p.insert("cipher".to_string(), json!(cipher));
+    Some(p)
+}
+
+fn build_shadowsocksr(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let password = string_field(s, "password")?;
+    let cipher = string_field(s, "cipher").unwrap_or_else(|| "aes-256-cfb".to_string());
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("shadowsocksr"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("password".to_string(), json!(password));
+    p.insert("cipher".to_string(), json!(cipher));
+    if let Some(obfs) = string_field(s, "obfs") {
+        p.insert("obfs".to_string(), json!(obfs));
+    }
+    if let Some(protocol) = string_field(s, "protocol") {
+        p.insert("protocol".to_string(), json!(protocol));
+    }
+    if let Some(param) = string_field(s, "protocol-param").or_else(|| string_field(s, "protocol_param")) {
+        p.insert("protocol_param".to_string(), json!(param));
+    }
+    Some(p)
+}
+
+fn build_trojan(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let password = string_field(s, "password")?;
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("trojan"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("password".to_string(), json!(password));
+    if let Some(sni) = resolve_sni(s) {
+        p.insert("sni".to_string(), json!(sni));
+    }
+    if let Some(insecure) = resolve_insecure(s) {
+        p.insert("insecure".to_string(), json!(insecure));
+    }
+    if let Some(fp) = resolve_client_fingerprint(s) {
+        p.insert("client_fingerprint".to_string(), json!(fp));
+    }
+    Some(p)
+}
+
+fn build_vmess(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let id = string_field(s, "uuid").or_else(|| string_field(s, "id"))?;
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("vmess"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("id".to_string(), json!(id));
+    if let Some(cipher) = string_field(s, "cipher") {
+        p.insert("cipher".to_string(), json!(cipher));
+    } else if s.get("alterId").or_else(|| s.get("alterid")).is_some() {
+        // Clash vmess carries alterId; Zero is AEAD-only and normalizes
+        // `cipher: auto` to its AEAD baseline.
+        p.insert("cipher".to_string(), json!("auto"));
+    }
+    if let Some(tls) = build_tls(s) {
+        p.insert("tls".to_string(), Value::Object(tls));
+    }
+    if let Some(ws) = build_ws(s) {
+        p.insert("ws".to_string(), Value::Object(ws));
+    }
+    if let Some(grpc) = build_grpc(s) {
+        p.insert("grpc".to_string(), Value::Object(grpc));
+    }
+    Some(p)
+}
+
+fn build_vless(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let id = string_field(s, "uuid").or_else(|| string_field(s, "id"))?;
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("vless"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("id".to_string(), json!(id));
+    if let Some(reality) = build_reality(s) {
+        p.insert("reality".to_string(), Value::Object(reality));
+    }
+    if let Some(tls) = build_tls(s) {
+        p.insert("tls".to_string(), Value::Object(tls));
+    }
+    if let Some(ws) = build_ws(s) {
+        p.insert("ws".to_string(), Value::Object(ws));
+    }
+    Some(p)
+}
+
+fn build_socks(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("socks5"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    if let Some(username) = string_field(s, "username") {
+        p.insert("username".to_string(), json!(username));
+    }
+    if let Some(password) = string_field(s, "password") {
+        p.insert("password".to_string(), json!(password));
+    }
+    Some(p)
+}
+
+fn build_http(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!("http"));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    if let Some(username) = string_field(s, "username") {
+        p.insert("username".to_string(), json!(username));
+    }
+    if let Some(password) = string_field(s, "password") {
+        p.insert("password".to_string(), json!(password));
+    }
+    if s.get("tls").and_then(Value::as_bool) == Some(true) {
+        p.insert("tls".to_string(), json!(true));
+    }
+    Some(p)
+}
+
+fn build_hysteria2(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let (server, port) = server_port(s)?;
+    let password = string_field(s, "password")?;
+    let raw_type = string_field(s, "type").unwrap_or_default();
+    let type_tag = if raw_type == "hysteria" { "hysteria" } else { "hysteria2" };
+    let mut p = Map::new();
+    p.insert("type".to_string(), json!(type_tag));
+    p.insert("server".to_string(), json!(server));
+    p.insert("port".to_string(), json!(port));
+    p.insert("password".to_string(), json!(password));
+    if let Some(insecure) = resolve_insecure(s) {
+        p.insert("insecure".to_string(), json!(insecure));
+    }
+    if let Some(fp) = resolve_client_fingerprint(s) {
+        p.insert("client_fingerprint".to_string(), json!(fp));
+    }
+    Some(p)
+}
+
+// ── TLS / transport builders ──
+//
+// Clash spreads TLS across flat fields (sni, skip-cert-verify, alpn,
+// disable-sni) and models transports as `ws-opts` / `grpc-opts` /
+// `reality-opts`. Zero wants one nested object per outbound. Each builder
+// returns None when no relevant fields are present so the caller can skip
+// emitting an empty object.
+
+fn build_tls(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let server_name = resolve_sni(s);
+    let insecure = resolve_insecure(s);
+    let alpn = s.get("alpn").and_then(Value::as_array).cloned();
+    let disable_sni = s
+        .get("disable-sni")
+        .or_else(|| s.get("disable_sni"))
+        .and_then(Value::as_bool);
+    if server_name.is_none() && insecure.is_none() && alpn.is_none() && disable_sni.is_none() {
+        return None;
+    }
+    let mut tls = Map::new();
+    if let Some(server_name) = server_name {
+        tls.insert("server_name".to_string(), json!(server_name));
+    }
+    if let Some(insecure) = insecure {
+        tls.insert("insecure".to_string(), json!(insecure));
+    }
+    if let Some(disable_sni) = disable_sni {
+        tls.insert("disable_sni".to_string(), json!(disable_sni));
+    }
+    if let Some(alpn) = alpn {
+        tls.insert("alpn".to_string(), Value::Array(alpn));
+    }
+    Some(tls)
+}
+
+fn build_ws(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let ws = s
+        .get("ws-opts")
+        .or_else(|| s.get("ws_opts"))
+        .and_then(Value::as_object)?;
+    let mut w = Map::new();
+    if let Some(path) = string_field(ws, "path") {
+        w.insert("path".to_string(), json!(path));
+    }
+    if let Some(headers) = ws.get("headers").and_then(Value::as_object).cloned() {
+        w.insert("headers".to_string(), Value::Object(headers));
+    }
+    if w.is_empty() {
+        return None;
+    }
+    Some(w)
+}
+
+fn build_grpc(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let grpc = s
+        .get("grpc-opts")
+        .or_else(|| s.get("grpc_opts"))
+        .and_then(Value::as_object)?;
+    let service = string_field(grpc, "grpc-service-name")
+        .or_else(|| string_field(grpc, "grpc_service_name"))
+        .or_else(|| string_field(grpc, "service-name"))
+        .or_else(|| string_field(grpc, "serviceName"));
+    let mut g = Map::new();
+    if let Some(service) = service {
+        g.insert("service_name".to_string(), json!(service));
+    }
+    if g.is_empty() {
+        return None;
+    }
+    Some(g)
+}
+
+fn build_reality(s: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let r = s
+        .get("reality-opts")
+        .or_else(|| s.get("reality_opts"))
+        .and_then(Value::as_object)?;
+    let public_key = string_field(r, "public-key").or_else(|| string_field(r, "public_key"))?;
+    let mut reality = Map::new();
+    reality.insert("public_key".to_string(), json!(public_key));
+    if let Some(short_id) = string_field(r, "short-id").or_else(|| string_field(r, "short_id")) {
+        reality.insert("short_id".to_string(), json!(short_id));
+    }
+    let server_name = string_field(r, "server-name")
+        .or_else(|| string_field(r, "server_name"))
+        .or_else(|| resolve_sni(s));
+    if let Some(server_name) = server_name {
+        reality.insert("server_name".to_string(), json!(server_name));
+    }
+    Some(reality)
+}
+
+fn resolve_sni(s: &Map<String, Value>) -> Option<String> {
+    string_field(s, "sni")
+        .or_else(|| string_field(s, "servername"))
+        .or_else(|| string_field(s, "server-name"))
+}
+
+fn resolve_insecure(s: &Map<String, Value>) -> Option<bool> {
+    s.get("skip-cert-verify")
+        .or_else(|| s.get("skip_cert_verify"))
+        .or_else(|| s.get("insecure"))
+        .and_then(Value::as_bool)
+}
+
+fn resolve_client_fingerprint(s: &Map<String, Value>) -> Option<String> {
+    string_field(s, "client-fingerprint")
+        .or_else(|| string_field(s, "client_fingerprint"))
+        .or_else(|| string_field(s, "fingerprint"))
 }
 
 fn convert_clash_proxy_group(
@@ -671,36 +990,51 @@ fn convert_clash_proxy_group(
     let group_type = string_field(source, "type")
         .unwrap_or_else(|| "select".to_string())
         .to_ascii_lowercase();
-    let outbounds = source
+
+    let members: Vec<Value> = source
         .get("proxies")
         .and_then(Value::as_array)?
         .iter()
         .filter_map(Value::as_str)
-        .filter_map(|tag| normalize_outbound_ref(tag, known_tags))
+        .filter_map(|t| normalize_outbound_ref(t, known_tags))
         .map(Value::String)
-        .collect::<Vec<_>>();
-
-    if outbounds.is_empty() {
+        .collect();
+    if members.is_empty() {
         return None;
     }
 
     let mapped_type = match group_type.as_str() {
-        "url-test" => "urltest",
+        "url-test" => "url_test",
         "fallback" => "fallback",
-        "load-balance" => "loadbalance",
+        "load-balance" => "load_balance",
+        "relay" => "relay",
         _ => "selector",
     };
+
+    // Zero's `relay` group carries its chain under `proxies`; every other
+    // group type uses `outbounds`. Both are populated from clash's `proxies`.
+    let members_key = if mapped_type == "relay" { "proxies" } else { "outbounds" };
 
     let mut converted = Map::new();
     converted.insert("tag".to_string(), Value::String(tag));
     converted.insert("type".to_string(), Value::String(mapped_type.to_string()));
-    converted.insert("outbounds".to_string(), Value::Array(outbounds));
+    converted.insert(members_key.to_string(), Value::Array(members));
 
-    if let Some(url) = source.get("url") {
-        converted.insert("url".to_string(), url.clone());
-    }
-    if let Some(interval) = source.get("interval") {
-        converted.insert("interval".to_string(), interval.clone());
+    match mapped_type {
+        "url_test" => {
+            if let Some(url) = source.get("url") {
+                converted.insert("url".to_string(), url.clone());
+            }
+            if let Some(interval) = source.get("interval") {
+                converted.insert("interval_seconds".to_string(), interval.clone());
+            }
+        }
+        "load_balance" => {
+            if let Some(strategy) = string_field(source, "strategy") {
+                converted.insert("strategy".to_string(), Value::String(strategy));
+            }
+        }
+        _ => {}
     }
 
     Some(Value::Object(converted))
@@ -761,14 +1095,23 @@ fn normalize_outbound_ref(
     tag: &str,
     known_tags: &std::collections::BTreeSet<String>,
 ) -> Option<String> {
-    if known_tags.contains(tag) {
-        return Some(tag.to_string());
+    let trimmed = tag.trim();
+    if known_tags.contains(trimmed) {
+        return Some(trimmed.to_string());
     }
 
-    match tag.to_ascii_uppercase().as_str() {
-        "DIRECT" => Some("direct".to_string()),
+    match trimmed.to_ascii_uppercase().as_str() {
+        "DIRECT" | "PASS" => Some("direct".to_string()),
         "REJECT" => Some("block".to_string()),
-        _ => None,
+        other => {
+            crate::services::file_logger::emit(
+                "warn",
+                "subscription",
+                &format!("drop unknown outbound ref: {other}"),
+                None,
+            );
+            None
+        }
     }
 }
 
@@ -780,9 +1123,9 @@ fn string_field(map: &Map<String, Value>, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn normalize_clash_key(key: &str) -> String {
-    key.replace('-', "_")
-}
+// Per-protocol outbound construction lives in the `build_*` functions above.
+// Zero's strict serde needs an explicit field set per protocol, so a generic
+// key map is not enough — each protocol builds its own object.
 
 fn decode_base64(content: &str) -> AppResult<Vec<u8>> {
     let compact = content.split_whitespace().collect::<String>();
@@ -990,11 +1333,68 @@ mod tests {
     #[test]
     fn auto_detect_accepts_base64_clash_yaml() {
         // Minimal clash yaml: `proxies:\n- {name: x, type: ss}`
-        let yaml = "proxies:\n  - {name: x, type: ss, server: s, port: 1}\n";
+        let yaml = "proxies:\n  - {name: x, type: ss, server: s, port: 1, password: p}\n";
         let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
         let parsed = parse_subscription_content(&encoded, "auto").unwrap();
         assert_eq!(parsed.format, "clash-base64-yaml-converted");
         assert_eq!(parsed.content["outbounds"][2]["tag"], "x");
+    }
+
+    #[test]
+    fn clash_proxy_converts_to_nested_protocol() {
+        // Zero outbounds use a nested protocol object:
+        //   {"tag":...,"protocol":{"type":"trojan","server":...,...}}
+        // Regression guard for the flat `type` bug — the kernel rejects a
+        // top-level type with "unknown field `type`, expected `tag` or `protocol`".
+        let yaml = "proxies:\n  - {name: hk, type: trojan, server: example.com, port: 443, password: secret}\n";
+        let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
+        let parsed = parse_subscription_content(&encoded, "auto").unwrap();
+        let node = &parsed.content["outbounds"][2];
+        assert_eq!(node["tag"], "hk");
+        assert_eq!(node["protocol"]["type"], "trojan");
+        assert_eq!(node["protocol"]["server"], "example.com");
+        assert_eq!(node["protocol"]["port"], 443);
+        assert!(node.get("type").is_none(), "must not emit flat top-level type");
+    }
+
+    #[test]
+    fn clash_vmess_emits_nested_tls_and_ws() {
+        // vmess with TLS + WebSocket: clash's flat sni/skip-cert-verify and
+        // nested ws-opts must land in Zero's `tls` / `ws` objects.
+        let yaml = "proxies:\n  - {name: vm, type: vmess, server: s, port: 443, uuid: 11111111-2222-3333-4444-555555555555, cipher: auto, sni: s.example, skip-cert-verify: true, ws-opts: {path: /v, headers: {Host: s.example}}}\n";
+        let parsed = parse_subscription_content(yaml, "clash").unwrap();
+        let node = &parsed.content["outbounds"][2];
+        assert_eq!(node["tag"], "vm");
+        assert_eq!(node["protocol"]["type"], "vmess");
+        assert_eq!(node["protocol"]["id"], "11111111-2222-3333-4444-555555555555");
+        assert_eq!(node["protocol"]["cipher"], "auto");
+        assert_eq!(node["protocol"]["tls"]["server_name"], "s.example");
+        assert_eq!(node["protocol"]["tls"]["insecure"], true);
+        assert_eq!(node["protocol"]["ws"]["path"], "/v");
+        assert!(node.get("type").is_none());
+    }
+
+    #[test]
+    fn clash_vless_emits_reality_object() {
+        let yaml = "proxies:\n  - {name: vl, type: vless, server: s, port: 443, uuid: 11111111-2222-3333-4444-555555555555, reality-opts: {public-key: PUBKEY, short-id: abcd1234, server-name: www.cloudflare.com}}\n";
+        let parsed = parse_subscription_content(yaml, "clash").unwrap();
+        let node = &parsed.content["outbounds"][2];
+        assert_eq!(node["protocol"]["type"], "vless");
+        assert_eq!(node["protocol"]["reality"]["public_key"], "PUBKEY");
+        assert_eq!(node["protocol"]["reality"]["short_id"], "abcd1234");
+        assert_eq!(node["protocol"]["reality"]["server_name"], "www.cloudflare.com");
+    }
+
+    #[test]
+    fn clash_relay_group_uses_proxies_key() {
+        // Zero's relay group carries its chain under `proxies`, not `outbounds`.
+        let yaml = "proxies:\n  - {name: A, type: ss, server: s, port: 1, password: p}\nproxy-groups:\n  - {name: R, type: relay, proxies: [A]}\n";
+        let parsed = parse_subscription_content(yaml, "clash").unwrap();
+        let groups = parsed.content["outbound_groups"].as_array().unwrap();
+        let relay = groups.iter().find(|g| g["tag"] == "R").unwrap();
+        assert_eq!(relay["type"], "relay");
+        assert!(relay.get("proxies").is_some());
+        assert!(relay.get("outbounds").is_none());
     }
 
     #[test]
@@ -1039,8 +1439,8 @@ mod tests {
         // groups must survive with their intra-group references intact.
         let yaml = "\
 proxies:
-  - {name: HK, type: ss, server: s, port: 1}
-  - {name: JP, type: ss, server: s, port: 2}
+  - {name: HK, type: ss, server: s, port: 1, password: p}
+  - {name: JP, type: ss, server: s, port: 2, password: p}
 proxy-groups:
   - {name: Auto, type: url-test, proxies: [HK, JP], url: http://x, interval: 300}
   - {name: Final, type: select, proxies: [Auto, DIRECT]}
@@ -1050,8 +1450,9 @@ proxy-groups:
         let groups = parsed.content["outbound_groups"].as_array().unwrap();
 
         let auto = groups.iter().find(|g| g["tag"] == "Auto").unwrap();
-        assert_eq!(auto["type"], "urltest");
+        assert_eq!(auto["type"], "url_test");
         assert_eq!(auto["outbounds"].as_array().unwrap().len(), 2);
+        assert_eq!(auto["interval_seconds"], 300);
 
         let final_group = groups.iter().find(|g| g["tag"] == "Final").unwrap();
         let final_refs: Vec<&str> = final_group["outbounds"]
