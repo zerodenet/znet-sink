@@ -142,7 +142,6 @@
       runtimeOverlay,
       latestDelay: (tag) => delayHistory.latest(tag),
       fallbackNodes: overviewData.proxyNodes,
-      includeGroups: guiState.proxyMode?.currentMode === 'global',
     });
   });
 

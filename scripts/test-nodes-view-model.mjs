@@ -54,15 +54,20 @@ function testBuildSectionsKeepsOrphansWhenGroupsExist() {
   assert.deepEqual(tags(sections[1].nodes), ['orphan']);
 }
 
-function testNestedGroupFilteringResolvesLeafNodes() {
+function testNestedGroupFilteringShowsNestedGroupAsMember() {
+  // A nested group (Fallback inside Auto) stays as a direct member tag
+  // rather than being expanded into JP/US, so it renders as a member card.
   const groups = [
     group('Auto', [{ tag: 'Fallback' }, { tag: 'HK' }], 'urltest'),
     group('Fallback', [{ tag: 'JP' }, { tag: 'US' }], 'selector'),
   ];
-  const nodes = [node('HK', 20), node('JP', 40), node('US', 60), node('SG', 10)];
+  const nodes = [
+    node('HK', 20), node('JP', 40), node('US', 60), node('SG', 10),
+    node('Fallback', 0, { protocol: 'selector' }),
+  ];
 
-  assert.deepEqual([...collectGroupNodeTags(groups, 'Auto')].sort(), ['HK', 'JP', 'US']);
-  assert.deepEqual(tags(filterNodes({ allNodes: nodes, groups, query: '', selectedGroup: 'Auto', sortMode: 'delay' })), ['HK', 'JP', 'US']);
+  assert.deepEqual([...collectGroupNodeTags(groups, 'Auto')].sort(), ['Fallback', 'HK']);
+  assert.deepEqual(tags(filterNodes({ allNodes: nodes, groups, query: '', selectedGroup: 'Auto', sortMode: 'delay' })), ['HK', 'Fallback']);
 }
 
 function testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue() {
@@ -90,7 +95,7 @@ function testRuntimeOverlayKeepsFirstGroupForSharedNodeTag() {
 
 testDelaySortRanksReachableBeforeTimeoutAndUntested();
 testBuildSectionsKeepsOrphansWhenGroupsExist();
-testNestedGroupFilteringResolvesLeafNodes();
+testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
 

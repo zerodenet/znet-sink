@@ -41,50 +41,79 @@ export function buildAllNodes(options: {
   runtimeOverlay: Map<string, RuntimeOverlay>;
   latestDelay: (tag: string) => number | undefined;
   fallbackNodes: ProxyNode[];
-  includeGroups?: boolean;
 }): ProxyNode[] {
-  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes, includeGroups = false } = options;
+  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes } = options;
 
   if (configNodes.length > 0) {
-    return configNodes
-      .filter((configNode) => includeGroups || !configNode.isSelector)
-      .map<ProxyNode>((configNode) => {
-        const runtime = runtimeOverlay.get(configNode.tag);
-        const parsed = parseNodeName(configNode.tag);
-        let delay = runtime?.delayMs ?? latestDelay(configNode.tag) ?? 0;
-        // Selector (group) nodes have no own latency — inherit the delay
-        // of the group's currently-selected outbound. Switching the
-        // selection only re-reads that node's stored delay from history;
-        // it never mutates other nodes' entries, so previous measurements
-        // remain visible.
-        if (configNode.isSelector) {
-          const group = groups.find((g) => g.name === configNode.tag);
-          const selectedTag = group?.selected;
-          if (selectedTag) {
-            const selectedRuntime = runtimeOverlay.get(selectedTag);
-            delay = selectedRuntime?.delayMs ?? latestDelay(selectedTag) ?? delay;
-          }
+    const nodeItems: ProxyNode[] = configNodes.map<ProxyNode>((configNode) => {
+      const runtime = runtimeOverlay.get(configNode.tag);
+      const parsed = parseNodeName(configNode.tag);
+      let delay = runtime?.delayMs ?? latestDelay(configNode.tag) ?? 0;
+      // Selector (group) nodes have no own latency — inherit the delay
+      // of the group's currently-selected outbound. Switching the
+      // selection only re-reads that node's stored delay from history;
+      // it never mutates other nodes' entries, so previous measurements
+      // remain visible.
+      if (configNode.isSelector) {
+        const group = groups.find((g) => g.name === configNode.tag);
+        const selectedTag = group?.selected;
+        if (selectedTag) {
+          const selectedRuntime = runtimeOverlay.get(selectedTag);
+          delay = selectedRuntime?.delayMs ?? latestDelay(selectedTag) ?? delay;
         }
-        return {
-          id: configNode.tag,
-          tag: configNode.tag,
-          name: configNode.tag,
-          emoji: parsed.emoji,
-          cleanName: parsed.cleanName,
-          protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
-          delay,
-          selected: runtime?.selected,
-          alive: runtime?.alive,
-          domain: runtime?.groupName ?? 'policy',
-          server: configNode.server,
-          port: configNode.port,
-          udp: configNode.udp,
-          network: configNode.network,
-          tls: configNode.tls,
-          sni: configNode.sni,
-          cipher: configNode.cipher,
-        };
+      }
+      return {
+        id: configNode.tag,
+        tag: configNode.tag,
+        name: configNode.tag,
+        emoji: parsed.emoji,
+        cleanName: parsed.cleanName,
+        protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
+        delay,
+        selected: runtime?.selected,
+        alive: runtime?.alive,
+        domain: runtime?.groupName ?? 'policy',
+        server: configNode.server,
+        port: configNode.port,
+        udp: configNode.udp,
+        network: configNode.network,
+        tls: configNode.tls,
+        sni: configNode.sni,
+        cipher: configNode.cipher,
+      };
+    });
+
+    // Also surface every policy group as a node. A group nested inside
+    // another group (group B listed as a member of group A) then renders as
+    // a regular member card inside A — same display, same interaction —
+    // instead of being recursively expanded into its leaf nodes. This does
+    // not enlarge the default view: the "全部节点" entry is gated to global
+    // mode in NodesGroupSidebar, so in rule mode users still pick a specific
+    // group and see only its direct members (nodes + nested-group cards).
+    const existingTags = new Set(nodeItems.map((n) => n.tag));
+    const groupItems: ProxyNode[] = [];
+    for (const group of groups) {
+      if (existingTags.has(group.name)) continue;
+      const parsed = parseNodeName(group.name);
+      let delay = 0;
+      if (group.selected) {
+        delay = runtimeOverlay.get(group.selected)?.delayMs ?? latestDelay(group.selected) ?? 0;
+      }
+      groupItems.push({
+        id: group.name,
+        tag: group.name,
+        name: group.name,
+        emoji: parsed.emoji,
+        cleanName: parsed.cleanName,
+        protocol: group.kind || 'group',
+        delay,
+        selected: runtimeOverlay.get(group.name)?.selected,
+        alive: undefined,
+        domain: 'policy',
       });
+    }
+
+    return [...nodeItems, ...groupItems];
   }
 
   const seen = new Set<string>();
@@ -140,25 +169,13 @@ export function sortNodes(nodes: ProxyNode[], sortMode: NodeSortMode): ProxyNode
 export function collectGroupNodeTags(
   groups: PolicyGroup[],
   groupName: string,
-  visited: Set<string> = new Set(),
 ): Set<string> {
-  if (visited.has(groupName)) return new Set();
-  visited.add(groupName);
+  // Direct members only — a nested group stays as a member tag rather than
+  // being recursively expanded into its leaves, so it can render as a member
+  // card alongside regular nodes (see buildAllNodes).
   const group = groups.find((item) => item.name === groupName);
   if (!group) return new Set();
-
-  const groupTags = new Set(groups.map((item) => item.name));
-  const tags = new Set<string>();
-
-  for (const outbound of group.outbounds) {
-    if (groupTags.has(outbound.tag)) {
-      for (const tag of collectGroupNodeTags(groups, outbound.tag, visited)) tags.add(tag);
-    } else {
-      tags.add(outbound.tag);
-    }
-  }
-
-  return tags;
+  return new Set(group.outbounds.map((outbound) => outbound.tag));
 }
 
 export function filterNodes(options: {
