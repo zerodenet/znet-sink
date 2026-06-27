@@ -3,7 +3,7 @@
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { selectPolicy, guiClientProbeNode, guiClientProbeStart } from '$lib/services/core';
+  import { guiSelectPolicy, guiClientProbeNode, guiClientProbeStart } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
   import { getGroupKindStyle } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -22,7 +22,6 @@
     filterNodes,
     getActiveNodeTag,
     isSelectableGroup,
-    normalizeSelectedGroup,
     resolveNodeGroup,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
@@ -180,7 +179,18 @@
     });
   }
 
-  /** Only selector groups allow manual outbound selection. */
+  const GROUP_NODE_PROTOCOLS = new Set([
+    'selector', 'url_test', 'urltest', 'fallback', 'load_balance', 'loadbalance', 'relay',
+  ]);
+
+  function isGroupNode(node: ProxyNode): boolean {
+    return GROUP_NODE_PROTOCOLS.has((node.protocol ?? '').toLowerCase());
+  }
+
+  /** Only selector groups allow manual outbound selection. A nested-group
+   *  member stays clickable — whether the kernel honors a group target_tag
+   *  is surfaced at click time (see handleSelect), not by disabling the
+   *  card, so the UI keeps working once the kernel adds group-target support. */
   function isNodeSelectable(node: ProxyNode): boolean {
     return isSelectableGroup(groupForNode(node));
   }
@@ -203,16 +213,20 @@
         ?? runtimeOverlay.get(node.tag)?.groupName
         ?? groups.find((g) => g.outbounds.some((o) => o.tag === node.tag))?.name
         ?? 'proxy';
-      const result = await selectPolicy(policyTag, node.tag);
-      if (!result.available) {
-        lastError = '内核未就绪，无法切换节点';
-      } else if (result.error) {
-        lastError = result.error.message;
+      const result = await guiSelectPolicy(policyTag, node.tag);
+      if (!result.accepted) {
+        lastError = result.message ?? '内核未接受此选择';
+      } else if (result.selected && result.selected !== node.tag) {
+        lastError = result.message ?? `内核选中了 ${result.selected}（非 ${node.tag}）`;
       } else {
         await guiState.refreshPolicyGroups();
       }
     } catch (e) {
-      lastError = String(e);
+      if (isGroupNode(node)) {
+        lastError = '当前内核版本暂不支持选中节点组，请更新内核后重试';
+      } else {
+        lastError = (e as { message?: string }).message ?? '切换节点失败';
+      }
     } finally {
       switching = null;
     }
@@ -238,9 +252,15 @@
   }
 
   $effect(() => {
-    const normalized = normalizeSelectedGroup(selectedGroup, groups);
-    if (normalized !== selectedGroup) {
-      selectedGroup = normalized;
+    // Non-global mode hides the "全部节点" sidebar entry (gated to global
+    // in NodesGroupSidebar), so the page must land on a concrete group —
+    // default to the first one when groups load or when the current
+    // selection becomes stale. Global mode keeps the all-nodes view.
+    const proxyMode = guiState.proxyMode?.currentMode;
+    if (proxyMode === 'global') return;
+    if (groups.length === 0) return;
+    if (!groups.some((g) => g.name === selectedGroup)) {
+      selectedGroup = groups[0].name;
     }
   });
 
