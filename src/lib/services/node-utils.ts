@@ -172,6 +172,72 @@ export function delayBarWidth(delay: number): string {
   return `${Math.min(100, (delay / 1000) * 100)}%`;
 }
 
+// ── Probe time formatting ─────────────────────────────────────────────
+
+export type Freshness = 'fresh' | 'stale' | 'old' | 'never';
+
+export interface ProbeTimeStyle {
+  label: string;
+  color: string;
+  level: Freshness;
+}
+
+/**
+ * Format a Unix-ms timestamp as a relative human-readable string.
+ * Returns "未测速" if timestamp is undefined.
+ */
+export function formatProbeTime(timestamp?: number): string {
+  if (!timestamp) return '未测速';
+  const now = Date.now();
+  const diff = now - timestamp;
+  if (diff < 0) return '刚刚';
+
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return '刚刚';
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分钟前`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
+}
+
+/**
+ * Get the freshness level of a probe timestamp.
+ * - fresh: < 5 minutes
+ * - stale: 5–30 minutes
+ * - old: > 30 minutes
+ * - never: undefined
+ */
+export function getProbeFreshness(timestamp?: number): Freshness {
+  if (!timestamp) return 'never';
+  const diff = Date.now() - timestamp;
+  if (diff < 5 * 60 * 1000) return 'fresh';
+  if (diff < 30 * 60 * 1000) return 'stale';
+  return 'old';
+}
+
+/**
+ * Get display style for probe time based on freshness.
+ */
+export function getProbeTimeStyle(timestamp?: number): ProbeTimeStyle {
+  const level = getProbeFreshness(timestamp);
+  const label = formatProbeTime(timestamp);
+  switch (level) {
+    case 'fresh':
+      return { label, color: 'var(--muted-foreground)', level };
+    case 'stale':
+      return { label, color: '#D97706', level };
+    case 'old':
+      return { label, color: '#DC2626', level };
+    case 'never':
+      return { label, color: 'var(--muted-foreground)', level };
+  }
+}
+
 // ── Policy-group kind helpers ─────────────────────────────────────────
 
 export interface GroupKindStyle {

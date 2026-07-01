@@ -21,7 +21,6 @@
     buildSections,
     filterNodes,
     getActiveNodeTag,
-    isSelectableGroup,
     resolveNodeGroup,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
@@ -139,6 +138,7 @@
       groups,
       runtimeOverlay,
       latestDelay: (tag) => delayHistory.latest(tag),
+      latestProbeTime: (tag) => delayHistory.latestTime(tag),
       fallbackNodes: overviewData.proxyNodes,
     });
   });
@@ -187,12 +187,26 @@
     return GROUP_NODE_PROTOCOLS.has((node.protocol ?? '').toLowerCase());
   }
 
-  /** Only selector groups allow manual outbound selection. A nested-group
-   *  member stays clickable — whether the kernel honors a group target_tag
-   *  is surfaced at click time (see handleSelect), not by disabling the
-   *  card, so the UI keeps working once the kernel adds group-target support. */
+  /** Check if a node is a direct member of a selector group.
+   *  A nested group (e.g. urltest) inside a selector is selectable —
+   *  policies.select sends the direct member tag, and the kernel resolves
+   *  it recursively during engine resolve. */
   function isNodeSelectable(node: ProxyNode): boolean {
-    return isSelectableGroup(groupForNode(node));
+    // If user is browsing a specific group, check if that group is a selector
+    if (selectedGroup) {
+      const browsingGroup = groups.find((g) => g.name === selectedGroup);
+      if (browsingGroup && browsingGroup.kind?.toLowerCase() === 'selector') {
+        // Node is a direct member of this selector → selectable
+        return browsingGroup.outbounds.some((o) => o.tag === node.tag);
+      }
+      // Browsing a non-selector group → not selectable
+      return false;
+    }
+
+    // Global view: find the node's parent group
+    const parentGroup = groupForNode(node);
+    if (!parentGroup) return true; // fallback: allow selection
+    return parentGroup.kind?.toLowerCase() === 'selector';
   }
 
   async function handleSelect(node: ProxyNode) {
@@ -208,28 +222,48 @@
     switching = node.id;
     lastError = null;
     try {
-      const policyTag =
-        selectedGroup
-        ?? runtimeOverlay.get(node.tag)?.groupName
-        ?? groups.find((g) => g.outbounds.some((o) => o.tag === node.tag))?.name
-        ?? 'proxy';
+      // Resolve the selector group that contains this node as a direct member.
+      // For nested groups (e.g. urltest inside selector), we send the group tag
+      // as target — the kernel resolves it recursively during engine resolve.
+      const policyTag = resolvePolicyTag(node);
       const result = await guiSelectPolicy(policyTag, node.tag);
       if (!result.accepted) {
         lastError = result.message ?? '内核未接受此选择';
       } else if (result.selected && result.selected !== node.tag) {
-        lastError = result.message ?? `内核选中了 ${result.selected}（非 ${node.tag}）`;
+        // Kernel may have resolved to a different target — this is informational, not an error
+        await guiState.refreshPolicyGroups();
       } else {
         await guiState.refreshPolicyGroups();
       }
     } catch (e) {
-      if (isGroupNode(node)) {
-        lastError = '当前内核版本暂不支持选中节点组，请更新内核后重试';
-      } else {
-        lastError = (e as { message?: string }).message ?? '切换节点失败';
-      }
+      lastError = (e as { message?: string }).message ?? '切换节点失败';
     } finally {
       switching = null;
     }
+  }
+
+  /** Resolve the selector policy tag that contains the node as a direct member. */
+  function resolvePolicyTag(node: ProxyNode): string {
+    // 1. If user is browsing a specific selector group, use that
+    if (selectedGroup) {
+      const browsingGroup = groups.find((g) => g.name === selectedGroup);
+      if (browsingGroup?.kind?.toLowerCase() === 'selector') {
+        return selectedGroup;
+      }
+    }
+    // 2. Try runtime overlay
+    const overlayGroup = runtimeOverlay.get(node.tag)?.groupName;
+    if (overlayGroup) {
+      const g = groups.find((g) => g.name === overlayGroup);
+      if (g?.kind?.toLowerCase() === 'selector') return overlayGroup;
+    }
+    // 3. Find first selector group containing this node
+    const selectorGroup = groups.find(
+      (g) => g.kind?.toLowerCase() === 'selector' && g.outbounds.some((o) => o.tag === node.tag),
+    );
+    if (selectorGroup) return selectorGroup.name;
+    // 4. Fallback
+    return 'proxy';
   }
 
   async function handleProbe(node: ProxyNode) {
@@ -273,23 +307,46 @@
     hist: DelayEntry[];
   }
   let popover = $state<PopoverState>({ visible: false, anchor: null, node: null, hist: [] });
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   function showPopover(e: MouseEvent, node: ProxyNode) {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
     const hist = delayHistory.getHistory(node.tag);
     if (hist.length < 2) return;
     const el = e.currentTarget as HTMLElement;
     popover = { visible: true, anchor: el.getBoundingClientRect(), node, hist };
   }
 
-  function hidePopover() {
-    popover = { visible: false, anchor: null, node: null, hist: [] };
+  function hidePopover(delay = 300) {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      popover = { visible: false, anchor: null, node: null, hist: [] };
+      hideTimer = null;
+    }, delay);
+  }
+
+  function keepPopover() {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
   }
 
   function popoverStyle(): string {
     if (!popover.anchor) return '';
     const r = popover.anchor;
-    const top = r.top - 6;
+    const gap = 6;
+    // Estimate popover height (chart ~100px, list ~200px)
+    const estimatedHeight = 200;
+    const top = r.top - gap;
     const left = r.left + r.width / 2;
+    // If would overflow top of viewport, flip below the anchor
+    if (top - estimatedHeight < 0) {
+      return `position:fixed; left:${Math.round(left)}px; top:${Math.round(r.bottom + gap)}px; transform:translate(-50%, 0); z-index:9999;`;
+    }
     return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; transform:translate(-50%, -100%); z-index:9999;`;
   }
 </script>
@@ -467,11 +524,18 @@
 </div>
 
 {#if popover.visible && popover.node}
-  <NodesDelayPopover
-    node={popover.node}
-    hist={popover.hist}
-    positionStyle={popoverStyle()}
-  />
+  <div
+    class="popover-anchor"
+    style={popoverStyle()}
+    onmouseenter={keepPopover}
+    onmouseleave={() => hidePopover()}
+    role="tooltip"
+  >
+    <NodesDelayPopover
+      node={popover.node}
+      hist={popover.hist}
+    />
+  </div>
 {/if}
 
 <style>
@@ -661,6 +725,14 @@
   }
 
   .error-dismiss:hover { opacity: 1; }
+
+  /* Popover anchor */
+  .popover-anchor {
+    position: fixed;
+    z-index: 9999;
+    transform: translate(-50%, -100%);
+    pointer-events: auto;
+  }
 
   /* Responsive layout */
   @media (max-width: 700px) {

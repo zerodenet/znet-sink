@@ -6,6 +6,7 @@
     getNodeChips,
     getProtocolStyle,
     gradeDelay,
+    getProbeTimeStyle,
   } from '$lib/services/node-utils';
 
   interface Props {
@@ -39,6 +40,7 @@
   const delayState = $derived(gradeDelay(node.delay, node.alive));
   const protocolStyle = $derived(getProtocolStyle(node.protocol));
   const chips = $derived(getNodeChips(node));
+  const probeTimeState = $derived(getProbeTimeStyle(node.lastProbeAt));
 </script>
 
 <div
@@ -83,6 +85,12 @@
         </span>
       {/if}
     </div>
+
+    {#if node.lastProbeAt}
+      <span class="grid-probe-time" style="color: {probeTimeState.color};">
+        {probeTimeState.label}
+      </span>
+    {/if}
 
     <div class="grid-bar-track">
       <div class="grid-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
@@ -291,6 +299,14 @@
     font-weight: 700;
     opacity: 0.6;
     margin-left: 3px;
+  }
+
+  .grid-probe-time {
+    font-size: 9px;
+    font-weight: 500;
+    opacity: 0.7;
+    line-height: 1;
+    text-align: right;
   }
 
   .grid-spin {

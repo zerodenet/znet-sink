@@ -6,6 +6,7 @@
     getNodeChips,
     getProtocolStyle,
     gradeDelay,
+    getProbeTimeStyle,
   } from '$lib/services/node-utils';
 
   interface Props {
@@ -39,6 +40,7 @@
   const delayState = $derived(gradeDelay(node.delay, node.alive));
   const protocolStyle = $derived(getProtocolStyle(node.protocol));
   const chips = $derived(getNodeChips(node));
+  const probeTimeState = $derived(getProbeTimeStyle(node.lastProbeAt));
 </script>
 
 <div class="node-row {isActive ? 'active' : ''}" role="listitem">
@@ -73,21 +75,26 @@
     </div>
   </button>
 
-  <div class="node-actions">
-    <div
-      class="delay-wrap"
-      role="presentation"
-      onmouseenter={(event) => onShowPopover(event, node)}
-      onmouseleave={onHidePopover}
-    >
-      <span class="delay-pill" style="color: {delayState.color}; background: {delayState.bg};">
-        {formatDelay(node.delay)}
-        {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
-        {#if delayState.grade && delayState.grade !== '—'}
-          <span class="delay-grade">{delayState.grade}</span>
+    <div class="node-actions">
+      <div
+        class="delay-wrap"
+        role="presentation"
+        onmouseenter={(event) => onShowPopover(event, node)}
+        onmouseleave={onHidePopover}
+      >
+        <span class="delay-pill" style="color: {delayState.color}; background: {delayState.bg};">
+          {formatDelay(node.delay)}
+          {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
+          {#if delayState.grade && delayState.grade !== '—'}
+            <span class="delay-grade">{delayState.grade}</span>
+          {/if}
+        </span>
+        {#if node.lastProbeAt}
+          <span class="probe-time" style="color: {probeTimeState.color};">
+            {probeTimeState.label}
+          </span>
         {/if}
-      </span>
-    </div>
+      </div>
 
     <div class="delay-bar-track">
       <div class="delay-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
@@ -347,6 +354,14 @@
     font-weight: 700;
     opacity: 0.7;
     margin-left: 2px;
+  }
+
+  .probe-time {
+    font-size: 9px;
+    font-weight: 500;
+    opacity: 0.6;
+    margin-top: 1px;
+    text-align: center;
   }
 
   .delay-bar-track {

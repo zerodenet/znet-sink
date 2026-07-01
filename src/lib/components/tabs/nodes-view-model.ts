@@ -38,9 +38,10 @@ export function buildAllNodes(options: {
   groups: PolicyGroup[];
   runtimeOverlay: Map<string, RuntimeOverlay>;
   latestDelay: (tag: string) => number | undefined;
+  latestProbeTime?: (tag: string) => number | undefined;
   fallbackNodes: ProxyNode[];
 }): ProxyNode[] {
-  const { configNodes, groups, runtimeOverlay, latestDelay, fallbackNodes } = options;
+  const { configNodes, groups, runtimeOverlay, latestDelay, latestProbeTime, fallbackNodes } = options;
 
   if (configNodes.length > 0) {
     const nodeItems: ProxyNode[] = configNodes.map<ProxyNode>((configNode) => {
@@ -68,6 +69,7 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
         delay,
+        lastProbeAt: latestProbeTime?.(configNode.tag),
         selected: runtime?.selected,
         alive: runtime?.alive,
         domain: runtime?.groupName ?? 'policy',
@@ -114,6 +116,7 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: group.kind || 'group',
         delay,
+        lastProbeAt: group.selected ? latestProbeTime?.(group.selected) : undefined,
         selected: runtimeOverlay.get(group.name)?.selected,
         alive: undefined,
         domain: 'policy',
@@ -139,6 +142,7 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: outbound.type || 'proxy',
         delay: outbound.delayMs ?? latestDelay(outbound.tag) ?? 0,
+        lastProbeAt: latestProbeTime?.(outbound.tag),
         selected: group.selected === outbound.tag,
         alive: outbound.alive,
         domain: group.name,

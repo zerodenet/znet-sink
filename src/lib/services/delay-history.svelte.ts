@@ -69,6 +69,13 @@ class DelayHistoryStore {
     return entries[entries.length - 1].delay;
   }
 
+  /** Timestamp of the latest probe for a node, or undefined if never probed. */
+  latestTime(tag: string): number | undefined {
+    const entries = this.history[tag];
+    if (!entries || entries.length === 0) return undefined;
+    return entries[entries.length - 1].at;
+  }
+
   /** Prune stale entries (older than PRUNE_AFTER_MS) and over-sized maps. */
   prune(): void {
     const cutoff = Date.now() - PRUNE_AFTER_MS;

@@ -23,6 +23,8 @@ export interface ProxyNode {
   protocol: string;
   /** Latency in ms; `0` means "not tested yet". */
   delay: number;
+  /** Unix-ms timestamp of the last probe; `undefined` if never probed. */
+  lastProbeAt?: number;
   /** Display domain / grouping hint (e.g. policy group name). */
   domain: string;
   // ── Static attributes (from config) ──
