@@ -44,28 +44,6 @@
   const networkProbeResult = $derived(guiState.networkProbe);
   const networkProbeLoading = $derived(guiState.networkProbeLoading);
 
-  // Country code to flag emoji mapping
-  const COUNTRY_FLAGS: Record<string, string> = {
-    'CN': '🇨🇳', 'US': '🇺🇸', 'JP': '🇯🇵', 'KR': '🇰🇷', 'SG': '🇸🇬',
-    'HK': '🇭🇰', 'TW': '🇹🇼', 'MO': '🇲🇴', 'GB': '🇬🇧', 'DE': '🇩🇪',
-    'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺', 'RU': '🇷🇺', 'IN': '🇮🇳',
-    'BR': '🇧🇷', 'NL': '🇳🇱', 'SE': '🇸🇪', 'CH': '🇨🇭', 'FI': '🇫🇮',
-    'NO': '🇳🇴', 'DK': '🇩🇰', 'PL': '🇵🇱', 'CZ': '🇨🇿', 'AT': '🇦🇹',
-    'BE': '🇧🇪', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'IE': '🇮🇪',
-    'NZ': '🇳🇿', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'ZA': '🇿🇦',
-    'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪', 'TH': '🇹🇭', 'VN': '🇻🇳',
-    'MY': '🇲🇾', 'ID': '🇮🇩', 'PH': '🇵🇭', 'AE': '🇦🇪', 'SA': '🇸🇦',
-    'IL': '🇮🇱', 'TR': '🇹🇷', 'UA': '🇺🇦', 'RO': '🇷🇴', 'HU': '🇭🇺',
-    'GR': '🇬🇷', 'BG': '🇧🇬', 'HR': '🇭🇷', 'SK': '🇸🇰', 'LT': '🇱🇹',
-    'LV': '🇱🇻', 'EE': '🇪🇪', 'SI': '🇸🇮', 'LU': '🇱🇺', 'MT': '🇲🇹',
-    'CY': '🇨🇾', 'IS': '🇮🇸', 'LI': '🇱🇮', 'MC': '🇲🇨', 'AD': '🇦🇩',
-    'SM': '🇸🇲', 'VA': '🇻🇦', 'GI': '🇬🇮', 'FO': '🇫🇴', 'GL': '🇬🇱',
-    'KZ': '🇰🇿', 'UZ': '🇺🇿', 'MN': '🇲🇳', 'LA': '🇱🇦', 'KH': '🇰🇭',
-    'MM': '🇲🇲', 'NP': '🇳🇵', 'BD': '🇧🇩', 'LK': '🇱🇰', 'PK': '🇵🇰',
-    'IR': '🇮🇷', 'IQ': '🇮🇶', 'SY': '🇸🇾', 'JO': '🇯🇴', 'LB': '🇱🇧',
-    'KW': '🇰🇼', 'QA': '🇶🇦', 'BH': '🇧🇭', 'OM': '🇴🇲', 'YE': '🇾🇪',
-  };
-
   // Country name to code mapping (supports multiple formats)
   const COUNTRY_NAME_MAP: Record<string, string> = {
     // Chinese names
@@ -111,18 +89,19 @@
     return COUNTRY_NAME_MAP[lower] ?? COUNTRY_NAME_MAP[trimmed];
   }
 
-  // Get flag emoji for a country
-  function getFlag(country?: string): string {
+  // Get flag image URL for a country code
+  function getFlagUrl(country?: string): string | null {
     const code = getCountryCode(country);
-    return code ? (COUNTRY_FLAGS[code] ?? '') : '';
+    if (!code) return null;
+    return `https://flagcdn.com/w40/${code.toLowerCase()}.png`;
   }
 
   // Format location with flag
-  function formatLocationWithFlag(result: { country?: string; region?: string; city?: string }): { flag: string; text: string } {
-    const flag = getFlag(result.country);
+  function formatLocationWithFlag(result: { country?: string; region?: string; city?: string }): { flagUrl: string | null; text: string } {
+    const flagUrl = getFlagUrl(result.country);
     const parts = [result.country, result.region, result.city].filter(Boolean);
     return {
-      flag,
+      flagUrl,
       text: parts.length > 0 ? parts.join(' · ') : '未知地区',
     };
   }
@@ -335,8 +314,8 @@
       <div class="network-strip lg:hidden">
         <span class="card-label network-strip-label">网络检测</span>
         <div class="network-strip-content">
-          {#if loc.flag}
-            <span class="network-strip-flag">{loc.flag}</span>
+          {#if loc.flagUrl}
+            <img src={loc.flagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
           {/if}
           <span class="network-strip-ip font-mono">{networkProbeResult.ip}</span>
           <span class="network-strip-sep"></span>
@@ -430,8 +409,8 @@
             {@const loc = formatLocationWithFlag(networkProbeResult)}
             <div class="network-card-body">
               <div class="network-main">
-                {#if loc.flag}
-                  <span class="network-flag">{loc.flag}</span>
+                {#if loc.flagUrl}
+                  <img src={loc.flagUrl} alt="" class="network-flag" width="36" height="27" loading="lazy" />
                 {/if}
                 <span class="network-ip font-mono">{networkProbeResult.ip}</span>
               </div>
@@ -709,8 +688,11 @@
     gap: 8px;
   }
   .network-flag {
-    font-size: 28px;
-    line-height: 1;
+    width: 36px;
+    height: 27px;
+    border-radius: 3px;
+    object-fit: cover;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   .network-ip {
     font-size: 18px;
@@ -776,9 +758,12 @@
     flex-shrink: 0;
   }
   .network-strip-flag {
-    font-size: 14px;
-    line-height: 1;
+    width: 20px;
+    height: 15px;
+    border-radius: 2px;
+    object-fit: cover;
     flex-shrink: 0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   .network-strip-ip {
     font-weight: 600;
