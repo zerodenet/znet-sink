@@ -507,3 +507,42 @@ async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
 
     Err(last_error.unwrap_or_else(|| AppError::internal("core readiness check timed out")))
 }
+
+/// Probe outbound network to get IP and geo information.
+/// Uses the kernel's proxy channel to fetch from GeoIP services.
+#[tauri::command]
+pub async fn gui_network_probe(state: State<'_, AppState>) -> AppResult<crate::services::network_probe::NetworkProbeResult> {
+    // Clone the config data we need before spawning the blocking task
+    let (proxy_host, proxy_port) = {
+        let config = common::lock(state.app_config(), "app_config")?;
+        (config.local_proxy.host.clone(), config.local_proxy.port)
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::network_probe::probe_outbound_with_proxy(&proxy_host, proxy_port)
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("network probe task failed: {}", e)))?
+}
+
+/// Get the GUI log file path and directory.
+#[tauri::command]
+pub fn gui_log_paths() -> AppResult<GuiLogPaths> {
+    let data_dir = crate::services::data_dir()?;
+    let logs_dir = data_dir.join("logs");
+    let log_file = logs_dir.join("gui.log.jsonl");
+
+    Ok(GuiLogPaths {
+        data_dir: data_dir.to_string_lossy().to_string(),
+        logs_dir: logs_dir.to_string_lossy().to_string(),
+        log_file: log_file.to_string_lossy().to_string(),
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiLogPaths {
+    pub data_dir: String,
+    pub logs_dir: String,
+    pub log_file: String,
+}

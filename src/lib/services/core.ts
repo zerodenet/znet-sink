@@ -461,6 +461,40 @@ export async function trayUpdateStatus(running: boolean, connected: boolean): Pr
   return invoke('tray_update_status', { running, connected });
 }
 
+// Network probe
+
+export interface NetworkProbeResult {
+  ip: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  org?: string;
+  isp?: string;
+}
+
+/**
+ * Probe outbound network to get IP and geo information.
+ * Uses the kernel's proxy channel to fetch from GeoIP services.
+ */
+export async function guiNetworkProbe(): Promise<NetworkProbeResult> {
+  return invoke('gui_network_probe');
+}
+
+// Log paths
+
+export interface GuiLogPaths {
+  dataDir: string;
+  logsDir: string;
+  logFile: string;
+}
+
+/**
+ * Get the GUI log file path and directory.
+ */
+export async function guiLogPaths(): Promise<GuiLogPaths> {
+  return invoke('gui_log_paths');
+}
+
 // Debug
 
 import type { DebugFrame } from '$lib/types/debug';

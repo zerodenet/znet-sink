@@ -15,6 +15,7 @@ pub mod local_proxy;
 pub mod file_logger;
 pub mod log_store;
 pub mod logs;
+pub mod network_probe;
 pub mod probe;
 pub mod proxy_config;
 pub mod proxy_coordinator;

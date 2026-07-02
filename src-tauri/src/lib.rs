@@ -300,6 +300,8 @@ pub fn run() {
             kernel_version_commands::kernel_list_versions,
             kernel_version_commands::kernel_install_version,
             kernel_version_commands::kernel_detect_version,
+            gui_core_commands::gui_network_probe,
+            gui_core_commands::gui_log_paths,
             tray_update_status,
         ])
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──

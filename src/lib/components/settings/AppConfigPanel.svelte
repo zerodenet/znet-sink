@@ -1,14 +1,18 @@
 <script lang="ts">
-  import { getAppConfig, updateAppConfig } from '$lib/services/core';
+  import { getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
   import type { AppConfig } from '$lib/types/app-config';
   import { Switch } from '$lib/components/ui/switch';
   import { NAV_TABS, TAB_LABELS } from '$lib/constants/navigation';
+  import { onMount } from 'svelte';
 
   let config = $state<AppConfig | null>(null);
   let loading = $state(false);
   let updatingMenuKey = $state<string | null>(null);
+  let logPaths = $state<GuiLogPaths | null>(null);
+  let logPathsError = $state<string | null>(null);
+  let copiedField = $state<string | null>(null);
 
   const menuTabs = NAV_TABS.filter((tab) => tab.id !== 'settings');
 
@@ -80,6 +84,47 @@
     return !(config.ui.hiddenMenuKeys ?? []).some((item) => item.toLowerCase() === key);
   }
 
+  async function loadLogPaths() {
+    try {
+      logPaths = await guiLogPaths();
+      logPathsError = null;
+    } catch (e) {
+      logPathsError = (e as { message?: string }).message ?? '获取日志路径失败';
+    }
+  }
+
+  async function copyToClipboard(text: string, field: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedField = field;
+      setTimeout(() => { copiedField = null; }, 2000);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      copiedField = field;
+      setTimeout(() => { copiedField = null; }, 2000);
+    }
+  }
+
+  async function openLogsFolder() {
+    if (!logPaths) return;
+    try {
+      // Use Tauri opener plugin
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(logPaths.logsDir);
+    } catch {
+      // Fallback: copy path to clipboard
+      await copyToClipboard(logPaths.logsDir, 'logsDir');
+    }
+  }
+
   const THEMES: Array<{ value: ThemeMode; label: string }> = [
     { value: 'light', label: '明亮' },
     { value: 'dark', label: '暗色' },
@@ -88,6 +133,7 @@
 
   $effect(() => {
     refreshConfig();
+    loadLogPaths();
   });
 </script>
 
@@ -199,6 +245,81 @@
         disabled={loading}
         aria-label="启动后自动连接"
       />
+    </div>
+  {/if}
+</div>
+
+<div class="config-separator"></div>
+
+<div class="config-section">
+  <div class="config-section-title">日志</div>
+
+  {#if logPathsError}
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text" style="color: var(--destructive);">{logPathsError}</span>
+      </div>
+    </div>
+  {:else if logPaths}
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">运行日志文件</span>
+        <span class="label-desc log-path">{logPaths.logFile}</span>
+      </div>
+      <div class="log-actions">
+        <button
+          class="log-action-btn"
+          onclick={() => copyToClipboard(logPaths!.logFile, 'logFile')}
+          title="复制路径"
+        >
+          {copiedField === 'logFile' ? '已复制' : '复制'}
+        </button>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">日志目录</span>
+        <span class="label-desc log-path">{logPaths.logsDir}</span>
+      </div>
+      <div class="log-actions">
+        <button
+          class="log-action-btn"
+          onclick={() => copyToClipboard(logPaths!.logsDir, 'logsDir')}
+          title="复制路径"
+        >
+          {copiedField === 'logsDir' ? '已复制' : '复制'}
+        </button>
+        <button
+          class="log-action-btn primary"
+          onclick={openLogsFolder}
+          title="打开文件夹"
+        >
+          打开
+        </button>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">数据目录</span>
+        <span class="label-desc log-path">{logPaths.dataDir}</span>
+      </div>
+      <div class="log-actions">
+        <button
+          class="log-action-btn"
+          onclick={() => copyToClipboard(logPaths!.dataDir, 'dataDir')}
+          title="复制路径"
+        >
+          {copiedField === 'dataDir' ? '已复制' : '复制'}
+        </button>
+      </div>
+    </div>
+  {:else}
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">加载中...</span>
+      </div>
     </div>
   {/if}
 </div>
@@ -390,6 +511,49 @@
 
   .reset-btn:hover {
     background: rgba(239, 68, 68, 0.12);
+  }
+
+  .log-path {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+
+  .log-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .log-action-btn {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.13s ease;
+    white-space: nowrap;
+  }
+
+  .log-action-btn:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+
+  .log-action-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .log-action-btn.primary:hover {
+    opacity: 0.9;
   }
 
   @media (max-width: 760px) {

@@ -18,6 +18,8 @@ import {
   getConfigPolicyGroups,
   getGuiZeroCapabilities,
   trayUpdateStatus,
+  guiNetworkProbe,
+  type NetworkProbeResult,
 } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { coreEvents } from './core-events.svelte';
@@ -41,6 +43,10 @@ class GuiStateStore {
   tunStatus = $state<GuiFeatureStatus | null>(null);
   configNodes = $state<ConfigProxyNode[]>([]);
   configPolicyGroups = $state<PolicyGroup[]>([]);
+
+  // Network probe state
+  networkProbe = $state<NetworkProbeResult | null>(null);
+  networkProbeLoading = $state(false);
 
   // Whether the kernel supports live traffic stats (needs "query" or
   // "runtime-snapshot" capability). When false, the traffic chart shows
@@ -71,6 +77,11 @@ class GuiStateStore {
     // Until this point the UI may show stale pre-load state where buttons
     // look clickable but the kernel is already running or starting.
     this.isInitializing = false;
+
+    // Probe outbound network if kernel is already running
+    if (this.isProcessRunning) {
+      void this.probeNetwork();
+    }
   }
 
   async refreshAll() {
@@ -222,6 +233,20 @@ class GuiStateStore {
     void trayUpdateStatus(this.isProcessRunning, this.isConnected).catch(() => {});
   }
 
+  /** Probe outbound network to get IP and geo information. */
+  async probeNetwork() {
+    if (this.networkProbeLoading) return;
+    if (!this.isProcessRunning) return;
+    this.networkProbeLoading = true;
+    try {
+      this.networkProbe = await guiNetworkProbe();
+    } catch {
+      // Silently fail — network probe is best-effort
+    } finally {
+      this.networkProbeLoading = false;
+    }
+  }
+
   async connect() {
     this.isConnecting = true;
     try {
@@ -230,6 +255,7 @@ class GuiStateStore {
       toastSuccess('系统代理已开启，服务已生效');
       coreEvents.start();
       await this.refreshPolicyPanels();
+      void this.probeNetwork();
     } catch (e: any) {
       toastError(`连接失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
@@ -262,6 +288,7 @@ class GuiStateStore {
       coreEvents.start();
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
+      void this.probeNetwork();
     } catch (e: any) {
       toastError(`启动内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
@@ -279,6 +306,7 @@ class GuiStateStore {
       toastSuccess('内核已重启');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
+      void this.probeNetwork();
     } catch (e: any) {
       toastError(`重启内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
@@ -294,6 +322,7 @@ class GuiStateStore {
       await enableSystemProxyCommand();
       toastSuccess('系统代理已开启');
       await this.refreshRuntimeState();
+      void this.probeNetwork();
     } catch (e: any) {
       toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();

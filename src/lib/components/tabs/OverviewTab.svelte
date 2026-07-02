@@ -40,6 +40,93 @@
   let nodeDropdownOpen = $state(false);
   let nodeSwitching = $state<string | null>(null);
 
+  // Network probe from guiState (auto-triggered)
+  const networkProbeResult = $derived(guiState.networkProbe);
+  const networkProbeLoading = $derived(guiState.networkProbeLoading);
+
+  // Country code to flag emoji mapping
+  const COUNTRY_FLAGS: Record<string, string> = {
+    'CN': '🇨🇳', 'US': '🇺🇸', 'JP': '🇯🇵', 'KR': '🇰🇷', 'SG': '🇸🇬',
+    'HK': '🇭🇰', 'TW': '🇹🇼', 'MO': '🇲🇴', 'GB': '🇬🇧', 'DE': '🇩🇪',
+    'FR': '🇫🇷', 'CA': '🇨🇦', 'AU': '🇦🇺', 'RU': '🇷🇺', 'IN': '🇮🇳',
+    'BR': '🇧🇷', 'NL': '🇳🇱', 'SE': '🇸🇪', 'CH': '🇨🇭', 'FI': '🇫🇮',
+    'NO': '🇳🇴', 'DK': '🇩🇰', 'PL': '🇵🇱', 'CZ': '🇨🇿', 'AT': '🇦🇹',
+    'BE': '🇧🇪', 'IT': '🇮🇹', 'ES': '🇪🇸', 'PT': '🇵🇹', 'IE': '🇮🇪',
+    'NZ': '🇳🇿', 'MX': '🇲🇽', 'AR': '🇦🇷', 'CL': '🇨🇱', 'ZA': '🇿🇦',
+    'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪', 'TH': '🇹🇭', 'VN': '🇻🇳',
+    'MY': '🇲🇾', 'ID': '🇮🇩', 'PH': '🇵🇭', 'AE': '🇦🇪', 'SA': '🇸🇦',
+    'IL': '🇮🇱', 'TR': '🇹🇷', 'UA': '🇺🇦', 'RO': '🇷🇴', 'HU': '🇭🇺',
+    'GR': '🇬🇷', 'BG': '🇧🇬', 'HR': '🇭🇷', 'SK': '🇸🇰', 'LT': '🇱🇹',
+    'LV': '🇱🇻', 'EE': '🇪🇪', 'SI': '🇸🇮', 'LU': '🇱🇺', 'MT': '🇲🇹',
+    'CY': '🇨🇾', 'IS': '🇮🇸', 'LI': '🇱🇮', 'MC': '🇲🇨', 'AD': '🇦🇩',
+    'SM': '🇸🇲', 'VA': '🇻🇦', 'GI': '🇬🇮', 'FO': '🇫🇴', 'GL': '🇬🇱',
+    'KZ': '🇰🇿', 'UZ': '🇺🇿', 'MN': '🇲🇳', 'LA': '🇱🇦', 'KH': '🇰🇭',
+    'MM': '🇲🇲', 'NP': '🇳🇵', 'BD': '🇧🇩', 'LK': '🇱🇰', 'PK': '🇵🇰',
+    'IR': '🇮🇷', 'IQ': '🇮🇶', 'SY': '🇸🇾', 'JO': '🇯🇴', 'LB': '🇱🇧',
+    'KW': '🇰🇼', 'QA': '🇶🇦', 'BH': '🇧🇭', 'OM': '🇴🇲', 'YE': '🇾🇪',
+  };
+
+  // Country name to code mapping (supports multiple formats)
+  const COUNTRY_NAME_MAP: Record<string, string> = {
+    // Chinese names
+    '中国': 'CN', '美国': 'US', '日本': 'JP', '韩国': 'KR', '新加坡': 'SG',
+    '香港': 'HK', '台湾': 'TW', '澳门': 'MO', '英国': 'GB', '德国': 'DE',
+    '法国': 'FR', '加拿大': 'CA', '澳大利亚': 'AU', '俄罗斯': 'RU', '印度': 'IN',
+    '巴西': 'BR', '荷兰': 'NL', '瑞典': 'SE', '瑞士': 'CH', '芬兰': 'FI',
+    '挪威': 'NO', '丹麦': 'DK', '波兰': 'PL', '捷克': 'CZ', '奥地利': 'AT',
+    '比利时': 'BE', '意大利': 'IT', '西班牙': 'ES', '葡萄牙': 'PT', '爱尔兰': 'IE',
+    '新西兰': 'NZ', '墨西哥': 'MX', '阿根廷': 'AR', '智利': 'CL', '南非': 'ZA',
+    '泰国': 'TH', '越南': 'VN', '马来西亚': 'MY', '印度尼西亚': 'ID', '菲律宾': 'PH',
+    '阿联酋': 'AE', '沙特阿拉伯': 'SA', '以色列': 'IL', '土耳其': 'TR', '乌克兰': 'UA',
+    '哈萨克斯坦': 'KZ', '蒙古': 'MN', '老挝': 'LA', '柬埔寨': 'KH',
+    // English names (lowercase for case-insensitive matching)
+    'china': 'CN', 'united states': 'US', 'usa': 'US', 'japan': 'JP', 'korea': 'KR',
+    'south korea': 'KR', 'singapore': 'SG', 'hong kong': 'HK', 'taiwan': 'TW',
+    'united kingdom': 'GB', 'uk': 'GB', 'germany': 'DE', 'france': 'FR',
+    'canada': 'CA', 'australia': 'AU', 'russia': 'RU', 'india': 'IN',
+    'brazil': 'BR', 'netherlands': 'NL', 'sweden': 'SE', 'switzerland': 'CH',
+    'finland': 'FI', 'norway': 'NO', 'denmark': 'DK', 'poland': 'PL',
+    'czech republic': 'CZ', 'czechia': 'CZ', 'austria': 'AT', 'belgium': 'BE',
+    'italy': 'IT', 'spain': 'ES', 'portugal': 'PT', 'ireland': 'IE',
+    'new zealand': 'NZ', 'mexico': 'MX', 'argentina': 'AR', 'chile': 'CL',
+    'south africa': 'ZA', 'thailand': 'TH', 'vietnam': 'VN', 'malaysia': 'MY',
+    'indonesia': 'ID', 'philippines': 'PH', 'united arab emirates': 'AE',
+    'saudi arabia': 'SA', 'israel': 'IL', 'turkey': 'TR', 'ukraine': 'UA',
+    'kazakhstan': 'KZ', 'mongolia': 'MN', 'laos': 'LA', 'cambodia': 'KH',
+    'myanmar': 'MM', 'burma': 'MM', 'nepal': 'NP', 'bangladesh': 'BD',
+    'sri lanka': 'LK', 'pakistan': 'PK', 'iran': 'IR', 'iraq': 'IQ',
+    'syria': 'SY', 'jordan': 'JO', 'lebanon': 'LB', 'kuwait': 'KW',
+    'qatar': 'QA', 'bahrain': 'BH', 'oman': 'OM', 'yemen': 'YE',
+    'macao': 'MO', 'macau': 'MO',
+  };
+
+  // Convert country name/code to 2-letter code
+  function getCountryCode(country?: string): string | undefined {
+    if (!country) return undefined;
+    const trimmed = country.trim();
+    // Already a 2-letter code
+    if (trimmed.length === 2) return trimmed.toUpperCase();
+    // Try direct lookup (case-insensitive)
+    const lower = trimmed.toLowerCase();
+    return COUNTRY_NAME_MAP[lower] ?? COUNTRY_NAME_MAP[trimmed];
+  }
+
+  // Get flag emoji for a country
+  function getFlag(country?: string): string {
+    const code = getCountryCode(country);
+    return code ? (COUNTRY_FLAGS[code] ?? '') : '';
+  }
+
+  // Format location with flag
+  function formatLocationWithFlag(result: { country?: string; region?: string; city?: string }): { flag: string; text: string } {
+    const flag = getFlag(result.country);
+    const parts = [result.country, result.region, result.city].filter(Boolean);
+    return {
+      flag,
+      text: parts.length > 0 ? parts.join(' · ') : '未知地区',
+    };
+  }
+
   // Speed derived from history
   const currentDown = $derived(
     overviewData.speedHistory.length > 0
@@ -75,19 +162,6 @@
     }
     const cn = guiState.configNodes;
     return cn.find((n) => !n.isSelector)?.tag ?? cn[0]?.tag ?? null;
-  });
-
-  // Active node info for Pro mode card
-  const currentNode = $derived.by(() => {
-    for (const g of guiState.policyGroups) {
-      if (g.selected) {
-        const member = g.outbounds.find((o) => o.tag === g.selected);
-        if (member) return { group: g.name, tag: member.tag, type: member.type, delayMs: member.delayMs, alive: member.alive };
-      }
-    }
-    const cn = guiState.configNodes.find((n) => !n.isSelector);
-    if (cn) return { group: '', tag: cn.tag, type: cn.protocol };
-    return null;
   });
 
   // Flat node list for dropdown — config nodes as base, runtime data when connected
@@ -255,6 +329,29 @@
       {/if}
     </div>
 
+    <!-- Network probe: compact horizontal strip (visible on small screens, hidden on lg+) -->
+    {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) && networkProbeResult}
+      {@const loc = formatLocationWithFlag(networkProbeResult)}
+      <div class="network-strip lg:hidden">
+        <span class="card-label network-strip-label">网络检测</span>
+        <div class="network-strip-content">
+          {#if loc.flag}
+            <span class="network-strip-flag">{loc.flag}</span>
+          {/if}
+          <span class="network-strip-ip font-mono">{networkProbeResult.ip}</span>
+          <span class="network-strip-sep"></span>
+          <span class="network-strip-loc">{loc.text}</span>
+          {#if networkProbeResult.isp || networkProbeResult.org}
+            <span class="network-strip-sep"></span>
+            <span class="network-strip-isp truncate">{networkProbeResult.isp || networkProbeResult.org}</span>
+          {/if}
+        </div>
+        {#if networkProbeLoading}
+          <span class="network-status-badge loading">检测中…</span>
+        {/if}
+      </div>
+    {/if}
+
     <!-- Row 2: Self-test -->
     <div class="overview-card flex-shrink-0">
       <button class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
@@ -315,47 +412,38 @@
       {/if}
     </div>
 
-    <!-- Row 3: Chart + Current node (only when config is active or nodes loaded) -->
+    <!-- Row 3: Chart + Network probe card (card only visible on lg+) -->
     <div class="flex-1 w-full flex flex-col lg:flex-row gap-3 overflow-hidden min-h-0" style="min-height: 180px;">
       <div class="w-full {store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) ? 'lg:w-2/3' : ''} overflow-hidden min-h-[120px]">
         <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
       </div>
       {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes)}
-      <div class="w-full lg:w-1/3 min-h-[80px]">
-        <div class="overview-card h-full flex flex-col gap-2">
-          <div class="flex items-center justify-between flex-shrink-0">
-            <span class="card-label">当前节点</span>
-            <button
-              class="node-link-btn"
-              onclick={() => store.activeTab = 'nodes'}
-              aria-label="管理节点"
-            >
-              管理
-            </button>
+      <div class="hidden lg:block lg:w-1/3 min-w-0">
+        <div class="overview-card network-card">
+          <div class="network-card-header">
+            <span class="card-label">网络检测</span>
+            {#if networkProbeLoading}
+              <span class="network-status-badge loading">检测中…</span>
+            {/if}
           </div>
-          {#if currentNode}
-            <div class="flex-1 flex flex-col justify-center min-h-0">
-              <span class="active-node-name truncate">{currentNode.tag}</span>
-              <span class="active-node-meta">
-                {currentNode.type}
-                {#if currentNode.delayMs != null && currentNode.delayMs > 0}
-                  · {currentNode.delayMs} ms
-                {:else}
-                  · 延迟未知
+          {#if networkProbeResult}
+            {@const loc = formatLocationWithFlag(networkProbeResult)}
+            <div class="network-card-body">
+              <div class="network-main">
+                {#if loc.flag}
+                  <span class="network-flag">{loc.flag}</span>
                 {/if}
-                {#if currentNode.alive === false}
-                  · <span class="text-destructive">离线</span>
-                {/if}
-              </span>
+                <span class="network-ip font-mono">{networkProbeResult.ip}</span>
+              </div>
+              <div class="network-location">{loc.text}</div>
+              {#if networkProbeResult.isp || networkProbeResult.org}
+                <div class="network-isp truncate">{networkProbeResult.isp || networkProbeResult.org}</div>
+              {/if}
             </div>
-          {:else if guiState.isConnected}
-            <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-              等待节点数据…
-            </div>
+          {:else if !isCoreRunning}
+            <div class="network-card-empty">内核未运行</div>
           {:else}
-            <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-              未连接
-            </div>
+            <div class="network-card-empty">等待网络检测…</div>
           {/if}
         </div>
       </div>
@@ -586,9 +674,151 @@
     cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
   }
   .node-link-btn:hover { background: var(--muted); color: var(--foreground); }
+  .node-link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .active-node-name { font-size: 14px; font-weight: 700; color: var(--foreground); }
   .active-node-meta { font-size: 11.5px; color: var(--muted-foreground); font-family: var(--font-mono); }
+
+  .network-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 100px;
+    overflow: hidden;
+  }
+  .network-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .network-card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 0;
+    overflow: hidden;
+    text-align: center;
+  }
+  .network-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .network-flag {
+    font-size: 28px;
+    line-height: 1;
+  }
+  .network-ip {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--foreground);
+    letter-spacing: 0.02em;
+  }
+  .network-location {
+    font-size: 12px;
+    color: var(--muted-foreground);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .network-isp {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    opacity: 0.8;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .network-card-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+
+  /* Network strip: compact horizontal layout for small screens */
+  .network-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .network-strip-label {
+    flex-shrink: 0;
+  }
+  .network-strip-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .network-strip-sep {
+    width: 1px;
+    height: 12px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  .network-strip-flag {
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .network-strip-ip {
+    font-weight: 600;
+    color: var(--foreground);
+    flex-shrink: 0;
+  }
+  .network-strip-loc {
+    color: var(--muted-foreground);
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .network-strip-isp {
+    color: var(--muted-foreground);
+    opacity: 0.8;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 120px;
+  }
+
+  .network-status-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background: var(--muted);
+  }
+  .network-status-badge.loading {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
 
   /* ─────────────── Lite mode ─────────────── */
 
