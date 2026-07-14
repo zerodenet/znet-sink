@@ -44,4 +44,13 @@ pub struct LogQuery {
     pub source: Option<LogSource>,
     pub level: Option<LogLevel>,
     pub limit: Option<usize>,
+    pub before_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPage {
+    pub items: Vec<LogEntry>,
+    pub has_more: bool,
+    pub oldest_available_id: Option<u64>,
 }

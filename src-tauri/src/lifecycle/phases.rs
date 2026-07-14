@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use crate::errors::AppResult;
 use crate::models::app_config::AppConfig;
 use crate::services::domain_store::DomainStoreData;
-use crate::services::{app_config_store, domain_store, log_store, system_proxy_guard};
+use crate::services::{app_config_store, debug_store, domain_store, log_store, system_proxy_guard};
 
 use super::{Lifecycle, OnPhase, Phase};
 
@@ -92,6 +92,22 @@ impl OnPhase for ConfigPhase {
                 crate::models::logs::LogLevel::Warn,
                 format!("failed to rotate logs: {e:?}"),
             );
+        }
+        if let Err(e) = debug_store::rotate() {
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to rotate debug frames: {e:?}"),
+            );
+        }
+        match debug_store::latest_id() {
+            Ok(Some(id)) => crate::models::debug::seed_next_debug_frame_id(id.saturating_add(1)),
+            Ok(None) => {}
+            Err(e) => crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to seed debug frame id: {e:?}"),
+            ),
         }
 
         *self.data.lock().expect("startup data lock") = Some(StartupData {

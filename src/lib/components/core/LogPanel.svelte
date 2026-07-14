@@ -1,10 +1,15 @@
 <script lang="ts">
   import { getLogs, clearLogs } from '$lib/services/core';
   import { coreEvents } from '$lib/services/core-events.svelte';
-  import type { LogEntry, LogLevel, LogSource } from '$lib/types/logs';
+  import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
+
+  const PAGE_SIZE = 400;
 
   let logs = $state<LogEntry[]>([]);
+  let loading = $state(true);
+  let loadingMore = $state(false);
   let autoScroll = $state(true);
+  let hasMore = $state(false);
   let selectedSource = $state<LogSource | 'all'>('all');
   let selectedLevel = $state<LogLevel | 'all'>('all');
 
@@ -23,24 +28,83 @@
     { value: 'trace', label: 'TRC' },
   ];
 
-  // 后端返回时间升序（旧→新），反转后最新在最上面
-  const filteredLogs = $derived(logs.filter(log => {
-    if (selectedSource !== 'all' && log.source !== selectedSource) return false;
-    if (selectedLevel !== 'all' && log.level !== selectedLevel) return false;
-    return true;
-  }).reverse());
+  const visibleLogs = $derived([...logs].reverse());
 
-  async function refreshLogs() {
+  let _lastLogTick = -1;
+  let shouldScrollToLatest = false;
+  let logBodyEl: HTMLDivElement | undefined = $state();
+
+  function buildQuery(beforeId?: number): LogQuery {
+    return {
+      source: selectedSource === 'all' ? undefined : selectedSource,
+      level: selectedLevel === 'all' ? undefined : selectedLevel,
+      limit: PAGE_SIZE,
+      beforeId,
+    };
+  }
+
+  function mergePage(current: LogEntry[], page: LogPage): LogEntry[] {
+    const merged = new Map<number, LogEntry>();
+    const oldestAvailableId = page.oldestAvailableId;
+
+    for (const entry of current) {
+      if (oldestAvailableId == null || entry.id >= oldestAvailableId) {
+        merged.set(entry.id, entry);
+      }
+    }
+    for (const entry of page.items) {
+      merged.set(entry.id, entry);
+    }
+
+    return Array.from(merged.values()).sort((a, b) => a.id - b.id);
+  }
+
+  function syncHasMore(page: LogPage, items: LogEntry[]) {
+    if (page.oldestAvailableId == null || items.length === 0) {
+      hasMore = false;
+      return;
+    }
+    hasMore = page.hasMore || items[0].id > page.oldestAvailableId;
+  }
+
+  async function refreshLogs(options: { replace?: boolean } = {}) {
     try {
-      logs = await getLogs();
+      const page = await getLogs(buildQuery());
+      if (options.replace || (page.items.length === 0 && page.oldestAvailableId == null)) {
+        logs = page.items;
+      } else {
+        logs = mergePage(logs, page);
+      }
+      syncHasMore(page, logs);
+      shouldScrollToLatest = true;
     } catch (e) {
       console.error('Failed to get logs:', e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function loadMoreLogs() {
+    if (loadingMore || logs.length === 0) return;
+
+    loadingMore = true;
+    try {
+      const page = await getLogs(buildQuery(logs[0].id));
+      logs = mergePage(logs, page);
+      syncHasMore(page, logs);
+    } catch (e) {
+      console.error('Failed to load more logs:', e);
+    } finally {
+      loadingMore = false;
     }
   }
 
   async function handleClear() {
     await clearLogs();
-    await refreshLogs();
+    logs = [];
+    hasMore = false;
+    loading = true;
+    await refreshLogs({ replace: true });
   }
 
   function copyLastError() {
@@ -58,45 +122,52 @@
       + ' ' + d.toLocaleTimeString('zh-CN', { hour12: false });
   }
 
-  let _lastLogTick = -1;
-  let logBodyEl: HTMLDivElement | undefined = $state();
-
-  // 日志最新在最上面，自动滚动到顶部
   function scrollToLatest() {
-    if (!logBodyEl || !autoScroll) return;
+    if (!logBodyEl || !autoScroll || !shouldScrollToLatest) return;
     logBodyEl.scrollTop = 0;
+    shouldScrollToLatest = false;
   }
 
-  // 挂载时初始加载
   $effect(() => {
-    refreshLogs();
+    const source = selectedSource;
+    const level = selectedLevel;
+    void source;
+    void level;
+
+    loading = true;
+    logs = [];
+    hasMore = false;
+    void refreshLogs({ replace: true });
   });
 
-  // 内核日志事件驱动刷新
+  $effect(() => {
+    const timer = window.setInterval(() => {
+      void refreshLogs();
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  });
+
   $effect(() => {
     const tick = coreEvents.logTick;
     if (tick > 0 && tick !== _lastLogTick) {
       _lastLogTick = tick;
-      refreshLogs();
+      void refreshLogs();
     }
   });
 
-  // 日志更新后自动滚动到最新（顶部）
   $effect(() => {
-    void filteredLogs.length;
+    void visibleLogs.length;
     scrollToLatest();
   });
 </script>
 
 <div class="log-panel">
-  <!-- Toolbar -->
   <div class="log-toolbar">
-    <!-- Left: title + filters -->
     <div class="flex items-center gap-2">
       <span class="log-title">运行日志</span>
       <span class="log-sep"></span>
 
-      <!-- Source filter -->
       <div class="log-filter-group">
         {#each sources as s}
           <button
@@ -108,7 +179,6 @@
         {/each}
       </div>
 
-      <!-- Level filter -->
       <div class="log-filter-group">
         {#each levels as l}
           <button
@@ -121,9 +191,8 @@
       </div>
     </div>
 
-    <!-- Right: count + actions -->
     <div class="flex items-center gap-1.5">
-      <span class="log-count">{filteredLogs.length}</span>
+      <span class="log-count">{hasMore ? `${visibleLogs.length}+` : visibleLogs.length}</span>
 
       <button
         onclick={() => autoScroll = !autoScroll}
@@ -164,13 +233,13 @@
     </div>
   </div>
 
-  <!-- Log body: terminal-style -->
   <div class="log-body" bind:this={logBodyEl}>
-    {#if filteredLogs.length === 0}
+    {#if loading && visibleLogs.length === 0}
+      <div class="log-empty">加载中...</div>
+    {:else if visibleLogs.length === 0}
       <div class="log-empty">暂无日志</div>
     {:else}
-      {#each filteredLogs as log, index (`${log.id}-${log.occurredAtUnixMs}-${index}`)}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
+      {#each visibleLogs as log, index (`${log.id}-${log.occurredAtUnixMs}-${index}`)}
         <div
           class="log-row"
           role="button"
@@ -184,11 +253,19 @@
             {log.source.toUpperCase()}
           </span>
           <span class="log-lvl" class:err={log.level === 'error'} class:wrn={log.level === 'warn'} class:inf={log.level === 'info'} class:dbg={log.level === 'debug'}>
-            {log.level.slice(0,3).toUpperCase()}
+            {log.level.slice(0, 3).toUpperCase()}
           </span>
           <span class="log-msg">{log.message}</span>
         </div>
       {/each}
+
+      {#if hasMore}
+        <div class="log-more">
+          <button class="log-more-btn" onclick={loadMoreLogs} disabled={loadingMore}>
+            {loadingMore ? '加载中...' : '加载更多'}
+          </button>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -204,7 +281,6 @@
     overflow: hidden;
   }
 
-  /* ---- Toolbar ---- */
   .log-toolbar {
     display: flex;
     align-items: center;
@@ -244,7 +320,6 @@
     text-align: center;
   }
 
-  /* ---- Filter groups ---- */
   .log-filter-group {
     display: inline-flex;
     align-items: center;
@@ -288,7 +363,6 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 
-  /* ---- Action buttons ---- */
   .log-action-btn {
     display: inline-flex;
     align-items: center;
@@ -318,7 +392,6 @@
     cursor: not-allowed;
   }
 
-  /* ---- Log body ---- */
   .log-body {
     flex: 1;
     overflow-y: auto;
@@ -412,5 +485,35 @@
     flex: 1;
     word-break: break-all;
     line-height: 1.5;
+  }
+
+  .log-more {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 2px;
+  }
+
+  .log-more-btn {
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--foreground);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+
+  .log-more-btn:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  }
+
+  .log-more-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
   }
 </style>

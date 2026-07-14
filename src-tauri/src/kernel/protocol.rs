@@ -110,7 +110,7 @@ pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult
     push_debug_frame(DebugFrame {
         id: 0,
         at_ms: crate::services::common::now_unix_ms(),
-        direction: "tx",
+        direction: "tx".to_string(),
         frame_type: frame_type.clone(),
         payload: frame_value.clone(),
         elapsed_ms: None,
@@ -152,7 +152,7 @@ pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult
             push_debug_frame(DebugFrame {
                 id: 0,
                 at_ms: crate::services::common::now_unix_ms(),
-                direction: "rx",
+                direction: "rx".to_string(),
                 frame_type,
                 payload: value.clone(),
                 elapsed_ms: Some(elapsed),
@@ -163,7 +163,7 @@ pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult
             push_debug_frame(DebugFrame {
                 id: 0,
                 at_ms: crate::services::common::now_unix_ms(),
-                direction: "rx",
+                direction: "rx".to_string(),
                 frame_type,
                 payload: json!({
                     "errorCode": error.code,

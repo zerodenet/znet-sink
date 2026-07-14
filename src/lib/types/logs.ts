@@ -24,4 +24,11 @@ export interface LogQuery {
   source?: LogSource;
   level?: LogLevel;
   limit?: number;
+  beforeId?: number;
+}
+
+export interface LogPage {
+  items: LogEntry[];
+  hasMore: boolean;
+  oldestAvailableId?: number;
 }

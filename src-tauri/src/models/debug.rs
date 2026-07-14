@@ -1,9 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// A captured IPC frame for the debug diagnostic page.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugFrame {
     /// Monotonic sequence number.
@@ -12,8 +12,8 @@ pub struct DebugFrame {
     pub at_ms: u64,
     /// "tx" (GUI → kernel) or "rx" (kernel → GUI).
     #[serde(rename = "direction")]
-    pub direction: &'static str,
-    /// "ping" | "query" | "command" | "subscribe" | "response" | "event" | "hb"
+    pub direction: String,
+    /// Transport classification such as query, subscribe-ack, response, or event.
     pub frame_type: String,
     /// The JSON payload (may be truncated for large responses).
     pub payload: serde_json::Value,
@@ -23,8 +23,24 @@ pub struct DebugFrame {
     pub error: Option<String>,
 }
 
-/// Maximum number of frames retained in the ring buffer.
-pub(crate) const DEBUG_RING_SIZE: usize = 200;
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugFrameQuery {
+    pub frame_type: Option<String>,
+    pub limit: Option<usize>,
+    pub before_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugFramePage {
+    pub items: Vec<DebugFrame>,
+    pub has_more: bool,
+    pub oldest_available_id: Option<u64>,
+}
+
+/// Maximum number of recent frames retained in memory for live inspection.
+pub(crate) const DEBUG_RING_SIZE: usize = 1_000;
 
 /// Global ring buffer for diagnostic IPC frame capture.
 static DEBUG_FRAMES: std::sync::LazyLock<Mutex<Vec<DebugFrame>>> =
@@ -36,29 +52,30 @@ static DEBUG_FRAME_ID: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn push_debug_frame(frame: DebugFrame) {
     let mut frame = frame;
     frame.id = DEBUG_FRAME_ID.fetch_add(1, Ordering::Relaxed);
+    let persisted = frame.clone();
     if let Ok(mut frames) = DEBUG_FRAMES.lock() {
         if frames.len() >= DEBUG_RING_SIZE {
             frames.remove(0);
         }
         frames.push(frame);
     }
-}
-
-/// Snapshot all captured debug frames (newest first).
-pub(crate) fn snapshot_debug_frames() -> Vec<DebugFrame> {
-    DEBUG_FRAMES
-        .lock()
-        .map(|frames| {
-            let mut v = frames.clone();
-            v.reverse();
-            v
-        })
-        .unwrap_or_default()
+    let _ = crate::services::debug_store::append(&persisted);
 }
 
 /// Clear all captured debug frames.
 pub(crate) fn clear_debug_frames() {
     if let Ok(mut frames) = DEBUG_FRAMES.lock() {
         frames.clear();
+    }
+}
+
+pub(crate) fn seed_next_debug_frame_id(next_id: u64) {
+    let mut current = DEBUG_FRAME_ID.load(Ordering::SeqCst);
+    while current < next_id {
+        match DEBUG_FRAME_ID.compare_exchange(current, next_id, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
     }
 }

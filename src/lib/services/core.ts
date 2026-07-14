@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { warning } from './toast.svelte';
 import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo } from '$lib/types/core';
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
-import type { LogEntry, LogAppend, LogQuery } from '$lib/types/logs';
+import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
 import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
 import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
@@ -50,33 +50,33 @@ export async function commandCore(method: string, params?: unknown, options?: Co
   return invoke('core_ipc_command', { method, params, options });
 }
 
-export async function getCapabilities(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCapabilities(options?: CoreIpcOptions): Promise<Record<string, unknown>> {
   return invoke('core_get_capabilities', { options });
 }
 
-export async function getCoreHealth(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCoreHealth(options?: CoreIpcOptions): Promise<Record<string, unknown>> {
   return invoke('core_get_health', { options });
 }
 
-export async function getCoreConfig(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCoreConfig(options?: CoreIpcOptions): Promise<Record<string, unknown>> {
   return invoke('core_get_config', { options });
 }
 
-export async function getCoreRuntime(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCoreRuntime(options?: CoreIpcOptions): Promise<Record<string, unknown>> {
   return invoke('core_get_runtime', { options });
 }
 
-export async function getCoreStats(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCoreStats(options?: CoreIpcOptions): Promise<Record<string, unknown>> {
   return invoke('core_get_stats', { options });
 }
 
-export async function getCorePolicies(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getCorePolicies(options?: CoreIpcOptions): Promise<unknown> {
   return invoke('core_get_policies', { options });
 }
 
 // Policies
 
-export async function getPolicies(options?: CoreIpcOptions): Promise<CoreCallResult> {
+export async function getPolicies(options?: CoreIpcOptions): Promise<unknown> {
   return invoke('core_get_policies', { options });
 }
 
@@ -205,7 +205,7 @@ export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig>
 
 // Logs
 
-export async function getLogs(query?: LogQuery): Promise<LogEntry[]> {
+export async function getLogs(query?: LogQuery): Promise<LogPage> {
   return invoke('logs_list', { query });
 }
 
@@ -446,8 +446,16 @@ export async function guiSetMode(mode: string, outbound?: string): Promise<unkno
 
 // Policy probe
 
-export async function guiProbePolicy(policyTag: string): Promise<unknown> {
-  return invoke('gui_probe_policy', { policyTag });
+export async function guiProbePolicy(policyTag: string): Promise<import('$lib/types/gui-api').PolicyProbeAccepted> {
+  const raw = await invoke<Record<string, unknown>>('gui_probe_policy', { policyTag });
+  const result = objectFrom(raw, ['result']);
+  return {
+    accepted: boolFrom(raw, ['accepted']) ?? false,
+    result: Object.keys(result).length > 0 ? {
+      policyTag: stringFrom(result, ['policyTag', 'policy_tag']),
+      probeTriggered: boolFrom(result, ['probeTriggered', 'probe_triggered']),
+    } : undefined,
+  };
 }
 
 // System tray status sync
@@ -486,6 +494,7 @@ export interface GuiLogPaths {
   dataDir: string;
   logsDir: string;
   logFile: string;
+  coreLogFile: string;
 }
 
 /**
@@ -497,10 +506,10 @@ export async function guiLogPaths(): Promise<GuiLogPaths> {
 
 // Debug
 
-import type { DebugFrame } from '$lib/types/debug';
+import type { DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
-export async function getGuiDebugFrames(): Promise<DebugFrame[]> {
-  return invoke('gui_debug_frames');
+export async function getGuiDebugFrames(query?: DebugFrameQuery): Promise<DebugFramePage> {
+  return invoke('gui_debug_frames', { query });
 }
 
 export async function clearDebugFrames(): Promise<void> {
@@ -537,6 +546,7 @@ function mapConnectionStatus(raw: Record<string, unknown>): ConnectionStatus {
     state: connected ? 'connected' : stageToState(stage),
     message: stringFrom(raw, ['last_error', 'lastError', 'message']) ?? (connected ? undefined : stage),
     uptimeMs: uptimeFromProcess(process),
+    startedAtUnixMs: numberFrom(process, ['started_at_unix_ms', 'startedAtUnixMs']),
     activeConnections: numberFrom(stats, ['active_sessions', 'activeSessions']) ?? 0,
     coreAvailable,
     systemProxyEnabled: boolFrom(systemProxy, ['enabled']) ?? false,
@@ -604,6 +614,8 @@ function mapPolicyGroups(raw: Record<string, unknown>[]): PolicyGroup[] {
             type: stringFrom(item, ['kind', 'type', 'protocol']) ?? 'unknown',
             delayMs: numberFrom(item, ['delayMs', 'delay_ms', 'latency', 'latencyMs', 'latency_ms']),
             alive: boolFrom(item, ['alive', 'healthy', 'available']),
+            lastCheckedUnixMs: numberFrom(item, ['lastCheckedUnixMs', 'last_checked_unix_ms']),
+            lastError: stringFrom(item, ['lastError', 'last_error', 'error']),
           });
           return acc;
         }, []),

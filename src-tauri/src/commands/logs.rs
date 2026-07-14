@@ -1,12 +1,12 @@
 use tauri::State;
 
 use crate::errors::AppResult;
-use crate::models::logs::{LogAppend, LogEntry, LogQuery};
+use crate::models::logs::{LogAppend, LogEntry, LogPage, LogQuery};
 use crate::services::logs;
 use crate::state::app_state::AppState;
 
 #[tauri::command]
-pub fn logs_list(state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<Vec<LogEntry>> {
+pub fn logs_list(state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<LogPage> {
     logs::list(state, query)
 }
 

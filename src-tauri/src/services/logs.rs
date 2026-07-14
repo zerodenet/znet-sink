@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use tauri::State;
 
 use crate::errors::AppResult;
-use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogQuery, LogSource};
+use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogPage, LogQuery, LogSource};
 use crate::services::common::{lock, normalize_required, now_unix_ms};
 use crate::services::log_store;
 use crate::state::app_state::AppState;
@@ -66,32 +66,10 @@ pub(crate) fn znet_log(state: Option<&AppState>, level: LogLevel, message: impl 
     }
 }
 
-pub fn list(state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<Vec<LogEntry>> {
-    let query = query.unwrap_or_default();
-    let limit = query.limit.unwrap_or(200).min(1000);
-    let entries = lock(state.logs(), "logs")?;
-
-    let mut result = entries
-        .iter()
-        .rev()
-        .filter(|entry| {
-            query
-                .source
-                .as_ref()
-                .is_none_or(|source| &entry.source == source)
-        })
-        .filter(|entry| {
-            query
-                .level
-                .as_ref()
-                .is_none_or(|level| &entry.level == level)
-        })
-        .take(limit)
-        .cloned()
-        .collect::<Vec<_>>();
-    result.reverse();
-
-    Ok(result)
+pub fn list(_state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<LogPage> {
+    let mut query = query.unwrap_or_default();
+    query.limit = Some(query.limit.unwrap_or(200).clamp(1, 1_000));
+    log_store::query_page(&query)
 }
 
 pub fn append(state: State<'_, AppState>, input: LogAppend) -> AppResult<LogEntry> {

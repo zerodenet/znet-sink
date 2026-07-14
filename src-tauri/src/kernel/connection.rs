@@ -104,6 +104,15 @@ impl MultiplexedConnection {
             "events": [],
         });
         let subscribe_bytes = transport::serialize_frame(&subscribe_frame)?;
+        push_debug_frame(DebugFrame {
+            id: 0,
+            at_ms: crate::services::common::now_unix_ms(),
+            direction: "tx".to_string(),
+            frame_type: "subscribe".to_string(),
+            payload: subscribe_frame,
+            elapsed_ms: None,
+            error: None,
+        });
         {
             let mut writer = inner.writer.lock().expect("IPC writer mutex poisoned");
             writer.write_all(&subscribe_bytes).map_err(|error| {
@@ -181,7 +190,7 @@ impl MultiplexedConnection {
         push_debug_frame(DebugFrame {
             id: 0,
             at_ms: crate::services::common::now_unix_ms(),
-            direction: "tx",
+            direction: "tx".to_string(),
             frame_type: "multiplex".to_string(),
             payload: serde_json::json!({
                 "requestId": request_id,
@@ -231,7 +240,7 @@ impl MultiplexedConnection {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "response".to_string(),
                     payload: serde_json::json!({
                         "requestId": request_id,
@@ -248,7 +257,7 @@ impl MultiplexedConnection {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "error".to_string(),
                     payload: serde_json::json!({
                         "requestId": request_id,
@@ -263,7 +272,7 @@ impl MultiplexedConnection {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "error".to_string(),
                     payload: serde_json::json!({
                         "requestId": request_id,
@@ -346,9 +355,9 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "subscribe-ack".to_string(),
-                    payload: serde_json::json!({ "subscribed": true }),
+                    payload: frame.clone(),
                     elapsed_ms: None,
                     error: None,
                 });
@@ -378,7 +387,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "response".to_string(),
                     payload: serde_json::json!({
                         "requestId": id,
@@ -401,7 +410,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 push_debug_frame(DebugFrame {
                     id: 0,
                     at_ms: crate::services::common::now_unix_ms(),
-                    direction: "rx",
+                    direction: "rx".to_string(),
                     frame_type: "orphan-response".to_string(),
                     payload: serde_json::json!({ "preview": preview }),
                     elapsed_ms: None,
@@ -411,19 +420,12 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             // Response with no matching id → drop.
         } else {
             // Event frame: fan out to every subscriber. No subscriber → ignore.
-            let event_type = frame
-                .get("event_type")
-                .or_else(|| frame.get("type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
             push_debug_frame(DebugFrame {
                 id: 0,
                 at_ms: crate::services::common::now_unix_ms(),
-                direction: "rx",
+                direction: "rx".to_string(),
                 frame_type: "event".to_string(),
-                payload: serde_json::json!({
-                    "eventType": event_type,
-                }),
+                payload: frame.clone(),
                 elapsed_ms: None,
                 error: None,
             });
