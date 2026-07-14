@@ -100,14 +100,13 @@ class ConfigEditorService {
       }
 
       // Load config
-      const result = configResult.status === 'fulfilled' ? configResult.value : null;
-      if (!result || !result.available || !result.response) {
+      const config = configResult.status === 'fulfilled' ? configResult.value : null;
+      if (!config) {
         this.lastError = '内核不可用，无法加载配置';
         this.phase = 'error';
         return;
       }
 
-      const config = result.response as Record<string, unknown>;
       this._sourceObj = config;
       this.sourceJson = JSON.stringify(config, null, 2);
       this.draftJson = this.sourceJson;
@@ -342,8 +341,8 @@ class ConfigEditorService {
         getCoreStats(),
       ]);
 
-      if (configResult.status === 'fulfilled' && configResult.value.available && configResult.value.response) {
-        const config = configResult.value.response as Record<string, unknown>;
+      if (configResult.status === 'fulfilled') {
+        const config = configResult.value;
         this._sourceObj = config;
         this.sourceJson = JSON.stringify(config, null, 2);
         this.draftJson = this.sourceJson;

@@ -205,6 +205,8 @@ pub struct GuiPolicyMember {
     pub selected: bool,
     pub alive: Option<bool>,
     pub delay_ms: Option<u64>,
+    pub last_checked_unix_ms: Option<u64>,
+    pub last_error: Option<String>,
 }
 
 /// Proxy node extracted from the active proxy config file (static data).
@@ -428,6 +430,11 @@ pub struct GuiConfigChangedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct GuiPolicyProbeCompletedEvent {
     pub policy_tag: String,
+    pub trigger: Option<String>,
+    pub url: Option<String>,
+    pub started_at_unix_ms: Option<u64>,
+    pub completed_at_unix_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
     pub selected: Option<String>,
     pub members: Vec<GuiPolicyMember>,
 }

@@ -1,13 +1,9 @@
-//! Network probe service — fetch outbound IP and geo information.
-//!
-//! Uses the kernel's proxy channel to make HTTP requests to GeoIP services,
-//! revealing the actual outbound IP address and geographic location.
-
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::errors::{AppError, AppResult};
+use crate::models::app_config::default_network_probe_urls;
 
-/// GeoIP information returned by the probe.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkProbeResult {
@@ -19,142 +15,173 @@ pub struct NetworkProbeResult {
     pub isp: Option<String>,
 }
 
-/// Probe the outbound network by fetching IP info through the local proxy.
-///
-/// This sends an HTTP request to a GeoIP service via the local proxy (if running),
-/// revealing the actual exit node's IP and location.
-pub fn probe_outbound_with_proxy(proxy_host: &str, proxy_port: u16) -> AppResult<NetworkProbeResult> {
+pub fn probe_outbound_with_proxy(
+    proxy_host: &str,
+    proxy_port: u16,
+    probe_urls: &[String],
+) -> AppResult<NetworkProbeResult> {
+    let probe_urls = if probe_urls.is_empty() {
+        default_network_probe_urls()
+    } else {
+        probe_urls.to_vec()
+    };
+
     let proxy_url = format!("http://{}:{}", proxy_host, proxy_port);
-
-    // Try with proxy first, then without
-    let result = try_geoip_services(Some(&proxy_url))
-        .or_else(|_| try_geoip_services(None));
-
-    result
+    match try_probe_urls(Some(&proxy_url), &probe_urls) {
+        Ok(result) => Ok(result),
+        Err(proxy_error) => match try_probe_urls(None, &probe_urls) {
+            Ok(result) => Ok(result),
+            Err(direct_error) => Err(AppError::internal(format!(
+                "all network probe URLs failed (proxy: {}; direct: {})",
+                proxy_error.message, direct_error.message
+            ))),
+        },
+    }
 }
 
-fn try_geoip_services(proxy_url: Option<&str>) -> AppResult<NetworkProbeResult> {
-    let mut builder = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10));
+fn try_probe_urls(proxy_url: Option<&str>, probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
+    let mut builder =
+        reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
 
     if let Some(proxy) = proxy_url {
-        if let Ok(p) = reqwest::Proxy::all(proxy) {
-            builder = builder.proxy(p);
+        if let Ok(parsed_proxy) = reqwest::Proxy::all(proxy) {
+            builder = builder.proxy(parsed_proxy);
         }
     }
 
     let client = builder
         .build()
-        .map_err(|e| AppError::internal(format!("failed to build HTTP client: {}", e)))?;
+        .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
 
-    // Service 1: ip-api.com (free, no key required)
-    if let Ok(result) = fetch_ip_api_com(&client) {
-        return Ok(result);
+    let mut failures = Vec::new();
+    for url in probe_urls {
+        match fetch_probe_result(&client, url) {
+            Ok(result) => return Ok(result),
+            Err(error) => failures.push(format!("{url}: {}", error.message)),
+        }
     }
 
-    // Service 2: ipinfo.io (free tier, limited)
-    if let Ok(result) = fetch_ipinfo_io(&client) {
-        return Ok(result);
-    }
-
-    // Service 3: httpbin.org (basic IP only)
-    if let Ok(result) = fetch_httpbin_org(&client) {
-        return Ok(result);
-    }
-
-    Err(AppError::internal("all GeoIP services failed".to_string()))
+    Err(AppError::internal(failures.join("; ")))
 }
 
-fn fetch_ip_api_com(client: &reqwest::blocking::Client) -> AppResult<NetworkProbeResult> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct IpApiResponse {
-        query: Option<String>,
-        country: Option<String>,
-        region_name: Option<String>,
-        city: Option<String>,
-        org: Option<String>,
-        isp: Option<String>,
+fn fetch_probe_result(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> AppResult<NetworkProbeResult> {
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|error| AppError::internal(format!("request failed: {error}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppError::internal(format!(
+            "unexpected HTTP status {status}"
+        )));
     }
 
-    let resp = client
-        .get("http://ip-api.com/json/?fields=query,country,regionName,city,org,isp")
-        .send()
-        .map_err(|e| AppError::internal(format!("ip-api.com request failed: {}", e)))?;
-
-    let text = resp
+    let body = response
         .text()
-        .map_err(|e| AppError::internal(format!("ip-api.com read failed: {}", e)))?;
+        .map_err(|error| AppError::internal(format!("failed to read response body: {error}")))?;
 
-    let data: IpApiResponse = serde_json::from_str(&text)
-        .map_err(|e| AppError::internal(format!("ip-api.com parse failed: {}", e)))?;
+    parse_probe_response(&body)
+}
+
+fn parse_probe_response(body: &str) -> AppResult<NetworkProbeResult> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| AppError::internal(format!("failed to parse JSON response: {error}")))?;
+
+    let object = value
+        .as_object()
+        .ok_or_else(|| AppError::internal("probe response must be a JSON object"))?;
+
+    let ip = first_string(object, &["query", "ip", "origin"])
+        .map(normalize_ip)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::internal("probe response did not contain an IP field"))?;
+
+    let org = first_string(object, &["org", "organization"]);
+    let isp = first_string(object, &["isp"]).or_else(|| org.clone());
 
     Ok(NetworkProbeResult {
-        ip: data.query.unwrap_or_else(|| "unknown".to_string()),
-        country: data.country,
-        region: data.region_name,
-        city: data.city,
-        org: data.org,
-        isp: data.isp,
+        ip,
+        country: first_string(object, &["country", "country_name"]),
+        region: first_string(object, &["regionName", "region", "region_name"]),
+        city: first_string(object, &["city"]),
+        org,
+        isp,
     })
 }
 
-fn fetch_ipinfo_io(client: &reqwest::blocking::Client) -> AppResult<NetworkProbeResult> {
-    #[derive(Deserialize)]
-    struct IpinfoResponse {
-        ip: Option<String>,
-        country: Option<String>,
-        region: Option<String>,
-        city: Option<String>,
-        org: Option<String>,
-    }
-
-    let resp = client
-        .get("https://ipinfo.io/json")
-        .send()
-        .map_err(|e| AppError::internal(format!("ipinfo.io request failed: {}", e)))?;
-
-    let text = resp
-        .text()
-        .map_err(|e| AppError::internal(format!("ipinfo.io read failed: {}", e)))?;
-
-    let data: IpinfoResponse = serde_json::from_str(&text)
-        .map_err(|e| AppError::internal(format!("ipinfo.io parse failed: {}", e)))?;
-
-    Ok(NetworkProbeResult {
-        ip: data.ip.unwrap_or_else(|| "unknown".to_string()),
-        country: data.country,
-        region: data.region,
-        city: data.city,
-        org: data.org.clone(),
-        isp: data.org,
+fn first_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| match value {
+            Value::String(text) => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then_some(trimmed.to_string())
+            }
+            _ => None,
+        })
     })
 }
 
-fn fetch_httpbin_org(client: &reqwest::blocking::Client) -> AppResult<NetworkProbeResult> {
-    #[derive(Deserialize)]
-    struct HttpbinResponse {
-        origin: Option<String>,
+fn normalize_ip(value: String) -> String {
+    value
+        .split(',')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_probe_response;
+
+    #[test]
+    fn parse_ip_api_shape() {
+        let result = parse_probe_response(
+            r#"{
+                "query":"1.2.3.4",
+                "country":"Japan",
+                "regionName":"Tokyo",
+                "city":"Tokyo",
+                "org":"Example Org",
+                "isp":"Example ISP"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(result.ip, "1.2.3.4");
+        assert_eq!(result.country.as_deref(), Some("Japan"));
+        assert_eq!(result.region.as_deref(), Some("Tokyo"));
+        assert_eq!(result.isp.as_deref(), Some("Example ISP"));
     }
 
-    let resp = client
-        .get("https://httpbin.org/ip")
-        .send()
-        .map_err(|e| AppError::internal(format!("httpbin.org request failed: {}", e)))?;
+    #[test]
+    fn parse_ipinfo_shape() {
+        let result = parse_probe_response(
+            r#"{
+                "ip":"5.6.7.8",
+                "country":"US",
+                "region":"California",
+                "city":"San Jose",
+                "org":"Example ASN"
+            }"#,
+        )
+        .unwrap();
 
-    let text = resp
-        .text()
-        .map_err(|e| AppError::internal(format!("httpbin.org read failed: {}", e)))?;
+        assert_eq!(result.ip, "5.6.7.8");
+        assert_eq!(result.region.as_deref(), Some("California"));
+        assert_eq!(result.org.as_deref(), Some("Example ASN"));
+        assert_eq!(result.isp.as_deref(), Some("Example ASN"));
+    }
 
-    let data: HttpbinResponse = serde_json::from_str(&text)
-        .map_err(|e| AppError::internal(format!("httpbin.org parse failed: {}", e)))?;
+    #[test]
+    fn parse_httpbin_shape() {
+        let result = parse_probe_response(r#"{"origin":"9.9.9.9, 10.10.10.10"}"#).unwrap();
 
-    Ok(NetworkProbeResult {
-        ip: data.origin.unwrap_or_else(|| "unknown".to_string()),
-        country: None,
-        region: None,
-        city: None,
-        org: None,
-        isp: None,
-    })
+        assert_eq!(result.ip, "9.9.9.9");
+        assert!(result.country.is_none());
+    }
 }

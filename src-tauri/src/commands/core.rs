@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
 use crate::kernel::protocol as ipc;
+use crate::kernel::zero::queries;
 use crate::models::core::{CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreIpcOptions};
 use crate::services::common::lock;
 use crate::services::{core_config, core_events, interaction_mode};
@@ -65,50 +66,80 @@ pub async fn core_ipc_request(
 pub async fn core_get_capabilities(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
+) -> AppResult<Value> {
     interaction_mode::require_pro_mode(state.inner(), "diagnostics")?;
-    ipc::get_capabilities(resolve_options(&state, options)?).await
+    queries::query_value(
+        serde_json::json!({"capabilities": {}}),
+        "capabilities",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn core_get_health(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
-    ipc::get_health(resolve_options(&state, options)?).await
+) -> AppResult<Value> {
+    queries::query_value(
+        serde_json::json!({"health": {}}),
+        "health",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn core_get_config(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
+) -> AppResult<Value> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-    ipc::get_config(resolve_options(&state, options)?).await
+    queries::query_value(
+        serde_json::json!({"config": {}}),
+        "config",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn core_get_runtime(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
-    ipc::get_runtime(resolve_options(&state, options)?).await
+) -> AppResult<Value> {
+    queries::query_value(
+        serde_json::json!({"runtime": {}}),
+        "runtime",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn core_get_stats(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
-    ipc::get_stats(resolve_options(&state, options)?).await
+) -> AppResult<Value> {
+    queries::query_value(
+        serde_json::json!({"stats": {}}),
+        "stats",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn core_get_policies(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
-) -> AppResult<CoreCallResult> {
-    ipc::get_policies(resolve_options(&state, options)?).await
+) -> AppResult<Value> {
+    queries::query_value(
+        serde_json::json!({"policies": {}}),
+        "policies",
+        resolve_options(&state, options)?,
+    )
+    .await
 }
 
 #[tauri::command]

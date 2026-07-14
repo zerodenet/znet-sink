@@ -282,9 +282,7 @@ class OverviewDataStore {
   }
 
   async refreshPolicyNodes() {
-    const result = await getCorePolicies();
-    if (!result.available || !result.response) return;
-    this.applyPolicyEvent(result.response);
+    this.applyPolicyEvent(await getCorePolicies());
   }
 }
 

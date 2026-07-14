@@ -15,8 +15,7 @@ use crate::models::kernel_version::{
     KernelVersionList, ReleaseChannel,
 };
 use crate::models::logs::{LogLevel, LogSource};
-use crate::services::common;
-use crate::services::core_config;
+use crate::services::{common, core_config, core_process};
 
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/zerodenet/zero/releases?per_page=30";
@@ -149,6 +148,16 @@ pub fn install_version(
         None,
     );
 
+    let _ = app.emit(
+        PROGRESS_EVENT,
+        KernelDownloadProgress {
+            version: version.clone(),
+            bytes_downloaded: 0,
+            bytes_total: None,
+            percent: None,
+        },
+    );
+
     let mut response = client.get(&download_url).send().map_err(|e| {
         let proxy_hint = if proxy_auto {
             "（已启用跟随系统代理：请确认 HTTPS_PROXY/HTTP_PROXY 环境变量指向可用代理；若无需代理可在设置中关闭「下载跟随系统代理」）"
@@ -269,6 +278,32 @@ pub fn install_version(
     // Target path in the install directory
     let executable_path = dir.join(executable_name);
 
+    let state = app.state::<crate::state::app_state::AppState>();
+    let _ = crate::services::logs::append_entry(
+        state.inner(),
+        LogSource::App,
+        LogLevel::Info,
+        format!("kernel upgrade: stopping core before swapping in v{version}"),
+        None,
+    );
+
+    // Keep the kernel running during the network transfer so environments
+    // that depend on the kernel's mixed-port can still reach the release
+    // asset. We only stop it immediately before replacing the executable.
+    let _ = core_process::stop(state.clone());
+    let _ = core_process::kill_external(state.inner());
+
+    let _ = crate::services::logs::append_entry(
+        state.inner(),
+        LogSource::App,
+        LogLevel::Info,
+        format!(
+            "kernel upgrade: replacing binary at {}",
+            executable_path.display()
+        ),
+        None,
+    );
+
     // Remove old binary.  The kernel was killed before we got here but
     // Windows may hold the file handle briefly.  Retry a few times.
     if executable_path.exists() {
@@ -306,6 +341,17 @@ pub fn install_version(
     }
 
     let channel = classify_channel(&version, false);
+
+    let _ = crate::services::logs::append_entry(
+        state.inner(),
+        LogSource::App,
+        LogLevel::Info,
+        format!(
+            "kernel install complete: v{version} → {}",
+            executable_path.display()
+        ),
+        None,
+    );
 
     Ok(KernelInstallResult {
         success: true,

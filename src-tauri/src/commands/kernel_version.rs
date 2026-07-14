@@ -1,11 +1,9 @@
 use tauri::State;
 
 use crate::errors::AppResult;
+use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::models::{app_config::AppCoreConfig, logs::LogLevel, logs::LogSource};
-use crate::services::{
-    app_config_store, common, core_process, interaction_mode, kernel_manager, logs,
-};
+use crate::services::{app_config_store, common, interaction_mode, kernel_manager};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -31,24 +29,6 @@ pub async fn kernel_install_version(
     app: tauri::AppHandle,
 ) -> AppResult<KernelInstallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-
-    // ── Stop the running core so the old binary isn't locked during
-    // extraction.  On Windows a running .exe cannot be overwritten.
-    //
-    // 1. Try graceful stop (kills our managed child process).
-    // 2. Force-kill any remaining zero process (external or stale).
-    //    This also covers the case where the kernel was started by a
-    //    previous GUI session and the current one doesn't own the child.
-    let _ = core_process::stop(state.clone());
-    let _ = core_process::kill_external(state.inner());
-
-    let _ = logs::append_entry(
-        state.inner(),
-        LogSource::App,
-        LogLevel::Info,
-        format!("kernel upgrade: stopped core before installing v{version}"),
-        None,
-    );
 
     let proxy_auto = common::lock(state.app_config(), "app_config")?
         .core

@@ -10,6 +10,7 @@
   import TitleBar from '$lib/components/TitleBar.svelte';
   import AppHeader from '$lib/components/AppHeader.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
+  import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { Spinner } from '$lib/components/ui/Spinner';
   import TabContent from '$lib/components/TabContent.svelte';
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
@@ -142,6 +143,12 @@
     {/if}
   </div>
 
+  {#if (updater.updateAvailable || updater.downloading) && store.isInitialized}
+    <div class="global-update-shell">
+      <UpdateBanner />
+    </div>
+  {/if}
+
   <Toast />
 </main>
 
@@ -218,5 +225,16 @@
   .retry-btn:hover {
     background: var(--muted);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  .global-update-shell {
+    flex-shrink: 0;
+    padding: 0 20px 14px;
+  }
+
+  @media (max-width: 640px) {
+    .global-update-shell {
+      padding: 0 12px 12px;
+    }
   }
 </style>

@@ -385,23 +385,15 @@ pub async fn gui_set_mode(
 
 /// Trigger a url_test probe on a policy group.
 ///
-/// Fire-and-forget: spawns the IPC command in background, returns immediately.
-/// Results arrive via the event stream as `policy.probeCompleted` events.
-/// This avoids blocking the UI for the entire probe duration (which can be
-/// several seconds per url_test cycle).
+/// Waits only for the kernel's command acknowledgement. Probe results arrive
+/// later via `policy.probeCompleted` events.
 #[tauri::command]
 pub async fn gui_probe_policy(
     state: State<'_, AppState>,
     policy_tag: String,
 ) -> AppResult<serde_json::Value> {
     let opts = default_opts(state.inner());
-    // Fire the probe in background — the kernel will emit policy.probeCompleted
-    // events when results are ready. The frontend listens for these via the
-    // event subscription to update latency/health indicators.
-    tauri::async_runtime::spawn(async move {
-        let _ = ZeroAdapter::new().probe_policy(policy_tag, opts).await;
-    });
-    Ok(serde_json::json!({"accepted": true}))
+    ZeroAdapter::new().probe_policy(policy_tag, opts).await
 }
 
 /// DNS lookup diagnostic.
@@ -511,31 +503,42 @@ async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
 /// Probe outbound network to get IP and geo information.
 /// Uses the kernel's proxy channel to fetch from GeoIP services.
 #[tauri::command]
-pub async fn gui_network_probe(state: State<'_, AppState>) -> AppResult<crate::services::network_probe::NetworkProbeResult> {
-    // Clone the config data we need before spawning the blocking task
-    let (proxy_host, proxy_port) = {
+pub async fn gui_network_probe(
+    state: State<'_, AppState>,
+) -> AppResult<crate::services::network_probe::NetworkProbeResult> {
+    let (proxy_host, proxy_port, probe_urls) = {
         let config = common::lock(state.app_config(), "app_config")?;
-        (config.local_proxy.host.clone(), config.local_proxy.port)
+        (
+            config.local_proxy.host.clone(),
+            config.local_proxy.port,
+            config.core.network_probe_urls.clone(),
+        )
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::network_probe::probe_outbound_with_proxy(&proxy_host, proxy_port)
+        crate::services::network_probe::probe_outbound_with_proxy(
+            &proxy_host,
+            proxy_port,
+            &probe_urls,
+        )
     })
     .await
     .map_err(|e| AppError::internal(format!("network probe task failed: {}", e)))?
 }
 
-/// Get the GUI log file path and directory.
+/// Get the GUI / core log file paths and data directory.
 #[tauri::command]
 pub fn gui_log_paths() -> AppResult<GuiLogPaths> {
     let data_dir = crate::services::data_dir()?;
     let logs_dir = data_dir.join("logs");
     let log_file = logs_dir.join("gui.log.jsonl");
+    let core_log_file = crate::services::core_config::managed_core_log_path()?;
 
     Ok(GuiLogPaths {
         data_dir: data_dir.to_string_lossy().to_string(),
         logs_dir: logs_dir.to_string_lossy().to_string(),
         log_file: log_file.to_string_lossy().to_string(),
+        core_log_file: core_log_file.to_string_lossy().to_string(),
     })
 }
 
@@ -545,4 +548,5 @@ pub struct GuiLogPaths {
     pub data_dir: String,
     pub logs_dir: String,
     pub log_file: String,
+    pub core_log_file: String,
 }

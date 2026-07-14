@@ -1,5 +1,41 @@
+use gui_lib::kernel::zero::events;
 use gui_lib::kernel::zero::parsing;
+use gui_lib::models::gui_core::GuiEventData;
 use serde_json::json;
+
+#[test]
+fn policy_probe_completed_preserves_runtime_details() {
+    let event = events::normalize_event(&json!({
+        "schema_id": "zero.event.v1",
+        "event_type": "policy.probe.completed",
+        "payload": {
+            "policy_tag": "auto",
+            "trigger": "manual",
+            "url": "http://www.gstatic.com/generate_204",
+            "started_at_unix_ms": 1710000000000_u64,
+            "completed_at_unix_ms": 1710000000320_u64,
+            "duration_ms": 320,
+            "selected": "server-b",
+            "members": [{
+                "target_tag": "server-a",
+                "healthy": false,
+                "latency_ms": 120,
+                "error": "timeout"
+            }]
+        }
+    }));
+
+    let GuiEventData::PolicyProbeCompleted(probe) = event.payload else {
+        panic!("expected policy probe event");
+    };
+    assert_eq!(probe.policy_tag, "auto");
+    assert_eq!(probe.trigger.as_deref(), Some("manual"));
+    assert_eq!(probe.duration_ms, Some(320));
+    assert_eq!(probe.selected.as_deref(), Some("server-b"));
+    assert_eq!(probe.members[0].alive, Some(false));
+    assert_eq!(probe.members[0].delay_ms, Some(120));
+    assert_eq!(probe.members[0].last_error.as_deref(), Some("timeout"));
+}
 
 // ── stats ──
 
@@ -212,6 +248,49 @@ fn unwrap_core_envelope_passes_through_non_envelope() {
 }
 
 // ── QueryResponse variant unwrapping ──
+
+#[test]
+fn unwrap_query_variant_returns_config_entity() {
+    let result = parsing::unwrap_query_variant(
+        json!({
+            "api_id": "zero.api.v1",
+            "ok": true,
+            "id": "config-1",
+            "result": {
+                "config": {
+                    "inbounds": [],
+                    "outbounds": [{ "tag": "direct", "protocol": { "type": "direct" } }]
+                }
+            }
+        }),
+        "config",
+    )
+    .unwrap();
+
+    assert!(result.get("api_id").is_none());
+    assert!(result.get("result").is_none());
+    assert_eq!(result["outbounds"][0]["tag"], json!("direct"));
+}
+
+#[test]
+fn unwrap_query_variant_returns_policies_entity() {
+    let result = parsing::unwrap_query_variant(
+        json!({
+            "api_id": "zero.api.v1",
+            "ok": true,
+            "id": "policies-1",
+            "result": {
+                "policies": [{ "policy_tag": "auto", "selected": "server-b" }]
+            }
+        }),
+        "policies",
+    )
+    .unwrap();
+
+    assert!(result.is_array());
+    assert_eq!(result[0]["policy_tag"], json!("auto"));
+    assert_eq!(result[0]["selected"], json!("server-b"));
+}
 
 #[test]
 fn unwrap_query_variant_strips_health_key() {

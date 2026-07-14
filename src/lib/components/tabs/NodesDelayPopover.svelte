@@ -27,12 +27,54 @@
     hoveredIndex = null;
   }
 
-  function formatTime(ts: number): string {
-    const d = new Date(ts);
-    const h = d.getHours().toString().padStart(2, '0');
-    const m = d.getMinutes().toString().padStart(2, '0');
-    const s = d.getSeconds().toString().padStart(2, '0');
-    return `${h}:${m}:${s}`;
+  function isSameDay(a: Date, b: Date): boolean {
+    return a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth()
+      && a.getDate() === b.getDate();
+  }
+
+  function formatHistoryTime(ts: number): string {
+    const date = new Date(ts);
+    const now = new Date();
+    if (isSameDay(date, now)) {
+      return new Intl.DateTimeFormat('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(date);
+    }
+
+    if (date.getFullYear() === now.getFullYear()) {
+      return new Intl.DateTimeFormat('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(date);
+    }
+
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date);
+  }
+
+  function formatHistoryTooltip(ts: number): string {
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(ts));
   }
 
   function handleSparklineHover(event: MouseEvent) {
@@ -105,7 +147,7 @@
       </svg>
       {#if hoveredEntry}
         <span class="hover-tooltip">
-          {formatTime(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
+          {formatHistoryTooltip(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
         </span>
       {/if}
     </div>
@@ -113,7 +155,7 @@
     <div class="delay-list">
       {#each reversedHist as entry, i}
         <div class="delay-list-item">
-          <span class="delay-list-time">{formatTime(entry.at)}</span>
+          <span class="delay-list-time" title={formatHistoryTooltip(entry.at)}>{formatHistoryTime(entry.at)}</span>
           <span class="delay-list-bar-wrap">
             <span
               class="delay-list-bar"
@@ -140,7 +182,7 @@
 <style>
   .delay-portal-popover {
     min-width: 180px;
-    max-width: 240px;
+    max-width: 280px;
     padding: 8px 10px;
     border-radius: 8px;
     background: var(--dialog-bg, #fff);
@@ -245,7 +287,7 @@
     font-family: var(--font-mono);
     color: var(--muted-foreground);
     flex-shrink: 0;
-    width: 50px;
+    width: 92px;
     text-align: right;
   }
 

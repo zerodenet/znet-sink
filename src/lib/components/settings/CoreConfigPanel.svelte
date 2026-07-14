@@ -9,6 +9,7 @@
   import {
     getAppConfig,
     getCoreConfigSnapshot,
+    getCoreProcessStatus,
     updateAppConfig,
     getGuiCoreHealth,
   } from '$lib/services/core';
@@ -40,6 +41,7 @@
   let appConfig = $state<AppConfig | null>(null);
   let kernelInfo = $state<CoreKernelInfo | null>(null);
   let executablePathDraft = $state('');
+  let networkProbeUrlsDraft = $state('');
   let loading = $state(false);
   let saving = $state(false);
   let message = $state<string | null>(null);
@@ -60,23 +62,36 @@
   const hasExecutable = $derived(Boolean(kernelInfo?.executableExists));
   const recommendedInstallDir = $derived(kernelInfo?.recommendedInstallDir ?? '');
   const pathDirty = $derived(executablePathDraft.trim() !== (kernelInfo?.executablePath ?? ''));
+  const normalizedNetworkProbeUrlsDraft = $derived.by(() => parseNetworkProbeUrls(networkProbeUrlsDraft));
+  const networkProbeUrlsDirty = $derived(
+    normalizedNetworkProbeUrlsDraft.join('\n') !== (appConfig?.core.networkProbeUrls ?? []).join('\n'),
+  );
   const currentVersion = $derived(runningVersion ?? installedVersion ?? null);
 
   const channelFilteredVersions = $derived(
     (versionList?.versions ?? []).filter((v) => v.channel === activeChannel),
   );
 
+  function parseNetworkProbeUrls(value: string): string[] {
+    return value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
   async function refresh() {
     loading = true;
     message = null;
     try {
-      const [config, info] = await Promise.all([
+      const [config, info, process] = await Promise.all([
         getAppConfig(),
         getCoreConfigSnapshot(),
+        getCoreProcessStatus().catch(() => null),
       ]);
       appConfig = config;
       kernelInfo = info;
       executablePathDraft = info.executablePath ?? '';
+      networkProbeUrlsDraft = (config.core.networkProbeUrls ?? []).join('\n');
 
       // Detect installed version
       try {
@@ -86,11 +101,16 @@
         installedVersion = null;
       }
 
-      // Get running version from health API
-      try {
-        const health = await getGuiCoreHealth();
-        runningVersion = health.engineVersion ? stripV(health.engineVersion) : null;
-      } catch {
+      // Skip runtime health probing when the kernel is intentionally stopped
+      // (for example right after a successful install swap).
+      if (process?.state === 'running') {
+        try {
+          const health = await getGuiCoreHealth();
+          runningVersion = health.engineVersion ? stripV(health.engineVersion) : null;
+        } catch {
+          runningVersion = null;
+        }
+      } else {
         runningVersion = null;
       }
     } catch (error) {
@@ -132,6 +152,33 @@
       message = value
         ? '内核下载已启用跟随系统代理（HTTPS_PROXY / HTTP_PROXY）'
         : '内核下载已切换为直连（绕过所有代理）';
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveNetworkProbeUrls() {
+    if (!appConfig) return;
+
+    const urls = parseNetworkProbeUrls(networkProbeUrlsDraft);
+    if (urls.length === 0) {
+      const notice = '请至少保留一个网络检测地址';
+      message = notice;
+      warning(notice);
+      return;
+    }
+
+    saving = true;
+    message = null;
+    try {
+      const updated = await updateAppConfig({
+        core: { networkProbeUrls: urls },
+      });
+      appConfig = updated;
+      networkProbeUrlsDraft = updated.core.networkProbeUrls.join('\n');
+      message = '已保存网络检测地址';
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     } finally {
@@ -202,6 +249,8 @@
       );
       installResult = result;
       if (result.success) {
+        installedVersion = stripV(result.version);
+        runningVersion = null;
         executablePathDraft = result.executablePath;
         await saveExecutablePath();
         success(`内核 ${result.version} 安装成功`);
@@ -381,6 +430,34 @@
           disabled={loading || saving}
           onCheckedChange={toggleDownloadProxyAuto}
         />
+      </div>
+
+      <div class="probe-urls-card">
+        <div class="probe-urls-header">
+          <div class="probe-urls-text">
+            <span class="probe-urls-title">网络检测地址</span>
+            <span class="probe-urls-desc">
+              每行一个 `http` 或 `https` 地址，概览页的自动探测和右侧手动测试都会按顺序尝试这些地址。
+            </span>
+          </div>
+          <Button
+            size="sm"
+            onclick={saveNetworkProbeUrls}
+            disabled={loading || saving || !networkProbeUrlsDirty}
+          >
+            <Save class="h-3.5 w-3.5" />
+            <span>保存地址</span>
+          </Button>
+        </div>
+
+        <textarea
+          bind:value={networkProbeUrlsDraft}
+          class="probe-urls-textarea mono"
+          rows="4"
+          spellcheck="false"
+          disabled={loading || saving}
+          placeholder="https://ipinfo.io/json"
+        ></textarea>
       </div>
     </div>
   {/if}
@@ -699,6 +776,66 @@
     line-height: 1.5;
   }
 
+  .probe-urls-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+  }
+
+  .probe-urls-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .probe-urls-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .probe-urls-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--foreground);
+  }
+
+  .probe-urls-desc {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    line-height: 1.5;
+  }
+
+  .probe-urls-textarea {
+    width: 100%;
+    min-height: 108px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    color: var(--foreground);
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    outline: none;
+  }
+
+  .probe-urls-textarea:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+  }
+
+  .probe-urls-textarea:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
   .message {
     padding: 10px 12px;
     font-size: 12px;
@@ -926,6 +1063,10 @@
 
     .path-row {
       grid-template-columns: 1fr;
+    }
+
+    .probe-urls-header {
+      flex-direction: column;
     }
 
     .version-row {

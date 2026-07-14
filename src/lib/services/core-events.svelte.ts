@@ -1,9 +1,11 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime } from '$lib/services/core';
 import { overviewData } from '$lib/services/overview-data.svelte';
+import { guiState } from '$lib/services/gui-state.svelte';
+import { delayHistory } from '$lib/services/delay-history.svelte';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
-import type { GuiConnectionItem } from '$lib/types/gui-api';
+import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
@@ -178,10 +180,21 @@ class CoreEventsService {
       return;
     }
 
-    if (eventType === 'policy.selected' || eventType === 'policy.probeCompleted') {
+    if (eventType === 'policy.probeCompleted') {
+      const probe = data as PolicyProbeCompletedEvent;
+      if (probe?.policyTag && Array.isArray(probe.members)) {
+        guiState.applyPolicyProbeCompleted(probe);
+        for (const member of probe.members) {
+          delayHistory.record(member.tag, member.delayMs, member.alive !== false);
+        }
+      }
       awaitIgnore(overviewData.refreshPolicyNodes());
-      // Bump statusTick so policy-group watchers (node page, overview)
-      // re-fetch runtime data and reflect the new selection / latency.
+      this.statusTick++;
+      return;
+    }
+
+    if (eventType === 'policy.selected') {
+      awaitIgnore(overviewData.refreshPolicyNodes());
       this.statusTick++;
       return;
     }
@@ -477,12 +490,8 @@ class CoreEventsService {
         getCoreStats(),
         getCoreRuntime(),
       ]);
-      if (statsResult.available && statsResult.response) {
-        overviewData.applyStatsEvent(statsResult.response as Record<string, unknown>);
-      }
-      if (runtimeResult.available && runtimeResult.response) {
-        overviewData.applyRuntimeEvent(runtimeResult.response as Record<string, unknown>);
-      }
+      overviewData.applyStatsEvent(statsResult);
+      overviewData.applyRuntimeEvent(runtimeResult);
       await overviewData.refreshPolicyNodes();
     } catch {
       // Best-effort initial fetch

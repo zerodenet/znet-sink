@@ -1,13 +1,14 @@
 use serde_json::{Map, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     core_process::CoreProcessState,
     gui_core::{GuiProxyMode, GuiProxyModeStatus, GuiSetProxyModeInput},
+    logs::LogLevel,
 };
 use crate::services::{
-    common, core_config, core_process, domain_store, proxy_config, system_proxy,
+    common, core_config, core_process, domain_store, logs, proxy_config, system_proxy,
 };
 use crate::state::app_state::AppState;
 
@@ -76,14 +77,29 @@ pub async fn set(
         // Try mode.set hot-switch first (no restart, no connection interruption)
         if !restart_core {
             hot_switched =
-                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner())
-                    .await;
+                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner()).await;
         }
 
-        // Fallback: restart kernel if hot-switch failed or user explicitly requested restart
+        // Fallback: restart kernel if hot-switch failed or user explicitly
+        // requested restart. `stop`/`start` are blocking operations
+        // (`child.wait`, stderr join, kill backoff, port probe), so run them
+        // on the blocking pool just like the dedicated restart command does.
         if !hot_switched {
-            core_process::stop(state.clone())?;
-            let started = core_process::start(app_handle, state.clone())?;
+            logs::znet_log(
+                Some(state.inner()),
+                LogLevel::Info,
+                format!(
+                    "proxy mode switch: restarting core for {:?}",
+                    requested_mode
+                ),
+            );
+            let started = tauri::async_runtime::spawn_blocking(move || {
+                let state = app_handle.state::<AppState>();
+                core_process::stop(state.clone())?;
+                core_process::start(app_handle.clone(), state)
+            })
+            .await
+            .map_err(|e| AppError::internal(format!("proxy mode restart task failed: {e}")))??;
             restarted_core = started.state == CoreProcessState::Running;
         }
     }
@@ -132,10 +148,20 @@ async fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &A
     .await
     {
         Ok(_) => {
+            logs::znet_log(
+                Some(state),
+                LogLevel::Info,
+                format!("proxy mode hot-switch succeeded: {mode_str}"),
+            );
             eprintln!("[ZNet] mode.set hot-switch succeeded: {mode_str}");
             true
         }
         Err(e) => {
+            logs::znet_log(
+                Some(state),
+                LogLevel::Warn,
+                format!("proxy mode hot-switch failed for {mode_str}, falling back to restart"),
+            );
             eprintln!("[ZNet] mode.set failed, will restart kernel: {e:?}");
             false
         }

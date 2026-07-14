@@ -27,6 +27,7 @@ export interface ConnectionStatus {
   state: ConnectionState;
   message?: string;
   uptimeMs?: number;
+  startedAtUnixMs?: number;
   activeConnections?: number;
   coreAvailable?: boolean;
   systemProxyEnabled?: boolean;
@@ -87,6 +88,27 @@ export interface PolicyOutbound {
   type: string;
   delayMs?: number;
   alive?: boolean;
+  lastCheckedUnixMs?: number;
+  lastError?: string;
+}
+
+export interface PolicyProbeCompletedEvent {
+  policyTag: string;
+  trigger?: 'startup' | 'scheduled' | 'manual' | string;
+  url?: string;
+  startedAtUnixMs?: number;
+  completedAtUnixMs?: number;
+  durationMs?: number;
+  selected?: string;
+  members: PolicyOutbound[];
+}
+
+export interface PolicyProbeAccepted {
+  accepted: boolean;
+  result?: {
+    policyTag?: string;
+    probeTriggered?: boolean;
+  };
 }
 
 export interface PolicyGroup {

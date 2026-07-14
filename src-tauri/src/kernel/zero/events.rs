@@ -199,6 +199,11 @@ fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeComplet
 
     Some(GuiPolicyProbeCompletedEvent {
         policy_tag: string_at(payload, &["policy_tag", "policyTag"])?,
+        trigger: string_at(payload, &["trigger"]),
+        url: string_at(payload, &["url"]),
+        started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
+        completed_at_unix_ms: u64_at(payload, &["completed_at_unix_ms", "completedAtUnixMs"]),
+        duration_ms: u64_at(payload, &["duration_ms", "durationMs"]),
         selected,
         members,
     })
@@ -215,6 +220,15 @@ fn parse_policy_probe_member(payload: &Value, selected: Option<&str>) -> Option<
             .and_then(Value::as_bool)
             .or_else(|| payload.get("alive").and_then(Value::as_bool)),
         delay_ms: u64_at(payload, &["latency_ms", "latencyMs", "delay_ms", "delayMs"]),
+        last_checked_unix_ms: u64_at(
+            payload,
+            &[
+                "last_checked_unix_ms",
+                "lastCheckedUnixMs",
+                "checked_at_unix_ms",
+            ],
+        ),
+        last_error: string_at(payload, &["error", "last_error", "lastError"]),
     })
 }
 

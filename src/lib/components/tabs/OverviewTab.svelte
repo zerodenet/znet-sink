@@ -7,7 +7,6 @@
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import TunStackStatus from '$lib/components/core/TunStackStatus.svelte';
   import LogPanel from '$lib/components/core/LogPanel.svelte';
-  import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import {
     selectPolicy,
   } from '$lib/services/core';
@@ -29,6 +28,7 @@
   }
 
   let testExpanded = $state(false);
+  let uptimeNowMs = $state(Date.now());
 
   const PROXY_MODES = [
     { value: 'global', label: '全局' },
@@ -40,13 +40,10 @@
   let nodeDropdownOpen = $state(false);
   let nodeSwitching = $state<string | null>(null);
 
-  // Network probe from guiState (auto-triggered)
   const networkProbeResult = $derived(guiState.networkProbe);
   const networkProbeLoading = $derived(guiState.networkProbeLoading);
 
-  // Country name to code mapping (supports multiple formats)
-  const COUNTRY_NAME_MAP: Record<string, string> = {
-    // Chinese names
+  const COUNTRY_CODES: Record<string, string> = {
     '中国': 'CN', '美国': 'US', '日本': 'JP', '韩国': 'KR', '新加坡': 'SG',
     '香港': 'HK', '台湾': 'TW', '澳门': 'MO', '英国': 'GB', '德国': 'DE',
     '法国': 'FR', '加拿大': 'CA', '澳大利亚': 'AU', '俄罗斯': 'RU', '印度': 'IN',
@@ -56,54 +53,33 @@
     '新西兰': 'NZ', '墨西哥': 'MX', '阿根廷': 'AR', '智利': 'CL', '南非': 'ZA',
     '泰国': 'TH', '越南': 'VN', '马来西亚': 'MY', '印度尼西亚': 'ID', '菲律宾': 'PH',
     '阿联酋': 'AE', '沙特阿拉伯': 'SA', '以色列': 'IL', '土耳其': 'TR', '乌克兰': 'UA',
-    '哈萨克斯坦': 'KZ', '蒙古': 'MN', '老挝': 'LA', '柬埔寨': 'KH',
-    // English names (lowercase for case-insensitive matching)
-    'china': 'CN', 'united states': 'US', 'usa': 'US', 'japan': 'JP', 'korea': 'KR',
-    'south korea': 'KR', 'singapore': 'SG', 'hong kong': 'HK', 'taiwan': 'TW',
-    'united kingdom': 'GB', 'uk': 'GB', 'germany': 'DE', 'france': 'FR',
-    'canada': 'CA', 'australia': 'AU', 'russia': 'RU', 'india': 'IN',
-    'brazil': 'BR', 'netherlands': 'NL', 'sweden': 'SE', 'switzerland': 'CH',
-    'finland': 'FI', 'norway': 'NO', 'denmark': 'DK', 'poland': 'PL',
-    'czech republic': 'CZ', 'czechia': 'CZ', 'austria': 'AT', 'belgium': 'BE',
-    'italy': 'IT', 'spain': 'ES', 'portugal': 'PT', 'ireland': 'IE',
-    'new zealand': 'NZ', 'mexico': 'MX', 'argentina': 'AR', 'chile': 'CL',
-    'south africa': 'ZA', 'thailand': 'TH', 'vietnam': 'VN', 'malaysia': 'MY',
-    'indonesia': 'ID', 'philippines': 'PH', 'united arab emirates': 'AE',
-    'saudi arabia': 'SA', 'israel': 'IL', 'turkey': 'TR', 'ukraine': 'UA',
-    'kazakhstan': 'KZ', 'mongolia': 'MN', 'laos': 'LA', 'cambodia': 'KH',
-    'myanmar': 'MM', 'burma': 'MM', 'nepal': 'NP', 'bangladesh': 'BD',
-    'sri lanka': 'LK', 'pakistan': 'PK', 'iran': 'IR', 'iraq': 'IQ',
-    'syria': 'SY', 'jordan': 'JO', 'lebanon': 'LB', 'kuwait': 'KW',
-    'qatar': 'QA', 'bahrain': 'BH', 'oman': 'OM', 'yemen': 'YE',
-    'macao': 'MO', 'macau': 'MO',
+    'china': 'CN', 'united states': 'US', 'usa': 'US', 'japan': 'JP',
+    'south korea': 'KR', 'korea': 'KR', 'singapore': 'SG', 'hong kong': 'HK',
+    'taiwan': 'TW', 'united kingdom': 'GB', 'uk': 'GB', 'germany': 'DE',
+    'france': 'FR', 'canada': 'CA', 'australia': 'AU', 'russia': 'RU',
+    'india': 'IN', 'brazil': 'BR', 'netherlands': 'NL', 'sweden': 'SE',
+    'switzerland': 'CH', 'finland': 'FI', 'norway': 'NO', 'denmark': 'DK',
+    'poland': 'PL', 'czech republic': 'CZ', 'czechia': 'CZ', 'austria': 'AT',
+    'belgium': 'BE', 'italy': 'IT', 'spain': 'ES', 'portugal': 'PT',
+    'ireland': 'IE', 'new zealand': 'NZ', 'mexico': 'MX', 'argentina': 'AR',
+    'chile': 'CL', 'south africa': 'ZA', 'thailand': 'TH', 'vietnam': 'VN',
+    'malaysia': 'MY', 'indonesia': 'ID', 'philippines': 'PH',
+    'united arab emirates': 'AE', 'saudi arabia': 'SA', 'israel': 'IL',
+    'turkey': 'TR', 'ukraine': 'UA', 'macao': 'MO', 'macau': 'MO',
   };
 
-  // Convert country name/code to 2-letter code
-  function getCountryCode(country?: string): string | undefined {
-    if (!country) return undefined;
-    const trimmed = country.trim();
-    // Already a 2-letter code
-    if (trimmed.length === 2) return trimmed.toUpperCase();
-    // Try direct lookup (case-insensitive)
-    const lower = trimmed.toLowerCase();
-    return COUNTRY_NAME_MAP[lower] ?? COUNTRY_NAME_MAP[trimmed];
-  }
-
-  // Get flag image URL for a country code
   function getFlagUrl(country?: string): string | null {
-    const code = getCountryCode(country);
-    if (!code) return null;
-    return `https://flagcdn.com/w40/${code.toLowerCase()}.png`;
+    if (!country) return null;
+    const value = country.trim();
+    const code = value.length === 2
+      ? value.toUpperCase()
+      : COUNTRY_CODES[value.toLowerCase()] ?? COUNTRY_CODES[value];
+    return code ? `https://flagcdn.com/w40/${code.toLowerCase()}.png` : null;
   }
 
-  // Format location with flag
-  function formatLocationWithFlag(result: { country?: string; region?: string; city?: string }): { flagUrl: string | null; text: string } {
-    const flagUrl = getFlagUrl(result.country);
+  function formatProbeLocation(result: { country?: string; region?: string; city?: string }): string {
     const parts = [result.country, result.region, result.city].filter(Boolean);
-    return {
-      flagUrl,
-      text: parts.length > 0 ? parts.join(' · ') : '未知地区',
-    };
+    return parts.length > 0 ? parts.join(' · ') : '未知地区';
   }
 
   // Speed derived from history
@@ -124,6 +100,14 @@
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
+  const canShowNetworkStrip = $derived(
+    (hasConfig || hasNodes) && (isCoreRunning || networkProbeLoading || networkProbeResult !== null),
+  );
+  const networkProbePlaceholder = $derived(
+    networkProbeLoading ? '正在检测出口网络…' :
+    isCoreRunning ? '等待网络检测结果' :
+    '启动内核后可进行网络检测',
+  );
 
   const powerLabel = $derived(
     guiState.isConnecting ? '启用中' :
@@ -202,7 +186,18 @@
     nodeDropdownOpen = false;
   }
 
-  // ── Pro status-strip derived values ──
+  $effect(() => {
+    const startedAt = guiState.connection?.startedAtUnixMs;
+    if (!startedAt || store.uiMode !== 'pro') return;
+
+    uptimeNowMs = Date.now();
+    const timer = window.setInterval(() => {
+      uptimeNowMs = Date.now();
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  });
+
   const modeLabel = $derived(
     guiState.proxyMode?.currentMode === 'global' ? '全局' :
     guiState.proxyMode?.currentMode === 'direct' ? '直连' :
@@ -222,16 +217,20 @@
     isCoreAvailable || guiState.isStartingCore ? 'listen' :
     guiState.connection?.processState === 'failed' ? 'error' : 'off',
   );
-  const uptimeLabel = $derived(formatUptime(guiState.connection?.uptimeMs));
-</script>
+  const liveUptimeMs = $derived.by(() => {
+    const startedAt = guiState.connection?.startedAtUnixMs;
+    if (startedAt) {
+      return Math.max(0, uptimeNowMs - startedAt);
+    }
+    return guiState.connection?.uptimeMs;
+  });
+  const uptimeLabel = $derived(formatUptime(liveUptimeMs));
 
-<UpdateBanner />
+</script>
 
 {#if store.uiMode === 'pro'}
   <!-- ============ PRO MODE ============ -->
   <div class="flex-1 w-full flex flex-col gap-3 overflow-y-auto overflow-x-hidden animate-fade-in min-h-0 pr-0.5">
-
-    <!-- Row 0: Compact status strip — all key state at a glance -->
     <div class="status-strip flex-shrink-0" role="status" aria-label="运行状态概览">
       <div class="strip-item tone-{coreStateTone}" title="内核状态">
         <span class="strip-dot" class:pulse={guiState.isStartingCore || guiState.isConnecting}></span>
@@ -308,26 +307,61 @@
       {/if}
     </div>
 
-    <!-- Network probe: compact horizontal strip (visible on small screens, hidden on lg+) -->
-    {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) && networkProbeResult}
-      {@const loc = formatLocationWithFlag(networkProbeResult)}
-      <div class="network-strip lg:hidden">
+    {#if store.isFeatureVisible('policySelection') && canShowNetworkStrip}
+      {@const flagUrl = networkProbeResult ? getFlagUrl(networkProbeResult.country) : null}
+      <div class="network-strip">
         <span class="card-label network-strip-label">网络检测</span>
         <div class="network-strip-content">
-          {#if loc.flagUrl}
-            <img src={loc.flagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
+          {#if networkProbeResult}
+          {#if flagUrl}
+            <img src={flagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
           {/if}
           <span class="network-strip-ip font-mono">{networkProbeResult.ip}</span>
           <span class="network-strip-sep"></span>
-          <span class="network-strip-loc">{loc.text}</span>
+          <span class="network-strip-loc" title={formatProbeLocation(networkProbeResult)}>
+            {formatProbeLocation(networkProbeResult)}
+          </span>
           {#if networkProbeResult.isp || networkProbeResult.org}
             <span class="network-strip-sep"></span>
-            <span class="network-strip-isp truncate">{networkProbeResult.isp || networkProbeResult.org}</span>
+            <span class="network-strip-isp" title={networkProbeResult.isp || networkProbeResult.org}>
+              {networkProbeResult.isp || networkProbeResult.org}
+            </span>
+          {/if}
+          {:else}
+            <span class="network-strip-empty">{networkProbePlaceholder}</span>
           {/if}
         </div>
+        <div class="network-strip-actions">
         {#if networkProbeLoading}
           <span class="network-status-badge loading">检测中…</span>
         {/if}
+          <button
+            type="button"
+            class="network-strip-trigger"
+            onclick={() => void guiState.probeNetwork()}
+            disabled={!isCoreRunning || networkProbeLoading}
+            title={networkProbeLoading ? '检测中' : '重新测试网络'}
+            aria-label={networkProbeLoading ? '检测中' : '重新测试网络'}
+          >
+            <svg
+              class="network-strip-trigger-icon"
+              class:spinning={networkProbeLoading}
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10 6A4 4 0 1 1 8.83 3.17" />
+              <polyline points="10 2 10 6 6 6" />
+            </svg>
+            手动测试
+          </button>
+        </div>
       </div>
     {/if}
 
@@ -391,47 +425,16 @@
       {/if}
     </div>
 
-    <!-- Row 3: Chart + Network probe card (card only visible on lg+) -->
-    <div class="flex-1 w-full flex flex-col lg:flex-row gap-3 overflow-hidden min-h-0" style="min-height: 180px;">
-      <div class="w-full {store.isFeatureVisible('policySelection') && (hasConfig || hasNodes) ? 'lg:w-2/3' : ''} overflow-hidden min-h-[120px]">
+    <!-- Row 3: real-time traffic uses the full available width. -->
+    <div class="traffic-panel">
+      <div class="w-full h-full overflow-hidden">
         <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
       </div>
-      {#if store.isFeatureVisible('policySelection') && (hasConfig || hasNodes)}
-      <div class="hidden lg:block lg:w-1/3 min-w-0">
-        <div class="overview-card network-card">
-          <div class="network-card-header">
-            <span class="card-label">网络检测</span>
-            {#if networkProbeLoading}
-              <span class="network-status-badge loading">检测中…</span>
-            {/if}
-          </div>
-          {#if networkProbeResult}
-            {@const loc = formatLocationWithFlag(networkProbeResult)}
-            <div class="network-card-body">
-              <div class="network-main">
-                {#if loc.flagUrl}
-                  <img src={loc.flagUrl} alt="" class="network-flag" width="36" height="27" loading="lazy" />
-                {/if}
-                <span class="network-ip font-mono">{networkProbeResult.ip}</span>
-              </div>
-              <div class="network-location">{loc.text}</div>
-              {#if networkProbeResult.isp || networkProbeResult.org}
-                <div class="network-isp truncate">{networkProbeResult.isp || networkProbeResult.org}</div>
-              {/if}
-            </div>
-          {:else if !isCoreRunning}
-            <div class="network-card-empty">内核未运行</div>
-          {:else}
-            <div class="network-card-empty">等待网络检测…</div>
-          {/if}
-        </div>
-      </div>
-      {/if}
     </div>
 
     <!-- Row 5: Log panel -->
     {#if store.isNavVisible('logs')}
-      <div style="min-height: 120px; max-height: 200px;" class="flex-shrink-0 flex-1 min-h-0">
+      <div style="min-height: 120px; max-height: 200px;" class="flex-shrink-0 min-h-0">
         <LogPanel />
       </div>
     {/if}
@@ -534,7 +537,6 @@
 <style>
   /* ─────────────── Shared (Pro) ─────────────── */
 
-  /* Compact status strip — one-row at-a-glance overview */
   .status-strip {
     display: flex;
     align-items: center;
@@ -547,6 +549,7 @@
     overflow-x: auto;
     scrollbar-width: none;
   }
+
   .status-strip::-webkit-scrollbar { display: none; }
 
   .strip-item {
@@ -556,9 +559,11 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+
   .strip-item.up { color: #22C55E; }
   .strip-item.down { color: #3B82F6; }
   .strip-item.muted { color: var(--muted-foreground); }
+
   :global(.dark) .strip-item.up { color: #4ADE80; }
   :global(.dark) .strip-item.down { color: #60A5FA; }
 
@@ -566,19 +571,30 @@
   .strip-item.tone-listen .strip-val { color: #D97706; }
   .strip-item.tone-error .strip-val { color: var(--destructive); }
   .strip-item.tone-off .strip-val { color: var(--muted-foreground); }
+
   :global(.dark) .strip-item.tone-on .strip-val { color: #4ADE80; }
   :global(.dark) .strip-item.tone-listen .strip-val { color: #FBBF24; }
 
   .strip-dot {
-    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-    background: var(--muted-foreground); opacity: 0.5;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--muted-foreground);
+    opacity: 0.5;
     transition: background 0.2s ease, opacity 0.2s ease;
   }
+
   .strip-item.tone-on .strip-dot { background: #22C55E; opacity: 1; }
   .strip-item.tone-listen .strip-dot { background: #F59E0B; opacity: 1; }
   .strip-item.tone-error .strip-dot { background: #EF4444; opacity: 1; }
+
   .strip-dot.pulse { animation: pulse-dot 1.4s ease-in-out infinite; }
-  @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
 
   .strip-key {
     font-size: 10.5px;
@@ -587,6 +603,7 @@
     opacity: 0.7;
     letter-spacing: 0.01em;
   }
+
   .strip-val {
     font-size: 12px;
     font-weight: 600;
@@ -603,6 +620,7 @@
     border-radius: 1px;
     flex-shrink: 0;
   }
+
   .strip-spacer { flex: 1; min-width: 8px; }
 
   .overview-card {
@@ -646,90 +664,16 @@
   .test-check-name { font-weight: 600; color: var(--foreground); }
   .test-check-msg { color: var(--muted-foreground); font-size: 11px; line-height: 1.4; word-break: break-all; }
 
-  .node-link-btn {
-    display: inline-flex; align-items: center; height: 22px; padding: 0 9px;
-    border-radius: 5px; border: 1px solid var(--border); background: transparent;
-    color: var(--muted-foreground); font-size: 11px; font-weight: 500;
-    cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
-  }
-  .node-link-btn:hover { background: var(--muted); color: var(--foreground); }
-  .node-link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .active-node-name { font-size: 14px; font-weight: 700; color: var(--foreground); }
-  .active-node-meta { font-size: 11.5px; color: var(--muted-foreground); font-family: var(--font-mono); }
-
-  .network-card {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 100px;
+  .traffic-panel {
+    width: 100%;
+    min-height: 240px;
+    flex: 1 0 240px;
     overflow: hidden;
-  }
-  .network-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-  .network-card-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 0;
-    overflow: hidden;
-    text-align: center;
-  }
-  .network-main {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .network-flag {
-    width: 36px;
-    height: 27px;
-    border-radius: 3px;
-    object-fit: cover;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  }
-  .network-ip {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--foreground);
-    letter-spacing: 0.02em;
-  }
-  .network-location {
-    font-size: 12px;
-    color: var(--muted-foreground);
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .network-isp {
-    font-size: 11px;
-    color: var(--muted-foreground);
-    opacity: 0.8;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .network-card-empty {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    color: var(--muted-foreground);
-    text-align: center;
   }
 
-  /* Network strip: compact horizontal layout for small screens */
   .network-strip {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
@@ -740,22 +684,14 @@
     overflow: hidden;
     flex-shrink: 0;
   }
-  .network-strip-label {
-    flex-shrink: 0;
-  }
-  .network-strip-content {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-  }
+  .network-strip-label,
+  .network-strip-ip,
   .network-strip-sep {
-    width: 1px;
-    height: 12px;
-    background: var(--border);
     flex-shrink: 0;
+  }
+  .network-strip-label {
+    justify-self: start;
+    white-space: nowrap;
   }
   .network-strip-flag {
     width: 20px;
@@ -765,42 +701,108 @@
     flex-shrink: 0;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
+  .network-strip-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .network-strip-sep {
+    width: 1px;
+    height: 12px;
+    background: var(--border);
+  }
   .network-strip-ip {
     font-weight: 600;
     color: var(--foreground);
-    flex-shrink: 0;
   }
-  .network-strip-loc {
+  .network-strip-loc,
+  .network-strip-isp {
     color: var(--muted-foreground);
-    flex-shrink: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .network-strip-isp {
-    color: var(--muted-foreground);
     opacity: 0.8;
-    flex-shrink: 1;
-    min-width: 0;
-    max-width: 120px;
   }
-
-  .network-status-badge {
+  .network-strip-empty {
+    color: var(--muted-foreground);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .network-strip-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+  }
+  .network-strip-trigger {
+    appearance: none;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    height: 24px;
+    width: 24px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0;
+    font-weight: 600;
+    line-height: 0;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .network-strip-trigger-icon {
+    flex-shrink: 0;
+  }
+  .network-strip-trigger-icon.spinning {
+    animation: network-trigger-spin 0.8s linear infinite;
+  }
+  .network-strip-trigger:hover:not(:disabled) {
+    background: var(--muted);
+    border-color: rgba(0, 0, 0, 0.18);
+  }
+  :global(.dark) .network-strip-trigger:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+  .network-strip-trigger:focus-visible {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+  }
+  .network-strip-trigger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  @keyframes network-trigger-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .network-status-badge {
+    flex-shrink: 0;
     height: 18px;
     padding: 0 6px;
     border-radius: 4px;
     font-size: 10px;
-    font-weight: 500;
     color: var(--muted-foreground);
     background: var(--muted);
   }
   .network-status-badge.loading {
-    animation: pulse 1.5s ease-in-out infinite;
+    animation: network-pulse 1.5s ease-in-out infinite;
   }
-  @keyframes pulse {
+  @keyframes network-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }

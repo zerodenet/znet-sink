@@ -6,7 +6,7 @@
   // postpone still get reminded once per session without being nagged.
   let dismissed = $state(false);
 
-  const visible = $derived(updater.updateAvailable && !dismissed);
+  const visible = $derived((updater.updateAvailable || updater.downloading) && (!dismissed || updater.downloading));
 
   async function handleUpdate() {
     const ok = await updater.downloadAndInstall();
@@ -51,17 +51,19 @@
     <button class="update-action" onclick={handleUpdate} disabled={updater.downloading}>
       {updater.downloading ? '下载中…' : '立即更新'}
     </button>
-    <button
-      class="update-dismiss"
-      onclick={() => (dismissed = true)}
-      title="本次启动不再提示"
-      aria-label="关闭更新提示"
-    >
-      <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-        <line x1="2" y1="2" x2="8" y2="8" />
-        <line x1="8" y1="2" x2="2" y2="8" />
-      </svg>
-    </button>
+    {#if !updater.downloading}
+      <button
+        class="update-dismiss"
+        onclick={() => (dismissed = true)}
+        title="本次启动不再提示"
+        aria-label="关闭更新提示"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <line x1="2" y1="2" x2="8" y2="8" />
+          <line x1="8" y1="2" x2="2" y2="8" />
+        </svg>
+      </button>
+    {/if}
     {#if updater.downloading}
       <div class="update-progress-track" aria-hidden="true">
         <div
@@ -79,6 +81,7 @@
     position: relative;
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 9px;
     padding: 9px 12px;
     border-radius: 10px;
@@ -86,6 +89,7 @@
     background: rgba(245, 158, 11, 0.08);
     flex-shrink: 0;
     overflow: hidden;
+    width: 100%;
   }
 
   .update-dot {
@@ -118,6 +122,7 @@
   .update-content {
     display: flex;
     align-items: baseline;
+    flex-wrap: wrap;
     gap: 5px;
     flex: 1;
     min-width: 0;
@@ -227,5 +232,21 @@
   :global(.dark) .update-banner {
     border-color: rgba(245, 158, 11, 0.32);
     background: rgba(245, 158, 11, 0.1);
+  }
+
+  @media (max-width: 640px) {
+    .update-banner {
+      gap: 8px;
+      padding-right: 10px;
+    }
+
+    .update-content {
+      width: 100%;
+      order: 1;
+    }
+
+    .update-action {
+      margin-left: auto;
+    }
   }
 </style>

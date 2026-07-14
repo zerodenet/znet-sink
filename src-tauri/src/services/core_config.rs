@@ -20,6 +20,7 @@ use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
 const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerodenet/zero/releases/latest";
+const MANAGED_CORE_LOG_FILE: &str = "core.log.jsonl";
 
 pub fn snapshot(state: State<'_, AppState>) -> AppResult<CoreConfigSnapshot> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
@@ -50,8 +51,10 @@ pub fn export_active(state: State<'_, AppState>) -> AppResult<CoreConfigExportRe
     }
 
     let path = default_export_path()?;
-    // Strip GUI-only fields the core engine doesn't understand
-    let export_content = strip_gui_only_fields(content);
+    // Strip GUI-only fields the core engine doesn't understand, then inject
+    // a managed file sink so kernel runtime logs survive GUI restarts/crashes.
+    let mut export_content = strip_gui_only_fields(content);
+    inject_managed_core_log(&mut export_content)?;
     write_core_config(&path, &export_content)?;
 
     let snapshot = {
@@ -302,7 +305,8 @@ fn default_export_path() -> AppResult<PathBuf> {
 /// no proxy config" instead of treating this as a startup failure.
 pub fn write_minimal_temp_config() -> AppResult<PathBuf> {
     let path = data_dir()?.join("zero-temp-stub.json");
-    let minimal = minimal_temp_config_content();
+    let mut minimal = minimal_temp_config_content();
+    inject_managed_core_log(&mut minimal)?;
     write_core_config(&path, &minimal)?;
     Ok(path)
 }
@@ -325,6 +329,72 @@ fn minimal_temp_config_content() -> serde_json::Value {
             "final": { "type": "direct" }
         }
     })
+}
+
+pub fn managed_core_log_path() -> AppResult<PathBuf> {
+    Ok(data_dir()?.join("logs").join(MANAGED_CORE_LOG_FILE))
+}
+
+fn inject_managed_core_log(content: &mut serde_json::Value) -> AppResult<()> {
+    let path = managed_core_log_path()?;
+    inject_managed_core_log_at_path(content, &path)
+}
+
+fn inject_managed_core_log_at_path(
+    content: &mut serde_json::Value,
+    log_path: &Path,
+) -> AppResult<()> {
+    let root = content.as_object_mut().ok_or_else(|| {
+        AppError::invalid_argument("active proxy config content must be a JSON object")
+    })?;
+    let runtime = ensure_object_field(root, "runtime")?;
+    let log = ensure_object_field(runtime, "log")?;
+    let files = ensure_array_field(log, "files")?;
+    let log_path = path_to_string(log_path);
+
+    let already_present = files.iter().any(|entry| {
+        entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|path| path == log_path)
+    });
+    if !already_present {
+        files.push(serde_json::json!({
+            "path": log_path,
+            "max_bytes": 10 * 1024 * 1024u64,
+            "max_files": 5
+        }));
+    }
+
+    Ok(())
+}
+
+fn ensure_object_field<'a>(
+    root: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> AppResult<&'a mut serde_json::Map<String, serde_json::Value>> {
+    if !root.contains_key(key) {
+        root.insert(
+            key.to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
+    }
+    root.get_mut(key)
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| AppError::invalid_argument(format!("{key} must be an object")))
+}
+
+fn ensure_array_field<'a>(
+    root: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> AppResult<&'a mut Vec<serde_json::Value>> {
+    if !root.contains_key(key) {
+        root.insert(key.to_string(), serde_json::Value::Array(Vec::new()));
+    }
+    root.get_mut(key)
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| AppError::invalid_argument(format!("{key} must be an array")))
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -570,8 +640,9 @@ fn route_final_outbound(route: &serde_json::Map<String, serde_json::Value>) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::strip_gui_only_fields;
+    use super::{inject_managed_core_log_at_path, strip_gui_only_fields};
     use serde_json::json;
+    use std::path::Path;
 
     #[test]
     fn exported_config_strips_route_mode_and_maps_global_to_final_route() {
@@ -655,5 +726,47 @@ mod tests {
         );
         assert_eq!(saved["mode"], json!({ "type": "rule" }));
         assert_eq!(saved["route"]["final"], json!({ "type": "direct" }));
+    }
+
+    #[test]
+    fn managed_core_log_sink_is_injected_into_exported_runtime() {
+        let mut content = json!({
+            "route": {
+                "rules": []
+            }
+        });
+
+        inject_managed_core_log_at_path(&mut content, Path::new("C:/tmp/core.log.jsonl")).unwrap();
+
+        assert_eq!(
+            content["runtime"]["log"]["files"],
+            json!([{
+                "path": "C:/tmp/core.log.jsonl",
+                "max_bytes": 10485760u64,
+                "max_files": 5
+            }])
+        );
+    }
+
+    #[test]
+    fn managed_core_log_sink_is_not_duplicated() {
+        let mut content = json!({
+            "runtime": {
+                "log": {
+                    "files": [{
+                        "path": "C:/tmp/core.log.jsonl",
+                        "max_bytes": 10485760u64,
+                        "max_files": 5
+                    }]
+                }
+            }
+        });
+
+        inject_managed_core_log_at_path(&mut content, Path::new("C:/tmp/core.log.jsonl")).unwrap();
+
+        assert_eq!(
+            content["runtime"]["log"]["files"].as_array().unwrap().len(),
+            1
+        );
     }
 }

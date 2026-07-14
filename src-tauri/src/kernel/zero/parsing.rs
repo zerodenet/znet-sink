@@ -189,6 +189,19 @@ fn parse_policy_member(value: Value, selected: Option<&str>) -> Option<GuiPolicy
     let delay_ms = source
         .as_ref()
         .and_then(|value| u64_at(value, &["delay_ms", "delayMs", "latency", "latency_ms"]));
+    let last_checked_unix_ms = source.as_ref().and_then(|value| {
+        u64_at(
+            value,
+            &[
+                "last_checked_unix_ms",
+                "lastCheckedUnixMs",
+                "checked_at_unix_ms",
+            ],
+        )
+    });
+    let last_error = source
+        .as_ref()
+        .and_then(|value| string_at(value, &["last_error", "lastError", "error"]));
 
     Some(GuiPolicyMember {
         selected: selected.is_some_and(|selected| selected == tag),
@@ -196,6 +209,8 @@ fn parse_policy_member(value: Value, selected: Option<&str>) -> Option<GuiPolicy
         kind,
         alive,
         delay_ms,
+        last_checked_unix_ms,
+        last_error,
     })
 }
 

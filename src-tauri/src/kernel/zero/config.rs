@@ -295,6 +295,8 @@ fn parse_config_policy_member(
         kind,
         alive: None,
         delay_ms: None,
+        last_checked_unix_ms: None,
+        last_error: None,
     })
 }
 

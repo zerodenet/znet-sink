@@ -3,7 +3,7 @@
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { guiSelectPolicy, guiClientProbeNode, guiClientProbeStart } from '$lib/services/core';
+  import { guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
   import { getGroupKindStyle } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -36,6 +36,7 @@
   let switching = $state<string | null>(null);
   let probingNodeIds = $state<Set<string>>(new Set());
   let probingAll = $state(false);
+  let probingPolicy = $state(false);
   let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
   type ProbeControllerState = {
@@ -285,6 +286,50 @@
     await probeController.handleProbeAll(filteredNodes);
   }
 
+  async function handleProbePolicy() {
+    const group = groups.find((item) => item.name === selectedGroup);
+    if (!group || probingPolicy) return;
+
+    probingPolicy = true;
+    lastError = null;
+    let unlisten: (() => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      let resolveCompleted!: () => void;
+      let rejectCompleted!: (error: Error) => void;
+      const completed = new Promise<void>((resolve, reject) => {
+        resolveCompleted = resolve;
+        rejectCompleted = reject;
+      });
+      unlisten = await listen<{
+        event?: { eventType?: string; payload?: { data?: { policyTag?: string; trigger?: string } } };
+      }>('gui:event', ({ payload }) => {
+        const event = payload.event;
+        const data = event?.payload?.data;
+        if (
+          event?.eventType === 'policy.probeCompleted'
+          && data?.policyTag === group.name
+          && data?.trigger === 'manual'
+        ) {
+          resolveCompleted();
+        }
+      });
+      timer = setTimeout(() => rejectCompleted(new Error('策略测速等待结果超时')), 30_000);
+
+      const accepted = await guiProbePolicy(group.name);
+      if (!accepted.accepted || accepted.result?.probeTriggered === false) {
+        throw new Error('内核未接受策略测速请求');
+      }
+      await completed;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (timer) clearTimeout(timer);
+      unlisten?.();
+      probingPolicy = false;
+    }
+  }
+
   $effect(() => {
     // Non-global mode hides the "全部节点" sidebar entry (gated to global
     // in NodesGroupSidebar), so the page must land on a concrete group —
@@ -370,12 +415,15 @@
       {viewMode}
       {isLite}
       {probingAll}
+      {probingPolicy}
       {probeProgress}
       canProbeAll={isCoreAvailable && !probingAll && probingNodeIds.size === 0 && filteredNodes.length > 0}
+      canProbePolicy={isCoreAvailable && !probingPolicy && Boolean(selectedGroup && ['url_test', 'urltest'].includes(groups.find((group) => group.name === selectedGroup)?.kind?.toLowerCase() ?? ''))}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={(mode) => (viewMode = mode)}
       onProbeAll={handleProbeAll}
+      onProbePolicy={handleProbePolicy}
     />
 
     <!-- Node content -->

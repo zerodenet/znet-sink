@@ -710,9 +710,10 @@ fn convert_clash_proxy(proxy: &Value) -> Option<Value> {
 
 fn server_port(source: &Map<String, Value>) -> Option<(String, u64)> {
     let server = string_field(source, "server")?;
-    let port = source
-        .get("port")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))?;
+    let port = source.get("port").and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    })?;
     Some((server, port))
 }
 
@@ -745,7 +746,9 @@ fn build_shadowsocksr(s: &Map<String, Value>) -> Option<Map<String, Value>> {
     if let Some(protocol) = string_field(s, "protocol") {
         p.insert("protocol".to_string(), json!(protocol));
     }
-    if let Some(param) = string_field(s, "protocol-param").or_else(|| string_field(s, "protocol_param")) {
+    if let Some(param) =
+        string_field(s, "protocol-param").or_else(|| string_field(s, "protocol_param"))
+    {
         p.insert("protocol_param".to_string(), json!(param));
     }
     Some(p)
@@ -855,7 +858,11 @@ fn build_hysteria2(s: &Map<String, Value>) -> Option<Map<String, Value>> {
     let (server, port) = server_port(s)?;
     let password = string_field(s, "password")?;
     let raw_type = string_field(s, "type").unwrap_or_default();
-    let type_tag = if raw_type == "hysteria" { "hysteria" } else { "hysteria2" };
+    let type_tag = if raw_type == "hysteria" {
+        "hysteria"
+    } else {
+        "hysteria2"
+    };
     let mut p = Map::new();
     p.insert("type".to_string(), json!(type_tag));
     p.insert("server".to_string(), json!(server));
@@ -1013,7 +1020,11 @@ fn convert_clash_proxy_group(
 
     // Zero's `relay` group carries its chain under `proxies`; every other
     // group type uses `outbounds`. Both are populated from clash's `proxies`.
-    let members_key = if mapped_type == "relay" { "proxies" } else { "outbounds" };
+    let members_key = if mapped_type == "relay" {
+        "proxies"
+    } else {
+        "outbounds"
+    };
 
     let mut converted = Map::new();
     converted.insert("tag".to_string(), Value::String(tag));
@@ -1354,7 +1365,10 @@ mod tests {
         assert_eq!(node["protocol"]["type"], "trojan");
         assert_eq!(node["protocol"]["server"], "example.com");
         assert_eq!(node["protocol"]["port"], 443);
-        assert!(node.get("type").is_none(), "must not emit flat top-level type");
+        assert!(
+            node.get("type").is_none(),
+            "must not emit flat top-level type"
+        );
     }
 
     #[test]
@@ -1366,7 +1380,10 @@ mod tests {
         let node = &parsed.content["outbounds"][2];
         assert_eq!(node["tag"], "vm");
         assert_eq!(node["protocol"]["type"], "vmess");
-        assert_eq!(node["protocol"]["id"], "11111111-2222-3333-4444-555555555555");
+        assert_eq!(
+            node["protocol"]["id"],
+            "11111111-2222-3333-4444-555555555555"
+        );
         assert_eq!(node["protocol"]["cipher"], "auto");
         assert_eq!(node["protocol"]["tls"]["server_name"], "s.example");
         assert_eq!(node["protocol"]["tls"]["insecure"], true);
@@ -1382,7 +1399,10 @@ mod tests {
         assert_eq!(node["protocol"]["type"], "vless");
         assert_eq!(node["protocol"]["reality"]["public_key"], "PUBKEY");
         assert_eq!(node["protocol"]["reality"]["short_id"], "abcd1234");
-        assert_eq!(node["protocol"]["reality"]["server_name"], "www.cloudflare.com");
+        assert_eq!(
+            node["protocol"]["reality"]["server_name"],
+            "www.cloudflare.com"
+        );
     }
 
     #[test]

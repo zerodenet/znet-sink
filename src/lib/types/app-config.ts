@@ -20,6 +20,7 @@ export interface AppCoreConfig {
   socket?: string;
   /** 管理流量是否自动跟随系统代理。默认 true */
   downloadProxyAuto: boolean;
+  networkProbeUrls: string[];
 }
 
 export interface AppLogConfig {
@@ -68,6 +69,7 @@ export interface AppCoreConfigPatch {
   workingDir?: string | null;
   socket?: string | null;
   downloadProxyAuto?: boolean;
+  networkProbeUrls?: string[];
 }
 
 export interface AppLogConfigPatch {

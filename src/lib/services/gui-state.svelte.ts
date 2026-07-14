@@ -17,9 +17,9 @@ import {
   getConfigProxyNodes,
   getConfigPolicyGroups,
   getGuiZeroCapabilities,
-  trayUpdateStatus,
   guiNetworkProbe,
   type NetworkProbeResult,
+  trayUpdateStatus,
 } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { coreEvents } from './core-events.svelte';
@@ -43,8 +43,6 @@ class GuiStateStore {
   tunStatus = $state<GuiFeatureStatus | null>(null);
   configNodes = $state<ConfigProxyNode[]>([]);
   configPolicyGroups = $state<PolicyGroup[]>([]);
-
-  // Network probe state
   networkProbe = $state<NetworkProbeResult | null>(null);
   networkProbeLoading = $state(false);
 
@@ -78,7 +76,6 @@ class GuiStateStore {
     // look clickable but the kernel is already running or starting.
     this.isInitializing = false;
 
-    // Probe outbound network if kernel is already running
     if (this.isProcessRunning) {
       void this.probeNetwork();
     }
@@ -166,6 +163,25 @@ class GuiStateStore {
     }
   }
 
+  applyPolicyProbeCompleted(event: import('$lib/types/gui-api').PolicyProbeCompletedEvent) {
+    const existing = this.policyGroups.find((group) => group.name === event.policyTag);
+    const previousMembers = new Map(existing?.outbounds.map((member) => [member.tag, member]) ?? []);
+    const outbounds = event.members.map((member) => ({
+      ...previousMembers.get(member.tag),
+      ...member,
+    }));
+    const updated = {
+      ...existing,
+      name: event.policyTag,
+      kind: existing?.kind ?? 'url_test',
+      selected: event.selected ?? existing?.selected,
+      outbounds,
+    };
+    this.policyGroups = existing
+      ? this.policyGroups.map((group) => group.name === event.policyTag ? updated : group)
+      : [...this.policyGroups, updated];
+  }
+
   async refreshTunStatus() {
     try {
       this.tunStatus = await getGuiTunStatus();
@@ -233,15 +249,13 @@ class GuiStateStore {
     void trayUpdateStatus(this.isProcessRunning, this.isConnected).catch(() => {});
   }
 
-  /** Probe outbound network to get IP and geo information. */
   async probeNetwork() {
-    if (this.networkProbeLoading) return;
-    if (!this.isProcessRunning) return;
+    if (this.networkProbeLoading || !this.isProcessRunning) return;
     this.networkProbeLoading = true;
     try {
       this.networkProbe = await guiNetworkProbe();
     } catch {
-      // Silently fail — network probe is best-effort
+      // Best-effort status shown above the self-test panel.
     } finally {
       this.networkProbeLoading = false;
     }
@@ -396,9 +410,14 @@ class GuiStateStore {
   async setProxyMode(mode: ProxyMode) {
     this.isSwitchingMode = true;
     try {
-      this.proxyMode = await guiSetProxyMode(mode, true);
-      // Mode switches restart the core, so refresh runtime state immediately
-      // instead of waiting for the next status tick.
+      // Prefer kernel hot-switch. The backend will only fall back to a
+      // restart when `mode.set` is unavailable or fails.
+      this.proxyMode = await guiSetProxyMode(mode);
+      // Mode switches can still trigger a restart as a backend fallback, so
+      // refresh runtime state immediately instead of waiting for the next tick.
+      await this.refreshModeState();
+    } catch (e: any) {
+      toastError(`切换代理模式失败: ${this.errorMessage(e)}`);
       await this.refreshModeState();
     } finally {
       this.isSwitchingMode = false;

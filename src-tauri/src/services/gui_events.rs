@@ -10,9 +10,9 @@ use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
     emit_gui_event, emit_gui_event_status, GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME,
 };
-use crate::kernel::zero::events;
+use crate::kernel::zero::{events, queries};
 use crate::kernel::{connection, protocol};
-use crate::models::core::{CoreCallResult, CoreEndpoint, CoreIpcOptions};
+use crate::models::core::{CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{GuiEventPayload, GuiEventStatus, GuiEventSubscription};
 
 pub fn start(
@@ -88,10 +88,12 @@ fn subscribe_and_forward_events(
             }
         };
         backoff = MIN_RECONNECT_BACKOFF;
+        // Register before snapshot queries so events arriving during resync
+        // remain buffered for this consumer instead of being dropped.
+        let mut receiver = conn.subscribe_events();
         let snapshot = resync_snapshot(endpoint.clone(), timeout);
         emit_status(&app, generation, "subscribed", None, snapshot);
 
-        let mut receiver = conn.subscribe_events();
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
             match receiver.blocking_recv() {
@@ -131,25 +133,16 @@ fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
             timeout_ms: Some(timeout.as_millis() as u64),
         });
 
-        let runtime = protocol::get_runtime(options.clone()).await;
-        let stats = protocol::get_stats(options.clone()).await;
-        let policies = protocol::get_policies(options).await;
+        let runtime =
+            queries::query_value(json!({"runtime": {}}), "runtime", options.clone()).await;
+        let stats = queries::query_value(json!({"stats": {}}), "stats", options.clone()).await;
+        let policies = queries::query_value(json!({"policies": {}}), "policies", options).await;
 
         Some(json!({
-            "runtime": response_payload(runtime),
-            "stats": response_payload(stats),
-            "policies": response_payload(policies),
+            "runtime": runtime.ok(),
+            "stats": stats.ok(),
+            "policies": policies.ok(),
         }))
-    })
-}
-
-fn response_payload(result: AppResult<CoreCallResult>) -> Option<Value> {
-    result.ok().and_then(|result| {
-        if result.available {
-            result.response
-        } else {
-            None
-        }
     })
 }
 

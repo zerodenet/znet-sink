@@ -25,7 +25,7 @@ function assertContains(path, expectedSnippet, message) {
 
 assertUsesTag(
   'src/lib/components/tabs/NodesTab.svelte',
-  'selectPolicy(policyTag, node.tag)',
+  'guiSelectPolicy(policyTag, node.tag)',
 );
 assertUsesTag(
   'src/lib/components/NodeSelector.svelte',

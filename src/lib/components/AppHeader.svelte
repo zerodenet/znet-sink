@@ -1,13 +1,11 @@
 <script lang="ts">
-  import * as Tabs from "$lib/components/ui/tabs";
   import { store } from '$lib/services/store.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
-  import ConnectionStatusBadge from '$lib/components/ConnectionStatusBadge.svelte';
 </script>
 
 <!--
   AppHeader: compact desktop toolbar navigation
-  Center-aligned nav tabs, status badge on right
+  Center-aligned nav tabs
 -->
 <header class="w-full flex-shrink-0">
   <div class="w-full flex items-center justify-between" style="height: 38px;">
@@ -31,10 +29,8 @@
       {/each}
     </nav>
 
-    <!-- Right: Connection status, flexible on small windows -->
-    <div class="flex items-center justify-end flex-shrink-0" style="min-width: 60px; max-width: 120px;">
-      <ConnectionStatusBadge />
-    </div>
+    <!-- Right spacer keeps nav centered against the titlebar controls above -->
+    <div class="flex-1 min-w-0 hidden sm:block" style="max-width: 120px;" aria-hidden="true"></div>
 
   </div>
 </header>

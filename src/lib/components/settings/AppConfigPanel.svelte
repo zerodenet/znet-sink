@@ -280,6 +280,23 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">日志目录</span>
+        <span class="label-text">内核日志文件</span>
+        <span class="label-desc log-path">{logPaths.coreLogFile}</span>
+      </div>
+      <div class="log-actions">
+        <button
+          class="log-action-btn core-log-btn"
+          onclick={() => copyToClipboard(logPaths!.coreLogFile, 'coreLogFile')}
+          title="复制路径"
+        >
+          {copiedField === 'coreLogFile' ? '已复制' : '复制'}
+        </button>
+      </div>
+    </div>
+
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">日志目录</span>
         <span class="label-desc log-path">{logPaths.logsDir}</span>
       </div>
       <div class="log-actions">
@@ -554,6 +571,10 @@
 
   .log-action-btn.primary:hover {
     opacity: 0.9;
+  }
+
+  .config-row:has(.core-log-btn) .config-row-label > .label-text:first-child {
+    display: none;
   }
 
   @media (max-width: 760px) {

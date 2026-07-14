@@ -243,7 +243,12 @@ pub async fn diagnostics(options: Option<CoreIpcOptions>) -> AppResult<Value> {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-async fn query_variant(
+/// Execute an IPC query and return only the validated variant payload.
+///
+/// Raw IPC envelopes remain available through `core_ipc_query`; GUI-facing
+/// query consumers should use this boundary so `api_id/ok/id/result` never
+/// leaks into application state.
+pub async fn query_value(
     request: Value,
     variant: &str,
     options: Option<CoreIpcOptions>,
@@ -251,6 +256,14 @@ async fn query_variant(
     let call = protocol::query(request, options).await?;
     let response = unwrap_call_result(call.response, call.error)?;
     unwrap_query_variant_wrapped(response, variant)
+}
+
+async fn query_variant(
+    request: Value,
+    variant: &str,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<Value> {
+    query_value(request, variant, options).await
 }
 
 async fn query_variant_with_timeout(

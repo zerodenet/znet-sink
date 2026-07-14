@@ -55,6 +55,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(v) = core.download_proxy_auto {
             config.core.download_proxy_auto = v;
         }
+        if let Some(network_probe_urls) = core.network_probe_urls {
+            config.core.network_probe_urls = normalize_network_probe_urls(network_probe_urls)?;
+        }
     }
 
     if let Some(logs) = patch.logs {
@@ -183,4 +186,78 @@ pub fn validate_port(port: u16, field: &'static str) -> AppResult<()> {
         )));
     }
     Ok(())
+}
+
+pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+
+    for raw in urls {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parsed = reqwest::Url::parse(trimmed).map_err(|error| {
+            AppError::invalid_argument(format!(
+                "core.networkProbeUrls contains an invalid URL `{trimmed}`: {error}"
+            ))
+        })?;
+
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(AppError::invalid_argument(format!(
+                "core.networkProbeUrls only supports http(s) URLs: {trimmed}"
+            )));
+        }
+
+        if parsed.host_str().is_none() {
+            return Err(AppError::invalid_argument(format!(
+                "core.networkProbeUrls is missing a host: {trimmed}"
+            )));
+        }
+
+        let normalized_url = parsed.to_string();
+        if seen.insert(normalized_url.clone()) {
+            normalized.push(normalized_url);
+        }
+    }
+
+    if normalized.is_empty() {
+        return Err(AppError::invalid_argument(
+            "core.networkProbeUrls must contain at least one http(s) URL",
+        ));
+    }
+
+    Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_network_probe_urls;
+    use crate::models::app_config::default_network_probe_urls;
+
+    #[test]
+    fn network_probe_urls_trim_and_deduplicate() {
+        let urls = normalize_network_probe_urls(vec![
+            " https://ipinfo.io/json ".to_string(),
+            "https://ipinfo.io/json".to_string(),
+            "https://httpbin.org/ip".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://ipinfo.io/json".to_string(),
+                "https://httpbin.org/ip".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn network_probe_urls_require_http_scheme_and_non_empty_result() {
+        assert!(normalize_network_probe_urls(vec!["socks5://127.0.0.1".to_string()]).is_err());
+        assert!(normalize_network_probe_urls(vec!["   ".to_string()]).is_err());
+        assert!(!default_network_probe_urls().is_empty());
+    }
 }

@@ -384,13 +384,17 @@ pub fn run() {
                         };
 
                         if !path_matches {
-                            crate::services::file_logger::line("kernel alive but path mismatch, restarting");
+                            crate::services::file_logger::line(
+                                "kernel alive but path mismatch, restarting",
+                            );
                             // Use fresh State — the outer `state` is not `Copy`.
                             let _ = core_process::stop(app_handle.state::<AppState>());
                             crate::kernel::connection::reset();
                             // Fall through to start the configured kernel.
                         } else {
-                            crate::services::file_logger::line("kernel already running (fast probe ok), connecting");
+                            crate::services::file_logger::line(
+                                "kernel already running (fast probe ok), connecting",
+                            );
 
                             // Update the process state so the UI reflects the
                             // actual kernel status.  Without this the UI shows
@@ -415,7 +419,9 @@ pub fn run() {
 
                     // Kernel not running (or was restarted due to path mismatch).
                     if !auto_start {
-                        crate::services::file_logger::line("auto_start disabled, not starting kernel");
+                        crate::services::file_logger::line(
+                            "auto_start disabled, not starting kernel",
+                        );
                         let _ = crate::services::proxy_coordinator::update(&state);
                         return;
                     }

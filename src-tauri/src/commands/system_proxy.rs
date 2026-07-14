@@ -73,9 +73,7 @@ fn ensure_active_proxy_config(state: &AppState) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub async fn system_proxy_disable(
-    state: State<'_, AppState>,
-) -> AppResult<SystemProxyStatus> {
+pub async fn system_proxy_disable(state: State<'_, AppState>) -> AppResult<SystemProxyStatus> {
     let status = tauri::async_runtime::spawn_blocking(|| {
         system_proxy_guard::disable_with_guard()?;
         system_proxy::status()

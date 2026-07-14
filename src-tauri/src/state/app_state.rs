@@ -18,6 +18,7 @@ use crate::models::{
 pub struct AppState {
     core_event_generation: Arc<AtomicU64>,
     gui_event_generation: Arc<AtomicU64>,
+    core_process_monitor_generation: Arc<AtomicU64>,
     next_record_id: AtomicU64,
     app_config: Mutex<AppConfig>,
     proxy_configs: Mutex<Vec<ProxyConfigProfile>>,
@@ -80,6 +81,7 @@ impl AppState {
         Self {
             core_event_generation: Arc::new(AtomicU64::default()),
             gui_event_generation: Arc::new(AtomicU64::default()),
+            core_process_monitor_generation: Arc::new(AtomicU64::default()),
             next_record_id: AtomicU64::new(next_record_id),
             app_config: Mutex::new(app_config),
             proxy_configs: Mutex::new(proxy_configs),
@@ -107,6 +109,16 @@ impl AppState {
 
     pub(crate) fn gui_event_generation(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.gui_event_generation)
+    }
+
+    pub(crate) fn next_core_process_monitor_generation(&self) -> u64 {
+        self.core_process_monitor_generation
+            .fetch_add(1, Ordering::SeqCst)
+            + 1
+    }
+
+    pub(crate) fn core_process_monitor_generation(&self) -> u64 {
+        self.core_process_monitor_generation.load(Ordering::SeqCst)
     }
 
     pub(crate) fn next_record_id(&self) -> u64 {
@@ -230,6 +242,17 @@ mod tests {
         let profiles = state.proxy_configs().lock().unwrap();
         assert!(profiles[0].active);
         assert!(!profiles[1].active);
+    }
+
+    #[test]
+    fn core_process_monitor_generation_advances_monotonically() {
+        let state = AppState::default();
+
+        assert_eq!(state.core_process_monitor_generation(), 0);
+        assert_eq!(state.next_core_process_monitor_generation(), 1);
+        assert_eq!(state.core_process_monitor_generation(), 1);
+        assert_eq!(state.next_core_process_monitor_generation(), 2);
+        assert_eq!(state.core_process_monitor_generation(), 2);
     }
 
     fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {

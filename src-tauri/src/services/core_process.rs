@@ -208,7 +208,8 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     // Spawn the watchdog once. It reuses spawn_core_child to restart after
     // crashes, so on restart it must NOT spawn another monitor — that would
     // multiply monitors on every crash.
-    spawn_monitor(app_handle.clone(), snapshot);
+    let monitor_generation = state.next_core_process_monitor_generation();
+    spawn_monitor(app_handle.clone(), snapshot, monitor_generation);
     Ok(status)
 }
 
@@ -345,7 +346,7 @@ fn spawn_core_child(
 /// A run lasting at least `STABLE_RUN` resets the restart budget, so a
 /// kernel that flaps occasionally still recovers, while a genuinely broken
 /// kernel eventually gives up instead of looping forever.
-fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
+fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_generation: u64) {
     /// How often to poll the child for exit.
     const POLL_INTERVAL: Duration = Duration::from_secs(1);
     /// Cooldown between a crash and the next restart attempt.
@@ -377,6 +378,9 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
             let was_stable = loop {
                 std::thread::sleep(POLL_INTERVAL);
                 if state.is_shutting_down() {
+                    return;
+                }
+                if state.core_process_monitor_generation() != monitor_generation {
                     return;
                 }
 
@@ -473,6 +477,9 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
             if state.is_shutting_down() {
                 return;
             }
+            if state.core_process_monitor_generation() != monitor_generation {
+                return;
+            }
             if was_stable {
                 restart_budget = 0;
                 eprintln!("[ZNet] watchdog: previous run was stable, reset restart budget");
@@ -513,6 +520,9 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot) {
                 );
                 std::thread::sleep(RESTART_BACKOFF);
                 if state.is_shutting_down() {
+                    return;
+                }
+                if state.core_process_monitor_generation() != monitor_generation {
                     return;
                 }
                 match spawn_core_child(state.inner(), &snapshot, &app_handle) {
@@ -559,6 +569,15 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     let (child, stderr_handle) = {
         let mut process = lock(state.core_process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;
+        if process.child.is_some() {
+            // Mark the stop intent before releasing the child handle.
+            // The watchdog polls `child.is_none()` once per second; without
+            // this early marker it can see "no child + no Stopped reason"
+            // in the small window before we finish kill/wait bookkeeping and
+            // misclassify a user-initiated stop/restart as a crash.
+            process.status.exit_reason = Some(CoreProcessExitReason::Stopped);
+            process.status.last_error = None;
+        }
         (process.child.take(), process.stderr_handle.take())
     };
 
@@ -893,4 +912,3 @@ mod tests {
         assert!(fields.get("invalid-key").is_none());
     }
 }
-

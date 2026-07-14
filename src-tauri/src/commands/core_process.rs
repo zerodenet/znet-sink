@@ -16,9 +16,7 @@ pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessS
 /// a kill-backoff sleep, and a port check that would otherwise stall the
 /// main thread and freeze the window.
 #[tauri::command]
-pub async fn core_process_start(
-    app_handle: AppHandle,
-) -> AppResult<CoreProcessStatus> {
+pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         core_process::start(app_handle.clone(), state)
@@ -33,9 +31,7 @@ pub async fn core_process_start(
 /// that freeze is what previously left the window "not responding" until the
 /// OS killed the process.
 #[tauri::command]
-pub async fn core_process_restart(
-    app_handle: AppHandle,
-) -> AppResult<CoreProcessStatus> {
+pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let _ = core_process::stop(state.clone());

@@ -97,9 +97,9 @@ fn subscribe_and_forward_events(
             }
         };
         backoff = MIN_RECONNECT_BACKOFF;
+        let mut receiver = conn.subscribe_events();
         emit_core_event_status(&app, generation, "subscribed", None, None);
 
-        let mut receiver = conn.subscribe_events();
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
             match receiver.blocking_recv() {

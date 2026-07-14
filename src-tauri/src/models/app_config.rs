@@ -54,6 +54,8 @@ pub struct AppCoreConfig {
     /// false       = 直连，绕过一切代理
     #[serde(default = "default_true")]
     pub download_proxy_auto: bool,
+    #[serde(default = "default_network_probe_urls")]
+    pub network_probe_urls: Vec<String>,
 }
 
 impl Default for AppCoreConfig {
@@ -68,6 +70,7 @@ impl Default for AppCoreConfig {
             working_dir: None,
             socket: None,
             download_proxy_auto: true,
+            network_probe_urls: default_network_probe_urls(),
         }
     }
 }
@@ -184,6 +187,7 @@ pub struct AppCoreConfigPatch {
     pub working_dir: Option<Option<String>>,
     pub socket: Option<Option<String>>,
     pub download_proxy_auto: Option<bool>,
+    pub network_probe_urls: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -266,4 +270,12 @@ fn default_tun_tag() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+pub fn default_network_probe_urls() -> Vec<String> {
+    vec![
+        "http://ip-api.com/json/?fields=query,country,regionName,city,org,isp".to_string(),
+        "https://ipinfo.io/json".to_string(),
+        "https://httpbin.org/ip".to_string(),
+    ]
 }
