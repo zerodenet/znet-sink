@@ -15,6 +15,61 @@ export interface NodeSection {
   nodes: ProxyNode[];
 }
 
+export interface ProbeTargets {
+  nodes: ProxyNode[];
+  policyTags: string[];
+}
+
+function isUrlTestGroup(group: PolicyGroup | undefined): boolean {
+  const kind = group?.kind?.toLowerCase();
+  return kind === 'url_test' || kind === 'urltest';
+}
+
+export function mergePolicyGroups(configGroups: PolicyGroup[], runtimeGroups: PolicyGroup[]): PolicyGroup[] {
+  if (configGroups.length === 0) return runtimeGroups;
+
+  const runtimeByName = new Map(runtimeGroups.map((group) => [group.name, group]));
+  return configGroups.map((configGroup) => {
+    const runtimeGroup = runtimeByName.get(configGroup.name);
+    if (!runtimeGroup) return configGroup;
+
+    const runtimeMembers = new Map(runtimeGroup.outbounds.map((member) => [member.tag, member]));
+    return {
+      ...configGroup,
+      selected: runtimeGroup.selected ?? configGroup.selected,
+      outbounds: configGroup.outbounds.map((member) => ({
+        ...member,
+        ...runtimeMembers.get(member.tag),
+      })),
+    };
+  });
+}
+
+export function planProbeTargets(options: {
+  groups: PolicyGroup[];
+  selectedGroup: string | null;
+  visibleNodes: ProxyNode[];
+}): ProbeTargets {
+  const { groups, selectedGroup, visibleNodes } = options;
+  const selected = groups.find((group) => group.name === selectedGroup);
+  if (isUrlTestGroup(selected)) {
+    return { nodes: [], policyTags: [selected!.name] };
+  }
+
+  const groupsByName = new Map(groups.map((group) => [group.name, group]));
+  const policyTags = new Set<string>();
+  const nodes: ProxyNode[] = [];
+  for (const node of visibleNodes) {
+    const memberGroup = groupsByName.get(node.tag);
+    if (isUrlTestGroup(memberGroup)) {
+      policyTags.add(memberGroup!.name);
+    } else if (!memberGroup) {
+      nodes.push(node);
+    }
+  }
+  return { nodes, policyTags: [...policyTags] };
+}
+
 export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeOverlay> {
   const map = new Map<string, RuntimeOverlay>();
   for (const group of groups) {

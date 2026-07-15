@@ -14,15 +14,12 @@
     viewMode: ViewMode;
     isLite: boolean;
     probingAll: boolean;
-    probingPolicy: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
-    canProbePolicy: boolean;
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
     onProbeAll: () => void | Promise<void>;
-    onProbePolicy: () => void | Promise<void>;
   }
 
   let {
@@ -33,15 +30,12 @@
     viewMode,
     isLite,
     probingAll,
-    probingPolicy,
     probeProgress,
     canProbeAll,
-    canProbePolicy,
     probeDisabledReason = null,
     onSearchQueryChange,
     onViewModeChange,
     onProbeAll,
-    onProbePolicy,
   }: Props = $props();
 </script>
 
@@ -114,20 +108,6 @@
       </div>
     {/if}
 
-    {#if (selectedGroup && canProbePolicy) || probingPolicy}
-      <button
-        class="probe-all-btn"
-        onclick={onProbePolicy}
-        disabled={!canProbePolicy}
-        title="触发当前 url_test 策略测速"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-        </svg>
-        <span>{probingPolicy ? '策略测速中' : '策略测速'}</span>
-      </button>
-    {/if}
-
     <button
       class="probe-all-btn"
       onclick={onProbeAll}
@@ -140,7 +120,9 @@
             <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
           </svg>
         </span>
-        <span class="probe-progress-text">{probeProgress.done}/{probeProgress.total}</span>
+        <span class="probe-progress-text">
+          {probeProgress.total > 0 ? `${probeProgress.done}/${probeProgress.total}` : '测速中'}
+        </span>
       {:else}
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>

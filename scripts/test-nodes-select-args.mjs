@@ -51,8 +51,8 @@ assertContains(
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',
-  'await probeController.handleProbeAll(filteredNodes);',
-  'NodesTab should batch probe the current filtered node set',
+  'planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes })',
+  'NodesTab should plan node and url_test probes through one action',
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',

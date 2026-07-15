@@ -4,7 +4,9 @@ import {
   buildSections,
   collectGroupNodeTags,
   filterNodes,
+  mergePolicyGroups,
   normalizeSelectedGroup,
+  planProbeTargets,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 
 function node(tag, delay, extra = {}) {
@@ -82,9 +84,46 @@ function testRuntimeOverlayKeepsFirstGroupForSharedNodeTag() {
   });
 }
 
+function testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState() {
+  const config = [group('Auto', [{ tag: 'HK', type: 'vmess' }, { tag: 'JP', type: 'trojan' }], 'url_test')];
+  const runtime = [{
+    ...group('Auto', [
+      { tag: 'HK', type: 'proxy', delayMs: 31, alive: true },
+      { tag: 'JP', type: 'proxy', delayMs: 82, alive: false, lastError: 'timeout' },
+    ], 'url_test'),
+    selected: 'HK',
+  }];
+
+  const [merged] = mergePolicyGroups(config, runtime);
+  assert.equal(merged.selected, 'HK');
+  assert.deepEqual(merged.outbounds[0], { tag: 'HK', type: 'proxy', delayMs: 31, alive: true });
+  assert.equal(merged.outbounds[1].lastError, 'timeout');
+}
+
+function testProbePlanningUsesKernelForUrlTestGroups() {
+  const groups = [
+    group('Proxy', [{ tag: 'HK' }, { tag: 'Auto' }]),
+    group('Auto', [{ tag: 'JP' }, { tag: 'US' }], 'url_test'),
+  ];
+  const hk = node('HK', 20);
+  const auto = node('Auto', 30, { protocol: 'url_test' });
+  const jp = node('JP', 40);
+
+  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Proxy', visibleNodes: [hk, auto] }), {
+    nodes: [hk],
+    policyTags: ['Auto'],
+  });
+  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [jp] }), {
+    nodes: [],
+    policyTags: ['Auto'],
+  });
+}
+
 testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
+testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState();
+testProbePlanningUsesKernelForUrlTestGroups();
 
 console.log('nodes-view-model: ok');

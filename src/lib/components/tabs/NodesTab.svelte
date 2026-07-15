@@ -21,6 +21,8 @@
     buildSections,
     filterNodes,
     getActiveNodeTag,
+    mergePolicyGroups,
+    planProbeTargets,
     resolveNodeGroup,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
@@ -36,7 +38,7 @@
   let switching = $state<string | null>(null);
   let probingNodeIds = $state<Set<string>>(new Set());
   let probingAll = $state(false);
-  let probingPolicy = $state(false);
+  let probingRequested = $state(false);
   let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
   type ProbeControllerState = {
@@ -110,19 +112,7 @@
     const config = guiState.configPolicyGroups;
     const runtime = guiState.policyGroups;
 
-    // Merge selected tag from runtime onto config groups.
-    const runtimeSelected = new Map<string, string | undefined>();
-    for (const rg of runtime) {
-      if (rg.selected) runtimeSelected.set(rg.name, rg.selected);
-    }
-
-    if (config.length > 0) {
-      return config.map((cg) => ({
-        ...cg,
-        selected: runtimeSelected.get(cg.name) ?? cg.selected,
-      }));
-    }
-    return runtime;
+    return mergePolicyGroups(config, runtime);
   });
 
   const runtimeOverlay = $derived.by(() => {
@@ -280,53 +270,29 @@
       lastError = '内核未就绪，无法测速';
       return;
     }
-    if (probingAll || probingNodeIds.size > 0) {
+    if (probingRequested || probingAll || probingNodeIds.size > 0) {
       return;
     }
-    await probeController.handleProbeAll(filteredNodes);
-  }
+    const targets = planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes });
+    if (targets.nodes.length === 0 && targets.policyTags.length === 0) return;
 
-  async function handleProbePolicy() {
-    const group = groups.find((item) => item.name === selectedGroup);
-    if (!group || probingPolicy) return;
-
-    probingPolicy = true;
+    probingRequested = true;
     lastError = null;
-    let unlisten: (() => void) | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      let resolveCompleted!: () => void;
-      let rejectCompleted!: (error: Error) => void;
-      const completed = new Promise<void>((resolve, reject) => {
-        resolveCompleted = resolve;
-        rejectCompleted = reject;
-      });
-      unlisten = await listen<{
-        event?: { eventType?: string; payload?: { data?: { policyTag?: string; trigger?: string } } };
-      }>('gui:event', ({ payload }) => {
-        const event = payload.event;
-        const data = event?.payload?.data;
-        if (
-          event?.eventType === 'policy.probeCompleted'
-          && data?.policyTag === group.name
-          && data?.trigger === 'manual'
-        ) {
-          resolveCompleted();
+      const policyRequests = targets.policyTags.map(async (policyTag) => {
+        const accepted = await guiProbePolicy(policyTag);
+        if (!accepted.accepted || accepted.result?.probeTriggered === false) {
+          throw new Error(`内核未接受 ${policyTag} 的测速请求`);
         }
       });
-      timer = setTimeout(() => rejectCompleted(new Error('策略测速等待结果超时')), 30_000);
-
-      const accepted = await guiProbePolicy(group.name);
-      if (!accepted.accepted || accepted.result?.probeTriggered === false) {
-        throw new Error('内核未接受策略测速请求');
-      }
-      await completed;
+      await Promise.all([
+        targets.nodes.length > 0 ? probeController.handleProbeAll(targets.nodes) : Promise.resolve(),
+        ...policyRequests,
+      ]);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     } finally {
-      if (timer) clearTimeout(timer);
-      unlisten?.();
-      probingPolicy = false;
+      probingRequested = false;
     }
   }
 
@@ -414,16 +380,13 @@
       {searchQuery}
       {viewMode}
       {isLite}
-      {probingAll}
-      {probingPolicy}
+      probingAll={probingRequested || probingAll}
       {probeProgress}
-      canProbeAll={isCoreAvailable && !probingAll && probingNodeIds.size === 0 && filteredNodes.length > 0}
-      canProbePolicy={isCoreAvailable && !probingPolicy && Boolean(selectedGroup && ['url_test', 'urltest'].includes(groups.find((group) => group.name === selectedGroup)?.kind?.toLowerCase() ?? ''))}
+      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && filteredNodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={(mode) => (viewMode = mode)}
       onProbeAll={handleProbeAll}
-      onProbePolicy={handleProbePolicy}
     />
 
     <!-- Node content -->
