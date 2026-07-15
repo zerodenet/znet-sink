@@ -6,7 +6,6 @@
   import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import TunStackStatus from '$lib/components/core/TunStackStatus.svelte';
-  import LogPanel from '$lib/components/core/LogPanel.svelte';
   import {
     selectPolicy,
   } from '$lib/services/core';
@@ -431,13 +430,6 @@
         <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
       </div>
     </div>
-
-    <!-- Row 5: Log panel -->
-    {#if store.isNavVisible('logs')}
-      <div style="min-height: 120px; max-height: 200px;" class="flex-shrink-0 min-h-0">
-        <LogPanel />
-      </div>
-    {/if}
 
   </div>
 
