@@ -48,17 +48,16 @@
     if (store.isInitialized) {
       guiState.initialize();
       coreEvents.start();
-      // Start delayed update checks after initialization without blocking UI.
-      setTimeout(() => {
-        updater.checkForUpdate();
-      }, 3000);
+      updater.startPeriodicChecks();
     } else {
       guiState.destroy();
       coreEvents.stop();
+      updater.stopPeriodicChecks();
     }
     return () => {
       guiState.destroy();
       coreEvents.stop();
+      updater.stopPeriodicChecks();
     };
   });
 

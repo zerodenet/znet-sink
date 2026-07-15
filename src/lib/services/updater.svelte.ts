@@ -5,6 +5,9 @@ import { appendLog } from '$lib/services/core';
 
 export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'error' | 'unsupported';
 
+export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
+
 class UpdaterService {
   updateAvailable = $state(false);
   latestVersion = $state<string | null>(null);
@@ -19,6 +22,10 @@ class UpdaterService {
   total = $state<number | null>(null);
   /** Granular status for UI rendering. */
   status = $state<UpdaterStatus>('idle');
+  private lastCheckAt = 0;
+  private initialCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private periodicCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private scheduleListenersAttached = false;
 
   /** Download progress as 0–100, or null when total size is unknown (indeterminate). */
   get progressPct(): number | null {
@@ -101,9 +108,55 @@ class UpdaterService {
       void appendLog({ source: 'app', level: 'warn', message: `更新检查失败: ${msg}` });
       return false;
     } finally {
+      this.lastCheckAt = Date.now();
       this.checking = false;
     }
   }
+
+  startPeriodicChecks() {
+    if (this.periodicCheckTimer) return;
+
+    this.initialCheckTimer = setTimeout(() => {
+      this.initialCheckTimer = null;
+      this.runScheduledCheck();
+    }, INITIAL_UPDATE_CHECK_DELAY_MS);
+    this.periodicCheckTimer = setInterval(() => {
+      this.runScheduledCheck();
+    }, UPDATE_CHECK_INTERVAL_MS);
+
+    if (!this.scheduleListenersAttached) {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      window.addEventListener('online', this.handleOnline);
+      this.scheduleListenersAttached = true;
+    }
+  }
+
+  stopPeriodicChecks() {
+    if (this.initialCheckTimer) clearTimeout(this.initialCheckTimer);
+    if (this.periodicCheckTimer) clearInterval(this.periodicCheckTimer);
+    this.initialCheckTimer = null;
+    this.periodicCheckTimer = null;
+
+    if (this.scheduleListenersAttached) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      window.removeEventListener('online', this.handleOnline);
+      this.scheduleListenersAttached = false;
+    }
+  }
+
+  private runScheduledCheck(force = false) {
+    if (this.checking || this.downloading || this.updateAvailable) return;
+    if (!force && this.lastCheckAt > 0 && Date.now() - this.lastCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
+    void this.checkForUpdate();
+  }
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') this.runScheduledCheck(true);
+  };
+
+  private handleOnline = () => {
+    this.runScheduledCheck(this.status === 'error');
+  };
 
   /** Download and install the update. */
   async downloadAndInstall(): Promise<boolean> {
@@ -153,6 +206,7 @@ class UpdaterService {
     this.latestVersion = null;
     this.releaseNotes = null;
     this.status = 'up-to-date';
+    this.lastCheckAt = Date.now();
   }
 }
 
