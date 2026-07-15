@@ -334,20 +334,22 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
      <button class="tab-btn {activeTab === 'live' ? 'active' : ''}" onclick={() => activeTab = 'live'}>实时连接</button>
      <button class="tab-btn {activeTab === 'history' ? 'active' : ''}" onclick={() => activeTab = 'history'}>连接记录</button>
    </div>
-   <button class="action-btn" onclick={refresh}>
-     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-       <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
-     </svg>
-     刷新
-   </button>
-   {#if tabConnections.length > 0}
-     <button class="action-btn danger" onclick={clearList} title="清空当前列表">
+   <div class="header-actions">
+     <button class="action-btn" onclick={refresh}>
        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-         <path d="M3 4H9M5 4V3A1 1 0 0 1 6 2H6A1 1 0 0 1 7 3V4M4 4L4.5 10A1 1 0 0 0 5.5 11H6.5A1 1 0 0 0 7.5 10L8 4"/>
+         <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
        </svg>
-       清空
+       刷新
      </button>
-   {/if}
+     {#if tabConnections.length > 0}
+       <button class="action-btn danger" onclick={clearList} title="清空当前列表">
+         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+           <path d="M3 4H9M5 4V3A1 1 0 0 1 6 2H6A1 1 0 0 1 7 3V4M4 4L4.5 10A1 1 0 0 0 5.5 11H6.5A1 1 0 0 0 7.5 10L8 4"/>
+         </svg>
+         清空
+       </button>
+     {/if}
+   </div>
  </div>
 
  <!-- Search / filter -->
@@ -496,9 +498,10 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
 
 <style>
   .panel-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
+    column-gap: 12px;
     padding: 11px 14px 10px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -508,6 +511,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     display: flex;
     align-items: center;
     gap: 7px;
+    min-width: 0;
   }
 
   .panel-title {
@@ -540,6 +544,15 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     border: 1px solid var(--border);
     cursor: pointer;
     transition: background 0.12s ease;
+    white-space: nowrap;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
   }
 
  .action-btn:hover { background: var(--surface); }
@@ -556,6 +569,8 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
    background: var(--muted);
    border-radius: 7px;
    padding: 2px;
+   justify-self: center;
+   white-space: nowrap;
  }
 
  .tab-btn {
