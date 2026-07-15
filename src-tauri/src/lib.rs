@@ -307,6 +307,22 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(false) {
+                            crate::services::logs::znet_log(
+                                Some(app_handle.state::<AppState>().inner()),
+                                crate::models::logs::LogLevel::Warn,
+                                "frontend readiness timed out; showing main window".to_string(),
+                            );
+                            let _ = window.show();
+                        }
+                    }
+                });
+            }
             // Always check kernel health on startup. If the kernel is already
             // running (e.g. external daemon), just connect. If not, try to
             // start a managed kernel when auto_start is enabled (default).

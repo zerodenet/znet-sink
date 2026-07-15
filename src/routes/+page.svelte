@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
@@ -15,10 +16,29 @@
   import TabContent from '$lib/components/TabContent.svelte';
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import Toast from '$lib/components/Toast.svelte';
+  import { appendLog } from '$lib/services/core';
 
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
     initTheme();
+    requestAnimationFrame(() => {
+      void getCurrentWindow().show().catch((error) => {
+        console.error('Failed to show main window after first render:', error);
+      });
+
+      const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+      void appendLog({
+        source: 'app',
+        level: 'info',
+        message: '前端首屏已就绪',
+        fields: {
+          action: 'frontend_first_render',
+          readyAtMs: Math.round(performance.now()),
+          domInteractiveMs: navigation ? Math.round(navigation.domInteractive) : undefined,
+          domContentLoadedMs: navigation ? Math.round(navigation.domContentLoadedEventEnd) : undefined,
+        },
+      }).catch((error) => console.error('Failed to log frontend readiness:', error));
+    });
     void store.loadFromBackend();
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
       const { tab, section } = event.payload;
