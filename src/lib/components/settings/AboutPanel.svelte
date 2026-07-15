@@ -108,7 +108,7 @@
 
     <div class="config-row">
       <span class="config-label">描述</span>
-      <span class="config-value desc">ZNet Sink 是一款轻量级网络代理管理客户端，提供配置管理、订阅同步、规则集编辑、实时连接监控、TUN 虚拟网卡等能力。</span>
+      <span class="config-value desc">ZNet Sink 是一款轻量级网络代理管理客户端，提供配置管理、订阅同步、实时连接监控、TUN 虚拟网卡等能力。</span>
     </div>
   </div>
 

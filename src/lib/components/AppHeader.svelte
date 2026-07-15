@@ -22,8 +22,12 @@
             disabled={!store.isNavOperable(tab.id)}
             class="nav-tab-btn {store.activeTab === tab.id ? 'active' : ''} {!store.isNavOperable(tab.id) ? 'disabled' : ''}"
             aria-current={store.activeTab === tab.id ? 'page' : undefined}
+            title={tab.comingSoon ? `${tab.label} - 敬请期待` : undefined}
           >
-            {tab.label}
+            <span>{tab.label}</span>
+            {#if tab.comingSoon}
+              <span class="coming-soon-badge">敬请期待</span>
+            {/if}
           </button>
         {/if}
       {/each}
@@ -73,5 +77,16 @@
   .nav-tab-btn.disabled {
     opacity: 0.38;
     cursor: not-allowed;
+  }
+
+  .coming-soon-badge {
+    margin-left: 4px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 8px;
+    font-weight: 600;
+    line-height: 1.2;
   }
 </style>

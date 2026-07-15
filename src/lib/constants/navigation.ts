@@ -1,6 +1,7 @@
 export interface NavTab {
   id: string;
   label: string;
+  comingSoon?: boolean;
 }
 
 export const NAV_TABS: NavTab[] = [
@@ -8,7 +9,7 @@ export const NAV_TABS: NavTab[] = [
   { id: 'nodes', label: '节点' },
   { id: 'profiles', label: '配置' },
   { id: 'subscriptions', label: '订阅' },
-  { id: 'rules', label: '规则' },
+  { id: 'rules', label: '规则', comingSoon: true },
   { id: 'connections', label: '连接' },
   { id: 'logs', label: '日志' },
   { id: 'settings', label: '设置' },

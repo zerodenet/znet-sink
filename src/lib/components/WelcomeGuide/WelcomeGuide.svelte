@@ -80,7 +80,7 @@
           </button>
           <button onclick={() => selectedMode = 'pro'} class="mode-card {selectedMode === 'pro' ? 'selected' : ''}">
             <span class="mode-card-title">专业模式</span>
-            <span class="mode-card-desc">全部功能：连接、规则、日志、能力</span>
+            <span class="mode-card-desc">完整界面：连接、日志、调试与能力信息</span>
             <span class="mode-card-badge pro">高级用户</span>
           </button>
         </div>
