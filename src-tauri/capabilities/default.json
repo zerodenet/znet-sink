@@ -7,6 +7,15 @@
     "core:default",
     "dialog:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$APPDATA/ZNet Sink" },
+        { "path": "$APPDATA/ZNet Sink/**" },
+        { "path": "$HOME/.config/znet-sink" },
+        { "path": "$HOME/.config/znet-sink/**" }
+      ]
+    },
     "updater:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",

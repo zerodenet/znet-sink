@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
+  import { appendLog, getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
   import type { AppConfig } from '$lib/types/app-config';
   import { Switch } from '$lib/components/ui/switch';
   import { NAV_TABS, TAB_LABELS } from '$lib/constants/navigation';
   import { onMount } from 'svelte';
+  import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
+  import { warning } from '$lib/services/toast.svelte';
 
   let config = $state<AppConfig | null>(null);
   let loading = $state(false);
@@ -15,6 +17,16 @@
   let copiedField = $state<string | null>(null);
 
   const menuTabs = NAV_TABS.filter((tab) => tab.id !== 'settings');
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function logPathAction(level: 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown>) {
+    void appendLog({ source: 'app', level, message, fields }).catch((error) => {
+      console.error('Failed to append path action log:', error);
+    });
+  }
 
   async function refreshConfig() {
     try {
@@ -96,9 +108,10 @@
   async function copyToClipboard(text: string, field: string) {
     try {
       await navigator.clipboard.writeText(text);
+      logPathAction('info', '已复制应用路径', { action: 'copy_path', field, path: text });
       copiedField = field;
       setTimeout(() => { copiedField = null; }, 2000);
-    } catch {
+    } catch (clipboardError) {
       // Fallback for older browsers
       const textarea = document.createElement('textarea');
       textarea.value = text;
@@ -106,22 +119,61 @@
       textarea.style.opacity = '0';
       document.body.appendChild(textarea);
       textarea.select();
-      document.execCommand('copy');
+      const copied = document.execCommand('copy');
       document.body.removeChild(textarea);
       copiedField = field;
       setTimeout(() => { copiedField = null; }, 2000);
+      if (copied) {
+        logPathAction('info', '已通过兼容方式复制应用路径', {
+          action: 'copy_path_fallback', field, path: text, clipboardError: errorMessage(clipboardError),
+        });
+      } else {
+        const message = '浏览器未能复制路径';
+        logPathAction('error', message, {
+          action: 'copy_path_failed', field, path: text, clipboardError: errorMessage(clipboardError),
+        });
+        warning(message);
+      }
     }
   }
 
-  async function openLogsFolder() {
-    if (!logPaths) return;
+  async function openDirectory(path: string) {
     try {
-      // Use Tauri opener plugin
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(logPaths.logsDir);
-    } catch {
-      // Fallback: copy path to clipboard
-      await copyToClipboard(logPaths.logsDir, 'logsDir');
+      await openPath(path);
+      logPathAction('info', '已打开应用目录', { action: 'open_directory', path });
+    } catch (openError) {
+      logPathAction('warn', '直接打开目录失败，尝试在资源管理器中定位', {
+        action: 'open_directory_fallback', path, error: errorMessage(openError),
+      });
+      try {
+        await revealItemInDir(path);
+        logPathAction('info', '已在资源管理器中定位应用目录', {
+          action: 'reveal_directory', path,
+        });
+      } catch (revealError) {
+        const message = `无法打开目录: ${errorMessage(revealError)}`;
+        logPathAction('error', message, {
+          action: 'open_directory_failed', path,
+          openError: errorMessage(openError),
+          revealError: errorMessage(revealError),
+        });
+        warning(message);
+      }
+    }
+  }
+
+  async function revealLogFile(path: string) {
+    try {
+      await revealItemInDir(path);
+      logPathAction('info', '已在资源管理器中定位日志文件', {
+        action: 'reveal_log_file', path,
+      });
+    } catch (error) {
+      const message = `无法定位日志文件: ${errorMessage(error)}`;
+      logPathAction('error', message, {
+        action: 'reveal_log_file_failed', path, error: errorMessage(error),
+      });
+      warning(message);
     }
   }
 
@@ -204,7 +256,7 @@
               disabled={updatingMenuKey === tab.id}
               aria-pressed={isMenuVisible(tab.id)}
             >
-              <span>{TAB_LABELS[tab.id] ?? tab.label}</span>
+              <span>{TAB_LABELS[tab.id] ?? tab.label}{tab.comingSoon ? '（敬请期待）' : ''}</span>
             </button>
           {/each}
         </div>
@@ -274,6 +326,13 @@
         >
           {copiedField === 'logFile' ? '已复制' : '复制'}
         </button>
+        <button
+          class="log-action-btn primary"
+          onclick={() => revealLogFile(logPaths!.logFile)}
+          title="在文件夹中显示"
+        >
+          打开目录
+        </button>
       </div>
     </div>
 
@@ -290,6 +349,13 @@
           title="复制路径"
         >
           {copiedField === 'coreLogFile' ? '已复制' : '复制'}
+        </button>
+        <button
+          class="log-action-btn primary"
+          onclick={() => revealLogFile(logPaths!.coreLogFile)}
+          title="在文件夹中显示"
+        >
+          打开目录
         </button>
       </div>
     </div>
@@ -309,7 +375,7 @@
         </button>
         <button
           class="log-action-btn primary"
-          onclick={openLogsFolder}
+          onclick={() => openDirectory(logPaths!.logsDir)}
           title="打开文件夹"
         >
           打开
@@ -329,6 +395,13 @@
           title="复制路径"
         >
           {copiedField === 'dataDir' ? '已复制' : '复制'}
+        </button>
+        <button
+          class="log-action-btn primary"
+          onclick={() => openDirectory(logPaths!.dataDir)}
+          title="打开文件夹"
+        >
+          打开
         </button>
       </div>
     </div>
