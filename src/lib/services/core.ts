@@ -509,7 +509,24 @@ export async function guiLogPaths(): Promise<GuiLogPaths> {
 import type { DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
 export async function getGuiDebugFrames(query?: DebugFrameQuery): Promise<DebugFramePage> {
-  return invoke('gui_debug_frames', { query });
+  const raw = await invoke<DebugFramePage | import('$lib/types/debug').DebugFrame[]>('gui_debug_frames', { query });
+  if (!Array.isArray(raw)) return raw;
+
+  // Compatibility with a Tauri backend that has not restarted since the
+  // debug API moved from a frame array to a paginated response.
+  const matching = raw
+    .filter((frame) => !query?.frameType || frame.frameType === query.frameType)
+    .sort((a, b) => a.id - b.id);
+  const oldestAvailableId = matching[0]?.id;
+  const before = query?.beforeId ?? Number.POSITIVE_INFINITY;
+  const eligible = matching.filter((frame) => frame.id < before);
+  const limit = query?.limit ?? 200;
+  const items = eligible.slice(Math.max(0, eligible.length - limit));
+  return {
+    items,
+    hasMore: items.length > 0 && oldestAvailableId != null && items[0].id > oldestAvailableId,
+    oldestAvailableId,
+  };
 }
 
 export async function clearDebugFrames(): Promise<void> {

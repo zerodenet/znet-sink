@@ -24,6 +24,7 @@
   let frames = $state<DebugFrame[]>([]);
   let loading = $state(true);
   let loadingMore = $state(false);
+  let loadError = $state<string | null>(null);
   let autoRefresh = $state(true);
   let expandedIds = $state<Set<number>>(new Set());
   let expandAll = $state(false);
@@ -84,6 +85,7 @@
 
     try {
       const page = await getGuiDebugFrames(buildQuery());
+      loadError = null;
       if (options.replace || (page.items.length === 0 && page.oldestAvailableId == null)) {
         frames = page.items;
       } else {
@@ -96,8 +98,8 @@
       } else {
         expandedIds = new Set([...expandedIds].filter(id => frames.some(frame => frame.id === id)));
       }
-    } catch {
-      /* silent */
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : String(error);
     } finally {
       loading = false;
     }
@@ -109,13 +111,14 @@
     loadingMore = true;
     try {
       const page = await getGuiDebugFrames(buildQuery(frames[0].id));
+      loadError = null;
       frames = mergePage(frames, page);
       syncHasMore(page, frames);
       if (expandAll) {
         expandedIds = new Set(visibleFrames.map(f => f.id));
       }
-    } catch {
-      /* silent */
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : String(error);
     } finally {
       loadingMore = false;
     }
@@ -278,6 +281,8 @@
     <div class="flex-1 overflow-y-auto min-h-0 space-y-0.5" style="font-size: 11px;">
       {#if loading && frames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">加载中...</div>
+      {:else if loadError && visibleFrames.length === 0}
+        <div class="debug-load-error">IPC 调试数据加载失败：{loadError}</div>
       {:else if visibleFrames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">暂无匹配帧</div>
       {:else}
@@ -563,5 +568,18 @@
     display: flex;
     justify-content: center;
     padding: 10px 0 2px;
+  }
+
+  .debug-load-error {
+    margin: 24px auto;
+    max-width: 560px;
+    padding: 10px 12px;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--destructive);
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 </style>

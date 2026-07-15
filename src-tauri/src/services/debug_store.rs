@@ -92,11 +92,11 @@ pub(crate) fn query_page_from_path(
             continue;
         }
 
-        let frame = serde_json::from_str::<DebugFrame>(line).map_err(|error| AppError {
-            code: "invalid_argument",
-            message: format!("failed to parse debug frames: {error}"),
-            details: Some(serde_json::json!({ "path": path.display().to_string() })),
-        })?;
+        let Ok(frame) = serde_json::from_str::<DebugFrame>(line) else {
+            // A partial final write or an older incompatible record must not
+            // make every valid debug frame in the history unreadable.
+            continue;
+        };
 
         if frame_type.is_some_and(|expected| frame.frame_type != expected) {
             continue;
@@ -270,6 +270,31 @@ mod tests {
         assert_eq!(
             frames.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![3, 4]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn debug_store_skips_malformed_records() {
+        let dir = std::env::temp_dir().join(format!("znet-debug-malformed-{}", std::process::id()));
+        let path = dir.join("debug.log.jsonl");
+
+        append_to_path(&path, &frame(1, "query")).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\nnot-json\n{}\n",
+                serde_json::to_string(&frame(1, "query")).unwrap(),
+                serde_json::to_string(&frame(2, "event")).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let frames = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(
+            frames.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![1, 2]
         );
 
         let _ = fs::remove_dir_all(dir);
