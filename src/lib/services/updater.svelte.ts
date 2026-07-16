@@ -2,6 +2,7 @@ import { check } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { info, warning } from '$lib/services/toast.svelte';
 import { appendLog } from '$lib/services/core';
+import { tracedOperation } from '$lib/services/telemetry';
 
 export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'error' | 'unsupported';
 
@@ -60,7 +61,9 @@ class UpdaterService {
 
     try {
       void appendLog({ source: 'app', level: 'info', message: `正在检查更新… (当前 v${this.currentVersion})` });
-      const update = await check();
+      const update = await tracedOperation('update', 'update.check', () => check(), {
+        currentVersion: this.currentVersion,
+      });
       if (update) {
         this.updateAvailable = true;
         this.latestVersion = update.version;
@@ -166,27 +169,34 @@ class UpdaterService {
     this.downloaded = 0;
     this.total = null;
     try {
-      const update = await check();
+      const update = await tracedOperation('update', 'update.install.prepare', () => check(), {
+        currentVersion: this.currentVersion,
+      });
       if (!update) {
         this.downloading = false;
         this.status = 'up-to-date';
         return false;
       }
 
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case 'Started':
-            this.total = event.data.contentLength ?? null;
-            info('开始下载更新…');
-            break;
-          case 'Progress':
-            this.downloaded += event.data.chunkLength;
-            break;
-          case 'Finished':
-            info('下载完成，应用即将重启…');
-            break;
-        }
-      });
+      await tracedOperation(
+        'update',
+        'update.download_install',
+        () => update.downloadAndInstall((event) => {
+          switch (event.event) {
+            case 'Started':
+              this.total = event.data.contentLength ?? null;
+              info('开始下载更新…');
+              break;
+            case 'Progress':
+              this.downloaded += event.data.chunkLength;
+              break;
+            case 'Finished':
+              info('下载完成，应用即将重启…');
+              break;
+          }
+        }),
+        { fromVersion: this.currentVersion, toVersion: update.version },
+      );
 
       // The app will restart after install
       this.downloading = false;

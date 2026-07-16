@@ -504,6 +504,16 @@ export async function guiLogPaths(): Promise<GuiLogPaths> {
   return invoke('gui_log_paths');
 }
 
+export interface GuiDiagnosticExport {
+  directory: string;
+  files: string[];
+  createdAtUnixMs: number;
+}
+
+export async function guiExportDiagnostics(): Promise<GuiDiagnosticExport> {
+  return invoke('gui_export_diagnostics');
+}
+
 // Debug
 
 import type { DebugFramePage, DebugFrameQuery } from '$lib/types/debug';

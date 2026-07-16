@@ -17,13 +17,21 @@
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import Toast from '$lib/components/Toast.svelte';
   import { appendLog } from '$lib/services/core';
+  import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
 
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
+    const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry();
     initTheme();
     requestAnimationFrame(() => {
       void getCurrentWindow().show().catch((error) => {
         console.error('Failed to show main window after first render:', error);
+        void recordTelemetry({
+          level: 'error',
+          area: 'startup',
+          operation: 'window.show',
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
 
       const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
@@ -61,6 +69,7 @@
     return () => {
       mediaQuery.removeEventListener('change', onSystemThemeChange);
       unlistenNavigate?.();
+      uninstallGlobalErrorTelemetry();
     };
   });
 

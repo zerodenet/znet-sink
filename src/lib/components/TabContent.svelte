@@ -1,38 +1,98 @@
 <script lang="ts">
+  import type { Component } from 'svelte';
   import { store } from '$lib/services/store.svelte';
-  import OverviewTab from './tabs/OverviewTab.svelte';
-  import NodesTab from './tabs/NodesTab.svelte';
-  import ProfilesTab from './tabs/ProfilesTab.svelte';
-  import SubscriptionsTab from './tabs/SubscriptionsTab.svelte';
-  import RulesTab from './tabs/RulesTab.svelte';
-  import LogsTab from './tabs/LogsTab.svelte';
-  import ConnectionsTab from './tabs/ConnectionsTab.svelte';
-  import CapabilitiesTab from './tabs/CapabilitiesTab.svelte';
-  import DebugTab from './tabs/DebugTab.svelte';
-  import SettingsPanel from './SettingsPanel.svelte';
-  import PlaceholderTab from './tabs/PlaceholderTab.svelte';
+  import { recordTelemetry } from '$lib/services/telemetry';
+  import { Spinner } from '$lib/components/ui/Spinner';
+
+  type ComponentModule = { default: Component };
+  type Loader = () => Promise<ComponentModule>;
+
+  const loaders: Record<string, Loader> = {
+    overview: () => import('./tabs/OverviewTab.svelte'),
+    nodes: () => import('./tabs/NodesTab.svelte'),
+    profiles: () => import('./tabs/ProfilesTab.svelte'),
+    subscriptions: () => import('./tabs/SubscriptionsTab.svelte'),
+    rules: () => import('./tabs/RulesTab.svelte'),
+    connections: () => import('./tabs/ConnectionsTab.svelte'),
+    logs: () => import('./tabs/LogsTab.svelte'),
+    settings: () => import('./SettingsPanel.svelte'),
+    capabilities: () => import('./tabs/CapabilitiesTab.svelte'),
+    debug: () => import('./tabs/DebugTab.svelte'),
+  };
+
+  let ActiveComponent = $state<Component | null>(null);
+  let activeProps = $state<Record<string, unknown>>({});
+  let loadError = $state<string | null>(null);
+  let requestId = 0;
+
+  $effect(() => {
+    const tab = store.activeTab;
+    const currentRequest = ++requestId;
+    ActiveComponent = null;
+    activeProps = {};
+    loadError = null;
+    const startedAt = performance.now();
+    const loader = loaders[tab] ?? (() => import('./tabs/PlaceholderTab.svelte'));
+
+    void loader()
+      .then((module) => {
+        if (currentRequest !== requestId) return;
+        ActiveComponent = module.default;
+        activeProps = loaders[tab] ? {} : { label: tab };
+        void recordTelemetry({
+          level: 'debug',
+          area: 'ui',
+          operation: 'tab.load',
+          message: `tab ${tab} loaded`,
+          durationMs: Math.round(performance.now() - startedAt),
+          context: { tab },
+        });
+      })
+      .catch((error) => {
+        if (currentRequest !== requestId) return;
+        loadError = error instanceof Error ? error.message : String(error);
+        void recordTelemetry({
+          level: 'error',
+          area: 'ui',
+          operation: 'tab.load',
+          message: loadError,
+          durationMs: Math.round(performance.now() - startedAt),
+          context: { tab },
+        });
+      });
+  });
 </script>
 
-{#if store.activeTab === 'overview'}
-  <OverviewTab />
-{:else if store.activeTab === 'nodes'}
-  <NodesTab />
-{:else if store.activeTab === 'profiles'}
-  <ProfilesTab />
-{:else if store.activeTab === 'subscriptions'}
-  <SubscriptionsTab />
-{:else if store.activeTab === 'rules'}
-  <RulesTab />
-{:else if store.activeTab === 'connections'}
-  <ConnectionsTab />
-{:else if store.activeTab === 'logs'}
-  <LogsTab />
-{:else if store.activeTab === 'settings'}
-  <SettingsPanel />
-{:else if store.activeTab === 'capabilities'}
-  <CapabilitiesTab />
-{:else if store.activeTab === 'debug'}
-  <DebugTab />
+{#if loadError}
+  <div class="tab-load-state error">
+    <strong>页面加载失败</strong>
+    <span>{loadError}</span>
+  </div>
+{:else if ActiveComponent}
+  <ActiveComponent {...activeProps} />
 {:else}
-  <PlaceholderTab label={store.activeTab} />
+  <div class="tab-load-state">
+    <Spinner size="sm" color="default" />
+    <span>正在加载页面…</span>
+  </div>
 {/if}
+
+<style>
+  .tab-load-state {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+
+  .tab-load-state.error {
+    flex-direction: column;
+    color: var(--destructive);
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+</style>

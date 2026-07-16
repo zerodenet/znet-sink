@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::{fs, path::Path};
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
@@ -549,4 +550,86 @@ pub struct GuiLogPaths {
     pub logs_dir: String,
     pub log_file: String,
     pub core_log_file: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiDiagnosticExport {
+    pub directory: String,
+    pub files: Vec<String>,
+    pub created_at_unix_ms: u64,
+}
+
+/// Export a local, support-ready diagnostic directory without proxy config
+/// contents, subscription URLs, credentials, or other user secrets.
+#[tauri::command]
+pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
+    let created_at_unix_ms = common::now_unix_ms();
+    let data_dir = crate::services::data_dir()?;
+    let export_dir = data_dir
+        .join("diagnostics")
+        .join(format!("znet-sink-diagnostics-{created_at_unix_ms}"));
+    fs::create_dir_all(&export_dir).map_err(|error| {
+        AppError::internal(format!("create diagnostic export directory: {error}"))
+    })?;
+
+    let candidates = [
+        data_dir.join("logs").join("gui.log.jsonl"),
+        data_dir.join("logs").join("logs.jsonl"),
+        data_dir.join("logs").join("debug.log.jsonl"),
+        crate::services::core_config::managed_core_log_path()?,
+    ];
+    let mut files = Vec::new();
+    for source in candidates {
+        if !source.is_file() {
+            continue;
+        }
+        let Some(file_name) = source.file_name() else {
+            continue;
+        };
+        let destination = export_dir.join(file_name);
+        fs::copy(&source, &destination)
+            .map_err(|error| AppError::internal(format!("copy diagnostic file: {error}")))?;
+        files.push(file_name.to_string_lossy().to_string());
+    }
+
+    let manifest_name = "manifest.json";
+    let manifest = serde_json::json!({
+        "schema": "znet.diagnostics.v1",
+        "createdAtUnixMs": created_at_unix_ms,
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "files": files,
+        "privacy": {
+            "proxyConfigIncluded": false,
+            "subscriptionUrlsIncluded": false,
+            "credentialsIncluded": false
+        }
+    });
+    write_pretty_json(&export_dir.join(manifest_name), &manifest)?;
+    files.push(manifest_name.to_string());
+
+    crate::services::file_logger::emit(
+        "info",
+        "diagnostics",
+        "diagnostic export created",
+        Some(serde_json::json!({
+            "directory": export_dir.to_string_lossy(),
+            "file_count": files.len()
+        })),
+    );
+
+    Ok(GuiDiagnosticExport {
+        directory: export_dir.to_string_lossy().to_string(),
+        files,
+        created_at_unix_ms,
+    })
+}
+
+fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
+    let content = serde_json::to_vec_pretty(value)
+        .map_err(|error| AppError::internal(format!("serialize diagnostic manifest: {error}")))?;
+    fs::write(path, content)
+        .map_err(|error| AppError::internal(format!("write diagnostic manifest: {error}")))
 }

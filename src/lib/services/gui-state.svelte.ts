@@ -23,6 +23,7 @@ import {
 } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { coreEvents } from './core-events.svelte';
+import { tracedOperation } from './telemetry';
 import type {
   ConfigProxyNode,
   SelfTestSnapshot,
@@ -264,7 +265,7 @@ class GuiStateStore {
   async connect() {
     this.isConnecting = true;
     try {
-      this.connection = await guiConnect();
+      this.connection = await tracedOperation('proxy', 'connection.connect', () => guiConnect());
       this.syncTrayStatus();
       toastSuccess('系统代理已开启，服务已生效');
       coreEvents.start();
@@ -281,7 +282,7 @@ class GuiStateStore {
   async disconnect() {
     this.isDisconnecting = true;
     try {
-      this.connection = await guiDisconnect();
+      this.connection = await tracedOperation('proxy', 'connection.disconnect', () => guiDisconnect());
       this.syncTrayStatus();
       toastSuccess('系统代理已关闭，内核保持运行');
       await this.refreshPolicyPanels();
@@ -297,7 +298,7 @@ class GuiStateStore {
     if (!this.canStartCore) return;
     this.isStartingCore = true;
     try {
-      await startCoreProcess();
+      await tracedOperation('kernel', 'kernel.start', () => startCoreProcess());
       toastSuccess('内核监听已启动');
       coreEvents.start();
       await this.refreshRuntimeState();
@@ -316,7 +317,7 @@ class GuiStateStore {
     if (!this.canRestartCore) return;
     this.isStoppingCore = true;
     try {
-      await restartCoreProcess();
+      await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess());
       toastSuccess('内核已重启');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
@@ -333,7 +334,7 @@ class GuiStateStore {
     if (!this.canEnableSystemProxy) return;
     this.isSwitchingSystemProxy = true;
     try {
-      await enableSystemProxyCommand();
+      await tracedOperation('proxy', 'system_proxy.enable', () => enableSystemProxyCommand());
       toastSuccess('系统代理已开启');
       await this.refreshRuntimeState();
       void this.probeNetwork();
@@ -349,7 +350,7 @@ class GuiStateStore {
     if (!this.canDisableSystemProxy) return;
     this.isSwitchingSystemProxy = true;
     try {
-      await disableSystemProxyCommand();
+      await tracedOperation('proxy', 'system_proxy.disable', () => disableSystemProxyCommand());
       toastSuccess('系统代理已关闭');
       await this.refreshConnectionStatus();
     } catch (e: any) {

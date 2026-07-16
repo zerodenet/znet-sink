@@ -2,10 +2,14 @@
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { updater, formatBytes } from '$lib/services/updater.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
+  import { guiExportDiagnostics } from '$lib/services/core';
+  import { openPath } from '@tauri-apps/plugin-opener';
+  import { error as toastError, success as toastSuccess } from '$lib/services/toast.svelte';
 
   let appName = $state('ZNet Sink');
   let appVersion = $state('0.0.1');
   let loaded = $state(false);
+  let exportingDiagnostics = $state(false);
 
   $effect(() => {
     loadAppInfo();
@@ -36,6 +40,20 @@
 
   async function handleDownloadUpdate() {
     await updater.downloadAndInstall();
+  }
+
+  async function handleExportDiagnostics() {
+    if (exportingDiagnostics) return;
+    exportingDiagnostics = true;
+    try {
+      const result = await guiExportDiagnostics();
+      toastSuccess(`诊断材料已导出（${result.files.length} 个文件）`);
+      await openPath(result.directory);
+    } catch (error) {
+      toastError(`导出诊断材料失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      exportingDiagnostics = false;
+    }
   }
 </script>
 
@@ -177,6 +195,22 @@
         </button>
       </div>
     {/if}
+  </div>
+
+  <div class="config-separator"></div>
+
+  <div class="config-section">
+    <div class="config-section-title">故障诊断</div>
+    <div class="config-row">
+      <span class="config-label">诊断材料</span>
+      <span class="config-value desc">导出应用日志、IPC 调试记录、内核日志和版本清单；不会包含代理配置、订阅地址或凭据。</span>
+    </div>
+    <div class="config-row">
+      <span class="config-label"></span>
+      <button class="check-update-btn" onclick={handleExportDiagnostics} disabled={exportingDiagnostics}>
+        <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
+      </button>
+    </div>
   </div>
 
   <!-- Footer -->
