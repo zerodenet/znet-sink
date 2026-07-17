@@ -8,6 +8,8 @@ import type {
   SubscriptionSyncAllOutcome,
   RuleSetProfile,
   RuleSetUpsert,
+  RuleSetKernelPayload,
+  RuleSetSyncAllOutcome,
 } from '$lib/types/domain';
 
 export type {
@@ -85,4 +87,16 @@ export async function upsertRuleSet(input: RuleSetUpsert): Promise<RuleSetProfil
 
 export async function removeRuleSet(id: string): Promise<void> {
   return invoke('rule_set_remove', { id });
+}
+
+export async function updateRuleSet(id: string): Promise<RuleSetProfile> {
+  return invoke('rule_set_update', { id });
+}
+
+export async function updateAllRuleSets(): Promise<RuleSetSyncAllOutcome> {
+  return invoke('rule_set_update_all');
+}
+
+export async function getRuleSetKernelPayloads(): Promise<RuleSetKernelPayload[]> {
+  return invoke('rule_set_kernel_payloads');
 }

@@ -289,6 +289,9 @@ pub fn run() {
             rule_set_commands::rule_set_get,
             rule_set_commands::rule_set_upsert,
             rule_set_commands::rule_set_remove,
+            rule_set_commands::rule_set_update,
+            rule_set_commands::rule_set_update_all,
+            rule_set_commands::rule_set_kernel_payloads,
             logs_commands::logs_list,
             logs_commands::logs_append,
             logs_commands::logs_clear,
@@ -542,6 +545,7 @@ pub fn run() {
             // that interval elapses. The first pass is delayed to let
             // the kernel and network come up.
             crate::services::subscription::spawn_auto_sync_scheduler(app.handle().clone());
+            crate::services::rule_set::spawn_auto_update_scheduler(app.handle().clone());
 
             // Spawn the traffic sampler so the overview chart updates live —
             // the kernel doesn't push traffic events on its own (TODO P5).

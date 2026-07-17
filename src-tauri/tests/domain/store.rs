@@ -1,6 +1,6 @@
 use gui_lib::models::{
     proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile},
-    rule_set::{RuleSetProfile, RuleSetSource},
+    rule_set::RuleSetProfile,
     subscription::SubscriptionProfile,
 };
 use gui_lib::services::domain_store;
@@ -52,15 +52,18 @@ fn domain_store_roundtrips_profiles() {
         &[RuleSetProfile {
             id: "rule-set-1".to_string(),
             name: "GeoIP".to_string(),
-            format: "json".to_string(),
             enabled: true,
-            source: RuleSetSource {
-                kind: "inline".to_string(),
-                url: None,
-                path: None,
-                content: Some(serde_json::json!([])),
-            },
+            semantic_ir: serde_json::json!({
+                "version": 1,
+                "name": "GeoIP",
+                "rules": [{"type":"domain_suffix","value":"example.com"}]
+            }),
+            source: None,
+            source_state: Default::default(),
+            artifact: None,
             updated_at_unix_ms: 1,
+            last_sync_at_unix_ms: None,
+            last_error: None,
         }],
     )
     .unwrap();
@@ -71,6 +74,37 @@ fn domain_store_roundtrips_profiles() {
     assert_eq!(data.subscriptions.len(), 1);
     assert_eq!(data.rule_sets.len(), 1);
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn domain_store_migrates_legacy_rule_profiles_to_semantic_assets() {
+    let dir = isolated_data_dir("domain-store-rule-migration");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("rule-sets.json"),
+        serde_json::to_vec_pretty(&serde_json::json!([{
+            "id": "legacy",
+            "name": "Legacy",
+            "format": "clash-yaml",
+            "enabled": true,
+            "source": {"kind":"remote","url":"https://example.com/rules.yaml","path":null,"content":null},
+            "compiledIr": {"version":1,"name":"Legacy","rules":[{"type":"domain_exact","value":"example.com"}]},
+            "ruleCount": 1,
+            "updatedAtUnixMs": 1
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let data = domain_store::load_all_from_dir(&dir).unwrap();
+    let migrated = &data.rule_sets[0];
+    assert_eq!(migrated.semantic_ir["version"], 1);
+    assert_eq!(
+        migrated.source.as_ref().unwrap().format,
+        "clash-classical-yaml"
+    );
+    assert!(migrated.artifact.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 fn isolated_data_dir(name: &str) -> std::path::PathBuf {

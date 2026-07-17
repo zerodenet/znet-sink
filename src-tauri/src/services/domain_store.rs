@@ -27,7 +27,79 @@ pub fn load_all_from_dir(dir: &Path) -> AppResult<DomainStoreData> {
     Ok(DomainStoreData {
         proxy_configs: load_vec(&dir.join(PROXY_CONFIGS_FILE))?,
         subscriptions: load_vec(&dir.join(SUBSCRIPTIONS_FILE))?,
-        rule_sets: load_vec(&dir.join(RULE_SETS_FILE))?,
+        rule_sets: load_rule_sets(&dir.join(RULE_SETS_FILE))?,
+    })
+}
+
+fn load_rule_sets(path: &Path) -> AppResult<Vec<RuleSetProfile>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path).map_err(|error| AppError {
+        code: "io_error",
+        message: format!("failed to read data store: {error}"),
+        details: Some(serde_json::json!({ "path": path.display().to_string() })),
+    })?;
+    let mut values: Vec<serde_json::Value> =
+        serde_json::from_str(&content).map_err(|error| AppError {
+            code: "invalid_argument",
+            message: format!("failed to parse data store: {error}"),
+            details: Some(serde_json::json!({ "path": path.display().to_string() })),
+        })?;
+    for value in &mut values {
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        if !object.contains_key("semanticIr") {
+            if let Some(ir) = object.remove("compiledIr") {
+                object.insert("semanticIr".into(), ir);
+            }
+        }
+        if object
+            .get("semanticIr")
+            .is_none_or(serde_json::Value::is_null)
+        {
+            let name = object
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Migrated");
+            object.insert(
+                "semanticIr".into(),
+                serde_json::json!({ "version": 1, "name": name, "rules": [] }),
+            );
+        }
+        let legacy_format = match object
+            .get("format")
+            .and_then(|value| value.as_str())
+            .unwrap_or("auto")
+        {
+            "zero" | "zero-rule" | "zero-rule-ir" | "zero-rule-ir-v1" => "zero-rule-ir-v1",
+            "clash" | "clash-yaml" | "clash-classical" | "clash-classical-yaml" => {
+                "clash-classical-yaml"
+            }
+            _ => "auto",
+        }
+        .to_string();
+        if let Some(source) = object.get_mut("source") {
+            let remote_url = source
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            match remote_url {
+                Some(url) => *source = serde_json::json!({ "url": url, "format": legacy_format }),
+                None => {
+                    object.remove("source");
+                }
+            }
+        }
+        object.remove("format");
+        object.remove("ruleCount");
+        object.remove("lastUpdatedAtUnixMs");
+    }
+    serde_json::from_value(serde_json::Value::Array(values)).map_err(|error| AppError {
+        code: "invalid_argument",
+        message: format!("failed to migrate rule set data: {error}"),
+        details: Some(serde_json::json!({ "path": path.display().to_string() })),
     })
 }
 

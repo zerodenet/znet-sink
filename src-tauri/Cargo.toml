@@ -40,3 +40,4 @@ windows-sys = { version = "0.61", features = [
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-updater = "2"
 dirs = "6.0.0"
+zero-rule = { path = "../../zero/crates/rule" }

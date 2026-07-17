@@ -88,23 +88,57 @@ export interface SubscriptionSyncAllOutcome {
 export interface RuleSetProfile {
   id: string;
   name: string;
-  format: string;
   enabled: boolean;
-  source: RuleSetSource;
+  semanticIr: ZeroRuleIr;
+  source?: RuleSetSource;
+  sourceState: RuleSetSourceState;
+  artifact?: ZrsArtifact;
   updatedAtUnixMs: number;
+  lastSyncAtUnixMs?: number;
+  lastError?: string;
 }
 
+export type ZeroRuleType = 'domain_exact' | 'domain_suffix' | 'domain_keyword' | 'ipv4_cidr' | 'ipv6_cidr';
+export interface ZeroRule { type: ZeroRuleType; value: string; }
+export interface ZeroRuleIr { version: 1; name?: string; rules: ZeroRule[]; }
+export interface RuleSetKernelPayload { id: string; name: string; zrsPath: string; checksum: number; }
+
 export interface RuleSetSource {
-  kind: string;   // "remote" | "file" | "inline"
-  url?: string;
-  path?: string;
-  content?: unknown;
+  url: string;
+  format: 'auto' | 'zero-rule-ir-v1' | 'clash-classical-yaml';
+  updateIntervalSecs?: number;
+  userAgent?: string;
+}
+
+export interface RuleSetSourceState {
+  etag?: string;
+  lastModified?: string;
+  contentSha256?: string;
+  contentBytes?: number;
+  lastCheckedAtUnixMs?: number;
+}
+
+export interface ZrsArtifact {
+  path: string;
+  majorVersion: number;
+  minorVersion: number;
+  checksum: number;
+  fileSize: number;
+  entryCount: number;
+  builtAtUnixMs: number;
 }
 
 export interface RuleSetUpsert {
   id?: string;
   name: string;
-  format?: string;
   enabled?: boolean;
-  source: RuleSetSource;
+  semanticIr?: ZeroRuleIr;
+  source?: RuleSetSource;
+}
+
+export interface RuleSetSyncAllOutcome {
+  total: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
 }
