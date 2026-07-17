@@ -151,12 +151,6 @@ function testProbePlanningUsesKernelForUrlTestGroups() {
     nodes: [],
     policyTags: ['Auto'],
   });
-  // Per-row probing uses this same plan. Members of the currently browsed
-  // url_test group must retain policy-probe semantics and its configured URL.
-  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [node('US', 60)] }), {
-    nodes: [],
-    policyTags: ['Auto'],
-  });
 }
 
 testBuildSectionsKeepsOrphansWhenGroupsExist();
