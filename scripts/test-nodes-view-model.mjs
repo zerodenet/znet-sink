@@ -4,6 +4,7 @@ import {
   buildSections,
   collectGroupNodeTags,
   filterNodes,
+  getActiveNodeTag,
   mergePolicyGroups,
   normalizeSelectedGroup,
   planProbeTargets,
@@ -84,6 +85,18 @@ function testRuntimeOverlayKeepsFirstGroupForSharedNodeTag() {
   });
 }
 
+function testActiveNodeUsesCurrentlyBrowsedGroup() {
+  const groups = [
+    { ...group('Primary', [{ tag: 'HK' }, { tag: 'JP' }]), selected: 'HK' },
+    { ...group('Auto', [{ tag: 'SG' }, { tag: 'US' }], 'url_test'), selected: 'SG' },
+  ];
+
+  assert.equal(getActiveNodeTag(groups, 'Auto'), 'SG');
+  assert.equal(getActiveNodeTag(groups, 'Primary'), 'HK');
+  assert.equal(getActiveNodeTag(groups, 'Missing'), undefined);
+  assert.equal(getActiveNodeTag(groups), 'HK');
+}
+
 function testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState() {
   const config = [group('Auto', [{ tag: 'HK', type: 'vmess' }, { tag: 'JP', type: 'trojan' }], 'url_test')];
   const runtime = [{
@@ -117,12 +130,19 @@ function testProbePlanningUsesKernelForUrlTestGroups() {
     nodes: [],
     policyTags: ['Auto'],
   });
+  // Per-row probing uses this same plan. Members of the currently browsed
+  // url_test group must retain policy-probe semantics and its configured URL.
+  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [node('US', 60)] }), {
+    nodes: [],
+    policyTags: ['Auto'],
+  });
 }
 
 testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
+testActiveNodeUsesCurrentlyBrowsedGroup();
 testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState();
 testProbePlanningUsesKernelForUrlTestGroups();
 

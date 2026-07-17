@@ -299,7 +299,14 @@ export function buildSections(options: {
   return sections;
 }
 
-export function getActiveNodeTag(groups: PolicyGroup[]): string | undefined {
+export function getActiveNodeTag(
+  groups: PolicyGroup[],
+  selectedGroup: string | null = null,
+): string | undefined {
+  if (selectedGroup) {
+    return groups.find((group) => group.name === selectedGroup)?.selected;
+  }
+
   for (const group of groups) {
     if (group.selected) return group.selected;
   }

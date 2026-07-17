@@ -156,7 +156,7 @@
 
   // Active selected tag for row/card highlight
   const activeNodeId = $derived.by(() => {
-    return getActiveNodeTag(groups);
+    return getActiveNodeTag(groups, selectedGroup);
   });
 
   // Actions
@@ -262,6 +262,26 @@
       lastError = '内核未就绪，无法测速';
       return;
     }
+    const targets = planProbeTargets({ groups, selectedGroup, visibleNodes: [node] });
+    if (targets.policyTags.length > 0) {
+      if (probingRequested || probingAll || probingNodeIds.size > 0) return;
+      probingRequested = true;
+      lastError = null;
+      try {
+        for (const policyTag of targets.policyTags) {
+          const accepted = await guiProbePolicy(policyTag);
+          if (!accepted.accepted || accepted.result?.probeTriggered === false) {
+            throw new Error(`内核未接受 ${policyTag} 的策略测速请求`);
+          }
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      } finally {
+        probingRequested = false;
+      }
+      return;
+    }
+
     await probeController.handleProbe(node);
   }
 
