@@ -315,9 +315,11 @@
     visible: boolean;
     anchor: DOMRect | null;
     node: ProxyNode | null;
-    hist: DelayEntry[];
   }
-  let popover = $state<PopoverState>({ visible: false, anchor: null, node: null, hist: [] });
+  let popover = $state<PopoverState>({ visible: false, anchor: null, node: null });
+  const popoverHistory = $derived.by<DelayEntry[]>(() =>
+    popover.node ? delayHistory.getHistory(popover.node.tag) : [],
+  );
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   function showPopover(e: MouseEvent, node: ProxyNode) {
@@ -328,13 +330,13 @@
     const hist = delayHistory.getHistory(node.tag);
     if (hist.length < 2) return;
     const el = e.currentTarget as HTMLElement;
-    popover = { visible: true, anchor: el.getBoundingClientRect(), node, hist };
+    popover = { visible: true, anchor: el.getBoundingClientRect(), node };
   }
 
   function hidePopover(delay = 300) {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
-      popover = { visible: false, anchor: null, node: null, hist: [] };
+      popover = { visible: false, anchor: null, node: null };
       hideTimer = null;
     }, delay);
   }
@@ -544,7 +546,7 @@
   >
     <NodesDelayPopover
       node={popover.node}
-      hist={popover.hist}
+      hist={popoverHistory}
     />
   </div>
 {/if}

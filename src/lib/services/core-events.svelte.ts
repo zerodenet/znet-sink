@@ -185,7 +185,12 @@ class CoreEventsService {
       if (probe?.policyTag && Array.isArray(probe.members)) {
         guiState.applyPolicyProbeCompleted(probe);
         for (const member of probe.members) {
-          delayHistory.record(member.tag, member.delayMs, member.alive !== false);
+          delayHistory.record(
+            member.tag,
+            member.delayMs,
+            member.alive !== false,
+            member.lastCheckedUnixMs ?? probe.completedAtUnixMs,
+          );
         }
       }
       awaitIgnore(overviewData.refreshPolicyNodes());

@@ -40,15 +40,16 @@ class DelayHistoryStore {
   }
 
   /** Record a probe result for a node. */
-  record(tag: string, delayMs: number | undefined, reachable: boolean): void {
+  record(tag: string, delayMs: number | undefined, reachable: boolean, at = Date.now()): void {
     if (!tag) return;
     // `-1` marks a timeout / unreachable probe (e.g. kernel not running) so
     // the UI can show "timeout" instead of mistaking it for "never probed".
     const value = reachable ? Math.max(0, delayMs ?? 0) : -1;
-    const entry: DelayEntry = { delay: value, at: Date.now() };
+    const entry: DelayEntry = { delay: value, at };
 
     const existing = this.history[tag] ?? [];
-    const next = [...existing, entry];
+    if (existing.some((item) => item.at === entry.at && item.delay === entry.delay)) return;
+    const next = [...existing, entry].sort((left, right) => left.at - right.at);
     if (next.length > MAX_ENTRIES) {
       next.splice(0, next.length - MAX_ENTRIES);
     }

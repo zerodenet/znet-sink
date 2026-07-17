@@ -24,6 +24,7 @@ import {
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { coreEvents } from './core-events.svelte';
 import { tracedOperation } from './telemetry';
+import { delayHistory } from './delay-history.svelte';
 import type {
   ConfigProxyNode,
   SelfTestSnapshot,
@@ -158,6 +159,18 @@ class GuiStateStore {
       const groups = await getGuiPolicyGroups();
       console.warn('[gui-state] policy groups loaded:', groups.length, 'groups');
       this.policyGroups = groups;
+      for (const group of groups) {
+        for (const member of group.outbounds) {
+          if (member.lastCheckedUnixMs !== undefined) {
+            delayHistory.record(
+              member.tag,
+              member.delayMs,
+              member.alive !== false,
+              member.lastCheckedUnixMs,
+            );
+          }
+        }
+      }
     } catch (e: any) {
       console.warn('[gui-state] policy groups failed:', this.errorMessage(e));
       this.policyGroups = [];
