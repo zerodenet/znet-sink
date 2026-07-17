@@ -43,6 +43,7 @@ pub struct LogAppend {
 pub struct LogQuery {
     pub source: Option<LogSource>,
     pub level: Option<LogLevel>,
+    pub min_level: Option<LogLevel>,
     pub limit: Option<usize>,
     pub before_id: Option<u64>,
 }

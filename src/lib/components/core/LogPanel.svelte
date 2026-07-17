@@ -11,7 +11,7 @@
   let autoScroll = $state(true);
   let hasMore = $state(false);
   let selectedSource = $state<LogSource | 'all'>('all');
-  let selectedLevel = $state<LogLevel | 'all'>('all');
+  let selectedLevel = $state<LogLevel>('info');
 
   const sources: Array<{ value: LogSource | 'all'; label: string }> = [
     { value: 'all', label: '全部' },
@@ -19,13 +19,12 @@
     { value: 'core', label: 'CORE' },
   ];
 
-  const levels: Array<{ value: LogLevel | 'all'; label: string }> = [
-    { value: 'all', label: '全部' },
+  const levels: Array<{ value: LogLevel; label: string }> = [
     { value: 'error', label: 'ERR' },
-    { value: 'warn', label: 'WRN' },
-    { value: 'info', label: 'INF' },
-    { value: 'debug', label: 'DBG' },
-    { value: 'trace', label: 'TRC' },
+    { value: 'warn', label: 'WRN+' },
+    { value: 'info', label: 'INF+' },
+    { value: 'debug', label: 'DBG+' },
+    { value: 'trace', label: 'ALL' },
   ];
 
   const visibleLogs = $derived([...logs].reverse());
@@ -37,7 +36,7 @@
   function buildQuery(beforeId?: number): LogQuery {
     return {
       source: selectedSource === 'all' ? undefined : selectedSource,
-      level: selectedLevel === 'all' ? undefined : selectedLevel,
+      minLevel: selectedLevel,
       limit: PAGE_SIZE,
       beforeId,
     };

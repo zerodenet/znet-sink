@@ -133,6 +133,13 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
         {
             continue;
         }
+        if query
+            .min_level
+            .as_ref()
+            .is_some_and(|min_level| !level_meets(&entry.level, min_level))
+        {
+            continue;
+        }
 
         oldest_available_id.get_or_insert(entry.id);
 
@@ -157,6 +164,22 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
         has_more,
         oldest_available_id,
     })
+}
+
+fn level_meets(level: &crate::models::logs::LogLevel, min: &crate::models::logs::LogLevel) -> bool {
+    use crate::models::logs::LogLevel;
+
+    fn rank(level: &LogLevel) -> u8 {
+        match level {
+            LogLevel::Trace => 0,
+            LogLevel::Debug => 1,
+            LogLevel::Info => 2,
+            LogLevel::Warn => 3,
+            LogLevel::Error => 4,
+        }
+    }
+
+    rank(level) >= rank(min)
 }
 
 pub fn append_to_path(path: &Path, entry: &LogEntry) -> AppResult<()> {
@@ -344,6 +367,50 @@ mod tests {
         );
         assert!(page.has_more);
         assert_eq!(page.oldest_available_id, Some(1));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_store_queries_minimum_severity() {
+        let dir = std::env::temp_dir().join(format!("znet-log-min-level-{}", std::process::id()));
+        let path = dir.join("logs.jsonl");
+        let levels = [
+            LogLevel::Trace,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ];
+
+        for (index, level) in levels.into_iter().enumerate() {
+            append_to_path(
+                &path,
+                &LogEntry {
+                    id: index as u64 + 1,
+                    source: LogSource::Core,
+                    level,
+                    message: format!("entry-{}", index + 1),
+                    fields: None,
+                    occurred_at_unix_ms: index as u64 + 1,
+                },
+            )
+            .unwrap();
+        }
+
+        let page = query_page_from_path(
+            &path,
+            &LogQuery {
+                min_level: Some(LogLevel::Info),
+                ..LogQuery::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

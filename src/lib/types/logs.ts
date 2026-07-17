@@ -23,6 +23,7 @@ export interface LogAppend {
 export interface LogQuery {
   source?: LogSource;
   level?: LogLevel;
+  minLevel?: LogLevel;
   limit?: number;
   beforeId?: number;
 }
