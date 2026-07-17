@@ -7,6 +7,7 @@ export interface RuntimeOverlay {
   alive?: boolean;
   selected?: boolean;
   groupName?: string;
+  lastCheckedUnixMs?: number;
 }
 
 export interface NodeSection {
@@ -75,10 +76,12 @@ export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeO
   for (const group of groups) {
     for (const outbound of group.outbounds) {
       const existing = map.get(outbound.tag);
+      const lastCheckedUnixMs = outbound.lastCheckedUnixMs ?? existing?.lastCheckedUnixMs;
       map.set(outbound.tag, {
         delayMs: outbound.delayMs ?? existing?.delayMs,
         alive: outbound.alive ?? existing?.alive,
         selected: existing?.selected || group.selected === outbound.tag,
+        ...(lastCheckedUnixMs !== undefined ? { lastCheckedUnixMs } : {}),
         // Keep the first matching group so the runtime overlay stays
         // consistent with the all-nodes section assignment.
         groupName: existing?.groupName ?? group.name,
@@ -124,7 +127,7 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
         delay,
-        lastProbeAt: latestProbeTime?.(configNode.tag),
+        lastProbeAt: latestTimestamp(runtime?.lastCheckedUnixMs, latestProbeTime?.(configNode.tag)),
         selected: runtime?.selected,
         alive: runtime?.alive,
         domain: runtime?.groupName ?? 'policy',
@@ -171,7 +174,9 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: group.kind || 'group',
         delay,
-        lastProbeAt: group.selected ? latestProbeTime?.(group.selected) : undefined,
+        lastProbeAt: group.selected
+          ? latestTimestamp(runtimeOverlay.get(group.selected)?.lastCheckedUnixMs, latestProbeTime?.(group.selected))
+          : undefined,
         selected: runtimeOverlay.get(group.name)?.selected,
         alive: undefined,
         domain: 'policy',
@@ -197,7 +202,7 @@ export function buildAllNodes(options: {
         cleanName: parsed.cleanName,
         protocol: outbound.type || 'proxy',
         delay: outbound.delayMs ?? latestDelay(outbound.tag) ?? 0,
-        lastProbeAt: latestProbeTime?.(outbound.tag),
+        lastProbeAt: latestTimestamp(outbound.lastCheckedUnixMs, latestProbeTime?.(outbound.tag)),
         selected: group.selected === outbound.tag,
         alive: outbound.alive,
         domain: group.name,
@@ -206,6 +211,11 @@ export function buildAllNodes(options: {
   }
 
   return runtimeNodes.length > 0 ? runtimeNodes : fallbackNodes;
+}
+
+function latestTimestamp(...values: Array<number | undefined>): number | undefined {
+  const timestamps = values.filter((value): value is number => typeof value === 'number');
+  return timestamps.length > 0 ? Math.max(...timestamps) : undefined;
 }
 
 export function matchesSearch(node: ProxyNode, query: string): boolean {

@@ -170,6 +170,7 @@ class GuiStateStore {
     const outbounds = event.members.map((member) => ({
       ...previousMembers.get(member.tag),
       ...member,
+      lastCheckedUnixMs: member.lastCheckedUnixMs ?? event.completedAtUnixMs,
     }));
     const updated = {
       ...existing,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  buildAllNodes,
   buildRuntimeOverlay,
   buildSections,
   collectGroupNodeTags,
@@ -85,6 +86,26 @@ function testRuntimeOverlayKeepsFirstGroupForSharedNodeTag() {
   });
 }
 
+function testRuntimeProbeTimestampOverridesOlderLocalHistory() {
+  const checkedAt = 1_784_263_308_834;
+  const groups = [{
+    ...group('Auto', [{ tag: 'HK', delayMs: 133, alive: true, lastCheckedUnixMs: checkedAt }], 'url_test'),
+    selected: 'HK',
+  }];
+  const runtimeOverlay = buildRuntimeOverlay(groups);
+  const [hk] = buildAllNodes({
+    configNodes: [{ tag: 'HK', protocol: 'shadowsocks', isSelector: false }],
+    groups,
+    runtimeOverlay,
+    latestDelay: () => 154,
+    latestProbeTime: () => checkedAt - 60 * 60 * 1000,
+    fallbackNodes: [],
+  });
+
+  assert.equal(hk.delay, 133);
+  assert.equal(hk.lastProbeAt, checkedAt);
+}
+
 function testActiveNodeUsesCurrentlyBrowsedGroup() {
   const groups = [
     { ...group('Primary', [{ tag: 'HK' }, { tag: 'JP' }]), selected: 'HK' },
@@ -142,6 +163,7 @@ testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
+testRuntimeProbeTimestampOverridesOlderLocalHistory();
 testActiveNodeUsesCurrentlyBrowsedGroup();
 testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState();
 testProbePlanningUsesKernelForUrlTestGroups();
