@@ -458,7 +458,7 @@ fn parse_release(
 
     let published_at_unix_ms = release["published_at"]
         .as_str()
-        .and_then(|s| parse_iso8601_to_unix_ms(s));
+        .and_then(parse_iso8601_to_unix_ms);
 
     let assets = release["assets"].as_array()?;
 
@@ -543,13 +543,11 @@ fn fetch_checksums(
     resp.read_to_string(&mut body).ok()?;
 
     let reader = std::io::BufReader::new(body.as_bytes());
-    for line in reader.lines() {
-        if let Ok(line) = line {
-            let line = line.trim();
-            if line.contains(platform_asset) {
-                let hash = line.split_whitespace().next()?;
-                return Some(hash.to_string());
-            }
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim();
+        if line.contains(platform_asset) {
+            let hash = line.split_whitespace().next()?;
+            return Some(hash.to_string());
         }
     }
     None
@@ -651,7 +649,7 @@ fn parse_iso8601_to_unix_ms(s: &str) -> Option<u64> {
     let year = date_parts[0];
     let month = date_parts[1];
     let day = date_parts[2];
-    let hour = time_parts.get(0).copied().unwrap_or(0);
+    let hour = time_parts.first().copied().unwrap_or(0);
     let minute = time_parts.get(1).copied().unwrap_or(0);
     let second = time_parts.get(2).copied().unwrap_or(0);
 

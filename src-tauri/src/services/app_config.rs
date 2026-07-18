@@ -17,7 +17,10 @@ pub fn get(state: State<'_, AppState>) -> AppResult<AppConfig> {
 
 pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<AppConfig> {
     let start = std::time::Instant::now();
-    let mut config = lock(state.app_config(), "app_config")?;
+    // Validate and persist a detached snapshot. Mutating the shared config as
+    // fields are validated can leave a half-applied patch in memory when a
+    // later field is invalid or the disk write fails.
+    let mut config = lock(state.app_config(), "app_config")?.clone();
 
     if let Some(core) = patch.core {
         if let Some(kernel) = core.kernel {
@@ -77,12 +80,6 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
                 ));
             }
             config.logs.max_entries = max_entries;
-
-            let mut entries = lock(state.logs(), "logs")?;
-            if entries.len() > max_entries {
-                let remove_count = entries.len() - max_entries;
-                entries.drain(0..remove_count);
-            }
         }
     }
 
@@ -161,11 +158,23 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         }
     }
 
-    app_config_store::save(&app_config_store::default_config_path()?, &config)?;
+    replace(state.inner(), config.clone())?;
 
     eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed(),);
 
-    Ok(config.clone())
+    Ok(config)
+}
+
+pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
+    app_config_store::save(&app_config_store::default_config_path()?, &config)?;
+    *lock(state.app_config(), "app_config")? = config.clone();
+
+    let mut entries = lock(state.logs(), "logs")?;
+    if entries.len() > config.logs.max_entries {
+        let remove_count = entries.len() - config.logs.max_entries;
+        entries.drain(0..remove_count);
+    }
+    Ok(())
 }
 
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {

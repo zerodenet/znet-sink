@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { AlertTriangle, Database, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Database, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { listRuleSets, removeRuleSet, updateAllRuleSets, updateRuleSet, upsertRuleSet } from '$lib/services/config';
+  import { getAppErrorMessage } from '$lib/services/core';
   import type { RuleSetProfile, ZeroRule, ZeroRuleType } from '$lib/types/domain';
 
   const RULE_TYPES: { value: ZeroRuleType; label: string; placeholder: string }[] = [
@@ -15,6 +16,8 @@
     { value: 'ipv4_cidr', label: 'IPv4 CIDR', placeholder: '10.0.0.0/8' },
     { value: 'ipv6_cidr', label: 'IPv6 CIDR', placeholder: 'fd00::/8' },
   ];
+  const VIEW_MODE_KEY = 'znet-rules-view-mode';
+  type ViewMode = 'card' | 'list';
 
   let items = $state<RuleSetProfile[]>([]);
   let loading = $state(true);
@@ -23,7 +26,10 @@
   let updatingAll = $state(false);
   let deletingId = $state<string | null>(null);
   let pendingDelete = $state<RuleSetProfile | null>(null);
-  let error = $state('');
+  let loadError = $state('');
+  let pageError = $state('');
+  let editorError = $state('');
+  let deleteError = $state('');
   let showEditor = $state(false);
   let editingId = $state<string | undefined>();
   let name = $state('');
@@ -34,30 +40,53 @@
   let updateIntervalSecs = $state(0);
   let userAgent = $state('');
   let retainSource = $state(false);
+  let viewMode = $state<ViewMode>('list');
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
+  const busy = $derived(saving || updatingId !== null || updatingAll || deletingId !== null);
   const canSave = $derived(
-    !saving
+    !busy
       && name.trim().length > 0
       && (mode !== 'subscription' || !!editingId || sourceUrl.trim().length > 0),
   );
 
-  onMount(load);
+  onMount(() => {
+    viewMode = loadViewMode();
+    void load();
+  });
 
-  async function load() {
-    loading = true;
+  function loadViewMode(): ViewMode {
+    try {
+      return localStorage.getItem(VIEW_MODE_KEY) === 'card' ? 'card' : 'list';
+    } catch {
+      return 'list';
+    }
+  }
+
+  function setViewMode(mode: ViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // View preference persistence is best effort.
+    }
+  }
+
+  async function load(showLoading = true) {
+    if (showLoading) loading = true;
     try {
       items = await listRuleSets();
-      error = '';
+      loadError = '';
     } catch (cause) {
-      error = String(cause);
+      loadError = getAppErrorMessage(cause, '加载规则集失败');
     } finally {
-      loading = false;
+      if (showLoading) loading = false;
     }
   }
 
   function openNew() {
+    if (busy) return;
     editingId = undefined;
     name = '';
     mode = 'visual';
@@ -67,11 +96,12 @@
     updateIntervalSecs = 0;
     userAgent = '';
     retainSource = false;
-    error = '';
+    editorError = '';
     showEditor = true;
   }
 
   function openEdit(item: RuleSetProfile) {
+    if (busy) return;
     editingId = item.id;
     name = item.name;
     mode = 'visual';
@@ -81,13 +111,14 @@
     updateIntervalSecs = item.source?.updateIntervalSecs ?? 0;
     userAgent = item.source?.userAgent ?? '';
     retainSource = !!item.source;
-    error = '';
+    editorError = '';
     showEditor = true;
   }
 
   function closeEditor() {
     if (saving) return;
     showEditor = false;
+    editorError = '';
   }
 
   function addRule() {
@@ -115,7 +146,7 @@
   async function save() {
     if (!canSave) return;
     saving = true;
-    error = '';
+    editorError = '';
     try {
       if (mode === 'subscription' && !editingId) {
         await upsertRuleSet({
@@ -148,60 +179,65 @@
         });
       }
       showEditor = false;
-      await load();
+      await load(false);
     } catch (cause) {
-      error = String(cause);
+      editorError = getAppErrorMessage(cause, '保存规则集失败');
     } finally {
       saving = false;
     }
   }
 
   async function update(id: string) {
+    if (busy) return;
     updatingId = id;
-    error = '';
+    pageError = '';
     try {
       await updateRuleSet(id);
     } catch (cause) {
-      error = String(cause);
+      pageError = getAppErrorMessage(cause, '更新规则集失败');
     } finally {
       updatingId = null;
-      await load();
+      await load(false);
     }
   }
 
   function requestRemove(item: RuleSetProfile) {
+    if (busy) return;
+    deleteError = '';
     pendingDelete = item;
   }
 
   function cancelRemove() {
     if (deletingId) return;
     pendingDelete = null;
+    deleteError = '';
   }
 
   async function confirmRemove() {
-    if (!pendingDelete || deletingId) return;
+    if (!pendingDelete || busy) return;
     const id = pendingDelete.id;
     deletingId = id;
     try {
       await removeRuleSet(id);
       pendingDelete = null;
-      await load();
+      await load(false);
     } catch (cause) {
-      error = String(cause);
+      deleteError = getAppErrorMessage(cause, '删除规则集失败');
     } finally {
       deletingId = null;
     }
   }
 
   async function updateAll() {
+    if (busy) return;
     updatingAll = true;
-    error = '';
+    pageError = '';
     try {
       const outcome = await updateAllRuleSets();
-      await load();
-      error = outcome.failed ? `${outcome.failed} 个来源更新失败，旧产物已保留` : '';
+      await load(false);
+      pageError = outcome.failed ? `${outcome.failed} 个来源更新失败，旧产物已保留` : '';
     } catch (cause) {
-      error = String(cause);
+      pageError = getAppErrorMessage(cause, '批量更新规则集失败');
     } finally {
       updatingAll = false;
     }
@@ -233,13 +269,37 @@
     </div>
 
     <div class="header-actions">
+      <div class="view-switch" role="group" aria-label="规则集显示方式">
+        <button
+          type="button"
+          class="view-switch-button"
+          class:active={viewMode === 'card'}
+          onclick={() => setViewMode('card')}
+          title="卡片视图"
+          aria-label="卡片视图"
+          aria-pressed={viewMode === 'card'}
+        >
+          <LayoutGrid class="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          class="view-switch-button"
+          class:active={viewMode === 'list'}
+          onclick={() => setViewMode('list')}
+          title="列表视图"
+          aria-label="列表视图"
+          aria-pressed={viewMode === 'list'}
+        >
+          <List class="h-3.5 w-3.5" />
+        </button>
+      </div>
       {#if sourceCount > 0}
-        <Button variant="outline" size="sm" onclick={updateAll} disabled={updatingAll}>
+        <Button variant="outline" size="sm" onclick={updateAll} disabled={busy}>
           <RefreshCw class={`h-3.5 w-3.5 ${updatingAll ? 'spin' : ''}`} />
           <span>{updatingAll ? '更新中...' : '全部更新'}</span>
         </Button>
       {/if}
-      <Button size="sm" onclick={openNew}>
+      <Button size="sm" onclick={openNew} disabled={busy}>
         <Plus class="h-3.5 w-3.5" />
         <span>新建规则集</span>
       </Button>
@@ -264,43 +324,41 @@
     {/if}
   </div>
 
-  {#if error}
+  {#if pageError}
     <div class="error-banner" role="alert">
       <AlertTriangle class="h-3.5 w-3.5" />
-      <span>{error}</span>
+      <span>{pageError}</span>
     </div>
   {/if}
 
   {#if loading}
     <div class="panel-empty">加载中...</div>
+  {:else if loadError}
+    <div class="panel-empty" role="alert">
+      <div class="empty-stack error-empty">
+        <AlertTriangle class="h-6 w-6" />
+        <span class="empty-title">规则集加载失败</span>
+        <span class="empty-hint">{loadError}</span>
+        <Button variant="outline" size="sm" onclick={() => load()}>重试</Button>
+      </div>
+    </div>
   {:else if items.length === 0}
     <div class="panel-empty">
       <div class="empty-stack">
         <Database class="empty-icon h-9 w-9" />
         <span class="empty-title">还没有规则集</span>
         <span class="empty-hint">手动创建语义规则，或从外部订阅导入</span>
-        <Button size="sm" onclick={openNew}>
+        <Button size="sm" onclick={openNew} disabled={busy}>
           <Plus class="h-3.5 w-3.5" />
           <span>新建规则集</span>
         </Button>
       </div>
     </div>
   {:else}
-    <div class="list-scroll">
+    <div class="list-scroll" class:card-view={viewMode === 'card'}>
       {#each items as item (item.id)}
-        <div
-          class="list-row"
-          role="button"
-          tabindex="0"
-          onclick={() => openEdit(item)}
-          onkeydown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              openEdit(item);
-            }
-          }}
-        >
-          <div class="row-main">
+        <div class="list-row">
+          <button type="button" class="row-main" onclick={() => openEdit(item)} disabled={busy}>
             <div class="row-top">
               <span class="row-name">{item.name}</span>
               <Badge variant={item.artifact ? 'secondary' : 'outline'}>
@@ -336,7 +394,7 @@
             {#if item.lastError}
               <div class="row-error">同步失败，继续使用上一版 ZRS：{item.lastError}</div>
             {/if}
-          </div>
+          </button>
 
           <div class="row-actions">
             {#if item.source}
@@ -347,7 +405,7 @@
                   event.stopPropagation();
                   update(item.id);
                 }}
-                disabled={updatingId === item.id}
+                disabled={busy}
                 title="下载并重建"
                 aria-label="下载并重建"
               >
@@ -362,6 +420,7 @@
                 event.stopPropagation();
                   requestRemove(item);
               }}
+              disabled={busy}
               title="删除"
               aria-label="删除"
             >
@@ -514,6 +573,13 @@
     {/if}
   {/if}
 
+  {#if editorError}
+    <div class="error-banner modal-error" role="alert">
+      <AlertTriangle class="h-3.5 w-3.5" />
+      <span>{editorError}</span>
+    </div>
+  {/if}
+
   {#snippet footer()}
     <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
     <Button onclick={save} disabled={!canSave}>
@@ -524,7 +590,7 @@
 
 <DraggableModal
   title="删除规则集"
-  description="此操作会删除规则语义、订阅关联和已构建的 ZRS 产物，无法撤销。"
+  description="此操作会删除管理记录和订阅关联；已发布的不可变 ZRS 文件会保留，以免影响仍在映射它的内核进程。"
   open={pendingDelete !== null}
   onClose={cancelRemove}
   closeDisabled={deletingId !== null}
@@ -539,6 +605,13 @@
       <span>删除后，引用该规则集的配置可能无法继续正常工作。</span>
     </div>
   </div>
+
+  {#if deleteError}
+    <div class="error-banner modal-error" role="alert">
+      <AlertTriangle class="h-3.5 w-3.5" />
+      <span>{deleteError}</span>
+    </div>
+  {/if}
 
   {#snippet footer()}
     <Button variant="outline" onclick={cancelRemove} disabled={deletingId !== null}>取消</Button>
@@ -596,6 +669,41 @@
     flex-shrink: 0;
   }
 
+  .view-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--muted);
+  }
+
+  .view-switch-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 27px;
+    height: 25px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .view-switch-button:hover {
+    color: var(--foreground);
+  }
+
+  .view-switch-button.active {
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+
   .summary-strip {
     display: flex;
     align-items: center;
@@ -638,6 +746,11 @@
     flex-shrink: 0;
   }
 
+  .modal-error {
+    border: 1px solid color-mix(in srgb, var(--destructive) 22%, var(--border));
+    border-radius: 7px;
+  }
+
   .panel-empty {
     flex: 1;
     min-height: 0;
@@ -670,6 +783,11 @@
     opacity: 0.75;
   }
 
+  .error-empty {
+    max-width: 440px;
+    color: var(--destructive);
+  }
+
   .list-scroll {
     flex: 1;
     min-height: 0;
@@ -680,6 +798,14 @@
     gap: 1px;
   }
 
+  .list-scroll.card-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    align-content: start;
+    gap: 10px;
+    padding: 10px;
+  }
+
   .list-row {
     display: flex;
     align-items: center;
@@ -687,15 +813,63 @@
     padding: 10px 11px;
     border: 1px solid transparent;
     border-radius: 8px;
-    cursor: pointer;
-    outline: none;
     transition: background 0.12s ease, border-color 0.12s ease;
   }
 
   .list-row:hover,
-  .list-row:focus-visible {
+  .list-row:focus-within {
     background: var(--muted);
     border-color: var(--border);
+  }
+
+  .card-view .list-row {
+    align-items: flex-start;
+    min-height: 158px;
+    padding: 13px;
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--card) 94%, var(--muted));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .card-view .list-row:hover,
+  .card-view .list-row:focus-within {
+    background: var(--card);
+    border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.07);
+  }
+
+  .card-view .row-main {
+    align-self: stretch;
+    min-height: 130px;
+  }
+
+  .card-view .row-top {
+    padding-bottom: 3px;
+  }
+
+  .card-view .row-name {
+    font-size: 13.5px;
+  }
+
+  .card-view .row-meta {
+    padding: 7px 8px;
+    border-radius: 6px;
+    background: var(--muted);
+  }
+
+  .card-view .source-line {
+    margin-top: auto;
+    padding-top: 5px;
+    flex-wrap: wrap;
+  }
+
+  .card-view .source-url {
+    max-width: 100%;
+    flex-basis: 100%;
+  }
+
+  .card-view .row-actions {
+    margin: -4px -4px 0 0;
   }
 
   .row-main {
@@ -704,6 +878,19 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    outline: none;
+  }
+
+  .row-main:disabled {
+    cursor: wait;
+    opacity: 0.65;
   }
 
   .row-top,
@@ -934,6 +1121,15 @@
     }
 
     .summary-counts { display: none; }
+
+    .header-actions {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+
+    .list-scroll.card-view {
+      grid-template-columns: 1fr;
+    }
 
     .form-row { flex-direction: column; }
 

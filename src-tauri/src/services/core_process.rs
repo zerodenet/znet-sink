@@ -213,6 +213,24 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     Ok(status)
 }
 
+/// Restart the managed kernel while preserving a system proxy owned by this
+/// GUI. `stop` restores the user's original proxy; once the new kernel is
+/// running we re-enable the guard against the current local endpoint.
+pub fn restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
+    let state = app_handle.state::<AppState>();
+    let reconnect_system_proxy = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    stop(state.clone())?;
+    let status = start(app_handle.clone(), state.clone())?;
+    if reconnect_system_proxy {
+        let (host, port) = {
+            let config = lock(state.app_config(), "app_config")?;
+            (config.local_proxy.host.clone(), config.local_proxy.port)
+        };
+        system_proxy_guard::enable_with_guard(&host, port)?;
+    }
+    Ok(status)
+}
+
 /// Spawn the kernel child process, wire up its stderr pump, and record the
 /// running status. Shared between the initial [`start`] and the watchdog's
 /// crash-restart path so neither duplicates the other's bookkeeping.
@@ -278,23 +296,20 @@ fn spawn_core_child(
     let app_handle_stderr = app_handle.clone();
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                let cleaned = strip_ansi(&line);
-                if !cleaned.trim().is_empty() {
-                    let state = app_handle_stderr.state::<AppState>();
-                    let (level, mut fields) = parse_kernel_log_line(&cleaned);
-                    let message = fields
-                        .get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(&cleaned)
-                        .to_string();
-                    if let Some(object) = fields.as_object_mut() {
-                        object.insert("raw_line".to_string(), serde_json::Value::String(cleaned));
-                    }
-                    let _ =
-                        logs::append_entry(&state, LogSource::Core, level, message, Some(fields));
+        for line in reader.lines().map_while(Result::ok) {
+            let cleaned = strip_ansi(&line);
+            if !cleaned.trim().is_empty() {
+                let state = app_handle_stderr.state::<AppState>();
+                let (level, mut fields) = parse_kernel_log_line(&cleaned);
+                let message = fields
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&cleaned)
+                    .to_string();
+                if let Some(object) = fields.as_object_mut() {
+                    object.insert("raw_line".to_string(), serde_json::Value::String(cleaned));
                 }
+                let _ = logs::append_entry(&state, LogSource::Core, level, message, Some(fields));
             }
         }
     });

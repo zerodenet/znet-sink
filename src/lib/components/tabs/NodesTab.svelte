@@ -4,7 +4,7 @@
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
+  import { appendLog, guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
   import { getGroupKindStyle } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -32,10 +32,29 @@
 
   // View state
   type ViewMode = 'list' | 'grid';
+  const VIEW_MODE_KEY = 'znet-nodes-view-mode';
   let viewMode = $state<ViewMode>(store.uiMode === 'lite' ? 'list' : 'grid');
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
   let isLite = $derived(store.uiMode === 'lite');
   let searchQuery = $state('');
   let selectedGroup = $state<string | null>(null);
+
+  function loadViewMode(): ViewMode {
+    try {
+      return localStorage.getItem(VIEW_MODE_KEY) === 'list' ? 'list' : 'grid';
+    } catch {
+      return 'grid';
+    }
+  }
+
+  function setViewMode(mode: ViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // View preference persistence is best effort.
+    }
+  }
 
   // Action state
   let switching = $state<string | null>(null);
@@ -46,9 +65,40 @@
   let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
 
-  function reportError(message: string) {
+  function reportActionError(message: string) {
     lastError = message;
     toastError(message, 8_000);
+  }
+
+  interface ProbeFailureLog {
+    message: string;
+    scope: 'single' | 'batch' | 'policy';
+    targetTag?: string;
+    policyTag?: string;
+    failedTargets?: string[];
+  }
+
+  function recordProbeFailure(failure: ProbeFailureLog) {
+    const target = failure.targetTag ?? failure.policyTag;
+    const message = target
+      ? `节点测速失败（${target}）：${failure.message}`
+      : `节点测速失败：${failure.message}`;
+    void appendLog({
+      source: 'app',
+      level: 'warn',
+      message,
+      fields: {
+        schema: 'znet.node-probe.v1',
+        area: 'nodes',
+        operation: 'probe',
+        scope: failure.scope,
+        targetTag: failure.targetTag,
+        policyTag: failure.policyTag,
+        failedTargets: failure.failedTargets,
+      },
+    }).catch((logError) => {
+      console.error('[nodes] failed to persist probe failure', logError);
+    });
   }
   type ProbeControllerState = {
     probingNodeIds: Set<string>;
@@ -62,16 +112,14 @@
     probeAll: guiClientProbeStart,
     recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) =>
       delayHistory.record(targetTag, latencyMs, reachable),
+    onProbeFailure: (failure: { targetTag?: string; message: string; scope: 'single' | 'batch' }) =>
+      recordProbeFailure(failure),
     refreshPolicyGroups: () => guiState.refreshPolicyGroups(),
     onStateChange: (state: ProbeControllerState) => {
       probingNodeIds = state.probingNodeIds;
       probingAll = state.probingAll;
       probeProgress = state.probeProgress;
-      if (state.lastError && state.lastError !== lastError) {
-        reportError(state.lastError);
-      } else {
-        lastError = state.lastError;
-      }
+      lastError = state.lastError;
     },
   });
 
@@ -109,6 +157,7 @@
   // On mount, reload config-derived data so the page reflects the active profile.
   // Also pull runtime policy groups once in case the kernel is already connected.
   onMount(() => {
+    viewMode = isLite ? 'list' : loadViewMode();
     void Promise.allSettled([
       guiState.refreshConfigNodes(),
       guiState.refreshConfigPolicyGroups(),
@@ -117,6 +166,7 @@
   });
 
   onDestroy(() => {
+    if (hideTimer) clearTimeout(hideTimer);
     probeController.cleanup();
   });
 
@@ -216,11 +266,11 @@
   async function handleSelect(node: ProxyNode) {
     if (switching) return;
     if (!isCoreAvailable) {
-      reportError('内核未就绪，无法切换节点');
+      reportActionError('内核未就绪，无法切换节点');
       return;
     }
     if (!isNodeSelectable(node)) {
-      reportError('当前策略组为自动选择组，不支持手动切换节点');
+      reportActionError('当前策略组为自动选择组，不支持手动切换节点');
       return;
     }
     switching = node.id;
@@ -232,7 +282,7 @@
       const policyTag = resolvePolicyTag(node);
       const result = await guiSelectPolicy(policyTag, node.tag);
       if (!result.accepted) {
-        reportError(result.message ?? '内核未接受此选择');
+        reportActionError(result.message ?? '内核未接受此选择');
       } else if (result.selected && result.selected !== node.tag) {
         // Kernel may have resolved to a different target — this is informational, not an error
         await guiState.refreshPolicyGroups();
@@ -240,7 +290,7 @@
         await guiState.refreshPolicyGroups();
       }
     } catch (e) {
-      reportError((e as { message?: string }).message ?? '切换节点失败');
+      reportActionError((e as { message?: string }).message ?? '切换节点失败');
     } finally {
       switching = null;
     }
@@ -272,7 +322,7 @@
 
   async function handleProbe(node: ProxyNode) {
     if (!isCoreAvailable) {
-      reportError('内核未就绪，无法测速');
+      recordProbeFailure({ message: '内核未就绪', scope: 'single', targetTag: node.tag });
       return;
     }
 
@@ -287,7 +337,11 @@
       try {
         await probePolicy(policyTag);
       } catch (error) {
-        reportError(error instanceof Error ? error.message : String(error));
+        recordProbeFailure({
+          message: error instanceof Error ? error.message : String(error),
+          scope: 'policy',
+          policyTag,
+        });
       }
       return;
     }
@@ -306,7 +360,18 @@
         void completion.catch(() => undefined);
         throw new Error(`内核未接受 ${policyTag} 的策略测速请求`);
       }
-      await completion;
+      const completed = await completion;
+      const failedMembers = completed.members.filter(
+        (member) => member.alive === false || !!member.lastError,
+      );
+      if (failedMembers.length > 0) {
+        recordProbeFailure({
+          message: `${failedMembers.length}/${completed.members.length} 个节点不可达`,
+          scope: 'policy',
+          policyTag,
+          failedTargets: failedMembers.map((member) => member.tag),
+        });
+      }
     } catch (error) {
       void completion.catch(() => undefined);
       throw error;
@@ -319,7 +384,7 @@
 
   async function handleProbeAll() {
     if (!isCoreAvailable) {
-      reportError('内核未就绪，无法测速');
+      recordProbeFailure({ message: '内核未就绪', scope: 'batch' });
       return;
     }
     if (probingRequested || probingAll || probingNodeIds.size > 0 || probingPolicyTags.size > 0) {
@@ -337,7 +402,10 @@
         ...policyRequests,
       ]);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : String(error));
+      recordProbeFailure({
+        message: error instanceof Error ? error.message : String(error),
+        scope: 'batch',
+      });
     } finally {
       probingRequested = false;
     }
@@ -367,8 +435,6 @@
   const popoverHistory = $derived.by<DelayEntry[]>(() =>
     popover.node ? delayHistory.getHistory(popover.node.tag) : [],
   );
-  let hideTimer: ReturnType<typeof setTimeout> | null = null;
-
   function showPopover(e: MouseEvent, node: ProxyNode) {
     if (hideTimer) {
       clearTimeout(hideTimer);
@@ -434,7 +500,7 @@
       canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && filteredNodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
-      onViewModeChange={(mode) => (viewMode = mode)}
+      onViewModeChange={setViewMode}
       onProbeAll={handleProbeAll}
     />
 

@@ -3,7 +3,7 @@ use tauri::State;
 use crate::errors::AppResult;
 use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::services::{app_config_store, common, interaction_mode, kernel_manager};
+use crate::services::{app_config, common, interaction_mode, kernel_manager};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -29,6 +29,7 @@ pub async fn kernel_install_version(
     app: tauri::AppHandle,
 ) -> AppResult<KernelInstallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
+    let _operation = state.proxy_config_operation().lock().await;
 
     let proxy_auto = common::lock(state.app_config(), "app_config")?
         .core
@@ -50,13 +51,9 @@ pub async fn kernel_install_version(
     // Persist the new executable path so subsequent starts and version
     // detection pick up the freshly installed binary.
     let executable_path = result.executable_path.clone();
-    {
-        let mut app_config = common::lock(state.app_config(), "app_config")?;
-        app_config.core.executable_path = Some(executable_path);
-        let snapshot = app_config.clone();
-        drop(app_config);
-        app_config_store::save(&app_config_store::default_config_path()?, &snapshot)?;
-    }
+    let mut next_config = common::lock(state.app_config(), "app_config")?.clone();
+    next_config.core.executable_path = Some(executable_path);
+    app_config::replace(state.inner(), next_config)?;
 
     Ok(result)
 }

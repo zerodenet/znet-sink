@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
+  import { onDestroy } from 'svelte';
+  import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
+  import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import {
     serializeDebugFrameForClipboard,
     serializeDebugFramesForClipboard,
   } from '$lib/services/diagnostic-copy';
-  import { error as toastError, success as toastSuccess } from '$lib/services/toast.svelte';
   import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import type { DebugFrame, DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
@@ -29,14 +30,22 @@
   let subTab = $state<SubTab>('diagnostics');
   let frames = $state<DebugFrame[]>([]);
   let loading = $state(true);
+  let refreshing = $state(false);
   let loadingMore = $state(false);
+  let clearing = $state(false);
+  let clearArmed = $state(false);
   let loadError = $state<string | null>(null);
+  let feedback = $state<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
   let autoRefresh = $state(true);
   let expandedIds = $state<Set<number>>(new Set());
   let expandAll = $state(false);
   let hasMore = $state(false);
   let filterType = $state<string>('all');
   let _timer: ReturnType<typeof setInterval> | null = null;
+  let _feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  let _clearArmTimer: ReturnType<typeof setTimeout> | null = null;
+  let queryGeneration = 0;
+  const refreshGate = createLatestRequestGate();
 
   const visibleFrames = $derived([...frames].reverse());
 
@@ -72,7 +81,36 @@
     hasMore = page.hasMore || items[0].id > page.oldestAvailableId;
   }
 
-  async function clearAll() {
+  function showFeedback(kind: 'success' | 'error' | 'info', message: string, timeoutMs = 3_000) {
+    feedback = { kind, message };
+    if (_feedbackTimer) clearTimeout(_feedbackTimer);
+    _feedbackTimer = setTimeout(() => {
+      feedback = null;
+      _feedbackTimer = null;
+    }, timeoutMs);
+  }
+
+  async function requestClearAll() {
+    if (clearing) return;
+    if (!clearArmed) {
+      clearArmed = true;
+      showFeedback('info', '再次点击“确认清空”将删除当前 IPC 调试记录', 4_000);
+      if (_clearArmTimer) clearTimeout(_clearArmTimer);
+      _clearArmTimer = setTimeout(() => {
+        clearArmed = false;
+        _clearArmTimer = null;
+      }, 4_000);
+      return;
+    }
+
+    clearArmed = false;
+    if (_clearArmTimer) {
+      clearTimeout(_clearArmTimer);
+      _clearArmTimer = null;
+    }
+    clearing = true;
+    const generation = refreshGate.reset();
+    queryGeneration = generation;
     try {
       await clearDebugFrames();
       frames = [];
@@ -80,17 +118,25 @@
       expandedIds = new Set();
       expandAll = false;
       loading = true;
-      await refresh({ replace: true });
-    } catch {
-      /* ignore */
+      await refresh({ replace: true }, generation);
+      showFeedback('success', '已清空 IPC 调试记录');
+    } catch (error) {
+      showFeedback('error', getAppErrorMessage(error, '清空 IPC 调试记录失败'), 6_000);
+    } finally {
+      clearing = false;
     }
   }
 
-  async function refresh(options: { replace?: boolean } = {}) {
+  async function refresh(options: { replace?: boolean } = {}, generation = queryGeneration) {
     if (subTab !== 'frames') return;
+    const request = refreshGate.begin(generation);
+    const requestedFilter = filterType;
+    if (options.replace && frames.length > 0) refreshing = true;
 
     try {
       const page = await getGuiDebugFrames(buildQuery());
+      if (!refreshGate.isCurrentGeneration(generation) || subTab !== 'frames' || requestedFilter !== filterType) return;
+      if (!refreshGate.canApply(request)) return;
       loadError = null;
       if (options.replace || (page.items.length === 0 && page.oldestAvailableId == null)) {
         frames = page.items;
@@ -105,9 +151,14 @@
         expandedIds = new Set([...expandedIds].filter(id => frames.some(frame => frame.id === id)));
       }
     } catch (error) {
-      loadError = error instanceof Error ? error.message : String(error);
+      if (requestedFilter === filterType && refreshGate.canApply(request)) {
+        loadError = getAppErrorMessage(error, '加载 IPC 调试数据失败');
+      }
     } finally {
-      loading = false;
+      if (refreshGate.isLatest(request)) {
+        loading = false;
+        refreshing = false;
+      }
     }
   }
 
@@ -115,8 +166,12 @@
     if (loadingMore || frames.length === 0) return;
 
     loadingMore = true;
+    const generation = queryGeneration;
+    const requestedFilter = filterType;
+    const beforeId = frames[0].id;
     try {
-      const page = await getGuiDebugFrames(buildQuery(frames[0].id));
+      const page = await getGuiDebugFrames(buildQuery(beforeId));
+      if (!refreshGate.isCurrentGeneration(generation) || requestedFilter !== filterType || subTab !== 'frames') return;
       loadError = null;
       frames = mergePage(frames, page);
       syncHasMore(page, frames);
@@ -124,9 +179,11 @@
         expandedIds = new Set(visibleFrames.map(f => f.id));
       }
     } catch (error) {
-      loadError = error instanceof Error ? error.message : String(error);
+      if (refreshGate.isCurrentGeneration(generation) && requestedFilter === filterType) {
+        loadError = getAppErrorMessage(error, '加载更多 IPC 调试数据失败');
+      }
     } finally {
-      loadingMore = false;
+      if (refreshGate.isCurrentGeneration(generation)) loadingMore = false;
     }
   }
 
@@ -152,14 +209,19 @@
     void tab;
     void type;
 
+    const generation = refreshGate.reset();
+    queryGeneration = generation;
     frames = [];
     hasMore = false;
     expandedIds = new Set();
     expandAll = false;
+    loadingMore = false;
+    refreshing = false;
     loading = subTab === 'frames';
+    loadError = null;
 
     if (subTab === 'frames') {
-      void refresh({ replace: true });
+      void refresh({ replace: true }, generation);
     }
   });
 
@@ -257,9 +319,9 @@
   async function copyWithFeedback(text: string, successMessage: string): Promise<void> {
     try {
       await copyTextToClipboard(text);
-      toastSuccess(successMessage, 2_500);
+      showFeedback('success', successMessage);
     } catch (copyError) {
-      toastError(`复制失败：${copyErrorMessage(copyError)}`, 6_000);
+      showFeedback('error', `复制失败：${copyErrorMessage(copyError)}`, 6_000);
     }
   }
 
@@ -278,6 +340,12 @@
     });
     await copyWithFeedback(content, `已复制当前 ${visibleFrames.length} 条 IPC 帧`);
   }
+
+  onDestroy(() => {
+    if (_timer) clearInterval(_timer);
+    if (_feedbackTimer) clearTimeout(_feedbackTimer);
+    if (_clearArmTimer) clearTimeout(_clearArmTimer);
+  });
 </script>
 
 <div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
@@ -314,16 +382,39 @@
           class="debug-sm-btn copy"
           title="复制当前筛选下已加载的完整 IPC 帧"
         >复制当前</button>
-        <button onclick={() => refresh({ replace: true })} class="debug-sm-btn">刷新</button>
-        <button onclick={clearAll} class="debug-sm-btn clear">清空</button>
+        <button onclick={() => refresh({ replace: true })} class="debug-sm-btn" disabled={refreshing || clearing}>
+          {refreshing ? '刷新中...' : '刷新'}
+        </button>
+        <button
+          onclick={requestClearAll}
+          class="debug-sm-btn clear"
+          class:armed={clearArmed}
+          disabled={clearing}
+        >{clearing ? '清空中...' : clearArmed ? '确认清空' : '清空'}</button>
       </div>
     </div>
+
+    {#if feedback}
+      <div class="debug-feedback" class:error={feedback.kind === 'error'} class:info={feedback.kind === 'info'} role="status" aria-live="polite">
+        {feedback.message}
+      </div>
+    {/if}
+
+    {#if loadError && visibleFrames.length > 0}
+      <div class="debug-inline-error" role="alert">
+        <span>刷新失败，当前仍显示上一批数据：{loadError}</span>
+        <button class="debug-sm-btn" onclick={() => refresh({ replace: true })} disabled={refreshing}>重试</button>
+      </div>
+    {/if}
 
     <div class="flex-1 overflow-y-auto min-h-0 space-y-0.5" style="font-size: 11px;">
       {#if loading && frames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">加载中...</div>
       {:else if loadError && visibleFrames.length === 0}
-        <div class="debug-load-error">IPC 调试数据加载失败：{loadError}</div>
+        <div class="debug-load-error" role="alert">
+          <span>IPC 调试数据加载失败：{loadError}</span>
+          <button class="debug-sm-btn" onclick={() => refresh({ replace: true })}>重试</button>
+        </div>
       {:else if visibleFrames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">暂无匹配帧</div>
       {:else}
@@ -471,6 +562,12 @@
 
   .debug-sm-btn.clear:hover {
     color: var(--destructive);
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  .debug-sm-btn.clear.armed {
+    color: var(--destructive);
+    border-color: rgba(239, 68, 68, 0.35);
     background: rgba(239, 68, 68, 0.08);
   }
 
@@ -671,5 +768,45 @@
     font-size: 11px;
     line-height: 1.5;
     overflow-wrap: anywhere;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .debug-feedback {
+    flex-shrink: 0;
+    padding: 6px 9px;
+    border: 1px solid rgba(34, 197, 94, 0.22);
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.07);
+    color: var(--success);
+    font-size: 10.5px;
+  }
+
+  .debug-feedback.error {
+    border-color: rgba(239, 68, 68, 0.22);
+    background: rgba(239, 68, 68, 0.07);
+    color: var(--destructive);
+  }
+
+  .debug-feedback.info {
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border));
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+    color: var(--foreground);
+  }
+
+  .debug-inline-error {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 9px;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--destructive);
+    font-size: 10.5px;
   }
 </style>

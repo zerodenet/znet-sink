@@ -1,26 +1,32 @@
 <script lang="ts">
-  import { getGuiCapabilitiesSnapshot, getGuiZeroCapabilities } from '$lib/services/core';
+  import { getAppErrorMessage, getGuiCapabilitiesSnapshot, getGuiZeroCapabilities } from '$lib/services/core';
   import type { GuiCapabilitySnapshot } from '$lib/types/capability';
-  import type { GuiZeroCapabilities, GuiProtocolCapability } from '$lib/types/gui-api';
+  import type { GuiZeroCapabilities } from '$lib/types/gui-api';
 
   let snapshot = $state<GuiCapabilitySnapshot | null>(null);
   let kernelCaps = $state<GuiZeroCapabilities | null>(null);
   let loading = $state(true);
+  let loadError = $state<string | null>(null);
+  let partialError = $state<string | null>(null);
+  let refreshGeneration = 0;
 
   async function refresh() {
+    const generation = ++refreshGeneration;
     loading = true;
-    try {
-      const [capSnap, zeroCaps] = await Promise.allSettled([
-        getGuiCapabilitiesSnapshot(),
-        getGuiZeroCapabilities(),
-      ]);
-      if (capSnap.status === 'fulfilled') snapshot = capSnap.value;
-      if (zeroCaps.status === 'fulfilled') kernelCaps = zeroCaps.value;
-    } catch (e) {
-      console.error('Failed to load capabilities:', e);
-    } finally {
-      loading = false;
-    }
+    const [capSnap, zeroCaps] = await Promise.allSettled([
+      getGuiCapabilitiesSnapshot(),
+      getGuiZeroCapabilities(),
+    ]);
+    if (generation !== refreshGeneration) return;
+
+    if (capSnap.status === 'fulfilled') snapshot = capSnap.value;
+    if (zeroCaps.status === 'fulfilled') kernelCaps = zeroCaps.value;
+    const errors = [capSnap, zeroCaps]
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => getAppErrorMessage(result.reason, '能力查询失败'));
+    loadError = errors.length === 2 ? errors.join('；') : null;
+    partialError = errors.length === 1 ? `部分能力未能加载：${errors[0]}` : null;
+    loading = false;
   }
 
   function statusColor(status: string): string {
@@ -51,14 +57,27 @@
     <h3 class="text-sm font-bold text-foreground">能力快照</h3>
     <button
       onclick={refresh}
+      disabled={loading}
       class="px-3 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground text-xs font-medium"
     >
-      刷新
+      {loading ? '刷新中...' : '刷新'}
     </button>
   </div>
 
-  {#if loading}
+  {#if partialError}
+    <div class="capability-warning" role="status">{partialError}</div>
+  {/if}
+  {#if loadError && (snapshot || kernelCaps)}
+    <div class="capability-warning error" role="alert">刷新失败，当前仍显示上一批能力：{loadError}</div>
+  {/if}
+
+  {#if loading && !snapshot && !kernelCaps}
     <div class="flex-1 flex items-center justify-center text-xs text-muted-foreground">加载中...</div>
+  {:else if loadError && !snapshot && !kernelCaps}
+    <div class="flex-1 flex flex-col gap-2 items-center justify-center text-xs text-destructive" role="alert">
+      <span>能力快照加载失败：{loadError}</span>
+      <button onclick={refresh} class="px-3 py-1.5 rounded-lg bg-muted text-foreground text-xs font-medium">重试</button>
+    </div>
   {:else}
     <div class="flex-1 overflow-y-auto min-h-0 space-y-4">
       <!-- 内核协议能力矩阵 -->
@@ -168,3 +187,20 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .capability-warning {
+    padding: 7px 9px;
+    border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--warning) 7%, transparent);
+    color: var(--warning);
+    font-size: 10.5px;
+  }
+
+  .capability-warning.error {
+    border-color: color-mix(in srgb, var(--destructive) 22%, var(--border));
+    background: color-mix(in srgb, var(--destructive) 7%, transparent);
+    color: var(--destructive);
+  }
+</style>

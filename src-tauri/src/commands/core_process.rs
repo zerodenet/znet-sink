@@ -17,9 +17,12 @@ pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessS
 /// main thread and freeze the window.
 #[tauri::command]
 pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    let start_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        core_process::start(app_handle.clone(), state)
+        let state = start_app.state::<AppState>();
+        core_process::start(start_app.clone(), state)
     })
     .await
     .map_err(|e| AppError::internal(format!("core start task failed: {e}")))?
@@ -32,11 +35,10 @@ pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessS
 /// OS killed the process.
 #[tauri::command]
 pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        let _ = core_process::stop(state.clone());
-        core_process::start(app_handle.clone(), state)
-    })
-    .await
-    .map_err(|e| AppError::internal(format!("core restart task failed: {e}")))?
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    let restart_app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || core_process::restart(restart_app))
+        .await
+        .map_err(|e| AppError::internal(format!("core restart task failed: {e}")))?
 }

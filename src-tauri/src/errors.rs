@@ -37,6 +37,18 @@ impl AppError {
         }
     }
 
+    pub(crate) fn conflict(
+        resource: &'static str,
+        id: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: "conflict",
+            message: message.into(),
+            details: Some(json!({ "resource": resource, "id": id.into() })),
+        }
+    }
+
     pub(crate) fn mode_restricted(
         feature: &'static str,
         required_mode: &'static str,

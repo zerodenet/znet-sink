@@ -2,7 +2,7 @@
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { guiApplyConfig, handleAppError, restartCoreProcess } from '$lib/services/core';
+  import { getAppErrorMessage, handleAppError } from '$lib/services/core';
   import {
     importProxyConfig,
     listProxyConfigs,
@@ -15,7 +15,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
-  import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2, X } from '@lucide/svelte';
+  import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
 
   type SourceMode = 'file' | 'inline';
@@ -30,8 +30,11 @@
 
   let configs = $state<ProxyConfigProfile[]>([]);
   let loading = $state(true);
+  let loadError = $state<string | null>(null);
   let saving = $state(false);
   let activatingId = $state<string | null>(null);
+  let removingId = $state<string | null>(null);
+  let deleteTarget = $state<ProxyConfigProfile | null>(null);
   let query = $state('');
   let showEditor = $state(false);
   let editingId = $state<string | null>(null);
@@ -44,6 +47,7 @@
   const canRemove = $derived(store.isActionOperable('proxyConfig.remove'));
   const filteredConfigs = $derived(filterConfigs(configs, query));
   const activeProfile = $derived(configs.find((item) => item.active) ?? null);
+  const busy = $derived(saving || activatingId !== null || removingId !== null);
   const canSave = $derived(canEdit && !saving && draft.name.trim().length > 0 && isDraftReady(draft));
 
   function emptyDraft(mode: SourceMode = 'file'): EditorDraft {
@@ -102,9 +106,11 @@
 
   async function refresh() {
     loading = true;
+    loadError = null;
     try {
       configs = await listProxyConfigs();
     } catch (error) {
+      loadError = getAppErrorMessage(error, '加载代理配置失败');
       handleAppError(error, '加载代理配置失败');
     } finally {
       loading = false;
@@ -112,6 +118,7 @@
   }
 
   function openCreate() {
+    if (busy) return;
     draft = emptyDraft('file');
     editingId = null;
     selectedProfile = null;
@@ -121,6 +128,7 @@
   }
 
   function openEdit(profile: ProxyConfigProfile) {
+    if (busy) return;
     draft = {
       name: profile.name,
       sourceMode: profile.path ? 'file' : 'inline',
@@ -222,15 +230,27 @@
     }
   }
 
-  async function handleRemove(id: string) {
-    if (!canRemove) return;
-    if (!confirm('确认删除此代理配置？')) return;
+  function requestRemove(profile: ProxyConfigProfile) {
+    if (!canRemove || busy) return;
+    deleteTarget = profile;
+  }
+
+  function closeDelete() {
+    if (removingId !== null) return;
+    deleteTarget = null;
+  }
+
+  async function handleRemove() {
+    if (!canRemove || !deleteTarget || busy) return;
+    const target = deleteTarget;
+    removingId = target.id;
 
     try {
-      await removeProxyConfig(id);
-      if (editingId === id) {
+      await removeProxyConfig(target.id);
+      if (editingId === target.id) {
         closeEditor();
       }
+      deleteTarget = null;
       await refresh();
       // Removing the active profile makes the backend promote another
       // profile (or none), so re-sync GUI state to the new active config.
@@ -241,37 +261,17 @@
       ]);
     } catch (error) {
       handleAppError(error, '删除代理配置失败');
+    } finally {
+      removingId = null;
     }
   }
 
   async function handleSetActive(id: string) {
-    if (!canEdit) return;
+    if (!canEdit || busy) return;
 
     activatingId = id;
     try {
-      const profile = await setActiveProxyConfig(id);
-      // Apply the new config to the running kernel silently. Try hot-apply
-      // first (no reconnection, no disruption); if that is unavailable
-      // (lite mode, kernel not connected, or the kernel rejected it) fall
-      // back to an automatic restart so the switch still takes effect
-      // without asking the user to do anything. Only a real restart failure
-      // surfaces to the user.
-      if (profile.content && typeof profile.content === 'object') {
-        let applied = false;
-        try {
-          await guiApplyConfig(profile.content as Record<string, unknown>);
-          applied = true;
-        } catch {
-          // Hot-apply unavailable — fall through to restart below.
-        }
-        if (!applied) {
-          try {
-            await restartCoreProcess();
-          } catch (restartError) {
-            handleAppError(restartError, '切换配置后自动重启内核失败');
-          }
-        }
-      }
+      await setActiveProxyConfig(id);
       await refresh();
       // Propagate the new active config to GUI state so the node page
       // and overview render the freshly activated configuration instead
@@ -320,7 +320,7 @@
         <span class="current-label">当前配置</span>
         <span class="current-name">{activeProfile?.name ?? '未设置'}</span>
         {#if canEdit}
-          <Button size="sm" onclick={openCreate} disabled={loading}>
+          <Button size="sm" onclick={openCreate} disabled={loading || busy}>
             <Plus class="h-3.5 w-3.5" />
             <span>新建配置</span>
           </Button>
@@ -339,12 +339,19 @@
   <div class="list-shell">
     {#if loading}
       <div class="empty-state">加载中...</div>
+    {:else if loadError}
+      <div class="empty-state error-state" role="alert">
+        <AlertTriangle class="h-5 w-5" />
+        <div class="empty-title">代理配置加载失败</div>
+        <div class="empty-desc">{loadError}</div>
+        <Button variant="outline" onclick={refresh}>重试</Button>
+      </div>
     {:else if filteredConfigs.length === 0}
       <div class="empty-state">
-        <div class="empty-title">还没有代理配置</div>
-        <div class="empty-desc">新建后选择本地文件，或者直接粘贴 JSON。</div>
-        {#if canEdit}
-          <Button onclick={openCreate}>
+        <div class="empty-title">{query.trim() ? '没有匹配的代理配置' : '还没有代理配置'}</div>
+        <div class="empty-desc">{query.trim() ? '请调整搜索关键词后重试。' : '新建后选择本地文件，或者直接粘贴 JSON。'}</div>
+        {#if canEdit && !query.trim()}
+          <Button onclick={openCreate} disabled={busy}>
             <Plus class="h-3.5 w-3.5" />
             <span>新建配置</span>
           </Button>
@@ -353,19 +360,15 @@
     {:else}
       <div class="config-list">
         {#each filteredConfigs as config (config.id)}
-          <div
-            class="config-row"
-            role="button"
-            tabindex="0"
-            onclick={() => openEdit(config)}
-            onkeydown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                openEdit(config);
-              }
-            }}
-          >
-            <div class="row-main">
+          <div class="config-row">
+            <button
+              type="button"
+              class="row-open"
+              onclick={() => openEdit(config)}
+              disabled={busy}
+              aria-label={`编辑代理配置 ${config.name}`}
+            >
+              <div class="row-main">
               <div class="row-top">
                 <div class="row-title">{config.name}</div>
                 {#if config.active}
@@ -383,7 +386,8 @@
                 <span>·</span>
                 <span class="row-path">{config.path ?? '内嵌 JSON'}</span>
               </div>
-            </div>
+              </div>
+            </button>
 
             <div class="row-actions">
               {#if canEdit}
@@ -393,11 +397,8 @@
                   <Button
                     variant="outline"
                     size="sm"
-                    onclick={(event) => {
-                      event.stopPropagation();
-                      handleSetActive(config.id);
-                    }}
-                    disabled={activatingId === config.id}
+                    onclick={() => handleSetActive(config.id)}
+                    disabled={busy}
                   >
                     <span>{activatingId === config.id ? '切换中...' : '设为当前'}</span>
                   </Button>
@@ -408,10 +409,8 @@
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    handleRemove(config.id);
-                  }}
+                  onclick={() => requestRemove(config)}
+                  disabled={busy}
                   title="删除"
                   aria-label="删除"
                 >
@@ -518,6 +517,29 @@
     <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
     <Button onclick={handleSave} disabled={!canSave}>
       <span>{saving ? '保存中...' : getSaveLabel()}</span>
+    </Button>
+  {/snippet}
+</DraggableModal>
+
+<DraggableModal
+  title="删除代理配置"
+  description="删除后无法从应用内恢复。若删除的是当前配置，后端会切换到下一份可用配置；没有其他配置时会停止内核。"
+  open={deleteTarget !== null}
+  onClose={closeDelete}
+  closeDisabled={removingId !== null}
+  width="min(460px, 90vw)"
+>
+  {#if deleteTarget}
+    <div class="validation-row" role="alert">
+      <AlertTriangle class="h-4 w-4" />
+      <span>确认删除“{deleteTarget.name}”吗？{deleteTarget.active ? '这是当前生效配置。' : ''}</span>
+    </div>
+  {/if}
+
+  {#snippet footer()}
+    <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
+    <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
+      {removingId !== null ? '删除中...' : '确认删除'}
     </Button>
   {/snippet}
 </DraggableModal>
@@ -649,7 +671,6 @@
     gap: 12px;
     padding: 12px 14px;
     border-bottom: 1px solid var(--border);
-    cursor: pointer;
     transition: background 0.12s ease;
   }
 
@@ -659,6 +680,24 @@
 
   .config-row:last-child {
     border-bottom: 0;
+  }
+
+  .row-open {
+    all: unset;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+
+  .row-open:focus-visible {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
+  }
+
+  .row-open:disabled {
+    cursor: wait;
+    opacity: 0.65;
   }
 
   .row-main {
@@ -730,6 +769,10 @@
   .empty-desc {
     font-size: 11.5px;
     line-height: 1.5;
+  }
+
+  .error-state {
+    color: var(--destructive);
   }
 
   /* Form styles (layout provided by DraggableModal) */

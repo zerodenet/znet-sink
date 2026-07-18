@@ -56,21 +56,23 @@ fn open_main_window_route(app: &tauri::AppHandle, tab: &str, section: Option<&st
 fn tray_start_core(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let _ = core_process::start(app.clone(), state);
+        let _operation = state.proxy_config_operation().blocking_lock();
+        let _ = core_process::start(app.clone(), state.clone());
     });
 }
 
 fn tray_restart_core(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let _ = core_process::stop(state.clone());
-        let _ = core_process::start(app.clone(), state);
+        let _operation = state.proxy_config_operation().blocking_lock();
+        let _ = core_process::restart(app.clone());
     });
 }
 
 fn tray_enable_system_proxy(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
+        let _operation = state.proxy_config_operation().blocking_lock();
         let _ = core_process::start(app.clone(), state.clone());
         let host = state
             .app_config()
@@ -333,6 +335,7 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<AppState>();
+                    let _operation = state.proxy_config_operation().lock().await;
                     let base_opts = crate::services::core_config::ipc_options_from_app_config(
                         &state
                             .app_config()
@@ -552,12 +555,11 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

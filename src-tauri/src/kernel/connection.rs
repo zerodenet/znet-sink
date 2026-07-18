@@ -471,49 +471,6 @@ fn validate_subscribe_ack(frame: &Value) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::validate_subscribe_ack;
-    use serde_json::json;
-
-    #[test]
-    fn subscribe_ack_requires_the_documented_success_envelope() {
-        validate_subscribe_ack(&json!({
-            "api_id": "zero.api.v1",
-            "ok": true,
-            "id": "znet-sink-subscribe",
-            "result": "subscribed"
-        }))
-        .unwrap();
-    }
-
-    #[test]
-    fn subscribe_ack_preserves_kernel_rejection() {
-        let error = validate_subscribe_ack(&json!({
-            "api_id": "zero.api.v1",
-            "ok": false,
-            "id": "znet-sink-subscribe",
-            "error": { "code": "permission_denied", "message": "denied" }
-        }))
-        .unwrap_err();
-        assert_eq!(error.code, "core_error");
-        assert_eq!(error.message, "denied");
-    }
-
-    #[test]
-    fn subscribe_ack_rejects_wrong_api_or_result() {
-        for frame in [
-            json!({"api_id":"other", "ok":true, "result":"subscribed"}),
-            json!({"api_id":"zero.api.v1", "ok":true, "result":"unexpected"}),
-        ] {
-            assert_eq!(
-                validate_subscribe_ack(&frame).unwrap_err().code,
-                "invalid_response"
-            );
-        }
-    }
-}
-
 // ── Global connection manager ───────────────────────────────────────
 
 struct ManagedConnection {
@@ -574,5 +531,48 @@ pub fn get_or_connect(
 pub fn reset() {
     if let Ok(mut guard) = MANAGER.lock() {
         *guard = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_subscribe_ack;
+    use serde_json::json;
+
+    #[test]
+    fn subscribe_ack_requires_the_documented_success_envelope() {
+        validate_subscribe_ack(&json!({
+            "api_id": "zero.api.v1",
+            "ok": true,
+            "id": "znet-sink-subscribe",
+            "result": "subscribed"
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn subscribe_ack_preserves_kernel_rejection() {
+        let error = validate_subscribe_ack(&json!({
+            "api_id": "zero.api.v1",
+            "ok": false,
+            "id": "znet-sink-subscribe",
+            "error": { "code": "permission_denied", "message": "denied" }
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "core_error");
+        assert_eq!(error.message, "denied");
+    }
+
+    #[test]
+    fn subscribe_ack_rejects_wrong_api_or_result() {
+        for frame in [
+            json!({"api_id":"other", "ok":true, "result":"subscribed"}),
+            json!({"api_id":"zero.api.v1", "ok":true, "result":"unexpected"}),
+        ] {
+            assert_eq!(
+                validate_subscribe_ack(&frame).unwrap_err().code,
+                "invalid_response"
+            );
+        }
     }
 }

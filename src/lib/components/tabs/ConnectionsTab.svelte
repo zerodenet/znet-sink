@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { getGuiConnections, getGuiRecentConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
+  import { onDestroy } from 'svelte';
+  import { getAppErrorMessage, getGuiConnections, getGuiRecentConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { coreEvents, type ConnectionDelta } from '$lib/services/core-events.svelte';
@@ -32,10 +33,13 @@
  let activeTab = $state<'live' | 'history'>('live');
  let searchQuery = $state('');
  let flowSupported = $state(true);
+ let loadError = $state<string | null>(null);
+ let partialError = $state<string | null>(null);
  const MAX_CONNECTIONS = 500;
  const MAX_RENDER = 120;
  let pendingDeltas: ConnectionDelta[] = [];
  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+ let refreshGeneration = 0;
 
  function matchesSearch(c: DisplayConnection): boolean {
    const q = searchQuery.trim().toLowerCase();
@@ -81,60 +85,88 @@
     expandedIds = next;
   }
 
-  async function refresh() {
-    loading = true;
+  async function refresh(showLoading = connections.length === 0) {
+    const generation = ++refreshGeneration;
+    if (showLoading) loading = true;
     try {
-      connections = await fetchConnections();
-   } catch {
-     // If the kernel doesn't support flow queries at all, mark unsupported.
-     flowSupported = false;
+      const result = await fetchConnections();
+      if (generation !== refreshGeneration) return;
+      connections = result.items;
+      flowSupported = result.supported;
+      partialError = result.partialError;
+      loadError = null;
+   } catch (error) {
+     if (generation !== refreshGeneration) return;
+     loadError = getAppErrorMessage(error, '加载连接数据失败');
+     partialError = null;
    } finally {
-      loading = false;
+      if (generation === refreshGeneration && showLoading) loading = false;
     }
   }
 
-  async function fetchConnections(): Promise<DisplayConnection[]> {
-    try {
+  function isUnsupportedError(error: unknown): boolean {
+    const appError = error as { code?: string; message?: string };
+    return appError.code === 'unsupported'
+      || appError.code === 'not_supported'
+      || /(?:not supported|unsupported|unknown.*(?:active_flows|recent_flows|flow))/i.test(appError.message ?? '');
+  }
+
+  async function fetchConnections(): Promise<{
+    items: DisplayConnection[];
+    supported: boolean;
+    partialError: string | null;
+  }> {
       // Fetch both active and recent connections in parallel
       const [activeResult, recentResult] = await Promise.allSettled([
         getGuiConnections({ limit: 200 }),
         getGuiRecentConnections({ limit: 50 }),
       ]);
 
-     const activeItems = activeResult.status === 'fulfilled'
+     let activeItems = activeResult.status === 'fulfilled'
        ? activeResult.value.items.map((c) => mapGuiConnection(c))
        : [];
+     let rawFallbackSucceeded = false;
+     const errors: unknown[] = [];
+
+     if (activeResult.status === 'rejected') {
+       const appError = activeResult.reason as { code?: string };
+       if (appError.code === 'mode_restricted') {
+         try {
+           activeItems = (await queryFlows()).map(mapFlowInfo);
+           rawFallbackSucceeded = true;
+         } catch (fallbackError) {
+           errors.push(fallbackError);
+         }
+       } else {
+         errors.push(activeResult.reason);
+       }
+     }
 
      const recentItems = recentResult.status === 'fulfilled'
        ? recentResult.value.items
            .filter(r => !activeItems.some(a => a.flowId === r.flowId))
            .map((c) => mapGuiConnection(c, 'recent'))
        : [];
+     if (recentResult.status === 'rejected') errors.push(recentResult.reason);
 
-     flowSupported = true;
      // Deduplicate: active connections take priority
      const all = [...activeItems, ...recentItems];
-      if (all.length > 0) return all;
-
-      // If both failed with mode_restricted, fallback to raw IPC
-      if (activeResult.status === 'rejected') {
-        const appError = activeResult.reason as { code?: string };
-        if (appError.code === 'mode_restricted') {
-          const flows = await queryFlows();
-          return flows.map(mapFlowInfo);
+      const succeeded = activeResult.status === 'fulfilled'
+        || recentResult.status === 'fulfilled'
+        || rawFallbackSucceeded;
+      if (!succeeded && errors.length > 0) {
+        if (errors.every(isUnsupportedError)) {
+          return { items: [], supported: false, partialError: null };
         }
-        throw activeResult.reason;
+        throw errors[0];
       }
-
-      return [];
-    } catch (e) {
-      const appError = e as { code?: string };
-      if (appError.code === 'mode_restricted') {
-        const flows = await queryFlows();
-        return flows.map(mapFlowInfo);
-      }
-      throw e;
-    }
+      return {
+        items: all,
+        supported: true,
+        partialError: errors.length > 0
+          ? `部分连接数据未能加载：${getAppErrorMessage(errors[0], '查询失败')}`
+          : null,
+      };
   }
 
 function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'active'): DisplayConnection {
@@ -173,6 +205,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   }
 
   async function handleClose(flowId: string) {
+    if (closingId !== null) return;
     closingId = flowId;
     try {
       try {
@@ -222,7 +255,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
 
   // 挂载：加载初始连接列表
   $effect(() => {
-    refresh();
+    void refresh(true);
   });
 
   // 事件流重新订阅后对账（弥补断连期间丢失的事件）
@@ -230,7 +263,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   $effect(() => {
     const sub = coreEvents.status === 'subscribed';
     if (sub && !_prevSubscribed) {
-      refresh();
+      void refresh(false);
     }
     _prevSubscribed = sub;
   });
@@ -320,6 +353,10 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
       }
     }
   }
+
+  onDestroy(() => {
+    if (flushTimer) clearTimeout(flushTimer);
+  });
 </script>
 
 <div class="desk-card flex-1 overflow-hidden flex flex-col animate-fade-in">
@@ -335,18 +372,18 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
      <button class="tab-btn {activeTab === 'history' ? 'active' : ''}" onclick={() => activeTab = 'history'}>连接记录</button>
    </div>
    <div class="header-actions">
-     <button class="action-btn" onclick={refresh}>
+     <button class="action-btn" onclick={() => refresh(false)} disabled={loading}>
        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
          <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
        </svg>
-       刷新
+       {loading ? '刷新中...' : '刷新'}
      </button>
      {#if tabConnections.length > 0}
-       <button class="action-btn danger" onclick={clearList} title="清空当前列表">
+       <button class="action-btn danger" onclick={clearList} title="仅清空当前页面显示，不会关闭连接或删除内核记录">
          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
            <path d="M3 4H9M5 4V3A1 1 0 0 1 6 2H6A1 1 0 0 1 7 3V4M4 4L4.5 10A1 1 0 0 0 5.5 11H6.5A1 1 0 0 0 7.5 10L8 4"/>
          </svg>
-         清空
+         清空显示
        </button>
      {/if}
    </div>
@@ -360,9 +397,28 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
    <input class="search-input" type="text" placeholder="搜索目标地址、来源、标签..." bind:value={searchQuery}>
  </div>
 
+ {#if partialError}
+   <div class="connection-warning" role="status">
+     <span>{partialError}</span>
+     <button class="action-btn" onclick={() => refresh(false)}>重试</button>
+   </div>
+ {/if}
+ {#if loadError && connections.length > 0}
+   <div class="connection-warning error" role="alert">
+     <span>刷新失败，当前仍显示上一批数据：{loadError}</span>
+     <button class="action-btn" onclick={() => refresh(false)}>重试</button>
+   </div>
+ {/if}
+
  <!-- Content -->
  {#if loading && connections.length === 0}
    <div class="panel-empty">加载中...</div>
+ {:else if loadError && connections.length === 0}
+   <div class="panel-empty-block" role="alert">
+     <span class="empty-title error-text">连接数据加载失败</span>
+     <span class="empty-desc">{loadError}</span>
+     <button class="action-btn" onclick={() => refresh(true)}>重试</button>
+   </div>
  {:else if !flowSupported}
    <div class="panel-empty-block">
      <span class="empty-title">内核不支持实时连接</span>
@@ -382,7 +438,8 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
    <div class="list-scroll">
      {#each visibleConnections as conn (conn.flowId)}
         <div class="flow-group" class:expanded={expandedIds.has(conn.flowId)}>
-          <div class="flow-row" onclick={() => toggleExpand(conn.flowId)} onkeydown={(e) => e.key === 'Enter' && toggleExpand(conn.flowId)} role="button" tabindex="0">
+          <div class="flow-row">
+            <button type="button" class="flow-open" onclick={() => toggleExpand(conn.flowId)}>
             <div class="flow-main">
               <div class="flow-top">
                 <span class="flow-destination" title={conn.destination}>{conn.destination}</span>
@@ -411,12 +468,16 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
               <polyline points="3 5 7 9 11 5"/>
             </svg>
           </div>
+          </button>
 
           {#if store.isActionOperable('core.flow.close')}
             <button
               class="flow-close"
-              onclick={() => handleClose(conn.flowId)}
-              disabled={closingId === conn.flowId}
+              onclick={(event) => {
+                event.stopPropagation();
+                handleClose(conn.flowId);
+              }}
+              disabled={closingId !== null}
               title="关闭连接"
             >
               <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
@@ -556,6 +617,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   }
 
  .action-btn:hover { background: var(--surface); }
+ .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
  .action-btn.danger:hover {
    background: rgba(239, 68, 68, 0.08);
@@ -619,6 +681,25 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
 
  .search-input::placeholder { color: var(--muted-foreground); opacity: 0.5; }
 
+ .connection-warning {
+   flex-shrink: 0;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 8px;
+   padding: 6px 14px;
+   border-bottom: 1px solid color-mix(in srgb, var(--warning) 20%, var(--border));
+   background: color-mix(in srgb, var(--warning) 7%, transparent);
+   color: var(--warning);
+   font-size: 10.5px;
+ }
+
+ .connection-warning.error {
+   border-bottom-color: color-mix(in srgb, var(--destructive) 20%, var(--border));
+   background: color-mix(in srgb, var(--destructive) 7%, transparent);
+   color: var(--destructive);
+ }
+
  /* ---- Truncation footer ---- */
  .list-truncated {
    text-align: center;
@@ -655,6 +736,8 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     opacity: 0.6;
   }
 
+  .error-text { color: var(--destructive); }
+
   .list-scroll {
     flex: 1;
     overflow-y: auto;
@@ -681,8 +764,26 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     align-items: flex-start;
     gap: 8px;
     padding: 10px 11px;
-    cursor: pointer;
     transition: background 0.12s ease;
+  }
+
+  .flow-open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    outline: none;
+  }
+
+  .flow-open:focus-visible {
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 32%, transparent);
   }
 
   .flow-group.expanded .flow-row {

@@ -5767,7 +5767,7 @@ dependencies = [
 
 [[package]]
 name = "zero-rule"
-version = "0.0.15-beta"
+version = "0.0.15-bate.1"
 dependencies = [
  "crc32fast",
  "fst",

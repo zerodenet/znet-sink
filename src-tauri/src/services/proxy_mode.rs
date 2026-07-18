@@ -1,5 +1,5 @@
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
@@ -8,7 +8,7 @@ use crate::models::{
     logs::LogLevel,
 };
 use crate::services::{
-    common, core_config, core_process, domain_store, logs, proxy_config, system_proxy,
+    common, core_config, core_process, logs, proxy_config, system_proxy, system_proxy_guard,
 };
 use crate::state::app_state::AppState;
 
@@ -39,17 +39,22 @@ pub async fn set(
     state: State<'_, AppState>,
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     let requested_mode = input.mode;
     let global_outbound = common::normalize_optional(input.global_outbound);
     let restart_core = input.restart_core.unwrap_or(false);
 
     let core_was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
 
-    // Always update the config file with the kernel-native top-level mode.
+    // Build the next profile snapshot without mutating shared state. Persisting
+    // through the proxy-config transaction keeps the domain file, app config,
+    // and in-memory profiles on the same revision.
+    let previous_profiles = common::lock(state.proxy_configs(), "proxy_config")?.clone();
+    let mut next_profiles = previous_profiles.clone();
     {
-        let mut profiles = common::lock(state.proxy_configs(), "proxy_config")?;
-        let active = profiles
+        let active = next_profiles
             .iter_mut()
             .find(|profile| profile.active)
             .ok_or_else(|| AppError::invalid_argument("no active proxy config"))?;
@@ -65,10 +70,13 @@ pub async fn set(
         apply_route_mode(content, &requested_mode, global_outbound.as_deref())?;
         active.capabilities = proxy_config::analyze_capabilities(Some(content));
         active.updated_at_unix_ms = common::now_unix_ms();
-        domain_store::save_proxy_configs(&profiles)?;
     }
 
-    core_config::export_active(state.clone())?;
+    proxy_config::persist_profile_transition(state.inner(), &previous_profiles, next_profiles)?;
+    if let Err(error) = core_config::export_active(state.clone()) {
+        let _ = restore_mode_profiles(state.clone(), &previous_profiles);
+        return Err(error);
+    }
 
     let mut restarted_core = false;
     let mut hot_switched = false;
@@ -93,14 +101,53 @@ pub async fn set(
                     requested_mode
                 ),
             );
-            let started = tauri::async_runtime::spawn_blocking(move || {
-                let state = app_handle.state::<AppState>();
-                core_process::stop(state.clone())?;
-                core_process::start(app_handle.clone(), state)
-            })
-            .await
-            .map_err(|e| AppError::internal(format!("proxy mode restart task failed: {e}")))??;
-            restarted_core = started.state == CoreProcessState::Running;
+            let restart_app = app_handle.clone();
+            let restart_result =
+                tauri::async_runtime::spawn_blocking(move || core_process::restart(restart_app))
+                    .await
+                    .map_err(|e| AppError::internal(format!("proxy mode restart task failed: {e}")))
+                    .and_then(|result| result);
+            match restart_result {
+                Ok(started) => {
+                    restarted_core = started.state == CoreProcessState::Running;
+                }
+                Err(error) => {
+                    let rollback_error = restore_mode_profiles(state.clone(), &previous_profiles)
+                        .err()
+                        .map(|rollback| rollback.message);
+                    let rollback_app = app_handle.clone();
+                    let runtime_rollback_error = tauri::async_runtime::spawn_blocking(move || {
+                        core_process::restart(rollback_app)
+                    })
+                    .await
+                    .map_err(|join| join.to_string())
+                    .and_then(|result| result.map_err(|rollback| rollback.message))
+                    .err();
+                    if managed_proxy_enabled
+                        && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+                    {
+                        let endpoint = common::lock(state.app_config(), "app_config")?
+                            .local_proxy
+                            .clone();
+                        let _ =
+                            system_proxy_guard::enable_with_guard(&endpoint.host, endpoint.port);
+                    }
+                    let mut message = format!(
+                        "failed to restart the kernel after changing proxy mode: {}",
+                        error.message
+                    );
+                    if let Some(rollback_error) = rollback_error {
+                        message.push_str(&format!("; profile rollback failed: {rollback_error}"));
+                    }
+                    if let Some(runtime_rollback_error) = runtime_rollback_error {
+                        message.push_str(&format!(
+                            "; runtime rollback failed: {runtime_rollback_error}"
+                        ));
+                    }
+                    logs::znet_log(Some(state.inner()), LogLevel::Error, message.clone());
+                    return Err(AppError::internal(message));
+                }
+            }
         }
     }
 
@@ -114,6 +161,16 @@ pub async fn set(
         hot_switched,
         None,
     ))
+}
+
+fn restore_mode_profiles(
+    state: State<'_, AppState>,
+    previous_profiles: &[crate::models::proxy_config::ProxyConfigProfile],
+) -> AppResult<()> {
+    let current = common::lock(state.proxy_configs(), "proxy_config")?.clone();
+    proxy_config::persist_profile_transition(state.inner(), &current, previous_profiles.to_vec())?;
+    core_config::export_active(state)?;
+    Ok(())
 }
 
 /// Try the kernel's `mode.set` command for hot mode switching.

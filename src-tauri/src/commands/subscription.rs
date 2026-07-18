@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
 use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert};
@@ -25,15 +25,15 @@ pub fn subscription_upsert(
 
 #[tauri::command]
 pub async fn subscription_sync(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     id: String,
 ) -> AppResult<SubscriptionProfile> {
-    subscription::sync(state, id).await
+    subscription::sync(app_handle, id).await
 }
 
 #[tauri::command]
-pub async fn subscription_sync_all(state: State<'_, AppState>) -> AppResult<SyncAllOutcome> {
-    subscription::sync_all(state).await
+pub async fn subscription_sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
+    subscription::sync_all(app_handle).await
 }
 
 #[tauri::command]

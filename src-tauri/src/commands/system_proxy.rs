@@ -28,6 +28,7 @@ pub async fn system_proxy_enable(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<SystemProxyStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     ensure_active_proxy_config(state.inner())?;
     ensure_core_ready(app_handle, state.clone()).await?;
 
@@ -74,6 +75,7 @@ fn ensure_active_proxy_config(state: &AppState) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn system_proxy_disable(state: State<'_, AppState>) -> AppResult<SystemProxyStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     let status = tauri::async_runtime::spawn_blocking(|| {
         system_proxy_guard::disable_with_guard()?;
         system_proxy::status()
@@ -89,7 +91,7 @@ pub async fn system_proxy_disable(state: State<'_, AppState>) -> AppResult<Syste
 
 #[tauri::command]
 pub async fn system_proxy_status() -> AppResult<SystemProxyStatus> {
-    tauri::async_runtime::spawn_blocking(|| system_proxy::status())
+    tauri::async_runtime::spawn_blocking(system_proxy::status)
         .await
         .map_err(|e| {
             crate::errors::AppError::internal(format!("system proxy thread panicked: {e}"))

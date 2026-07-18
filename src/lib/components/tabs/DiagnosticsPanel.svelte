@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { guiDnsLookup, guiTraceRoute } from '$lib/services/core';
+  import { onDestroy } from 'svelte';
+  import { getAppErrorMessage, guiDnsLookup, guiTraceRoute } from '$lib/services/core';
+  import { copyTextToClipboard } from '$lib/services/clipboard';
   import type { DnsLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
 
   // DNS lookup
@@ -7,6 +9,7 @@
   let dnsLoading = $state(false);
   let dnsResult = $state<DnsLookupResult | null>(null);
   let dnsError = $state<string | null>(null);
+  let dnsCopyFeedback = $state<string | null>(null);
 
   // Route trace
   let traceTarget = $state('');
@@ -16,6 +19,8 @@
   let traceLoading = $state(false);
   let traceResult = $state<TraceRouteResult | null>(null);
   let traceError = $state<string | null>(null);
+  let traceCopyFeedback = $state<string | null>(null);
+  let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function runDns() {
     const host = dnsHost.trim();
@@ -26,7 +31,7 @@
     try {
       dnsResult = await guiDnsLookup(host);
     } catch (e) {
-      dnsError = e instanceof Error ? e.message : String(e);
+      dnsError = getAppErrorMessage(e, 'DNS 查询失败');
     } finally {
       dnsLoading = false;
     }
@@ -43,7 +48,7 @@
       const inboundTag = traceInboundTag.trim() || undefined;
       traceResult = await guiTraceRoute(target, tracePort || undefined, proto, inboundTag);
     } catch (e) {
-      traceError = e instanceof Error ? e.message : String(e);
+      traceError = getAppErrorMessage(e, '路由追踪失败');
     } finally {
       traceLoading = false;
     }
@@ -68,12 +73,22 @@
     return ms == null ? '' : `${ms}ms`;
   }
 
-  async function copyText(text: string) {
+  async function copyText(text: string, target: 'dns' | 'trace') {
     try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      /* clipboard unavailable — ignore */
+      await copyTextToClipboard(text);
+      if (target === 'dns') dnsCopyFeedback = '已复制 JSON';
+      else traceCopyFeedback = '已复制 JSON';
+    } catch (error) {
+      const message = getAppErrorMessage(error, '复制失败');
+      if (target === 'dns') dnsCopyFeedback = message;
+      else traceCopyFeedback = message;
     }
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = setTimeout(() => {
+      dnsCopyFeedback = null;
+      traceCopyFeedback = null;
+      copyFeedbackTimer = null;
+    }, 3_000);
   }
 
   function onDnsKey(e: KeyboardEvent) {
@@ -83,6 +98,10 @@
   function onTraceKey(e: KeyboardEvent) {
     if (e.key === 'Enter') runTrace();
   }
+
+  onDestroy(() => {
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+  });
 </script>
 
 <div class="diag-panel">
@@ -114,7 +133,8 @@
           {#if dnsResult.rcode != null}<span>rcode {dnsResult.rcode}</span>{/if}
           {#if dnsResult.server}<span>server {dnsResult.server}</span>{/if}
           {#if dnsResult.elapsedMs != null}<span>{fmtElapsed(dnsResult.elapsedMs)}</span>{/if}
-          <button class="diag-copy" onclick={() => copyText(JSON.stringify(dnsResult, null, 2))}>复制 JSON</button>
+          {#if dnsCopyFeedback}<span class="copy-feedback" role="status">{dnsCopyFeedback}</span>{/if}
+          <button class="diag-copy" onclick={() => copyText(JSON.stringify(dnsResult, null, 2), 'dns')}>复制 JSON</button>
         </div>
         {#if dnsRecords(dnsResult).length > 0}
           <div class="dns-list">
@@ -183,7 +203,8 @@
           {#if traceResult.target}<span>target {traceResult.target}</span>{/if}
           {#if traceResult.totalHops != null}<span>{traceResult.totalHops} hops</span>{/if}
           {#if traceResult.elapsedMs != null}<span>{fmtElapsed(traceResult.elapsedMs)}</span>{/if}
-          <button class="diag-copy" onclick={() => copyText(JSON.stringify(traceResult, null, 2))}>复制 JSON</button>
+          {#if traceCopyFeedback}<span class="copy-feedback" role="status">{traceCopyFeedback}</span>{/if}
+          <button class="diag-copy" onclick={() => copyText(JSON.stringify(traceResult, null, 2), 'trace')}>复制 JSON</button>
         </div>
         {#if traceHops(traceResult).length > 0}
           <table class="hop-table">
@@ -342,6 +363,16 @@
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.12s ease;
+  }
+
+  .copy-feedback {
+    margin-left: auto;
+    color: var(--success);
+    font-family: inherit;
+  }
+
+  .copy-feedback + .diag-copy {
+    margin-left: 0;
   }
 
   .diag-copy:hover {

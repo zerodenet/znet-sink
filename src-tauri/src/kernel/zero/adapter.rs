@@ -24,6 +24,12 @@ use super::{commands, config, queries};
 /// from `AppState`). The adapter never touches GUI state directly.
 pub struct ZeroAdapter;
 
+impl Default for ZeroAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZeroAdapter {
     pub const fn new() -> Self {
         Self

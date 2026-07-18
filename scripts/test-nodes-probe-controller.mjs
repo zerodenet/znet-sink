@@ -63,9 +63,35 @@ async function testSingleProbeCompletionDoesNotWaitForSnapshotRefresh() {
   releaseRefresh();
 }
 
+async function testSingleProbeFailureUsesNonBlockingFailureCallback() {
+  const failures = [];
+  const controller = createNodesProbeController({
+    listen: async () => () => {},
+    probeNode: async () => ({
+      targetTag: 'offline',
+      reachable: false,
+      message: 'connection timed out',
+    }),
+    probeAll: async () => {},
+    recordDelay: () => {},
+    onProbeFailure: (failure) => failures.push(failure),
+    refreshPolicyGroups: async () => {},
+  });
+
+  await controller.handleProbe({ id: 'node-offline', tag: 'offline' });
+
+  assert.deepEqual(failures, [{
+    targetTag: 'offline',
+    message: 'connection timed out',
+    scope: 'single',
+  }]);
+  assert.equal(controller.getState().lastError, null);
+}
+
 async function testBatchProbeLifecycle() {
   const states = [];
   const seenDelays = [];
+  const failures = [];
   let refreshCalls = 0;
   let batchSessionId;
   const registry = createListenerRegistry();
@@ -87,6 +113,7 @@ async function testBatchProbeLifecycle() {
     recordDelay: (targetTag, latencyMs, reachable) => {
       seenDelays.push({ targetTag, latencyMs, reachable });
     },
+    onProbeFailure: (failure) => failures.push(failure),
     refreshPolicyGroups: async () => {
       refreshCalls += 1;
     },
@@ -110,6 +137,7 @@ async function testBatchProbeLifecycle() {
     { targetTag: 'A', latencyMs: 12, reachable: true },
     { targetTag: 'B', latencyMs: undefined, reachable: false },
   ]);
+  assert.deepEqual(failures, [{ targetTag: 'B', message: '节点不可达', scope: 'batch' }]);
   assert.equal(refreshCalls, 1);
 }
 
@@ -174,6 +202,7 @@ async function testBatchProbeDoesNotStartWhileSingleProbeIsRunning() {
 
 await testSingleProbeLifecycle();
 await testSingleProbeCompletionDoesNotWaitForSnapshotRefresh();
+await testSingleProbeFailureUsesNonBlockingFailureCallback();
 await testBatchProbeLifecycle();
 await testEmptyBatchProbeIsNoOp();
 await testBatchProbeDoesNotStartWhileSingleProbeIsRunning();

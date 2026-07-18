@@ -47,7 +47,24 @@ fn level_meets(level: &LogLevel, min: &LogLevel) -> bool {
 /// - If `state` is provided, also writes to the in-memory log buffer
 ///   (visible in the frontend LogPanel).
 pub(crate) fn znet_log(state: Option<&AppState>, level: LogLevel, message: impl Into<String>) {
-    let msg: String = message.into();
+    znet_log_with_fields(state, level, message.into(), None);
+}
+
+pub(crate) fn znet_log_fields(
+    state: Option<&AppState>,
+    level: LogLevel,
+    message: impl Into<String>,
+    fields: serde_json::Value,
+) {
+    znet_log_with_fields(state, level, message.into(), Some(fields));
+}
+
+fn znet_log_with_fields(
+    state: Option<&AppState>,
+    level: LogLevel,
+    msg: String,
+    fields: Option<serde_json::Value>,
+) {
     let min = stderr_level();
 
     if level_meets(&level, &min) {
@@ -62,7 +79,7 @@ pub(crate) fn znet_log(state: Option<&AppState>, level: LogLevel, message: impl 
     }
 
     if let Some(state) = state {
-        let _ = append_entry(state, LogSource::App, level, msg, None);
+        let _ = append_entry(state, LogSource::App, level, msg, fields);
     }
 }
 

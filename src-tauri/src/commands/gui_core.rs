@@ -109,7 +109,7 @@ pub async fn gui_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<GuiP
         .and_then(|p| p.content.clone());
     let kind_map = active_content
         .as_ref()
-        .map(|c| zero::config::outbound_kind_map(c))
+        .map(zero::config::outbound_kind_map)
         .unwrap_or_default();
 
     match adapter.policy_groups(opts).await {
@@ -215,6 +215,7 @@ pub async fn gui_tun_enable(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<GuiFeatureStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
     let opts = default_opts(state.inner());
@@ -223,6 +224,7 @@ pub async fn gui_tun_enable(
 
 #[tauri::command]
 pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     let opts = default_opts(state.inner());
     zero::commands::disable_tun(Some(opts)).await
 }
@@ -335,6 +337,16 @@ pub async fn gui_apply_config(
     config: serde_json::Value,
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "apply_config")?;
+    let _operation = state.proxy_config_operation().lock().await;
+    let previous_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone())
+        .ok_or_else(|| {
+            AppError::invalid_argument(
+                "an active proxy config with parsed content is required before applying changes",
+            )
+        })?;
     let opts = default_opts(state.inner());
     let result = ZeroAdapter::new()
         .apply_config(config.clone(), opts)
@@ -342,7 +354,20 @@ pub async fn gui_apply_config(
     // The kernel accepted the config — mirror it into the active profile so
     // that config-derived views (proxy nodes, policy groups) and the next
     // core-process start reflect the live configuration.
-    let _ = proxy_config::update_active_content(state.inner(), config);
+    if let Err(error) = proxy_config::update_active_content(state.inner(), config) {
+        let _ = ZeroAdapter::new()
+            .apply_config(previous_content, default_opts(state.inner()))
+            .await;
+        return Err(error);
+    }
+    if let Err(error) = proxy_config::retarget_managed_system_proxy(state.inner()) {
+        let _ = proxy_config::update_active_content(state.inner(), previous_content.clone());
+        let _ = ZeroAdapter::new()
+            .apply_config(previous_content, default_opts(state.inner()))
+            .await;
+        let _ = proxy_config::retarget_managed_system_proxy(state.inner());
+        return Err(error);
+    }
     Ok(result)
 }
 

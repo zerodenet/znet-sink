@@ -1,20 +1,27 @@
 <script lang="ts">
-  import { appendLog, getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
+  import { appendLog, getAppErrorMessage, getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
+  import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
   import type { AppConfig } from '$lib/types/app-config';
   import { Switch } from '$lib/components/ui/switch';
   import { NAV_TABS, TAB_LABELS } from '$lib/constants/navigation';
-  import { onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
   import { warning } from '$lib/services/toast.svelte';
 
   let config = $state<AppConfig | null>(null);
+  let configLoading = $state(true);
+  let configError = $state<string | null>(null);
+  let updateError = $state<string | null>(null);
   let loading = $state(false);
   let updatingMenuKey = $state<string | null>(null);
   let logPaths = $state<GuiLogPaths | null>(null);
   let logPathsError = $state<string | null>(null);
   let copiedField = $state<string | null>(null);
+  let pathActionError = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  let configRequestGeneration = 0;
 
   const menuTabs = NAV_TABS.filter((tab) => tab.id !== 'settings');
 
@@ -29,22 +36,33 @@
   }
 
   async function refreshConfig() {
+    const generation = ++configRequestGeneration;
+    configLoading = true;
+    configError = null;
+    updateError = null;
     try {
-      config = await getAppConfig();
+      const next = await getAppConfig();
+      if (generation !== configRequestGeneration) return;
+      config = next;
     } catch (error) {
-      console.error('Failed to get app config:', error);
+      if (generation === configRequestGeneration) {
+        configError = getAppErrorMessage(error, '加载应用配置失败');
+      }
+    } finally {
+      if (generation === configRequestGeneration) configLoading = false;
     }
   }
 
   async function toggleCoreSetting(key: 'autoStart' | 'autoConnect') {
     if (!config) return;
     loading = true;
+    updateError = null;
     try {
       const current = config.core[key];
       const updated = await updateAppConfig({ core: { [key]: !current } });
       config = updated;
     } catch (error) {
-      console.error('Failed to update config:', error);
+      updateError = getAppErrorMessage(error, '更新内核行为失败');
     } finally {
       loading = false;
     }
@@ -58,6 +76,7 @@
     if (!config || key === 'settings' || store.uiMode !== 'pro') return;
 
     updatingMenuKey = key;
+    updateError = null;
     try {
       const hidden = new Set((config.ui.hiddenMenuKeys ?? []).map((item) => item.toLowerCase()));
       if (hidden.has(key)) {
@@ -85,7 +104,7 @@
         store.activeTab = 'overview';
       }
     } catch (error) {
-      console.error('Failed to update hidden menus:', error);
+      updateError = getAppErrorMessage(error, '更新菜单设置失败');
     } finally {
       updatingMenuKey = null;
     }
@@ -101,43 +120,32 @@
       logPaths = await guiLogPaths();
       logPathsError = null;
     } catch (e) {
-      logPathsError = (e as { message?: string }).message ?? '获取日志路径失败';
+      logPathsError = getAppErrorMessage(e, '获取日志路径失败');
     }
   }
 
   async function copyToClipboard(text: string, field: string) {
+    pathActionError = null;
     try {
-      await navigator.clipboard.writeText(text);
+      await copyTextToClipboard(text);
       logPathAction('info', '已复制应用路径', { action: 'copy_path', field, path: text });
       copiedField = field;
-      setTimeout(() => { copiedField = null; }, 2000);
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => {
+        copiedField = null;
+        copyTimer = null;
+      }, 2000);
     } catch (clipboardError) {
-      // Fallback for older browsers
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      const copied = document.execCommand('copy');
-      document.body.removeChild(textarea);
-      copiedField = field;
-      setTimeout(() => { copiedField = null; }, 2000);
-      if (copied) {
-        logPathAction('info', '已通过兼容方式复制应用路径', {
-          action: 'copy_path_fallback', field, path: text, clipboardError: errorMessage(clipboardError),
-        });
-      } else {
-        const message = '浏览器未能复制路径';
-        logPathAction('error', message, {
-          action: 'copy_path_failed', field, path: text, clipboardError: errorMessage(clipboardError),
-        });
-        warning(message);
-      }
+      const message = getAppErrorMessage(clipboardError, '浏览器未能复制路径');
+      pathActionError = message;
+      logPathAction('error', message, {
+        action: 'copy_path_failed', field, path: text, clipboardError: errorMessage(clipboardError),
+      });
     }
   }
 
   async function openDirectory(path: string) {
+    pathActionError = null;
     try {
       await openPath(path);
       logPathAction('info', '已打开应用目录', { action: 'open_directory', path });
@@ -152,6 +160,7 @@
         });
       } catch (revealError) {
         const message = `无法打开目录: ${errorMessage(revealError)}`;
+        pathActionError = message;
         logPathAction('error', message, {
           action: 'open_directory_failed', path,
           openError: errorMessage(openError),
@@ -163,6 +172,7 @@
   }
 
   async function revealLogFile(path: string) {
+    pathActionError = null;
     try {
       await revealItemInDir(path);
       logPathAction('info', '已在资源管理器中定位日志文件', {
@@ -170,6 +180,7 @@
       });
     } catch (error) {
       const message = `无法定位日志文件: ${errorMessage(error)}`;
+      pathActionError = message;
       logPathAction('error', message, {
         action: 'reveal_log_file_failed', path, error: errorMessage(error),
       });
@@ -186,6 +197,10 @@
   $effect(() => {
     refreshConfig();
     loadLogPaths();
+  });
+
+  onDestroy(() => {
+    if (copyTimer) clearTimeout(copyTimer);
   });
 </script>
 
@@ -232,6 +247,15 @@
   </div>
 </div>
 
+{#if configError || updateError}
+  <div class="settings-error" role="alert">
+    <span>{configError ?? updateError}</span>
+    {#if configError}
+      <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
+    {/if}
+  </div>
+{/if}
+
 {#if store.uiMode === 'pro'}
   <div class="config-separator"></div>
 
@@ -244,8 +268,10 @@
         <div class="label-desc">设置固定展示，其他菜单点击选中表示显示，再点一次取消显示。</div>
       </div>
 
-      {#if !config}
+      {#if configLoading}
         <div class="config-loading">加载配置中...</div>
+      {:else if !config}
+        <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
       {:else}
         <div class="menu-button-row">
           {#each menuTabs as tab}
@@ -253,7 +279,7 @@
               type="button"
               class="menu-chip {isMenuVisible(tab.id) ? 'active' : ''}"
               onclick={() => toggleMenuVisibility(tab.id)}
-              disabled={updatingMenuKey === tab.id}
+              disabled={updatingMenuKey !== null || loading}
               aria-pressed={isMenuVisible(tab.id)}
             >
               <span>{TAB_LABELS[tab.id] ?? tab.label}{tab.comingSoon ? '（敬请期待）' : ''}</span>
@@ -270,8 +296,10 @@
 <div class="config-section">
   <div class="config-section-title">内核行为</div>
 
-  {#if !config}
+  {#if configLoading}
     <div class="config-loading">加载配置中...</div>
+  {:else if !config}
+    <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
   {:else}
     <div class="config-row">
       <div class="config-row-label">
@@ -311,6 +339,7 @@
       <div class="config-row-label">
         <span class="label-text" style="color: var(--destructive);">{logPathsError}</span>
       </div>
+      <button class="log-action-btn" onclick={loadLogPaths}>重试</button>
     </div>
   {:else if logPaths}
     <div class="config-row">
@@ -412,6 +441,10 @@
       </div>
     </div>
   {/if}
+
+  {#if pathActionError}
+    <div class="settings-error" role="alert">{pathActionError}</div>
+  {/if}
 </div>
 
 <div class="config-separator"></div>
@@ -451,6 +484,24 @@
     height: 1px;
     background: var(--border);
     margin: 16px 0;
+  }
+
+  .settings-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 0;
+    padding: 8px 10px;
+    border: 1px solid rgba(239, 68, 68, 0.22);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.07);
+    color: var(--destructive);
+    font-size: 11.5px;
+  }
+
+  .error-copy {
+    color: var(--destructive);
   }
 
   .config-row {

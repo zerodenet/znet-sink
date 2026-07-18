@@ -4,6 +4,7 @@ import type { LogEntry, LogLevel, LogSource } from '$lib/types/logs';
 export interface LogCopyContext {
   source: LogSource | 'all';
   minLevel: LogLevel;
+  search?: string;
   hasMore: boolean;
   copiedAtUnixMs?: number;
 }
@@ -47,6 +48,7 @@ export function serializeLogsForClipboard(
     copiedAtUnixMs: context.copiedAtUnixMs ?? Date.now(),
     source: context.source,
     minLevel: context.minLevel,
+    search: context.search,
     count: logs.length,
     partial: context.hasMore,
     items: logs.map(logCopyRecord),

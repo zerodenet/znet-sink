@@ -17,9 +17,10 @@ import { createBatchProbeState } from './nodes-probe-state.js';
 /**
  * @typedef {{
  *   listen: <T>(event: string, handler: (event: { payload: T }) => void | Promise<void>) => Promise<() => void>,
- *   probeNode: (targetTag: string) => Promise<{ targetTag: string, reachable: boolean, latencyMs?: number }>,
+ *   probeNode: (targetTag: string) => Promise<{ targetTag: string, reachable: boolean, latencyMs?: number, message?: string }>,
  *   probeAll: (targetTags: string[], sessionId: string) => Promise<void>,
  *   recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) => void,
+ *   onProbeFailure?: (failure: { targetTag?: string, message: string, scope: 'single' | 'batch' }) => void,
  *   refreshPolicyGroups: () => Promise<void>,
  *   onStateChange?: (state: ProbeControllerState) => void,
  * }} ProbeControllerDeps
@@ -116,8 +117,20 @@ export function createNodesProbeController(deps) {
       try {
         const result = await deps.probeNode(node.tag);
         deps.recordDelay(node.tag, result.latencyMs, result.reachable);
+        if (!result.reachable) {
+          deps.onProbeFailure?.({
+            targetTag: result.targetTag || node.tag,
+            message: result.message || '节点不可达',
+            scope: 'single',
+          });
+        }
       } catch (error) {
         lastError = String(error);
+        deps.onProbeFailure?.({
+          targetTag: node.tag,
+          message: lastError,
+          scope: 'single',
+        });
       } finally {
         removeProbingNodeIds([node.id]);
         emit();
@@ -164,11 +177,18 @@ export function createNodesProbeController(deps) {
 
         activeProbeResultUnlisten = await deps.listen(
           'probe:result',
-          /** @param {{ payload: { sessionId: string, targetTag: string, reachable: boolean, latencyMs?: number } }} event */
+          /** @param {{ payload: { sessionId: string, targetTag: string, reachable: boolean, latencyMs?: number, message?: string } }} event */
           (event) => {
             if (!isActiveSessionPayload(event.payload)) return;
-            const { targetTag, reachable, latencyMs } = event.payload;
+            const { targetTag, reachable, latencyMs, message } = event.payload;
             deps.recordDelay(targetTag, latencyMs, reachable);
+            if (!reachable) {
+              deps.onProbeFailure?.({
+                targetTag,
+                message: message || '节点不可达',
+                scope: 'batch',
+              });
+            }
             batchProbeState.resolveTag(targetTag);
             probingNodeIds = batchProbeState.probingNodeIds();
             emit();
@@ -204,6 +224,10 @@ export function createNodesProbeController(deps) {
         await completion;
       } catch (error) {
         lastError = String(error);
+        deps.onProbeFailure?.({
+          message: lastError,
+          scope: 'batch',
+        });
         probingAll = false;
         batchProbeState.clear();
         probingNodeIds = batchProbeState.probingNodeIds();

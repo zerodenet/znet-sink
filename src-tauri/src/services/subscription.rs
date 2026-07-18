@@ -1,17 +1,18 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 use tauri::{AppHandle, Manager, State};
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Map, Value};
 
 use crate::errors::{AppError, AppResult};
+use crate::models::logs::LogLevel;
 use crate::models::proxy_config::ProxyConfigProfile;
 use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert, SyncMetadata};
 use crate::services::common::{
-    generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
+    begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
+    normalize_required, now_unix_ms,
 };
-use crate::services::domain_store;
-use crate::services::proxy_config;
+use crate::services::{domain_store, logs, proxy_config};
 use crate::state::app_state::AppState;
 
 const SUBSCRIPTION_FETCH_TIMEOUT_SECONDS: u64 = 30;
@@ -20,12 +21,55 @@ const AUTO_SYNC_TICK_SECONDS: u64 = 60;
 /// Grace delay before the first auto-sync pass so the kernel and
 /// networking stack have time to come up on startup.
 const AUTO_SYNC_WARMUP_SECONDS: u64 = 15;
+/// Number of exponential-backoff retries after the initial scheduled
+/// attempt. A failed cycle therefore performs at most four requests.
+const AUTO_SYNC_MAX_RETRIES: u32 = 3;
+const AUTO_SYNC_RETRY_BASE_SECONDS: u64 = 60;
+const AUTO_SYNC_RETRY_MAX_SECONDS: u64 = 15 * 60;
 
 const DEFAULT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION"));
 
 /// How often (in seconds) an auto-sync interval may be configured at
 /// minimum. Prevents accidentally hammering a provider.
 const MIN_AUTO_SYNC_INTERVAL_SECS: u64 = 60;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutoSyncRetryState {
+    /// Failed attempts in the current cycle, including the initial attempt.
+    failed_attempts: u32,
+    next_attempt_at_unix_ms: u64,
+    /// A successful manual sync changes this value and invalidates the
+    /// scheduler's in-memory retry state on the next pass.
+    cycle_last_sync_at_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AutoSyncAttemptKind {
+    Initial,
+    Retry { number: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DueSubscription {
+    id: String,
+    name: String,
+    interval_secs: u64,
+    last_sync_at_unix_ms: Option<u64>,
+    kind: AutoSyncAttemptKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AutoSyncFailureDisposition {
+    RetryScheduled {
+        retry_number: u32,
+        delay_secs: u64,
+        next_attempt_at_unix_ms: u64,
+    },
+    RetryLimitReached {
+        cooldown_secs: u64,
+        next_cycle_at_unix_ms: u64,
+    },
+}
 
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<SubscriptionProfile>> {
     Ok(lock(state.subscriptions(), "subscription")?.clone())
@@ -49,6 +93,7 @@ pub fn upsert(
     validate_http_url(&url)?;
 
     let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("subscription"));
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     let kernel = normalize_optional(input.kernel).unwrap_or_else(|| "zero".to_string());
     let format = normalize_optional(input.format).unwrap_or_else(|| "auto".to_string());
     let update_interval_secs = validate_update_interval(input.update_interval_secs)?;
@@ -56,7 +101,8 @@ pub fn upsert(
     let target_proxy_config_id = normalize_optional(input.target_proxy_config_id);
 
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
-    let profile = match subscriptions.iter_mut().find(|item| item.id == id) {
+    let mut next = subscriptions.clone();
+    let profile = match next.iter_mut().find(|item| item.id == id) {
         Some(existing) => {
             // Preserve sync-derived state across edits; only the
             // user-editable fields are overwritten.
@@ -91,37 +137,43 @@ pub fn upsert(
                 last_sync_at_unix_ms: None,
                 last_error: None,
             };
-            subscriptions.push(profile.clone());
+            next.push(profile.clone());
             profile
         }
     };
-    domain_store::save_subscriptions(&subscriptions)?;
+    domain_store::save_subscriptions(&next)?;
+    *subscriptions = next;
 
     Ok(profile)
 }
 
-pub async fn sync(state: State<'_, AppState>, id: String) -> AppResult<SubscriptionProfile> {
+pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionProfile> {
     let id = normalize_required(id, "id")?;
-    sync_by_id(state.inner(), &id).await
+    let state = app_handle.state::<AppState>();
+    sync_by_id(&app_handle, state.inner(), &id).await
 }
 
 /// Sync every enabled subscription sequentially. Returns the number
 /// that succeeded. Used by the UI's "sync all" action and by the
 /// background auto-sync scheduler.
-pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncAllOutcome> {
-    sync_all_with_state(state.inner()).await
+pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
+    let state = app_handle.state::<AppState>();
+    sync_all_with_state(&app_handle, state.inner()).await
 }
 
 pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let id = normalize_required(id, "id")?;
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
-    let before = subscriptions.len();
-    subscriptions.retain(|profile| profile.id != id);
+    let mut next = subscriptions.clone();
+    let before = next.len();
+    next.retain(|profile| profile.id != id);
 
-    if subscriptions.len() == before {
+    if next.len() == before {
         return Err(AppError::not_found("subscription", id));
     }
-    domain_store::save_subscriptions(&subscriptions)?;
+    domain_store::save_subscriptions(&next)?;
+    *subscriptions = next;
 
     Ok(())
 }
@@ -156,7 +208,12 @@ pub struct SyncAllOutcome {
     pub failed: usize,
 }
 
-async fn sync_by_id(state: &AppState, id: &str) -> AppResult<SubscriptionProfile> {
+async fn sync_by_id(
+    app_handle: &AppHandle,
+    state: &AppState,
+    id: &str,
+) -> AppResult<SubscriptionProfile> {
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", id)?;
     let subscription = {
         let subscriptions = lock(state.subscriptions(), "subscription")?;
         subscriptions
@@ -172,7 +229,7 @@ async fn sync_by_id(state: &AppState, id: &str) -> AppResult<SubscriptionProfile
         return Err(error);
     }
 
-    let result = sync_subscription(state, subscription).await;
+    let result = sync_subscription(app_handle, state, subscription).await;
     if let Err(error) = &result {
         update_sync_error(state, id, &error.message)?;
     }
@@ -180,7 +237,10 @@ async fn sync_by_id(state: &AppState, id: &str) -> AppResult<SubscriptionProfile
     result
 }
 
-async fn sync_all_with_state(state: &AppState) -> AppResult<SyncAllOutcome> {
+async fn sync_all_with_state(
+    app_handle: &AppHandle,
+    state: &AppState,
+) -> AppResult<SyncAllOutcome> {
     let ids: Vec<String> = lock(state.subscriptions(), "subscription")?
         .iter()
         .filter(|profile| profile.enabled)
@@ -189,7 +249,7 @@ async fn sync_all_with_state(state: &AppState) -> AppResult<SyncAllOutcome> {
 
     let mut succeeded = 0usize;
     for id in &ids {
-        if sync_by_id(state, id).await.is_ok() {
+        if sync_by_id(app_handle, state, id).await.is_ok() {
             succeeded += 1;
         }
     }
@@ -202,6 +262,7 @@ async fn sync_all_with_state(state: &AppState) -> AppResult<SyncAllOutcome> {
 }
 
 async fn sync_subscription(
+    app_handle: &AppHandle,
     state: &AppState,
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
@@ -225,7 +286,16 @@ async fn sync_subscription(
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
 
-    upsert_synced_proxy_config(state, &subscription, &target_proxy_config_id, parsed, now)?;
+    ensure_subscription_unchanged(state, &subscription)?;
+
+    upsert_synced_proxy_config(
+        app_handle,
+        state,
+        &subscription,
+        &target_proxy_config_id,
+        parsed,
+    )
+    .await?;
     update_sync_success(
         state,
         &subscription.id,
@@ -233,6 +303,30 @@ async fn sync_subscription(
         metadata,
         now,
     )
+}
+
+fn ensure_subscription_unchanged(
+    state: &AppState,
+    snapshot: &SubscriptionProfile,
+) -> AppResult<()> {
+    let subscriptions = lock(state.subscriptions(), "subscription")?;
+    let current = subscriptions
+        .iter()
+        .find(|profile| profile.id == snapshot.id)
+        .ok_or_else(|| AppError::not_found("subscription", snapshot.id.clone()))?;
+    if current.updated_at_unix_ms != snapshot.updated_at_unix_ms
+        || current.url != snapshot.url
+        || current.format != snapshot.format
+        || current.target_proxy_config_id != snapshot.target_proxy_config_id
+        || current.enabled != snapshot.enabled
+    {
+        return Err(AppError::conflict(
+            "subscription",
+            snapshot.id.clone(),
+            "subscription changed while synchronization was in progress",
+        ));
+    }
+    Ok(())
 }
 
 /// Raw response captured from the subscription endpoint, including
@@ -1166,44 +1260,88 @@ fn pad_base64(content: &str) -> String {
     padded
 }
 
-fn upsert_synced_proxy_config(
+async fn upsert_synced_proxy_config(
+    app_handle: &AppHandle,
     state: &AppState,
     subscription: &SubscriptionProfile,
     target_proxy_config_id: &str,
-    parsed: ParsedSubscriptionConfig,
-    updated_at_unix_ms: u64,
+    mut parsed: ParsedSubscriptionConfig,
 ) -> AppResult<ProxyConfigProfile> {
-    let capabilities = proxy_config::analyze_capabilities(Some(&parsed.content));
-    let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
-    let existing_active = profiles
+    let existing_profile = lock(state.proxy_configs(), "proxy_config")?
         .iter()
         .find(|profile| profile.id == target_proxy_config_id)
+        .cloned();
+    let existing_active = existing_profile
+        .as_ref()
         .is_some_and(|profile| profile.active);
-    let profile = ProxyConfigProfile {
-        id: target_proxy_config_id.to_string(),
-        name: subscription.name.clone(),
-        kernel: subscription.kernel.clone(),
-        format: parsed.format,
-        path: Some(subscription.url.clone()),
-        content: Some(parsed.content),
-        active: existing_active,
-        updated_at_unix_ms,
-        capabilities,
-    };
+    if parsed.format.contains("clash") {
+        let (host, port) = {
+            let config = lock(state.app_config(), "app_config")?;
+            (config.local_proxy.host.clone(), config.local_proxy.port)
+        };
+        ensure_clash_local_inbound(
+            &mut parsed.content,
+            existing_profile
+                .as_ref()
+                .and_then(|profile| profile.content.as_ref()),
+            &host,
+            port,
+        )?;
+    }
+    ensure_subscription_unchanged(state, subscription)?;
+    proxy_config::upsert_runtime(
+        app_handle.clone(),
+        crate::models::proxy_config::ProxyConfigUpsert {
+            id: Some(target_proxy_config_id.to_string()),
+            name: subscription.name.clone(),
+            kernel: Some(subscription.kernel.clone()),
+            format: Some(parsed.format),
+            path: Some(subscription.url.clone()),
+            content: Some(parsed.content),
+            active: Some(existing_active),
+        },
+    )
+    .await
+}
 
-    match profiles
-        .iter_mut()
-        .find(|profile| profile.id == target_proxy_config_id)
+fn ensure_clash_local_inbound(
+    content: &mut Value,
+    existing_content: Option<&Value>,
+    host: &str,
+    port: u16,
+) -> AppResult<()> {
+    let object = content.as_object_mut().ok_or_else(|| {
+        AppError::invalid_argument("converted Clash subscription must produce an object")
+    })?;
+    if object
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .is_some_and(|inbounds| !inbounds.is_empty())
     {
-        Some(existing) => *existing = profile.clone(),
-        None => profiles.push(profile.clone()),
-    }
-    domain_store::save_proxy_configs(&profiles)?;
-    if profile.active {
-        proxy_config::sync_local_proxy_from_profile(state, &profile)?;
+        return Ok(());
     }
 
-    Ok(profile)
+    let inbounds = existing_content
+        .and_then(|existing| existing.get("inbounds"))
+        .and_then(Value::as_array)
+        .filter(|inbounds| {
+            inbounds.iter().any(|inbound| {
+                crate::services::proxy_config::extract_local_proxy(&json!({
+                    "inbounds": [inbound]
+                }))
+                .is_some()
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            vec![json!({
+                "tag": "mixed-in",
+                "listen": { "address": host, "port": port },
+                "protocol": { "type": "mixed" }
+            })]
+        });
+    object.insert("inbounds".to_string(), Value::Array(inbounds));
+    Ok(())
 }
 
 fn update_sync_success(
@@ -1214,7 +1352,8 @@ fn update_sync_success(
     synced_at_unix_ms: u64,
 ) -> AppResult<SubscriptionProfile> {
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
-    let subscription = subscriptions
+    let mut next = subscriptions.clone();
+    let subscription = next
         .iter_mut()
         .find(|profile| profile.id == id)
         .ok_or_else(|| AppError::not_found("subscription", id.to_string()))?;
@@ -1229,17 +1368,20 @@ fn update_sync_success(
     subscription.total_bytes = metadata.total_bytes;
     subscription.expire_at_unix_ms = metadata.expire_at_unix_ms;
     let updated = subscription.clone();
-    domain_store::save_subscriptions(&subscriptions)?;
+    domain_store::save_subscriptions(&next)?;
+    *subscriptions = next;
 
     Ok(updated)
 }
 
 fn update_sync_error(state: &AppState, id: &str, message: &str) -> AppResult<()> {
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
-    if let Some(subscription) = subscriptions.iter_mut().find(|profile| profile.id == id) {
+    let mut next = subscriptions.clone();
+    if let Some(subscription) = next.iter_mut().find(|profile| profile.id == id) {
         subscription.last_error = Some(message.to_string());
         subscription.updated_at_unix_ms = now_unix_ms();
-        domain_store::save_subscriptions(&subscriptions)?;
+        domain_store::save_subscriptions(&next)?;
+        *subscriptions = next;
     }
 
     Ok(())
@@ -1254,25 +1396,40 @@ pub fn spawn_auto_sync_scheduler(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         // Warmup: let the kernel / network come up before the first pass.
         tokio::time::sleep(Duration::from_secs(AUTO_SYNC_WARMUP_SECONDS)).await;
+        let mut retry_states = HashMap::new();
 
         loop {
-            run_auto_sync_pass(&app).await;
+            run_auto_sync_pass(&app, &mut retry_states).await;
             tokio::time::sleep(Duration::from_secs(AUTO_SYNC_TICK_SECONDS)).await;
         }
     });
 }
 
-async fn run_auto_sync_pass(app: &AppHandle) {
+async fn run_auto_sync_pass(
+    app: &AppHandle,
+    retry_states: &mut HashMap<String, AutoSyncRetryState>,
+) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
 
-    let due: Vec<String> = match collect_due_subscription_ids(state.inner()) {
-        Ok(ids) => ids,
+    let now = now_unix_ms();
+    let due = match collect_due_subscription_attempts(state.inner(), retry_states, now) {
+        Ok(attempts) => attempts,
         Err(error) => {
-            eprintln!(
-                "[ZNet] subscription auto-sync: failed to collect due ids: {}",
-                error.message
+            logs::znet_log_fields(
+                Some(state.inner()),
+                LogLevel::Warn,
+                format!(
+                    "subscription auto-sync: failed to collect due subscriptions: {}",
+                    error.message
+                ),
+                json!({
+                    "schema": "znet.subscription-sync.v1",
+                    "operation": "collect_due",
+                    "errorCode": error.code,
+                    "errorMessage": error.message,
+                }),
             );
             return;
         }
@@ -1282,47 +1439,276 @@ async fn run_auto_sync_pass(app: &AppHandle) {
         return;
     }
 
-    for id in due {
-        match sync_by_id(state.inner(), &id).await {
-            Ok(profile) => eprintln!(
-                "[ZNet] subscription auto-sync: refreshed '{}' ({} nodes)",
-                profile.name,
-                profile.node_count.unwrap_or(0)
-            ),
-            Err(error) => eprintln!(
-                "[ZNet] subscription auto-sync: '{id}' failed: {}",
-                error.message
-            ),
+    for attempt in due {
+        let attempt_label = match &attempt.kind {
+            AutoSyncAttemptKind::Initial => "scheduled attempt".to_string(),
+            AutoSyncAttemptKind::Retry { number } => {
+                format!("retry {number}/{AUTO_SYNC_MAX_RETRIES}")
+            }
+        };
+        match sync_by_id(app, state.inner(), &attempt.id).await {
+            Ok(profile) => {
+                retry_states.remove(&attempt.id);
+                logs::znet_log_fields(
+                    Some(state.inner()),
+                    LogLevel::Info,
+                    format!(
+                        "subscription auto-sync: refreshed '{}' ({} nodes)",
+                        profile.name,
+                        profile.node_count.unwrap_or(0)
+                    ),
+                    json!({
+                        "schema": "znet.subscription-sync.v1",
+                        "operation": "auto_sync",
+                        "subscriptionId": attempt.id,
+                        "subscriptionName": profile.name,
+                        "attempt": attempt_label,
+                        "outcome": "success",
+                        "nodeCount": profile.node_count.unwrap_or(0),
+                    }),
+                );
+            }
+            Err(error) if error.code == "conflict" => {
+                logs::znet_log_fields(
+                    Some(state.inner()),
+                    LogLevel::Debug,
+                    format!(
+                        "subscription auto-sync: skipped '{}' because another sync is already running",
+                        attempt.name
+                    ),
+                    json!({
+                        "schema": "znet.subscription-sync.v1",
+                        "operation": "auto_sync",
+                        "subscriptionId": attempt.id,
+                        "subscriptionName": attempt.name,
+                        "attempt": attempt_label,
+                        "outcome": "skipped_conflict",
+                    }),
+                );
+            }
+            Err(error) => {
+                let disposition = record_auto_sync_failure(retry_states, &attempt, now_unix_ms());
+                let (message, retry_number, delay_secs, retry_exhausted) = match disposition {
+                    AutoSyncFailureDisposition::RetryScheduled {
+                        retry_number,
+                        delay_secs,
+                        ..
+                    } => (
+                        format!(
+                            "subscription auto-sync: '{}' {attempt_label} failed: {}; retry {retry_number}/{AUTO_SYNC_MAX_RETRIES} in {delay_secs}s",
+                            attempt.name, error.message,
+                        ),
+                        retry_number,
+                        delay_secs,
+                        false,
+                    ),
+                    AutoSyncFailureDisposition::RetryLimitReached { cooldown_secs, .. } => (
+                        format!(
+                            "subscription auto-sync: '{}' {attempt_label} failed after {AUTO_SYNC_MAX_RETRIES} retries: {}; automatic retries paused for {cooldown_secs}s",
+                            attempt.name, error.message,
+                        ),
+                        AUTO_SYNC_MAX_RETRIES,
+                        cooldown_secs,
+                        true,
+                    ),
+                };
+                logs::znet_log_fields(
+                    Some(state.inner()),
+                    LogLevel::Warn,
+                    message,
+                    json!({
+                        "schema": "znet.subscription-sync.v1",
+                        "operation": "auto_sync",
+                        "subscriptionId": attempt.id,
+                        "subscriptionName": attempt.name,
+                        "attempt": attempt_label,
+                        "outcome": "failure",
+                        "errorCode": error.code,
+                        "errorMessage": error.message,
+                        "retryNumber": retry_number,
+                        "retryLimit": AUTO_SYNC_MAX_RETRIES,
+                        "nextDelaySecs": delay_secs,
+                        "retryExhausted": retry_exhausted,
+                    }),
+                );
+            }
         }
     }
 }
 
 /// Identify subscriptions that are enabled, have an auto-sync
 /// interval, and whose last sync predates the interval window.
+#[cfg(test)]
 pub(crate) fn collect_due_subscription_ids(state: &AppState) -> AppResult<Vec<String>> {
-    let now = now_unix_ms();
+    let mut retry_states = HashMap::new();
+    Ok(
+        collect_due_subscription_attempts(state, &mut retry_states, now_unix_ms())?
+            .into_iter()
+            .map(|attempt| attempt.id)
+            .collect(),
+    )
+}
+
+fn collect_due_subscription_attempts(
+    state: &AppState,
+    retry_states: &mut HashMap<String, AutoSyncRetryState>,
+    now_unix_ms: u64,
+) -> AppResult<Vec<DueSubscription>> {
     let subscriptions = lock(state.subscriptions(), "subscription")?;
-    Ok(subscriptions
-        .iter()
-        .filter_map(|profile| {
-            if !profile.enabled {
-                return None;
-            }
-            let interval = profile.update_interval_secs?;
-            let interval_ms = u128::from(interval) * 1000;
-            let last = u128::from(profile.last_sync_at_unix_ms.unwrap_or(0));
-            if now as u128 >= last + interval_ms {
-                Some(profile.id.clone())
-            } else {
-                None
-            }
+
+    // Drop retry state when a subscription is removed, disabled, switched to
+    // manual mode, or successfully synced outside this scheduler.
+    retry_states.retain(|id, retry| {
+        subscriptions.iter().any(|profile| {
+            profile.id == *id
+                && profile.enabled
+                && profile.update_interval_secs.is_some()
+                && profile.last_sync_at_unix_ms == retry.cycle_last_sync_at_unix_ms
         })
-        .collect())
+    });
+
+    let mut reset_cycles = Vec::new();
+    let mut due = Vec::new();
+
+    for profile in subscriptions.iter() {
+        if !profile.enabled {
+            continue;
+        }
+        if is_in_flight(state.subscription_syncs(), &profile.id)? {
+            continue;
+        }
+        let Some(interval_secs) = profile.update_interval_secs else {
+            continue;
+        };
+
+        let kind = if let Some(retry) = retry_states.get(&profile.id) {
+            if now_unix_ms < retry.next_attempt_at_unix_ms {
+                continue;
+            }
+
+            if retry.failed_attempts > AUTO_SYNC_MAX_RETRIES {
+                // The cooldown after an exhausted cycle has elapsed. Start a
+                // fresh bounded cycle instead of carrying the old budget on.
+                reset_cycles.push(profile.id.clone());
+                AutoSyncAttemptKind::Initial
+            } else {
+                AutoSyncAttemptKind::Retry {
+                    number: retry.failed_attempts,
+                }
+            }
+        } else {
+            let interval_ms = interval_secs.saturating_mul(1_000);
+            let due_at = profile
+                .last_sync_at_unix_ms
+                .unwrap_or(0)
+                .saturating_add(interval_ms);
+            if now_unix_ms < due_at {
+                continue;
+            }
+            AutoSyncAttemptKind::Initial
+        };
+
+        due.push(DueSubscription {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            interval_secs,
+            last_sync_at_unix_ms: profile.last_sync_at_unix_ms,
+            kind,
+        });
+    }
+
+    for id in reset_cycles {
+        retry_states.remove(&id);
+    }
+
+    Ok(due)
+}
+
+fn auto_sync_retry_delay_secs(retry_number: u32) -> u64 {
+    let exponent = retry_number.saturating_sub(1).min(31);
+    AUTO_SYNC_RETRY_BASE_SECONDS
+        .saturating_mul(1_u64 << exponent)
+        .min(AUTO_SYNC_RETRY_MAX_SECONDS)
+}
+
+fn record_auto_sync_failure(
+    retry_states: &mut HashMap<String, AutoSyncRetryState>,
+    attempt: &DueSubscription,
+    failed_at_unix_ms: u64,
+) -> AutoSyncFailureDisposition {
+    let failed_attempts = retry_states
+        .get(&attempt.id)
+        .map(|retry| retry.failed_attempts)
+        .unwrap_or(0)
+        .saturating_add(1);
+
+    if failed_attempts <= AUTO_SYNC_MAX_RETRIES {
+        let delay_secs = auto_sync_retry_delay_secs(failed_attempts);
+        let next_attempt_at_unix_ms =
+            failed_at_unix_ms.saturating_add(delay_secs.saturating_mul(1_000));
+        retry_states.insert(
+            attempt.id.clone(),
+            AutoSyncRetryState {
+                failed_attempts,
+                next_attempt_at_unix_ms,
+                cycle_last_sync_at_unix_ms: attempt.last_sync_at_unix_ms,
+            },
+        );
+        AutoSyncFailureDisposition::RetryScheduled {
+            retry_number: failed_attempts,
+            delay_secs,
+            next_attempt_at_unix_ms,
+        }
+    } else {
+        // Once the retry budget is exhausted, wait for one normal update
+        // interval before allowing a fresh bounded cycle.
+        let cooldown_secs = attempt.interval_secs.max(AUTO_SYNC_TICK_SECONDS);
+        let next_cycle_at_unix_ms =
+            failed_at_unix_ms.saturating_add(cooldown_secs.saturating_mul(1_000));
+        retry_states.insert(
+            attempt.id.clone(),
+            AutoSyncRetryState {
+                failed_attempts,
+                next_attempt_at_unix_ms: next_cycle_at_unix_ms,
+                cycle_last_sync_at_unix_ms: attempt.last_sync_at_unix_ms,
+            },
+        );
+        AutoSyncFailureDisposition::RetryLimitReached {
+            cooldown_secs,
+            next_cycle_at_unix_ms,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clash_conversion_gets_a_usable_mixed_inbound() {
+        let mut content = json!({ "outbounds": [] });
+        ensure_clash_local_inbound(&mut content, None, "127.0.0.1", 7890).unwrap();
+
+        let endpoint = proxy_config::extract_local_proxy(&content).unwrap();
+        assert_eq!(endpoint.host, "127.0.0.1");
+        assert_eq!(endpoint.port, 7890);
+    }
+
+    #[test]
+    fn clash_conversion_preserves_existing_local_inbounds() {
+        let existing = json!({
+            "inbounds": [{
+                "tag": "custom-mixed",
+                "listen": { "address": "127.0.0.1", "port": 8899 },
+                "protocol": { "type": "mixed" }
+            }]
+        });
+        let mut content = json!({ "outbounds": [] });
+        ensure_clash_local_inbound(&mut content, Some(&existing), "127.0.0.1", 7890).unwrap();
+
+        let endpoint = proxy_config::extract_local_proxy(&content).unwrap();
+        assert_eq!(endpoint.port, 8899);
+    }
 
     #[test]
     fn auto_detect_accepts_raw_zero_json() {
@@ -1546,5 +1932,156 @@ proxy-groups:
 
         let ids = collect_due_subscription_ids(&state).unwrap();
         assert_eq!(ids, vec!["due".to_string()]);
+    }
+
+    #[test]
+    fn auto_sync_retry_delay_is_exponential_and_capped() {
+        assert_eq!(auto_sync_retry_delay_secs(1), 60);
+        assert_eq!(auto_sync_retry_delay_secs(2), 120);
+        assert_eq!(auto_sync_retry_delay_secs(3), 240);
+        assert_eq!(auto_sync_retry_delay_secs(8), AUTO_SYNC_RETRY_MAX_SECONDS);
+    }
+
+    #[test]
+    fn auto_sync_retry_cycle_has_a_finite_budget_and_cooldown() {
+        use crate::models::app_config::AppConfig;
+        use crate::state::app_state::AppState;
+
+        let interval_secs = 3_600;
+        let initial_now = 10_000_000;
+        let last_sync = initial_now - interval_secs * 1_000;
+        let state = AppState::new(AppConfig::default());
+        state
+            .subscriptions()
+            .lock()
+            .unwrap()
+            .push(SubscriptionProfile {
+                id: "bounded".to_string(),
+                name: "Bounded".to_string(),
+                url: "https://example.com/sub".to_string(),
+                enabled: true,
+                kernel: "zero".to_string(),
+                format: "auto".to_string(),
+                target_proxy_config_id: None,
+                update_interval_secs: Some(interval_secs),
+                user_agent: None,
+                node_count: None,
+                upload_bytes: None,
+                download_bytes: None,
+                total_bytes: None,
+                expire_at_unix_ms: None,
+                updated_at_unix_ms: initial_now,
+                last_sync_at_unix_ms: Some(last_sync),
+                last_error: None,
+            });
+
+        let mut retries = HashMap::new();
+        let mut now = initial_now;
+        let initial = collect_due_subscription_attempts(&state, &mut retries, now)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(initial.kind, AutoSyncAttemptKind::Initial);
+
+        for retry_number in 1..=AUTO_SYNC_MAX_RETRIES {
+            let outcome = record_auto_sync_failure(&mut retries, &initial, now);
+            let AutoSyncFailureDisposition::RetryScheduled {
+                retry_number: scheduled_number,
+                next_attempt_at_unix_ms,
+                ..
+            } = outcome
+            else {
+                panic!("retry {retry_number} should be scheduled");
+            };
+            assert_eq!(scheduled_number, retry_number);
+            assert!(collect_due_subscription_attempts(
+                &state,
+                &mut retries,
+                next_attempt_at_unix_ms - 1,
+            )
+            .unwrap()
+            .is_empty());
+
+            now = next_attempt_at_unix_ms;
+            let retry = collect_due_subscription_attempts(&state, &mut retries, now)
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert_eq!(
+                retry.kind,
+                AutoSyncAttemptKind::Retry {
+                    number: retry_number,
+                }
+            );
+        }
+
+        let exhausted = record_auto_sync_failure(&mut retries, &initial, now);
+        let AutoSyncFailureDisposition::RetryLimitReached {
+            next_cycle_at_unix_ms,
+            ..
+        } = exhausted
+        else {
+            panic!("retry budget should be exhausted");
+        };
+        assert!(
+            collect_due_subscription_attempts(&state, &mut retries, next_cycle_at_unix_ms - 1,)
+                .unwrap()
+                .is_empty()
+        );
+
+        let next_cycle =
+            collect_due_subscription_attempts(&state, &mut retries, next_cycle_at_unix_ms)
+                .unwrap()
+                .pop()
+                .unwrap();
+        assert_eq!(next_cycle.kind, AutoSyncAttemptKind::Initial);
+        assert!(!retries.contains_key("bounded"));
+    }
+
+    #[test]
+    fn successful_manual_sync_invalidates_pending_auto_retry() {
+        use crate::models::app_config::AppConfig;
+        use crate::state::app_state::AppState;
+
+        let state = AppState::new(AppConfig::default());
+        state
+            .subscriptions()
+            .lock()
+            .unwrap()
+            .push(SubscriptionProfile {
+                id: "manual-success".to_string(),
+                name: "Manual success".to_string(),
+                url: "https://example.com/sub".to_string(),
+                enabled: true,
+                kernel: "zero".to_string(),
+                format: "auto".to_string(),
+                target_proxy_config_id: None,
+                update_interval_secs: Some(60),
+                user_agent: None,
+                node_count: None,
+                upload_bytes: None,
+                download_bytes: None,
+                total_bytes: None,
+                expire_at_unix_ms: None,
+                updated_at_unix_ms: 1,
+                last_sync_at_unix_ms: None,
+                last_error: None,
+            });
+
+        let mut retries = HashMap::new();
+        let attempt = collect_due_subscription_attempts(&state, &mut retries, 100_000)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let _ = record_auto_sync_failure(&mut retries, &attempt, 100_000);
+        assert!(retries.contains_key("manual-success"));
+
+        state.subscriptions().lock().unwrap()[0].last_sync_at_unix_ms = Some(100_001);
+        assert!(
+            collect_due_subscription_attempts(&state, &mut retries, 100_002)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!retries.contains_key("manual-success"));
     }
 }

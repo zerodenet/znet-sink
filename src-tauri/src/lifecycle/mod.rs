@@ -104,6 +104,12 @@ pub struct Lifecycle {
     shutdown: shutdown::ShutdownCoordinator,
 }
 
+impl Default for Lifecycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lifecycle {
     pub fn new() -> Self {
         Self {

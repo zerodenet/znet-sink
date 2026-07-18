@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { handleAppError } from '$lib/services/core';
+  import { getAppErrorMessage, handleAppError } from '$lib/services/core';
   import {
     listSubscriptions,
     syncSubscription,
     removeSubscription,
     upsertSubscription,
     listProxyConfigs,
+    syncAllSubscriptions,
   } from '$lib/services/config';
   import * as toast from '$lib/services/toast.svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
@@ -53,15 +54,23 @@
   let subscriptions = $state<SubscriptionProfile[]>([]);
   let proxyConfigs = $state<ProxyConfigProfile[]>([]);
   let loading = $state(true);
+  let loadError = $state<string | null>(null);
+  let proxyConfigsError = $state<string | null>(null);
   let syncingId = $state<string | null>(null);
   let syncingAll = $state<{ done: number; total: number } | null>(null);
   let togglingId = $state<string | null>(null);
   let showForm = $state(false);
   let saving = $state(false);
+  let formError = $state<string | null>(null);
+  let removingId = $state<string | null>(null);
+  let deleteTarget = $state<SubscriptionProfile | null>(null);
   let editingId = $state<string | null>(null);
   let searchQuery = $state('');
 
   let form = $state<FormState>(emptyForm());
+  const busy = $derived(
+    syncingId !== null || syncingAll !== null || togglingId !== null || saving || removingId !== null
+  );
 
   const filtered = $derived(
     searchQuery.trim()
@@ -85,27 +94,36 @@
     };
   }
 
-  async function refresh() {
-    loading = true;
-    try {
-      const [subs, configs] = await Promise.all([
-        listSubscriptions(),
-        listProxyConfigs().catch(() => [] as ProxyConfigProfile[]),
-      ]);
-      subscriptions = subs;
-      proxyConfigs = configs;
-    } catch (e) {
-      handleAppError(e, '加载订阅列表失败');
-    } finally {
-      loading = false;
+  async function refresh(showLoading = true) {
+    if (showLoading) loading = true;
+    loadError = null;
+    proxyConfigsError = null;
+    const [subscriptionsResult, configsResult] = await Promise.allSettled([
+      listSubscriptions(),
+      listProxyConfigs(),
+    ]);
+
+    if (subscriptionsResult.status === 'fulfilled') {
+      subscriptions = subscriptionsResult.value;
+    } else {
+      loadError = getAppErrorMessage(subscriptionsResult.reason, '加载订阅列表失败');
+      handleAppError(subscriptionsResult.reason, '加载订阅列表失败');
     }
+    if (configsResult.status === 'fulfilled') {
+      proxyConfigs = configsResult.value;
+    } else {
+      proxyConfigs = [];
+      proxyConfigsError = getAppErrorMessage(configsResult.reason, '加载关联配置失败');
+    }
+    if (showLoading) loading = false;
   }
 
   async function handleSync(id: string) {
+    if (busy) return;
     syncingId = id;
     try {
       await syncSubscription(id);
-      await refresh();
+      await refresh(false);
       toast.success('订阅同步完成');
     } catch (e) {
       handleAppError(e, '同步订阅失败');
@@ -116,36 +134,31 @@
 
   async function handleSyncAll() {
     const list = subscriptions;
-    if (list.length === 0 || syncingAll) return;
+    if (list.length === 0 || busy) return;
     const eligible = list.filter(s => s.enabled);
     if (eligible.length === 0) {
       toast.warning('没有已启用的订阅可同步');
       return;
     }
     syncingAll = { done: 0, total: eligible.length };
-    let succeeded = 0;
     try {
-      for (const sub of eligible) {
-        try {
-          await syncSubscription(sub.id);
-          succeeded++;
-        } catch {
-          // individual failure doesn't stop the batch
-        }
-        syncingAll.done++;
-      }
-      await refresh();
-      if (succeeded === eligible.length) {
-        toast.success(`全部同步完成 (${succeeded}/${eligible.length})`);
+      const outcome = await syncAllSubscriptions();
+      syncingAll = { done: outcome.total, total: outcome.total };
+      await refresh(false);
+      if (outcome.failed === 0) {
+        toast.success(`全部同步完成 (${outcome.succeeded}/${outcome.total})`);
       } else {
-        toast.warning(`同步完成：成功 ${succeeded}/${eligible.length}`);
+        toast.warning(`同步完成：成功 ${outcome.succeeded}/${outcome.total}，失败 ${outcome.failed}`);
       }
+    } catch (e) {
+      handleAppError(e, '批量同步订阅失败');
     } finally {
       syncingAll = null;
     }
   }
 
   async function handleToggleEnabled(sub: SubscriptionProfile) {
+    if (busy) return;
     togglingId = sub.id;
     try {
       // Send the full editable payload so the backend upsert (which
@@ -161,7 +174,7 @@
         userAgent: sub.userAgent,
         targetProxyConfigId: sub.targetProxyConfigId,
       });
-      await refresh();
+      await refresh(false);
     } catch (e) {
       handleAppError(e, '切换启用状态失败');
     } finally {
@@ -169,24 +182,42 @@
     }
   }
 
-  async function handleRemove(id: string) {
-    if (!confirm('确认删除此订阅？关联的代理配置不会被删除。')) return;
+  function requestRemove(sub: SubscriptionProfile) {
+    if (busy) return;
+    deleteTarget = sub;
+  }
+
+  function closeDelete() {
+    if (removingId !== null) return;
+    deleteTarget = null;
+  }
+
+  async function handleRemove() {
+    if (!deleteTarget || busy) return;
+    const target = deleteTarget;
+    removingId = target.id;
     try {
-      await removeSubscription(id);
-      await refresh();
+      await removeSubscription(target.id);
+      deleteTarget = null;
+      await refresh(false);
       toast.success('订阅已删除');
     } catch (e) {
       handleAppError(e, '删除订阅失败');
+    } finally {
+      removingId = null;
     }
   }
 
   function openCreate() {
+    if (busy) return;
     editingId = null;
     form = emptyForm();
+    formError = null;
     showForm = true;
   }
 
   function openEdit(sub: SubscriptionProfile) {
+    if (busy) return;
     editingId = sub.id;
     form = {
       name: sub.name,
@@ -198,12 +229,20 @@
       targetProxyConfigId: sub.targetProxyConfigId ?? '',
       enabled: sub.enabled,
     };
+    formError = null;
     showForm = true;
   }
 
+  function closeForm() {
+    if (saving) return;
+    showForm = false;
+    formError = null;
+  }
+
   async function handleSave() {
-    if (!form.name.trim() || !form.url.trim()) return;
+    if (!form.name.trim() || !form.url.trim() || busy) return;
     saving = true;
+    formError = null;
     try {
       const input: SubscriptionUpsert = {
         id: editingId ?? undefined,
@@ -219,9 +258,10 @@
 
       await upsertSubscription(input);
       showForm = false;
-      await refresh();
+      await refresh(false);
       toast.success(editingId ? '订阅已更新' : '订阅已创建');
     } catch (e) {
+      formError = getAppErrorMessage(e, '保存订阅失败');
       handleAppError(e, '保存订阅失败');
     } finally {
       saving = false;
@@ -313,7 +353,7 @@
         <button
           class="action-btn"
           onclick={handleSyncAll}
-          disabled={syncingAll !== null}
+          disabled={busy}
         >
           {#if syncingAll}
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="spin">
@@ -328,7 +368,7 @@
           {/if}
         </button>
       {/if}
-      <button class="action-btn primary" onclick={openCreate}>
+      <button class="action-btn primary" onclick={openCreate} disabled={loading || busy}>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
         </svg>
@@ -340,6 +380,14 @@
   <!-- Content -->
   {#if loading}
     <div class="panel-empty">加载中...</div>
+  {:else if loadError}
+    <div class="panel-empty" role="alert">
+      <div class="empty-stack error-stack">
+        <span>订阅列表加载失败</span>
+        <span class="empty-hint">{loadError}</span>
+        <button class="action-btn" onclick={() => refresh()}>重试</button>
+      </div>
+    </div>
   {:else if subscriptions.length === 0 && !showForm}
     <div class="panel-empty">
       <div class="empty-stack">
@@ -365,7 +413,7 @@
                 class:active={sub.enabled}
                 title={sub.enabled ? '已启用' : '已禁用'}
                 onclick={(e: MouseEvent) => { e.stopPropagation(); handleToggleEnabled(sub); }}
-                disabled={togglingId === sub.id}
+                disabled={busy}
                 aria-label={sub.enabled ? '禁用' : '启用'}
               >
                 <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -443,7 +491,7 @@
             <button
               class="row-action sync-btn"
               onclick={(e: MouseEvent) => { e.stopPropagation(); handleSync(sub.id); }}
-              disabled={syncingId === sub.id || !sub.enabled}
+              disabled={busy || !sub.enabled}
               title="同步订阅"
               aria-label="同步订阅"
             >
@@ -458,6 +506,7 @@
             <button
               class="row-action edit-btn"
               onclick={(e: MouseEvent) => { e.stopPropagation(); openEdit(sub); }}
+              disabled={busy}
               title="编辑订阅"
               aria-label="编辑订阅"
             >
@@ -467,7 +516,8 @@
             </button>
             <button
               class="row-action del-btn"
-              onclick={(e: MouseEvent) => { e.stopPropagation(); handleRemove(sub.id); }}
+              onclick={(e: MouseEvent) => { e.stopPropagation(); requestRemove(sub); }}
+              disabled={busy}
               title="删除订阅"
               aria-label="删除订阅"
             >
@@ -486,20 +536,21 @@
 <DraggableModal
   title="{editingId ? '编辑' : '新增'}订阅"
   open={showForm}
-  onClose={() => showForm = false}
+  onClose={closeForm}
+  closeDisabled={saving}
   width="min(500px, 92vw)"
 >
     <div class="form-item">
       <span class="form-label">名称 <span class="required">*</span></span>
       <div class="form-input-wrap">
-        <input bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" />
+        <input bind:value={form.name} placeholder="例如: 官方订阅" class="field-input" disabled={saving} />
       </div>
     </div>
 
     <div class="form-item">
       <span class="form-label">订阅 URL <span class="required">*</span></span>
       <div class="form-input-wrap">
-        <input bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" />
+        <input bind:value={form.url} placeholder="https://example.com/subscription" class="field-input field-mono" disabled={saving} />
       </div>
     </div>
 
@@ -507,7 +558,7 @@
       <div class="form-item">
         <span class="form-label">源格式</span>
         <div class="form-input-wrap">
-          <select bind:value={form.format} class="field-input">
+          <select bind:value={form.format} class="field-input" disabled={saving}>
             {#each FORMAT_OPTIONS as opt}
               <option value={opt.value}>{opt.label}</option>
             {/each}
@@ -532,7 +583,7 @@
       <div class="form-item">
         <span class="form-label">自动同步</span>
         <div class="form-input-wrap">
-          <select bind:value={form.updateIntervalSecs} class="field-input">
+          <select bind:value={form.updateIntervalSecs} class="field-input" disabled={saving}>
             {#each INTERVAL_OPTIONS as opt}
               <option value={opt.value}>{opt.label}</option>
             {/each}
@@ -549,6 +600,7 @@
             class="switch-mini"
             class:active={form.enabled}
             onclick={() => form.enabled = !form.enabled}
+            disabled={saving}
             aria-label="启用订阅"
           >
             <span class="switch-knob"></span>
@@ -560,28 +612,55 @@
     <div class="form-item">
       <span class="form-label">关联配置</span>
       <div class="form-input-wrap">
-        <select bind:value={form.targetProxyConfigId} class="field-input">
+        <select bind:value={form.targetProxyConfigId} class="field-input" disabled={saving || proxyConfigsError !== null}>
           <option value="">自动创建</option>
           {#each proxyConfigs as cfg}
             <option value={cfg.id}>{cfg.name} ({cfg.id})</option>
           {/each}
         </select>
         <span class="form-hint">同步时写入关联的代理配置；留空则自动新建一份</span>
+        {#if proxyConfigsError}
+          <span class="form-error">关联配置加载失败：{proxyConfigsError}</span>
+        {/if}
       </div>
     </div>
 
     <div class="form-item">
       <span class="form-label">User-Agent</span>
       <div class="form-input-wrap">
-        <input bind:value={form.userAgent} placeholder="留空使用默认 UA" class="field-input field-mono" />
+        <input bind:value={form.userAgent} placeholder="留空使用默认 UA" class="field-input field-mono" disabled={saving} />
         <span class="form-hint">部分机场需要特定 UA 才能返回节点</span>
       </div>
     </div>
 
+    {#if formError}
+      <div class="form-error-box" role="alert">{formError}</div>
+    {/if}
+
   {#snippet footer()}
-    <button class="btn-ghost" onclick={() => showForm = false}>取消</button>
+    <button class="btn-ghost" onclick={closeForm} disabled={saving}>取消</button>
     <button class="btn-primary" onclick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim()}>
       {saving ? '保存中...' : '保存'}
+    </button>
+  {/snippet}
+</DraggableModal>
+
+<DraggableModal
+  title="删除订阅"
+  description="关联的代理配置会被保留，删除操作不会中断当前内核配置。"
+  open={deleteTarget !== null}
+  onClose={closeDelete}
+  closeDisabled={removingId !== null}
+  width="min(440px, 90vw)"
+>
+  {#if deleteTarget}
+    <div class="form-error-box" role="alert">确认删除“{deleteTarget.name}”吗？此操作无法从应用内撤销。</div>
+  {/if}
+
+  {#snippet footer()}
+    <button class="btn-ghost" onclick={closeDelete} disabled={removingId !== null}>取消</button>
+    <button class="btn-danger" onclick={handleRemove} disabled={removingId !== null}>
+      {removingId !== null ? '删除中...' : '确认删除'}
     </button>
   {/snippet}
 </DraggableModal>
@@ -658,6 +737,12 @@
   .empty-hint {
     font-size: 11px;
     opacity: 0.7;
+  }
+
+  .error-stack {
+    color: var(--destructive);
+    max-width: 440px;
+    text-align: center;
   }
 
   .action-btn {
@@ -953,6 +1038,21 @@
     opacity: 0.75;
   }
 
+  .form-error {
+    font-size: 10.5px;
+    color: var(--destructive);
+  }
+
+  .form-error-box {
+    padding: 9px 11px;
+    border: 1px solid rgba(239, 68, 68, 0.24);
+    border-radius: 7px;
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--destructive);
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+
   .field-input {
     width: 100%;
     padding: 7px 10px;
@@ -1025,6 +1125,7 @@
   }
 
   .btn-ghost:hover { background: var(--surface); color: var(--foreground); }
+  .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .btn-primary {
     flex: 1;
@@ -1041,6 +1142,20 @@
 
   .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
   .btn-primary:not(:disabled):hover { opacity: 0.88; }
+
+  .btn-danger {
+    flex: 1;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--destructive);
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+  }
+
+  .btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
 
   @keyframes spin {
     from { transform: rotate(0deg); }

@@ -14,6 +14,12 @@ pub struct ShutdownCoordinator {
     guards: Vec<(Phase, &'static str, ShutdownFn)>,
 }
 
+impl Default for ShutdownCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShutdownCoordinator {
     pub fn new() -> Self {
         Self { guards: Vec::new() }
@@ -38,7 +44,7 @@ impl ShutdownCoordinator {
 
         // Sort descending by phase (Runtime first, Guard last).
         let mut ordered: Vec<_> = self.guards.iter().collect();
-        ordered.sort_by(|a, b| b.0.cmp(&a.0));
+        ordered.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
         eprintln!("[ZNet] shutdown: begin ({} callbacks)", ordered.len());
         for (phase, name, callback) in &ordered {

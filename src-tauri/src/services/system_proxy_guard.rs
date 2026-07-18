@@ -46,7 +46,7 @@ fn marker_path() -> AppResult<PathBuf> {
     Ok(data_dir()?.join(MARKER_FILE))
 }
 
-/// Resolve the application data directory.
+// Resolve the application data directory.
 
 // ── Public API ──
 
@@ -140,6 +140,45 @@ pub fn enable_with_guard(host: &str, port: u16) -> AppResult<()> {
         if let Ok(path) = marker_path() {
             remove_marker_file(&path);
         }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Whether the current OS proxy is still the endpoint owned by this GUI.
+pub fn is_enabled_by_guard() -> AppResult<bool> {
+    let path = marker_path()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+    let marker = read_marker(&path).map_err(|error| {
+        crate::errors::AppError::internal(format!("failed to read proxy marker: {error}"))
+    })?;
+    let status = system_proxy::status()?;
+    Ok(status.enabled && status.host == marker.host && status.port == marker.port)
+}
+
+/// Move a GUI-owned system proxy to a new local endpoint without replacing
+/// the original user-proxy backup stored in the crash marker.
+pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
+    let path = marker_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let marker = read_marker(&path).map_err(|error| {
+        crate::errors::AppError::internal(format!("failed to read proxy marker: {error}"))
+    })?;
+    let status = system_proxy::status()?;
+    if !status.enabled || status.host != marker.host || status.port != marker.port {
+        return Ok(());
+    }
+    if marker.host == host && marker.port == port {
+        return Ok(());
+    }
+
+    write_marker(host, port, marker.previous.clone())?;
+    if let Err(error) = system_proxy::enable(host, port) {
+        let _ = write_marker(&marker.host, marker.port, marker.previous);
         return Err(error);
     }
     Ok(())

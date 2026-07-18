@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -26,6 +27,43 @@ pub(crate) fn lock<'a, T>(
     mutex
         .lock()
         .map_err(|_| AppError::internal(format!("{label} state lock is poisoned")))
+}
+
+#[derive(Debug)]
+pub(crate) struct InFlightGuard<'a> {
+    registry: &'a Mutex<HashSet<String>>,
+    id: String,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.remove(&self.id);
+        }
+    }
+}
+
+pub(crate) fn begin_in_flight<'a>(
+    registry: &'a Mutex<HashSet<String>>,
+    resource: &'static str,
+    id: &str,
+) -> AppResult<InFlightGuard<'a>> {
+    let mut active = lock(registry, "in_flight")?;
+    if !active.insert(id.to_string()) {
+        return Err(AppError::conflict(
+            resource,
+            id,
+            format!("{resource} operation is already in progress"),
+        ));
+    }
+    Ok(InFlightGuard {
+        registry,
+        id: id.to_string(),
+    })
+}
+
+pub(crate) fn is_in_flight(registry: &Mutex<HashSet<String>>, id: &str) -> AppResult<bool> {
+    Ok(lock(registry, "in_flight")?.contains(id))
 }
 
 pub(crate) fn now_unix_ms() -> u64 {
@@ -64,7 +102,10 @@ pub(crate) fn generated_store_id(prefix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::generated_store_id;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    use super::{begin_in_flight, generated_store_id};
 
     #[test]
     fn generated_store_id_uses_prefix_without_order_semantics() {
@@ -75,5 +116,15 @@ mod tests {
         assert!(second.starts_with("proxy-config_"));
         assert_ne!(first, second);
         assert!(!first.starts_with("proxy-config-"));
+    }
+
+    #[test]
+    fn in_flight_guard_rejects_duplicate_and_releases_on_drop() {
+        let registry = Mutex::new(HashSet::new());
+        let first = begin_in_flight(&registry, "subscription", "sub-1").unwrap();
+        let duplicate = begin_in_flight(&registry, "subscription", "sub-1").unwrap_err();
+        assert_eq!(duplicate.code, "conflict");
+        drop(first);
+        assert!(begin_in_flight(&registry, "subscription", "sub-1").is_ok());
     }
 }

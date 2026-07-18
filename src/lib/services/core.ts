@@ -9,13 +9,16 @@ import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
-export function handleAppError(error: unknown, fallbackMessage: string): void {
+export function getAppErrorMessage(error: unknown, fallbackMessage: string): string {
   const appError = error as { code?: string; message?: string };
   if (appError.code === 'mode_restricted') {
-    warning(`该功能仅在专业模式下可用：${appError.message}`);
-  } else {
-    warning(appError.message || fallbackMessage);
+    return `该功能仅在专业模式下可用：${appError.message || fallbackMessage}`;
   }
+  return appError.message || fallbackMessage;
+}
+
+export function handleAppError(error: unknown, fallbackMessage: string): void {
+  warning(getAppErrorMessage(error, fallbackMessage));
 }
 
 // Core process lifecycle

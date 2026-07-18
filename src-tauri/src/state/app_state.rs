@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -24,6 +25,9 @@ pub struct AppState {
     proxy_configs: Mutex<Vec<ProxyConfigProfile>>,
     subscriptions: Mutex<Vec<SubscriptionProfile>>,
     rule_sets: Mutex<Vec<RuleSetProfile>>,
+    proxy_config_operation: tokio::sync::Mutex<()>,
+    subscription_syncs: Mutex<HashSet<String>>,
+    rule_set_updates: Mutex<HashSet<String>>,
     logs: Mutex<Vec<LogEntry>>,
     traffic_sample: Mutex<Option<TrafficSample>>,
     core_process: Mutex<ManagedCoreProcess>,
@@ -87,6 +91,9 @@ impl AppState {
             proxy_configs: Mutex::new(proxy_configs),
             subscriptions: Mutex::new(subscriptions),
             rule_sets: Mutex::new(rule_sets),
+            proxy_config_operation: tokio::sync::Mutex::new(()),
+            subscription_syncs: Mutex::new(HashSet::new()),
+            rule_set_updates: Mutex::new(HashSet::new()),
             logs: Mutex::new(logs),
             traffic_sample: Mutex::new(None),
             core_process: Mutex::new(ManagedCoreProcess::default()),
@@ -141,6 +148,18 @@ impl AppState {
         &self.rule_sets
     }
 
+    pub(crate) fn proxy_config_operation(&self) -> &tokio::sync::Mutex<()> {
+        &self.proxy_config_operation
+    }
+
+    pub(crate) fn subscription_syncs(&self) -> &Mutex<HashSet<String>> {
+        &self.subscription_syncs
+    }
+
+    pub(crate) fn rule_set_updates(&self) -> &Mutex<HashSet<String>> {
+        &self.rule_set_updates
+    }
+
     pub(crate) fn logs(&self) -> &Mutex<Vec<LogEntry>> {
         &self.logs
     }
@@ -166,6 +185,48 @@ impl AppState {
     /// registered in `lib.rs` (which can't borrow `AppState`) can flip it.
     pub(crate) fn shutting_down_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.shutting_down)
+    }
+}
+
+fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyConfigProfile> {
+    let mut active_index = None;
+    for (index, profile) in profiles.iter_mut().enumerate() {
+        if profile.active {
+            if active_index.is_none() {
+                active_index = Some(index);
+            } else {
+                profile.active = false;
+            }
+        }
+    }
+
+    if !profiles.is_empty() && active_index.is_none() {
+        profiles[0].active = true;
+    }
+
+    profiles
+}
+
+impl Default for ManagedCoreProcess {
+    fn default() -> Self {
+        Self {
+            child: None,
+            stderr_handle: None,
+            status: CoreProcessStatus {
+                state: CoreProcessState::NotStarted,
+                pid: None,
+                kernel: "zero".to_string(),
+                executable_path: None,
+                working_dir: None,
+                config_path: None,
+                endpoint_path: String::new(),
+                started_at_unix_ms: None,
+                exited_at_unix_ms: None,
+                exit_code: None,
+                exit_reason: None,
+                last_error: None,
+            },
+        }
     }
 }
 
@@ -266,48 +327,6 @@ mod tests {
             active,
             updated_at_unix_ms: 1,
             capabilities: ProxyConfigCapabilities::default(),
-        }
-    }
-}
-
-fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyConfigProfile> {
-    let mut active_index = None;
-    for (index, profile) in profiles.iter_mut().enumerate() {
-        if profile.active {
-            if active_index.is_none() {
-                active_index = Some(index);
-            } else {
-                profile.active = false;
-            }
-        }
-    }
-
-    if !profiles.is_empty() && active_index.is_none() {
-        profiles[0].active = true;
-    }
-
-    profiles
-}
-
-impl Default for ManagedCoreProcess {
-    fn default() -> Self {
-        Self {
-            child: None,
-            stderr_handle: None,
-            status: CoreProcessStatus {
-                state: CoreProcessState::NotStarted,
-                pid: None,
-                kernel: "zero".to_string(),
-                executable_path: None,
-                working_dir: None,
-                config_path: None,
-                endpoint_path: String::new(),
-                started_at_unix_ms: None,
-                exited_at_unix_ms: None,
-                exit_code: None,
-                exit_reason: None,
-                last_error: None,
-            },
         }
     }
 }

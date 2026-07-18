@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::errors::AppResult;
 use crate::models::proxy_config::{ProxyConfigImport, ProxyConfigProfile, ProxyConfigUpsert};
@@ -18,33 +18,38 @@ pub fn proxy_config_get(state: State<'_, AppState>, id: String) -> AppResult<Pro
 }
 
 #[tauri::command]
-pub fn proxy_config_upsert(
-    state: State<'_, AppState>,
+pub async fn proxy_config_upsert(
+    app_handle: AppHandle,
     input: ProxyConfigUpsert,
 ) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
     interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
-    proxy_config::upsert(state, input)
+    proxy_config::upsert_runtime(app_handle.clone(), input).await
 }
 
 #[tauri::command]
-pub fn proxy_config_import(
-    state: State<'_, AppState>,
+pub async fn proxy_config_import(
+    app_handle: AppHandle,
     input: ProxyConfigImport,
 ) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
     interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
-    proxy_config::import(state, input)
+    proxy_config::import_runtime(app_handle.clone(), input).await
 }
 
 #[tauri::command]
-pub fn proxy_config_set_active(
-    state: State<'_, AppState>,
+pub async fn proxy_config_set_active(
+    app_handle: AppHandle,
     id: String,
 ) -> AppResult<ProxyConfigProfile> {
-    proxy_config::set_active(state, id)
+    let state = app_handle.state::<AppState>();
+    interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
+    proxy_config::activate_runtime(app_handle.clone(), id).await
 }
 
 #[tauri::command]
-pub fn proxy_config_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn proxy_config_remove(app_handle: AppHandle, id: String) -> AppResult<()> {
+    let state = app_handle.state::<AppState>();
     interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
-    proxy_config::remove(state, id)
+    proxy_config::remove_runtime(app_handle.clone(), id).await
 }

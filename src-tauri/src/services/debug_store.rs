@@ -18,7 +18,7 @@ pub(crate) fn query_page(query: &DebugFrameQuery) -> AppResult<DebugFramePage> {
 
 pub(crate) fn append(frame: &DebugFrame) -> AppResult<()> {
     append_to_path(&debug_path()?, frame)?;
-    if frame.id % DEBUG_ROTATE_EVERY == 0 {
+    if frame.id.is_multiple_of(DEBUG_ROTATE_EVERY) {
         rotate()?;
     }
     Ok(())
