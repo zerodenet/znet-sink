@@ -7,10 +7,9 @@ use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::{
-    ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
-    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats,
-    GuiZeroCapabilities,
+    ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
+    GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
 use crate::services::common;
 use crate::services::{core_config, core_process, interaction_mode, probe, proxy_config};
@@ -145,10 +144,10 @@ pub async fn gui_select_policy(
         .await
 }
 
-/// Probe a single target's connectivity.
+/// Probe a single outbound through the kernel proxy stack.
 ///
 /// Fire-and-forget like `gui_probe_policy`: spawns the IPC probe in background,
-/// returns immediately. Results arrive via `diagnostics.probe_target` response
+/// returns immediately. Results arrive via `diagnostics.probe_outbound` response
 /// logged to the event stream, or the frontend can poll via policy status.
 #[tauri::command]
 pub async fn gui_probe_target(
@@ -163,7 +162,7 @@ pub async fn gui_probe_target(
     }
     let opts = default_opts(state.inner());
     tauri::async_runtime::spawn(async move {
-        let _ = adapter.probe_target(target_tag, opts).await;
+        let _ = adapter.probe_outbound(target_tag, None, opts).await;
     });
     Ok(serde_json::json!({"accepted": true}))
 }
@@ -363,16 +362,6 @@ pub async fn gui_validate_config(
 /// Sends `config.plan_apply` to the kernel, which returns a structured
 /// breakdown of which sections can be hot-reloaded and which require
 /// a kernel restart.
-#[tauri::command]
-pub async fn gui_plan_apply_config(
-    state: State<'_, AppState>,
-    config: serde_json::Value,
-) -> AppResult<GuiConfigPlanApplyResult> {
-    interaction_mode::require_pro_mode(state.inner(), "plan_apply_config")?;
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().plan_apply_config(config, opts).await
-}
-
 /// Set the global routing mode at runtime (hot-switch, no kernel restart).
 #[tauri::command]
 pub async fn gui_set_mode(
@@ -415,11 +404,12 @@ pub async fn gui_trace_route(
     target: String,
     port: Option<u16>,
     protocol: Option<String>,
+    inbound_tag: Option<String>,
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "trace_route")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new()
-        .trace_route(target, port.unwrap_or(80), protocol, opts)
+        .trace_route(target, port.unwrap_or(80), protocol, inbound_tag, opts)
         .await
 }
 
@@ -501,27 +491,20 @@ async fn wait_for_core_ready(state: &AppState) -> AppResult<()> {
     Err(last_error.unwrap_or_else(|| AppError::internal("core readiness check timed out")))
 }
 
-/// Probe outbound network to get IP and geo information.
-/// Uses the kernel's proxy channel to fetch from GeoIP services.
+/// Detect the host machine's current public IP and geo information.
+/// This GUI-side request does not call the kernel; it follows the host's
+/// current system network and proxy configuration.
 #[tauri::command]
 pub async fn gui_network_probe(
     state: State<'_, AppState>,
 ) -> AppResult<crate::services::network_probe::NetworkProbeResult> {
-    let (proxy_host, proxy_port, probe_urls) = {
+    let probe_urls = {
         let config = common::lock(state.app_config(), "app_config")?;
-        (
-            config.local_proxy.host.clone(),
-            config.local_proxy.port,
-            config.core.network_probe_urls.clone(),
-        )
+        config.core.network_probe_urls.clone()
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::network_probe::probe_outbound_with_proxy(
-            &proxy_host,
-            proxy_port,
-            &probe_urls,
-        )
+        crate::services::network_probe::probe_local_network(&probe_urls)
     })
     .await
     .map_err(|e| AppError::internal(format!("network probe task failed: {}", e)))?

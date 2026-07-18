@@ -41,6 +41,7 @@
 
   const networkProbeResult = $derived(guiState.networkProbe);
   const networkProbeLoading = $derived(guiState.networkProbeLoading);
+  const networkProbeError = $derived(guiState.networkProbeError);
 
   const COUNTRY_CODES: Record<string, string> = {
     '中国': 'CN', '美国': 'US', '日本': 'JP', '韩国': 'KR', '新加坡': 'SG',
@@ -76,6 +77,8 @@
     return code ? `https://flagcdn.com/w40/${code.toLowerCase()}.png` : null;
   }
 
+  const networkProbeFlagUrl = $derived(getFlagUrl(networkProbeResult?.country));
+
   function formatProbeLocation(result: { country?: string; region?: string; city?: string }): string {
     const parts = [result.country, result.region, result.city].filter(Boolean);
     return parts.length > 0 ? parts.join(' · ') : '未知地区';
@@ -99,13 +102,10 @@
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
-  const canShowNetworkStrip = $derived(
-    (hasConfig || hasNodes) && (isCoreRunning || networkProbeLoading || networkProbeResult !== null),
-  );
   const networkProbePlaceholder = $derived(
-    networkProbeLoading ? '正在检测出口网络…' :
-    isCoreRunning ? '等待网络检测结果' :
-    '启动内核后可进行网络检测',
+    networkProbeLoading ? '正在检测本地网络环境…' :
+    networkProbeError ? '网络检测失败，请检查当前网络后重试' :
+    '等待网络检测结果',
   );
 
   const powerLabel = $derived(
@@ -306,14 +306,12 @@
       {/if}
     </div>
 
-    {#if store.isFeatureVisible('policySelection') && canShowNetworkStrip}
-      {@const flagUrl = networkProbeResult ? getFlagUrl(networkProbeResult.country) : null}
-      <div class="network-strip">
-        <span class="card-label network-strip-label">网络检测</span>
+    <div class="network-strip">
+        <span class="card-label network-strip-label">本地网络</span>
         <div class="network-strip-content">
           {#if networkProbeResult}
-          {#if flagUrl}
-            <img src={flagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
+          {#if networkProbeFlagUrl}
+            <img src={networkProbeFlagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
           {/if}
           <span class="network-strip-ip font-mono">{networkProbeResult.ip}</span>
           <span class="network-strip-sep"></span>
@@ -327,7 +325,7 @@
             </span>
           {/if}
           {:else}
-            <span class="network-strip-empty">{networkProbePlaceholder}</span>
+            <span class="network-strip-empty" title={networkProbeError ?? undefined}>{networkProbePlaceholder}</span>
           {/if}
         </div>
         <div class="network-strip-actions">
@@ -338,9 +336,9 @@
             type="button"
             class="network-strip-trigger"
             onclick={() => void guiState.probeNetwork()}
-            disabled={!isCoreRunning || networkProbeLoading}
-            title={networkProbeLoading ? '检测中' : '重新测试网络'}
-            aria-label={networkProbeLoading ? '检测中' : '重新测试网络'}
+            disabled={networkProbeLoading}
+            title={networkProbeLoading ? '检测中' : '重新检测本地网络'}
+            aria-label={networkProbeLoading ? '检测中' : '重新检测本地网络'}
           >
             <svg
               class="network-strip-trigger-icon"
@@ -361,8 +359,7 @@
             手动测试
           </button>
         </div>
-      </div>
-    {/if}
+    </div>
 
     <!-- Row 2: Self-test -->
     <div class="overview-card flex-shrink-0">

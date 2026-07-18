@@ -9,13 +9,12 @@ use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConfigPlanApplyResult, GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult,
-    GuiTargetProbeResult,
+    GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult,
 };
 
 use super::parsing::{
-    normalize_non_empty, parse_connection_close, parse_feature_runtime_status,
-    parse_plan_apply_result, parse_policy_selection, parse_target_probe, unwrap_call_result,
+    normalize_non_empty, normalize_optional, parse_connection_close, parse_feature_runtime_status,
+    parse_policy_selection, parse_target_probe, unwrap_call_result,
 };
 
 /// Switch the selected outbound in a policy group.
@@ -80,6 +79,22 @@ pub async fn probe_target(
     Ok(parse_target_probe(&value, target_tag))
 }
 
+/// Probe a single outbound through the kernel's full proxy stack.
+pub async fn probe_outbound(
+    target_tag: String,
+    url: Option<String>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<GuiTargetProbeResult> {
+    let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+    let mut params = Map::new();
+    params.insert("target_tag".to_string(), json!(target_tag));
+    if let Some(url) = normalize_optional(url) {
+        params.insert("url".to_string(), json!(url));
+    }
+    let value = run_command("diagnostics.probe_outbound", Value::Object(params), options).await?;
+    Ok(parse_target_probe(&value, target_tag))
+}
+
 /// Close an active flow.
 pub async fn close_connection(
     flow_id: String,
@@ -115,19 +130,6 @@ pub async fn validate_config(config: Value, options: Option<CoreIpcOptions>) -> 
 /// Sends `config.plan_apply` to the kernel, which returns a structured
 /// breakdown of which sections can be hot-reloaded and which require
 /// a kernel restart.
-pub async fn plan_apply_config(
-    config: Value,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<GuiConfigPlanApplyResult> {
-    if !config.is_object() {
-        return Err(crate::errors::AppError::invalid_argument(
-            "config must be a JSON object",
-        ));
-    }
-    let value = run_command("config.plan_apply", json!({ "config": config }), options).await?;
-    Ok(parse_plan_apply_result(&value))
-}
-
 /// Set the global routing mode at runtime (hot-switch, no restart).
 pub async fn set_mode(
     mode: String,
@@ -158,16 +160,30 @@ pub async fn trace_route(
     target: String,
     port: u16,
     protocol: Option<String>,
+    inbound_tag: Option<String>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Value> {
     let target = normalize_non_empty(target, "target")?;
+    let params = trace_route_params(target, port, protocol, inbound_tag);
+    run_command("diagnostics.trace_route", params, options).await
+}
+
+fn trace_route_params(
+    target: String,
+    port: u16,
+    protocol: Option<String>,
+    inbound_tag: Option<String>,
+) -> Value {
     let mut params = Map::new();
     params.insert("target".to_string(), json!(target));
     params.insert("port".to_string(), json!(port));
-    if let Some(protocol) = protocol {
+    if let Some(protocol) = normalize_optional(protocol) {
         params.insert("protocol".to_string(), json!(protocol));
     }
-    run_command("diagnostics.trace_route", Value::Object(params), options).await
+    if let Some(inbound_tag) = normalize_optional(inbound_tag) {
+        params.insert("inbound_tag".to_string(), json!(inbound_tag));
+    }
+    Value::Object(params)
 }
 
 /// Enable TUN virtual network interface.
@@ -206,4 +222,28 @@ pub(crate) async fn run_command(
 ) -> AppResult<Value> {
     let call = protocol::command(method.to_string(), Some(params), options).await?;
     unwrap_call_result(call.response, call.error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_route_params;
+    use serde_json::json;
+
+    #[test]
+    fn trace_route_preserves_optional_inbound_tag() {
+        assert_eq!(
+            trace_route_params(
+                "example.com".to_string(),
+                443,
+                Some("tcp".to_string()),
+                Some("mixed-in".to_string()),
+            ),
+            json!({
+                "target": "example.com",
+                "port": 443,
+                "protocol": "tcp",
+                "inbound_tag": "mixed-in"
+            })
+        );
+    }
 }

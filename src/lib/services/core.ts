@@ -434,6 +434,8 @@ export async function guiValidateConfig(config: Record<string, unknown>): Promis
   return invoke('gui_validate_config', { config });
 }
 
+/** Compatibility-only API. The current Zero IPC contract does not expose
+ * config.plan_apply, and the Tauri command is intentionally not registered. */
 export async function guiPlanApplyConfig(config: Record<string, unknown>): Promise<ConfigPlanApplyResult> {
   return invoke('gui_plan_apply_config', { config });
 }
@@ -481,8 +483,9 @@ export interface NetworkProbeResult {
 }
 
 /**
- * Probe outbound network to get IP and geo information.
- * Uses the kernel's proxy channel to fetch from GeoIP services.
+ * Detect the host machine's current public IP and geo information.
+ * Runs in the Tauri backend without calling the managed kernel and follows
+ * the host's current system network/proxy configuration.
  */
 export async function guiNetworkProbe(): Promise<NetworkProbeResult> {
   return invoke('gui_network_probe');
@@ -549,8 +552,13 @@ export async function guiDnsLookup(hostname: string): Promise<DnsLookupResult> {
   return invoke<DnsLookupResult>('gui_dns_lookup', { hostname });
 }
 
-export async function guiTraceRoute(target: string, port?: number, protocol?: string): Promise<TraceRouteResult> {
-  return invoke<TraceRouteResult>('gui_trace_route', { target, port, protocol });
+export async function guiTraceRoute(
+  target: string,
+  port?: number,
+  protocol?: string,
+  inboundTag?: string,
+): Promise<TraceRouteResult> {
+  return invoke<TraceRouteResult>('gui_trace_route', { target, port, protocol, inboundTag });
 }
 
 export async function getGuiSinks(): Promise<unknown> {

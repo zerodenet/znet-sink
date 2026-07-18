@@ -24,7 +24,7 @@ Updated: 2026-06-21
 
 - Proxy mode writes the kernel-native top-level `mode`.
 - Legacy `route.mode` is accepted only as an import/read fallback.
-- Runtime/control commands currently exposed through the adapter include `config.apply`, `config.validate`, `config.plan_apply`, `mode.set`, `diagnostics.dns_lookup`, `diagnostics.trace_route`, `recent_flows`, `sinks`, and `diagnostics`.
+- Runtime/control commands currently exposed through the adapter include `config.apply`, `config.validate`, `mode.set`, `diagnostics.dns_lookup`, `diagnostics.trace_route`, `diagnostics.probe_outbound`, `recent_flows`, `sinks`, and `diagnostics`. The current kernel contract does not expose `config.plan_apply`.
 
 ## Events And Capabilities
 

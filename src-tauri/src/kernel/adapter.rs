@@ -10,8 +10,8 @@
 use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
-    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
     GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
@@ -77,6 +77,14 @@ pub trait KernelAdapter {
         options: CoreIpcOptions,
     ) -> AppResult<GuiTargetProbeResult>;
 
+    /// Probe a single outbound through the proxy stack.
+    async fn probe_outbound(
+        &self,
+        target_tag: String,
+        url: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<GuiTargetProbeResult>;
+
     // ── Connections ─────────────────────────────────────────────
 
     /// Active connections / flows.
@@ -116,12 +124,6 @@ pub trait KernelAdapter {
     async fn validate_config(&self, config: Value, options: CoreIpcOptions) -> AppResult<Value>;
 
     /// Dry-run config apply — returns impact analysis (hot-reload vs restart).
-    async fn plan_apply_config(
-        &self,
-        config: Value,
-        options: CoreIpcOptions,
-    ) -> AppResult<GuiConfigPlanApplyResult>;
-
     /// Set the global routing mode at runtime (hot-switch).
     async fn set_mode(
         &self,
@@ -141,6 +143,7 @@ pub trait KernelAdapter {
         target: String,
         port: u16,
         protocol: Option<String>,
+        inbound_tag: Option<String>,
         options: CoreIpcOptions,
     ) -> AppResult<Value>;
 

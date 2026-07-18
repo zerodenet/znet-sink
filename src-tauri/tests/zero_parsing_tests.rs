@@ -37,6 +37,53 @@ fn policy_probe_completed_preserves_runtime_details() {
     assert_eq!(probe.members[0].last_error.as_deref(), Some("timeout"));
 }
 
+#[test]
+fn policy_probe_completed_maps_selected_member_snapshot() {
+    let event = events::normalize_event(&json!({
+        "schema_id": "zero.event.v1",
+        "event_type": "policy.probe.completed",
+        "occurred_at_unix_ms": 1784294531467_u64,
+        "payload": {
+            "completed_at_unix_ms": 1784294531466_u64,
+            "duration_ms": 1610,
+            "members": [
+                {
+                    "error": null,
+                    "healthy": true,
+                    "latency_ms": 794,
+                    "target_tag": "ss-in"
+                },
+                {
+                    "error": null,
+                    "healthy": true,
+                    "latency_ms": 815,
+                    "target_tag": "tr-sg"
+                }
+            ],
+            "policy_tag": "Auto-proxy",
+            "selected": "ss-in",
+            "started_at_unix_ms": 1784294529856_u64,
+            "trigger": "scheduled",
+            "url": "http://latency-test.skk.moe/endpoint"
+        }
+    }));
+
+    let GuiEventData::PolicyProbeCompleted(probe) = event.payload else {
+        panic!("expected policy probe event");
+    };
+    assert_eq!(probe.policy_tag, "Auto-proxy");
+    assert_eq!(probe.trigger.as_deref(), Some("scheduled"));
+    assert_eq!(probe.completed_at_unix_ms, Some(1784294531466));
+    assert_eq!(probe.selected.as_deref(), Some("ss-in"));
+    assert_eq!(probe.members.len(), 2);
+    assert_eq!(probe.members[0].tag, "ss-in");
+    assert!(probe.members[0].selected);
+    assert_eq!(probe.members[0].delay_ms, Some(794));
+    assert_eq!(probe.members[1].tag, "tr-sg");
+    assert!(!probe.members[1].selected);
+    assert_eq!(probe.members[1].delay_ms, Some(815));
+}
+
 // ── stats ──
 
 #[test]

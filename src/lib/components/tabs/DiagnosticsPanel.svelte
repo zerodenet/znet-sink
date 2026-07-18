@@ -12,6 +12,7 @@
   let traceTarget = $state('');
   let tracePort = $state(80);
   let traceProtocol = $state('');
+  let traceInboundTag = $state('');
   let traceLoading = $state(false);
   let traceResult = $state<TraceRouteResult | null>(null);
   let traceError = $state<string | null>(null);
@@ -39,7 +40,8 @@
     traceResult = null;
     try {
       const proto = traceProtocol.trim() || undefined;
-      traceResult = await guiTraceRoute(target, tracePort || undefined, proto);
+      const inboundTag = traceInboundTag.trim() || undefined;
+      traceResult = await guiTraceRoute(target, tracePort || undefined, proto, inboundTag);
     } catch (e) {
       traceError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -161,6 +163,12 @@
         bind:value={traceProtocol}
         disabled={traceLoading}
       />
+      <input
+        class="diag-input diag-input--inbound"
+        placeholder="Inbound tag (optional)"
+        bind:value={traceInboundTag}
+        disabled={traceLoading}
+      />
       <button class="diag-btn" onclick={runTrace} disabled={traceLoading || !traceTarget.trim()}>
         {traceLoading ? '追踪中…' : '追踪'}
       </button>
@@ -269,6 +277,10 @@
 
   .diag-input--proto {
     flex: 0 0 130px;
+  }
+
+  .diag-input--inbound {
+    flex: 0 0 140px;
   }
 
   .diag-btn {

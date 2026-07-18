@@ -263,7 +263,7 @@ await invoke('gui_set_proxy_mode', {
     "available": true,
     "apiVersion": "zero.api.v1",
     "schemaVersion": "zero.event.v1",
-    "features": ["query", "runtime-snapshot", "flow-snapshot", "policy-snapshot"],
+    "features": ["query", "runtime_snapshot", "flow_snapshot", "policy_snapshot"],
     "permissions": ["read"],
     "adapters": [],
     "sinks": [],

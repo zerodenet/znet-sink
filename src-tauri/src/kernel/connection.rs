@@ -74,7 +74,7 @@ struct Inner {
     /// acknowledgement arrives.  Taken by the reader on first response
     /// frame whose `id` matches [`SUBSCRIBE_FRAME_ID`], then read by
     /// `connect()` before it returns.
-    subscribe_ack_tx: Mutex<Option<mpsc::SyncSender<()>>>,
+    subscribe_ack_tx: Mutex<Option<mpsc::SyncSender<AppResult<()>>>>,
 }
 
 impl MultiplexedConnection {
@@ -136,7 +136,11 @@ impl MultiplexedConnection {
         // handshake — the kernel may not have registered the connection
         // as persistent yet, so a fast follow-up query can time out.
         match subscribe_ack_rx.recv_timeout(connect_timeout) {
-            Ok(()) => {} // subscribe confirmed
+            Ok(Ok(())) => {} // subscribe confirmed
+            Ok(Err(error)) => {
+                inner.alive.store(false, Ordering::Release);
+                return Err(error);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 inner.alive.store(false, Ordering::Release);
                 return Err(AppError {
@@ -367,7 +371,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     .expect("IPC subscribe ack mutex poisoned")
                     .take()
                 {
-                    let _ = tx.send(());
+                    let _ = tx.send(validate_subscribe_ack(&frame));
                 }
                 continue;
             }
@@ -443,6 +447,70 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
     let endpoint = inner.endpoint.clone();
     for (_, sender) in drained {
         let _ = sender.send(Err(AppError::connection_closed(&endpoint)));
+    }
+}
+
+fn validate_subscribe_ack(frame: &Value) -> AppResult<()> {
+    if frame.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(AppError::core_response(frame.clone()));
+    }
+    if frame.get("api_id").and_then(Value::as_str) != Some("zero.api.v1") {
+        return Err(AppError {
+            code: "invalid_response",
+            message: "core IPC subscribe acknowledgement has an invalid api_id".to_string(),
+            details: Some(frame.clone()),
+        });
+    }
+    if frame.get("result").and_then(Value::as_str) != Some("subscribed") {
+        return Err(AppError {
+            code: "invalid_response",
+            message: "core IPC subscribe acknowledgement did not confirm subscription".to_string(),
+            details: Some(frame.clone()),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_subscribe_ack;
+    use serde_json::json;
+
+    #[test]
+    fn subscribe_ack_requires_the_documented_success_envelope() {
+        validate_subscribe_ack(&json!({
+            "api_id": "zero.api.v1",
+            "ok": true,
+            "id": "znet-sink-subscribe",
+            "result": "subscribed"
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn subscribe_ack_preserves_kernel_rejection() {
+        let error = validate_subscribe_ack(&json!({
+            "api_id": "zero.api.v1",
+            "ok": false,
+            "id": "znet-sink-subscribe",
+            "error": { "code": "permission_denied", "message": "denied" }
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "core_error");
+        assert_eq!(error.message, "denied");
+    }
+
+    #[test]
+    fn subscribe_ack_rejects_wrong_api_or_result() {
+        for frame in [
+            json!({"api_id":"other", "ok":true, "result":"subscribed"}),
+            json!({"api_id":"zero.api.v1", "ok":true, "result":"unexpected"}),
+        ] {
+            assert_eq!(
+                validate_subscribe_ack(&frame).unwrap_err().code,
+                "invalid_response"
+            );
+        }
     }
 }
 

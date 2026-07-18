@@ -178,7 +178,7 @@ The production gap list above has been implemented or re-verified in order:
 - Item 3: proxy mode writes the kernel-native top-level `mode`; legacy `route.mode` is read only as fallback.
 - Item 3.5: missing active proxy config is a warning for kernel startup; enabling system proxy still requires active proxy config content.
 - Item 3.6: ordinary UI stop/disconnect paths no longer expose stopping the kernel as a routine business action.
-- Item 4: config.apply, config.validate, config.plan_apply, mode.set, diagnostics.dns_lookup, diagnostics.trace_route, recent_flows, sinks, and diagnostics are wired through the adapter/commands/frontend API.
+- Item 4: config.apply, config.validate, mode.set, diagnostics.dns_lookup, diagnostics.trace_route, diagnostics.probe_outbound, recent_flows, sinks, and diagnostics are wired through the adapter/commands/frontend API. config.plan_apply is not part of the current kernel contract and is not exposed by Tauri.
 - Item 5: capabilities DTOs include protocols and buildFeatures, including protocol TCP/UDP/MUX/limitations fields.
 - Item 6: GUI/core event subscriptions reconnect in the service layer with 1s to 5s backoff; GUI event status includes a resync snapshot for runtime, stats, and policies after subscription recovery.
 - Item 7: TUN status uses documented `tun_status` query handling. There is no `tun.status` command fallback in the kernel query path.

@@ -366,7 +366,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
  {:else if !flowSupported}
    <div class="panel-empty-block">
      <span class="empty-title">内核不支持实时连接</span>
-     <span class="empty-desc">当前内核版本未启用 flow-snapshot 能力</span>
+     <span class="empty-desc">当前内核未声明 flow_snapshot 能力</span>
    </div>
  {:else if connections.length === 0}
    <div class="panel-empty-block">

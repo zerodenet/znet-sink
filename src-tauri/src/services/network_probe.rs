@@ -15,41 +15,24 @@ pub struct NetworkProbeResult {
     pub isp: Option<String>,
 }
 
-pub fn probe_outbound_with_proxy(
-    proxy_host: &str,
-    proxy_port: u16,
-    probe_urls: &[String],
-) -> AppResult<NetworkProbeResult> {
+/// Detect the host machine's current public network environment.
+///
+/// This GUI-side check never injects the managed kernel's local proxy address.
+/// The default HTTP client follows the host's normal proxy configuration, so
+/// an enabled operating-system proxy is correctly reflected in the result.
+pub fn probe_local_network(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
     let probe_urls = if probe_urls.is_empty() {
         default_network_probe_urls()
     } else {
         probe_urls.to_vec()
     };
 
-    let proxy_url = format!("http://{}:{}", proxy_host, proxy_port);
-    match try_probe_urls(Some(&proxy_url), &probe_urls) {
-        Ok(result) => Ok(result),
-        Err(proxy_error) => match try_probe_urls(None, &probe_urls) {
-            Ok(result) => Ok(result),
-            Err(direct_error) => Err(AppError::internal(format!(
-                "all network probe URLs failed (proxy: {}; direct: {})",
-                proxy_error.message, direct_error.message
-            ))),
-        },
-    }
+    try_probe_urls(&probe_urls)
 }
 
-fn try_probe_urls(proxy_url: Option<&str>, probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
-    let mut builder =
-        reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
-
-    if let Some(proxy) = proxy_url {
-        if let Ok(parsed_proxy) = reqwest::Proxy::all(proxy) {
-            builder = builder.proxy(parsed_proxy);
-        }
-    }
-
-    let client = builder
+fn try_probe_urls(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
 

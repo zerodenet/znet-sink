@@ -253,7 +253,6 @@ pub fn run() {
             gui_core_commands::gui_rule_status,
             gui_core_commands::gui_apply_config,
             gui_core_commands::gui_validate_config,
-            gui_core_commands::gui_plan_apply_config,
             gui_core_commands::gui_set_mode,
             gui_core_commands::gui_probe_policy,
             gui_core_commands::gui_dns_lookup,

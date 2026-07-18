@@ -24,7 +24,6 @@ import {
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { coreEvents } from './core-events.svelte';
 import { tracedOperation } from './telemetry';
-import { delayHistory } from './delay-history.svelte';
 import type {
   ConfigProxyNode,
   SelfTestSnapshot,
@@ -47,9 +46,10 @@ class GuiStateStore {
   configPolicyGroups = $state<PolicyGroup[]>([]);
   networkProbe = $state<NetworkProbeResult | null>(null);
   networkProbeLoading = $state(false);
+  networkProbeError = $state<string | null>(null);
 
   // Whether the kernel supports live traffic stats (needs "query" or
-  // "runtime-snapshot" capability). When false, the traffic chart shows
+  // "runtime_snapshot" capability). When false, the traffic chart shows
   // a downgrade hint instead of silently reading 0.
   supportsTrafficStats = $state(true);
 
@@ -71,16 +71,15 @@ class GuiStateStore {
     this.isInitialized = true;
     this.isInitializing = true;
 
+    // Host-network detection is GUI-owned and starts independently of all
+    // kernel/config/runtime refresh work below.
+    void this.probeNetwork();
     await this.refreshAll();
 
     // Unlock kernel action buttons after the first full state snapshot.
     // Until this point the UI may show stale pre-load state where buttons
     // look clickable but the kernel is already running or starting.
     this.isInitializing = false;
-
-    if (this.isProcessRunning) {
-      void this.probeNetwork();
-    }
   }
 
   async refreshAll() {
@@ -159,18 +158,6 @@ class GuiStateStore {
       const groups = await getGuiPolicyGroups();
       console.warn('[gui-state] policy groups loaded:', groups.length, 'groups');
       this.policyGroups = groups;
-      for (const group of groups) {
-        for (const member of group.outbounds) {
-          if (member.lastCheckedUnixMs !== undefined) {
-            delayHistory.record(
-              member.tag,
-              member.delayMs,
-              member.alive !== false,
-              member.lastCheckedUnixMs,
-            );
-          }
-        }
-      }
     } catch (e: any) {
       console.warn('[gui-state] policy groups failed:', this.errorMessage(e));
       this.policyGroups = [];
@@ -211,7 +198,7 @@ class GuiStateStore {
       const caps = await getGuiZeroCapabilities();
       const features = caps?.features ?? [];
       this.supportsTrafficStats =
-        caps.available && (features.includes('query') || features.includes('runtime-snapshot'));
+        caps.available && (features.includes('query') || features.includes('runtime_snapshot'));
     } catch {
       // Kernel not connected yet; keep the optimistic default.
     }
@@ -265,12 +252,14 @@ class GuiStateStore {
   }
 
   async probeNetwork() {
-    if (this.networkProbeLoading || !this.isProcessRunning) return;
+    if (this.networkProbeLoading) return;
     this.networkProbeLoading = true;
+    this.networkProbeError = null;
     try {
       this.networkProbe = await guiNetworkProbe();
-    } catch {
-      // Best-effort status shown above the self-test panel.
+    } catch (error) {
+      this.networkProbe = null;
+      this.networkProbeError = this.errorMessage(error);
     } finally {
       this.networkProbeLoading = false;
     }
@@ -284,7 +273,6 @@ class GuiStateStore {
       toastSuccess('系统代理已开启，服务已生效');
       coreEvents.start();
       await this.refreshPolicyPanels();
-      void this.probeNetwork();
     } catch (e: any) {
       toastError(`连接失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
@@ -317,7 +305,6 @@ class GuiStateStore {
       coreEvents.start();
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
-      void this.probeNetwork();
     } catch (e: any) {
       toastError(`启动内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
@@ -335,7 +322,6 @@ class GuiStateStore {
       toastSuccess('内核已重启');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
-      void this.probeNetwork();
     } catch (e: any) {
       toastError(`重启内核失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
@@ -351,7 +337,6 @@ class GuiStateStore {
       await tracedOperation('proxy', 'system_proxy.enable', () => enableSystemProxyCommand());
       toastSuccess('系统代理已开启');
       await this.refreshRuntimeState();
-      void this.probeNetwork();
     } catch (e: any) {
       toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();

@@ -253,7 +253,7 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
             "action",
             true,
             zero_features,
-            &["query", "runtime-snapshot"],
+            &["query", "runtime_snapshot"],
         ),
         feature_required(
             "tun.status",
@@ -274,7 +274,7 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
             "action",
             true,
             zero_features,
-            &["query", "runtime-snapshot"],
+            &["query", "runtime_snapshot"],
         ),
         shared("systemProxy.status", "action"),
         shared("systemProxy.enable", "action"),
@@ -304,21 +304,21 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
             "action",
             is_pro,
             zero_features,
-            &["flow-snapshot"],
+            &["flow_snapshot"],
         ),
         feature_required(
             "core.connections.detail",
             "action",
             is_pro,
             zero_features,
-            &["flow-snapshot"],
+            &["flow_snapshot"],
         ),
         feature_required(
             "core.flow.close",
             "action",
             is_pro,
             zero_features,
-            &["flow-snapshot"],
+            &["flow_snapshot"],
         ),
     ]
 }
@@ -335,14 +335,14 @@ fn feature_surface_items(is_pro: bool, zero_features: &[String]) -> Vec<Interact
             "feature",
             true,
             zero_features,
-            &["query", "runtime-snapshot"],
+            &["query", "runtime_snapshot"],
         ),
         feature_required(
             "policySelection",
             "feature",
             true,
             zero_features,
-            &["policy-snapshot"],
+            &["policy_snapshot"],
         ),
         pro_only("proxyConfigManagement", "feature", is_pro),
         pro_only("routing", "feature", is_pro),
@@ -352,7 +352,7 @@ fn feature_surface_items(is_pro: bool, zero_features: &[String]) -> Vec<Interact
             "feature",
             is_pro,
             zero_features,
-            &["flow-snapshot"],
+            &["flow_snapshot"],
         ),
         feature_required(
             "dns",
@@ -450,5 +450,41 @@ fn feature_required(
                 required_features.join(", ")
             )
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{action_items, feature_surface_items};
+
+    #[test]
+    fn canonical_zero_snapshot_features_enable_gui_surfaces() {
+        let features = vec![
+            "runtime_snapshot".to_string(),
+            "flow_snapshot".to_string(),
+            "policy_snapshot".to_string(),
+        ];
+
+        let actions = action_items(true, &features);
+        for key in [
+            "core.stats",
+            "traffic.snapshot",
+            "core.connections.list",
+            "core.connections.detail",
+            "core.flow.close",
+        ] {
+            assert!(
+                actions.iter().any(|item| item.key == key && item.operable),
+                "{key} should be enabled by the canonical Zero feature names"
+            );
+        }
+
+        let surfaces = feature_surface_items(true, &features);
+        for key in ["traffic", "policySelection", "connections"] {
+            assert!(
+                surfaces.iter().any(|item| item.key == key && item.operable),
+                "{key} should be enabled by the canonical Zero feature names"
+            );
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! Client-side node latency probing.
 //!
 //! Orchestrates speed tests (queue, concurrency, progress) on the client side.
-//! Individual node probes go directly to the core engine's IPC without any
+//! Individual node probes go through the core engine's outbound IPC probe without any
 //! upfront health check — each probe handles its own timeout and failure.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,7 +53,7 @@ pub struct ProbeCompleteEvent {
     pub failed: usize,
 }
 
-/// Probe a single node via the core's probe command.
+/// Probe a single node through the core's full outbound proxy stack.
 /// No upfront health check — the probe itself handles timeout/failure.
 pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
     let target_tag = target_tag.trim().to_string();
@@ -80,7 +80,7 @@ pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
     };
 
     // Send probe command directly — no readiness health check
-    match commands::probe_target(target_tag.clone(), options).await {
+    match commands::probe_outbound(target_tag.clone(), None, options).await {
         Ok(result) => ProbeResult {
             target_tag: result.target_tag,
             reachable: result.reachable,

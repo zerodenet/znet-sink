@@ -437,7 +437,7 @@
           <div class="probe-urls-text">
             <span class="probe-urls-title">网络检测地址</span>
             <span class="probe-urls-desc">
-              每行一个 `http` 或 `https` 地址，概览页的自动探测和右侧手动测试都会按顺序尝试这些地址。
+              每行一个 `http` 或 `https` 地址。GUI 不会指定 Zero 代理，而是按宿主机当前系统网络与代理配置依次请求这些地址。
             </span>
           </div>
           <Button

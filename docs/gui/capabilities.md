@@ -76,7 +76,7 @@
   "features": [
     { "key": "selfTest", "category": "feature", "visible": true, "operable": true, "readonly": false, "reason": null },
     { "key": "proxyMode", "category": "feature", "visible": true, "operable": true, "readonly": false, "reason": null },
-    { "key": "connections", "category": "feature", "visible": true, "operable": false, "readonly": true, "reason": "zero capability does not declare any of: flow-snapshot" }
+    { "key": "connections", "category": "feature", "visible": true, "operable": false, "readonly": true, "reason": "zero capability does not declare any of: flow_snapshot" }
   ]
 }
 ```

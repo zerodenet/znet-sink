@@ -10,8 +10,8 @@ use crate::errors::AppResult;
 use crate::kernel::adapter::KernelAdapter;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    ConfigProxyNode, GuiConfigPlanApplyResult, GuiConnection, GuiConnectionCloseResult,
-    GuiConnectionList, GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
     GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates, GuiTrafficSnapshot,
     GuiTrafficStats, GuiZeroCapabilities,
 };
@@ -161,6 +161,15 @@ impl KernelAdapter for ZeroAdapter {
         commands::probe_target(target_tag, Some(options)).await
     }
 
+    async fn probe_outbound(
+        &self,
+        target_tag: String,
+        url: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<GuiTargetProbeResult> {
+        commands::probe_outbound(target_tag, url, Some(options)).await
+    }
+
     async fn probe_policy(&self, policy_tag: String, options: CoreIpcOptions) -> AppResult<Value> {
         commands::probe_policy(policy_tag, Some(options)).await
     }
@@ -205,14 +214,6 @@ impl KernelAdapter for ZeroAdapter {
         commands::validate_config(config, Some(options)).await
     }
 
-    async fn plan_apply_config(
-        &self,
-        config: Value,
-        options: CoreIpcOptions,
-    ) -> AppResult<GuiConfigPlanApplyResult> {
-        commands::plan_apply_config(config, Some(options)).await
-    }
-
     async fn set_mode(
         &self,
         mode: String,
@@ -231,9 +232,10 @@ impl KernelAdapter for ZeroAdapter {
         target: String,
         port: u16,
         protocol: Option<String>,
+        inbound_tag: Option<String>,
         options: CoreIpcOptions,
     ) -> AppResult<Value> {
-        commands::trace_route(target, port, protocol, Some(options)).await
+        commands::trace_route(target, port, protocol, inbound_tag, Some(options)).await
     }
 
     async fn sinks(&self, options: CoreIpcOptions) -> AppResult<Value> {
