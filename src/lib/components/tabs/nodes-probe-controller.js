@@ -116,12 +116,12 @@ export function createNodesProbeController(deps) {
       try {
         const result = await deps.probeNode(node.tag);
         deps.recordDelay(node.tag, result.latencyMs, result.reachable);
-        await deps.refreshPolicyGroups();
       } catch (error) {
         lastError = String(error);
       } finally {
         removeProbingNodeIds([node.id]);
         emit();
+        void deps.refreshPolicyGroups();
       }
     },
 
@@ -192,11 +192,11 @@ export function createNodesProbeController(deps) {
             if (!isActiveSessionPayload(event.payload)) return;
             batchProbeState.clear();
             probingNodeIds = batchProbeState.probingNodeIds();
-            await deps.refreshPolicyGroups();
             probingAll = false;
             emit();
             resolveCompletion?.();
             activeProbeCompletionResolve = null;
+            void deps.refreshPolicyGroups();
           },
         );
 

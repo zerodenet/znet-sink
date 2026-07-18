@@ -147,7 +147,7 @@
       </svg>
       {#if hoveredEntry}
         <span class="hover-tooltip">
-          {formatHistoryTooltip(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
+          {#if hoveredEntry.selectedTag}{hoveredEntry.selectedTag} · {/if}{formatHistoryTooltip(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
         </span>
       {/if}
     </div>
@@ -156,6 +156,9 @@
       {#each reversedHist as entry, i}
         <div class="delay-list-item">
           <span class="delay-list-time" title={formatHistoryTooltip(entry.at)}>{formatHistoryTime(entry.at)}</span>
+          {#if entry.selectedTag}
+            <span class="delay-list-target" title={entry.selectedTag}>{entry.selectedTag}</span>
+          {/if}
           <span class="delay-list-bar-wrap">
             <span
               class="delay-list-bar"
@@ -172,6 +175,7 @@
 
   <span class="popover-stats">
     最新 {hist[hist.length - 1].delay > 0 ? hist[hist.length - 1].delay + 'ms' : '超时'}
+    {#if hist[hist.length - 1].selectedTag}· {hist[hist.length - 1].selectedTag}{/if}
     · 均 {meanDelay(hist)}ms
   </span>
   {#if node.lastProbeAt}
@@ -298,6 +302,17 @@
     border-radius: 2px;
     overflow: hidden;
     min-width: 40px;
+  }
+
+  .delay-list-target {
+    width: 56px;
+    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--foreground);
   }
 
   .delay-list-bar {

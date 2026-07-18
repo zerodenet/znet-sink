@@ -3,6 +3,7 @@ import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime 
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { delayHistory } from '$lib/services/delay-history.svelte';
+import { buildPolicyProbeHistoryUpdates } from '$lib/services/policy-probe-history';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
 import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
@@ -59,6 +60,40 @@ class CoreEventsService {
   private _activeGeneration: number | null = null;
 
   private _stopped = false;
+  private _policyProbeWaiters = new Map<
+    string,
+    Set<(event: PolicyProbeCompletedEvent) => void>
+  >();
+
+  /** Register before sending policies.probe so a fast completion event
+   * cannot race past the UI lifecycle. */
+  waitForPolicyProbe(
+    policyTag: string,
+    options: { timeoutMs?: number; trigger?: string } = {},
+  ): Promise<PolicyProbeCompletedEvent> {
+    return new Promise((resolve, reject) => {
+      const waiters = this._policyProbeWaiters.get(policyTag) ?? new Set();
+      let timer: ReturnType<typeof setTimeout>;
+      const complete = (event: PolicyProbeCompletedEvent) => {
+        // A scheduled probe for the same policy may finish while a manual
+        // request is in flight. It should still update global state, but must
+        // not end the clicked card's lifecycle. Older kernels that omit the
+        // trigger remain compatible.
+        if (options.trigger && event.trigger && event.trigger !== options.trigger) return;
+        clearTimeout(timer);
+        waiters.delete(complete);
+        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
+        resolve(event);
+      };
+      waiters.add(complete);
+      this._policyProbeWaiters.set(policyTag, waiters);
+      timer = setTimeout(() => {
+        waiters.delete(complete);
+        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
+        reject(new Error(`policy probe timed out: ${policyTag}`));
+      }, options.timeoutMs ?? 60_000);
+    });
+  }
 
   async start(events?: string[]) {
     this._stopped = false;
@@ -102,6 +137,7 @@ class CoreEventsService {
     this._unlistenStatus = null;
     this._unlistenProcess = null;
     this._pendingDeltas = [];
+    this._policyProbeWaiters.clear();
   }
 
   /** 获取并清空待处理的连接增量事件 */
@@ -184,13 +220,18 @@ class CoreEventsService {
       const probe = data as PolicyProbeCompletedEvent;
       if (probe?.policyTag && Array.isArray(probe.members)) {
         guiState.applyPolicyProbeCompleted(probe);
-        for (const member of probe.members) {
+        for (const update of buildPolicyProbeHistoryUpdates(probe)) {
           delayHistory.record(
-            member.tag,
-            member.delayMs,
-            member.alive !== false,
-            member.lastCheckedUnixMs ?? probe.completedAtUnixMs,
+            update.tag,
+            update.delayMs,
+            update.reachable,
+            update.at,
+            update.selectedTag,
           );
+        }
+        const waiters = this._policyProbeWaiters.get(probe.policyTag);
+        if (waiters) {
+          for (const complete of [...waiters]) complete(probe);
         }
       }
       awaitIgnore(overviewData.refreshPolicyNodes());

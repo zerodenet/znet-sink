@@ -56,8 +56,13 @@ assertContains(
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',
-  'isProbing={probingNodeIds.has(node.id)}',
-  'NodesTab should render probe state per visible node instance',
+  'policyProbeTagForNode(groups, node.tag)',
+  'NodesTab should route a nested url_test node card through the policy probe contract',
+);
+assertContains(
+  'src/lib/components/tabs/NodesTab.svelte',
+  'isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}',
+  'NodesTab should render probe state for regular nodes and nested policy nodes',
 );
 assertContains(
   'src/lib/components/tabs/NodesToolbar.svelte',

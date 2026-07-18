@@ -16,6 +16,8 @@ export interface DelayEntry {
   delay: number;
   /** Unix-ms timestamp of the probe. */
   at: number;
+  /** Policy-group history only: selected member that produced this result. */
+  selectedTag?: string;
 }
 
 type HistoryMap = Record<string, DelayEntry[]>;
@@ -39,16 +41,30 @@ class DelayHistoryStore {
     this.history = load();
   }
 
-  /** Record a probe result for a node. */
-  record(tag: string, delayMs: number | undefined, reachable: boolean, at = Date.now()): void {
+  /** Record a probe result for a node or policy group. */
+  record(
+    tag: string,
+    delayMs: number | undefined,
+    reachable: boolean,
+    at = Date.now(),
+    selectedTag?: string,
+  ): void {
     if (!tag) return;
     // `-1` marks a timeout / unreachable probe (e.g. kernel not running) so
     // the UI can show "timeout" instead of mistaking it for "never probed".
     const value = reachable ? Math.max(0, delayMs ?? 0) : -1;
-    const entry: DelayEntry = { delay: value, at };
+    const entry: DelayEntry = {
+      delay: value,
+      at,
+      ...(selectedTag ? { selectedTag } : {}),
+    };
 
     const existing = this.history[tag] ?? [];
-    if (existing.some((item) => item.at === entry.at && item.delay === entry.delay)) return;
+    if (existing.some((item) =>
+      item.at === entry.at
+      && item.delay === entry.delay
+      && item.selectedTag === entry.selectedTag
+    )) return;
     const next = [...existing, entry].sort((left, right) => left.at - right.at);
     if (next.length > MAX_ENTRIES) {
       next.splice(0, next.length - MAX_ENTRIES);

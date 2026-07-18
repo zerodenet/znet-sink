@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
+  import { coreEvents } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
   import { guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
@@ -15,6 +16,7 @@
   import NodesToolbar from '$lib/components/tabs/NodesToolbar.svelte';
   import { createNodesProbeController } from '$lib/components/tabs/nodes-probe-controller.js';
   import { delayHistory, type DelayEntry } from '$lib/services/delay-history.svelte';
+  import { error as toastError } from '$lib/services/toast.svelte';
   import {
     buildAllNodes,
     buildRuntimeOverlay,
@@ -23,6 +25,7 @@
     getActiveNodeTag,
     mergePolicyGroups,
     planProbeTargets,
+    policyProbeTagForNode,
     resolveNodeGroup,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
@@ -37,10 +40,16 @@
   // Action state
   let switching = $state<string | null>(null);
   let probingNodeIds = $state<Set<string>>(new Set());
+  let probingPolicyTags = $state<Set<string>>(new Set());
   let probingAll = $state(false);
   let probingRequested = $state(false);
   let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
+
+  function reportError(message: string) {
+    lastError = message;
+    toastError(message, 8_000);
+  }
   type ProbeControllerState = {
     probingNodeIds: Set<string>;
     probingAll: boolean;
@@ -58,7 +67,11 @@
       probingNodeIds = state.probingNodeIds;
       probingAll = state.probingAll;
       probeProgress = state.probeProgress;
-      lastError = state.lastError;
+      if (state.lastError && state.lastError !== lastError) {
+        reportError(state.lastError);
+      } else {
+        lastError = state.lastError;
+      }
     },
   });
 
@@ -203,11 +216,11 @@
   async function handleSelect(node: ProxyNode) {
     if (switching) return;
     if (!isCoreAvailable) {
-      lastError = '内核未就绪，无法切换节点';
+      reportError('内核未就绪，无法切换节点');
       return;
     }
     if (!isNodeSelectable(node)) {
-      lastError = '当前策略组为自动选择组，不支持手动切换节点';
+      reportError('当前策略组为自动选择组，不支持手动切换节点');
       return;
     }
     switching = node.id;
@@ -219,7 +232,7 @@
       const policyTag = resolvePolicyTag(node);
       const result = await guiSelectPolicy(policyTag, node.tag);
       if (!result.accepted) {
-        lastError = result.message ?? '内核未接受此选择';
+        reportError(result.message ?? '内核未接受此选择');
       } else if (result.selected && result.selected !== node.tag) {
         // Kernel may have resolved to a different target — this is informational, not an error
         await guiState.refreshPolicyGroups();
@@ -227,7 +240,7 @@
         await guiState.refreshPolicyGroups();
       }
     } catch (e) {
-      lastError = (e as { message?: string }).message ?? '切换节点失败';
+      reportError((e as { message?: string }).message ?? '切换节点失败');
     } finally {
       switching = null;
     }
@@ -259,18 +272,57 @@
 
   async function handleProbe(node: ProxyNode) {
     if (!isCoreAvailable) {
-      lastError = '内核未就绪，无法测速';
+      reportError('内核未就绪，无法测速');
       return;
     }
+
+    // A nested url_test group is rendered as a regular node card, but its
+    // probe contract remains group-level: policies.probe measures every
+    // member and completes through policy.probe.completed. A leaf card inside
+    // that group still uses the ordinary single-outbound probe controller.
+    const policyTag = policyProbeTagForNode(groups, node.tag);
+    if (policyTag) {
+      if (probingPolicyTags.has(policyTag)) return;
+      lastError = null;
+      try {
+        await probePolicy(policyTag);
+      } catch (error) {
+        reportError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+
     await probeController.handleProbe(node);
+  }
+
+  async function probePolicy(policyTag: string) {
+    probingPolicyTags = new Set([...probingPolicyTags, policyTag]);
+    // Register before sending the command so even an extremely fast probe
+    // completion cannot race past the UI waiter.
+    const completion = coreEvents.waitForPolicyProbe(policyTag, { trigger: 'manual' });
+    try {
+      const accepted = await guiProbePolicy(policyTag);
+      if (!accepted.accepted || accepted.result?.probeTriggered === false) {
+        void completion.catch(() => undefined);
+        throw new Error(`内核未接受 ${policyTag} 的策略测速请求`);
+      }
+      await completion;
+    } catch (error) {
+      void completion.catch(() => undefined);
+      throw error;
+    } finally {
+      const next = new Set(probingPolicyTags);
+      next.delete(policyTag);
+      probingPolicyTags = next;
+    }
   }
 
   async function handleProbeAll() {
     if (!isCoreAvailable) {
-      lastError = '内核未就绪，无法测速';
+      reportError('内核未就绪，无法测速');
       return;
     }
-    if (probingRequested || probingAll || probingNodeIds.size > 0) {
+    if (probingRequested || probingAll || probingNodeIds.size > 0 || probingPolicyTags.size > 0) {
       return;
     }
     const targets = planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes });
@@ -279,18 +331,13 @@
     probingRequested = true;
     lastError = null;
     try {
-      const policyRequests = targets.policyTags.map(async (policyTag) => {
-        const accepted = await guiProbePolicy(policyTag);
-        if (!accepted.accepted || accepted.result?.probeTriggered === false) {
-          throw new Error(`内核未接受 ${policyTag} 的测速请求`);
-        }
-      });
+      const policyRequests = targets.policyTags.map((policyTag) => probePolicy(policyTag));
       await Promise.all([
         targets.nodes.length > 0 ? probeController.handleProbeAll(targets.nodes) : Promise.resolve(),
         ...policyRequests,
       ]);
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
+      reportError(error instanceof Error ? error.message : String(error));
     } finally {
       probingRequested = false;
     }
@@ -384,7 +431,7 @@
       {isLite}
       probingAll={probingRequested || probingAll}
       {probeProgress}
-      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && filteredNodes.length > 0}
+      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && filteredNodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={(mode) => (viewMode = mode)}
@@ -427,8 +474,8 @@
               {node}
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
-              isProbing={probingNodeIds.has(node.id)}
-              {probingAll}
+              isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+              probingAll={probingRequested || probingAll}
               probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
@@ -445,8 +492,8 @@
               {node}
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
-              isProbing={probingNodeIds.has(node.id)}
-              {probingAll}
+              isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+              probingAll={probingRequested || probingAll}
               probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
@@ -485,8 +532,8 @@
                       {node}
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
-                      isProbing={probingNodeIds.has(node.id)}
-                      {probingAll}
+                      isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+                      probingAll={probingRequested || probingAll}
                       probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
@@ -503,8 +550,8 @@
                       {node}
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
-                      isProbing={probingNodeIds.has(node.id)}
-                      {probingAll}
+                      isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+                      probingAll={probingRequested || probingAll}
                       probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
@@ -521,18 +568,6 @@
       </div>
     {/if}
 
-    <!-- Error toast -->
-    {#if lastError}
-      <div class="node-error">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="flex-shrink-0">
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <span>{lastError}</span>
-        <button class="error-dismiss" onclick={() => (lastError = null)} aria-label="关闭错误提示">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
-        </button>
-      </div>
-    {/if}
   </div>
 </div>
 
@@ -710,35 +745,6 @@
 
 
   /* Error bar */
-  .node-error {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 6px;
-    padding: 8px 10px;
-    background: rgba(239, 68, 68, 0.06);
-    border: 1px solid rgba(239, 68, 68, 0.14);
-    border-radius: 6px;
-    font-size: 11px;
-    color: var(--destructive);
-    flex-shrink: 0;
-  }
-
-  .error-dismiss {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: var(--destructive);
-    opacity: 0.5;
-    cursor: pointer;
-    padding: 2px;
-  }
-
-  .error-dismiss:hover { opacity: 1; }
-
   /* Popover anchor */
   .popover-anchor {
     position: fixed;

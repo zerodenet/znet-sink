@@ -9,7 +9,10 @@ import {
   mergePolicyGroups,
   normalizeSelectedGroup,
   planProbeTargets,
+  policyProbeTagForNode,
+  resolveProbeDisplay,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
+import { buildPolicyProbeHistoryUpdates } from '../src/lib/services/policy-probe-history.ts';
 
 function node(tag, delay, extra = {}) {
   return {
@@ -106,6 +109,22 @@ function testRuntimeProbeTimestampOverridesOlderLocalHistory() {
   assert.equal(hk.lastProbeAt, checkedAt);
 }
 
+function testNewerLocalProbeOverridesStaleRuntimeSnapshot() {
+  assert.deepEqual(resolveProbeDisplay({
+    runtimeDelay: 133,
+    runtimeAt: 1_000,
+    localDelay: 42,
+    localAt: 2_000,
+  }), { delay: 42, at: 2_000 });
+
+  assert.deepEqual(resolveProbeDisplay({
+    runtimeDelay: 31,
+    runtimeAt: 3_000,
+    localDelay: 42,
+    localAt: 2_000,
+  }), { delay: 31, at: 3_000 });
+}
+
 function testActiveNodeUsesCurrentlyBrowsedGroup() {
   const groups = [
     { ...group('Primary', [{ tag: 'HK' }, { tag: 'JP' }]), selected: 'HK' },
@@ -153,13 +172,89 @@ function testProbePlanningUsesKernelForUrlTestGroups() {
   });
 }
 
+function testProbePlanningTreatsNestedSelectorLikeARegularNode() {
+  const groups = [
+    group('Proxy', [{ tag: 'Fallback' }, { tag: 'HK' }]),
+    group('Fallback', [{ tag: 'JP' }, { tag: 'US' }], 'selector'),
+  ];
+  const fallback = node('Fallback', 0, { protocol: 'selector' });
+  const hk = node('HK', 20);
+
+  assert.deepEqual(planProbeTargets({
+    groups,
+    selectedGroup: 'Proxy',
+    visibleNodes: [fallback, hk],
+  }), {
+    nodes: [fallback, hk],
+    policyTags: [],
+  });
+}
+
+function testSingleCardProbeUsesPolicyOnlyForNestedUrlTestGroup() {
+  const groups = [
+    group('Proxy', [{ tag: 'Auto' }, { tag: 'HK' }]),
+    group('Auto', [{ tag: 'JP' }, { tag: 'US' }], 'url_test'),
+    group('Fallback', [{ tag: 'SG' }], 'selector'),
+  ];
+
+  assert.equal(policyProbeTagForNode(groups, 'Auto'), 'Auto');
+  // Clicking a leaf while browsing Auto remains a single-node probe.
+  assert.equal(policyProbeTagForNode(groups, 'JP'), undefined);
+  // Other nested group types keep the ordinary outbound probe behavior.
+  assert.equal(policyProbeTagForNode(groups, 'Fallback'), undefined);
+}
+
+function testPolicyProbeHistoryUsesSelectedResultFromSameScheduledEvent() {
+  const completedAt = 1_784_294_531_466;
+  const updates = buildPolicyProbeHistoryUpdates({
+    policyTag: 'Auto-proxy',
+    trigger: 'scheduled',
+    completedAtUnixMs: completedAt,
+    selected: 'ss-in',
+    members: [
+      { tag: 'ss-in', type: 'proxy', alive: true, delayMs: 794 },
+      { tag: 'tr-sg', type: 'proxy', alive: true, delayMs: 815 },
+    ],
+  });
+
+  assert.deepEqual(updates, [
+    { tag: 'ss-in', delayMs: 794, reachable: true, at: completedAt },
+    { tag: 'tr-sg', delayMs: 815, reachable: true, at: completedAt },
+    {
+      tag: 'Auto-proxy',
+      delayMs: 794,
+      reachable: true,
+      at: completedAt,
+      selectedTag: 'ss-in',
+    },
+  ]);
+}
+
+function testPolicyProbeHistoryDoesNotInventMissingSelectedResult() {
+  const updates = buildPolicyProbeHistoryUpdates({
+    policyTag: 'Auto-proxy',
+    completedAtUnixMs: 2_000,
+    selected: 'missing',
+    members: [{ tag: 'ss-in', type: 'proxy', alive: true, delayMs: 30 }],
+  });
+
+  assert.deepEqual(updates, [
+    { tag: 'ss-in', delayMs: 30, reachable: true, at: 2_000 },
+  ]);
+}
+
 testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
 testRuntimeProbeTimestampOverridesOlderLocalHistory();
+testNewerLocalProbeOverridesStaleRuntimeSnapshot();
 testActiveNodeUsesCurrentlyBrowsedGroup();
 testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState();
 testProbePlanningUsesKernelForUrlTestGroups();
+testProbePlanningTreatsNestedSelectorLikeARegularNode();
+testSingleCardProbeUsesPolicyOnlyForNestedUrlTestGroup();
+testPolicyProbeHistoryUsesSelectedResultFromSameScheduledEvent();
+testPolicyProbeHistoryDoesNotInventMissingSelectedResult();
 
 console.log('nodes-view-model: ok');

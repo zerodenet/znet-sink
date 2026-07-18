@@ -46,6 +46,23 @@ async function testSingleProbeLifecycle() {
   assert.equal(refreshCalls, 1);
 }
 
+async function testSingleProbeCompletionDoesNotWaitForSnapshotRefresh() {
+  let releaseRefresh;
+  const states = [];
+  const controller = createNodesProbeController({
+    listen: async () => () => {},
+    probeNode: async () => ({ targetTag: 'A', reachable: true, latencyMs: 18 }),
+    probeAll: async () => {},
+    recordDelay: () => {},
+    refreshPolicyGroups: () => new Promise((resolve) => { releaseRefresh = resolve; }),
+    onStateChange: (state) => states.push(state),
+  });
+
+  await controller.handleProbe({ id: 'node-1', tag: 'A' });
+  assert.equal(states.at(-1).probingNodeIds.size, 0);
+  releaseRefresh();
+}
+
 async function testBatchProbeLifecycle() {
   const states = [];
   const seenDelays = [];
@@ -156,6 +173,7 @@ async function testBatchProbeDoesNotStartWhileSingleProbeIsRunning() {
 }
 
 await testSingleProbeLifecycle();
+await testSingleProbeCompletionDoesNotWaitForSnapshotRefresh();
 await testBatchProbeLifecycle();
 await testEmptyBatchProbeIsNoOp();
 await testBatchProbeDoesNotStartWhileSingleProbeIsRunning();
