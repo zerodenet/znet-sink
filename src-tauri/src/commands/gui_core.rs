@@ -1,5 +1,9 @@
 use std::time::{Duration, Instant};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{BufRead, BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
+};
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
@@ -571,7 +575,13 @@ pub struct GuiDiagnosticExport {
 /// Export a local, support-ready diagnostic directory without proxy config
 /// contents, subscription URLs, credentials, or other user secrets.
 #[tauri::command]
-pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
+pub async fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
+    tauri::async_runtime::spawn_blocking(export_diagnostics)
+        .await
+        .map_err(|error| AppError::internal(format!("diagnostic export worker failed: {error}")))?
+}
+
+fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {
     let created_at_unix_ms = common::now_unix_ms();
     let data_dir = crate::services::data_dir()?;
     let export_dir = data_dir
@@ -581,12 +591,10 @@ pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
         AppError::internal(format!("create diagnostic export directory: {error}"))
     })?;
 
-    let candidates = [
-        data_dir.join("logs").join("gui.log.jsonl"),
-        data_dir.join("logs").join("logs.jsonl"),
-        data_dir.join("logs").join("debug.log.jsonl"),
+    let candidates = diagnostic_candidates(
+        &data_dir,
         crate::services::core_config::managed_core_log_path()?,
-    ];
+    );
     let mut files = Vec::new();
     for source in candidates {
         if !source.is_file() {
@@ -596,8 +604,7 @@ pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
             continue;
         };
         let destination = export_dir.join(file_name);
-        fs::copy(&source, &destination)
-            .map_err(|error| AppError::internal(format!("copy diagnostic file: {error}")))?;
+        copy_diagnostic_file(&source, &destination)?;
         files.push(file_name.to_string_lossy().to_string());
     }
 
@@ -612,7 +619,8 @@ pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
         "privacy": {
             "proxyConfigIncluded": false,
             "subscriptionUrlsIncluded": false,
-            "credentialsIncluded": false
+            "credentialsIncluded": false,
+            "structuredLogsSanitized": true
         }
     });
     write_pretty_json(&export_dir.join(manifest_name), &manifest)?;
@@ -635,9 +643,250 @@ pub fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
     })
 }
 
+fn diagnostic_candidates(data_dir: &Path, core_log_path: PathBuf) -> [PathBuf; 4] {
+    [
+        data_dir.join("logs").join("gui.log.jsonl"),
+        // The structured application log lives at the data root, not in the
+        // file logger's `logs` directory.
+        data_dir.join("logs.jsonl"),
+        data_dir.join("logs").join("debug.log.jsonl"),
+        core_log_path,
+    ]
+}
+
+fn copy_diagnostic_file(source: &Path, destination: &Path) -> AppResult<()> {
+    match source.file_name().and_then(|name| name.to_str()) {
+        Some("debug.log.jsonl") => {
+            write_sanitized_jsonl(source, destination, sanitize_debug_record)
+        }
+        Some(name) if name.ends_with(".jsonl") => {
+            write_sanitized_jsonl(source, destination, sanitize_structured_record)
+        }
+        _ => fs::copy(source, destination)
+            .map(|_| ())
+            .map_err(|error| AppError::internal(format!("copy diagnostic file: {error}"))),
+    }
+}
+
+fn write_sanitized_jsonl(
+    source: &Path,
+    destination: &Path,
+    sanitize: fn(&mut serde_json::Value),
+) -> AppResult<()> {
+    let input = fs::File::open(source)
+        .map_err(|error| AppError::internal(format!("open diagnostic log: {error}")))?;
+    let output = fs::File::create(destination)
+        .map_err(|error| AppError::internal(format!("create diagnostic log: {error}")))?;
+    let mut writer = BufWriter::new(output);
+
+    for line in BufReader::new(input).lines() {
+        let line =
+            line.map_err(|error| AppError::internal(format!("read diagnostic log: {error}")))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut value = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_else(|_| {
+            serde_json::json!({
+                "redacted": true,
+                "reason": "unparseable diagnostic record"
+            })
+        });
+        sanitize(&mut value);
+        serde_json::to_writer(&mut writer, &value)
+            .map_err(|error| AppError::internal(format!("serialize diagnostic log: {error}")))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| AppError::internal(format!("write diagnostic log: {error}")))?;
+    }
+    writer
+        .flush()
+        .map_err(|error| AppError::internal(format!("flush diagnostic log: {error}")))
+}
+
+fn sanitize_debug_record(value: &mut serde_json::Value) {
+    if let Some(payload) = value.get_mut("payload") {
+        *payload = summarize_debug_payload(payload);
+    }
+    sanitize_structured_record(value);
+}
+
+fn summarize_debug_payload(payload: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = payload.as_object() else {
+        return serde_json::json!({ "redacted": true });
+    };
+
+    let mut summary = serde_json::Map::new();
+    summary.insert("redacted".to_string(), serde_json::Value::Bool(true));
+    let mut keys = object.keys().cloned().collect::<Vec<_>>();
+    keys.sort_unstable();
+    summary.insert("topLevelKeys".to_string(), serde_json::json!(keys));
+
+    for key in [
+        "api_id",
+        "event_type",
+        "id",
+        "ok",
+        "request_id",
+        "requestId",
+        "schema_id",
+        "sequence",
+        "status",
+        "type",
+    ] {
+        if let Some(value) = object.get(key).filter(|value| {
+            value.is_boolean() || value.is_number() || value.is_string() || value.is_null()
+        }) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+
+    serde_json::Value::Object(summary)
+}
+
+fn sanitize_structured_record(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if is_sensitive_diagnostic_key(key) {
+                    *value = serde_json::Value::String("[redacted]".to_string());
+                } else {
+                    sanitize_structured_record(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sanitize_structured_record(value);
+            }
+        }
+        serde_json::Value::String(value) => *value = redact_urls(value),
+        _ => {}
+    }
+}
+
+fn is_sensitive_diagnostic_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase().replace('-', "_");
+    matches!(
+        key.as_str(),
+        "auth"
+            | "authorization"
+            | "config"
+            | "content"
+            | "cookie"
+            | "credentials"
+            | "headers"
+            | "password"
+            | "private_key"
+            | "psk"
+            | "secret"
+            | "token"
+            | "uri"
+            | "url"
+            | "uuid"
+    ) || key.ends_with("_password")
+        || key.ends_with("_secret")
+        || key.ends_with("_token")
+        || key.ends_with("_url")
+}
+
+fn redact_urls(value: &str) -> String {
+    const SENSITIVE_SCHEMES: &[&str] = &[
+        "https://",
+        "http://",
+        "hysteria2://",
+        "ss://",
+        "trojan://",
+        "vless://",
+        "vmess://",
+    ];
+
+    let mut output = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(index) = SENSITIVE_SCHEMES
+        .iter()
+        .filter_map(|scheme| remaining.find(scheme))
+        .min()
+    {
+        output.push_str(&remaining[..index]);
+        output.push_str("[redacted-url]");
+        let url = &remaining[index..];
+        let end = url
+            .char_indices()
+            .find_map(|(offset, character)| {
+                (offset > 0
+                    && (character.is_whitespace()
+                        || matches!(character, '"' | '\'' | '<' | '>' | ')' | ']' | '}')))
+                .then_some(offset)
+            })
+            .unwrap_or(url.len());
+        remaining = &url[end..];
+    }
+    output.push_str(remaining);
+    output
+}
+
 fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
     let content = serde_json::to_vec_pretty(value)
         .map_err(|error| AppError::internal(format!("serialize diagnostic manifest: {error}")))?;
     fs::write(path, content)
         .map_err(|error| AppError::internal(format!("write diagnostic manifest: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        diagnostic_candidates, redact_urls, sanitize_debug_record, sanitize_structured_record,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn diagnostic_export_includes_the_root_application_log() {
+        let data_dir = Path::new("data-root");
+        let candidates = diagnostic_candidates(data_dir, PathBuf::from("core.log.jsonl"));
+
+        assert!(candidates.contains(&data_dir.join("logs.jsonl")));
+        assert!(!candidates.contains(&data_dir.join("logs").join("logs.jsonl")));
+    }
+
+    #[test]
+    fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
+        let mut record = serde_json::json!({
+            "message": "request failed for https://example.com/sub?token=secret)",
+            "fields": {
+                "url": "https://example.com/sub?token=secret",
+                "password": "secret",
+                "operation": "auto_sync"
+            }
+        });
+
+        sanitize_structured_record(&mut record);
+        let serialized = record.to_string();
+        assert!(!serialized.contains("example.com"));
+        assert!(!serialized.contains("secret"));
+        assert!(serialized.contains("auto_sync"));
+        assert_eq!(redact_urls("ok"), "ok");
+    }
+
+    #[test]
+    fn diagnostic_debug_sanitizer_keeps_envelope_but_drops_payload_content() {
+        let mut record = serde_json::json!({
+            "id": 9,
+            "frameType": "command",
+            "payload": {
+                "type": "command",
+                "id": "request-1",
+                "request": {
+                    "config": { "password": "secret" }
+                }
+            }
+        });
+
+        sanitize_debug_record(&mut record);
+        let serialized = record.to_string();
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("secret"));
+        assert_eq!(record["payload"]["type"], "command");
+        assert_eq!(record["payload"]["id"], "request-1");
+        assert_eq!(record["payload"]["redacted"], true);
+    }
 }

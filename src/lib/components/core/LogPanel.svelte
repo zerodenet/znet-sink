@@ -51,6 +51,7 @@
   let clearArmed = $state(false);
 
   let queryGeneration = 0;
+  let backgroundRefreshInFlight = false;
   const refreshGate = createLatestRequestGate();
   let lastLogTick = -1;
   let shouldScrollToLatest = false;
@@ -154,6 +155,16 @@
         loading = false;
         refreshing = false;
       }
+    }
+  }
+
+  async function refreshLogsInBackground() {
+    if (backgroundRefreshInFlight || loading || refreshing || loadingMore || clearing) return;
+    backgroundRefreshInFlight = true;
+    try {
+      await refreshLogs();
+    } finally {
+      backgroundRefreshInFlight = false;
     }
   }
 
@@ -402,8 +413,8 @@
   $effect(() => {
     if (!liveUpdates) return;
     const timer = window.setInterval(() => {
-      void refreshLogs();
-    }, 1_500);
+      void refreshLogsInBackground();
+    }, 3_000);
 
     return () => window.clearInterval(timer);
   });
@@ -414,7 +425,7 @@
     const isNewSignal = lastLogTick >= 0;
     lastLogTick = tick;
     if (liveUpdates) {
-      void refreshLogs();
+      void refreshLogsInBackground();
     } else if (isNewSignal) {
       pendingSignals += 1;
     }

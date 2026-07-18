@@ -426,21 +426,17 @@ fn detect_cli_version(path: &Path) -> Option<String> {
 /// Returns the version **without** a leading `v`.
 fn extract_semver(raw: &str) -> Option<String> {
     for token in raw.split_whitespace() {
-        let candidate = token.trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == ';');
+        let candidate = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '"' | '\''
+            )
+        });
         let version_part = candidate.strip_prefix('v').unwrap_or(candidate);
-        // Require exactly 2 dots so we don't accidentally match IP
-        // addresses like "127.0.0.1" or "0.0.0.0" that show up in
-        // kernel startup / listening-on output.
-        if version_part.starts_with(|c: char| c.is_ascii_digit())
-            && version_part.chars().filter(|&c| c == '.').count() == 2
-        {
-            let semver: String = version_part
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            if !semver.is_empty() {
-                return Some(semver);
-            }
+        // A real semver parser preserves pre-release/build metadata (for
+        // example `0.0.15-bate.1`) and naturally rejects IPv4 addresses.
+        if let Ok(version) = semver::Version::parse(version_part) {
+            return Some(version.to_string());
         }
     }
     None
@@ -680,6 +676,30 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_stable_and_prefixed_semver() {
+        assert_eq!(extract_semver("zero v0.0.15"), Some("0.0.15".to_string()));
+        assert_eq!(extract_semver("build_id: 1.2.3"), Some("1.2.3".to_string()));
+    }
+
+    #[test]
+    fn preserves_prerelease_and_build_metadata() {
+        assert_eq!(
+            extract_semver("build_id: 0.0.15-bate.1\ngit: v0.0.15-bate.1"),
+            Some("0.0.15-bate.1".to_string())
+        );
+        assert_eq!(
+            extract_semver("zero v1.2.3-rc.2+windows.x86-64"),
+            Some("1.2.3-rc.2+windows.x86-64".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_network_addresses_as_versions() {
+        assert_eq!(extract_semver("listening on 127.0.0.1:8080"), None);
+        assert_eq!(extract_semver("control 0.0.0.0"), None);
+    }
 
     #[test]
     fn days_from_civil_epoch() {

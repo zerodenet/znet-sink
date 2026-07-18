@@ -1,7 +1,5 @@
 use std::sync::OnceLock;
 
-use tauri::State;
-
 use crate::errors::AppResult;
 use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogPage, LogQuery, LogSource};
 use crate::services::common::{lock, normalize_required, now_unix_ms};
@@ -83,21 +81,15 @@ fn znet_log_with_fields(
     }
 }
 
-pub fn list(_state: State<'_, AppState>, query: Option<LogQuery>) -> AppResult<LogPage> {
+pub fn list(query: Option<LogQuery>) -> AppResult<LogPage> {
     let mut query = query.unwrap_or_default();
     query.limit = Some(query.limit.unwrap_or(200).clamp(1, 1_000));
     log_store::query_page(&query)
 }
 
-pub fn append(state: State<'_, AppState>, input: LogAppend) -> AppResult<LogEntry> {
+pub fn append(state: &AppState, input: LogAppend) -> AppResult<LogEntry> {
     let message = normalize_required(input.message, "message")?;
-    append_entry(
-        state.inner(),
-        input.source,
-        input.level,
-        message,
-        input.fields,
-    )
+    append_entry(state, input.source, input.level, message, input.fields)
 }
 
 pub(crate) fn append_entry(
@@ -123,13 +115,13 @@ pub(crate) fn append_entry(
         let remove_count = entries.len() - max_entries;
         entries.drain(0..remove_count);
     }
-    log_store::append(&entry)?;
-    log_store::rotate(max_entries)?;
+    drop(entries);
+    log_store::append(&entry, max_entries)?;
 
     Ok(entry)
 }
 
-pub fn clear(state: State<'_, AppState>) -> AppResult<()> {
+pub fn clear(state: &AppState) -> AppResult<()> {
     lock(state.logs(), "logs")?.clear();
     log_store::clear()?;
     Ok(())

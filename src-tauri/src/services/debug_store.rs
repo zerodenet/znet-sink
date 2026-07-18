@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use super::data_dir;
 use crate::errors::{AppError, AppResult};
@@ -11,20 +12,25 @@ const DEBUG_LOG_DIR: &str = "logs";
 const DEBUG_LOG_FILE: &str = "debug.log.jsonl";
 const DEBUG_PERSISTED_LIMIT: usize = 5_000;
 const DEBUG_ROTATE_EVERY: u64 = 100;
+static DEBUG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub(crate) fn query_page(query: &DebugFrameQuery) -> AppResult<DebugFramePage> {
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
     query_page_from_path(&debug_path()?, query)
 }
 
 pub(crate) fn append(frame: &DebugFrame) -> AppResult<()> {
-    append_to_path(&debug_path()?, frame)?;
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+    let path = debug_path()?;
+    append_to_path(&path, frame)?;
     if frame.id.is_multiple_of(DEBUG_ROTATE_EVERY) {
-        rotate()?;
+        rotate_path(&path, DEBUG_PERSISTED_LIMIT)?;
     }
     Ok(())
 }
 
 pub(crate) fn clear() -> AppResult<()> {
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
     let path = debug_path()?;
     if !path.exists() {
         return Ok(());
@@ -38,18 +44,13 @@ pub(crate) fn clear() -> AppResult<()> {
 }
 
 pub(crate) fn rotate() -> AppResult<()> {
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
     rotate_path(&debug_path()?, DEBUG_PERSISTED_LIMIT)
 }
 
 pub(crate) fn latest_id() -> AppResult<Option<u64>> {
-    let page = query_page_from_path(
-        &debug_path()?,
-        &DebugFrameQuery {
-            limit: Some(1),
-            ..DebugFrameQuery::default()
-        },
-    )?;
-    Ok(page.items.last().map(|frame| frame.id))
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+    latest_id_from_path(&debug_path()?)
 }
 
 pub(crate) fn query_page_from_path(
@@ -159,6 +160,35 @@ pub(crate) fn append_to_path(path: &Path, frame: &DebugFrame) -> AppResult<()> {
     })
 }
 
+fn latest_id_from_path(path: &Path) -> AppResult<Option<u64>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(path).map_err(|error| AppError {
+        code: "io_error",
+        message: format!("failed to read debug frames: {error}"),
+        details: Some(serde_json::json!({ "path": path.display().to_string() })),
+    })?;
+    let reader = BufReader::new(file);
+    let mut latest_id = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| AppError {
+            code: "io_error",
+            message: format!("failed to read debug frames: {error}"),
+            details: Some(serde_json::json!({ "path": path.display().to_string() })),
+        })?;
+        let Ok(frame) = serde_json::from_str::<DebugFrame>(line.trim()) else {
+            continue;
+        };
+        latest_id = Some(latest_id.map_or(frame.id, |current: u64| current.max(frame.id)));
+    }
+
+    Ok(latest_id)
+}
+
+#[cfg(test)]
 pub(crate) fn load_recent_from_path(path: &Path, limit: usize) -> AppResult<Vec<DebugFrame>> {
     let page = query_page_from_path(
         path,
@@ -183,9 +213,19 @@ pub(crate) fn rotate_path(path: &Path, limit: usize) -> AppResult<()> {
         });
     }
 
-    let frames = load_recent_from_path(path, limit)?;
+    let page = query_page_from_path(
+        path,
+        &DebugFrameQuery {
+            limit: Some(limit),
+            ..DebugFrameQuery::default()
+        },
+    )?;
+    if !page.has_more {
+        return Ok(());
+    }
+
     let mut content = String::new();
-    for frame in frames {
+    for frame in page.items {
         let line = serde_json::to_string(&frame).map_err(|error| AppError {
             code: "internal",
             message: format!("failed to serialize debug frame: {error}"),
@@ -272,6 +312,33 @@ mod tests {
             vec![3, 4]
         );
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn debug_store_does_not_rewrite_a_file_under_the_limit() {
+        let dir = std::env::temp_dir().join(format!("znet-debug-no-rotate-{}", std::process::id()));
+        let path = dir.join("debug.log.jsonl");
+
+        append_to_path(&path, &frame(1, "event")).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        rotate_path(&path, 2).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn debug_store_seeds_from_the_highest_id_not_the_last_record() {
+        let dir = std::env::temp_dir().join(format!("znet-debug-latest-id-{}", std::process::id()));
+        let path = dir.join("debug.log.jsonl");
+
+        for id in [12, 40, 3] {
+            append_to_path(&path, &frame(id, "event")).unwrap();
+        }
+
+        assert_eq!(latest_id_from_path(&path).unwrap(), Some(40));
         let _ = fs::remove_dir_all(dir);
     }
 

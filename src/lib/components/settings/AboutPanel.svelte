@@ -2,7 +2,7 @@
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { updater, formatBytes } from '$lib/services/updater.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
-  import { guiExportDiagnostics } from '$lib/services/core';
+  import { appendLog, guiExportDiagnostics } from '$lib/services/core';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
   import {
     error as toastError,
@@ -46,6 +46,12 @@
     await updater.downloadAndInstall();
   }
 
+  function logDiagnosticsPathAction(message: string, fields: Record<string, unknown>) {
+    void appendLog({ source: 'app', level: 'info', message, fields }).catch((error) => {
+      console.error('Failed to append diagnostics path action log:', error);
+    });
+  }
+
   async function handleExportDiagnostics() {
     if (exportingDiagnostics) return;
     exportingDiagnostics = true;
@@ -64,7 +70,13 @@
     } catch (openError) {
       try {
         await revealItemInDir(result.directory);
-        toastWarning('无法直接打开诊断目录，已在资源管理器中定位');
+        logDiagnosticsPathAction('已在资源管理器中定位诊断目录', {
+          area: 'diagnostics',
+          operation: 'diagnostics.open_directory',
+          outcome: 'revealed',
+          directory: result.directory,
+          directOpenError: openError instanceof Error ? openError.message : String(openError),
+        });
       } catch (revealError) {
         const openMessage = openError instanceof Error ? openError.message : String(openError);
         const revealMessage = revealError instanceof Error ? revealError.message : String(revealError);

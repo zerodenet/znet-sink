@@ -479,20 +479,20 @@ struct ManagedConnection {
 }
 
 static MANAGER: LazyLock<Mutex<Option<ManagedConnection>>> = LazyLock::new(|| Mutex::new(None));
+/// Serializes cold connects without holding [`MANAGER`] across blocking pipe
+/// I/O. Dropping a losing `MultiplexedConnection` is not sufficient to close
+/// its pipe because the reader thread owns another `Arc`, so concurrent cold
+/// connects would otherwise leave orphan kernel subscriptions behind.
+static CONNECT_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Return the live multiplexed connection for `endpoint`, creating one if
 /// none exists, the cached one is dead, or it is bound to a different path.
 ///
-/// The fast path (cache hit) holds the lock only long enough to clone the
-/// cached connection.  The slow path (cold start or dead connection) drops
-/// the lock before calling [`MultiplexedConnection::connect`] (which blocks
-/// for up to `connect_timeout` waiting for the subscribe ack) so that
-/// concurrent callers do not queue up behind a held lock and time out
-/// before the connection is ready.
-///
-/// When two callers race to create the first connection, the second one to
-/// finish simply drops its connection and returns the cached one — only one
-/// multiplexed pipe is ever open at a time.
+/// The fast path (cache hit) holds the manager lock only long enough to clone
+/// the cached connection. The slow path is serialized by [`CONNECT_GATE`]
+/// and rechecks the cache before opening the pipe. This keeps blocking pipe
+/// I/O outside [`MANAGER`] while guaranteeing that only one reader thread and
+/// kernel subscription are created for a cold endpoint.
 pub fn get_or_connect(
     endpoint: CoreEndpoint,
     connect_timeout: Duration,
@@ -507,18 +507,27 @@ pub fn get_or_connect(
                 return Ok(managed.conn.clone());
             }
         }
-    } // lock dropped here — connect() below does NOT hold it
+    }
+
+    // Only one caller may perform the blocking subscribe handshake. Other
+    // callers wait here, then reuse the connection published by the winner.
+    let _connect_guard = CONNECT_GATE.lock().expect("connection gate mutex poisoned");
+
+    // A caller may have populated the cache while we waited for the gate.
+    {
+        let guard = MANAGER.lock().expect("connection manager mutex poisoned");
+        if let Some(managed) = guard.as_ref() {
+            if managed.endpoint_path == path && managed.conn.is_alive() {
+                return Ok(managed.conn.clone());
+            }
+        }
+    }
 
     let conn = MultiplexedConnection::connect(endpoint, connect_timeout)?;
 
-    // ── Publish the new connection, preferring a concurrent winner ──
+    // Publish while the connect gate is still held, so no concurrent cold
+    // caller can create a second reader/subscription.
     let mut guard = MANAGER.lock().expect("connection manager mutex poisoned");
-    if let Some(managed) = guard.as_ref() {
-        if managed.endpoint_path == path && managed.conn.is_alive() {
-            // Another thread beat us to it — use its connection instead.
-            return Ok(managed.conn.clone());
-        }
-    }
     *guard = Some(ManagedConnection {
         endpoint_path: path,
         conn: conn.clone(),
@@ -529,8 +538,14 @@ pub fn get_or_connect(
 /// Drop the cached connection, if any. Called when the kernel is stopped so
 /// the next request reconnects cleanly instead of reusing a dead handle.
 pub fn reset() {
-    if let Ok(mut guard) = MANAGER.lock() {
-        *guard = None;
+    // Wait for an in-flight connect to finish before clearing the cache. This
+    // prevents an old-endpoint connection from being published after reset.
+    if let Ok(_connect_guard) = CONNECT_GATE.lock() {
+        if let Ok(mut guard) = MANAGER.lock() {
+            if let Some(managed) = guard.take() {
+                managed.conn.mark_dead();
+            }
+        }
     }
 }
 

@@ -45,6 +45,7 @@
   let _feedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let _clearArmTimer: ReturnType<typeof setTimeout> | null = null;
   let queryGeneration = 0;
+  let backgroundRefreshInFlight = false;
   const refreshGate = createLatestRequestGate();
 
   const visibleFrames = $derived([...frames].reverse());
@@ -162,6 +163,16 @@
     }
   }
 
+  async function refreshInBackground() {
+    if (backgroundRefreshInFlight || loading || refreshing || loadingMore || clearing) return;
+    backgroundRefreshInFlight = true;
+    try {
+      await refresh();
+    } finally {
+      backgroundRefreshInFlight = false;
+    }
+  }
+
   async function loadMore() {
     if (loadingMore || frames.length === 0) return;
 
@@ -233,8 +244,8 @@
 
     if (subTab === 'frames' && autoRefresh) {
       _timer = setInterval(() => {
-        void refresh();
-      }, 2_000);
+        void refreshInBackground();
+      }, 3_000);
     }
 
     return () => {

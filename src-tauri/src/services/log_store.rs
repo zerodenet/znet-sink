@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use super::data_dir;
 use crate::errors::{AppError, AppResult};
@@ -9,20 +10,31 @@ use crate::models::logs::{LogEntry, LogPage, LogQuery};
 
 const LOGS_FILE: &str = "logs.jsonl";
 const MIN_PERSISTED_LOG_ENTRIES: usize = 5_000;
+const LOG_ROTATE_EVERY: u64 = 100;
+static LOG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub(crate) fn load_recent(limit: usize) -> AppResult<Vec<LogEntry>> {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     load_recent_from_path(&logs_path()?, limit)
 }
 
-pub(crate) fn append(entry: &LogEntry) -> AppResult<()> {
-    append_to_path(&logs_path()?, entry)
+pub(crate) fn append(entry: &LogEntry, limit: usize) -> AppResult<()> {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
+    let path = logs_path()?;
+    append_to_path(&path, entry)?;
+    if entry.id.is_multiple_of(LOG_ROTATE_EVERY) {
+        rotate_path(&path, persisted_limit(limit))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn rotate(limit: usize) -> AppResult<()> {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     rotate_path(&logs_path()?, persisted_limit(limit))
 }
 
 pub(crate) fn clear() -> AppResult<()> {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     let path = logs_path()?;
     if !path.exists() {
         return Ok(());
@@ -36,6 +48,7 @@ pub(crate) fn clear() -> AppResult<()> {
 }
 
 pub(crate) fn query_page(query: &LogQuery) -> AppResult<LogPage> {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     query_page_from_path(&logs_path()?, query)
 }
 
@@ -227,9 +240,19 @@ pub fn rotate_path(path: &Path, limit: usize) -> AppResult<()> {
         });
     }
 
-    let entries = load_recent_from_path(path, limit)?;
+    let page = query_page_from_path(
+        path,
+        &LogQuery {
+            limit: Some(limit),
+            ..LogQuery::default()
+        },
+    )?;
+    if !page.has_more {
+        return Ok(());
+    }
+
     let mut content = String::new();
-    for entry in entries {
+    for entry in page.items {
         let line = serde_json::to_string(&entry).map_err(|error| AppError {
             code: "internal",
             message: format!("failed to serialize log entry: {error}"),
@@ -320,6 +343,32 @@ mod tests {
             vec![3, 4, 5]
         );
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_store_does_not_rewrite_a_file_under_the_limit() {
+        let dir =
+            std::env::temp_dir().join(format!("znet-log-store-no-rotate-{}", std::process::id()));
+        let path = dir.join("logs.jsonl");
+
+        append_to_path(
+            &path,
+            &LogEntry {
+                id: 1,
+                source: LogSource::App,
+                level: LogLevel::Info,
+                message: "entry-1".to_string(),
+                fields: None,
+                occurred_at_unix_ms: 1,
+            },
+        )
+        .unwrap();
+        let original = fs::read(&path).unwrap();
+
+        rotate_path(&path, 2).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), original);
         let _ = fs::remove_dir_all(dir);
     }
 

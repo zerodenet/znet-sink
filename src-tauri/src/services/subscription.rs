@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::logs::LogLevel;
-use crate::models::proxy_config::ProxyConfigProfile;
+use crate::models::proxy_config::{ProxyConfigProfile, ProxyConfigUpsert};
 use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert, SyncMetadata};
 use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
@@ -1289,19 +1289,33 @@ async fn upsert_synced_proxy_config(
         )?;
     }
     ensure_subscription_unchanged(state, subscription)?;
-    proxy_config::upsert_runtime(
-        app_handle.clone(),
-        crate::models::proxy_config::ProxyConfigUpsert {
-            id: Some(target_proxy_config_id.to_string()),
-            name: subscription.name.clone(),
-            kernel: Some(subscription.kernel.clone()),
-            format: Some(parsed.format),
-            path: Some(subscription.url.clone()),
-            content: Some(parsed.content),
-            active: Some(existing_active),
-        },
-    )
-    .await
+    let input = build_synced_proxy_config_upsert(
+        subscription,
+        target_proxy_config_id,
+        parsed.content,
+        existing_active,
+    );
+    proxy_config::upsert_runtime(app_handle.clone(), input).await
+}
+
+fn build_synced_proxy_config_upsert(
+    subscription: &SubscriptionProfile,
+    target_proxy_config_id: &str,
+    content: Value,
+    active: bool,
+) -> ProxyConfigUpsert {
+    ProxyConfigUpsert {
+        id: Some(target_proxy_config_id.to_string()),
+        name: subscription.name.clone(),
+        kernel: Some(subscription.kernel.clone()),
+        // `ParsedSubscriptionConfig::format` describes how the source was
+        // decoded or converted. At this point the payload is already a JSON
+        // value, and proxy profiles deliberately accept only JSON.
+        format: Some("json".to_string()),
+        path: Some(subscription.url.clone()),
+        content: Some(content),
+        active: Some(active),
+    }
 }
 
 fn ensure_clash_local_inbound(
@@ -1708,6 +1722,42 @@ mod tests {
 
         let endpoint = proxy_config::extract_local_proxy(&content).unwrap();
         assert_eq!(endpoint.port, 8899);
+    }
+
+    #[test]
+    fn synced_proxy_config_uses_json_target_format_after_source_conversion() {
+        let subscription = SubscriptionProfile {
+            id: "subscription-1".to_string(),
+            name: "Converted Clash".to_string(),
+            url: "https://example.com/subscription".to_string(),
+            enabled: true,
+            kernel: "zero".to_string(),
+            format: "clash-yaml".to_string(),
+            target_proxy_config_id: None,
+            update_interval_secs: None,
+            user_agent: None,
+            node_count: None,
+            upload_bytes: None,
+            download_bytes: None,
+            total_bytes: None,
+            expire_at_unix_ms: None,
+            updated_at_unix_ms: 1,
+            last_sync_at_unix_ms: None,
+            last_error: None,
+        };
+        let content = json!({ "outbounds": [] });
+
+        let input = build_synced_proxy_config_upsert(
+            &subscription,
+            "proxy-config-1",
+            content.clone(),
+            true,
+        );
+
+        assert_eq!(input.format.as_deref(), Some("json"));
+        assert_eq!(input.path.as_deref(), Some(subscription.url.as_str()));
+        assert_eq!(input.content, Some(content));
+        assert_eq!(input.active, Some(true));
     }
 
     #[test]
