@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte';
+
   interface Props {
     /** Dialog title shown in the draggable header. */
     title: string;
@@ -39,12 +41,71 @@
   let dragAnchorY = 0;
   let containerEl: HTMLDivElement | undefined = $state();
 
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+  }
+
+  function getFocusableElements(): HTMLElement[] {
+    if (!containerEl) return [];
+    return Array.from(containerEl.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => !element.hasAttribute('hidden'));
+  }
+
   // Reset position when dialog opens
   $effect(() => {
     if (open) {
       pos = { x: 0, y: 0 };
       fullscreen = false;
     }
+  });
+
+  $effect(() => {
+    if (!open) return;
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    function handleWindowKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        if (!closeDisabled) {
+          event.preventDefault();
+          onClose();
+        }
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        containerEl?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener('keydown', handleWindowKeydown);
+    void tick().then(() => {
+      const focusable = getFocusableElements();
+      (focusable[0] ?? containerEl)?.focus();
+    });
+
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeydown);
+      previouslyFocused?.focus();
+    };
   });
 
   function handleDragStart(e: MouseEvent) {
@@ -121,8 +182,8 @@
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && !closeDisabled) {
+  function handleOverlayClick(event: MouseEvent) {
+    if (event.target === event.currentTarget && !closeDisabled) {
       onClose();
     }
   }
@@ -131,10 +192,11 @@
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
+    use:portal
     class="dm-overlay"
     class:dm-overlay-fullscreen={fullscreen}
     role="presentation"
-    onkeydown={handleKeydown}
+    onclick={handleOverlayClick}
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -144,6 +206,7 @@
       style="width: {fullscreen ? '100%' : width}; {fullscreen ? '' : `transform: translate(${pos.x}px, ${pos.y}px)`}"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
     >
       <!-- Drag handle = header -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -212,7 +275,7 @@
   .dm-overlay {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
