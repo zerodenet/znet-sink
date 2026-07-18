@@ -25,6 +25,10 @@
   let loadError = $state<string | null>(null);
   let requestId = 0;
 
+  function reloadApplication() {
+    window.location.reload();
+  }
+
   $effect(() => {
     const tab = store.activeTab;
     const currentRequest = ++requestId;
@@ -67,6 +71,7 @@
   <div class="tab-load-state error">
     <strong>页面加载失败</strong>
     <span>{loadError}</span>
+    <button type="button" class="reload-button" onclick={reloadApplication}>重新加载应用</button>
   </div>
 {:else if ActiveComponent}
   <ActiveComponent {...activeProps} />
@@ -94,5 +99,20 @@
     color: var(--destructive);
     text-align: center;
     overflow-wrap: anywhere;
+  }
+
+  .reload-button {
+    margin-top: 4px;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--foreground);
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .reload-button:hover {
+    background: var(--muted);
   }
 </style>

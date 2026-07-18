@@ -1,13 +1,14 @@
 <script lang="ts">
   import { store } from '$lib/services/store.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
+  import Toast from '$lib/components/Toast.svelte';
 </script>
 
 <!--
   AppHeader: compact desktop toolbar navigation
   Center-aligned nav tabs
 -->
-<header class="w-full flex-shrink-0">
+<header class="app-header w-full flex-shrink-0">
   <div class="w-full flex items-center justify-between" style="height: 38px;">
 
     <!-- Left spacer: flexible, shrinks when window is narrow -->
@@ -37,9 +38,14 @@
     <div class="flex-1 min-w-0 hidden sm:block" style="max-width: 120px;" aria-hidden="true"></div>
 
   </div>
+  <Toast />
 </header>
 
 <style>
+  .app-header {
+    position: relative;
+  }
+
   .nav-tab-btn {
     display: inline-flex;
     align-items: center;

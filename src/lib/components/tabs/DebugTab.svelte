@@ -1,5 +1,11 @@
 <script lang="ts">
   import { getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
+  import { copyTextToClipboard } from '$lib/services/clipboard';
+  import {
+    serializeDebugFrameForClipboard,
+    serializeDebugFramesForClipboard,
+  } from '$lib/services/diagnostic-copy';
+  import { error as toastError, success as toastSuccess } from '$lib/services/toast.svelte';
   import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import type { DebugFrame, DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
@@ -243,6 +249,35 @@
     if (typeof p === 'string') return p;
     return JSON.stringify(p, null, 2) ?? '';
   }
+
+  function copyErrorMessage(copyError: unknown): string {
+    return copyError instanceof Error ? copyError.message : String(copyError);
+  }
+
+  async function copyWithFeedback(text: string, successMessage: string): Promise<void> {
+    try {
+      await copyTextToClipboard(text);
+      toastSuccess(successMessage, 2_500);
+    } catch (copyError) {
+      toastError(`复制失败：${copyErrorMessage(copyError)}`, 6_000);
+    }
+  }
+
+  async function copyFrame(frame: DebugFrame): Promise<void> {
+    await copyWithFeedback(
+      serializeDebugFrameForClipboard(frame),
+      `已复制 IPC 帧 #${frame.id}`,
+    );
+  }
+
+  async function copyVisibleFrames(): Promise<void> {
+    if (visibleFrames.length === 0) return;
+    const content = serializeDebugFramesForClipboard(visibleFrames, {
+      frameType: filterType,
+      hasMore,
+    });
+    await copyWithFeedback(content, `已复制当前 ${visibleFrames.length} 条 IPC 帧`);
+  }
 </script>
 
 <div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
@@ -273,6 +308,12 @@
         <button onclick={() => autoRefresh = !autoRefresh} class="debug-toggle" class:active={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
           {autoRefresh ? 'LIVE' : 'PAUSE'}
         </button>
+        <button
+          onclick={copyVisibleFrames}
+          disabled={visibleFrames.length === 0}
+          class="debug-sm-btn copy"
+          title="复制当前筛选下已加载的完整 IPC 帧"
+        >复制当前</button>
         <button onclick={() => refresh({ replace: true })} class="debug-sm-btn">刷新</button>
         <button onclick={clearAll} class="debug-sm-btn clear">清空</button>
       </div>
@@ -288,24 +329,33 @@
       {:else}
         {#each visibleFrames as frame (frame.id)}
           <div class="debug-row" class:expanded={expandedIds.has(frame.id)}>
-            <button class="debug-main" onclick={() => toggleExpand(frame.id)}>
-              <span class="debug-dir" style="color: {dirColor(frame.direction)}">{dirLabel(frame.direction)}</span>
-              <span class="debug-summary">{frameSummary(frame)}</span>
-              {#if frame.elapsedMs != null}
-                <span class="debug-ms" class:slow={frame.elapsedMs > 200} class:very-slow={frame.elapsedMs > 500}>
-                  {frame.elapsedMs}ms
-                </span>
-                <span class="debug-bar" style="width: {Math.min(frame.elapsedMs / 10, 80)}px; background: {frame.elapsedMs > 500 ? 'var(--destructive)' : frame.elapsedMs > 200 ? 'var(--warning)' : '#22C55E'};"></span>
-              {/if}
-              {#if frame.error}
-                <span class="debug-err-mark" title={frame.error}>ERR</span>
-              {/if}
-              <span class="debug-ts">{fmtTime(frame.atMs)}</span>
-              <span class="debug-id">#{frame.id}</span>
-              <svg width="10" height="10" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="debug-chev" class:on={expandedIds.has(frame.id)}>
-                <polyline points="3 5 7 9 11 5"/>
-              </svg>
-            </button>
+            <div class="debug-row-head">
+              <button class="debug-main" onclick={() => toggleExpand(frame.id)}>
+                <span class="debug-dir" style="color: {dirColor(frame.direction)}">{dirLabel(frame.direction)}</span>
+                <span class="debug-summary">{frameSummary(frame)}</span>
+                {#if frame.elapsedMs != null}
+                  <span class="debug-ms" class:slow={frame.elapsedMs > 200} class:very-slow={frame.elapsedMs > 500}>
+                    {frame.elapsedMs}ms
+                  </span>
+                  <span class="debug-bar" style="width: {Math.min(frame.elapsedMs / 10, 80)}px; background: {frame.elapsedMs > 500 ? 'var(--destructive)' : frame.elapsedMs > 200 ? 'var(--warning)' : '#22C55E'};"></span>
+                {/if}
+                {#if frame.error}
+                  <span class="debug-err-mark" title={frame.error}>ERR</span>
+                {/if}
+                <span class="debug-ts">{fmtTime(frame.atMs)}</span>
+                <span class="debug-id">#{frame.id}</span>
+                <svg width="10" height="10" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="debug-chev" class:on={expandedIds.has(frame.id)}>
+                  <polyline points="3 5 7 9 11 5"/>
+                </svg>
+              </button>
+              <button
+                class="debug-frame-copy"
+                type="button"
+                title={`复制 IPC 帧 #${frame.id}`}
+                aria-label={`复制 IPC 帧 #${frame.id}`}
+                onclick={() => void copyFrame(frame)}
+              >复制</button>
+            </div>
             {#if expandedIds.has(frame.id)}
               <div class="debug-body">
                 {#if frame.error}
@@ -414,6 +464,11 @@
     background: var(--muted);
   }
 
+  .debug-sm-btn.copy {
+    color: var(--foreground);
+    font-weight: 600;
+  }
+
   .debug-sm-btn.clear:hover {
     color: var(--destructive);
     background: rgba(239, 68, 68, 0.08);
@@ -441,6 +496,12 @@
     background: var(--surface);
   }
 
+  .debug-row-head {
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+  }
+
   .debug-main {
     display: flex;
     align-items: center;
@@ -453,6 +514,35 @@
     cursor: pointer;
     font-size: inherit;
     text-align: left;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .debug-frame-copy {
+    align-self: center;
+    flex-shrink: 0;
+    height: 20px;
+    margin-right: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--card);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+  }
+
+  .debug-row:hover .debug-frame-copy,
+  .debug-frame-copy:focus-visible {
+    opacity: 1;
+  }
+
+  .debug-frame-copy:hover {
+    color: var(--foreground);
+    background: var(--muted);
   }
 
   .debug-dir {

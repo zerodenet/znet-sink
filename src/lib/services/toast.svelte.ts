@@ -1,6 +1,11 @@
+import { invoke } from '@tauri-apps/api/core';
 import { SvelteMap } from 'svelte/reactivity';
+import {
+  buildNotificationLogInput,
+  type NotificationType,
+} from '$lib/services/notification-log';
 
-export type ToastType = 'success' | 'error' | 'warning' | 'info';
+export type ToastType = NotificationType;
 
 export interface Toast {
   id: number;
@@ -14,7 +19,17 @@ const toasts = new SvelteMap<number, Toast>();
 
 export function showToast(type: ToastType, message: string, duration: number = 4000): number {
   const id = ++nextId;
-  toasts.set(id, { id, type, message, duration });
+  const toast = { id, type, message, duration };
+  toasts.set(id, toast);
+
+  // Notifications are transient UI. Persist the complete text independently
+  // so errors and warnings remain inspectable after the banner disappears.
+  void invoke('logs_append', {
+    input: buildNotificationLogInput(toast),
+  }).catch((logError) => {
+    // Logging must never prevent the notification itself from being shown.
+    console.error('[notification] failed to persist notification', logError);
+  });
 
   if (duration > 0) {
     setTimeout(() => {

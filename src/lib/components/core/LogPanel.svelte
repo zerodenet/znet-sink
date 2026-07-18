@@ -1,6 +1,12 @@
 <script lang="ts">
   import { getLogs, clearLogs } from '$lib/services/core';
   import { coreEvents } from '$lib/services/core-events.svelte';
+  import { copyTextToClipboard } from '$lib/services/clipboard';
+  import {
+    serializeLogForClipboard,
+    serializeLogsForClipboard,
+  } from '$lib/services/diagnostic-copy';
+  import { error as toastError, success as toastSuccess } from '$lib/services/toast.svelte';
   import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
 
   const PAGE_SIZE = 400;
@@ -106,19 +112,68 @@
     await refreshLogs({ replace: true });
   }
 
-  function copyLastError() {
+  async function copyLastError() {
     const errors = logs.filter(l => l.level === 'error');
     if (errors.length === 0) return;
     const last = errors[errors.length - 1];
-    navigator.clipboard.writeText(
-      `[${formatTime(last.occurredAtUnixMs)}] [${last.source.toUpperCase()}] [${last.level.toUpperCase()}] ${last.message}`
-    );
+    await copyLog(last);
   }
 
   function formatTime(ms: number): string {
     const d = new Date(ms);
     return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
       + ' ' + d.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+
+  function fieldObject(log: LogEntry): Record<string, unknown> | null {
+    return log.fields && typeof log.fields === 'object' && !Array.isArray(log.fields)
+      ? log.fields as Record<string, unknown>
+      : null;
+  }
+
+  function structuredFields(log: LogEntry): Array<[string, unknown]> {
+    const fields = fieldObject(log);
+    if (!fields) return [];
+    return Object.entries(fields).filter(([key]) =>
+      !['message', 'timestamp', 'level', 'raw_line'].includes(key)
+    );
+  }
+
+  function displayMessage(log: LogEntry): string {
+    const message = fieldObject(log)?.['message'];
+    return typeof message === 'string' && message.length > 0 ? message : log.message;
+  }
+
+  function formatFieldValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    return JSON.stringify(value);
+  }
+
+  function copyErrorMessage(copyError: unknown): string {
+    return copyError instanceof Error ? copyError.message : String(copyError);
+  }
+
+  async function copyWithFeedback(text: string, successMessage: string): Promise<void> {
+    try {
+      await copyTextToClipboard(text);
+      toastSuccess(successMessage, 2_500);
+    } catch (copyError) {
+      toastError(`复制失败：${copyErrorMessage(copyError)}`, 6_000);
+    }
+  }
+
+  async function copyLog(log: LogEntry): Promise<void> {
+    await copyWithFeedback(serializeLogForClipboard(log), `已复制日志 #${log.id}`);
+  }
+
+  async function copyVisibleLogs(): Promise<void> {
+    if (visibleLogs.length === 0) return;
+    const content = serializeLogsForClipboard(visibleLogs, {
+      source: selectedSource,
+      minLevel: selectedLevel,
+      hasMore,
+    });
+    await copyWithFeedback(content, `已复制当前 ${visibleLogs.length} 条日志`);
   }
 
   function scrollToLatest() {
@@ -194,6 +249,19 @@
       <span class="log-count">{hasMore ? `${visibleLogs.length}+` : visibleLogs.length}</span>
 
       <button
+        onclick={copyVisibleLogs}
+        disabled={visibleLogs.length === 0}
+        class="log-copy-all-btn"
+        title="复制当前筛选下已加载的完整日志"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="4.5" y="4.5" width="6" height="6" rx="1"/>
+          <path d="M3.5 7.5H2.5a1 1 0 01-1-1V2.5a1 1 0 011-1h4a1 1 0 011 1v1"/>
+        </svg>
+        复制当前
+      </button>
+
+      <button
         onclick={() => autoScroll = !autoScroll}
         class="log-action-btn {autoScroll ? 'active' : ''}"
         title="自动滚动"
@@ -239,13 +307,14 @@
       <div class="log-empty">暂无日志</div>
     {:else}
       {#each visibleLogs as log, index (`${log.id}-${log.occurredAtUnixMs}-${index}`)}
+        {@const fields = structuredFields(log)}
         <div
           class="log-row"
           role="button"
           tabindex="0"
-          title={`${formatTime(log.occurredAtUnixMs)} [${log.source.toUpperCase()}] ${log.message}`}
-          onclick={() => { navigator.clipboard.writeText(`[${formatTime(log.occurredAtUnixMs)}] [${log.source.toUpperCase()}] [${log.level.toUpperCase()}] ${log.message}`); }}
-          onkeydown={(e) => { if (e.key === 'Enter') { navigator.clipboard.writeText(`[${formatTime(log.occurredAtUnixMs)}] [${log.source.toUpperCase()}] [${log.level.toUpperCase()}] ${log.message}`); } }}
+          title={`${formatTime(log.occurredAtUnixMs)} [${log.source.toUpperCase()}] ${displayMessage(log)}`}
+          onclick={() => void copyLog(log)}
+          onkeydown={(e) => { if (e.key === 'Enter') void copyLog(log); }}
         >
           <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
           <span class="log-src" class:app={log.source === 'app'} class:core={log.source === 'core'}>
@@ -254,7 +323,27 @@
           <span class="log-lvl" class:err={log.level === 'error'} class:wrn={log.level === 'warn'} class:inf={log.level === 'info'} class:dbg={log.level === 'debug'}>
             {log.level.slice(0, 3).toUpperCase()}
           </span>
-          <span class="log-msg">{log.message}</span>
+          <span class="log-msg">{displayMessage(log)}</span>
+          {#if fields.length > 0}
+            <span class="log-fields">
+              {#each fields as [key, value]}
+                <span class="log-field" title={`${key}=${formatFieldValue(value)}`}>
+                  <span class="log-field-key">{key}</span>
+                  <span class="log-field-value">{formatFieldValue(value)}</span>
+                </span>
+              {/each}
+            </span>
+          {/if}
+          <button
+            class="log-row-copy"
+            type="button"
+            title={`复制日志 #${log.id}`}
+            aria-label={`复制日志 #${log.id}`}
+            onclick={(event) => {
+              event.stopPropagation();
+              void copyLog(log);
+            }}
+          >复制</button>
         </div>
       {/each}
 
@@ -376,6 +465,33 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
 
+  .log-copy-all-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--foreground);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .log-copy-all-btn:hover:not(:disabled) {
+    background: var(--muted);
+  }
+
+  .log-copy-all-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
   .log-action-btn:hover:not(:disabled) {
     background: var(--muted);
     color: var(--foreground);
@@ -412,6 +528,7 @@
   .log-row {
     display: flex;
     align-items: baseline;
+    flex-wrap: wrap;
     gap: 5px;
     padding: 2px 4px;
     font-size: 12.5px;
@@ -424,6 +541,32 @@
   }
 
   .log-row:hover {
+    background: var(--muted);
+  }
+
+  .log-row-copy {
+    margin-left: auto;
+    flex-shrink: 0;
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--card);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+  }
+
+  .log-row:hover .log-row-copy,
+  .log-row:focus-within .log-row-copy {
+    opacity: 1;
+  }
+
+  .log-row-copy:hover {
+    color: var(--foreground);
     background: var(--muted);
   }
 
@@ -481,9 +624,40 @@
     color: var(--foreground);
     opacity: 0.82;
     min-width: 0;
-    flex: 1;
+    flex: 0 1 auto;
     word-break: break-all;
     line-height: 1.5;
+  }
+
+  .log-fields {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .log-field {
+    display: inline-flex;
+    max-width: 280px;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 18px;
+  }
+
+  .log-field-key {
+    padding: 0 4px;
+    color: var(--muted-foreground);
+    background: var(--muted);
+  }
+
+  .log-field-value {
+    padding: 0 5px;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .log-more {

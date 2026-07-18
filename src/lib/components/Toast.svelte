@@ -1,121 +1,120 @@
 <script lang="ts">
+  import { store } from '$lib/services/store.svelte';
   import { getToasts, dismissToast, type ToastType } from '$lib/services/toast.svelte';
 
   const toasts = getToasts();
-
-  interface IconPaths {
-    success: string;
-    error: string;
-    warning: string;
-    info: string;
-  }
-
-  // SVG path data for each type
-  const iconPaths: IconPaths = {
-    success: 'M2 6l3 3 5-5',         // check
-    error:   'M2 2l8 8M10 2L2 10',   // x
-    warning: 'M6 3v4M6 9.5v.5',      // exclamation (! body + dot)
-    info:    'M6 4v.5M6 6.5v4',      // i body + dot
-  };
+  const visibleToasts = $derived(Array.from(toasts.values()).slice(-3));
 
   function getAccentColor(type: ToastType): string {
     switch (type) {
       case 'success': return 'var(--success)';
-      case 'error':   return 'var(--destructive)';
+      case 'error': return 'var(--destructive)';
       case 'warning': return 'var(--warning)';
-      case 'info':    return 'var(--accent-foreground)';
+      case 'info': return 'var(--accent-foreground)';
     }
   }
 
   function getIconBg(type: ToastType): string {
     switch (type) {
       case 'success': return 'rgba(34,197,94,0.12)';
-      case 'error':   return 'rgba(239,68,68,0.12)';
+      case 'error': return 'rgba(239,68,68,0.12)';
       case 'warning': return 'rgba(245,158,11,0.12)';
-      case 'info':    return 'rgba(99,102,241,0.12)';
+      case 'info': return 'rgba(99,102,241,0.12)';
     }
   }
 
   function getLabel(type: ToastType): string {
     switch (type) {
       case 'success': return '成功';
-      case 'error':   return '错误';
+      case 'error': return '错误';
       case 'warning': return '警告';
-      case 'info':    return '提示';
+      case 'info': return '提示';
     }
+  }
+
+  function openLogs(id: number) {
+    dismissToast(id);
+    store.isInitialized = true;
+    store.activeTab = 'logs';
   }
 </script>
 
-<div class="toast-container">
-  {#each Array.from(toasts.values()) as toast (toast.id)}
-    <div
-      class="toast-item"
-      style="--accent: {getAccentColor(toast.type)};"
-    >
-      <!-- Left accent bar -->
-      <div class="toast-bar" style="background: var(--accent);"></div>
-
-      <!-- Icon -->
+{#if visibleToasts.length > 0}
+  <div class="toast-container" aria-live="polite" aria-label="应用提示">
+    {#each visibleToasts as toast (toast.id)}
       <div
-        class="toast-icon"
-        style="background: {getIconBg(toast.type)}; color: var(--accent);"
+        class="toast-item"
+        class:error={toast.type === 'error'}
+        style="--accent: {getAccentColor(toast.type)};"
+        role={toast.type === 'error' ? 'alert' : 'status'}
       >
-        {#if toast.type === 'warning'}
-          <!-- warning: exclamation mark -->
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <line x1="6" y1="2.5" x2="6" y2="7"/>
-            <circle cx="6" cy="9.5" r="0.6" fill="currentColor" stroke="none"/>
-          </svg>
-        {:else if toast.type === 'info'}
-          <!-- info: letter i -->
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <circle cx="6" cy="2.5" r="0.6" fill="currentColor" stroke="none"/>
-            <line x1="6" y1="4.5" x2="6" y2="9.5"/>
-          </svg>
-        {:else if toast.type === 'error'}
-          <!-- error: × -->
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <line x1="2.5" y1="2.5" x2="9.5" y2="9.5"/>
-            <line x1="9.5" y1="2.5" x2="2.5" y2="9.5"/>
-          </svg>
-        {:else}
-          <!-- success: ✓ -->
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="2,6 5,9 10,3"/>
-          </svg>
-        {/if}
-      </div>
+        <div class="toast-bar" style="background: var(--accent);"></div>
 
-      <!-- Text -->
-      <div class="toast-text">
-        <span class="toast-label" style="color: var(--accent);">{getLabel(toast.type)}</span>
-        <span class="toast-msg">{toast.message}</span>
-      </div>
+        <div
+          class="toast-icon"
+          style="background: {getIconBg(toast.type)}; color: var(--accent);"
+          aria-hidden="true"
+        >
+          {#if toast.type === 'warning'}
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <line x1="6" y1="2.5" x2="6" y2="7"/>
+              <circle cx="6" cy="9.5" r="0.6" fill="currentColor" stroke="none"/>
+            </svg>
+          {:else if toast.type === 'info'}
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="6" cy="2.5" r="0.6" fill="currentColor" stroke="none"/>
+              <line x1="6" y1="4.5" x2="6" y2="9.5"/>
+            </svg>
+          {:else if toast.type === 'error'}
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <line x1="2.5" y1="2.5" x2="9.5" y2="9.5"/>
+              <line x1="9.5" y1="2.5" x2="2.5" y2="9.5"/>
+            </svg>
+          {:else}
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="2,6 5,9 10,3"/>
+            </svg>
+          {/if}
+        </div>
 
-      <!-- Dismiss -->
-      <button
-        onclick={() => dismissToast(toast.id)}
-        class="toast-dismiss"
-        aria-label="关闭"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-          <line x1="2" y1="2" x2="8" y2="8"/>
-          <line x1="8" y1="2" x2="2" y2="8"/>
-        </svg>
-      </button>
-    </div>
-  {/each}
-</div>
+        <div class="toast-text">
+          <div class="toast-heading">
+            <span class="toast-label" style="color: var(--accent);">{getLabel(toast.type)}</span>
+            <span class="toast-recorded">已记录到应用日志</span>
+          </div>
+          <span class="toast-msg">{toast.message}</span>
+        </div>
+
+        <button class="toast-log-button" type="button" onclick={() => openLogs(toast.id)}>
+          查看日志
+        </button>
+        <button
+          onclick={() => dismissToast(toast.id)}
+          class="toast-dismiss"
+          type="button"
+          aria-label="关闭提示"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="8" y2="8"/>
+            <line x1="8" y1="2" x2="2" y2="8"/>
+          </svg>
+        </button>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <style>
   .toast-container {
-    position: fixed;
-    bottom: 16px;
-    right: 16px;
+    position: absolute;
+    top: calc(100% + 7px);
+    left: 50%;
     z-index: 9999;
+    width: min(660px, calc(100vw - 32px));
+    transform: translateX(-50%);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
     pointer-events: none;
   }
 
@@ -124,45 +123,49 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 9px 10px 9px 14px;
-    min-width: 240px;
-    max-width: 320px;
-    background: var(--card);
-    border: 1px solid var(--border);
+    gap: 10px;
+    width: 100%;
+    min-height: 48px;
+    padding: 8px 9px 8px 15px;
+    background: color-mix(in srgb, var(--card) 94%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
     border-radius: 9px;
     overflow: hidden;
     box-shadow:
-      0 4px 16px rgba(0, 0, 0, 0.1),
-      0 1px 4px rgba(0, 0, 0, 0.06);
+      0 10px 32px rgba(0, 0, 0, 0.16),
+      0 2px 8px rgba(0, 0, 0, 0.08);
     animation: toast-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .toast-item.error {
+    box-shadow:
+      0 10px 34px rgba(127, 29, 29, 0.2),
+      0 2px 8px rgba(0, 0, 0, 0.1);
   }
 
   :global(.dark) .toast-item {
     box-shadow:
-      0 4px 20px rgba(0, 0, 0, 0.4),
-      0 1px 4px rgba(0, 0, 0, 0.3);
+      0 12px 36px rgba(0, 0, 0, 0.5),
+      0 2px 8px rgba(0, 0, 0, 0.32);
   }
 
-  /* Left accent bar */
   .toast-bar {
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
-    width: 3px;
-    border-radius: 0 2px 2px 0;
+    width: 4px;
   }
 
   .toast-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 6px;
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
     flex-shrink: 0;
   }
 
@@ -171,39 +174,71 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 3px;
+  }
+
+  .toast-heading {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
   }
 
   .toast-label {
     font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    font-weight: 700;
     line-height: 1;
   }
 
+  .toast-recorded {
+    color: var(--muted-foreground);
+    font-size: 10px;
+    line-height: 1;
+    opacity: 0.7;
+  }
+
   .toast-msg {
-    font-size: 12px;
-    font-weight: 400;
+    max-height: 4.2em;
+    overflow: auto;
     color: var(--foreground);
-    line-height: 1.35;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 450;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    user-select: text;
+    white-space: normal;
+  }
+
+  .toast-log-button {
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background);
+    color: var(--foreground);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+
+  .toast-log-button:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: var(--muted);
   }
 
   .toast-dismiss {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
     background: transparent;
     border: none;
     cursor: pointer;
     color: var(--muted-foreground);
     flex-shrink: 0;
-    transition: background 0.12s ease, color 0.12s ease;
   }
 
   .toast-dismiss:hover {
@@ -214,11 +249,22 @@
   @keyframes toast-in {
     from {
       opacity: 0;
-      transform: translateX(16px) scale(0.97);
+      transform: translateY(-8px) scale(0.98);
     }
     to {
       opacity: 1;
-      transform: translateX(0) scale(1);
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .toast-container {
+      width: calc(100vw - 20px);
+    }
+
+    .toast-recorded,
+    .toast-log-button {
+      display: none;
     }
   }
 </style>

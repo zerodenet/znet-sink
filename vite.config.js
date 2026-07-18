@@ -11,6 +11,26 @@ export default defineConfig(async () => ({
     sveltekit()
   ],
 
+  // Tabs and settings panels are lazy-loaded. Pre-bundle their shared
+  // dependencies before Tauri opens the WebView so Vite does not discover a
+  // new dependency mid-import, invalidate OverviewTab, and force a reload
+  // while Tauri invoke callbacks are still pending.
+  optimizeDeps: {
+    include: [
+      '@lucide/svelte',
+      '@tauri-apps/api/app',
+      '@tauri-apps/api/core',
+      '@tauri-apps/api/event',
+      '@tauri-apps/api/window',
+      '@tauri-apps/plugin-dialog',
+      '@tauri-apps/plugin-opener',
+      '@tauri-apps/plugin-updater',
+      'bits-ui',
+      'tailwind-merge',
+      'tailwind-variants',
+    ],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

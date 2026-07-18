@@ -3,8 +3,12 @@
   import { updater, formatBytes } from '$lib/services/updater.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
   import { guiExportDiagnostics } from '$lib/services/core';
-  import { openPath } from '@tauri-apps/plugin-opener';
-  import { error as toastError, success as toastSuccess } from '$lib/services/toast.svelte';
+  import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
+  import {
+    error as toastError,
+    success as toastSuccess,
+    warning as toastWarning,
+  } from '$lib/services/toast.svelte';
 
   let appName = $state('ZNet Sink');
   let appVersion = $state('0.0.1');
@@ -45,15 +49,29 @@
   async function handleExportDiagnostics() {
     if (exportingDiagnostics) return;
     exportingDiagnostics = true;
+    let result: Awaited<ReturnType<typeof guiExportDiagnostics>>;
     try {
-      const result = await guiExportDiagnostics();
-      toastSuccess(`诊断材料已导出（${result.files.length} 个文件）`);
-      await openPath(result.directory);
+      result = await guiExportDiagnostics();
     } catch (error) {
       toastError(`导出诊断材料失败：${error instanceof Error ? error.message : String(error)}`);
-    } finally {
       exportingDiagnostics = false;
+      return;
     }
+
+    toastSuccess(`诊断材料已导出（${result.files.length} 个文件）`);
+    try {
+      await openPath(result.directory);
+    } catch (openError) {
+      try {
+        await revealItemInDir(result.directory);
+        toastWarning('无法直接打开诊断目录，已在资源管理器中定位');
+      } catch (revealError) {
+        const openMessage = openError instanceof Error ? openError.message : String(openError);
+        const revealMessage = revealError instanceof Error ? revealError.message : String(revealError);
+        toastWarning(`诊断材料已导出，但无法打开目录：${result.directory}（${openMessage}；${revealMessage}）`, 8_000);
+      }
+    }
+    exportingDiagnostics = false;
   }
 </script>
 

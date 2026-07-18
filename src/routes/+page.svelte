@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { store } from '$lib/services/store.svelte';
@@ -15,8 +15,6 @@
   import { Spinner } from '$lib/components/ui/Spinner';
   import TabContent from '$lib/components/TabContent.svelte';
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
-  import Toast from '$lib/components/Toast.svelte';
-  import { appendLog } from '$lib/services/core';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
 
   onMount(() => {
@@ -33,19 +31,6 @@
           message: error instanceof Error ? error.message : String(error),
         });
       });
-
-      const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-      void appendLog({
-        source: 'app',
-        level: 'info',
-        message: '前端首屏已就绪',
-        fields: {
-          action: 'frontend_first_render',
-          readyAtMs: Math.round(performance.now()),
-          domInteractiveMs: navigation ? Math.round(navigation.domInteractive) : undefined,
-          domContentLoadedMs: navigation ? Math.round(navigation.domContentLoadedEventEnd) : undefined,
-        },
-      }).catch((error) => console.error('Failed to log frontend readiness:', error));
     });
     void store.loadFromBackend();
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
@@ -74,19 +59,28 @@
   });
 
   $effect(() => {
-    if (store.isInitialized) {
-      guiState.initialize();
-      coreEvents.start();
-      updater.startPeriodicChecks();
-    } else {
-      guiState.destroy();
-      coreEvents.stop();
-      updater.stopPeriodicChecks();
-    }
+    // This is the only reactive dependency of the app lifecycle. The methods
+    // below synchronously read and write their own rune state before their
+    // first await; without untrack those fields become accidental effect
+    // dependencies and every loading/status update restarts the whole app.
+    const shouldInitialize = store.isInitialized;
+    untrack(() => {
+      if (shouldInitialize) {
+        void guiState.initialize();
+        void coreEvents.start();
+        updater.startPeriodicChecks();
+      } else {
+        guiState.destroy();
+        void coreEvents.stop();
+        updater.stopPeriodicChecks();
+      }
+    });
     return () => {
-      guiState.destroy();
-      coreEvents.stop();
-      updater.stopPeriodicChecks();
+      untrack(() => {
+        guiState.destroy();
+        void coreEvents.stop();
+        updater.stopPeriodicChecks();
+      });
     };
   });
 
@@ -177,7 +171,6 @@
     </div>
   {/if}
 
-  <Toast />
 </main>
 
 <style>

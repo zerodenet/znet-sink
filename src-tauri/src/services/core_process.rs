@@ -283,9 +283,17 @@ fn spawn_core_child(
                 let cleaned = strip_ansi(&line);
                 if !cleaned.trim().is_empty() {
                     let state = app_handle_stderr.state::<AppState>();
-                    let (level, fields) = parse_kernel_log_line(&cleaned);
+                    let (level, mut fields) = parse_kernel_log_line(&cleaned);
+                    let message = fields
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&cleaned)
+                        .to_string();
+                    if let Some(object) = fields.as_object_mut() {
+                        object.insert("raw_line".to_string(), serde_json::Value::String(cleaned));
+                    }
                     let _ =
-                        logs::append_entry(&state, LogSource::Core, level, cleaned, Some(fields));
+                        logs::append_entry(&state, LogSource::Core, level, message, Some(fields));
                 }
             }
         }
@@ -783,6 +791,25 @@ fn is_structured_field_key(key: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+fn parse_structured_field_value(value: &str) -> serde_json::Value {
+    if value.starts_with('"') && value.ends_with('"') {
+        if let Ok(parsed) = serde_json::from_str::<String>(value) {
+            return serde_json::Value::String(parsed);
+        }
+    }
+    if let Ok(value) = value.parse::<i64>() {
+        return serde_json::Value::Number(value.into());
+    }
+    if let Ok(value) = value.parse::<u64>() {
+        return serde_json::Value::Number(value.into());
+    }
+    match value {
+        "true" => serde_json::Value::Bool(true),
+        "false" => serde_json::Value::Bool(false),
+        _ => serde_json::Value::String(value.to_string()),
+    }
+}
+
 fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     let mut fields = serde_json::Map::new();
 
@@ -840,10 +867,7 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     for token in msg.split_whitespace() {
         if let Some((key, value)) = token.split_once('=') {
             if is_structured_field_key(key) {
-                fields.insert(
-                    key.to_string(),
-                    serde_json::Value::String(value.to_string()),
-                );
+                fields.insert(key.to_string(), parse_structured_field_value(value));
             } else {
                 message_tokens.push(token);
             }
@@ -889,7 +913,7 @@ mod tests {
 
         assert_eq!(fields["message"], "ipc client connected");
         assert_eq!(fields["pipe"], "\\\\.\\pipe\\zero-control");
-        assert_eq!(fields["active"], "3");
+        assert_eq!(fields["active"], 3);
     }
 
     #[test]
@@ -900,7 +924,21 @@ mod tests {
 
         assert_eq!(fields["message"], "节点测速完成");
         assert_eq!(fields["target"], "HK-01");
-        assert_eq!(fields["latency_ms"], "88");
+        assert_eq!(fields["latency_ms"], 88);
+    }
+
+    #[test]
+    fn parse_kernel_session_log_produces_typed_structured_fields() {
+        let (_, fields) = parse_kernel_log_line(
+            "2026-07-17T13:06:07.143223Z INFO session finished session_id=2 inbound_tag=\"socks-in\" outbound_tag=\"direct\" protocol=\"http\" network=\"tcp\" mode=\"rule\" target=Domain(\"api.github.com\") port=443 outcome=\"direct_relayed\" duration_ms=2339 bytes_up=966 bytes_down=987386",
+        );
+
+        assert_eq!(fields["message"], "session finished");
+        assert_eq!(fields["session_id"], 2);
+        assert_eq!(fields["inbound_tag"], "socks-in");
+        assert_eq!(fields["port"], 443);
+        assert_eq!(fields["duration_ms"], 2339);
+        assert_eq!(fields["bytes_down"], 987386);
     }
 
     #[test]
