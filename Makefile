@@ -17,7 +17,7 @@ help:
 	@echo "  make tauri-build      Build installable Tauri app bundle"
 	@echo "  make check            Typecheck (svelte-check)"
 	@echo "  make test             Run Rust integration tests"
-	@echo "  make update-version   Bump version, commit, tag, push (with VERSION=x.y.z)"
+	@echo "  make update-version   Bump version, commit, tag, push (VERSION=x.y.z; FORCE=1 retags)"
 	@echo "  make repair-manifest  Re-publish valid latest.json for a release (with TAG=v0.0.5)"
 	@echo ""
 
@@ -44,6 +44,7 @@ test:
 
 # ── release: bump version, commit, tag, push ─────────────────────────────
 # Usage: make update-version VERSION=0.1.0
+# Retag the current version: make update-version VERSION=0.1.0 FORCE=1
 # Auto-detects platform — PowerShell on Windows, bash elsewhere.
 update-version:
 ifeq ($(VERSION),)
@@ -51,9 +52,9 @@ ifeq ($(VERSION),)
 	@exit 1
 endif
 ifeq ($(OS),Windows_NT)
-	powershell -ExecutionPolicy Bypass -File scripts/update_version.ps1 "$(VERSION)"
+	$(if $(filter 1,$(FORCE)),powershell -ExecutionPolicy Bypass -File scripts/update_version.ps1 "$(VERSION)" -Force,powershell -ExecutionPolicy Bypass -File scripts/update_version.ps1 "$(VERSION)")
 else
-	bash scripts/update_version.sh "$(VERSION)"
+	$(if $(filter 1,$(FORCE)),bash scripts/update_version.sh "$(VERSION)" --force,bash scripts/update_version.sh "$(VERSION)")
 endif
 
 # ── release: repair broken updater manifest for an existing release ──────

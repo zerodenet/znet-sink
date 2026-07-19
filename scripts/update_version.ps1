@@ -1,11 +1,13 @@
 # update_version.ps1 — Bump the project version across all manifest files,
 # commit, tag, and push to every configured remote.
 #
-# Usage:   powershell -ExecutionPolicy Bypass -File scripts/update_version.ps1 0.1.0
-#          .\scripts\update_version.ps1 0.1.0
+# Usage:   powershell -ExecutionPolicy Bypass -File scripts/update_version.ps1 0.1.0 [-Force]
+#          .\scripts\update_version.ps1 0.1.0 -Force
 param(
     [Parameter(Mandatory = $true, HelpMessage = "New semver version, e.g. 0.1.0 or 0.1.0-beta.1")]
-    [string]$Version
+    [string]$Version,
+
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,11 +39,26 @@ if (-not $CurrentVersion) {
     Die "could not determine current version from package.json"
 }
 
+$retagOnly = $false
 if ($CurrentVersion -eq $Version) {
-    Die "version $Version is already the current version — nothing to do"
+    if (-not $Force) {
+        Die "version $Version is already the current version — use -Force to rebuild and republish its tag"
+    }
+    $dirty = git status --porcelain
+    if ($LASTEXITCODE -ne 0) {
+        Die "failed to inspect git worktree"
+    }
+    if ($dirty) {
+        Die "-Force requires a clean worktree before tagging the current HEAD"
+    }
+    $retagOnly = $true
+    Write-Host "Version $Version is already current — rebuilding its tag at HEAD" -ForegroundColor Cyan
+} else {
+    if ($Force) {
+        Die "-Force only rebuilds the already-current version tag; omit it for a normal version bump"
+    }
+    Write-Host "Bumping $CurrentVersion → $Version" -ForegroundColor Cyan
 }
-
-Write-Host "Bumping $CurrentVersion → $Version" -ForegroundColor Cyan
 
 # ── update files ─────────────────────────────────────────────────────────
 # Use the .NET File API rather than Get-Content/Set-Content: Windows
@@ -50,8 +67,6 @@ Write-Host "Bumping $CurrentVersion → $Version" -ForegroundColor Cyan
 # Set-Content -Encoding UTF8 would prepend a BOM that breaks TOML/JSON
 # manifests. Set-Location does not sync to .NET's current directory, so read
 # and write through absolute paths joined to $RepoRoot.
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
 $files = @(
     "package.json",
     "src-tauri/Cargo.toml",
@@ -59,34 +74,52 @@ $files = @(
     "src-tauri/tauri.conf.json"
 )
 
-foreach ($file in $files) {
-    if (-not (Test-Path $file)) {
-        Die "expected manifest file not found: $file"
+if (-not $retagOnly) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    foreach ($file in $files) {
+        if (-not (Test-Path $file)) {
+            Die "expected manifest file not found: $file"
+        }
+        $fullPath = Join-Path $RepoRoot $file
+        $content = [System.IO.File]::ReadAllText($fullPath)
+        $escapedCurrent = [regex]::Escape($CurrentVersion)
+        # Replace first occurrence of the version string only (Cargo.lock has a
+        # top-level entry plus dependency entries; we want the top-level one).
+        $newContent = $content -replace $escapedCurrent, $Version
+        if ($newContent -eq $content) {
+            Die "version '$CurrentVersion' not found in $file"
+        }
+        [System.IO.File]::WriteAllText($fullPath, $newContent, $utf8NoBom)
+        Write-Host "  updated $file"
     }
-    $fullPath = Join-Path $RepoRoot $file
-    $content = [System.IO.File]::ReadAllText($fullPath)
-    $escapedCurrent = [regex]::Escape($CurrentVersion)
-    # Replace first occurrence of the version string only (Cargo.lock has a
-    # top-level entry plus dependency entries; we want the top-level one).
-    $newContent = $content -replace $escapedCurrent, $Version
-    if ($newContent -eq $content) {
-        Die "version '$CurrentVersion' not found in $file"
+
+    # ── commit ───────────────────────────────────────────────────────────
+    git add $files
+    if ($LASTEXITCODE -ne 0) {
+        Die "failed to stage release manifests"
     }
-    [System.IO.File]::WriteAllText($fullPath, $newContent, $utf8NoBom)
-    Write-Host "  updated $file"
+
+    $commitMsg = "chore(release): bump version to $Version"
+    Write-Host ""
+    Write-Host "Committing: $commitMsg" -ForegroundColor Green
+    git commit -m $commitMsg
+    if ($LASTEXITCODE -ne 0) {
+        Die "failed to create release commit"
+    }
 }
 
-# ── commit & tag ─────────────────────────────────────────────────────────
-git add $files
-
-$commitMsg = "chore(release): bump version to $Version"
-Write-Host ""
-Write-Host "Committing: $commitMsg" -ForegroundColor Green
-git commit -m $commitMsg
-
 $tag = "v$Version"
-Write-Host "Tagging: $tag" -ForegroundColor Green
-git tag -a $tag -m $tag
+if ($Force) {
+    Write-Host "Force-tagging current HEAD: $tag" -ForegroundColor Green
+    git tag -fa $tag -m $tag
+} else {
+    Write-Host "Tagging: $tag" -ForegroundColor Green
+    git tag -a $tag -m $tag
+}
+if ($LASTEXITCODE -ne 0) {
+    Die "failed to create release tag $tag"
+}
 
 # ── push to all remotes ──────────────────────────────────────────────────
 $remotes = git remote
@@ -100,9 +133,20 @@ Write-Host ""
 foreach ($remote in $remotes) {
     Write-Host "Pushing $branch → $remote" -ForegroundColor Yellow
     git push $remote $branch
+    if ($LASTEXITCODE -ne 0) {
+        Die "failed to push $branch to $remote"
+    }
 
-    Write-Host "Pushing tag $tag → $remote" -ForegroundColor Yellow
-    git push $remote $tag
+    if ($Force) {
+        Write-Host "Force-pushing tag $tag → $remote" -ForegroundColor Yellow
+        git push --force $remote "refs/tags/${tag}:refs/tags/${tag}"
+    } else {
+        Write-Host "Pushing tag $tag → $remote" -ForegroundColor Yellow
+        git push $remote $tag
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Die "failed to push tag $tag to $remote"
+    }
 }
 
 Write-Host ""

@@ -2,12 +2,24 @@
 # update_version.sh — Bump the project version across all manifest files,
 # commit, tag, and push to every configured remote.
 #
-# Usage:   bash scripts/update_version.sh <version>
+# Usage:   bash scripts/update_version.sh <version> [--force]
 # Example: bash scripts/update_version.sh 0.1.0
+#          bash scripts/update_version.sh 0.1.0 --force  # rebuild tag at HEAD
 set -euo pipefail
 
 # ── helpers ──────────────────────────────────────────────────────────────
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage: update_version.sh <version> [--force]
+
+Without --force, bumps all manifests, commits, tags, and pushes every remote.
+With --force, an already-current version skips the bump/commit, rebuilds its
+annotated tag at the current HEAD, and force-updates that tag on every remote.
+The force path requires a clean worktree.
+EOF
+}
 
 # Validate semver shape: digits.digits.digits (optional -suffix)
 is_valid_version() {
@@ -15,10 +27,26 @@ is_valid_version() {
 }
 
 # ── guard ────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
+
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
-  die "missing version argument — usage: $0 <version>  (e.g. $0 0.1.0)"
+  die "missing version argument — usage: $0 <version> [--force]"
 fi
+
+shift
+FORCE=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force|-f) FORCE=true ;;
+    --help|-h) usage; exit 0 ;;
+    *) die "unknown argument '$1' — usage: $0 <version> [--force]" ;;
+  esac
+  shift
+done
 
 if ! is_valid_version "$VERSION"; then
   die "invalid version '$VERSION' — expected semver, e.g. 0.1.0 or 0.1.0-beta.1"
@@ -48,11 +76,22 @@ if [ -z "$CURRENT_VERSION" ]; then
   die "could not determine current version from package.json"
 fi
 
+RETAG_ONLY=false
 if [ "$CURRENT_VERSION" = "$VERSION" ]; then
-  die "version $VERSION is already the current version — nothing to do"
+  if [ "$FORCE" != true ]; then
+    die "version $VERSION is already the current version — use --force to rebuild and republish its tag"
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    die "--force requires a clean worktree before tagging the current HEAD"
+  fi
+  RETAG_ONLY=true
+  echo "Version $VERSION is already current — rebuilding its tag at HEAD"
+else
+  if [ "$FORCE" = true ]; then
+    die "--force only rebuilds the already-current version tag; omit it for a normal version bump"
+  fi
+  echo "Bumping $CURRENT_VERSION → $VERSION"
 fi
-
-echo "Bumping $CURRENT_VERSION → $VERSION"
 
 # ── update files ─────────────────────────────────────────────────────────
 # Use sed -i with a backup extension because macOS sed requires one.
@@ -65,43 +104,50 @@ do_sed() {
   sed -i.bak "$pattern" "$file" && rm -f "${file}.bak"
 }
 
-do_sed "package.json" \
-  "s/\"version\":[[:space:]]*\"$CURRENT_VERSION\"/\"version\": \"$VERSION\"/"
+if [ "$RETAG_ONLY" != true ]; then
+  do_sed "package.json" \
+    "s/\"version\":[[:space:]]*\"$CURRENT_VERSION\"/\"version\": \"$VERSION\"/"
 
-do_sed "src-tauri/Cargo.toml" \
-  "s/^version[[:space:]]*=[[:space:]]*\"$CURRENT_VERSION\"/version = \"$VERSION\"/"
+  do_sed "src-tauri/Cargo.toml" \
+    "s/^version[[:space:]]*=[[:space:]]*\"$CURRENT_VERSION\"/version = \"$VERSION\"/"
 
-do_sed "src-tauri/tauri.conf.json" \
-  "s/\"version\":[[:space:]]*\"$CURRENT_VERSION\"/\"version\": \"$VERSION\"/"
+  do_sed "src-tauri/tauri.conf.json" \
+    "s/\"version\":[[:space:]]*\"$CURRENT_VERSION\"/\"version\": \"$VERSION\"/"
 
-# Do NOT sed Cargo.lock: it carries a `version` field for every transitive
-# dependency, and a blanket string replace corrupts any third-party crate
-# whose version happens to equal $CURRENT_VERSION (a prior bump rewrote
-# `dtor-proc-macro` 0.0.6 to 0.0.7-beta).  Let cargo regenerate the entry.
-echo "Syncing src-tauri/Cargo.lock via cargo…"
-cargo check --manifest-path src-tauri/Cargo.toml -q
+  # Do NOT sed Cargo.lock: it carries a `version` field for every transitive
+  # dependency, and a blanket string replace corrupts any third-party crate
+  # whose version happens to equal $CURRENT_VERSION (a prior bump rewrote
+  # `dtor-proc-macro` 0.0.6 to 0.0.7-beta).  Let cargo regenerate the entry.
+  echo "Syncing src-tauri/Cargo.lock via cargo…"
+  cargo check --manifest-path src-tauri/Cargo.toml -q
 
-echo "Updated manifests:"
-echo "  package.json"
-echo "  src-tauri/Cargo.toml"
-echo "  src-tauri/Cargo.lock (via cargo)"
-echo "  src-tauri/tauri.conf.json"
+  echo "Updated manifests:"
+  echo "  package.json"
+  echo "  src-tauri/Cargo.toml"
+  echo "  src-tauri/Cargo.lock (via cargo)"
+  echo "  src-tauri/tauri.conf.json"
 
-# ── commit & tag ─────────────────────────────────────────────────────────
-git add \
-  package.json \
-  src-tauri/Cargo.toml \
-  src-tauri/Cargo.lock \
-  src-tauri/tauri.conf.json
+  # ── commit ─────────────────────────────────────────────────────────────
+  git add \
+    package.json \
+    src-tauri/Cargo.toml \
+    src-tauri/Cargo.lock \
+    src-tauri/tauri.conf.json
 
-COMMIT_MSG="chore(release): bump version to $VERSION"
-echo ""
-echo "Committing: $COMMIT_MSG"
-git commit -m "$COMMIT_MSG"
+  COMMIT_MSG="chore(release): bump version to $VERSION"
+  echo ""
+  echo "Committing: $COMMIT_MSG"
+  git commit -m "$COMMIT_MSG"
+fi
 
 TAG="v$VERSION"
-echo "Tagging: $TAG"
-git tag -a "$TAG" -m "$TAG"
+if [ "$FORCE" = true ]; then
+  echo "Force-tagging current HEAD: $TAG"
+  git tag -fa "$TAG" -m "$TAG"
+else
+  echo "Tagging: $TAG"
+  git tag -a "$TAG" -m "$TAG"
+fi
 
 # ── push to all remotes ──────────────────────────────────────────────────
 REMOTES=$(git remote)
@@ -115,8 +161,13 @@ for remote in $REMOTES; do
   echo "Pushing $BRANCH → $remote"
   git push "$remote" "$BRANCH"
 
-  echo "Pushing tag $TAG → $remote"
-  git push "$remote" "$TAG"
+  if [ "$FORCE" = true ]; then
+    echo "Force-pushing tag $TAG → $remote"
+    git push --force "$remote" "refs/tags/$TAG:refs/tags/$TAG"
+  else
+    echo "Pushing tag $TAG → $remote"
+    git push "$remote" "$TAG"
+  fi
 done
 
 echo ""
