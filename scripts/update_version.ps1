@@ -78,6 +78,7 @@ if ($CurrentVersion -eq $Version) {
     if ($Force) {
         Die "-Force only rebuilds the already-current version tag; omit it for a normal version bump"
     }
+    Invoke-Checked { node scripts/version-manifests.mjs assert-newer $Version $CurrentVersion } "release version must be greater than $CurrentVersion"
     Write-Host "Bumping $CurrentVersion -> $Version" -ForegroundColor Cyan
 }
 

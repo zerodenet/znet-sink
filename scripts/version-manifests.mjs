@@ -52,6 +52,64 @@ export function parseReleaseVersion(version) {
   };
 }
 
+export function compareReleaseVersions(leftVersion, rightVersion) {
+  const left = parseReleaseVersion(leftVersion);
+  const right = parseReleaseVersion(rightVersion);
+  const leftCore = left.nativeVersion.split(".").map(Number);
+  const rightCore = right.nativeVersion.split(".").map(Number);
+
+  for (let index = 0; index < leftCore.length; index += 1) {
+    if (leftCore[index] !== rightCore[index]) {
+      return leftCore[index] > rightCore[index] ? 1 : -1;
+    }
+  }
+
+  if (left.prerelease === null || right.prerelease === null) {
+    if (left.prerelease === right.prerelease) {
+      return 0;
+    }
+    return left.prerelease === null ? 1 : -1;
+  }
+
+  const leftIdentifiers = left.prerelease.split(".");
+  const rightIdentifiers = right.prerelease.split(".");
+  const sharedLength = Math.min(leftIdentifiers.length, rightIdentifiers.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftIdentifier = leftIdentifiers[index];
+    const rightIdentifier = rightIdentifiers[index];
+    if (leftIdentifier === rightIdentifier) {
+      continue;
+    }
+
+    const leftNumeric = /^[0-9]+$/.test(leftIdentifier);
+    const rightNumeric = /^[0-9]+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      if (leftIdentifier.length !== rightIdentifier.length) {
+        return leftIdentifier.length > rightIdentifier.length ? 1 : -1;
+      }
+      return leftIdentifier > rightIdentifier ? 1 : -1;
+    }
+    if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    }
+    return leftIdentifier > rightIdentifier ? 1 : -1;
+  }
+
+  if (leftIdentifiers.length === rightIdentifiers.length) {
+    return 0;
+  }
+  return leftIdentifiers.length > rightIdentifiers.length ? 1 : -1;
+}
+
+export function assertNewerReleaseVersion(version, currentVersion) {
+  if (compareReleaseVersions(version, currentVersion) <= 0) {
+    fail(
+      `version '${version}' must be greater than current version '${currentVersion}'; prereleases must target the next unreleased version (for example, 0.0.16-rc.1 after 0.0.15)`,
+    );
+  }
+  return parseReleaseVersion(version);
+}
+
 function readUtf8(root, relativePath) {
   const fullPath = path.join(root, relativePath);
   if (!fs.existsSync(fullPath)) {
@@ -178,8 +236,6 @@ export function checkReleaseManifests(expectedVersion, root = process.cwd()) {
 }
 
 export function setReleaseVersion(version, root = process.cwd()) {
-  const { nativeVersion } = parseReleaseVersion(version);
-
   const packageJson = parseJson(root, MANIFEST_PATHS.packageJson);
   const currentVersion = packageJson.version;
   if (!currentVersion) {
@@ -188,6 +244,7 @@ export function setReleaseVersion(version, root = process.cwd()) {
 
   // Refuse to build a new release on top of partially updated manifests.
   checkReleaseManifests(currentVersion, root);
+  const { nativeVersion } = assertNewerReleaseVersion(version, currentVersion);
 
   packageJson.version = version;
   writeUtf8(
@@ -230,6 +287,7 @@ export function setReleaseVersion(version, root = process.cwd()) {
 function usage() {
   console.log(`Usage:
   node scripts/version-manifests.mjs validate <version>
+  node scripts/version-manifests.mjs assert-newer <version> <current-version>
   node scripts/version-manifests.mjs check <version>
   node scripts/version-manifests.mjs set <version>`);
 }
@@ -242,20 +300,29 @@ function runCli() {
   }
   if (
     !version ||
-    extra.length > 0 ||
-    !["validate", "check", "set"].includes(command)
+    !["validate", "assert-newer", "check", "set"].includes(command) ||
+    (command === "assert-newer" ? extra.length !== 1 : extra.length > 0)
   ) {
     usage();
     process.exitCode = 2;
     return;
   }
 
-  const result =
-    command === "validate"
-      ? parseReleaseVersion(version)
-      : command === "check"
-        ? checkReleaseManifests(version)
-        : setReleaseVersion(version);
+  let result;
+  switch (command) {
+    case "validate":
+      result = parseReleaseVersion(version);
+      break;
+    case "assert-newer":
+      result = assertNewerReleaseVersion(version, extra[0]);
+      break;
+    case "check":
+      result = checkReleaseManifests(version);
+      break;
+    default:
+      result = setReleaseVersion(version);
+      break;
+  }
   console.log(
     `${command === "set" ? "Updated" : "Verified"} release version ${result.releaseVersion} (native package version ${result.nativeVersion})`,
   );

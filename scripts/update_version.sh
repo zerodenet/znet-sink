@@ -84,6 +84,7 @@ else
   if [ "$FORCE" = true ]; then
     die "--force only rebuilds the already-current version tag; omit it for a normal version bump"
   fi
+  node scripts/version-manifests.mjs assert-newer "$VERSION" "$CURRENT_VERSION" >/dev/null
   echo "Bumping $CURRENT_VERSION -> $VERSION"
 fi
 

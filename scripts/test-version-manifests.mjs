@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  assertNewerReleaseVersion,
   checkReleaseManifests,
+  compareReleaseVersions,
   parseReleaseVersion,
   renderMacInfoPlist,
   setReleaseVersion,
@@ -85,6 +87,21 @@ try {
 
   setReleaseVersion("0.0.16", fixtureRoot);
   checkReleaseManifests("0.0.16", fixtureRoot);
+
+  assert.equal(compareReleaseVersions("0.0.16-rc.1", "0.0.15"), 1);
+  assert.equal(compareReleaseVersions("0.0.16-rc.2", "0.0.16-rc.1"), 1);
+  assert.equal(compareReleaseVersions("0.0.16", "0.0.16-rc.2"), 1);
+  assert.equal(compareReleaseVersions("0.0.16-rc.1", "0.0.16-beta.9"), 1);
+  assert.equal(compareReleaseVersions("0.0.16-1", "0.0.16-rc.1"), -1);
+  assert.equal(compareReleaseVersions("0.0.16-rc.1", "0.0.16-rc.1"), 0);
+  assert.throws(
+    () => assertNewerReleaseVersion("0.0.16-rc.1", "0.0.16"),
+    /must be greater than current version/,
+  );
+  assert.throws(
+    () => setReleaseVersion("0.0.16-rc.1", fixtureRoot),
+    /must be greater than current version/,
+  );
 
   for (const invalid of [
     "01.0.0",
