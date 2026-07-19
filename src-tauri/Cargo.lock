@@ -5769,6 +5769,7 @@ dependencies = [
 [[package]]
 name = "zero-rule"
 version = "0.0.15-bate.1"
+source = "git+https://github.com/zerodenet/zero.git?rev=c69f417c5a835ab8193924279c5b562e6d244ab8#c69f417c5a835ab8193924279c5b562e6d244ab8"
 dependencies = [
  "crc32fast",
  "fst",
