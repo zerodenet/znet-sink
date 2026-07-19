@@ -306,6 +306,8 @@ pub fn run() {
             kernel_version_commands::kernel_detect_version,
             gui_core_commands::gui_network_probe,
             gui_core_commands::gui_log_paths,
+            gui_core_commands::gui_debug_storage_summary,
+            gui_core_commands::gui_clear_debug_storage,
             gui_core_commands::gui_export_diagnostics,
             tray_update_status,
         ])

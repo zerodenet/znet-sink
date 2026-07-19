@@ -516,8 +516,37 @@ export interface GuiDiagnosticExport {
   createdAtUnixMs: number;
 }
 
+export interface GuiDebugStorageSummary {
+  liveLogBytes: number;
+  liveLogFileCount: number;
+  diagnosticExportBytes: number;
+  diagnosticExportCount: number;
+  totalBytes: number;
+}
+
+export interface GuiDebugStorageCleanupFailure {
+  target: string;
+  message: string;
+}
+
+export interface GuiDebugStorageCleanupResult {
+  bytesReclaimed: number;
+  clearedFileCount: number;
+  removedDiagnosticExportCount: number;
+  remainingBytes: number;
+  failures: GuiDebugStorageCleanupFailure[];
+}
+
 export async function guiExportDiagnostics(): Promise<GuiDiagnosticExport> {
   return invoke('gui_export_diagnostics');
+}
+
+export async function guiDebugStorageSummary(): Promise<GuiDebugStorageSummary> {
+  return invoke('gui_debug_storage_summary');
+}
+
+export async function guiClearDebugStorage(): Promise<GuiDebugStorageCleanupResult> {
+  return invoke('gui_clear_debug_storage');
 }
 
 // Debug

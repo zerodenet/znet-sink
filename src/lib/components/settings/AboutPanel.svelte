@@ -2,7 +2,15 @@
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { updater, formatBytes } from '$lib/services/updater.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
-  import { appendLog, guiExportDiagnostics } from '$lib/services/core';
+  import DraggableModal from '$lib/components/DraggableModal.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import {
+    appendLog,
+    guiClearDebugStorage,
+    guiDebugStorageSummary,
+    guiExportDiagnostics,
+    type GuiDebugStorageSummary,
+  } from '$lib/services/core';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
   import {
     error as toastError,
@@ -14,9 +22,16 @@
   let appVersion = $state('0.0.1');
   let loaded = $state(false);
   let exportingDiagnostics = $state(false);
+  let debugStorage = $state<GuiDebugStorageSummary | null>(null);
+  let debugStorageError = $state<string | null>(null);
+  let cleanupConfirmOpen = $state(false);
+  let cleaningDebugStorage = $state(false);
+  let cleanupError = $state<string | null>(null);
+  let cleanupNotice = $state<string | null>(null);
 
   $effect(() => {
-    loadAppInfo();
+    void loadAppInfo();
+    void loadDebugStorage();
   });
 
   async function loadAppInfo() {
@@ -52,6 +67,50 @@
     });
   }
 
+  async function loadDebugStorage() {
+    try {
+      debugStorage = await guiDebugStorageSummary();
+      debugStorageError = null;
+    } catch (error) {
+      debugStorage = null;
+      debugStorageError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function openCleanupConfirm() {
+    cleanupError = null;
+    cleanupNotice = null;
+    cleanupConfirmOpen = true;
+    void loadDebugStorage();
+  }
+
+  function closeCleanupConfirm() {
+    if (cleaningDebugStorage) return;
+    cleanupConfirmOpen = false;
+    cleanupError = null;
+  }
+
+  async function handleClearDebugStorage() {
+    if (cleaningDebugStorage) return;
+    cleaningDebugStorage = true;
+    cleanupError = null;
+    try {
+      const result = await guiClearDebugStorage();
+      await loadDebugStorage();
+      if (result.failures.length > 0) {
+        cleanupError = `已清理 ${formatBytes(result.bytesReclaimed)}，但有 ${result.failures.length} 项未能完成：${result.failures.map((failure) => failure.message).join('；')}`;
+        return;
+      }
+
+      cleanupConfirmOpen = false;
+      cleanupNotice = `已清理现有调试数据，释放 ${formatBytes(result.bytesReclaimed)}`;
+    } catch (error) {
+      cleanupError = `清理本地调试数据失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      cleaningDebugStorage = false;
+    }
+  }
+
   async function handleExportDiagnostics() {
     if (exportingDiagnostics) return;
     exportingDiagnostics = true;
@@ -83,6 +142,7 @@
         toastWarning(`诊断材料已导出，但无法打开目录：${result.directory}（${openMessage}；${revealMessage}）`, 8_000);
       }
     }
+    await loadDebugStorage();
     exportingDiagnostics = false;
   }
 </script>
@@ -236,11 +296,31 @@
       <span class="config-value desc">导出应用日志、IPC 调试记录、内核日志和版本清单；不会包含代理配置、订阅地址或凭据。</span>
     </div>
     <div class="config-row">
-      <span class="config-label"></span>
-      <button class="check-update-btn" onclick={handleExportDiagnostics} disabled={exportingDiagnostics}>
-        <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
-      </button>
+      <span class="config-label">本地调试数据</span>
+      {#if debugStorage}
+        <span class="config-value mono">
+          {formatBytes(debugStorage.totalBytes)} · {debugStorage.diagnosticExportCount} 个诊断包
+        </span>
+      {:else if debugStorageError}
+        <span class="config-value storage-error" title={debugStorageError}>无法读取占用</span>
+      {:else}
+        <span class="config-value muted">计算中…</span>
+      {/if}
     </div>
+    <div class="config-row">
+      <span class="config-label"></span>
+      <div class="diagnostic-actions">
+        <button class="check-update-btn" onclick={handleExportDiagnostics} disabled={exportingDiagnostics || cleaningDebugStorage}>
+          <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
+        </button>
+        <button class="check-update-btn danger" onclick={openCleanupConfirm} disabled={exportingDiagnostics || cleaningDebugStorage}>
+          <span>清理本地调试数据</span>
+        </button>
+      </div>
+    </div>
+    {#if cleanupNotice}
+      <div class="cleanup-notice" role="status">{cleanupNotice}</div>
+    {/if}
   </div>
 
   <!-- Footer -->
@@ -248,6 +328,48 @@
     <span class="about-copyright">&copy; {new Date().getFullYear()} ZeroDenet. All rights reserved.</span>
   </div>
 </div>
+
+<DraggableModal
+  title="清理本地调试数据"
+  description="永久删除现有日志与应用生成的诊断包。"
+  open={cleanupConfirmOpen}
+  onClose={closeCleanupConfirm}
+  closeDisabled={cleaningDebugStorage}
+  width="min(480px, 90vw)"
+>
+  <div class="cleanup-confirm">
+    <p class="cleanup-copy">本次将清理：</p>
+    <ul class="cleanup-list">
+      <li>应用日志、IPC 调试记录、界面生命周期日志和内核运行日志</li>
+      <li>已导出的 {debugStorage?.diagnosticExportCount ?? 0} 个诊断材料目录</li>
+    </ul>
+
+    <div class="cleanup-size">
+      <span>当前可清理空间</span>
+      <strong>{debugStorage ? formatBytes(debugStorage.totalBytes) : '正在计算…'}</strong>
+      {#if debugStorage}
+        <small>
+          活动日志 {formatBytes(debugStorage.liveLogBytes)}，诊断包 {formatBytes(debugStorage.diagnosticExportBytes)}
+        </small>
+      {/if}
+    </div>
+
+    <p class="cleanup-warning">
+      代理配置、订阅、规则、应用设置和内核文件不会被删除。应用或内核继续运行时会按需生成新的日志。
+    </p>
+
+    {#if cleanupError}
+      <div class="cleanup-error" role="alert">{cleanupError}</div>
+    {/if}
+  </div>
+
+  {#snippet footer()}
+    <Button variant="outline" onclick={closeCleanupConfirm} disabled={cleaningDebugStorage}>取消</Button>
+    <Button variant="destructive" onclick={handleClearDebugStorage} disabled={cleaningDebugStorage}>
+      {cleaningDebugStorage ? '清理中…' : '确认清理'}
+    </Button>
+  {/snippet}
+</DraggableModal>
 
 <style>
   .about-root {
@@ -518,6 +640,87 @@
   .check-update-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .diagnostic-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .check-update-btn.danger,
+  .storage-error {
+    color: var(--destructive);
+  }
+
+  .cleanup-notice {
+    margin: 2px 12px 4px 96px;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    line-height: 1.4;
+    text-align: right;
+  }
+
+  .cleanup-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    color: var(--foreground);
+    font-size: 12px;
+  }
+
+  .cleanup-copy,
+  .cleanup-warning {
+    margin: 0;
+    line-height: 1.55;
+  }
+
+  .cleanup-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: -4px 0 0;
+    padding-left: 20px;
+    color: var(--muted-foreground);
+    line-height: 1.5;
+  }
+
+  .cleanup-size {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: 3px 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--muted);
+  }
+
+  .cleanup-size strong {
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+
+  .cleanup-size small {
+    grid-column: 1 / -1;
+    color: var(--muted-foreground);
+    line-height: 1.4;
+  }
+
+  .cleanup-warning {
+    color: var(--muted-foreground);
+  }
+
+  .cleanup-error {
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, var(--destructive) 35%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--destructive) 8%, transparent);
+    color: var(--destructive);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 
   /* ---- Footer ---- */

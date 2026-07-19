@@ -117,6 +117,35 @@ pub fn emit(level: &str, source: &str, msg: &str, details: Option<Value>) {
     }
 }
 
+/// Truncate the active GUI lifecycle log without replacing its open file
+/// handle. Future records continue to append to the same file.
+pub(crate) fn clear() -> Result<(), AppError> {
+    if let Some(logger) = LOGGER.get() {
+        let mut writer = logger
+            .lock()
+            .map_err(|_| AppError::internal("file logger mutex poisoned"))?;
+        writer
+            .flush()
+            .map_err(|error| AppError::internal(format!("flush GUI log: {error}")))?;
+        writer
+            .get_mut()
+            .set_len(0)
+            .map_err(|error| AppError::internal(format!("clear GUI log: {error}")))?;
+        return Ok(());
+    }
+
+    let path = data_dir()?.join("logs").join("gui.log.jsonl");
+    if !path.exists() {
+        return Ok(());
+    }
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map(|_| ())
+        .map_err(|error| AppError::internal(format!("clear GUI log: {error}")))
+}
+
 /// `eprintln!("[ZNet] {message}")` + file log. Preserves the existing console
 /// output while also persisting the line for post-crash inspection. Use this
 /// to replace bare `eprintln!("[ZNet] …")` calls in startup/shutdown paths.

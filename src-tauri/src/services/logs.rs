@@ -122,7 +122,12 @@ pub(crate) fn append_entry(
 }
 
 pub fn clear(state: &AppState) -> AppResult<()> {
-    lock(state.logs(), "logs")?.clear();
+    clear_memory(state)?;
     log_store::clear()?;
+    Ok(())
+}
+
+pub(crate) fn clear_memory(state: &AppState) -> AppResult<()> {
+    lock(state.logs(), "logs")?.clear();
     Ok(())
 }

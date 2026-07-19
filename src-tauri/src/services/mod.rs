@@ -6,6 +6,7 @@ pub mod core_config;
 pub mod core_events;
 pub mod core_process;
 pub mod debug_store;
+pub mod diagnostic_storage;
 pub mod domain_store;
 pub mod file_logger;
 pub mod gui_connection;

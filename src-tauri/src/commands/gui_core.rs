@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 use std::{
     fs,
     io::{BufRead, BufReader, BufWriter, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -16,7 +16,9 @@ use crate::models::gui_core::{
     GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
 use crate::services::common;
-use crate::services::{core_config, core_process, interaction_mode, probe, proxy_config};
+use crate::services::{
+    core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
+};
 use crate::state::app_state::AppState;
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -564,6 +566,25 @@ pub struct GuiLogPaths {
     pub core_log_file: String,
 }
 
+#[tauri::command]
+pub async fn gui_debug_storage_summary() -> AppResult<diagnostic_storage::DebugStorageSummary> {
+    tauri::async_runtime::spawn_blocking(diagnostic_storage::summary)
+        .await
+        .map_err(|error| AppError::internal(format!("debug storage worker failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn gui_clear_debug_storage(
+    app_handle: AppHandle,
+) -> AppResult<diagnostic_storage::DebugStorageCleanupResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        diagnostic_storage::clear(state.inner())
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("debug cleanup worker failed: {error}")))?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiDiagnosticExport {
@@ -582,6 +603,10 @@ pub async fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
 }
 
 fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {
+    diagnostic_storage::with_storage_lock(export_diagnostics_locked)
+}
+
+fn export_diagnostics_locked() -> AppResult<GuiDiagnosticExport> {
     let created_at_unix_ms = common::now_unix_ms();
     let data_dir = crate::services::data_dir()?;
     let export_dir = data_dir
@@ -591,10 +616,7 @@ fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {
         AppError::internal(format!("create diagnostic export directory: {error}"))
     })?;
 
-    let candidates = diagnostic_candidates(
-        &data_dir,
-        crate::services::core_config::managed_core_log_path()?,
-    );
+    let candidates = diagnostic_storage::diagnostic_log_paths()?;
     let mut files = Vec::new();
     for source in candidates {
         if !source.is_file() {
@@ -641,17 +663,6 @@ fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {
         files,
         created_at_unix_ms,
     })
-}
-
-fn diagnostic_candidates(data_dir: &Path, core_log_path: PathBuf) -> [PathBuf; 4] {
-    [
-        data_dir.join("logs").join("gui.log.jsonl"),
-        // The structured application log lives at the data root, not in the
-        // file logger's `logs` directory.
-        data_dir.join("logs.jsonl"),
-        data_dir.join("logs").join("debug.log.jsonl"),
-        core_log_path,
-    ]
 }
 
 fn copy_diagnostic_file(source: &Path, destination: &Path) -> AppResult<()> {
@@ -834,19 +845,7 @@ fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        diagnostic_candidates, redact_urls, sanitize_debug_record, sanitize_structured_record,
-    };
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn diagnostic_export_includes_the_root_application_log() {
-        let data_dir = Path::new("data-root");
-        let candidates = diagnostic_candidates(data_dir, PathBuf::from("core.log.jsonl"));
-
-        assert!(candidates.contains(&data_dir.join("logs.jsonl")));
-        assert!(!candidates.contains(&data_dir.join("logs").join("logs.jsonl")));
-    }
+    use super::{redact_urls, sanitize_debug_record, sanitize_structured_record};
 
     #[test]
     fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
