@@ -141,6 +141,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Verify release version metadata
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/version-manifests.mjs check "$TAG_VERSION"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -177,13 +183,10 @@ jobs:
           # prereleases so they do NOT become "latest" and push to every
           # updater client.  Stable tags (vX.Y.Z) stay regular releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # MSI's ProductVersion rejects non-numeric prerelease identifiers
-          # ("beta" fails with "must be numeric-only and cannot be greater
-          # than 65535").  NSIS has no such restriction.  For prerelease
-          # tags on Windows, build NSIS only and skip MSI.
-          args: >-
-            --target ${{ matrix.target }}
-            ${{ (runner.os == 'Windows' && contains(github.ref_name, '-')) && '--bundles nsis' || '' }}
+          # The app/updater keeps the full SemVer prerelease. Platform-native
+          # numeric versions are synchronized separately by update_version,
+          # so RC builds can produce MSI and signed macOS bundles as well.
+          args: --target ${{ matrix.target }}
 
   # latest.json is generated and uploaded automatically by tauri-action's
   # uploadUpdaterJson (default enabled).  Across the matrix, each platform

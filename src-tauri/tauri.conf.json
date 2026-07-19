@@ -48,7 +48,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "bundleVersion": "0.0.15"
+    },
     "windows": {
+      "wix": {
+        "version": "0.0.15"
+      },
       "nsis": {
         "installerHooks": "./nsis/uninstall.nsh"
       }

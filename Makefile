@@ -17,7 +17,7 @@ help:
 	@echo "  make tauri-build      Build installable Tauri app bundle"
 	@echo "  make check            Typecheck (svelte-check)"
 	@echo "  make test             Run Rust integration tests"
-	@echo "  make update-version   Bump version, commit, tag, push (VERSION=x.y.z; FORCE=1 retags)"
+	@echo "  make update-version   Release VERSION=x.y.z[-rc.N]; FORCE=1 retags"
 	@echo "  make repair-manifest  Re-publish valid latest.json for a release (with TAG=v0.0.5)"
 	@echo ""
 
@@ -43,7 +43,7 @@ test:
 	cd src-tauri && cargo test
 
 # ── release: bump version, commit, tag, push ─────────────────────────────
-# Usage: make update-version VERSION=0.1.0
+# Usage: make update-version VERSION=0.1.0-rc.1
 # Retag the current version: make update-version VERSION=0.1.0 FORCE=1
 # Auto-detects platform — PowerShell on Windows, bash elsewhere.
 update-version:

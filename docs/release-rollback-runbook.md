@@ -15,7 +15,10 @@ ZNet Sink desktop release. It applies to stable and prerelease channels.
 
 ## Staged Rollout
 
-1. Publish a prerelease tag and install it on internal machines.
+1. Publish a prerelease with `./scripts/update_version.sh 0.1.0-rc.1` and
+   install it on internal machines. The script keeps the full prerelease SemVer
+   for the app and updater while generating numeric MSI and macOS bundle
+   versions required by those platforms.
 2. Verify startup, kernel readiness, proxy enable/disable, subscription sync,
    update installation, restart, and clean shutdown.
 3. Observe exported diagnostics and local error logs for at least one full
