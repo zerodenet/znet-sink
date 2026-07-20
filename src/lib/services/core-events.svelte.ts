@@ -16,7 +16,8 @@ const STATUS_NAME = 'gui:event-status';
 export type ConnectionDelta =
   | { type: 'started'; connection: GuiConnectionItem }
   | { type: 'updated'; connection: GuiConnectionItem }
-  | { type: 'closed'; flowId: string };
+  | { type: 'completed'; connection: GuiConnectionItem }
+  | { type: 'snapshot'; connections: GuiConnectionItem[] };
 
 export interface CoreWarning {
   code?: string;
@@ -29,6 +30,8 @@ class CoreEventsService {
   status = $state<'idle' | 'subscribed' | 'reconnecting' | 'offline' | 'error' | 'disconnected'>('idle');
   lastError = $state<string | null>(null);
   connectionTick = $state(0);
+  activeConnections = $state<GuiConnectionItem[]>([]);
+  connectionHistory = $state<GuiConnectionItem[]>([]);
 
   // 日志刷新计数器（LogPanel 响应）
   logTick = $state(0);
@@ -137,6 +140,7 @@ class CoreEventsService {
     this._unlistenStatus = null;
     this._unlistenProcess = null;
     this._pendingDeltas = [];
+    this.activeConnections = [];
     this._policyProbeWaiters.clear();
   }
 
@@ -281,6 +285,15 @@ class CoreEventsService {
     }
 
     // ── 连接实时事件（增量更新）──
+    if (eventType === 'connection.snapshot') {
+      const connections = Array.isArray(data)
+        ? data.map((item) => this._parseConnectionEvent(item)).filter((item): item is GuiConnectionItem => item !== null)
+        : [];
+      this._pushDelta({ type: 'snapshot', connections });
+      this.connectionTick++;
+      return;
+    }
+
     if (eventType === 'connection.started' || eventType === 'connection.updated') {
       const conn = this._parseConnectionEvent(data);
       if (conn) {
@@ -294,9 +307,9 @@ class CoreEventsService {
     }
 
     if (eventType === 'connection.closed') {
-      const flowId = this._extractFlowId(data);
-      if (flowId) {
-        this._pushDelta({ type: 'closed', flowId });
+      const conn = this._parseConnectionEvent(data);
+      if (conn) {
+        this._pushDelta({ type: 'completed', connection: conn });
       }
       this.connectionTick++;
       return;
@@ -436,8 +449,39 @@ class CoreEventsService {
   // ── 连接增量 ──
 
   private _pushDelta(delta: ConnectionDelta) {
+    this._projectConnectionDelta(delta);
     this._pendingDeltas.push(delta);
+    if (this._pendingDeltas.length > 2_000) {
+      this._pendingDeltas.splice(0, this._pendingDeltas.length - 2_000);
+    }
     this._deltaSeq++;
+  }
+
+  private _projectConnectionDelta(delta: ConnectionDelta) {
+    if (delta.type === 'snapshot') {
+      this.activeConnections = delta.connections.slice(0, 500);
+      return;
+    }
+
+    if (delta.type === 'completed') {
+      const active = this.activeConnections.find((item) => item.flowId === delta.connection.flowId);
+      if (active && isOlderRevision(active, delta.connection)) return;
+      this.activeConnections = this.activeConnections.filter((item) => item.flowId !== delta.connection.flowId);
+      this.connectionHistory = [
+        delta.connection,
+        ...this.connectionHistory.filter((item) => item.flowId !== delta.connection.flowId),
+      ].slice(0, 500);
+      return;
+    }
+
+    const index = this.activeConnections.findIndex((item) => item.flowId === delta.connection.flowId);
+    const current = index >= 0 ? this.activeConnections[index] : undefined;
+    if (current && isOlderRevision(current, delta.connection)) return;
+    const connection = mergeGuiConnection(current, delta.connection);
+    this.activeConnections = [
+      connection,
+      ...this.activeConnections.filter((item) => item.flowId !== connection.flowId),
+    ].slice(0, 500);
   }
 
   private _parseConnectionEvent(data: unknown): GuiConnectionItem | null {
@@ -448,28 +492,55 @@ class CoreEventsService {
 
     return {
       flowId,
+      revision: typeof o['revision'] === 'number' ? o['revision'] : undefined,
+      state: typeof o['state'] === 'string' ? o['state'] : undefined,
       network: typeof o['network'] === 'string' ? o['network'] : 'tcp',
       source: typeof o['source'] === 'string' ? o['source'] : undefined,
+      sourceIp: typeof o['sourceIp'] === 'string' ? o['sourceIp'] : undefined,
+      sourcePort: typeof o['sourcePort'] === 'number' ? o['sourcePort'] : undefined,
+      processId: typeof o['processId'] === 'number' ? o['processId'] : undefined,
+      processName: typeof o['processName'] === 'string' ? o['processName'] : undefined,
+      processPath: typeof o['processPath'] === 'string' ? o['processPath'] : undefined,
       destination: typeof o['destination'] === 'string' ? o['destination'] : '-',
+      targetHost: typeof o['targetHost'] === 'string' ? o['targetHost'] : undefined,
+      targetIp: typeof o['targetIp'] === 'string' ? o['targetIp'] : undefined,
+      targetPort: typeof o['targetPort'] === 'number' ? o['targetPort'] : undefined,
+      sniffedHost: typeof o['sniffedHost'] === 'string' ? o['sniffedHost'] : undefined,
       inboundTag: typeof o['inboundTag'] === 'string' ? o['inboundTag'] : undefined,
+      inboundProtocol: typeof o['inboundProtocol'] === 'string' ? o['inboundProtocol'] : undefined,
       outboundTag: typeof o['outboundTag'] === 'string' ? o['outboundTag'] : undefined,
+      outboundProtocol: typeof o['outboundProtocol'] === 'string' ? o['outboundProtocol'] : undefined,
+      remoteDestination: typeof o['remoteDestination'] === 'string' ? o['remoteDestination'] : undefined,
       policyTag: typeof o['policyTag'] === 'string' ? o['policyTag'] : undefined,
       routeMode: typeof o['routeMode'] === 'string' ? o['routeMode'] : undefined,
+      routeAction: typeof o['routeAction'] === 'string' ? o['routeAction'] : undefined,
+      matchedRuleIndex: typeof o['matchedRuleIndex'] === 'number' ? o['matchedRuleIndex'] : undefined,
+      matchedRule: typeof o['matchedRule'] === 'string' ? o['matchedRule'] : undefined,
+      selectionChain: Array.isArray(o['selectionChain'])
+        ? o['selectionChain'].filter((item): item is string => typeof item === 'string')
+        : [],
+      relayChain: Array.isArray(o['relayChain'])
+        ? o['relayChain'].filter((item): item is string => typeof item === 'string')
+        : [],
       outcome: typeof o['outcome'] === 'string' ? o['outcome'] : undefined,
+      closeReason: typeof o['closeReason'] === 'string' ? o['closeReason'] : undefined,
+      failureStage: typeof o['failureStage'] === 'string' ? o['failureStage'] : undefined,
+      failureCode: typeof o['failureCode'] === 'string' ? o['failureCode'] : undefined,
+      failureMessage: typeof o['failureMessage'] === 'string' ? o['failureMessage'] : undefined,
       bytesUp: typeof o['bytesUp'] === 'number' ? o['bytesUp'] : 0,
       bytesDown: typeof o['bytesDown'] === 'number' ? o['bytesDown'] : 0,
+      inboundRxBytes: typeof o['inboundRxBytes'] === 'number' ? o['inboundRxBytes'] : undefined,
+      inboundTxBytes: typeof o['inboundTxBytes'] === 'number' ? o['inboundTxBytes'] : undefined,
+      outboundRxBytes: typeof o['outboundRxBytes'] === 'number' ? o['outboundRxBytes'] : undefined,
+      outboundTxBytes: typeof o['outboundTxBytes'] === 'number' ? o['outboundTxBytes'] : undefined,
       throughputUpBps: typeof o['throughputUpBps'] === 'number' ? o['throughputUpBps'] : undefined,
       throughputDownBps: typeof o['throughputDownBps'] === 'number' ? o['throughputDownBps'] : undefined,
       startedAtUnixMs: typeof o['startedAtUnixMs'] === 'number' ? o['startedAtUnixMs'] : undefined,
+      lastActivityAtUnixMs: typeof o['lastActivityAtUnixMs'] === 'number' ? o['lastActivityAtUnixMs'] : undefined,
+      endedAtUnixMs: typeof o['endedAtUnixMs'] === 'number' ? o['endedAtUnixMs'] : undefined,
       updatedAtUnixMs: typeof o['updatedAtUnixMs'] === 'number' ? o['updatedAtUnixMs'] : undefined,
       durationMs: typeof o['durationMs'] === 'number' ? o['durationMs'] : undefined,
     };
-  }
-
-  private _extractFlowId(data: unknown): string | null {
-    if (!data || typeof data !== 'object') return null;
-    const o = data as Record<string, unknown>;
-    return typeof o['flowId'] === 'string' ? o['flowId'] : null;
   }
 
   private _handleIpcStatus(data: unknown) {
@@ -543,6 +614,26 @@ class CoreEventsService {
       // Best-effort initial fetch
     }
   }
+}
+
+function isOlderRevision(current: GuiConnectionItem, incoming: GuiConnectionItem): boolean {
+  return current.revision !== undefined
+    && incoming.revision !== undefined
+    && incoming.revision < current.revision;
+}
+
+function mergeGuiConnection(
+  current: GuiConnectionItem | undefined,
+  incoming: GuiConnectionItem,
+): GuiConnectionItem {
+  if (!current) return incoming;
+  const merged = { ...current } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  if (incoming.selectionChain.length === 0) merged['selectionChain'] = current.selectionChain;
+  if (incoming.relayChain.length === 0) merged['relayChain'] = current.relayChain;
+  return merged as unknown as GuiConnectionItem;
 }
 
 function awaitIgnore(promise: Promise<unknown>) {

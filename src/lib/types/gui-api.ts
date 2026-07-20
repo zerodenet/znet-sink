@@ -180,19 +180,48 @@ export interface GuiTargetProbeResult {
 
 export interface GuiConnectionItem {
   flowId: string;
+  revision?: number;
+  state?: 'opening' | 'active' | 'completed' | string;
   network: string;
   source?: string;
+  sourceIp?: string;
+  sourcePort?: number;
+  processId?: number;
+  processName?: string;
+  processPath?: string;
   destination: string;
+  targetHost?: string;
+  targetIp?: string;
+  targetPort?: number;
+  sniffedHost?: string;
   inboundTag?: string;
+  inboundProtocol?: string;
   outboundTag?: string;
+  outboundProtocol?: string;
+  remoteDestination?: string;
   policyTag?: string;
   routeMode?: string;
+  routeAction?: string;
+  matchedRuleIndex?: number;
+  matchedRule?: string;
+  selectionChain: string[];
+  relayChain: string[];
   outcome?: string;
+  closeReason?: string;
+  failureStage?: string;
+  failureCode?: string;
+  failureMessage?: string;
   bytesUp: number;
   bytesDown: number;
+  inboundRxBytes?: number;
+  inboundTxBytes?: number;
+  outboundRxBytes?: number;
+  outboundTxBytes?: number;
   throughputUpBps?: number;
   throughputDownBps?: number;
   startedAtUnixMs?: number;
+  lastActivityAtUnixMs?: number;
+  endedAtUnixMs?: number;
   updatedAtUnixMs?: number;
   durationMs?: number;
 }

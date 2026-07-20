@@ -42,8 +42,10 @@ pub fn gui_event_type(source_event_type: &str) -> &'static str {
         "engine.warning" => "core.warning",
         "config.changed" => "core.configChanged",
         "flow.started" => "connection.started",
+        "flow.routed" => "connection.updated",
         "flow.updated" => "connection.updated",
         "flow.completed" => "connection.closed",
+        "flow.snapshot" => "connection.snapshot",
         "policy.selected" => "policy.selected",
         "policy.probe.completed" => "policy.probeCompleted",
         "stats.sampled" => "traffic.sampled",
@@ -84,9 +86,19 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
         "config.changed" => GuiEventData::ConfigChanged(GuiConfigChangedEvent {
             changed_at_unix_ms: u64_at(payload, &["changed_at_unix_ms", "changedAtUnixMs"]),
         }),
-        "flow.started" | "flow.updated" | "flow.completed" => parse_connection(payload)
-            .map(GuiEventData::Connection)
-            .unwrap_or_else(|| unknown_payload("invalid flow event payload", payload)),
+        "flow.started" | "flow.routed" | "flow.updated" | "flow.completed" => {
+            parse_connection(payload)
+                .map(GuiEventData::Connection)
+                .unwrap_or_else(|| unknown_payload("invalid flow event payload", payload))
+        }
+        "flow.snapshot" => {
+            let connections = payload
+                .get("records")
+                .and_then(Value::as_array)
+                .map(|records| records.iter().filter_map(parse_connection).collect())
+                .unwrap_or_default();
+            GuiEventData::Connections(connections)
+        }
         "policy.selected" => parse_policy_selected(payload)
             .map(GuiEventData::PolicySelected)
             .unwrap_or_else(|| unknown_payload("invalid policy.selected event payload", payload)),

@@ -1,32 +1,22 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { getAppErrorMessage, getGuiConnections, getGuiRecentConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
+  import { getAppErrorMessage, getGuiConnections, guiCloseConnection, queryFlows, closeFlow, handleAppError, type FlowInfo } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { coreEvents, type ConnectionDelta } from '$lib/services/core-events.svelte';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
 
- type DisplayConnection = {
-   flowId: string;
+ type DisplayConnection = Omit<GuiConnectionItem, 'source' | 'startedAtUnixMs'> & {
    source: string;
-   destination: string;
    origin: 'active' | 'recent';
    protocol: string;
-   bytesUp: number;
-   bytesDown: number;
    startedAtUnixMs: number;
-    policyTag?: string;
-    outboundTag?: string;
-    routeMode?: string;
-    inboundTag?: string;
-    outcome?: string;
-    throughputUpBps?: number;
-    throughputDownBps?: number;
-    updatedAtUnixMs?: number;
-    durationMs?: number;
   };
 
- let connections = $state<DisplayConnection[]>([]);
+ let connections = $state<DisplayConnection[]>([
+   ...coreEvents.activeConnections.map((connection) => mapGuiConnection(connection)),
+   ...coreEvents.connectionHistory.map((connection) => mapGuiConnection(connection, 'recent')),
+ ]);
  let loading = $state(true);
  let closingId = $state<string | null>(null);
  let expandedIds = $state<Set<string>>(new Set());
@@ -49,7 +39,13 @@
      c.source.toLowerCase().includes(q) ||
      c.flowId.toLowerCase().includes(q) ||
      (c.policyTag?.toLowerCase().includes(q) ?? false) ||
-     (c.outboundTag?.toLowerCase().includes(q) ?? false)
+     (c.outboundTag?.toLowerCase().includes(q) ?? false) ||
+     (c.processName?.toLowerCase().includes(q) ?? false) ||
+     (c.processPath?.toLowerCase().includes(q) ?? false) ||
+     (c.matchedRule?.toLowerCase().includes(q) ?? false) ||
+     (c.remoteDestination?.toLowerCase().includes(q) ?? false) ||
+     c.selectionChain.some((item) => item.toLowerCase().includes(q)) ||
+     c.relayChain.some((item) => item.toLowerCase().includes(q))
    );
  }
 
@@ -91,7 +87,9 @@
     try {
       const result = await fetchConnections();
       if (generation !== refreshGeneration) return;
-      connections = result.items;
+      const activeIds = new Set(result.items.map((item) => item.flowId));
+      const recent = connections.filter((item) => item.origin === 'recent' && !activeIds.has(item.flowId));
+      connections = [...result.items, ...recent].slice(0, MAX_CONNECTIONS);
       flowSupported = result.supported;
       partialError = result.partialError;
       loadError = null;
@@ -116,11 +114,11 @@
     supported: boolean;
     partialError: string | null;
   }> {
-      // Fetch both active and recent connections in parallel
-      const [activeResult, recentResult] = await Promise.allSettled([
-        getGuiConnections({ limit: 200 }),
-        getGuiRecentConnections({ limit: 50 }),
-      ]);
+     // The live list can query active flows as a compatibility fallback.
+     // Completed-flow history is owned by this GUI and is never loaded from the kernel.
+     const activeResult = await Promise.resolve(getGuiConnections({ limit: 200 }))
+       .then((value) => ({ status: 'fulfilled' as const, value }))
+       .catch((reason: unknown) => ({ status: 'rejected' as const, reason }));
 
      let activeItems = activeResult.status === 'fulfilled'
        ? activeResult.value.items.map((c) => mapGuiConnection(c))
@@ -142,17 +140,7 @@
        }
      }
 
-     const recentItems = recentResult.status === 'fulfilled'
-       ? recentResult.value.items
-           .filter(r => !activeItems.some(a => a.flowId === r.flowId))
-           .map((c) => mapGuiConnection(c, 'recent'))
-       : [];
-     if (recentResult.status === 'rejected') errors.push(recentResult.reason);
-
-     // Deduplicate: active connections take priority
-     const all = [...activeItems, ...recentItems];
       const succeeded = activeResult.status === 'fulfilled'
-        || recentResult.status === 'fulfilled'
         || rawFallbackSucceeded;
       if (!succeeded && errors.length > 0) {
         if (errors.every(isUnsupportedError)) {
@@ -161,7 +149,7 @@
         throw errors[0];
       }
       return {
-        items: all,
+        items: activeItems,
         supported: true,
         partialError: errors.length > 0
           ? `部分连接数据未能加载：${getAppErrorMessage(errors[0], '查询失败')}`
@@ -171,23 +159,13 @@
 
 function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'active'): DisplayConnection {
   return {
+    ...c,
     flowId: c.flowId,
     source: c.source ?? '-',
     destination: c.destination,
     origin,
     protocol: c.network,
-      bytesUp: c.bytesUp,
-      bytesDown: c.bytesDown,
-      startedAtUnixMs: c.startedAtUnixMs ?? Date.now(),
-      policyTag: c.policyTag,
-      outboundTag: c.outboundTag,
-      routeMode: c.routeMode,
-      inboundTag: c.inboundTag,
-      outcome: c.outcome,
-      throughputUpBps: c.throughputUpBps,
-      throughputDownBps: c.throughputDownBps,
-      updatedAtUnixMs: c.updatedAtUnixMs,
-      durationMs: c.durationMs,
+    startedAtUnixMs: c.startedAtUnixMs ?? Date.now(),
     };
   }
 
@@ -198,9 +176,12 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
      destination: f.destination,
      origin: 'active',
      protocol: f.protocol,
+     network: f.protocol,
       bytesUp: f.bytesUp,
-      bytesDown: f.bytesDown,
-      startedAtUnixMs: f.startedAtUnixMs,
+     bytesDown: f.bytesDown,
+     startedAtUnixMs: f.startedAtUnixMs,
+     selectionChain: [],
+     relayChain: [],
     };
   }
 
@@ -233,8 +214,8 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     return `${bytes} B`;
   }
 
-  function formatDuration(startedAtMs: number): string {
-    const elapsed = Date.now() - startedAtMs;
+  function formatDuration(startedAtMs: number, durationMs?: number): string {
+    const elapsed = durationMs ?? (Date.now() - startedAtMs);
     if (elapsed < 0) return '0s';
     const sec = Math.floor(elapsed / 1000);
     if (sec < 60) return `${sec}s`;
@@ -258,16 +239,6 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     void refresh(true);
   });
 
-  // 事件流重新订阅后对账（弥补断连期间丢失的事件）
-  let _prevSubscribed = false;
-  $effect(() => {
-    const sub = coreEvents.status === 'subscribed';
-    if (sub && !_prevSubscribed) {
-      void refresh(false);
-    }
-    _prevSubscribed = sub;
-  });
-
   // 实时增量更新（来自内核事件流）
   $effect(() => {
     const seq = coreEvents.deltaSeq;
@@ -284,74 +255,62 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   });
 
   function applyDeltas(deltas: ConnectionDelta[]) {
-    const addMap = new Map<string, DisplayConnection>();
-    const updateMap = new Map<string, Partial<DisplayConnection>>();
-    const removeSet = new Set<string>();
+    let next = [...connections];
 
     for (const delta of deltas) {
       switch (delta.type) {
+        case 'snapshot': {
+          flowSupported = true;
+          const active = delta.connections.map((connection) => mapGuiConnection(connection));
+          const activeIds = new Set(active.map((connection) => connection.flowId));
+          const recent = next.filter((connection) => connection.origin === 'recent' && !activeIds.has(connection.flowId));
+          next = [...active, ...recent];
+          break;
+        }
         case 'started':
-          addMap.set(delta.connection.flowId, mapGuiConnection(delta.connection));
-          removeSet.delete(delta.connection.flowId);
-          updateMap.delete(delta.connection.flowId);
+        case 'updated': {
+          const incoming = mapGuiConnection(delta.connection);
+          const index = next.findIndex((connection) => connection.flowId === incoming.flowId);
+          const current = index >= 0 ? next[index] : undefined;
+          if (current && isStale(current, incoming)) break;
+          if (index >= 0) next.splice(index, 1);
+          next.unshift(mergeConnection(current, incoming));
           break;
-        case 'updated':
-          if (!removeSet.has(delta.connection.flowId) && !addMap.has(delta.connection.flowId)) {
-            const u = delta.connection;
-            updateMap.set(delta.connection.flowId, {
-              bytesUp: u.bytesUp,
-              bytesDown: u.bytesDown,
-              throughputUpBps: u.throughputUpBps,
-              throughputDownBps: u.throughputDownBps,
-              updatedAtUnixMs: u.updatedAtUnixMs ?? Date.now(),
-              durationMs: u.durationMs,
-              outcome: u.outcome,
-              routeMode: u.routeMode,
-            });
-          }
+        }
+        case 'completed': {
+          const incoming = mapGuiConnection(delta.connection, 'recent');
+          const index = next.findIndex((connection) => connection.flowId === incoming.flowId);
+          const current = index >= 0 ? next[index] : undefined;
+          if (current && isStale(current, incoming)) break;
+          if (index >= 0) next.splice(index, 1);
+          next.unshift(incoming);
           break;
-        case 'closed':
-          removeSet.add(delta.flowId);
-          addMap.delete(delta.flowId);
-          updateMap.delete(delta.flowId);
-          break;
+        }
       }
     }
 
-    if (addMap.size === 0 && updateMap.size === 0 && removeSet.size === 0) return;
-
-   connections = [
-     ...Array.from(addMap.values()),
-     ...connections
-       .filter(c => !removeSet.has(c.flowId) && !addMap.has(c.flowId))
-       .map(c => {
-         const update = updateMap.get(c.flowId);
-         if (!update) return c;
-         return {
-           ...c,
-           bytesUp: update.bytesUp ?? c.bytesUp,
-           bytesDown: update.bytesDown ?? c.bytesDown,
-           throughputUpBps: update.throughputUpBps ?? c.throughputUpBps,
-           throughputDownBps: update.throughputDownBps ?? c.throughputDownBps,
-           updatedAtUnixMs: update.updatedAtUnixMs ?? c.updatedAtUnixMs,
-           durationMs: update.durationMs ?? c.durationMs,
-           outcome: update.outcome ?? c.outcome,
-           routeMode: update.routeMode ?? c.routeMode,
-         };
-       }),
-   ];
-   // Cap total to avoid unbounded growth (oldest/recent items dropped first)
-   if (connections.length > MAX_CONNECTIONS) {
-     connections = connections.slice(0, MAX_CONNECTIONS);
-   }
+    connections = next.slice(0, MAX_CONNECTIONS);
+    const visibleIds = new Set(connections.map((connection) => connection.flowId));
+    expandedIds = new Set([...expandedIds].filter((id) => visibleIds.has(id)));
 
    // 清理已移除连接的展开状态
-    if (removeSet.size > 0) {
-      const nextExpanded = new Set([...expandedIds].filter(id => !removeSet.has(id)));
-      if (nextExpanded.size !== expandedIds.size) {
-        expandedIds = nextExpanded;
-      }
+  }
+
+  function isStale(current: DisplayConnection, incoming: DisplayConnection): boolean {
+    return current.revision !== undefined
+      && incoming.revision !== undefined
+      && incoming.revision < current.revision;
+  }
+
+  function mergeConnection(current: DisplayConnection | undefined, incoming: DisplayConnection): DisplayConnection {
+    if (!current) return incoming;
+    const merged = { ...current } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(incoming)) {
+      if (value !== undefined) merged[key] = value;
     }
+    if (incoming.selectionChain.length === 0) merged['selectionChain'] = current.selectionChain;
+    if (incoming.relayChain.length === 0) merged['relayChain'] = current.relayChain;
+    return merged as DisplayConnection;
   }
 
   onDestroy(() => {
@@ -462,7 +421,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
               <div class="flow-stats">
               <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
               <span class="flow-stat down">↓ {formatBytes(conn.bytesDown)}</span>
-              <span class="flow-dur">{formatDuration(conn.startedAtUnixMs)}</span>
+              <span class="flow-dur">{formatDuration(conn.startedAtUnixMs, conn.durationMs)}</span>
             </div>
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="expand-chevron" class:expanded={expandedIds.has(conn.flowId)}>
               <polyline points="3 5 7 9 11 5"/>
@@ -491,16 +450,38 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
           {#if expandedIds.has(conn.flowId)}
             <div class="flow-detail">
               <div class="detail-grid">
+                <div class="detail-item">
+                  <span class="detail-key">来源</span>
+                  <span class="detail-val" title={conn.source}>{conn.source}</span>
+                </div>
+                {#if conn.processName || conn.processPath || conn.processId}
+                  <div class="detail-item">
+                    <span class="detail-key">进程</span>
+                    <span class="detail-val" title={conn.processPath}>{conn.processName ?? conn.processPath ?? `PID ${conn.processId}`}</span>
+                  </div>
+                {/if}
+                {#if conn.targetHost || conn.targetIp}
+                  <div class="detail-item">
+                    <span class="detail-key">目标</span>
+                    <span class="detail-val" title={conn.targetHost}>{conn.targetHost ?? conn.destination}{conn.targetIp && conn.targetIp !== conn.targetHost ? ` → ${conn.targetIp}` : ''}</span>
+                  </div>
+                {/if}
                 {#if conn.inboundTag}
                   <div class="detail-item">
                     <span class="detail-key">入口</span>
-                    <span class="detail-val">{conn.inboundTag}</span>
+                    <span class="detail-val">{conn.inboundTag}{conn.inboundProtocol ? ` · ${conn.inboundProtocol}` : ''}</span>
                   </div>
                 {/if}
                 {#if conn.outboundTag}
                   <div class="detail-item">
                     <span class="detail-key">出口</span>
-                    <span class="detail-val">{conn.outboundTag}</span>
+                    <span class="detail-val">{conn.outboundTag}{conn.outboundProtocol ? ` · ${conn.outboundProtocol}` : ''}</span>
+                  </div>
+                {/if}
+                {#if conn.remoteDestination}
+                  <div class="detail-item">
+                    <span class="detail-key">实际远端</span>
+                    <span class="detail-val">{conn.remoteDestination}</span>
                   </div>
                 {/if}
                 {#if conn.policyTag}
@@ -512,13 +493,43 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
                 {#if conn.routeMode}
                   <div class="detail-item">
                     <span class="detail-key">路由</span>
-                    <span class="detail-val">{modeLabel(conn.routeMode)}</span>
+                    <span class="detail-val">{modeLabel(conn.routeMode)}{conn.routeAction ? ` · ${conn.routeAction}` : ''}</span>
+                  </div>
+                {/if}
+                {#if conn.matchedRule}
+                  <div class="detail-item detail-wide">
+                    <span class="detail-key">命中规则{conn.matchedRuleIndex !== undefined ? ` #${conn.matchedRuleIndex}` : ''}</span>
+                    <span class="detail-val" title={conn.matchedRule}>{conn.matchedRule}</span>
+                  </div>
+                {/if}
+                {#if conn.selectionChain.length > 0}
+                  <div class="detail-item detail-wide">
+                    <span class="detail-key">选择链</span>
+                    <span class="detail-val" title={conn.selectionChain.join(' → ')}>{conn.selectionChain.join(' → ')}</span>
+                  </div>
+                {/if}
+                {#if conn.relayChain.length > 0}
+                  <div class="detail-item detail-wide">
+                    <span class="detail-key">中继链</span>
+                    <span class="detail-val" title={conn.relayChain.join(' → ')}>{conn.relayChain.join(' → ')}</span>
                   </div>
                 {/if}
                 {#if conn.outcome}
                   <div class="detail-item">
                     <span class="detail-key">结果</span>
-                    <span class="detail-val">{conn.outcome}</span>
+                    <span class="detail-val">{conn.outcome}{conn.closeReason ? ` · ${conn.closeReason}` : ''}</span>
+                  </div>
+                {/if}
+                {#if conn.failureMessage}
+                  <div class="detail-item detail-wide failure-detail">
+                    <span class="detail-key">失败{conn.failureStage ? ` · ${conn.failureStage}` : ''}{conn.failureCode ? ` · ${conn.failureCode}` : ''}</span>
+                    <span class="detail-val" title={conn.failureMessage}>{conn.failureMessage}</span>
+                  </div>
+                {/if}
+                {#if conn.inboundRxBytes !== undefined || conn.outboundTxBytes !== undefined}
+                  <div class="detail-item detail-wide">
+                    <span class="detail-key">方向流量</span>
+                    <span class="detail-val">入站收 {formatBytes(conn.inboundRxBytes ?? 0)} · 出站发 {formatBytes(conn.outboundTxBytes ?? 0)} · 出站收 {formatBytes(conn.outboundRxBytes ?? 0)} · 入站发 {formatBytes(conn.inboundTxBytes ?? 0)}</span>
                   </div>
                 {/if}
                 {#if conn.throughputDownBps !== undefined}
@@ -536,13 +547,19 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
                 {#if conn.durationMs !== undefined}
                   <div class="detail-item">
                     <span class="detail-key">持续时间</span>
-                    <span class="detail-val">{formatDuration(conn.startedAtUnixMs)}</span>
+                    <span class="detail-val">{formatDuration(conn.startedAtUnixMs, conn.durationMs)}</span>
                   </div>
                 {/if}
                 {#if conn.updatedAtUnixMs}
                   <div class="detail-item">
                     <span class="detail-key">最后更新</span>
                     <span class="detail-val">{new Date(conn.updatedAtUnixMs).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+                  </div>
+                {/if}
+                {#if conn.endedAtUnixMs}
+                  <div class="detail-item">
+                    <span class="detail-key">结束时间</span>
+                    <span class="detail-val">{new Date(conn.endedAtUnixMs).toLocaleTimeString('zh-CN', { hour12: false })}</span>
                   </div>
                 {/if}
               </div>
@@ -962,6 +979,15 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .detail-wide {
+    grid-column: 1 / -1;
+  }
+
+  .failure-detail .detail-key,
+  .failure-detail .detail-val {
+    color: var(--destructive);
   }
 
   .detail-key {

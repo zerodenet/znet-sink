@@ -258,13 +258,14 @@ pub fn parse_connection_list(value: &Value, limit: u32) -> GuiConnectionList {
 }
 
 pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
+    let value = nested_value(value, &["record"]).unwrap_or(value);
     let flow_id = string_at(
         value,
         &["flow_id", "flowId", "id", "connection_id", "connectionId"],
     )?;
     let target = nested_value(value, &["target"]);
     let host = target
-        .and_then(|target| string_at(target, &["host", "address"]))
+        .and_then(|target| string_at(target, &["host", "address", "value"]))
         .or_else(|| string_at(value, &["host", "destination", "dest", "remote", "address"]));
     let port = target
         .and_then(|target| u64_at(target, &["port"]))
@@ -274,48 +275,192 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
                 &["port", "dest_port", "destPort", "remote_port", "remotePort"],
             )
         });
-    let destination = match (host, port) {
-        (Some(host), Some(port)) => format!("{host}:{port}"),
-        (Some(host), None) => host,
-        (None, Some(port)) => port.to_string(),
-        (None, None) => "-".to_string(),
-    };
+    let destination = endpoint_display(host.as_deref(), port).unwrap_or_else(|| "-".to_string());
+    let source_info = nested_value(value, &["source"]);
+    let source_ip = source_info
+        .and_then(|source| string_at(source, &["ip", "address", "host"]))
+        .or_else(|| string_at(value, &["source_ip", "sourceIp", "client_ip", "clientIp"]));
+    let source_port = source_info
+        .and_then(|source| u64_at(source, &["port"]))
+        .or_else(|| {
+            u64_at(
+                value,
+                &["source_port", "sourcePort", "client_port", "clientPort"],
+            )
+        });
+    let source = endpoint_display(source_ip.as_deref(), source_port)
+        .or_else(|| string_at(value, &["source", "client", "local"]));
     let traffic = nested_value(value, &["traffic"]).unwrap_or(value);
     let timing = nested_value(value, &["timing"]).unwrap_or(value);
+    let throughput = nested_value(value, &["throughput"]).unwrap_or(value);
+    let inbound = nested_value(value, &["inbound"]);
+    let path = nested_value(value, &["path"]);
+    let outbound = path
+        .and_then(|path| nested_value(path, &["outbound"]))
+        .or_else(|| nested_value(value, &["outbound"]));
+    let route = nested_value(value, &["route"]);
+    let result = nested_value(value, &["result"]);
+    let failure = result.and_then(|result| nested_value(result, &["failure"]));
+    let remote = path
+        .and_then(|path| nested_value(path, &["remote"]))
+        .or_else(|| failure.and_then(|failure| nested_value(failure, &["remote"])));
+    let remote_host = remote.and_then(|remote| string_at(remote, &["host", "address", "ip"]));
+    let remote_port = remote.and_then(|remote| u64_at(remote, &["port"]));
+    let selection_chain = route
+        .and_then(|route| {
+            route
+                .get("selection_chain")
+                .or_else(|| route.get("selectionChain"))
+        })
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let relay_chain = path
+        .and_then(|path| path.get("relay_chain").or_else(|| path.get("relayChain")))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str()
+                        .map(ToOwned::to_owned)
+                        .or_else(|| string_at(item, &["tag", "name"]))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let matched_rule = route.and_then(|route| {
+        route
+            .get("matched_rule")
+            .or_else(|| route.get("matchedRule"))
+    });
 
     Some(GuiConnection {
         flow_id,
+        revision: u64_at(value, &["revision"]),
+        state: string_at(value, &["state"]),
         network: string_at(value, &["network", "protocol", "type"])
             .unwrap_or_else(|| "tcp".to_string()),
-        source: string_at(value, &["source", "client", "local"]),
+        source,
+        source_ip,
+        source_port,
+        process_id: source_info
+            .and_then(|source| u64_at(source, &["process_id", "processId", "pid"])),
+        process_name: source_info
+            .and_then(|source| string_at(source, &["process_name", "processName", "process"])),
+        process_path: source_info
+            .and_then(|source| string_at(source, &["process_path", "processPath"])),
         destination,
-        inbound_tag: nested_value(value, &["inbound"])
+        target_host: host,
+        target_ip: target.and_then(|target| {
+            string_at(target, &["resolved_ip", "resolvedIp"]).or_else(|| {
+                let family = string_at(target, &["family"])?;
+                (family == "ipv4" || family == "ipv6")
+                    .then(|| string_at(target, &["value"]))
+                    .flatten()
+            })
+        }),
+        target_port: port,
+        sniffed_host: target.and_then(|target| string_at(target, &["sniffed_host", "sniffedHost"])),
+        inbound_tag: inbound
             .and_then(|inbound| string_at(inbound, &["tag", "protocol"]))
             .or_else(|| string_at(value, &["inbound_tag", "inboundTag"])),
-        outbound_tag: nested_value(value, &["outbound"])
+        inbound_protocol: inbound.and_then(|inbound| string_at(inbound, &["protocol", "type"])),
+        outbound_tag: outbound
             .and_then(|outbound| string_at(outbound, &["tag", "protocol"]))
             .or_else(|| string_at(value, &["outbound_tag", "outboundTag"])),
+        outbound_protocol: outbound.and_then(|outbound| string_at(outbound, &["protocol", "type"])),
+        remote_destination: endpoint_display(remote_host.as_deref(), remote_port),
         policy_tag: nested_value(value, &["policy"])
             .and_then(|policy| string_at(policy, &["tag", "policy_tag", "policyTag"]))
+            .or_else(|| route.and_then(|route| string_at(route, &["target"])))
             .or_else(|| string_at(value, &["policy_tag", "policyTag"])),
-        route_mode: nested_value(value, &["route"])
+        route_mode: route
             .and_then(|route| string_at(route, &["mode"]))
-            .or_else(|| string_at(value, &["route_mode", "routeMode"])),
-        outcome: string_at(value, &["outcome", "status"]),
+            .or_else(|| string_at(value, &["route_mode", "routeMode", "mode"])),
+        route_action: route.and_then(|route| string_at(route, &["action"])),
+        matched_rule_index: matched_rule.and_then(|rule| u64_at(rule, &["index"])),
+        matched_rule: matched_rule.and_then(|rule| string_at(rule, &["condition", "rule"])),
+        selection_chain,
+        relay_chain,
+        outcome: result
+            .and_then(|result| string_at(result, &["outcome"]))
+            .or_else(|| string_at(value, &["outcome", "status"])),
+        close_reason: result
+            .and_then(|result| string_at(result, &["close_reason", "closeReason"]))
+            .or_else(|| string_at(value, &["close_reason", "closeReason"])),
+        failure_stage: failure.and_then(|failure| string_at(failure, &["stage"])),
+        failure_code: failure.and_then(|failure| string_at(failure, &["code"])),
+        failure_message: failure.and_then(|failure| string_at(failure, &["message", "error"])),
         bytes_up: u64_at(traffic, &["bytes_up", "bytesUp", "tx"]).unwrap_or(0),
         bytes_down: u64_at(traffic, &["bytes_down", "bytesDown", "rx"]).unwrap_or(0),
-        throughput_up_bps: u64_at(value, &["throughput_up_bps", "throughputUpBps"]),
-        throughput_down_bps: u64_at(value, &["throughput_down_bps", "throughputDownBps"]),
+        inbound_rx_bytes: u64_at(traffic, &["inbound_rx_bytes", "inboundRxBytes"]),
+        inbound_tx_bytes: u64_at(traffic, &["inbound_tx_bytes", "inboundTxBytes"]),
+        outbound_rx_bytes: u64_at(traffic, &["outbound_rx_bytes", "outboundRxBytes"]),
+        outbound_tx_bytes: u64_at(traffic, &["outbound_tx_bytes", "outboundTxBytes"]),
+        throughput_up_bps: u64_at(
+            throughput,
+            &[
+                "upload_bps",
+                "uploadBps",
+                "throughput_up_bps",
+                "throughputUpBps",
+            ],
+        ),
+        throughput_down_bps: u64_at(
+            throughput,
+            &[
+                "download_bps",
+                "downloadBps",
+                "throughput_down_bps",
+                "throughputDownBps",
+            ],
+        ),
         started_at_unix_ms: u64_at(
             timing,
             &["started_at_unix_ms", "startedAtUnixMs", "started_at"],
         ),
+        last_activity_at_unix_ms: u64_at(
+            timing,
+            &["last_activity_at_unix_ms", "lastActivityAtUnixMs"],
+        ),
+        ended_at_unix_ms: u64_at(
+            timing,
+            &[
+                "ended_at_unix_ms",
+                "endedAtUnixMs",
+                "finished_at_unix_ms",
+                "finishedAtUnixMs",
+            ],
+        ),
         updated_at_unix_ms: u64_at(
-            value,
-            &["snapshot_at_unix_ms", "updatedAtUnixMs", "updated_at"],
+            throughput,
+            &[
+                "sampled_at_unix_ms",
+                "sampledAtUnixMs",
+                "snapshot_at_unix_ms",
+                "updatedAtUnixMs",
+                "updated_at",
+            ],
         ),
         duration_ms: u64_at(timing, &["duration_ms", "durationMs"]),
     })
+}
+
+fn endpoint_display(host: Option<&str>, port: Option<u64>) -> Option<String> {
+    match (host, port) {
+        (Some(host), Some(port)) if host.contains(':') => Some(format!("[{host}]:{port}")),
+        (Some(host), Some(port)) => Some(format!("{host}:{port}")),
+        (Some(host), None) => Some(host.to_owned()),
+        (None, Some(port)) => Some(port.to_string()),
+        (None, None) => None,
+    }
 }
 
 pub fn parse_connection_close(value: &Value, flow_id: String) -> GuiConnectionCloseResult {

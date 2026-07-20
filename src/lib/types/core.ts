@@ -56,6 +56,7 @@ export type GuiEventType =
   | 'connection.started'
   | 'connection.updated'
   | 'connection.closed'
+  | 'connection.snapshot'
   | 'policy.selected'
   | 'policy.probeCompleted'
   | 'traffic.sampled'

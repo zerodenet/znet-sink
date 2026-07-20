@@ -320,6 +320,125 @@ fn unwrap_query_variant_returns_config_entity() {
 }
 
 #[test]
+fn parse_connection_preserves_canonical_lifecycle_record() {
+    let conn = parsing::parse_connection(&json!({
+        "flow_id": "legacy-id",
+        "record": {
+            "flow_id": "50dbde45",
+            "revision": 7,
+            "state": "completed",
+            "network": "tcp",
+            "inbound": { "tag": "DEFAULT-TPROXY", "protocol": "tproxy" },
+            "source": {
+                "ip": "192.168.50.175",
+                "port": 52864,
+                "process_id": 98,
+                "process_name": "Courier"
+            },
+            "target": {
+                "host": "19-courier.push.apple.com",
+                "port": 5223,
+                "resolved_ip": "17.57.147.6",
+                "sniffed_host": "courier.push.apple.com"
+            },
+            "route": {
+                "mode": "rule",
+                "action": "route",
+                "target": "Proxy",
+                "matched_rule": { "index": 12, "condition": "domain_suffix:apple.com" },
+                "selection_chain": ["Proxy", "US-Lite"]
+            },
+            "path": {
+                "outbound": { "tag": "US-Lite", "protocol": "vmess" },
+                "remote": { "host": "8.163.113.57", "port": 443 },
+                "relay_chain": [
+                    { "tag": "entry", "protocol": "shadowsocks" },
+                    { "tag": "US-Lite", "protocol": "vmess" }
+                ]
+            },
+            "traffic": {
+                "bytes_up": 12294,
+                "bytes_down": 4790,
+                "inbound_rx_bytes": 6147,
+                "inbound_tx_bytes": 2395,
+                "outbound_rx_bytes": 2395,
+                "outbound_tx_bytes": 6147
+            },
+            "throughput": {
+                "upload_bps": 0,
+                "download_bps": 63,
+                "sampled_at_unix_ms": 1784481785000_u64
+            },
+            "timing": {
+                "started_at_unix_ms": 1784481784193_u64,
+                "last_activity_at_unix_ms": 1784481784900_u64,
+                "ended_at_unix_ms": 1784481785000_u64,
+                "duration_ms": 807
+            },
+            "result": {
+                "outcome": "failed",
+                "close_reason": "upstream_error",
+                "failure": {
+                    "stage": "relay",
+                    "code": "io",
+                    "message": "connection reset"
+                }
+            }
+        }
+    }))
+    .expect("parse canonical record");
+
+    assert_eq!(conn.flow_id, "50dbde45");
+    assert_eq!(conn.revision, Some(7));
+    assert_eq!(conn.source.as_deref(), Some("192.168.50.175:52864"));
+    assert_eq!(conn.process_name.as_deref(), Some("Courier"));
+    assert_eq!(conn.destination, "19-courier.push.apple.com:5223");
+    assert_eq!(conn.target_ip.as_deref(), Some("17.57.147.6"));
+    assert_eq!(conn.matched_rule_index, Some(12));
+    assert_eq!(conn.selection_chain, vec!["Proxy", "US-Lite"]);
+    assert_eq!(conn.relay_chain, vec!["entry", "US-Lite"]);
+    assert_eq!(conn.remote_destination.as_deref(), Some("8.163.113.57:443"));
+    assert_eq!(conn.failure_stage.as_deref(), Some("relay"));
+    assert_eq!(conn.failure_code.as_deref(), Some("io"));
+    assert_eq!(conn.bytes_up, 12294);
+    assert_eq!(conn.outbound_tx_bytes, Some(6147));
+    assert_eq!(conn.duration_ms, Some(807));
+}
+
+#[test]
+fn flow_snapshot_normalizes_to_connection_snapshot() {
+    let event = events::normalize_event(&json!({
+        "event_type": "flow.snapshot",
+        "sequence": 9,
+        "payload": {
+            "watermark": 9,
+            "records": [{
+                "flow_id": "1",
+                "revision": 3,
+                "state": "active",
+                "network": "udp",
+                "inbound": { "tag": "socks-in", "protocol": "socks5" },
+                "target": { "host": "dns.example", "port": 53 },
+                "route": { "mode": "rule", "action": "direct", "selection_chain": [] },
+                "path": { "relay_chain": [] },
+                "traffic": { "bytes_up": 10, "bytes_down": 20 },
+                "throughput": { "upload_bps": 1, "download_bps": 2, "sampled_at_unix_ms": 100 },
+                "timing": { "started_at_unix_ms": 50, "last_activity_at_unix_ms": 90 }
+            }]
+        }
+    }));
+
+    assert_eq!(event.event_type, "connection.snapshot");
+    let GuiEventData::Connections(connections) = event.payload else {
+        panic!("expected connection snapshot");
+    };
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0].flow_id, "1");
+    assert_eq!(connections[0].revision, Some(3));
+    assert_eq!(connections[0].bytes_down, 20);
+}
+
+#[test]
 fn unwrap_query_variant_returns_policies_entity() {
     let result = parsing::unwrap_query_variant(
         json!({
