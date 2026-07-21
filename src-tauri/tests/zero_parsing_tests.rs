@@ -406,6 +406,32 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
 }
 
 #[test]
+fn boxed_connection_event_preserves_the_gui_json_contract() {
+    let event = events::normalize_event(&json!({
+        "event_type": "flow.started",
+        "payload": {
+            "flow_id": "flow-1",
+            "network": "tcp",
+            "target": { "host": "example.com", "port": 443 },
+            "traffic": { "bytes_up": 10, "bytes_down": 20 }
+        }
+    }));
+
+    let wire = serde_json::to_value(&event).expect("serialize GUI event");
+    assert_eq!(wire["payload"]["kind"], json!("connection"));
+    assert_eq!(wire["payload"]["data"]["flowId"], json!("flow-1"));
+    assert_eq!(
+        wire["payload"]["data"]["destination"],
+        json!("example.com:443")
+    );
+
+    let GuiEventData::Connection(connection) = event.payload else {
+        panic!("expected connection event");
+    };
+    assert_eq!(connection.flow_id, "flow-1");
+}
+
+#[test]
 fn flow_snapshot_normalizes_to_connection_snapshot() {
     let event = events::normalize_event(&json!({
         "event_type": "flow.snapshot",

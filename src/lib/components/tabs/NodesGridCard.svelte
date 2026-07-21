@@ -7,6 +7,7 @@
     getProtocolStyle,
     gradeDelay,
     getProbeTimeStyle,
+    getSpecialOutboundStyle,
   } from '$lib/services/node-utils';
 
   interface Props {
@@ -41,6 +42,7 @@
   const protocolStyle = $derived(getProtocolStyle(node.protocol));
   const chips = $derived(getNodeChips(node));
   const probeTimeState = $derived(getProbeTimeStyle(node.lastProbeAt));
+  const special = $derived(getSpecialOutboundStyle(node.protocol));
 </script>
 
 <div
@@ -57,7 +59,7 @@
     <div class="grid-card-header">
       <span class="grid-card-name {isActive ? 'grid-card-name-active' : ''}">
         {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
-        {node.cleanName || node.name}
+        {special?.label ?? (node.cleanName || node.name)}
       </span>
       {#if isActive}
         <span class="grid-check" aria-hidden="true">
@@ -78,6 +80,8 @@
     <div class="grid-card-footer">
       {#if isSwitching}
         <span class="grid-spin">⟳</span>
+      {:else if special}
+        <span class="grid-special-copy">{special.description}</span>
       {:else}
         <span class="grid-delay" style="color: {delayState.color};">
           {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
@@ -86,31 +90,37 @@
       {/if}
     </div>
 
-    {#if node.lastProbeAt}
-      <span class="grid-probe-time" style="color: {probeTimeState.color};">
-        {probeTimeState.label}
-      </span>
-    {/if}
+    <span
+      class="grid-probe-time"
+      class:layout-placeholder={!node.lastProbeAt || !!special}
+      style="color: {probeTimeState.color};"
+      aria-hidden={!node.lastProbeAt || !!special}
+    >
+      {#if node.lastProbeAt && !special}{probeTimeState.label}{:else}&nbsp;{/if}
+    </span>
 
     <div class="grid-bar-track">
-      <div class="grid-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
+      <div class="grid-bar-fill" style="width: {special ? '0%' : delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
     </div>
   </button>
 
-  <button
-    class="grid-probe-btn"
-    onclick={() => onProbeNode(node)}
-    disabled={probeDisabled || isProbing || probingAll}
-    title="测试延迟"
-    aria-label="测试 {node.name} 延迟"
-  >
-    {#if isProbing}<span class="grid-probe-spin">⟳</span>{:else}测速{/if}
-  </button>
+  {#if !special}
+    <button
+      class="grid-probe-btn"
+      onclick={() => onProbeNode(node)}
+      disabled={probeDisabled || isProbing || probingAll}
+      title="测试延迟"
+      aria-label="测试 {node.name} 延迟"
+    >
+      {#if isProbing}<span class="grid-probe-spin">⟳</span>{:else}测速{/if}
+    </button>
+  {/if}
 </div>
 
 <style>
   .grid-card-wrap {
     position: relative;
+    height: 100%;
   }
 
   .grid-card {
@@ -118,6 +128,7 @@
     flex-direction: column;
     gap: 5px;
     width: 100%;
+    height: 100%;
     padding: 12px 13px 14px;
     background: var(--card);
     border: 1.5px solid var(--border);
@@ -161,6 +172,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 4px;
+    min-height: 31px;
   }
 
   .grid-card-name {
@@ -299,6 +311,20 @@
     font-weight: 700;
     opacity: 0.6;
     margin-left: 3px;
+  }
+
+  .grid-special-copy {
+    color: var(--muted-foreground);
+    font-size: 10px;
+    line-height: 1.35;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .layout-placeholder {
+    visibility: hidden;
   }
 
   .grid-probe-time {

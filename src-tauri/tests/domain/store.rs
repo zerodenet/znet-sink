@@ -53,6 +53,8 @@ fn domain_store_roundtrips_profiles() {
             id: "rule-set-1".to_string(),
             name: "GeoIP".to_string(),
             enabled: true,
+            managed_by_subscription_id: None,
+            common_binding: None,
             semantic_ir: serde_json::json!({
                 "version": 1,
                 "name": "GeoIP",

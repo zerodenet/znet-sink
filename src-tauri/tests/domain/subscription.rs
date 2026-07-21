@@ -77,7 +77,7 @@ rules:
     );
     assert_eq!(
         parsed.content["route"]["rules"][0]["condition"]["type"],
-        "domain_suffix"
+        "domain"
     );
     assert_eq!(
         parsed.content["route"]["rules"][1]["action"]["outbound"],

@@ -20,12 +20,13 @@ pub mod logs;
 pub mod network_probe;
 pub mod probe;
 pub mod proxy_config;
-pub mod proxy_coordinator;
 pub mod proxy_mode;
+pub mod rule_overlay;
 pub mod rule_set;
 pub mod subscription;
 pub mod system_proxy;
 pub mod system_proxy_guard;
+pub(crate) mod text_encoding;
 pub mod traffic_sampler;
 
 #[cfg(test)]

@@ -354,22 +354,30 @@ pub async fn gui_apply_config(
             )
         })?;
     let opts = default_opts(state.inner());
-    let result = ZeroAdapter::new()
-        .apply_config(config.clone(), opts)
-        .await?;
+    let effective =
+        crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
+    let result = ZeroAdapter::new().apply_config(effective, opts).await?;
     // The kernel accepted the config — mirror it into the active profile so
     // that config-derived views (proxy nodes, policy groups) and the next
     // core-process start reflect the live configuration.
     if let Err(error) = proxy_config::update_active_content(state.inner(), config) {
+        let previous_effective = crate::services::rule_overlay::compose_effective_config(
+            state.inner(),
+            &previous_content,
+        )?;
         let _ = ZeroAdapter::new()
-            .apply_config(previous_content, default_opts(state.inner()))
+            .apply_config(previous_effective, default_opts(state.inner()))
             .await;
         return Err(error);
     }
     if let Err(error) = proxy_config::retarget_managed_system_proxy(state.inner()) {
         let _ = proxy_config::update_active_content(state.inner(), previous_content.clone());
+        let previous_effective = crate::services::rule_overlay::compose_effective_config(
+            state.inner(),
+            &previous_content,
+        )?;
         let _ = ZeroAdapter::new()
-            .apply_config(previous_content, default_opts(state.inner()))
+            .apply_config(previous_effective, default_opts(state.inner()))
             .await;
         let _ = proxy_config::retarget_managed_system_proxy(state.inner());
         return Err(error);
@@ -385,7 +393,9 @@ pub async fn gui_validate_config(
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "validate_config")?;
     let opts = default_opts(state.inner());
-    ZeroAdapter::new().validate_config(config, opts).await
+    let effective =
+        crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
+    ZeroAdapter::new().validate_config(effective, opts).await
 }
 
 /// Dry-run config apply — returns impact analysis without applying changes.
@@ -736,6 +746,7 @@ fn summarize_debug_payload(payload: &serde_json::Value) -> serde_json::Value {
         "api_id",
         "event_type",
         "id",
+        "matched",
         "ok",
         "request_id",
         "requestId",
@@ -874,6 +885,7 @@ mod tests {
             "payload": {
                 "type": "command",
                 "id": "request-1",
+                "matched": false,
                 "request": {
                     "config": { "password": "secret" }
                 }
@@ -886,6 +898,7 @@ mod tests {
         assert!(!serialized.contains("secret"));
         assert_eq!(record["payload"]["type"], "command");
         assert_eq!(record["payload"]["id"], "request-1");
+        assert_eq!(record["payload"]["matched"], false);
         assert_eq!(record["payload"]["redacted"], true);
     }
 }

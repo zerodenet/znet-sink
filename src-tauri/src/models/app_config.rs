@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub local_proxy: AppLocalProxyConfig,
     #[serde(default)]
     pub tun: AppTunConfig,
+    #[serde(default)]
+    pub routing: AppRoutingConfig,
 }
 
 impl Default for AppConfig {
@@ -26,6 +28,7 @@ impl Default for AppConfig {
             ui: AppUiConfig::default(),
             local_proxy: AppLocalProxyConfig::default(),
             tun: AppTunConfig::default(),
+            routing: AppRoutingConfig::default(),
         }
     }
 }
@@ -49,11 +52,6 @@ pub struct AppCoreConfig {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub socket: Option<String>,
-    /// 管理流量是否自动跟随系统代理环境变量。
-    /// true（默认）= 自动，读 HTTPS_PROXY / HTTP_PROXY
-    /// false       = 直连，绕过一切代理
-    #[serde(default = "default_true")]
-    pub download_proxy_auto: bool,
     #[serde(default = "default_network_probe_urls")]
     pub network_probe_urls: Vec<String>,
 }
@@ -69,7 +67,6 @@ impl Default for AppCoreConfig {
             config_path: None,
             working_dir: None,
             socket: None,
-            download_proxy_auto: true,
             network_probe_urls: default_network_probe_urls(),
         }
     }
@@ -144,6 +141,13 @@ pub struct AppTunConfig {
     pub mtu: u16,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRoutingConfig {
+    #[serde(default)]
+    pub inject_common_rules: bool,
+}
+
 impl Default for AppTunConfig {
     fn default() -> Self {
         Self {
@@ -173,6 +177,7 @@ pub struct AppConfigPatch {
     pub ui: Option<AppUiConfigPatch>,
     pub local_proxy: Option<AppLocalProxyConfigPatch>,
     pub tun: Option<AppTunConfigPatch>,
+    pub routing: Option<AppRoutingConfigPatch>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -186,7 +191,6 @@ pub struct AppCoreConfigPatch {
     pub config_path: Option<Option<String>>,
     pub working_dir: Option<Option<String>>,
     pub socket: Option<Option<String>>,
-    pub download_proxy_auto: Option<bool>,
     pub network_probe_urls: Option<Vec<String>>,
 }
 
@@ -222,6 +226,12 @@ pub struct AppTunConfigPatch {
     pub addr: Option<String>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRoutingConfigPatch {
+    pub inject_common_rules: Option<bool>,
 }
 
 fn default_schema_version() -> String {

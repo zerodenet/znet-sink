@@ -10,6 +10,7 @@
   } from '$lib/services/config';
   import * as toast from '$lib/services/toast.svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
+  import { Switch } from '$lib/components/ui/switch';
   import type {
     SubscriptionProfile,
     SubscriptionUpsert,
@@ -408,22 +409,14 @@
         <div class="list-row" class:disabled={!sub.enabled}>
           <div class="row-main">
             <div class="row-top">
-              <button
-                class="enable-toggle"
-                class:active={sub.enabled}
+              <Switch
+                size="sm"
+                checked={sub.enabled}
+                onCheckedChange={() => handleToggleEnabled(sub)}
                 title={sub.enabled ? '已启用' : '已禁用'}
-                onclick={(e: MouseEvent) => { e.stopPropagation(); handleToggleEnabled(sub); }}
                 disabled={busy}
-                aria-label={sub.enabled ? '禁用' : '启用'}
-              >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  {#if sub.enabled}
-                    <circle cx="6" cy="6" r="5"/><circle cx="6" cy="6" r="2" fill="currentColor"/>
-                  {:else}
-                    <circle cx="6" cy="6" r="5"/>
-                  {/if}
-                </svg>
-              </button>
+                aria-label={sub.enabled ? '禁用订阅' : '启用订阅'}
+              />
 
               <span class="row-name">{sub.name}</span>
 
@@ -595,16 +588,11 @@
         <span class="form-label">启用</span>
         <div class="form-input-wrap toggle-row">
           <span class="toggle-copy">{form.enabled ? '参与同步' : '暂停同步'}</span>
-          <button
-            type="button"
-            class="switch-mini"
-            class:active={form.enabled}
-            onclick={() => form.enabled = !form.enabled}
+          <Switch
+            bind:checked={form.enabled}
             disabled={saving}
             aria-label="启用订阅"
-          >
-            <span class="switch-knob"></span>
-          </button>
+          />
         </div>
       </div>
     </div>
@@ -814,25 +802,6 @@
     gap: 6px;
     flex-wrap: wrap;
   }
-
-  .enable-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-    transition: color 0.12s ease;
-  }
-
-  .enable-toggle.active { color: var(--success); }
-  .enable-toggle:hover { background: var(--surface); }
-  .enable-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .row-name {
     font-size: 12.5px;
@@ -1077,38 +1046,6 @@
   .toggle-copy {
     font-size: 11.5px;
     color: var(--muted-foreground);
-  }
-
-  .switch-mini {
-    position: relative;
-    width: 34px;
-    height: 20px;
-    border-radius: 10px;
-    background: var(--muted);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    transition: background 0.15s ease;
-    flex-shrink: 0;
-  }
-
-  .switch-mini.active {
-    background: var(--primary);
-    border-color: transparent;
-  }
-
-  .switch-knob {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--background);
-    transition: transform 0.15s ease;
-  }
-
-  .switch-mini.active .switch-knob {
-    transform: translateX(14px);
   }
 
   .btn-ghost {

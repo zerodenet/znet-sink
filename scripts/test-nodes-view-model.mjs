@@ -3,6 +3,7 @@ import {
   buildAllNodes,
   buildRuntimeOverlay,
   buildSections,
+  collectProbingPolicyNodeTags,
   collectGroupNodeTags,
   filterNodes,
   getActiveNodeTag,
@@ -13,6 +14,7 @@ import {
   resolveProbeDisplay,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 import { buildPolicyProbeHistoryUpdates } from '../src/lib/services/policy-probe-history.ts';
+import { parseNodeName } from '../src/lib/services/node-utils.ts';
 
 function node(tag, delay, extra = {}) {
   return {
@@ -32,6 +34,31 @@ function group(name, outbounds, kind = 'selector') {
 
 function tags(list) {
   return list.map((item) => item.tag);
+}
+
+function testNodeTitlesPreserveCompleteEmojiGraphemes() {
+  assert.deepEqual(parseNodeName('🇭🇰 香港 01'), { emoji: '🇭🇰', cleanName: '香港 01' });
+  assert.deepEqual(parseNodeName('☁️ Cloud'), { emoji: '☁️', cleanName: 'Cloud' });
+  assert.deepEqual(parseNodeName('👨‍💻 Developer'), { emoji: '👨‍💻', cleanName: 'Developer' });
+  assert.deepEqual(parseNodeName('1️⃣ Premium'), { emoji: '1️⃣', cleanName: 'Premium' });
+  assert.deepEqual(parseNodeName('香港 01'), { cleanName: '香港 01' });
+  assert.deepEqual(parseNodeName('HK 🚀 Premium'), { cleanName: 'HK 🚀 Premium' });
+}
+
+function testPolicyProbeAnimationCoversGroupAndEveryMemberCard() {
+  const groups = [
+    group('Auto', [{ tag: 'HK' }, { tag: 'JP' }], 'url_test'),
+    group('Manual', [{ tag: 'US' }], 'selector'),
+  ];
+
+  assert.deepEqual(
+    [...collectProbingPolicyNodeTags(groups, new Set(['Auto']))],
+    ['Auto', 'HK', 'JP'],
+  );
+  assert.deepEqual(
+    [...collectProbingPolicyNodeTags(groups, new Set())],
+    [],
+  );
 }
 
 function testBuildSectionsKeepsOrphansWhenGroupsExist() {
@@ -179,13 +206,36 @@ function testProbePlanningTreatsNestedSelectorLikeARegularNode() {
   ];
   const fallback = node('Fallback', 0, { protocol: 'selector' });
   const hk = node('HK', 20);
+  const direct = node('direct', 0, { protocol: 'direct' });
 
   assert.deepEqual(planProbeTargets({
     groups,
     selectedGroup: 'Proxy',
-    visibleNodes: [fallback, hk],
+    visibleNodes: [fallback, hk, direct],
   }), {
     nodes: [fallback, hk],
+    policyTags: [],
+  });
+}
+
+function testSpecialOutboundsRenderButNeverBecomeProbeTargets() {
+  const groups = [group('Proxy', [{ tag: 'direct' }, { tag: 'block' }, { tag: 'HK' }])];
+  const runtimeOverlay = buildRuntimeOverlay(groups);
+  const nodes = buildAllNodes({
+    configNodes: [
+      { tag: 'direct', protocol: 'direct', isSelector: false },
+      { tag: 'block', protocol: 'block', isSelector: false },
+      { tag: 'HK', protocol: 'shadowsocks', isSelector: false },
+    ],
+    groups,
+    runtimeOverlay,
+    latestDelay: () => undefined,
+    fallbackNodes: [],
+  });
+
+  assert.deepEqual(tags(nodes), ['direct', 'block', 'HK']);
+  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Proxy', visibleNodes: nodes }), {
+    nodes: [nodes[2]],
     policyTags: [],
   });
 }
@@ -244,6 +294,8 @@ function testPolicyProbeHistoryDoesNotInventMissingSelectedResult() {
 }
 
 testBuildSectionsKeepsOrphansWhenGroupsExist();
+testNodeTitlesPreserveCompleteEmojiGraphemes();
+testPolicyProbeAnimationCoversGroupAndEveryMemberCard();
 testNestedGroupFilteringShowsNestedGroupAsMember();
 testNormalizeSelectedGroupKeepsValidGroupAndClearsStaleValue();
 testRuntimeOverlayKeepsFirstGroupForSharedNodeTag();
@@ -253,6 +305,7 @@ testActiveNodeUsesCurrentlyBrowsedGroup();
 testMergePolicyGroupsPreservesConfigAndAppliesRuntimeMemberState();
 testProbePlanningUsesKernelForUrlTestGroups();
 testProbePlanningTreatsNestedSelectorLikeARegularNode();
+testSpecialOutboundsRenderButNeverBecomeProbeTargets();
 testSingleCardProbeUsesPolicyOnlyForNestedUrlTestGroup();
 testPolicyProbeHistoryUsesSelectedResultFromSameScheduledEvent();
 testPolicyProbeHistoryDoesNotInventMissingSelectedResult();

@@ -14,8 +14,8 @@ use crate::models::{
     core::{CoreEndpoint, CoreIpcOptions},
     core_config::{CoreConfigExportResult, CoreConfigSnapshot, CoreDownloadResult, CoreKernelInfo},
 };
-use crate::services::app_config_store;
 use crate::services::common::{self, lock, normalize_optional};
+use crate::services::{app_config_store, rule_overlay};
 use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
@@ -53,7 +53,8 @@ pub fn export_active(state: State<'_, AppState>) -> AppResult<CoreConfigExportRe
     let path = default_export_path()?;
     // Strip GUI-only fields the core engine doesn't understand, then inject
     // a managed file sink so kernel runtime logs survive GUI restarts/crashes.
-    let mut export_content = strip_gui_only_fields(content);
+    let effective = rule_overlay::compose_effective_config(state.inner(), content)?;
+    let mut export_content = strip_gui_only_fields(&effective);
     inject_managed_core_log(&mut export_content)?;
     write_core_config(&path, &export_content)?;
 
@@ -160,7 +161,45 @@ pub fn inspect_from_config(
 }
 
 pub fn resolve_executable_path(config: &AppCoreConfig) -> Option<PathBuf> {
-    normalize_optional(config.executable_path.clone()).map(PathBuf::from)
+    normalize_optional(config.executable_path.clone())
+        .map(PathBuf::from)
+        .or_else(discover_executable_path)
+}
+
+/// Locate a Zero binary supplied by the application or an adjacent development
+/// checkout. An explicitly configured path always wins, including when it is
+/// currently missing, so a user choice is never silently replaced.
+fn discover_executable_path() -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) { "zero.exe" } else { "zero" };
+    let mut candidates = Vec::new();
+
+    // Kernel manager installs releases here. This also makes a previously
+    // installed kernel usable after app-config.json is recreated.
+    if let Ok(dir) = data_dir() {
+        candidates.push(dir.join("core").join(executable_name));
+    }
+
+    // Packaged/sidecar builds place the kernel beside the GUI executable.
+    if let Ok(gui_executable) = std::env::current_exe() {
+        if let Some(dir) = gui_executable.parent() {
+            candidates.push(dir.join(executable_name));
+        }
+    }
+
+    // Developer layout: rust/gui/src-tauri and rust/zero are sibling projects.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(rust_dir) = manifest_dir.parent().and_then(Path::parent) {
+        let zero_target = rust_dir.join("zero").join("target");
+        if cfg!(debug_assertions) {
+            candidates.push(zero_target.join("debug").join(executable_name));
+            candidates.push(zero_target.join("release").join(executable_name));
+        } else {
+            candidates.push(zero_target.join("release").join(executable_name));
+            candidates.push(zero_target.join("debug").join(executable_name));
+        }
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 pub fn resolve_socket(config: &AppCoreConfig) -> Option<PathBuf> {
@@ -319,8 +358,10 @@ fn minimal_temp_config_content() -> serde_json::Value {
         "runtime": {},
         "api": {
             "control": {
-                "enabled": true,
-                "listen": { "address": "127.0.0.1", "port": 9090 }
+                // GUI management uses the dedicated local control socket
+                // passed through --control-socket. The HTTP status API is a
+                // separate authenticated surface and must stay disabled.
+                "enabled": false
             }
         },
         "mode": { "type": "rule" },
@@ -714,16 +755,13 @@ mod tests {
     }
 
     #[test]
-    fn minimal_temp_config_enables_control_plane_without_proxy_entries() {
+    fn minimal_temp_config_uses_socket_control_without_http_api() {
         let saved = super::minimal_temp_config_content();
 
         assert_eq!(saved["inbounds"], json!([]));
         assert_eq!(saved["outbounds"], json!([]));
-        assert_eq!(saved["api"]["control"]["enabled"], json!(true));
-        assert_eq!(
-            saved["api"]["control"]["listen"],
-            json!({ "address": "127.0.0.1", "port": 9090 })
-        );
+        assert_eq!(saved["api"]["control"]["enabled"], json!(false));
+        assert!(saved["api"]["control"].get("listen").is_none());
         assert_eq!(saved["mode"], json!({ "type": "rule" }));
         assert_eq!(saved["route"]["final"], json!({ "type": "direct" }));
     }

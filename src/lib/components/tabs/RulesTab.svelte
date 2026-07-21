@@ -5,9 +5,19 @@
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import { listRuleSets, removeRuleSet, updateAllRuleSets, updateRuleSet, upsertRuleSet } from '$lib/services/config';
+  import { Switch } from '$lib/components/ui/switch';
+  import {
+    getCommonRuleInjectionStatus,
+    listRuleSets,
+    removeRuleSet,
+    setCommonRuleBinding,
+    setCommonRuleInjectionEnabled,
+    updateAllRuleSets,
+    updateRuleSet,
+    upsertRuleSet,
+  } from '$lib/services/config';
   import { getAppErrorMessage } from '$lib/services/core';
-  import type { RuleSetProfile, ZeroRule, ZeroRuleType } from '$lib/types/domain';
+  import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, ZeroRule, ZeroRuleType } from '$lib/types/domain';
 
   const RULE_TYPES: { value: ZeroRuleType; label: string; placeholder: string }[] = [
     { value: 'domain_exact', label: '精确域名', placeholder: 'api.example.com' },
@@ -41,10 +51,13 @@
   let userAgent = $state('');
   let retainSource = $state(false);
   let viewMode = $state<ViewMode>('list');
+  let commonStatus = $state<CommonRuleInjectionStatus | null>(null);
+  let commonSaving = $state(false);
+  let bindingId = $state<string | null>(null);
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
-  const busy = $derived(saving || updatingId !== null || updatingAll || deletingId !== null);
+  const busy = $derived(saving || updatingId !== null || updatingAll || deletingId !== null || commonSaving || bindingId !== null);
   const canSave = $derived(
     !busy
       && name.trim().length > 0
@@ -76,12 +89,61 @@
   async function load(showLoading = true) {
     if (showLoading) loading = true;
     try {
-      items = await listRuleSets();
+      const [nextItems, nextStatus] = await Promise.all([
+        listRuleSets(),
+        getCommonRuleInjectionStatus(),
+      ]);
+      items = nextItems;
+      commonStatus = nextStatus;
       loadError = '';
     } catch (cause) {
       loadError = getAppErrorMessage(cause, '加载规则集失败');
     } finally {
       if (showLoading) loading = false;
+    }
+  }
+
+  function commonStatusCopy() {
+    if (!commonStatus?.enabled) return '默认关闭，不改动当前运行配置';
+    if (commonStatus.effective) return `已注入 ${commonStatus.injectedCount} 个公共规则集`;
+    return commonStatus.reason ?? '当前未生效';
+  }
+
+  async function toggleCommonInjection() {
+    if (commonSaving) return;
+    commonSaving = true;
+    pageError = '';
+    try {
+      commonStatus = await setCommonRuleInjectionEnabled(!commonStatus?.enabled);
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '切换公共规则注入失败，已保留原运行配置');
+    } finally {
+      commonSaving = false;
+    }
+  }
+
+  async function updateCommonBinding(
+    item: RuleSetProfile,
+    patch: Partial<{ enabled: boolean; action: CommonRuleAction; order: number }>,
+  ) {
+    if (bindingId) return;
+    bindingId = item.id;
+    pageError = '';
+    const current = item.commonBinding ?? { enabled: false, action: 'final' as const, order: items.indexOf(item) * 10 };
+    const requestedOrder = patch.order ?? current.order;
+    try {
+      const updated = await setCommonRuleBinding({
+        ruleSetId: item.id,
+        enabled: patch.enabled ?? current.enabled,
+        action: patch.action ?? current.action,
+        order: Number.isFinite(requestedOrder) ? Math.max(0, Math.trunc(requestedOrder)) : current.order,
+      });
+      items = items.map((candidate) => candidate.id === updated.id ? updated : candidate);
+      commonStatus = await getCommonRuleInjectionStatus();
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '更新公共规则绑定失败，已保留原运行配置');
+    } finally {
+      bindingId = null;
     }
   }
 
@@ -318,10 +380,23 @@
         <span>{readyCount} 个产物就绪</span>
         {#if sourceCount > 0}
           <span>·</span>
-          <span>{sourceCount} 个订阅来源</span>
+          <span>{sourceCount} 个外部来源</span>
         {/if}
       </div>
     {/if}
+  </div>
+
+  <div class="common-injection-row">
+    <div class="common-injection-copy">
+      <span class="common-injection-title">在规则模式下注入公共规则</span>
+      <span class="common-injection-hint">{commonStatusCopy()}。公共规则优先于机场订阅规则，且不会写回订阅原配置。</span>
+    </div>
+    <Switch
+      checked={commonStatus?.enabled ?? false}
+      onCheckedChange={toggleCommonInjection}
+      disabled={loading || commonSaving}
+      aria-label="在规则模式下注入公共规则"
+    />
   </div>
 
   {#if pageError}
@@ -347,7 +422,7 @@
       <div class="empty-stack">
         <Database class="empty-icon h-9 w-9" />
         <span class="empty-title">还没有规则集</span>
-        <span class="empty-hint">手动创建语义规则，或从外部订阅导入</span>
+        <span class="empty-hint">手动创建语义规则，或从独立规则源导入</span>
         <Button size="sm" onclick={openNew} disabled={busy}>
           <Plus class="h-3.5 w-3.5" />
           <span>新建规则集</span>
@@ -358,13 +433,21 @@
     <div class="list-scroll" class:card-view={viewMode === 'card'}>
       {#each items as item (item.id)}
         <div class="list-row">
-          <button type="button" class="row-main" onclick={() => openEdit(item)} disabled={busy}>
+          <button
+            type="button"
+            class="row-main"
+            onclick={() => openEdit(item)}
+            disabled={busy}
+          >
             <div class="row-top">
               <span class="row-name">{item.name}</span>
               <Badge variant={item.artifact ? 'secondary' : 'outline'}>
                 {item.artifact ? 'ZRS 已就绪' : '待构建'}
               </Badge>
-              <Badge variant="outline">{item.source ? '订阅' : '本地'}</Badge>
+              <Badge variant="outline">{item.source ? '外部来源' : '本地'}</Badge>
+              {#if item.commonBinding?.enabled}
+                <Badge variant="secondary">公共规则</Badge>
+              {/if}
             </div>
 
             <div class="row-meta">
@@ -397,6 +480,36 @@
           </button>
 
           <div class="row-actions">
+            <div class="common-binding" title="仅在公共规则总开关开启且处于规则模式时生效">
+                <Switch
+                  size="sm"
+                  checked={item.commonBinding?.enabled ?? false}
+                  onCheckedChange={() => updateCommonBinding(item, { enabled: !(item.commonBinding?.enabled ?? false) })}
+                  disabled={busy || !item.artifact}
+                  aria-label={`将 ${item.name} 用作公共规则`}
+                />
+                <select
+                  class="binding-select"
+                  value={item.commonBinding?.action ?? 'final'}
+                  onchange={(event) => updateCommonBinding(item, { action: event.currentTarget.value as CommonRuleAction })}
+                  disabled={busy || !item.commonBinding?.enabled}
+                  aria-label="匹配动作"
+                >
+                  <option value="final">沿用最终路由</option>
+                  <option value="direct">直连</option>
+                  <option value="reject">拒绝</option>
+                </select>
+                <input
+                  class="binding-order"
+                  type="number"
+                  min="0"
+                  value={item.commonBinding?.order ?? items.indexOf(item) * 10}
+                  onchange={(event) => updateCommonBinding(item, { order: Number(event.currentTarget.value) })}
+                  disabled={busy || !item.commonBinding?.enabled}
+                  aria-label="公共规则顺序"
+                  title="数值越小越优先"
+                />
+            </div>
             {#if item.source}
               <Button
                 variant="ghost"
@@ -418,7 +531,7 @@
               class="delete-button"
               onclick={(event) => {
                 event.stopPropagation();
-                  requestRemove(item);
+                requestRemove(item);
               }}
               disabled={busy}
               title="删除"
@@ -457,6 +570,7 @@
             type="button"
             class="source-button"
             class:active={mode === 'visual'}
+            aria-pressed={mode === 'visual'}
             onclick={() => mode = 'visual'}
             disabled={saving}
           >
@@ -466,10 +580,11 @@
             type="button"
             class="source-button"
             class:active={mode === 'subscription'}
+            aria-pressed={mode === 'subscription'}
             onclick={() => mode = 'subscription'}
             disabled={saving}
           >
-            订阅导入
+            外部导入
           </button>
         </div>
       </div>
@@ -478,7 +593,7 @@
 
   {#if mode === 'subscription' && !editingId}
     <div class="form-item">
-      <span class="form-label">订阅地址 <span class="required">*</span></span>
+      <span class="form-label">规则源地址 <span class="required">*</span></span>
       <div class="form-input-wrap">
         <Input bind:value={sourceUrl} placeholder="https://example.com/rules.yaml" disabled={saving} />
       </div>
@@ -568,7 +683,7 @@
     {#if sourceUrl}
       <label class="retain-source">
         <input type="checkbox" bind:checked={retainSource} disabled={saving} />
-        <span>保留订阅关联；下次同步会用订阅内容覆盖当前规则</span>
+        <span>保留外部来源；下次同步会用远程内容覆盖当前规则</span>
       </label>
     {/if}
   {/if}
@@ -715,6 +830,35 @@
     color: var(--muted-foreground);
     font-size: 10.5px;
     flex-shrink: 0;
+  }
+
+  .common-injection-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--card) 94%, var(--accent));
+    flex-shrink: 0;
+  }
+
+  .common-injection-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .common-injection-title {
+    color: var(--foreground);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .common-injection-hint {
+    color: var(--muted-foreground);
+    font-size: 10.5px;
   }
 
   .summary-copy {
@@ -871,6 +1015,40 @@
   .card-view .row-actions {
     margin: -4px -4px 0 0;
   }
+
+  .common-binding {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding-right: 5px;
+    border-right: 1px solid var(--border);
+  }
+
+  .binding-select,
+  .binding-order {
+    height: 27px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--muted);
+    color: var(--foreground);
+    font-size: 10.5px;
+  }
+
+  .binding-select { width: 100px; padding: 0 5px; }
+  .binding-order { width: 48px; padding: 0 5px; font-family: var(--font-mono); }
+
+  .binding-select:disabled,
+  .binding-order:disabled { opacity: 0.45; }
+
+  .card-view .common-binding {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    padding: 0;
+    border: 0;
+  }
+
+  .card-view .list-row { position: relative; padding-bottom: 48px; }
 
   .row-main {
     flex: 1;

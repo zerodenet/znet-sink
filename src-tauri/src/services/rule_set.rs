@@ -21,7 +21,7 @@ use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
     normalize_required, now_unix_ms,
 };
-use crate::services::{data_dir, domain_store, logs};
+use crate::services::{data_dir, domain_store, logs, rule_overlay};
 use crate::state::app_state::AppState;
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -31,6 +31,33 @@ const AUTO_UPDATE_MAX_RETRIES: u32 = 3;
 const AUTO_UPDATE_RETRY_BASE_SECS: u64 = 60;
 const AUTO_UPDATE_RETRY_MAX_SECS: u64 = 15 * 60;
 const DEFAULT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION"));
+
+#[derive(Clone, Debug)]
+pub(crate) struct ManagedRuleSetSource {
+    pub tag: String,
+    pub url: String,
+    pub update_interval_secs: Option<u64>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManagedRuleSetArtifact {
+    pub tag: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ManagedRuleSetFailure {
+    pub tag: String,
+    pub message: String,
+    pub used_previous_artifact: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ManagedRuleSetSyncOutcome {
+    pub artifacts: Vec<ManagedRuleSetArtifact>,
+    pub failures: Vec<ManagedRuleSetFailure>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AutoUpdateRetryState {
@@ -68,14 +95,17 @@ enum AutoUpdateFailureDisposition {
 }
 
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetProfile>> {
-    Ok(lock(state.rule_sets(), "rule_set")?.clone())
+    // Subscription-owned providers are implementation details of subscription
+    // conversion. They share persistence with rule assets, but are not GUI
+    // resources and must not cross the rule-set command boundary.
+    Ok(gui_owned_rule_sets(&lock(state.rule_sets(), "rule_set")?))
 }
 
 pub fn get(state: State<'_, AppState>, id: String) -> AppResult<RuleSetProfile> {
     let id = normalize_required(id, "id")?;
     lock(state.rule_sets(), "rule_set")?
         .iter()
-        .find(|item| item.id == id)
+        .find(|item| item.id == id && !is_subscription_managed_rule_set(item))
         .cloned()
         .ok_or_else(|| AppError::not_found("rule_set", id))
 }
@@ -84,16 +114,25 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
     let name = normalize_required(input.name, "name")?;
     let id = normalize_optional(input.id).unwrap_or_else(|| generated_store_id("rule-set"));
     let _in_flight = begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
-    let previous = lock(state.rule_sets(), "rule_set")?
+    let previous_profile = lock(state.rule_sets(), "rule_set")?
         .iter()
         .find(|item| item.id == id)
-        .map(|item| {
-            (
-                item.source.clone(),
-                item.source_state.clone(),
-                item.last_sync_at_unix_ms,
-            )
-        });
+        .cloned();
+    if previous_profile
+        .as_ref()
+        .is_some_and(is_subscription_managed_rule_set)
+    {
+        return Err(AppError::invalid_argument(
+            "subscription-managed rules must be changed through their subscription",
+        ));
+    }
+    let previous = previous_profile.as_ref().map(|item| {
+        (
+            item.source.clone(),
+            item.source_state.clone(),
+            item.last_sync_at_unix_ms,
+        )
+    });
     let source = input.source.map(normalize_source).transpose()?;
     let same_source = previous
         .as_ref()
@@ -135,6 +174,12 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         id: id.clone(),
         name,
         enabled: input.enabled.unwrap_or(true),
+        managed_by_subscription_id: previous_profile
+            .as_ref()
+            .and_then(|item| item.managed_by_subscription_id.clone()),
+        common_binding: previous_profile
+            .as_ref()
+            .and_then(|item| item.common_binding.clone()),
         semantic_ir,
         source: source.clone(),
         source_state,
@@ -177,6 +222,11 @@ async fn update_by_id(state: &AppState, id: String) -> AppResult<(RuleSetProfile
         .find(|item| item.id == id)
         .cloned()
         .ok_or_else(|| AppError::not_found("rule_set", id.clone()))?;
+    if is_subscription_managed_rule_set(&profile) {
+        return Err(AppError::invalid_argument(
+            "subscription-managed rules must be updated through their subscription",
+        ));
+    }
     let source = profile
         .source
         .clone()
@@ -233,7 +283,9 @@ pub async fn update_all(state: State<'_, AppState>) -> AppResult<RuleSetSyncAllO
 async fn update_all_with_state(state: &AppState) -> AppResult<RuleSetSyncAllOutcome> {
     let ids = lock(state.rule_sets(), "rule_set")?
         .iter()
-        .filter(|item| item.enabled && item.source.is_some())
+        .filter(|item| {
+            item.enabled && item.source.is_some() && !is_subscription_managed_rule_set(item)
+        })
         .map(|item| item.id.clone())
         .collect::<Vec<_>>();
     let mut outcome = RuleSetSyncAllOutcome {
@@ -252,11 +304,244 @@ async fn update_all_with_state(state: &AppState) -> AppResult<RuleSetSyncAllOutc
     Ok(outcome)
 }
 
+/// Synchronize the rule providers owned by one proxy subscription and return
+/// the verified ZRS files that must be wired into `route.rule_sets`.
+///
+/// The provider files are prepared first and the domain store is replaced only
+/// after every provider succeeds. Published ZRS generations are immutable, so
+/// an interrupted batch can leave an unreferenced generation on disk without
+/// invalidating the last known-good configuration.
+pub(crate) async fn sync_managed_subscription_sources(
+    state: &AppState,
+    subscription_id: &str,
+    subscription_name: &str,
+    sources: Vec<ManagedRuleSetSource>,
+) -> AppResult<ManagedRuleSetSyncOutcome> {
+    let id_prefix = managed_rule_set_id_prefix(subscription_id);
+    let current = lock(state.rule_sets(), "rule_set")?.clone();
+    let now = now_unix_ms();
+    let mut prepared = Vec::with_capacity(sources.len());
+    let mut artifacts = Vec::with_capacity(sources.len());
+    let mut failures = Vec::new();
+
+    for managed in sources {
+        let id = managed_rule_set_id(&id_prefix, &managed.tag);
+        let raw_source = RuleSetSource {
+            url: managed.url,
+            format: "clash-classical-yaml".to_string(),
+            update_interval_secs: managed.update_interval_secs,
+            user_agent: managed.user_agent,
+        };
+        let previous = current.iter().find(|item| item.id == id);
+        let source = match normalize_source(raw_source.clone()) {
+            Ok(source) => source,
+            Err(error) => {
+                push_managed_source_failure(
+                    &mut prepared,
+                    &mut artifacts,
+                    &mut failures,
+                    previous,
+                    id,
+                    subscription_id,
+                    subscription_name,
+                    &managed.tag,
+                    raw_source,
+                    error,
+                    now,
+                );
+                continue;
+            }
+        };
+        let same_source = previous
+            .and_then(|item| item.source.as_ref())
+            .is_some_and(|old| old.url == source.url);
+        let previous_state = same_source
+            .then(|| previous.map(|item| &item.source_state))
+            .flatten();
+
+        let result = async {
+            let values = match fetch_source(&source, previous_state).await? {
+                FetchOutcome::Modified(resource) => {
+                    let semantic_ir = convert_managed_clash_source(
+                        &resource.content,
+                        &format!("{subscription_name} / {}", managed.tag),
+                    )?;
+                    let artifact = build_zrs_artifact(&id, &semantic_ir)?;
+                    (semantic_ir, artifact, resource.state, Some(now), now)
+                }
+                FetchOutcome::NotModified(source_state) => {
+                    let previous = previous.ok_or_else(|| {
+                        AppError::internal(
+                            "managed rule source returned not-modified without a stored profile",
+                        )
+                    })?;
+                    let artifact = previous.artifact.clone().ok_or_else(|| {
+                        AppError::invalid_argument(format!(
+                            "managed rule source '{}' has no verified ZRS artifact",
+                            managed.tag
+                        ))
+                    })?;
+                    (
+                        previous.semantic_ir.clone(),
+                        artifact,
+                        source_state,
+                        previous.last_sync_at_unix_ms,
+                        previous.updated_at_unix_ms,
+                    )
+                }
+            };
+            Ok::<_, AppError>(values)
+        }
+        .await;
+
+        let (semantic_ir, artifact, source_state, last_sync_at_unix_ms, updated_at_unix_ms) =
+            match result {
+                Ok(values) => values,
+                Err(error) => {
+                    push_managed_source_failure(
+                        &mut prepared,
+                        &mut artifacts,
+                        &mut failures,
+                        previous,
+                        id,
+                        subscription_id,
+                        subscription_name,
+                        &managed.tag,
+                        source,
+                        error,
+                        now,
+                    );
+                    continue;
+                }
+            };
+
+        artifacts.push(ManagedRuleSetArtifact {
+            tag: managed.tag.clone(),
+            path: artifact.path.clone(),
+        });
+        prepared.push(RuleSetProfile {
+            id,
+            name: format!("{subscription_name} / {}", managed.tag),
+            enabled: true,
+            managed_by_subscription_id: Some(subscription_id.to_string()),
+            common_binding: None,
+            semantic_ir,
+            source: Some(source),
+            source_state,
+            artifact: Some(artifact),
+            updated_at_unix_ms,
+            last_sync_at_unix_ms,
+            last_error: None,
+        });
+    }
+
+    let mut next = current;
+    next.retain(|item| !item.id.starts_with(&id_prefix));
+    next.extend(prepared);
+    domain_store::save_rule_sets(&next)?;
+    *lock(state.rule_sets(), "rule_set")? = next;
+    Ok(ManagedRuleSetSyncOutcome {
+        artifacts,
+        failures,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_managed_source_failure(
+    prepared: &mut Vec<RuleSetProfile>,
+    artifacts: &mut Vec<ManagedRuleSetArtifact>,
+    failures: &mut Vec<ManagedRuleSetFailure>,
+    previous: Option<&RuleSetProfile>,
+    id: String,
+    subscription_id: &str,
+    subscription_name: &str,
+    tag: &str,
+    source: RuleSetSource,
+    error: AppError,
+    now: u64,
+) {
+    let mut profile = previous.cloned().unwrap_or_else(|| RuleSetProfile {
+        id,
+        name: format!("{subscription_name} / {tag}"),
+        enabled: true,
+        managed_by_subscription_id: Some(subscription_id.to_string()),
+        common_binding: None,
+        semantic_ir: json!({
+            "version": 1,
+            "name": format!("{subscription_name} / {tag}"),
+            "rules": []
+        }),
+        source: Some(source.clone()),
+        source_state: RuleSetSourceState::default(),
+        artifact: None,
+        updated_at_unix_ms: now,
+        last_sync_at_unix_ms: None,
+        last_error: None,
+    });
+    profile.name = format!("{subscription_name} / {tag}");
+    profile.enabled = true;
+    profile.managed_by_subscription_id = Some(subscription_id.to_string());
+    profile.common_binding = None;
+    if profile
+        .source
+        .as_ref()
+        .is_none_or(|previous_source| previous_source.url != source.url)
+    {
+        profile.source_state = RuleSetSourceState::default();
+    }
+    profile.source = Some(source);
+    profile.last_error = Some(error.message.clone());
+    profile.source_state.last_checked_at_unix_ms = Some(now);
+    let used_previous_artifact = profile.artifact.is_some();
+    if let Some(artifact) = profile.artifact.as_ref() {
+        artifacts.push(ManagedRuleSetArtifact {
+            tag: tag.to_string(),
+            path: artifact.path.clone(),
+        });
+    }
+    failures.push(ManagedRuleSetFailure {
+        tag: tag.to_string(),
+        message: error.message,
+        used_previous_artifact,
+    });
+    prepared.push(profile);
+}
+
+fn managed_rule_set_id_prefix(subscription_id: &str) -> String {
+    format!("subscription-rule-{subscription_id}-")
+}
+
+pub(crate) fn is_managed_subscription_rule_set_id(id: &str) -> bool {
+    id.starts_with("subscription-rule-")
+}
+
+fn is_subscription_managed_rule_set(profile: &RuleSetProfile) -> bool {
+    profile.managed_by_subscription_id.is_some() || is_managed_subscription_rule_set_id(&profile.id)
+}
+
+fn gui_owned_rule_sets(items: &[RuleSetProfile]) -> Vec<RuleSetProfile> {
+    items
+        .iter()
+        .filter(|item| !is_subscription_managed_rule_set(item))
+        .cloned()
+        .collect()
+}
+
+fn managed_rule_set_id(prefix: &str, tag: &str) -> String {
+    let digest = Sha256::digest(tag.as_bytes());
+    let suffix = digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{prefix}{suffix}")
+}
+
 pub fn kernel_payloads(state: State<'_, AppState>) -> AppResult<Vec<RuleSetKernelPayload>> {
     let items = lock(state.rule_sets(), "rule_set")?;
     items
         .iter()
-        .filter(|item| item.enabled)
+        .filter(|item| item.enabled && !is_subscription_managed_rule_set(item))
         .map(|item| {
             let artifact = item.artifact.as_ref().ok_or_else(|| {
                 AppError::invalid_argument(format!(
@@ -278,6 +563,14 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let id = normalize_required(id, "id")?;
     let _in_flight = begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
     let mut items = lock(state.rule_sets(), "rule_set")?;
+    if items
+        .iter()
+        .any(|item| item.id == id && is_subscription_managed_rule_set(item))
+    {
+        return Err(AppError::invalid_argument(
+            "subscription-managed rules must be removed through their subscription",
+        ));
+    }
     let mut next = items.clone();
     let before = next.len();
     next.retain(|item| item.id != id);
@@ -343,7 +636,6 @@ async fn fetch_source(
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
-            .no_proxy()
             .user_agent(user_agent)
             .build()
             .map_err(|error| AppError::internal(format!("failed to build rule client: {error}")))?;
@@ -460,6 +752,24 @@ async fn run_auto_update_pass(
         match update_by_id(state.inner(), attempt.id.clone()).await {
             Ok((profile, changed)) => {
                 retry_states.remove(&attempt.id);
+                if let Err(error) = rule_overlay::reconcile_after_rule_change(app.clone()).await {
+                    logs::znet_log_fields(
+                        Some(state.inner()),
+                        LogLevel::Warn,
+                        format!(
+                            "rule-set auto-update: '{}' was stored but runtime recomposition failed: {}",
+                            profile.name, error.message
+                        ),
+                        json!({
+                            "schema": "znet.rule-set-update.v1",
+                            "operation": "recompose_runtime",
+                            "ruleSetId": attempt.id,
+                            "ruleSetName": profile.name,
+                            "errorCode": error.code,
+                            "errorMessage": error.message,
+                        }),
+                    );
+                }
                 logs::znet_log_fields(
                     Some(state.inner()),
                     LogLevel::Info,
@@ -559,6 +869,7 @@ fn collect_due_rule_set_attempts(
     retry_states.retain(|id, retry| {
         items.iter().any(|item| {
             item.id == *id
+                && !is_subscription_managed_rule_set(item)
                 && item.enabled
                 && item
                     .source
@@ -573,6 +884,9 @@ fn collect_due_rule_set_attempts(
     let mut reset_cycles = Vec::new();
     let mut due = Vec::new();
     for item in items.iter() {
+        if is_subscription_managed_rule_set(item) {
+            continue;
+        }
         let Some(source) = item.source.as_ref() else {
             continue;
         };
@@ -726,6 +1040,18 @@ pub fn convert_source(content: &str, format: &str, display_name: &str) -> AppRes
 }
 
 fn convert_clash(content: &str, display_name: &str) -> AppResult<Value> {
+    convert_clash_with_policy(content, display_name, false)
+}
+
+pub(crate) fn convert_managed_clash_source(content: &str, display_name: &str) -> AppResult<Value> {
+    convert_clash_with_policy(content, display_name, true)
+}
+
+fn convert_clash_with_policy(
+    content: &str,
+    display_name: &str,
+    skip_process_rules: bool,
+) -> AppResult<Value> {
     let yaml: Value = serde_yaml::from_str(content).map_err(|error| {
         AppError::invalid_argument(format!("Clash rule YAML is invalid: {error}"))
     })?;
@@ -735,6 +1061,7 @@ fn convert_clash(content: &str, display_name: &str) -> AppResult<Value> {
         .or_else(|| yaml.as_array())
         .ok_or_else(|| AppError::invalid_argument("Clash rules must contain a payload array"))?;
     let mut rules = Vec::with_capacity(payload.len());
+    let mut skipped_process_rules = 0usize;
     for entry in payload {
         let raw = entry
             .as_str()
@@ -750,6 +1077,10 @@ fn convert_clash(content: &str, display_name: &str) -> AppResult<Value> {
             "DOMAIN-KEYWORD" => "domain_keyword",
             "IP-CIDR" => "ipv4_cidr",
             "IP-CIDR6" => "ipv6_cidr",
+            "PROCESS-NAME" if skip_process_rules => {
+                skipped_process_rules += 1;
+                continue;
+            }
             _ => {
                 return Err(AppError::invalid_argument(format!(
                     "unsupported Clash rule type '{source_type}'; conversion is strict"
@@ -757,6 +1088,19 @@ fn convert_clash(content: &str, display_name: &str) -> AppResult<Value> {
             }
         };
         rules.push(json!({ "type": rule_type, "value": value }));
+    }
+    if skipped_process_rules > 0 {
+        crate::services::file_logger::emit(
+            "warn",
+            "subscription",
+            "subscription.rule_provider.unsupported_rules_skipped",
+            Some(json!({
+                "ruleSet": display_name,
+                "ruleType": "PROCESS-NAME",
+                "skipped": skipped_process_rules,
+                "reason": "Zero Rule IR v1 has no process matcher"
+            })),
+        );
     }
     canonical_ir(
         json!({ "version": 1, "name": display_name, "rules": rules }),
@@ -845,6 +1189,8 @@ mod tests {
             id: "asset".into(),
             name: "Asset".into(),
             enabled: true,
+            managed_by_subscription_id: None,
+            common_binding: None,
             semantic_ir: json!({"version":1,"name":"Asset","rules":[]}),
             source: Some(RuleSetSource {
                 url: "https://example.com/rules".into(),
@@ -882,6 +1228,89 @@ mod tests {
         let error =
             convert_source("payload:\n  - GEOIP,CN\n", "clash-classical-yaml", "Bad").unwrap_err();
         assert!(error.message.contains("unsupported Clash rule type"));
+    }
+
+    #[test]
+    fn managed_clash_provider_skips_only_process_rules_missing_from_zero_ir_v1() {
+        let ir = convert_managed_clash_source(
+            "payload:\n  - PROCESS-NAME,Example.exe\n  - DOMAIN-SUFFIX,example.com\n",
+            "Managed",
+        )
+        .unwrap();
+
+        assert_eq!(ir["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(ir["rules"][0]["type"], "domain_suffix");
+        assert_eq!(ir["rules"][0]["value"], "example.com");
+    }
+
+    #[test]
+    fn managed_rule_set_ids_are_stable_per_subscription_and_tag() {
+        let prefix = managed_rule_set_id_prefix("subscription-1");
+        let first = managed_rule_set_id(&prefix, "Ads");
+
+        assert_eq!(first, managed_rule_set_id(&prefix, "Ads"));
+        assert_ne!(first, managed_rule_set_id(&prefix, "LAN"));
+        assert!(first.starts_with("subscription-rule-subscription-1-"));
+    }
+
+    #[test]
+    fn gui_rule_list_excludes_subscription_owned_providers() {
+        let gui_owned = scheduled_profile();
+        let mut explicitly_managed = scheduled_profile();
+        explicitly_managed.id = "legacy-provider".into();
+        explicitly_managed.managed_by_subscription_id = Some("subscription-1".into());
+        let mut prefixed_managed = scheduled_profile();
+        prefixed_managed.id = "subscription-rule-subscription-1-abc".into();
+
+        let visible =
+            gui_owned_rule_sets(&[explicitly_managed, gui_owned.clone(), prefixed_managed]);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, gui_owned.id);
+    }
+
+    #[test]
+    fn managed_provider_failure_reuses_last_verified_artifact() {
+        let mut previous = scheduled_profile();
+        previous.managed_by_subscription_id = Some("subscription-1".into());
+        previous.artifact = Some(ZrsArtifact {
+            path: "last-good.zrs".into(),
+            major_version: 1,
+            minor_version: 0,
+            checksum: 7,
+            file_size: 10,
+            entry_count: 1,
+            built_at_unix_ms: 1,
+        });
+        let source = RuleSetSource {
+            url: "https://example.com/new.yaml".into(),
+            format: "clash-classical-yaml".into(),
+            update_interval_secs: Some(3600),
+            user_agent: None,
+        };
+        let mut prepared = Vec::new();
+        let mut artifacts = Vec::new();
+        let mut failures = Vec::new();
+
+        push_managed_source_failure(
+            &mut prepared,
+            &mut artifacts,
+            &mut failures,
+            Some(&previous),
+            previous.id.clone(),
+            "subscription-1",
+            "Airport",
+            "Ads",
+            source.clone(),
+            AppError::invalid_argument("404 Not Found"),
+            2_000,
+        );
+
+        assert_eq!(artifacts[0].tag, "Ads");
+        assert_eq!(artifacts[0].path, "last-good.zrs");
+        assert!(failures[0].used_previous_artifact);
+        assert_eq!(prepared[0].source.as_ref().unwrap().url, source.url);
+        assert_eq!(prepared[0].last_error.as_deref(), Some("404 Not Found"));
     }
 
     #[test]

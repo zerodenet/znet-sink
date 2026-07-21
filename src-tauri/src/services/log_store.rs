@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use super::data_dir;
+use super::{data_dir, text_encoding};
 use crate::errors::{AppError, AppResult};
 use crate::models::logs::{LogEntry, LogPage, LogQuery};
 
@@ -76,7 +76,10 @@ pub fn load_recent_from_path(path: &Path, limit: usize) -> AppResult<Vec<LogEntr
             continue;
         }
         match serde_json::from_str::<LogEntry>(line) {
-            Ok(entry) => entries.push(entry),
+            Ok(mut entry) => {
+                repair_log_entry(&mut entry);
+                entries.push(entry);
+            }
             Err(error) => {
                 return Err(AppError {
                     code: "invalid_argument",
@@ -126,11 +129,12 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
             continue;
         }
 
-        let entry = serde_json::from_str::<LogEntry>(line).map_err(|error| AppError {
+        let mut entry = serde_json::from_str::<LogEntry>(line).map_err(|error| AppError {
             code: "invalid_argument",
             message: format!("failed to parse logs: {error}"),
             details: Some(serde_json::json!({ "path": path.display().to_string() })),
         })?;
+        repair_log_entry(&mut entry);
 
         if query
             .source
@@ -177,6 +181,13 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
         has_more,
         oldest_available_id,
     })
+}
+
+fn repair_log_entry(entry: &mut LogEntry) {
+    text_encoding::repair_string(&mut entry.message);
+    if let Some(fields) = entry.fields.as_mut() {
+        text_encoding::repair_json_strings(fields);
+    }
 }
 
 fn level_meets(level: &crate::models::logs::LogLevel, min: &crate::models::logs::LogLevel) -> bool {
@@ -460,6 +471,38 @@ mod tests {
             page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
             vec![3, 4, 5]
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_store_repairs_historical_mojibake_when_reading() {
+        let dir = std::env::temp_dir().join(format!("znet-log-mojibake-{}", std::process::id()));
+        let path = dir.join("logs.jsonl");
+        let expected = "🇸🇬 新加坡测速完成";
+        let mojibake: String = expected
+            .as_bytes()
+            .iter()
+            .copied()
+            .map(char::from)
+            .collect();
+
+        append_to_path(
+            &path,
+            &LogEntry {
+                id: 1,
+                source: LogSource::Core,
+                level: LogLevel::Info,
+                message: mojibake.clone(),
+                fields: Some(serde_json::json!({ "raw_line": mojibake })),
+                occurred_at_unix_ms: 1,
+            },
+        )
+        .unwrap();
+
+        let entries = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(entries[0].message, expected);
+        assert_eq!(entries[0].fields.as_ref().unwrap()["raw_line"], expected);
 
         let _ = fs::remove_dir_all(dir);
     }

@@ -7,6 +7,7 @@
     getProtocolStyle,
     gradeDelay,
     getProbeTimeStyle,
+    getSpecialOutboundStyle,
   } from '$lib/services/node-utils';
 
   interface Props {
@@ -41,6 +42,7 @@
   const protocolStyle = $derived(getProtocolStyle(node.protocol));
   const chips = $derived(getNodeChips(node));
   const probeTimeState = $derived(getProbeTimeStyle(node.lastProbeAt));
+  const special = $derived(getSpecialOutboundStyle(node.protocol));
 </script>
 
 <div class="node-row {isActive ? 'active' : ''}" role="listitem">
@@ -58,7 +60,7 @@
     <div class="node-info">
       <span class="node-name {isActive ? 'active-name' : ''}">
         {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
-        {node.cleanName || node.name}
+        {special?.label ?? (node.cleanName || node.name)}
       </span>
       <div class="node-meta">
         <span class="proto-label" style="background: {protocolStyle.bg}; color: {protocolStyle.color};">{protocolStyle.label}</span>
@@ -68,7 +70,7 @@
         {#if node.domain && node.domain !== 'selected' && node.domain !== 'policy' && node.domain !== 'unavailable'}
           <span class="node-domain">{node.domain}</span>
         {/if}
-        {#if delayState.level === 'dead'}
+        {#if !special && delayState.level === 'dead'}
           <span class="node-unavailable">离线</span>
         {/if}
       </div>
@@ -76,47 +78,51 @@
   </button>
 
     <div class="node-actions">
-      <div
-        class="delay-wrap"
-        role="presentation"
-        onmouseenter={(event) => onShowPopover(event, node)}
-        onmouseleave={onHidePopover}
-      >
-        <span class="delay-pill" style="color: {delayState.color}; background: {delayState.bg};">
-          {formatDelay(node.delay)}
-          {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
-          {#if delayState.grade && delayState.grade !== '—'}
-            <span class="delay-grade">{delayState.grade}</span>
-          {/if}
-        </span>
-        {#if node.lastProbeAt}
-          <span class="probe-time" style="color: {probeTimeState.color};">
-            {probeTimeState.label}
-          </span>
-        {/if}
-      </div>
-
-    <div class="delay-bar-track">
-      <div class="delay-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
-    </div>
-
-    <button
-      class="probe-btn"
-      onclick={() => onProbeNode(node)}
-      disabled={probeDisabled || isProbing || probingAll}
-      title="测试延迟"
-      aria-label="测试 {node.name} 延迟"
-    >
-      {#if isProbing}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="animate-spin">
-          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-        </svg>
+      {#if special}
+        <span class="special-state">特殊出口</span>
       {:else}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-        </svg>
+        <div
+          class="delay-wrap"
+          role="presentation"
+          onmouseenter={(event) => onShowPopover(event, node)}
+          onmouseleave={onHidePopover}
+        >
+          <span class="delay-pill" style="color: {delayState.color}; background: {delayState.bg};">
+            {formatDelay(node.delay)}
+            {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
+            {#if delayState.grade && delayState.grade !== '—'}
+              <span class="delay-grade">{delayState.grade}</span>
+            {/if}
+          </span>
+          {#if node.lastProbeAt}
+            <span class="probe-time" style="color: {probeTimeState.color};">
+              {probeTimeState.label}
+            </span>
+          {/if}
+        </div>
+
+        <div class="delay-bar-track">
+          <div class="delay-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
+        </div>
+
+        <button
+          class="probe-btn"
+          onclick={() => onProbeNode(node)}
+          disabled={probeDisabled || isProbing || probingAll}
+          title="测试延迟"
+          aria-label="测试 {node.name} 延迟"
+        >
+          {#if isProbing}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="animate-spin">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          {:else}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          {/if}
+        </button>
       {/if}
-    </button>
   </div>
 </div>
 
@@ -303,6 +309,16 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 160px;
+  }
+
+  .special-state {
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   .node-unavailable {

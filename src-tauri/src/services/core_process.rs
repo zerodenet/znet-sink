@@ -10,7 +10,6 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    core::CoreEndpoint,
     core_config::CoreConfigSnapshot,
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
     logs::{LogLevel, LogSource},
@@ -152,6 +151,7 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
         return Err(AppError::invalid_argument(error));
     }
 
+    let monitor_generation;
     {
         let mut process = lock(state.core_process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;
@@ -159,6 +159,12 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
             return Ok(process.status.clone());
         }
 
+        // Supersede the previous watchdog before clearing the Stopped exit
+        // reason. Starting has a deliberate pre-spawn window (stale-process
+        // cleanup and port checks) where there is no managed child. If the
+        // old watchdog remains current during that window, it can mistake
+        // this intentional transition for a crash and emit/retry spuriously.
+        monitor_generation = state.next_core_process_monitor_generation();
         process.status = CoreProcessStatus {
             state: CoreProcessState::Starting,
             pid: None,
@@ -208,7 +214,6 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
     // Spawn the watchdog once. It reuses spawn_core_child to restart after
     // crashes, so on restart it must NOT spawn another monitor — that would
     // multiply monitors on every crash.
-    let monitor_generation = state.next_core_process_monitor_generation();
     spawn_monitor(app_handle.clone(), snapshot, monitor_generation);
     Ok(status)
 }
@@ -291,13 +296,18 @@ fn spawn_core_child(
     };
 
     let pid = child.id();
-    let stderr = child.stderr.take().unwrap();
+    let stderr = child.stderr.take().ok_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        AppError::internal("core process stderr pipe was not available")
+    })?;
 
     let app_handle_stderr = app_handle.clone();
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            let cleaned = strip_ansi(&line);
+            let repaired = super::text_encoding::repair_utf8_mojibake(&line);
+            let cleaned = strip_ansi(&repaired);
             if !cleaned.trim().is_empty() {
                 let state = app_handle_stderr.state::<AppState>();
                 let (level, mut fields) = parse_kernel_log_line(&cleaned);
@@ -313,6 +323,50 @@ fn spawn_core_child(
             }
         }
     });
+
+    // `spawn()` only proves that the OS created a process. Configuration
+    // validation happens inside Zero and can terminate it immediately. Give
+    // those deterministic startup failures a short window to surface before
+    // reporting Running to the UI or starting the restart watchdog.
+    std::thread::sleep(Duration::from_millis(300));
+    if let Some(exit_status) = child
+        .try_wait()
+        .map_err(|error| AppError::internal(format!("failed to inspect core startup: {error}")))?
+    {
+        let _ = stderr_handle.join();
+        let exit_code = exit_status.code();
+        let message = format!(
+            "core process exited during startup (code={})",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        );
+        {
+            let mut process = lock(state.core_process(), "core_process")?;
+            process.status.state = CoreProcessState::Failed;
+            process.status.pid = None;
+            process.status.executable_path = snapshot.executable_path.clone();
+            process.status.working_dir = snapshot.working_dir.clone();
+            process.status.config_path = snapshot.config_path.clone();
+            process.status.endpoint_path = snapshot.endpoint.path.clone();
+            process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
+            process.status.exit_code = exit_code;
+            process.status.exit_reason = Some(CoreProcessExitReason::Exited);
+            process.status.last_error = Some(message.clone());
+        }
+        let _ = logs::append_entry(
+            state,
+            LogSource::Core,
+            LogLevel::Error,
+            message.clone(),
+            Some(json!({
+                "pid": pid,
+                "exitCode": exit_code,
+                "configPath": snapshot.config_path,
+            })),
+        );
+        return Err(AppError::internal(message));
+    }
 
     let (status, executable_path_for_log) = {
         let mut process = lock(state.core_process(), "core_process")?;
@@ -349,10 +403,6 @@ fn spawn_core_child(
             "args": snapshot.launch_args,
         })),
     );
-
-    // Kernel just became reachable — its mixed-port is now a valid proxy
-    // candidate, so recompute the effective proxy env vars.
-    let _ = crate::services::proxy_coordinator::update(state);
 
     Ok(status)
 }
@@ -415,29 +465,46 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
                     if state.is_shutting_down() {
                         return;
                     }
-                    if ping_kernel(&endpoint, PING_TIMEOUT) {
-                        ping_failures = 0;
-                    } else {
-                        ping_failures += 1;
-                        eprintln!(
-                            "[ZNet] watchdog: kernel ping failed ({}/{})",
-                            ping_failures, MAX_PING_FAILURES
-                        );
-                        if ping_failures >= MAX_PING_FAILURES {
-                            let _ = logs::append_entry(
-                                &state,
-                                LogSource::App,
-                                LogLevel::Error,
-                                format!(
-                                    "kernel unresponsive for {} consecutive pings; killing to force restart",
-                                    ping_failures
-                                ),
-                                None,
-                            );
+                    match tauri::async_runtime::block_on(crate::kernel::connection::ensure_healthy(
+                        endpoint.clone(),
+                        PING_TIMEOUT,
+                        PING_INTERVAL,
+                    )) {
+                        Ok(reconnected) => {
+                            if reconnected {
+                                let _ = logs::append_entry(
+                                    &state,
+                                    LogSource::App,
+                                    LogLevel::Warn,
+                                    "kernel IPC shared connection recovered".to_string(),
+                                    None,
+                                );
+                            }
                             ping_failures = 0;
-                            if let Ok(mut process) = lock(state.core_process(), "core_process") {
-                                if let Some(child) = process.child.as_mut() {
-                                    let _ = child.kill();
+                        }
+                        Err(error) => {
+                            ping_failures += 1;
+                            eprintln!(
+                                "[ZNet] watchdog: shared kernel IPC health check failed ({}/{}): {}",
+                                ping_failures, MAX_PING_FAILURES, error.message
+                            );
+                            if ping_failures >= MAX_PING_FAILURES {
+                                let _ = logs::append_entry(
+                                    &state,
+                                    LogSource::App,
+                                    LogLevel::Error,
+                                    format!(
+                                        "kernel unresponsive for {} consecutive shared IPC checks; killing to force restart",
+                                        ping_failures
+                                    ),
+                                    None,
+                                );
+                                ping_failures = 0;
+                                if let Ok(mut process) = lock(state.core_process(), "core_process")
+                                {
+                                    if let Some(child) = process.child.as_mut() {
+                                        let _ = child.kill();
+                                    }
                                 }
                             }
                         }
@@ -448,6 +515,13 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
                     Ok(p) => p,
                     Err(_) => return,
                 };
+                // The generation may have changed after the pre-lock check
+                // while this monitor was waiting for the process mutex.
+                // Re-check under the same lock used by start() before
+                // interpreting an empty child slot as an unexpected exit.
+                if state.core_process_monitor_generation() != monitor_generation {
+                    return;
+                }
                 let exited_info = match process.child.as_mut() {
                     Some(child) => child.try_wait().ok().flatten(),
                     None => None,
@@ -571,19 +645,6 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
     });
 }
 
-/// Send a short-lived `ping` to the kernel to check it is responsive on IPC.
-///
-/// Uses a fresh connection (not the multiplexed one) so a hung kernel can't
-/// poison the shared connection — the kernel closes non-subscribe
-/// connections right after responding.
-fn ping_kernel(endpoint: &CoreEndpoint, timeout: Duration) -> bool {
-    let frame = serde_json::json!({"type":"ping"});
-    let Ok(frame_bytes) = crate::kernel::transport::serialize_frame(&frame) else {
-        return false;
-    };
-    crate::kernel::transport::send_json_line_request(endpoint.clone(), frame_bytes, timeout).is_ok()
-}
-
 pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     let proxy_result = system_proxy_guard::disable_with_guard();
     // Drop the multiplexed connection so the next request opens a fresh one
@@ -611,7 +672,6 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
         let _ = kill_external(state.inner());
         proxy_result?;
         let status = refresh_status(state.inner());
-        let _ = crate::services::proxy_coordinator::update(state.inner());
         return status;
     };
 
@@ -642,10 +702,6 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
             )?;
 
             proxy_result?;
-
-            // Kernel is gone — its mixed-port is no longer usable. Recompute
-            // env vars (falls back to OS proxy or direct).
-            let _ = crate::services::proxy_coordinator::update(state.inner());
 
             Ok(process.status.clone())
         }
@@ -762,8 +818,13 @@ fn strip_ansi(raw: &str) -> String {
     let mut result = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
     let mut i = 0;
+    let mut segment_start = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // ESC is ASCII and therefore always a UTF-8 boundary. Preserve
+            // the complete UTF-8 slice before it instead of rebuilding the
+            // string one byte at a time (`byte as char` corrupts CJK/emoji).
+            result.push_str(&raw[segment_start..i]);
             // Skip ESC[ ... until a terminal byte (letter A-Z or a-z)
             i += 2;
             while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
@@ -772,11 +833,12 @@ fn strip_ansi(raw: &str) -> String {
             if i < bytes.len() {
                 i += 1; // skip the terminal byte
             }
+            segment_start = i;
         } else {
-            result.push(bytes[i] as char);
             i += 1;
         }
     }
+    result.push_str(&raw[segment_start..]);
     result
 }
 
@@ -906,8 +968,16 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_kernel_log_line;
+    use super::{parse_kernel_log_line, strip_ansi};
     use crate::models::logs::LogLevel;
+
+    #[test]
+    fn strip_ansi_preserves_utf8_node_titles() {
+        assert_eq!(
+            strip_ansi("\u{1b}[32m🇸🇬 新加坡 IEPL\u{1b}[0m"),
+            "🇸🇬 新加坡 IEPL"
+        );
+    }
 
     #[test]
     fn parse_kernel_log_line_keeps_plain_trailing_word() {

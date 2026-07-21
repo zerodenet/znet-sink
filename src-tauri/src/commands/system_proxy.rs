@@ -47,9 +47,6 @@ pub async fn system_proxy_enable(
     .await
     .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?;
 
-    // The OS proxy just changed — recompute env vars so outbound requests
-    // (updater, kernel download, subscription) follow the new system proxy.
-    let _ = crate::services::proxy_coordinator::update(state.inner());
     status
 }
 
@@ -83,9 +80,6 @@ pub async fn system_proxy_disable(state: State<'_, AppState>) -> AppResult<Syste
     .await
     .map_err(|e| crate::errors::AppError::internal(format!("system proxy thread panicked: {e}")))?;
 
-    // OS proxy was cleared — recompute env vars (may fall back to the
-    // kernel mixed-port if the kernel is still running, or go direct).
-    let _ = crate::services::proxy_coordinator::update(state.inner());
     status
 }
 

@@ -28,6 +28,8 @@ use std::ffi::OsStr;
 #[cfg(windows)]
 use std::mem;
 #[cfg(unix)]
+use std::net::Shutdown;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
@@ -275,15 +277,30 @@ pub struct KernelReader(UnixStream);
 /// Write half of a split kernel connection.
 #[cfg(unix)]
 pub struct KernelWriter(UnixStream);
+/// Handle used to interrupt both halves of a split connection.
+#[cfg(unix)]
+pub struct KernelCloser(UnixStream);
 
-/// Connect once and return `(reader, writer)` halves for a multiplexed
-/// connection. The read half has no timeout (the reader task blocks waiting
-/// for frames); the write half inherits `timeout`.
+/// Connect once and return reader/writer halves plus a closer for a
+/// multiplexed connection. The read half has no timeout (the reader task
+/// blocks waiting for frames); the write half inherits `timeout`.
 pub fn connect_split(
     endpoint: &CoreEndpoint,
     timeout: Duration,
-) -> AppResult<(KernelReader, KernelWriter)> {
+) -> AppResult<(KernelReader, KernelWriter, KernelCloser)> {
     connect_split_platform(endpoint, StreamTimeouts::event_stream(timeout))
+}
+
+impl KernelCloser {
+    /// Interrupt pending I/O so a dead multiplexed connection releases its
+    /// reader task and transport resources promptly.
+    pub fn close(&self) {
+        #[cfg(unix)]
+        let _ = self.0.shutdown(Shutdown::Both);
+
+        #[cfg(windows)]
+        self.shared.cancel_all_io();
+    }
 }
 
 #[cfg(unix)]
@@ -327,7 +344,7 @@ fn connect_platform(
 fn connect_split_platform(
     endpoint: &CoreEndpoint,
     timeouts: StreamTimeouts,
-) -> AppResult<(KernelReader, KernelWriter)> {
+) -> AppResult<(KernelReader, KernelWriter, KernelCloser)> {
     let reader = UnixStream::connect(&endpoint.path)
         .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?;
     reader
@@ -345,7 +362,14 @@ fn connect_split_platform(
             error,
         )
     })?;
-    Ok((KernelReader(reader), KernelWriter(writer)))
+    let closer = reader.try_clone().map_err(|error| {
+        AppError::from_io("failed to clone IPC stream for closer", endpoint, error)
+    })?;
+    Ok((
+        KernelReader(reader),
+        KernelWriter(writer),
+        KernelCloser(closer),
+    ))
 }
 
 // ── Windows transport (overlapped named pipe) ───────────────────────
@@ -562,6 +586,14 @@ impl SharedPipe {
 
         Ok(transferred as usize)
     }
+
+    fn cancel_all_io(&self) {
+        // ERROR_NOT_FOUND merely means there is no operation to cancel,
+        // which is already the desired state.
+        unsafe {
+            CancelIoEx(self.handle, std::ptr::null_mut());
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -582,6 +614,11 @@ pub struct KernelReader {
 
 #[cfg(windows)]
 pub struct KernelWriter {
+    shared: Arc<SharedPipe>,
+}
+
+#[cfg(windows)]
+pub struct KernelCloser {
     shared: Arc<SharedPipe>,
 }
 
@@ -607,7 +644,7 @@ impl Write for KernelWriter {
 fn connect_split_platform(
     endpoint: &CoreEndpoint,
     timeouts: StreamTimeouts,
-) -> AppResult<(KernelReader, KernelWriter)> {
+) -> AppResult<(KernelReader, KernelWriter, KernelCloser)> {
     let shared = Arc::new(
         SharedPipe::connect(&endpoint.path, timeouts)
             .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?,
@@ -616,7 +653,10 @@ fn connect_split_platform(
         KernelReader {
             shared: Arc::clone(&shared),
         },
-        KernelWriter { shared },
+        KernelWriter {
+            shared: Arc::clone(&shared),
+        },
+        KernelCloser { shared },
     ))
 }
 

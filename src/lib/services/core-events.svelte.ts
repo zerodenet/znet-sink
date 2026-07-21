@@ -4,6 +4,7 @@ import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { delayHistory } from '$lib/services/delay-history.svelte';
 import { buildPolicyProbeHistoryUpdates } from '$lib/services/policy-probe-history';
+import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
 import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
@@ -61,8 +62,9 @@ class CoreEventsService {
   private _unlistenStatus: UnlistenFn | null = null;
   private _unlistenProcess: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
+  private _lifecycle = new EventLifecycleQueue();
 
-  private _stopped = false;
+  private _stopped = true;
   private _policyProbeWaiters = new Map<
     string,
     Set<(event: PolicyProbeCompletedEvent) => void>
@@ -98,27 +100,46 @@ class CoreEventsService {
     });
   }
 
-  async start(events?: string[]) {
+  start(events?: string[]): Promise<void> {
+    return this._lifecycle.enqueue(() => this._start(events));
+  }
+
+  private async _start(events?: string[]) {
+    // The app lifecycle owns this stream. Repeated calls must not rotate the
+    // backend generation because an older async start can otherwise overwrite
+    // the active generation selected by a newer call.
+    if (
+      !this._stopped
+      && this._activeGeneration !== null
+      && this._unlistenEvent
+      && this._unlistenStatus
+      && this._unlistenProcess
+    ) {
+      return;
+    }
     this._stopped = false;
 
-    // Listen before starting subscription so we don't miss status events
-    if (!this._unlistenEvent) {
-      this._unlistenEvent = await listen<GuiEventPayload>(EVENT_NAME, (event) => {
-        this._routeEvent(event.payload);
-      });
-    }
-    if (!this._unlistenStatus) {
-      this._unlistenStatus = await listen<CoreEventStatus>(STATUS_NAME, (event) => {
-        this._handleStatus(event.payload);
-      });
-    }
-    if (!this._unlistenProcess) {
-      this._unlistenProcess = await listen<{ reason: string; code: number | null; message: string }>('core:process-exited', (event) => {
-        this._handleProcessExited(event.payload);
-      });
-    }
-
     try {
+      // Listen before starting subscription so we don't miss status events.
+      // Listener registration is part of the recoverable kernel boundary too:
+      // a closed Tauri channel must become UI error state, not an unhandled
+      // rejection that can tear down the page lifecycle.
+      if (!this._unlistenEvent) {
+        this._unlistenEvent = await listen<GuiEventPayload>(EVENT_NAME, (event) => {
+          this._routeEvent(event.payload);
+        });
+      }
+      if (!this._unlistenStatus) {
+        this._unlistenStatus = await listen<CoreEventStatus>(STATUS_NAME, (event) => {
+          this._handleStatus(event.payload);
+        });
+      }
+      if (!this._unlistenProcess) {
+        this._unlistenProcess = await listen<{ reason: string; code: number | null; message: string }>('core:process-exited', (event) => {
+          this._handleProcessExited(event.payload);
+        });
+      }
+
       const sub = await startGuiEvents(events);
       this._activeGeneration = sub.generation;
     } catch (e) {
@@ -127,9 +148,17 @@ class CoreEventsService {
     }
   }
 
-  stop() {
+  stop(): Promise<void> {
+    return this._lifecycle.enqueue(() => this._stop());
+  }
+
+  private async _stop() {
     this._stopped = true;
-    stopGuiEvents();
+    try {
+      await stopGuiEvents();
+    } catch {
+      // Listener teardown is still required when the backend is unavailable.
+    }
     this._activeGeneration = null;
     this.isSubscribed = false;
     this.status = 'idle';
@@ -157,7 +186,11 @@ class CoreEventsService {
   }
 
   private _handleStatus(status: CoreEventStatus) {
-    if (status.generation !== this._activeGeneration) return;
+    if (this._stopped) return;
+    // The backend can emit the first status before the invoke response carries
+    // its generation back to JavaScript. Accept it while start() is in flight;
+    // once active, reject stale generations normally.
+    if (this._activeGeneration !== null && status.generation !== this._activeGeneration) return;
 
     switch (status.status) {
       case 'subscribed':
@@ -203,6 +236,7 @@ class CoreEventsService {
 
   private _routeEvent(payload: GuiEventPayload) {
     const { generation: _gen, event } = payload;
+    if (this._stopped) return;
     if (!event || typeof event !== 'object') return;
     if (this._activeGeneration !== null && _gen !== this._activeGeneration) return;
 

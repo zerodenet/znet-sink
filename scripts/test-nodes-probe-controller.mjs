@@ -200,11 +200,35 @@ async function testBatchProbeDoesNotStartWhileSingleProbeIsRunning() {
   await singleProbe;
 }
 
+async function testBatchProbePreservesStructuredErrorMessage() {
+  const failures = [];
+  const controller = createNodesProbeController({
+    listen: async () => () => {},
+    probeNode: async () => ({ targetTag: 'unused', reachable: true }),
+    probeAll: async () => {
+      throw {
+        code: 'core_unavailable',
+        message: 'failed to connect to core IPC: 系统找不到指定的文件。 (os error 2)',
+      };
+    },
+    recordDelay: () => {},
+    onProbeFailure: (failure) => failures.push(failure),
+    refreshPolicyGroups: async () => {},
+  });
+
+  await controller.handleProbeAll([{ id: 'node-1', tag: 'ss-in' }]);
+
+  const message = 'failed to connect to core IPC: 系统找不到指定的文件。 (os error 2)';
+  assert.equal(controller.getState().lastError, message);
+  assert.deepEqual(failures, [{ message, scope: 'batch' }]);
+}
+
 await testSingleProbeLifecycle();
 await testSingleProbeCompletionDoesNotWaitForSnapshotRefresh();
 await testSingleProbeFailureUsesNonBlockingFailureCallback();
 await testBatchProbeLifecycle();
 await testEmptyBatchProbeIsNoOp();
 await testBatchProbeDoesNotStartWhileSingleProbeIsRunning();
+await testBatchProbePreservesStructuredErrorMessage();
 
 console.log('nodes-probe-controller: ok');

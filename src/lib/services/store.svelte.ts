@@ -6,11 +6,14 @@ import type { InteractionSurfaceItem } from '$lib/types/capability';
 export type UIMode = 'lite' | 'pro';
 export type SettingsSection = 'general' | 'core' | 'config' | 'about';
 
+const LITE_MODE_NAV = new Set(['overview', 'subscriptions', 'logs', 'settings']);
+
 class AppStateStore {
   isInitialized = $state(false);
   appLoading = $state(true);
   loadError = $state<string | null>(null);
   uiMode = $state<UIMode>('lite');
+  isSwitchingUiMode = $state(false);
   activeTab = $state('overview');
   settingsSection = $state<SettingsSection>('general');
   selectedNodeId = $state('node-1');
@@ -113,7 +116,11 @@ class AppStateStore {
   }
 
   async switchUIMode(mode: UIMode) {
+    if (this.isSwitchingUiMode || mode === this.uiMode) return;
+
+    this.isSwitchingUiMode = true;
     const previousMode = this.uiMode;
+    const previousTab = this.activeTab;
     console.time('[ZNet] switchUIMode');
 
     // Optimistic update so the UI responds instantly.
@@ -121,10 +128,19 @@ class AppStateStore {
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
     }
+    // Tear down Pro-only pages before the backend mode changes. Otherwise
+    // their reactive refreshes can race the permission change and dispatch a
+    // burst of now-restricted IPC commands while the mode switch is pending.
+    if (mode === 'lite' && !LITE_MODE_NAV.has(this.activeTab)) {
+      this.activeTab = 'overview';
+    }
 
     try {
-      // Both operations are independent, so run them in parallel.
-      await Promise.all([this.persistUiMode(mode), this.refreshInteractionSurface()]);
+      // The backend computes the interaction surface from its persisted mode.
+      // Persist first, otherwise a Pro -> Lite switch can race and retain a
+      // stale Pro-only active tab long enough to dispatch restricted commands.
+      await this.persistUiMode(mode);
+      await this.refreshInteractionSurface();
 
       // If the active tab is no longer visible after the surface refresh,
       // move the user back to a safe tab.
@@ -138,9 +154,12 @@ class AppStateStore {
       console.error('[ZNet] switchUIMode failed:', e);
       console.timeEnd('[ZNet] switchUIMode');
       this.uiMode = previousMode;
+      this.activeTab = previousTab;
       if (browser) {
         localStorage.setItem('znet-ui-mode', previousMode);
       }
+    } finally {
+      this.isSwitchingUiMode = false;
     }
   }
 
@@ -161,8 +180,7 @@ class AppStateStore {
 
   private getFallbackNavVisible(key: string): boolean {
     // When capability metadata is unavailable, keep the Lite mode tabs usable.
-    const liteModeNav = ['overview', 'profiles', 'subscriptions', 'settings'];
-    return liteModeNav.includes(key);
+    return LITE_MODE_NAV.has(key);
   }
 
   isNavVisible(key: string): boolean {
@@ -190,11 +208,7 @@ class AppStateStore {
   }
 
   private async persistUiMode(mode: UIMode) {
-    try {
-      await updateAppConfig({ ui: { uiMode: mode } });
-    } catch (e) {
-      console.warn('[ZNet] persistUiMode failed:', e);
-    }
+    await updateAppConfig({ ui: { uiMode: mode } });
   }
 
   resetApp() {

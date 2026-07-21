@@ -88,6 +88,7 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
         }),
         "flow.started" | "flow.routed" | "flow.updated" | "flow.completed" => {
             parse_connection(payload)
+                .map(Box::new)
                 .map(GuiEventData::Connection)
                 .unwrap_or_else(|| unknown_payload("invalid flow event payload", payload))
         }

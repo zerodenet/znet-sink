@@ -210,6 +210,7 @@ pub async fn upsert_runtime(
     let content = next_active.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
+    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     match ZeroAdapter::new()
         .apply_config(content, ipc_options(state.inner())?)
         .await
@@ -339,6 +340,7 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     let content = target.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot activate a proxy config without parsed content")
     })?;
+    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
     match ZeroAdapter::new().apply_config(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
@@ -423,6 +425,7 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     let content = replacement.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot promote a proxy config without parsed content")
     })?;
+    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
     match ZeroAdapter::new().apply_config(content, options).await {
         Ok(_) => {
@@ -464,6 +467,7 @@ async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppR
     let Some(content) = profile.content.clone() else {
         return Ok(());
     };
+    let content = crate::services::rule_overlay::compose_effective_config(state, &content)?;
     ZeroAdapter::new()
         .apply_config(content, ipc_options(state)?)
         .await

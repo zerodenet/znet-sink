@@ -8,13 +8,10 @@ import type { ProxyNode } from '$lib/types/protocol';
 
 // ── Emoji / flag extraction ──────────────────────────────────────────
 
-// Regional indicator symbols (country flags 🇦-🇿) and the core emoji
-// pictographic / symbol blocks.  We use `u` (sticky) + `u` (unicode) flag
-// so the regex covers surrogate-pair code points correctly.
-const FLAG_RE = /[\u{1F1E6}-\u{1F1FF}]{2}/u;
-// Leading emoji run — flags, pictographic emoji, and skin-tone modifiers.
-// We capture 1–2 leading emoji so "🇭🇰 香港 01" → flag + "香港 01".
-const LEADING_EMOJI_RE = /^((?:[\u{1F1E6}-\u{1F1FF}]{2})|(?:[\u{2190}-\u{2BFF}]|[\u{2E80}-\u{3243}]|[\u{1F000}-\u{1FAFF}]|[\u{2600}-\u{27BF}]|[\u{1F300}-\u{1F9FF}]))/u;
+// Match one complete leading emoji grapheme: country flags, variation
+// selectors, skin tones, keycaps, tag flags, and ZWJ sequences such as
+// `👨‍💻`. Unicode properties avoid treating ordinary CJK text as emoji.
+const LEADING_EMOJI_RE = /^(?:\p{Regional_Indicator}{2}|(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F|\p{Emoji_Modifier})?(?:[\u{E0020}-\u{E007E}]*\u{E007F})?(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F|\p{Emoji_Modifier})?)*|[#*0-9]\uFE0F?\u20E3)/u;
 
 export interface ParsedName {
   emoji?: string;
@@ -26,13 +23,8 @@ export function parseNodeName(raw: string): ParsedName {
   if (!raw) return { cleanName: '' };
   const trimmed = raw.trim();
 
-  // Try flag emoji first (exactly two regional indicators).
-  const flag = trimmed.match(FLAG_RE);
-  if (flag && flag.index === 0) {
-    return { emoji: flag[0], cleanName: trimmed.slice(flag[0].length).trim() };
-  }
-
-  // Then a single leading pictographic emoji.
+  // Keep the complete emoji cluster together so variation selectors and ZWJ
+  // joiners are never left at the beginning of the visible node name.
   const emojiMatch = trimmed.match(LEADING_EMOJI_RE);
   if (emojiMatch) {
     const emoji = emojiMatch[0];
@@ -65,7 +57,10 @@ const PROTOCOL_LABELS: Record<string, string> = {
   socks: 'SOCKS',
   http: 'HTTP',
   direct: 'DIRECT',
+  block: 'BLOCK',
   reject: 'BLOCK',
+  dns: 'DNS',
+  pass: 'PASS',
   selector: 'GROUP',
   urltest: 'TEST',
   url_test: 'TEST',
@@ -85,12 +80,38 @@ const PROTOCOL_COLORS: Record<string, { bg: string; color: string }> = {
   tuic:        { bg: 'rgba(99,102,241,0.14)',  color: '#6366F1' },
   socks:       { bg: 'rgba(168,162,158,0.14)', color: '#A8A29E' },
   http:        { bg: 'rgba(168,162,158,0.14)', color: '#A8A29E' },
+  direct:      { bg: 'rgba(34,197,94,0.12)',   color: '#16A34A' },
+  block:       { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626' },
+  reject:      { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626' },
+  dns:         { bg: 'rgba(6,182,212,0.12)',   color: '#0891B2' },
+  pass:        { bg: 'rgba(34,197,94,0.12)',   color: '#16A34A' },
 };
 
 const DEFAULT_PROTOCOL_COLOR = { bg: 'rgba(107,114,128,0.10)', color: '#6B7280' };
 
 function protocolKey(protocol: string): string {
   return protocol.toLowerCase().replace(/[-_\s]/g, '');
+}
+
+export interface SpecialOutboundStyle {
+  label: string;
+  description: string;
+}
+
+const SPECIAL_OUTBOUND_STYLES: Record<string, SpecialOutboundStyle> = {
+  direct: { label: '直连', description: '不经过代理，直接连接目标' },
+  block: { label: '拒绝', description: '阻止匹配的连接' },
+  reject: { label: '拒绝', description: '阻止匹配的连接' },
+  dns: { label: 'DNS', description: '交由内核 DNS 出口处理' },
+  pass: { label: '放行', description: '交由后续路由继续处理' },
+};
+
+export function getSpecialOutboundStyle(protocol: string): SpecialOutboundStyle | undefined {
+  return SPECIAL_OUTBOUND_STYLES[protocolKey(protocol)];
+}
+
+export function isSpecialOutboundProtocol(protocol: string): boolean {
+  return getSpecialOutboundStyle(protocol) !== undefined;
 }
 
 /** Return the compact label + color for a protocol family. */
@@ -274,11 +295,11 @@ export interface NodeChip {
 
 /**
  * Build the ordered list of attribute chips for a node card.
- * Returns an empty array for direct / reject outbounds.
+ * Returns an empty array for built-in special outbounds.
  */
 export function getNodeChips(node: Pick<ProxyNode, 'protocol' | 'udp' | 'tls' | 'network'>): NodeChip[] {
   const proto = node.protocol.toLowerCase();
-  if (proto === 'direct' || proto === 'reject' || proto === 'block') return [];
+  if (['direct', 'reject', 'block', 'dns', 'pass'].includes(proto)) return [];
 
   const chips: NodeChip[] = [];
 

@@ -26,6 +26,21 @@ import { createBatchProbeState } from './nodes-probe-state.js';
  * }} ProbeControllerDeps
  */
 
+/** @param {unknown} error */
+function probeErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {
+    // Fall through to the platform string representation.
+  }
+  return String(error);
+}
+
 /** @param {ProbeControllerDeps} deps */
 export function createNodesProbeController(deps) {
   /** @type {Set<string>} */
@@ -125,7 +140,7 @@ export function createNodesProbeController(deps) {
           });
         }
       } catch (error) {
-        lastError = String(error);
+        lastError = probeErrorMessage(error);
         deps.onProbeFailure?.({
           targetTag: node.tag,
           message: lastError,
@@ -223,7 +238,7 @@ export function createNodesProbeController(deps) {
         await deps.probeAll(targetTags, sessionId);
         await completion;
       } catch (error) {
-        lastError = String(error);
+        lastError = probeErrorMessage(error);
         deps.onProbeFailure?.({
           message: lastError,
           scope: 'batch',

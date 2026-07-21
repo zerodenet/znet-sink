@@ -17,6 +17,11 @@ use super::parsing::{
     parse_policy_selection, parse_target_probe, unwrap_call_result,
 };
 
+/// Outbound diagnostics can legitimately queue behind other probes in the
+/// kernel and take tens of seconds. The process watchdog remains responsible
+/// for detecting a genuinely unresponsive IPC channel.
+const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
+
 /// Switch the selected outbound in a policy group.
 pub async fn select_policy(
     policy_tag: String,
@@ -69,6 +74,7 @@ pub async fn probe_target(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiTargetProbeResult> {
     let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+    let options = probe_ipc_options(options);
     let value = run_command(
         "diagnostics.probe_target",
         json!({ "target_tag": target_tag }),
@@ -86,6 +92,7 @@ pub async fn probe_outbound(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiTargetProbeResult> {
     let target_tag = normalize_non_empty(target_tag, "targetTag")?;
+    let options = probe_ipc_options(options);
     let mut params = Map::new();
     params.insert("target_tag".to_string(), json!(target_tag));
     if let Some(url) = normalize_optional(url) {
@@ -186,6 +193,12 @@ fn trace_route_params(
     Value::Object(params)
 }
 
+fn probe_ipc_options(options: Option<CoreIpcOptions>) -> Option<CoreIpcOptions> {
+    let mut options = options.unwrap_or_default();
+    options.timeout_ms = Some(PROBE_IPC_TIMEOUT_MS);
+    Some(options)
+}
+
 /// Enable TUN virtual network interface.
 pub async fn enable_tun(
     tun_name: Option<String>,
@@ -226,7 +239,8 @@ pub(crate) async fn run_command(
 
 #[cfg(test)]
 mod tests {
-    use super::trace_route_params;
+    use super::{probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS};
+    use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
     #[test]
@@ -245,5 +259,17 @@ mod tests {
                 "inbound_tag": "mixed-in"
             })
         );
+    }
+
+    #[test]
+    fn outbound_probe_uses_a_bounded_long_response_timeout() {
+        let options = probe_ipc_options(Some(CoreIpcOptions {
+            socket: Some("test-pipe".to_string()),
+            timeout_ms: Some(2_000),
+        }))
+        .expect("probe options");
+
+        assert_eq!(options.socket.as_deref(), Some("test-pipe"));
+        assert_eq!(options.timeout_ms, Some(PROBE_IPC_TIMEOUT_MS));
     }
 }

@@ -281,6 +281,10 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
         shared("systemProxy.disable", "action"),
         shared("subscriptions.list", "action"),
         shared("subscriptions.sync", "action"),
+        // Lite-mode subscriptions need read-only profile metadata to display
+        // and preserve their target association. Mutating profiles stays Pro-only.
+        shared("proxyConfig.list", "action"),
+        shared("proxyConfig.get", "action"),
         shared("proxyMode.status", "action"),
         shared("proxyMode.set", "action"),
         shared("policies.list", "action"),

@@ -89,6 +89,8 @@ export interface RuleSetProfile {
   id: string;
   name: string;
   enabled: boolean;
+  managedBySubscriptionId?: string;
+  commonBinding?: CommonRuleBinding;
   semanticIr: ZeroRuleIr;
   source?: RuleSetSource;
   sourceState: RuleSetSourceState;
@@ -96,6 +98,18 @@ export interface RuleSetProfile {
   updatedAtUnixMs: number;
   lastSyncAtUnixMs?: number;
   lastError?: string;
+}
+
+export type CommonRuleAction = 'final' | 'direct' | 'reject';
+export interface CommonRuleBinding { enabled: boolean; action: CommonRuleAction; order: number; }
+export interface CommonRuleBindingInput { ruleSetId: string; enabled: boolean; action: CommonRuleAction; order: number; }
+export interface CommonRuleInjectionStatus {
+  enabled: boolean;
+  effective: boolean;
+  mode?: 'global' | 'rule' | 'direct';
+  eligibleCount: number;
+  injectedCount: number;
+  reason?: string;
 }
 
 export type ZeroRuleType = 'domain_exact' | 'domain_suffix' | 'domain_keyword' | 'ipv4_cidr' | 'ipv6_cidr';

@@ -7,13 +7,11 @@ use crate::state::app_state::AppState;
 
 #[tauri::command]
 pub fn proxy_config_list(state: State<'_, AppState>) -> AppResult<Vec<ProxyConfigProfile>> {
-    interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
     proxy_config::list(state)
 }
 
 #[tauri::command]
 pub fn proxy_config_get(state: State<'_, AppState>, id: String) -> AppResult<ProxyConfigProfile> {
-    interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
     proxy_config::get(state, id)
 }
 

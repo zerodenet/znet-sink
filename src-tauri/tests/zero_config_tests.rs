@@ -11,13 +11,14 @@ fn proxy_nodes_extracts_outbounds() {
         ]
     }));
 
-    // `direct` is a built-in outbound and is filtered out.
-    assert_eq!(nodes.len(), 2);
-    assert_eq!(nodes[0].tag, "proxy");
-    assert_eq!(nodes[0].protocol, "vless");
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[0].tag, "direct");
+    assert_eq!(nodes[0].protocol, "direct");
+    assert_eq!(nodes[1].tag, "proxy");
+    assert_eq!(nodes[1].protocol, "vless");
 
-    assert_eq!(nodes[1].tag, "auto");
-    assert!(nodes[1].is_selector);
+    assert_eq!(nodes[2].tag, "auto");
+    assert!(nodes[2].is_selector);
 }
 
 #[test]
@@ -56,10 +57,11 @@ fn policy_groups_from_config_accepts_outbound_groups() {
             .iter()
             .map(|m| m.tag.as_str())
             .collect::<Vec<_>>(),
-        vec!["server-a", "server-b"] // `direct` filtered out of members
+        vec!["server-a", "server-b", "direct"]
     );
     assert_eq!(groups[0].outbounds[0].kind.as_deref(), Some("trojan"));
     assert!(groups[0].outbounds[1].selected);
+    assert_eq!(groups[0].outbounds[2].kind.as_deref(), Some("direct"));
 }
 
 #[test]
@@ -84,6 +86,8 @@ fn policy_groups_handles_proxy_groups_key() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].name, "auto");
     assert_eq!(groups[0].kind, "url_test");
+    assert_eq!(groups[0].outbounds[0].tag, "direct");
+    assert_eq!(groups[0].outbounds[0].kind.as_deref(), Some("direct"));
 }
 
 #[test]
@@ -152,25 +156,26 @@ fn real_world_config_extracts_nodes_and_policy_group() {
     });
 
     let nodes = config::proxy_nodes_from_config(&config);
-    // `direct` is a built-in outbound and is filtered out.
-    assert_eq!(nodes.len(), 2);
-    assert_eq!(nodes[0].tag, "ss-in");
-    assert_eq!(nodes[0].protocol, "shadowsocks");
-    assert_eq!(nodes[1].tag, "tr-sg");
-    assert_eq!(nodes[1].protocol, "trojan");
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[0].tag, "direct");
+    assert_eq!(nodes[0].protocol, "direct");
+    assert_eq!(nodes[1].tag, "ss-in");
+    assert_eq!(nodes[1].protocol, "shadowsocks");
+    assert_eq!(nodes[2].tag, "tr-sg");
+    assert_eq!(nodes[2].protocol, "trojan");
 
     // ── New: static attribute extraction ──
     // shadowsocks node
-    assert_eq!(nodes[0].server.as_deref(), Some("redacted.example.com"));
-    assert_eq!(nodes[0].port, Some(37077));
-    assert_eq!(nodes[0].udp, Some(true)); // explicit `udp: true`
-    assert_eq!(nodes[0].cipher.as_deref(), Some("chacha20-ietf-poly1305"));
+    assert_eq!(nodes[1].server.as_deref(), Some("redacted.example.com"));
+    assert_eq!(nodes[1].port, Some(37077));
+    assert_eq!(nodes[1].udp, Some(true)); // explicit `udp: true`
+    assert_eq!(nodes[1].cipher.as_deref(), Some("chacha20-ietf-poly1305"));
     // trojan node — TLS inferred from sni/insecure presence
-    assert_eq!(nodes[1].port, Some(14688));
-    assert_eq!(nodes[1].tls, Some(true));
-    assert_eq!(nodes[1].sni.as_deref(), Some("redacted.example.com"));
+    assert_eq!(nodes[2].port, Some(14688));
+    assert_eq!(nodes[2].tls, Some(true));
+    assert_eq!(nodes[2].sni.as_deref(), Some("redacted.example.com"));
     // trojan has no explicit udp flag and isn't a UDP-native protocol
-    assert_eq!(nodes[1].udp, None);
+    assert_eq!(nodes[2].udp, None);
 
     let groups = config::policy_groups_from_config(&config);
     assert_eq!(groups.len(), 1, "expected one policy group");
@@ -179,14 +184,14 @@ fn real_world_config_extracts_nodes_and_policy_group() {
     assert_eq!(groups[0].selected, None, "no selected field in this config");
 
     let member_tags: Vec<&str> = groups[0].outbounds.iter().map(|m| m.tag.as_str()).collect();
-    assert_eq!(member_tags, vec!["ss-in", "tr-sg"]); // `direct` filtered
+    assert_eq!(member_tags, vec!["ss-in", "tr-sg", "direct"]);
 
     let member_kinds: Vec<&str> = groups[0]
         .outbounds
         .iter()
         .filter_map(|m| m.kind.as_deref())
         .collect();
-    assert_eq!(member_kinds, vec!["shadowsocks", "trojan"]);
+    assert_eq!(member_kinds, vec!["shadowsocks", "trojan", "direct"]);
 }
 
 #[test]

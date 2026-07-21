@@ -6,7 +6,7 @@
   import { store } from '$lib/services/store.svelte';
   import { appendLog, guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
-  import { getGroupKindStyle } from '$lib/services/node-utils';
+  import { getGroupKindStyle, isSpecialOutboundProtocol } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
   import type { PolicyGroup } from '$lib/types/gui-api';
   import NodesDelayPopover from '$lib/components/tabs/NodesDelayPopover.svelte';
@@ -21,6 +21,7 @@
     buildAllNodes,
     buildRuntimeOverlay,
     buildSections,
+    collectProbingPolicyNodeTags,
     filterNodes,
     getActiveNodeTag,
     mergePolicyGroups,
@@ -222,6 +223,18 @@
     return getActiveNodeTag(groups, selectedGroup);
   });
 
+  const plannedProbeTargets = $derived.by(() =>
+    planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes }),
+  );
+
+  const probingPolicyNodeTags = $derived.by(() =>
+    collectProbingPolicyNodeTags(groups, probingPolicyTags),
+  );
+
+  function isNodeProbing(node: ProxyNode): boolean {
+    return probingNodeIds.has(node.id) || probingPolicyNodeTags.has(node.tag);
+  }
+
   // Actions
   /** Resolve the policy group a node belongs to. */
   function groupForNode(node: ProxyNode): PolicyGroup | undefined {
@@ -321,6 +334,7 @@
   }
 
   async function handleProbe(node: ProxyNode) {
+    if (isSpecialOutboundProtocol(node.protocol)) return;
     if (!isCoreAvailable) {
       recordProbeFailure({ message: '内核未就绪', scope: 'single', targetTag: node.tag });
       return;
@@ -390,7 +404,7 @@
     if (probingRequested || probingAll || probingNodeIds.size > 0 || probingPolicyTags.size > 0) {
       return;
     }
-    const targets = planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes });
+    const targets = plannedProbeTargets;
     if (targets.nodes.length === 0 && targets.policyTags.length === 0) return;
 
     probingRequested = true;
@@ -497,7 +511,7 @@
       {isLite}
       probingAll={probingRequested || probingAll}
       {probeProgress}
-      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && filteredNodes.length > 0}
+      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && (plannedProbeTargets.nodes.length > 0 || plannedProbeTargets.policyTags.length > 0)}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={setViewMode}
@@ -540,9 +554,9 @@
               {node}
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
-              isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+              isProbing={isNodeProbing(node)}
               probingAll={probingRequested || probingAll}
-              probeDisabled={!isCoreAvailable}
+              probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
               onProbeNode={handleProbe}
@@ -558,9 +572,9 @@
               {node}
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
-              isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+              isProbing={isNodeProbing(node)}
               probingAll={probingRequested || probingAll}
-              probeDisabled={!isCoreAvailable}
+              probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
               onProbeNode={handleProbe}
@@ -598,9 +612,9 @@
                       {node}
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
-                      isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+                      isProbing={isNodeProbing(node)}
                       probingAll={probingRequested || probingAll}
-                      probeDisabled={!isCoreAvailable}
+                      probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
                       onProbeNode={handleProbe}
@@ -616,9 +630,9 @@
                       {node}
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
-                      isProbing={probingNodeIds.has(node.id) || probingPolicyTags.has(node.tag)}
+                      isProbing={isNodeProbing(node)}
                       probingAll={probingRequested || probingAll}
-                      probeDisabled={!isCoreAvailable}
+                      probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
                       onProbeNode={handleProbe}

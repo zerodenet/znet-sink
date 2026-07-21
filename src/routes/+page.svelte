@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
@@ -21,17 +20,6 @@
     let unlistenNavigate: UnlistenFn | null = null;
     const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry();
     initTheme();
-    requestAnimationFrame(() => {
-      void getCurrentWindow().show().catch((error) => {
-        console.error('Failed to show main window after first render:', error);
-        void recordTelemetry({
-          level: 'error',
-          area: 'startup',
-          operation: 'window.show',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    });
     void store.loadFromBackend();
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
       const { tab, section } = event.payload;
@@ -64,16 +52,18 @@
     // first await; without untrack those fields become accidental effect
     // dependencies and every loading/status update restarts the whole app.
     const shouldInitialize = store.isInitialized;
-    untrack(() => {
-      if (shouldInitialize) {
-        void guiState.initialize();
-        void coreEvents.start();
-        updater.startPeriodicChecks();
-      } else {
+    if (!shouldInitialize) {
+      untrack(() => {
         guiState.destroy();
-        void coreEvents.stop();
         updater.stopPeriodicChecks();
-      }
+      });
+      return;
+    }
+
+    untrack(() => {
+      void guiState.initialize();
+      void coreEvents.start();
+      updater.startPeriodicChecks();
     });
     return () => {
       untrack(() => {

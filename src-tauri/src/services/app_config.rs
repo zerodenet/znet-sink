@@ -55,9 +55,6 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(socket) = core.socket {
             config.core.socket = normalize_optional(socket);
         }
-        if let Some(v) = core.download_proxy_auto {
-            config.core.download_proxy_auto = v;
-        }
         if let Some(network_probe_urls) = core.network_probe_urls {
             config.core.network_probe_urls = normalize_network_probe_urls(network_probe_urls)?;
         }
@@ -155,6 +152,12 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
                 return Err(AppError::invalid_argument("tun.mtu must be greater than 0"));
             }
             config.tun.mtu = mtu;
+        }
+    }
+
+    if let Some(routing) = patch.routing {
+        if let Some(inject_common_rules) = routing.inject_common_rules {
+            config.routing.inject_common_rules = inject_common_rules;
         }
     }
 

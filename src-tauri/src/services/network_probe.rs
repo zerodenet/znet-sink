@@ -18,8 +18,8 @@ pub struct NetworkProbeResult {
 /// Detect the host machine's current public network environment.
 ///
 /// This GUI-side check never injects the managed kernel's local proxy address.
-/// The default HTTP client follows the host's normal proxy configuration, so
-/// an enabled operating-system proxy is correctly reflected in the result.
+/// The default HTTP client follows proxy variables inherited by this process;
+/// without them, it uses the host's direct network path.
 pub fn probe_local_network(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
     let probe_urls = if probe_urls.is_empty() {
         default_network_probe_urls()

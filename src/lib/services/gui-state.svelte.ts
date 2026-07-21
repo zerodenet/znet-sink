@@ -22,7 +22,6 @@ import {
   trayUpdateStatus,
 } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
-import { coreEvents } from './core-events.svelte';
 import { tracedOperation } from './telemetry';
 import type {
   ConfigProxyNode,
@@ -271,7 +270,6 @@ class GuiStateStore {
       this.connection = await tracedOperation('proxy', 'connection.connect', () => guiConnect());
       this.syncTrayStatus();
       toastSuccess('系统代理已开启，服务已生效');
-      coreEvents.start();
       await this.refreshPolicyPanels();
     } catch (e: any) {
       toastError(`连接失败: ${this.errorMessage(e)}`);
@@ -302,7 +300,6 @@ class GuiStateStore {
     try {
       await tracedOperation('kernel', 'kernel.start', () => startCoreProcess());
       toastSuccess('内核监听已启动');
-      coreEvents.start();
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {

@@ -83,7 +83,10 @@ pub async fn set(
 
     if core_was_running {
         // Try mode.set hot-switch first (no restart, no connection interruption)
-        if !restart_core {
+        let common_rules_enabled = common::lock(state.app_config(), "app_config")?
+            .routing
+            .inject_common_rules;
+        if !restart_core && !common_rules_enabled {
             hot_switched =
                 try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner()).await;
         }

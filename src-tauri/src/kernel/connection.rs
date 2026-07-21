@@ -31,17 +31,26 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot};
+
+/// IPC is an external failure boundary. If a worker panics while holding one
+/// of these coordination locks, retain the protected state and let later
+/// calls reconnect instead of cascading the poisoned lock into more panics.
+fn recover_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 use tokio::time::timeout;
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::transport::{self, KernelReader, KernelWriter};
+use crate::kernel::transport::{self, KernelCloser, KernelReader, KernelWriter};
 use crate::models::core::CoreEndpoint;
 use crate::models::debug::{push_debug_frame, DebugFrame};
 
@@ -67,9 +76,11 @@ pub struct MultiplexedConnection {
 struct Inner {
     endpoint: CoreEndpoint,
     writer: Mutex<KernelWriter>,
+    closer: KernelCloser,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>,
     event_tx: broadcast::Sender<Value>,
     alive: AtomicBool,
+    last_received_at_ms: AtomicU64,
     /// Set during `connect()` so the reader can signal when the subscribe
     /// acknowledgement arrives.  Taken by the reader on first response
     /// frame whose `id` matches [`SUBSCRIBE_FRAME_ID`], then read by
@@ -82,16 +93,18 @@ impl MultiplexedConnection {
     /// background reader. Returns once the connection is established and the
     /// reader is running.
     fn connect(endpoint: CoreEndpoint, connect_timeout: Duration) -> AppResult<Self> {
-        let (reader, writer) = transport::connect_split(&endpoint, connect_timeout)?;
+        let (reader, writer, closer) = transport::connect_split(&endpoint, connect_timeout)?;
 
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (subscribe_ack_tx, subscribe_ack_rx) = mpsc::sync_channel(1);
         let inner = Arc::new(Inner {
             endpoint: endpoint.clone(),
             writer: Mutex::new(writer),
+            closer,
             pending: Mutex::new(HashMap::new()),
             event_tx,
             alive: AtomicBool::new(true),
+            last_received_at_ms: AtomicU64::new(crate::services::common::now_unix_ms()),
             subscribe_ack_tx: Mutex::new(Some(subscribe_ack_tx)),
         });
 
@@ -114,7 +127,7 @@ impl MultiplexedConnection {
             error: None,
         });
         {
-            let mut writer = inner.writer.lock().expect("IPC writer mutex poisoned");
+            let mut writer = recover_lock(&inner.writer);
             writer.write_all(&subscribe_bytes).map_err(|error| {
                 AppError::from_io("failed to write IPC subscribe frame", &endpoint, error)
             })?;
@@ -138,11 +151,11 @@ impl MultiplexedConnection {
         match subscribe_ack_rx.recv_timeout(connect_timeout) {
             Ok(Ok(())) => {} // subscribe confirmed
             Ok(Err(error)) => {
-                inner.alive.store(false, Ordering::Release);
+                inner.mark_dead();
                 return Err(error);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                inner.alive.store(false, Ordering::Release);
+                inner.mark_dead();
                 return Err(AppError {
                     code: "connection_closed",
                     message: "timed out waiting for kernel subscribe acknowledgement".to_string(),
@@ -153,7 +166,7 @@ impl MultiplexedConnection {
                 });
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                inner.alive.store(false, Ordering::Release);
+                inner.mark_dead();
                 return Err(AppError::connection_closed(&endpoint));
             }
         }
@@ -178,11 +191,7 @@ impl MultiplexedConnection {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = self
-                .inner
-                .pending
-                .lock()
-                .expect("IPC pending mutex poisoned");
+            let mut pending = recover_lock(&self.inner.pending);
             pending.insert(request_id.clone(), tx);
         }
 
@@ -210,10 +219,7 @@ impl MultiplexedConnection {
         });
         let writer_inner = Arc::clone(&self.inner);
         let write_result = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
-            let mut writer = writer_inner
-                .writer
-                .lock()
-                .expect("IPC writer mutex poisoned");
+            let mut writer = recover_lock(&writer_inner.writer);
             writer.write_all(&frame_bytes)?;
             writer.flush()
         })
@@ -233,6 +239,7 @@ impl MultiplexedConnection {
             }
             Err(error) => {
                 self.inner.remove_pending(&request_id);
+                self.mark_dead();
                 return Err(AppError::internal(format!(
                     "IPC write worker failed: {error}"
                 )));
@@ -313,17 +320,26 @@ impl MultiplexedConnection {
         &self.inner.endpoint.path
     }
 
+    fn received_within(&self, window: Duration) -> bool {
+        let now = crate::services::common::now_unix_ms();
+        let last = self.inner.last_received_at_ms.load(Ordering::Acquire);
+        now.saturating_sub(last) <= window.as_millis() as u64
+    }
+
     fn mark_dead(&self) {
-        self.inner.alive.store(false, Ordering::Release);
+        self.inner.mark_dead();
     }
 }
 
 impl Inner {
     fn remove_pending(&self, id: &str) {
-        self.pending
-            .lock()
-            .expect("IPC pending mutex poisoned")
-            .remove(id);
+        recover_lock(&self.pending).remove(id);
+    }
+
+    fn mark_dead(&self) {
+        if self.alive.swap(false, Ordering::AcqRel) {
+            self.closer.close();
+        }
     }
 }
 
@@ -341,6 +357,9 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             Ok(frame) => frame,
             Err(_) => break, // connection closed / IO error → tear down
         };
+        inner
+            .last_received_at_ms
+            .store(crate::services::common::now_unix_ms(), Ordering::Release);
 
         let is_response = frame
             .as_object()
@@ -365,12 +384,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     elapsed_ms: None,
                     error: None,
                 });
-                if let Some(tx) = inner
-                    .subscribe_ack_tx
-                    .lock()
-                    .expect("IPC subscribe ack mutex poisoned")
-                    .take()
-                {
+                if let Some(tx) = recover_lock(&inner.subscribe_ack_tx).take() {
                     let _ = tx.send(validate_subscribe_ack(&frame));
                 }
                 continue;
@@ -379,11 +393,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             // Response frame: pair by id with the waiting waiter, if any.
             if let Some(id) = frame_id.as_deref() {
                 let ok = frame.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-                let sender = inner
-                    .pending
-                    .lock()
-                    .expect("IPC pending mutex poisoned")
-                    .remove(id);
+                let sender = recover_lock(&inner.pending).remove(id);
                 let matched = sender.is_some();
                 if let Some(sender) = sender {
                     let _ = sender.send(Ok(frame));
@@ -441,7 +451,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
     // don't block until their own timeout.
     inner.alive.store(false, Ordering::Release);
     let drained: HashMap<String, oneshot::Sender<Result<Value, AppError>>> = {
-        let mut guard = inner.pending.lock().expect("IPC pending mutex poisoned");
+        let mut guard = recover_lock(&inner.pending);
         std::mem::take(&mut *guard)
     };
     let endpoint = inner.endpoint.clone();
@@ -501,7 +511,7 @@ pub fn get_or_connect(
 
     // ── Fast path: check the cache without blocking on connect ──
     {
-        let guard = MANAGER.lock().expect("connection manager mutex poisoned");
+        let guard = recover_lock(&MANAGER);
         if let Some(managed) = guard.as_ref() {
             if managed.endpoint_path == path && managed.conn.is_alive() {
                 return Ok(managed.conn.clone());
@@ -511,11 +521,11 @@ pub fn get_or_connect(
 
     // Only one caller may perform the blocking subscribe handshake. Other
     // callers wait here, then reuse the connection published by the winner.
-    let _connect_guard = CONNECT_GATE.lock().expect("connection gate mutex poisoned");
+    let _connect_guard = recover_lock(&CONNECT_GATE);
 
     // A caller may have populated the cache while we waited for the gate.
     {
-        let guard = MANAGER.lock().expect("connection manager mutex poisoned");
+        let guard = recover_lock(&MANAGER);
         if let Some(managed) = guard.as_ref() {
             if managed.endpoint_path == path && managed.conn.is_alive() {
                 return Ok(managed.conn.clone());
@@ -527,7 +537,7 @@ pub fn get_or_connect(
 
     // Publish while the connect gate is still held, so no concurrent cold
     // caller can create a second reader/subscription.
-    let mut guard = MANAGER.lock().expect("connection manager mutex poisoned");
+    let mut guard = recover_lock(&MANAGER);
     *guard = Some(ManagedConnection {
         endpoint_path: path,
         conn: conn.clone(),
@@ -540,13 +550,89 @@ pub fn get_or_connect(
 pub fn reset() {
     // Wait for an in-flight connect to finish before clearing the cache. This
     // prevents an old-endpoint connection from being published after reset.
-    if let Ok(_connect_guard) = CONNECT_GATE.lock() {
-        if let Ok(mut guard) = MANAGER.lock() {
-            if let Some(managed) = guard.take() {
-                managed.conn.mark_dead();
-            }
-        }
+    let _connect_guard = recover_lock(&CONNECT_GATE);
+    let mut guard = recover_lock(&MANAGER);
+    if let Some(managed) = guard.take() {
+        managed.conn.mark_dead();
     }
+}
+
+/// Verify IPC health over the shared multiplexed channel.
+///
+/// Recent inbound traffic already proves that the shared channel is alive,
+/// so no ping is sent while events or responses are flowing. If an idle
+/// channel fails its ping, retire it and make one bounded reconnect attempt
+/// using a new persistent subscribe connection. This never uses the
+/// single-shot transport.
+///
+/// Returns `true` when the check had to rebuild the shared connection.
+pub async fn ensure_healthy(
+    endpoint: CoreEndpoint,
+    timeout: Duration,
+    activity_window: Duration,
+) -> AppResult<bool> {
+    let conn = connect_for_health(endpoint.clone(), timeout).await?;
+    if conn.received_within(activity_window) {
+        return Ok(false);
+    }
+
+    match ping_connection(conn, timeout).await {
+        Ok(()) => Ok(false),
+        Err(_) => ping_once(endpoint, timeout).await.map(|()| true),
+    }
+}
+
+async fn ping_once(endpoint: CoreEndpoint, timeout: Duration) -> AppResult<()> {
+    let conn = connect_for_health(endpoint, timeout).await?;
+    ping_connection(conn, timeout).await
+}
+
+async fn connect_for_health(
+    endpoint: CoreEndpoint,
+    timeout: Duration,
+) -> AppResult<MultiplexedConnection> {
+    tauri::async_runtime::spawn_blocking(move || get_or_connect(endpoint, timeout))
+        .await
+        .map_err(|error| AppError::internal(format!("IPC health connect worker failed: {error}")))?
+}
+
+async fn ping_connection(conn: MultiplexedConnection, timeout: Duration) -> AppResult<()> {
+    static NEXT_HEALTH_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    let request_id = format!(
+        "znet-sink-health-{}",
+        NEXT_HEALTH_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let frame = serde_json::json!({
+        "type": "ping",
+        "id": request_id,
+    });
+    let frame_bytes = transport::serialize_frame(&frame)?;
+    let response = match conn.request(frame_bytes, request_id.clone(), timeout).await {
+        Ok(response) => response,
+        Err(error) => {
+            conn.mark_dead();
+            return Err(error);
+        }
+    };
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        conn.mark_dead();
+        return Err(AppError::core_response(response));
+    }
+    let response_id = response
+        .get("id")
+        .or_else(|| response.get("request_id"))
+        .or_else(|| response.get("requestId"))
+        .and_then(Value::as_str);
+    if response_id != Some(request_id.as_str()) {
+        conn.mark_dead();
+        return Err(AppError::internal(
+            "kernel IPC health response id did not match the request",
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

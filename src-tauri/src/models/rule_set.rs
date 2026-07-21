@@ -7,6 +7,10 @@ pub struct RuleSetProfile {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub managed_by_subscription_id: Option<String>,
+    #[serde(default)]
+    pub common_binding: Option<CommonRuleBinding>,
     /// Canonical Zero Rule IR v1. This is the only user-visible/editable rule model.
     pub semantic_ir: Value,
     #[serde(default)]
@@ -20,6 +24,42 @@ pub struct RuleSetProfile {
     pub last_sync_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommonRuleAction {
+    Final,
+    Direct,
+    Reject,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommonRuleBinding {
+    pub enabled: bool,
+    pub action: CommonRuleAction,
+    pub order: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommonRuleBindingInput {
+    pub rule_set_id: String,
+    pub enabled: bool,
+    pub action: CommonRuleAction,
+    pub order: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommonRuleInjectionStatus {
+    pub enabled: bool,
+    pub effective: bool,
+    pub mode: Option<String>,
+    pub eligible_count: usize,
+    pub injected_count: usize,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

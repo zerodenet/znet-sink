@@ -420,7 +420,7 @@ pub enum GuiEventData {
     CoreStatus(GuiCoreHealth),
     CoreWarning(GuiWarningEvent),
     ConfigChanged(GuiConfigChangedEvent),
-    Connection(GuiConnection),
+    Connection(Box<GuiConnection>),
     Connections(Vec<GuiConnection>),
     PolicySelected(GuiPolicySelectedEvent),
     PolicyProbeCompleted(GuiPolicyProbeCompletedEvent),

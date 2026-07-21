@@ -7,6 +7,7 @@ export interface AppConfig {
   ui: AppUiConfig;
   localProxy: AppLocalProxyConfig;
   tun: AppTunConfig;
+  routing: AppRoutingConfig;
 }
 
 export interface AppCoreConfig {
@@ -18,8 +19,6 @@ export interface AppCoreConfig {
   configPath?: string;
   workingDir?: string;
   socket?: string;
-  /** 管理流量是否自动跟随系统代理。默认 true */
-  downloadProxyAuto: boolean;
   networkProbeUrls: string[];
 }
 
@@ -49,6 +48,10 @@ export interface AppTunConfig {
   mtu: number;
 }
 
+export interface AppRoutingConfig {
+  injectCommonRules: boolean;
+}
+
 // Patch types for partial updates
 
 export interface AppConfigPatch {
@@ -57,6 +60,7 @@ export interface AppConfigPatch {
   ui?: AppUiConfigPatch;
   localProxy?: AppLocalProxyConfigPatch;
   tun?: AppTunConfigPatch;
+  routing?: AppRoutingConfigPatch;
 }
 
 export interface AppCoreConfigPatch {
@@ -68,7 +72,6 @@ export interface AppCoreConfigPatch {
   configPath?: string | null;
   workingDir?: string | null;
   socket?: string | null;
-  downloadProxyAuto?: boolean;
   networkProbeUrls?: string[];
 }
 
@@ -96,4 +99,8 @@ export interface AppTunConfigPatch {
   addr?: string;
   tag?: string;
   mtu?: number;
+}
+
+export interface AppRoutingConfigPatch {
+  injectCommonRules?: boolean;
 }

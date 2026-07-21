@@ -16,6 +16,7 @@ fn default_app_config_is_gui_schema() {
     assert_eq!(config.local_proxy.host, "127.0.0.1");
     assert_eq!(config.local_proxy.port, 7890);
     assert!(config.local_proxy.source_proxy_config_id.is_none());
+    assert!(!config.routing.inject_common_rules);
 }
 
 #[test]
@@ -29,4 +30,15 @@ fn hidden_menu_keys_are_normalized() {
     ]);
 
     assert_eq!(keys, vec!["core".to_string(), "logs".to_string()]);
+}
+
+#[test]
+fn legacy_download_proxy_setting_is_ignored_and_not_persisted() {
+    let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+    value["core"]["downloadProxyAuto"] = serde_json::Value::Bool(false);
+
+    let config: AppConfig = serde_json::from_value(value).unwrap();
+    let saved = serde_json::to_value(config).unwrap();
+
+    assert!(saved["core"].get("downloadProxyAuto").is_none());
 }

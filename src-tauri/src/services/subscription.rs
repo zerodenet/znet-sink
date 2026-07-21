@@ -12,7 +12,7 @@ use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
     normalize_required, now_unix_ms,
 };
-use crate::services::{domain_store, logs, proxy_config};
+use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
 
 const SUBSCRIPTION_FETCH_TIMEOUT_SECONDS: u64 = 30;
@@ -28,6 +28,7 @@ const AUTO_SYNC_RETRY_BASE_SECONDS: u64 = 60;
 const AUTO_SYNC_RETRY_MAX_SECONDS: u64 = 15 * 60;
 
 const DEFAULT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_CLASH_USER_AGENT: &str = "Clash.Meta";
 
 /// How often (in seconds) an auto-sync interval may be configured at
 /// minimum. Prevents accidentally hammering a provider.
@@ -269,9 +270,9 @@ async fn sync_subscription(
     let user_agent = subscription
         .user_agent
         .clone()
-        .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string());
+        .unwrap_or_else(|| default_user_agent_for_format(&subscription.format).to_string());
     let response = fetch_subscription_content(subscription.url.clone(), user_agent).await?;
-    let parsed = parse_subscription_content(&response.content, &subscription.format)?;
+    let mut parsed = parse_subscription_content(&response.content, &subscription.format)?;
     let now = now_unix_ms();
     let target_proxy_config_id = subscription
         .target_proxy_config_id
@@ -285,6 +286,52 @@ async fn sync_subscription(
         total_bytes: response.userinfo.total,
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
+
+    if parsed.format.contains("clash") {
+        let sources = std::mem::take(&mut parsed.rule_providers)
+            .into_iter()
+            .map(|provider| rule_set::ManagedRuleSetSource {
+                tag: provider.tag,
+                url: provider.url,
+                update_interval_secs: provider.update_interval_secs,
+                user_agent: subscription.user_agent.clone(),
+            })
+            .collect();
+        let outcome = rule_set::sync_managed_subscription_sources(
+            state,
+            &subscription.id,
+            &subscription.name,
+            sources,
+        )
+        .await?;
+        let removed_tags = inject_synced_rule_sets(&mut parsed.content, outcome.artifacts)?;
+        for failure in outcome.failures {
+            logs::znet_log_fields(
+                Some(state),
+                LogLevel::Warn,
+                format!(
+                    "subscription rule provider '{}' failed: {}; {}",
+                    failure.tag,
+                    failure.message,
+                    if failure.used_previous_artifact {
+                        "continuing with the last verified ZRS"
+                    } else {
+                        "dropping its route rules"
+                    }
+                ),
+                json!({
+                    "schema": "znet.subscription-rule-provider.v1",
+                    "operation": "sync",
+                    "subscriptionId": subscription.id,
+                    "subscriptionName": subscription.name,
+                    "ruleSetTag": failure.tag,
+                    "usedPreviousArtifact": failure.used_previous_artifact,
+                    "routeReferencesRemoved": removed_tags.contains(&failure.tag),
+                    "errorMessage": failure.message,
+                }),
+            );
+        }
+    }
 
     ensure_subscription_unchanged(state, &subscription)?;
 
@@ -303,6 +350,67 @@ async fn sync_subscription(
         metadata,
         now,
     )
+}
+
+fn default_user_agent_for_format(format: &str) -> &'static str {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" | "clash" | "clash-yaml" | "yaml" | "clash-base64-yaml" | "base64-yaml" => {
+            DEFAULT_CLASH_USER_AGENT
+        }
+        _ => DEFAULT_USER_AGENT,
+    }
+}
+
+fn inject_synced_rule_sets(
+    content: &mut Value,
+    artifacts: Vec<rule_set::ManagedRuleSetArtifact>,
+) -> AppResult<Vec<String>> {
+    let route = content
+        .get_mut("route")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| AppError::invalid_argument("converted subscription has no route object"))?;
+    let available_tags = artifacts
+        .iter()
+        .map(|artifact| artifact.tag.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    route.insert(
+        "rule_sets".to_string(),
+        Value::Array(
+            artifacts
+                .into_iter()
+                .map(|artifact| {
+                    json!({
+                        "tag": artifact.tag,
+                        "type": "file",
+                        "path": artifact.path,
+                        "format": "zrs"
+                    })
+                })
+                .collect(),
+        ),
+    );
+    let mut removed_tags = std::collections::BTreeSet::new();
+    if let Some(rules) = route.get_mut("rules").and_then(Value::as_array_mut) {
+        rules.retain(|rule| {
+            let referenced = rule
+                .get("condition")
+                .filter(|condition| {
+                    condition.get("type").and_then(Value::as_str) == Some("rule_set")
+                })
+                .and_then(|condition| condition.get("tag"))
+                .and_then(Value::as_str);
+            let keep = referenced.is_none_or(|tag| available_tags.contains(tag));
+            if !keep {
+                removed_tags.insert(
+                    referenced
+                        .expect("missing rule-set tag is retained")
+                        .to_string(),
+                );
+            }
+            keep
+        });
+    }
+    Ok(removed_tags.into_iter().collect())
 }
 
 fn ensure_subscription_unchanged(
@@ -353,21 +461,11 @@ fn fetch_subscription_content_blocking(
     url: &str,
     user_agent: &str,
 ) -> AppResult<SubscriptionFetch> {
-    let mut builder = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(SUBSCRIPTION_FETCH_TIMEOUT_SECONDS))
         .user_agent(user_agent)
-        // Subscription downloads must stay independent of the proxy kernel,
-        // which may be broken or absent exactly when the user needs a fresh
-        // subscription to fix it. Drop the proxy_coordinator env vars first
-        // (they may point at 127.0.0.1:7890 = the kernel), then opt back in
-        // to a real, non-loopback OS system proxy if one is set independently.
-        .no_proxy();
-    if let Some(proxy_url) = real_system_proxy_url() {
-        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-            builder = builder.proxy(proxy);
-        }
-    }
-    let client = builder
+        // Use reqwest's default environment-variable proxy policy. The GUI
+        // does not infer a download proxy from kernel or OS proxy state.
         .build()
         .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
 
@@ -392,38 +490,12 @@ fn fetch_subscription_content_blocking(
         .and_then(|value| value.to_str().ok())
         .map(parse_subscription_userinfo)
         .unwrap_or_default();
-
     let content = response.text().map_err(|error| AppError {
         code: "upstream_error",
         message: format!("failed to read subscription response: {error}"),
         details: Some(serde_json::json!({ "url": url })),
     })?;
-
     Ok(SubscriptionFetch { content, userinfo })
-}
-
-/// The OS system proxy URL when it points at a real remote proxy.
-///
-/// Returns None for loopback proxies (127.0.0.1 / localhost / ::1 / 0.0.0.0)
-/// so subscription downloads never route through the local kernel mixed-port,
-/// even when the GUI has enabled its own system proxy pointing at the kernel.
-/// This keeps subscription fetches independent of kernel health — the user
-/// can re-sync a subscription to repair a broken kernel without that fetch
-/// being tunneled through the kernel it is trying to fix.
-fn real_system_proxy_url() -> Option<String> {
-    let status = crate::services::system_proxy::status().ok()?;
-    if !status.enabled || status.host.is_empty() || status.port == 0 {
-        return None;
-    }
-    let is_loopback = status.host == "127.0.0.1"
-        || status.host == "localhost"
-        || status.host == "::1"
-        || status.host == "[::1]"
-        || status.host == "0.0.0.0";
-    if is_loopback {
-        return None;
-    }
-    Some(format!("http://{}:{}", status.host, status.port))
 }
 
 /// Parsed `subscription-userinfo` header.
@@ -475,6 +547,14 @@ fn parse_subscription_userinfo(header: &str) -> SubscriptionUserinfo {
 pub struct ParsedSubscriptionConfig {
     pub content: serde_json::Value,
     pub format: String,
+    rule_providers: Vec<ClashRuleProvider>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ClashRuleProvider {
+    tag: String,
+    url: String,
+    update_interval_secs: Option<u64>,
 }
 
 pub fn parse_subscription_content(
@@ -511,6 +591,7 @@ fn parse_auto_subscription_content(content: &str) -> AppResult<ParsedSubscriptio
                 return Ok(ParsedSubscriptionConfig {
                     content: value,
                     format: "zero-json".to_string(),
+                    rule_providers: Vec::new(),
                 });
             }
         }
@@ -570,6 +651,7 @@ fn parse_zero_json_subscription_content(content: &str) -> AppResult<ParsedSubscr
     Ok(ParsedSubscriptionConfig {
         content,
         format: "zero-json".to_string(),
+        rule_providers: Vec::new(),
     })
 }
 
@@ -595,6 +677,7 @@ fn parse_base64_json_subscription_content(content: &str) -> AppResult<ParsedSubs
     Ok(ParsedSubscriptionConfig {
         content,
         format: "zero-base64-json".to_string(),
+        rule_providers: Vec::new(),
     })
 }
 
@@ -605,10 +688,11 @@ fn parse_clash_yaml_subscription_content(content: &str) -> AppResult<ParsedSubsc
         details: None,
     })?;
 
-    let content = convert_clash_to_zero(&clash)?;
+    let (content, rule_providers) = convert_clash_to_zero(&clash)?;
     Ok(ParsedSubscriptionConfig {
         content,
         format: "clash-yaml-converted".to_string(),
+        rule_providers,
     })
 }
 
@@ -628,10 +712,11 @@ fn parse_base64_clash_yaml_subscription_content(
         details: None,
     })?;
 
-    let content = convert_clash_to_zero(&clash)?;
+    let (content, rule_providers) = convert_clash_to_zero(&clash)?;
     Ok(ParsedSubscriptionConfig {
         content,
         format: "clash-base64-yaml-converted".to_string(),
+        rule_providers,
     })
 }
 
@@ -676,7 +761,7 @@ fn resolve_outbound_protocol(node: &Value) -> &str {
         .unwrap_or("unknown")
 }
 
-fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
+fn convert_clash_to_zero(clash: &Value) -> AppResult<(Value, Vec<ClashRuleProvider>)> {
     let root = clash.as_object().ok_or_else(|| {
         AppError::invalid_argument("subscription Clash YAML root must be an object")
     })?;
@@ -723,7 +808,7 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
         })
         .unwrap_or_default();
 
-    let rules = root
+    let mut rules = root
         .get("rules")
         .and_then(Value::as_array)
         .map(|rules| {
@@ -733,6 +818,31 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let referenced_rule_sets = rules
+        .iter()
+        .filter_map(|rule| {
+            rule.get("condition")
+                .and_then(|condition| condition.get("type"))
+                .and_then(Value::as_str)
+                .filter(|kind| *kind == "rule_set")
+                .and_then(|_| rule.get("condition"))
+                .and_then(|condition| condition.get("tag"))
+                .and_then(Value::as_str)
+        })
+        .map(ToString::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    let rule_providers = convert_clash_rule_providers(root, &referenced_rule_sets);
+    let available_rule_sets = rule_providers
+        .iter()
+        .map(|provider| provider.tag.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    rules.retain(|rule| {
+        rule.get("condition")
+            .filter(|condition| condition.get("type").and_then(Value::as_str) == Some("rule_set"))
+            .and_then(|condition| condition.get("tag"))
+            .and_then(Value::as_str)
+            .is_none_or(|tag| available_rule_sets.contains(tag))
+    });
 
     let final_outbound = root
         .get("rules")
@@ -751,14 +861,95 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<Value> {
                 .to_string()
         });
 
-    Ok(json!({
-        "outbounds": outbounds,
-        "outbound_groups": outbound_groups,
-        "route": {
-            "rules": rules,
-            "final": { "type": "route", "outbound": final_outbound }
+    Ok((
+        json!({
+            "outbounds": outbounds,
+            "outbound_groups": outbound_groups,
+            "route": {
+                "rule_sets": [],
+                "rules": rules,
+                "final": { "type": "route", "outbound": final_outbound }
+            }
+        }),
+        rule_providers,
+    ))
+}
+
+fn convert_clash_rule_providers(
+    root: &Map<String, Value>,
+    referenced: &std::collections::BTreeSet<String>,
+) -> Vec<ClashRuleProvider> {
+    let Some(providers) = root.get("rule-providers").and_then(Value::as_object) else {
+        for tag in referenced {
+            warn_skipped_clash_rule_provider(tag, "rule-providers is missing");
         }
-    }))
+        return Vec::new();
+    };
+
+    let mut converted = Vec::with_capacity(referenced.len());
+    for tag in referenced {
+        let Some(provider) = providers.get(tag).and_then(Value::as_object) else {
+            warn_skipped_clash_rule_provider(tag, "no matching rule-provider definition");
+            continue;
+        };
+        let provider_type = string_field(provider, "type")
+            .unwrap_or_else(|| "http".to_string())
+            .to_ascii_lowercase();
+        if provider_type != "http" {
+            warn_skipped_clash_rule_provider(
+                tag,
+                &format!("unsupported provider type '{provider_type}'"),
+            );
+            continue;
+        }
+        let behavior = string_field(provider, "behavior")
+            .unwrap_or_else(|| "classical".to_string())
+            .to_ascii_lowercase();
+        if behavior != "classical" {
+            warn_skipped_clash_rule_provider(tag, &format!("unsupported behavior '{behavior}'"));
+            continue;
+        }
+        let Some(url) = string_field(provider, "url") else {
+            warn_skipped_clash_rule_provider(tag, "provider URL is missing");
+            continue;
+        };
+        let update_interval_secs = provider
+            .get("interval")
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+            })
+            .filter(|seconds| *seconds > 0);
+        converted.push(ClashRuleProvider {
+            tag: tag.to_string(),
+            url: normalize_clash_rule_provider_url(&url),
+            update_interval_secs,
+        });
+    }
+    converted
+}
+
+fn warn_skipped_clash_rule_provider(tag: &str, reason: &str) {
+    crate::services::file_logger::emit(
+        "warn",
+        "subscription",
+        "subscription.rule_provider.definition_skipped",
+        Some(json!({
+            "ruleSetTag": tag,
+            "reason": reason,
+        })),
+    );
+}
+
+fn normalize_clash_rule_provider_url(url: &str) -> String {
+    // Older dler.io Clash templates used a path-compatible mirror for GitHub
+    // raw content. That endpoint now returns 404 while the repository and the
+    // same path remain available from GitHub's canonical raw origin.
+    const DLER_RAW_PREFIX: &str = "https://raw.dler.io/";
+    url.strip_prefix(DLER_RAW_PREFIX)
+        .map(|path| format!("https://raw.githubusercontent.com/{path}"))
+        .unwrap_or_else(|| url.to_string())
 }
 
 fn convert_clash_proxy(proxy: &Value) -> Option<Value> {
@@ -1164,13 +1355,11 @@ fn convert_clash_rule(
 
     let value = parts.get(1)?.to_string();
     let condition = match rule_type.as_str() {
-        "DOMAIN" => json!({ "type": "domain", "values": [value] }),
-        "DOMAIN-SUFFIX" => json!({ "type": "domain_suffix", "values": [value] }),
+        "DOMAIN" => json!({ "type": "domain_regex", "values": [exact_domain_regex(&value)] }),
+        "DOMAIN-SUFFIX" => json!({ "type": "domain", "values": [value] }),
         "DOMAIN-KEYWORD" => json!({ "type": "domain_keyword", "values": [value] }),
-        "IP-CIDR" | "IP-CIDR6" => json!({ "type": "ip_cidr", "values": [value] }),
-        "SRC-IP-CIDR" => json!({ "type": "source_ip_cidr", "values": [value] }),
+        "IP-CIDR" | "IP-CIDR6" => json!({ "type": "ip", "values": [value] }),
         "GEOIP" => json!({ "type": "geoip", "values": [value] }),
-        "GEOSITE" => json!({ "type": "geosite", "values": [value] }),
         "RULE-SET" => json!({ "type": "rule_set", "tag": value }),
         _ => return None,
     };
@@ -1179,6 +1368,22 @@ fn convert_clash_rule(
         "condition": condition,
         "action": { "type": "route", "outbound": outbound }
     }))
+}
+
+fn exact_domain_regex(domain: &str) -> String {
+    let mut escaped = String::with_capacity(domain.len() + 8);
+    escaped.push_str("(?i)^");
+    for character in domain.chars() {
+        if matches!(
+            character,
+            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped.push('$');
+    escaped
 }
 
 fn clash_match_outbound(
@@ -1697,6 +1902,165 @@ fn record_auto_sync_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clash_rule_providers_are_kept_for_zrs_synchronization() {
+        let parsed = parse_subscription_content(
+            r#"
+proxies:
+  - {name: HK, type: ss, server: s, port: 1, password: p}
+proxy-groups:
+  - {name: Proxy, type: select, proxies: [HK]}
+rules:
+  - RULE-SET,Ads,REJECT
+  - MATCH,Proxy
+rule-providers:
+  Ads: {type: http, behavior: classical, url: 'https://example.com/ads.yaml', path: ./rules/ads, interval: 3600}
+"#,
+            "clash",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.rule_providers.len(), 1);
+        assert_eq!(parsed.rule_providers[0].tag, "Ads");
+        assert_eq!(parsed.rule_providers[0].update_interval_secs, Some(3600));
+        assert_eq!(parsed.content["route"]["rule_sets"], json!([]));
+        assert_eq!(
+            parsed.content["route"]["rules"][0]["condition"],
+            json!({ "type": "rule_set", "tag": "Ads" })
+        );
+    }
+
+    #[test]
+    fn clash_rule_set_without_provider_is_dropped_without_rejecting_subscription() {
+        let parsed = parse_subscription_content(
+            "proxies:\n  - {name: HK, type: ss, server: s, port: 1, password: p}\nrules:\n  - RULE-SET,Missing,DIRECT\n",
+            "clash",
+        )
+        .unwrap();
+
+        assert!(parsed.rule_providers.is_empty());
+        assert!(parsed.content["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn unavailable_provider_drops_only_its_route_reference() {
+        let mut content = json!({
+            "route": {
+                "rules": [
+                    {"condition":{"type":"rule_set","tag":"Missing"},"action":{"type":"reject"}},
+                    {"condition":{"type":"rule_set","tag":"Available"},"action":{"type":"direct"}},
+                    {"condition":{"type":"domain","values":["example.com"]},"action":{"type":"direct"}}
+                ]
+            }
+        });
+        let removed = inject_synced_rule_sets(
+            &mut content,
+            vec![rule_set::ManagedRuleSetArtifact {
+                tag: "Available".to_string(),
+                path: "available.zrs".to_string(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(removed, vec!["Missing".to_string()]);
+        let rules = content["route"]["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0]["condition"]["tag"], "Available");
+        assert_eq!(rules[1]["condition"]["type"], "domain");
+    }
+
+    #[test]
+    fn legacy_dler_raw_provider_urls_use_the_live_github_raw_origin() {
+        assert_eq!(
+            normalize_clash_rule_provider_url(
+                "https://raw.dler.io/dler-io/Rules/main/Clash/Provider/AdBlock.yaml"
+            ),
+            "https://raw.githubusercontent.com/dler-io/Rules/main/Clash/Provider/AdBlock.yaml"
+        );
+        assert_eq!(
+            normalize_clash_rule_provider_url("https://example.com/rules.yaml"),
+            "https://example.com/rules.yaml"
+        );
+    }
+
+    #[test]
+    fn clash_and_auto_fetches_request_the_full_clash_document() {
+        assert_eq!(default_user_agent_for_format("auto"), "Clash.Meta");
+        assert_eq!(default_user_agent_for_format("clash-yaml"), "Clash.Meta");
+        assert!(default_user_agent_for_format("zero-json").starts_with("ZNet-Sink/"));
+    }
+
+    #[test]
+    fn clash_route_conditions_follow_the_zero_config_contract() {
+        let parsed = parse_subscription_content(
+            "proxies:\n  - {name: HK, type: ss, server: s, port: 1, password: p}\nrules:\n  - DOMAIN,exact.example,HK\n  - DOMAIN-SUFFIX,suffix.example,HK\n  - IP-CIDR,10.0.0.0/8,DIRECT\n  - MATCH,HK\n",
+            "clash",
+        )
+        .unwrap();
+        let rules = parsed.content["route"]["rules"].as_array().unwrap();
+
+        assert_eq!(rules[0]["condition"]["type"], "domain_regex");
+        assert_eq!(rules[0]["condition"]["values"][0], "(?i)^exact\\.example$");
+        assert_eq!(rules[1]["condition"]["type"], "domain");
+        assert_eq!(rules[2]["condition"]["type"], "ip");
+    }
+
+    #[test]
+    #[ignore = "requires ZNET_REAL_SUBSCRIPTION_URL and live provider access"]
+    fn live_clash_subscription_rule_providers_compile_to_verified_zrs() {
+        use zero_rule::protocol::decode_json;
+        use zero_rule::zrs::{encode, verify, VerifyMode};
+        use zero_rule::RuleSetCompiler;
+
+        let url = std::env::var("ZNET_REAL_SUBSCRIPTION_URL")
+            .expect("ZNET_REAL_SUBSCRIPTION_URL is required");
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("Clash.Meta")
+            .build()
+            .unwrap();
+        let body = client
+            .get(url)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .unwrap();
+        let parsed = parse_subscription_content(&body, "clash").unwrap();
+        let provider_count = parsed.rule_providers.len();
+        let referenced_count = parsed.content["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|rule| rule["condition"]["type"] == "rule_set")
+            .count();
+        assert_eq!(provider_count, referenced_count);
+
+        let mut total_entries = 0u64;
+        for provider in parsed.rule_providers {
+            let content = client
+                .get(provider.url)
+                .send()
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .unwrap();
+            let ir = rule_set::convert_managed_clash_source(&content, &provider.tag).unwrap();
+            let source = decode_json(&serde_json::to_vec(&ir).unwrap()).unwrap();
+            let (compiled, _) = RuleSetCompiler.compile(source).unwrap();
+            let bytes = encode(&compiled).unwrap();
+            let metadata = verify(&bytes, VerifyMode::FullChecksum).unwrap();
+            total_entries += metadata.entry_count();
+        }
+        assert_eq!(provider_count, 60);
+        assert!(total_entries > 10_000);
+    }
 
     #[test]
     fn clash_conversion_gets_a_usable_mixed_inbound() {

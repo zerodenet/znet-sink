@@ -478,10 +478,6 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
             .output();
     }
 
-    // NOTE: env-var proxy handling used to live here (Linux only). It moved
-    // to `proxy_coordinator`, which runs on every platform and recomputes
-    // on each proxy/core-state change — see that module for the rationale.
-
     gsettings_result
         .map(|_| ())
         .map_err(|e| AppError::internal(format!("failed to configure Linux proxy: {e}")))

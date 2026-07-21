@@ -5,16 +5,21 @@ use gui_lib::services::core_config::{
 use serde_json::json;
 
 #[test]
-fn default_zero_core_config_requires_explicit_executable() {
-    let snapshot = snapshot_from_config(&AppCoreConfig::default()).unwrap();
+fn explicitly_missing_zero_core_executable_is_reported() {
+    let missing = missing_executable();
+    let config = AppCoreConfig {
+        executable_path: Some(missing.clone()),
+        ..AppCoreConfig::default()
+    };
+    let snapshot = snapshot_from_config(&config).unwrap();
 
     assert_eq!(snapshot.kernel, "zero");
-    assert!(snapshot.executable_path.is_none());
+    assert_eq!(snapshot.executable_path.as_deref(), Some(missing.as_str()));
     assert!(!snapshot.executable_exists);
     assert!(snapshot
         .warnings
         .iter()
-        .any(|warning| warning.contains("core executable path is not configured")));
+        .any(|warning| warning.contains("core executable does not exist")));
 
     #[cfg(windows)]
     {
@@ -54,16 +59,21 @@ fn managed_unix_core_uses_socket_next_to_executable() {
 
 #[test]
 fn core_inspection_exposes_read_only_public_info() {
-    let info = inspect_from_config(&AppCoreConfig::default(), false).unwrap();
+    let missing = missing_executable();
+    let config = AppCoreConfig {
+        executable_path: Some(missing.clone()),
+        ..AppCoreConfig::default()
+    };
+    let info = inspect_from_config(&config, false).unwrap();
 
     assert_eq!(info.kernel, "zero");
     assert!(!info.executable_exists);
-    assert!(info.executable_path.is_none());
+    assert_eq!(info.executable_path.as_deref(), Some(missing.as_str()));
     assert!(info.download_url.is_some());
     assert!(info
         .warnings
         .iter()
-        .any(|warning| warning.contains("core executable path is not configured")));
+        .any(|warning| warning.contains("core executable does not exist")));
 }
 
 #[test]
@@ -106,4 +116,11 @@ fn custom_socket() -> String {
     {
         "/tmp/custom-zero-control.sock".to_string()
     }
+}
+
+fn missing_executable() -> String {
+    std::env::temp_dir()
+        .join("znet-sink-definitely-missing-zero")
+        .to_string_lossy()
+        .to_string()
 }

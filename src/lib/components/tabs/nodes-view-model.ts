@@ -1,4 +1,4 @@
-import { parseNodeName } from '$lib/services/node-utils';
+import { isSpecialOutboundProtocol, parseNodeName } from '$lib/services/node-utils';
 import type { PolicyGroup, ConfigProxyNode } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
 
@@ -87,6 +87,7 @@ export function planProbeTargets(options: {
   const policyTags = new Set<string>();
   const nodes: ProxyNode[] = [];
   for (const node of visibleNodes) {
+    if (isSpecialOutboundProtocol(node.protocol)) continue;
     const memberGroup = groupsByName.get(node.tag);
     if (isUrlTestGroup(memberGroup)) {
       policyTags.add(memberGroup!.name);
@@ -98,6 +99,22 @@ export function planProbeTargets(options: {
     }
   }
   return { nodes, policyTags: [...policyTags] };
+}
+
+/** Expand active policy-level probes to the cards affected by that probe.
+ * A url_test request is tracked by group tag in the kernel, while the page
+ * renders its member outbounds as separate cards. */
+export function collectProbingPolicyNodeTags(
+  groups: PolicyGroup[],
+  probingPolicyTags: ReadonlySet<string>,
+): Set<string> {
+  const tags = new Set<string>();
+  for (const group of groups) {
+    if (!probingPolicyTags.has(group.name)) continue;
+    tags.add(group.name);
+    for (const member of group.outbounds) tags.add(member.tag);
+  }
+  return tags;
 }
 
 export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeOverlay> {

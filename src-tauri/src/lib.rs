@@ -293,6 +293,9 @@ pub fn run() {
             rule_set_commands::rule_set_update,
             rule_set_commands::rule_set_update_all,
             rule_set_commands::rule_set_kernel_payloads,
+            rule_set_commands::rule_set_common_status,
+            rule_set_commands::rule_set_set_common_enabled,
+            rule_set_commands::rule_set_set_common_binding,
             logs_commands::logs_list,
             logs_commands::logs_append,
             logs_commands::logs_clear,
@@ -314,22 +317,6 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
-            {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(false) {
-                            crate::services::logs::znet_log(
-                                Some(app_handle.state::<AppState>().inner()),
-                                crate::models::logs::LogLevel::Warn,
-                                "frontend readiness timed out; showing main window".to_string(),
-                            );
-                            let _ = window.show();
-                        }
-                    }
-                });
-            }
             // Always check kernel health on startup. If the kernel is already
             // running (e.g. external daemon), just connect. If not, try to
             // start a managed kernel when auto_start is enabled (default).
@@ -436,7 +423,6 @@ pub fn run() {
                                 // No child — we don't own this process, so
                                 // stop() will fall through to kill_external().
                             }
-                            let _ = crate::services::proxy_coordinator::update(&state);
                             return;
                         }
                     }
@@ -446,7 +432,6 @@ pub fn run() {
                         crate::services::file_logger::line(
                             "auto_start disabled, not starting kernel",
                         );
-                        let _ = crate::services::proxy_coordinator::update(&state);
                         return;
                     }
 
@@ -456,11 +441,6 @@ pub fn run() {
                         let _ = core_process::start(app_handle_start.clone(), state);
                     })
                     .await;
-
-                    // Now that kernel state is settled, sync the effective
-                    // proxy env vars once at startup (the coordinator is also
-                    // re-run on every proxy/core-state change later).
-                    let _ = crate::services::proxy_coordinator::update(&state);
                 });
             }
 

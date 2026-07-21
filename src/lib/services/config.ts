@@ -10,6 +10,8 @@ import type {
   RuleSetUpsert,
   RuleSetKernelPayload,
   RuleSetSyncAllOutcome,
+  CommonRuleBindingInput,
+  CommonRuleInjectionStatus,
 } from '$lib/types/domain';
 
 export type {
@@ -99,4 +101,16 @@ export async function updateAllRuleSets(): Promise<RuleSetSyncAllOutcome> {
 
 export async function getRuleSetKernelPayloads(): Promise<RuleSetKernelPayload[]> {
   return invoke('rule_set_kernel_payloads');
+}
+
+export async function getCommonRuleInjectionStatus(): Promise<CommonRuleInjectionStatus> {
+  return invoke('rule_set_common_status');
+}
+
+export async function setCommonRuleInjectionEnabled(enabled: boolean): Promise<CommonRuleInjectionStatus> {
+  return invoke('rule_set_set_common_enabled', { enabled });
+}
+
+export async function setCommonRuleBinding(input: CommonRuleBindingInput): Promise<RuleSetProfile> {
+  return invoke('rule_set_set_common_binding', { input });
 }

@@ -10,12 +10,13 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppCoreConfig;
+use crate::models::core_process::CoreProcessState;
 use crate::models::kernel_version::{
     KernelDownloadProgress, KernelInstallResult, KernelRelease, KernelVersionDetect,
     KernelVersionList, ReleaseChannel,
 };
 use crate::models::logs::{LogLevel, LogSource};
-use crate::services::{common, core_config, core_process};
+use crate::services::{common, core_config, core_process, system_proxy_guard};
 
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/zerodenet/zero/releases?per_page=30";
@@ -25,59 +26,28 @@ const PROGRESS_INTERVAL: u64 = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600); // 10 min for large archives
 
+pub struct KernelInstallOutcome {
+    pub result: KernelInstallResult,
+    pub restart_core: bool,
+    pub restore_system_proxy: bool,
+}
+
 /// Build a blocking HTTP client for management traffic.
 ///
-/// `proxy_auto`: when true (default) reads HTTPS_PROXY / HTTP_PROXY / ALL_PROXY
-/// from the environment; when false goes direct, bypassing the kernel's own
-/// system proxy to avoid circular dependency.
-fn build_http_client(proxy_auto: bool) -> AppResult<reqwest::blocking::Client> {
-    let mut builder = reqwest::blocking::Client::builder()
+/// Reqwest's default proxy policy follows `HTTPS_PROXY`, `HTTP_PROXY`,
+/// `ALL_PROXY`, and `NO_PROXY` from the process environment. The application
+/// does not synthesize a proxy from kernel or operating-system state.
+fn build_http_client() -> AppResult<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
         .user_agent("znet-sink")
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(DOWNLOAD_TIMEOUT);
-
-    if proxy_auto {
-        let https_proxy = std::env::var("HTTPS_PROXY")
-            .or_else(|_| std::env::var("https_proxy"))
-            .or_else(|_| std::env::var("ALL_PROXY"))
-            .or_else(|_| std::env::var("all_proxy"))
-            .ok()
-            .filter(|v| !v.is_empty());
-        let http_proxy = std::env::var("HTTP_PROXY")
-            .or_else(|_| std::env::var("http_proxy"))
-            .or_else(|_| std::env::var("ALL_PROXY"))
-            .or_else(|_| std::env::var("all_proxy"))
-            .ok()
-            .filter(|v| !v.is_empty());
-
-        if let Some(ref url) = https_proxy {
-            if let Ok(p) = reqwest::Proxy::https(url) {
-                builder = builder.proxy(p);
-            }
-        }
-        if let Some(ref url) = http_proxy {
-            if let Ok(p) = reqwest::Proxy::http(url) {
-                builder = builder.proxy(p);
-            }
-        }
-        // NOTE: do NOT call `.no_proxy()` here — that would wipe the
-        // proxy we just configured. When no env proxy is set, reqwest
-        // connects directly by default.
-    } else {
-        // proxy_auto == false: bypass ALL proxies (including reqwest's
-        // default env-var auto-detection) so management traffic goes
-        // direct, avoiding a circular dependency through the kernel's
-        // own system proxy.
-        builder = builder.no_proxy();
-    }
-
-    builder
+        .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| AppError::internal(format!("failed to create http client: {e}")))
 }
 
-pub fn list_available_versions(proxy_auto: bool) -> AppResult<KernelVersionList> {
-    let client = build_http_client(proxy_auto)?;
+pub fn list_available_versions() -> AppResult<KernelVersionList> {
+    let client = build_http_client()?;
 
     let mut resp = client
         .get(GITHUB_RELEASES_URL)
@@ -112,9 +82,8 @@ pub fn install_version(
     download_url: String,
     expected_sha256: Option<String>,
     install_dir: Option<String>,
-    proxy_auto: bool,
     app: AppHandle,
-) -> AppResult<KernelInstallResult> {
+) -> AppResult<KernelInstallOutcome> {
     let dir = resolve_install_dir(install_dir)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
@@ -138,7 +107,7 @@ pub fn install_version(
     };
     let temp_file = dir.join(format!("zero-download.{}", ext));
 
-    let client = build_http_client(proxy_auto)?;
+    let client = build_http_client()?;
 
     let _ = crate::services::logs::append_entry(
         &app.state::<crate::state::app_state::AppState>(),
@@ -159,12 +128,9 @@ pub fn install_version(
     );
 
     let mut response = client.get(&download_url).send().map_err(|e| {
-        let proxy_hint = if proxy_auto {
-            "（已启用跟随系统代理：请确认 HTTPS_PROXY/HTTP_PROXY 环境变量指向可用代理；若无需代理可在设置中关闭「下载跟随系统代理」）"
-        } else {
-            "（已直连：若 GitHub 在当前网络不可达，可在设置中开启「下载跟随系统代理」）"
-        };
-        let msg = format!("kernel download failed: {e} {proxy_hint}");
+        let msg = format!(
+            "内核下载失败: {e}（网络访问遵循应用进程环境；需要代理时请检查 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）"
+        );
         let _ = crate::services::logs::append_entry(
             &app.state::<crate::state::app_state::AppState>(),
             LogSource::App,
@@ -279,6 +245,10 @@ pub fn install_version(
     let executable_path = dir.join(executable_name);
 
     let state = app.state::<crate::state::app_state::AppState>();
+    let restart_core =
+        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let restore_system_proxy =
+        restart_core && system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
     let _ = crate::services::logs::append_entry(
         state.inner(),
         LogSource::App,
@@ -290,8 +260,7 @@ pub fn install_version(
     // Keep the kernel running during the network transfer so environments
     // that depend on the kernel's mixed-port can still reach the release
     // asset. We only stop it immediately before replacing the executable.
-    let _ = core_process::stop(state.clone());
-    let _ = core_process::kill_external(state.inner());
+    core_process::stop(state.clone())?;
 
     let _ = crate::services::logs::append_entry(
         state.inner(),
@@ -353,13 +322,17 @@ pub fn install_version(
         None,
     );
 
-    Ok(KernelInstallResult {
-        success: true,
-        executable_path: path_to_string(&executable_path),
-        version: version.clone(),
-        channel,
-        checksum_verified,
-        message: format!("zero {} installed to {}", version, path_to_string(&dir)),
+    Ok(KernelInstallOutcome {
+        result: KernelInstallResult {
+            success: true,
+            executable_path: path_to_string(&executable_path),
+            version: version.clone(),
+            channel,
+            checksum_verified,
+            message: format!("zero {} installed to {}", version, path_to_string(&dir)),
+        },
+        restart_core,
+        restore_system_proxy,
     })
 }
 

@@ -8,6 +8,10 @@
   --color-card-border: var(--border);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-surface: var(--surface);
@@ -21,7 +25,7 @@
   --color-titlebar: var(--titlebar);
   --color-titlebar-border: var(--titlebar-border);
 
-  --font-sans: "Inter", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei UI", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
 
   --radius-xs: 4px;
@@ -53,6 +57,10 @@
   /* Primary = near-black for desktop utility feel */
   --primary:           #18181B;
   --primary-foreground: #FAFAFA;
+  --secondary:         #E7E7EC;
+  --secondary-foreground: #27272A;
+  --input:             rgba(24, 24, 27, 0.14);
+  --ring:              #2563EB;
 
   /* Muted */
   --muted:             rgba(0, 0, 0, 0.04);
@@ -100,6 +108,10 @@
 
   --primary:           #E8E8F0;
   --primary-foreground: #0F1014;
+  --secondary:         rgba(255, 255, 255, 0.10);
+  --secondary-foreground: #F4F4F5;
+  --input:             rgba(255, 255, 255, 0.14);
+  --ring:              #818CF8;
 
   --muted:             rgba(255, 255, 255, 0.06);
   --muted-foreground:  #8E8EA8;
@@ -182,6 +194,7 @@ body {
   background: var(--segment-bg);
   padding: 2px;
   border-radius: 8px;
+  border: 1px solid var(--border);
 }
 
 .segment-item {
@@ -198,16 +211,32 @@ body {
   transition: all 0.15s ease;
   user-select: none;
   white-space: nowrap;
+  border: 1px solid transparent;
+  outline: none;
 }
 
-.segment-item:hover {
+.segment-item:hover:not(:disabled) {
   color: var(--foreground);
+  background: var(--muted);
 }
 
-.segment-item.active {
+.segment-item.active,
+.segment-item[aria-pressed="true"],
+.segment-item[aria-selected="true"] {
   background: var(--segment-active-bg);
   box-shadow: var(--segment-active-shadow);
   color: var(--foreground);
+  border-color: var(--border);
+}
+
+.segment-item:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 24%, transparent);
+}
+
+.segment-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 /* ============================================

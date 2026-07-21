@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
@@ -220,20 +220,25 @@
     void tab;
     void type;
 
-    const generation = refreshGate.reset();
-    queryGeneration = generation;
-    frames = [];
-    hasMore = false;
-    expandedIds = new Set();
-    expandAll = false;
-    loadingMore = false;
-    refreshing = false;
-    loading = subTab === 'frames';
-    loadError = null;
+    // `refresh()` synchronously reads `frames` before its first await. Keep
+    // those implementation details out of this effect's dependency set so
+    // resetting the page cannot schedule the same effect again forever.
+    untrack(() => {
+      const generation = refreshGate.reset();
+      queryGeneration = generation;
+      frames = [];
+      hasMore = false;
+      expandedIds = new Set();
+      expandAll = false;
+      loadingMore = false;
+      refreshing = false;
+      loading = subTab === 'frames';
+      loadError = null;
 
-    if (subTab === 'frames') {
-      void refresh({ replace: true }, generation);
-    }
+      if (subTab === 'frames') {
+        void refresh({ replace: true }, generation);
+      }
+    });
   });
 
   $effect(() => {
@@ -361,8 +366,8 @@
 
 <div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
   <div class="debug-subtabs">
-    <button class:active={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</button>
-    <button class:active={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</button>
+    <button class:active={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</button>
+    <button class:active={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</button>
   </div>
 
   {#if subTab === 'diagnostics'}
@@ -384,7 +389,7 @@
             <option value={t}>{t === 'all' ? '全部' : t}</option>
           {/each}
         </select>
-        <button onclick={() => autoRefresh = !autoRefresh} class="debug-toggle" class:active={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
+        <button onclick={() => autoRefresh = !autoRefresh} class="debug-toggle" class:active={autoRefresh} aria-pressed={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
           {autoRefresh ? 'LIVE' : 'PAUSE'}
         </button>
         <button

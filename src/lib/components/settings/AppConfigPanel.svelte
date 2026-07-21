@@ -233,13 +233,17 @@
     <div class="theme-segment">
       <button
         onclick={async () => await store.switchUIMode('lite')}
+        disabled={store.isSwitchingUiMode}
         class="theme-seg-btn {store.uiMode === 'lite' ? 'active' : ''}"
+        aria-pressed={store.uiMode === 'lite'}
       >
         简约
       </button>
       <button
         onclick={async () => await store.switchUIMode('pro')}
+        disabled={store.isSwitchingUiMode}
         class="theme-seg-btn {store.uiMode === 'pro' ? 'active' : ''}"
+        aria-pressed={store.uiMode === 'pro'}
       >
         专业
       </button>
