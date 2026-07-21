@@ -4,8 +4,8 @@
 <dict>
   <!-- Apple bundle versions must contain digits and periods only. -->
   <key>CFBundleShortVersionString</key>
-  <string>0.0.15</string>
+  <string>0.0.16</string>
   <key>CFBundleVersion</key>
-  <string>0.0.15</string>
+  <string>0.0.16</string>
 </dict>
 </plist>
