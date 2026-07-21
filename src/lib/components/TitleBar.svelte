@@ -59,17 +59,17 @@
     >
       {appName}
     </span>
-    <!-- Version — click opens About; yellow pulse dot when an update is available -->
+    <!-- Version — opens About; yellow pulse dot when an update is available -->
     {#if appVersion}
       <button
         onclick={() => store.openSettings('about')}
         class="titlebar-version"
-        title={updater.updateAvailable
+        title={updater.prominentUpdateAvailable
           ? `新版本 v${updater.latestVersion} 可用 — 点击查看`
           : '关于'}
         aria-label="关于"
       >
-        {#if updater.updateAvailable}
+        {#if updater.prominentUpdateAvailable}
           <span class="titlebar-update-dot" aria-hidden="true"></span>
         {/if}
         <span class="text-muted-foreground" style="font-size: 11px; line-height: 1;">

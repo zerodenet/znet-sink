@@ -1,13 +1,27 @@
-import { check } from '@tauri-apps/plugin-updater';
+import { check, Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 import { info, warning } from '$lib/services/toast.svelte';
 import { appendLog } from '$lib/services/core';
 import { tracedOperation } from '$lib/services/telemetry';
+import {
+  shouldShowProminentUpdate,
+  type AppRelease,
+} from '$lib/services/app-update-policy';
 
 export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'error' | 'unsupported';
 
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
+
+interface AppUpdateMetadata {
+  rid: number;
+  currentVersion: string;
+  version: string;
+  date?: string;
+  body?: string;
+  rawJson: Record<string, unknown>;
+}
 
 class UpdaterService {
   updateAvailable = $state(false);
@@ -23,7 +37,9 @@ class UpdaterService {
   total = $state<number | null>(null);
   /** Granular status for UI rendering. */
   status = $state<UpdaterStatus>('idle');
+  selectedTag = $state<string | null>(null);
   private lastCheckAt = 0;
+  private pendingUpdate: Update | null = null;
   private initialCheckTimer: ReturnType<typeof setTimeout> | null = null;
   private periodicCheckTimer: ReturnType<typeof setInterval> | null = null;
   private scheduleListenersAttached = false;
@@ -65,16 +81,20 @@ class UpdaterService {
         currentVersion: this.currentVersion,
       });
       if (update) {
+        this.replacePendingUpdate(update);
         this.updateAvailable = true;
         this.latestVersion = update.version;
         this.currentVersion = update.currentVersion;
         this.releaseNotes = update.body ?? null;
+        this.selectedTag = null;
         this.status = 'available';
         void appendLog({ source: 'app', level: 'info', message: `发现新版本 v${update.version}（当前 v${update.currentVersion}）` });
         return true;
       } else {
+        this.replacePendingUpdate(null);
         this.updateAvailable = false;
         this.latestVersion = null;
+        this.selectedTag = null;
         // Distinguish "no update needed" from "endpoint missing / dev mode".
         // check() returns null both when up-to-date AND when the updater
         // cannot reach the endpoint in some environments.  Log the
@@ -92,8 +112,10 @@ class UpdaterService {
       // plugin's serde deserialization — detect them and treat as a
       // benign "no update info" state instead of a hard failure.
       if (isManifestUnavailable(msg)) {
+        this.replacePendingUpdate(null);
         this.updateAvailable = false;
         this.latestVersion = null;
+        this.selectedTag = null;
         this.status = 'up-to-date';
         // Keep the original error in the log (debug only) so we can
         // diagnose why check() failed — without it this benign branch
@@ -114,6 +136,12 @@ class UpdaterService {
       this.lastCheckAt = Date.now();
       this.checking = false;
     }
+  }
+
+  /** Only stable-to-stable updates use the global banner and title-bar dot. */
+  get prominentUpdateAvailable(): boolean {
+    return this.updateAvailable
+      && shouldShowProminentUpdate(this.currentVersion, this.latestVersion);
   }
 
   startPeriodicChecks() {
@@ -161,6 +189,53 @@ class UpdaterService {
     this.runScheduledCheck(this.status === 'error');
   };
 
+  /** Prepare a specific GitHub release, including prereleases and rollbacks. */
+  async selectRelease(release: AppRelease): Promise<boolean> {
+    if (this.checking || this.downloading) return false;
+    this.checking = true;
+    this.lastError = null;
+    this.status = 'checking';
+
+    if (!this.currentVersion) await this.initVersion();
+
+    try {
+      const metadata = await tracedOperation(
+        'update',
+        'update.release.select',
+        () => invoke<AppUpdateMetadata | null>('app_check_release', { tagName: release.tagName }),
+        { currentVersion: this.currentVersion, selectedVersion: release.version },
+      );
+      if (!metadata) {
+        this.status = 'up-to-date';
+        return false;
+      }
+
+      const update = new Update(metadata);
+      this.replacePendingUpdate(update);
+      this.updateAvailable = true;
+      this.latestVersion = update.version;
+      this.currentVersion = update.currentVersion;
+      this.releaseNotes = update.body ?? release.notes;
+      this.selectedTag = release.tagName;
+      this.status = 'available';
+      void appendLog({
+        source: 'app',
+        level: 'info',
+        message: `已选择应用版本 v${update.version}（当前 v${update.currentVersion}）`,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastError = message;
+      this.status = 'error';
+      void appendLog({ source: 'app', level: 'warn', message: `选择应用版本失败: ${message}` });
+      return false;
+    } finally {
+      this.checking = false;
+      this.lastCheckAt = Date.now();
+    }
+  }
+
   /** Download and install the update. */
   async downloadAndInstall(): Promise<boolean> {
     if (this.downloading) return false;
@@ -169,9 +244,12 @@ class UpdaterService {
     this.downloaded = 0;
     this.total = null;
     try {
-      const update = await tracedOperation('update', 'update.install.prepare', () => check(), {
-        currentVersion: this.currentVersion,
-      });
+      const update = this.pendingUpdate ?? await tracedOperation(
+        'update',
+        'update.install.prepare',
+        () => check(),
+        { currentVersion: this.currentVersion },
+      );
       if (!update) {
         this.downloading = false;
         this.status = 'up-to-date';
@@ -203,7 +281,8 @@ class UpdaterService {
       this.status = 'up-to-date';
       return true;
     } catch (e) {
-      warning(`更新失败: ${e instanceof Error ? e.message : String(e)}`);
+      this.lastError = e instanceof Error ? e.message : String(e);
+      warning(`更新失败: ${this.lastError}`);
       this.downloading = false;
       this.status = 'error';
       return false;
@@ -212,11 +291,19 @@ class UpdaterService {
 
   /** Manually dismiss the update notification. */
   dismissUpdate() {
+    this.replacePendingUpdate(null);
     this.updateAvailable = false;
     this.latestVersion = null;
     this.releaseNotes = null;
+    this.selectedTag = null;
     this.status = 'up-to-date';
     this.lastCheckAt = Date.now();
+  }
+
+  private replacePendingUpdate(update: Update | null) {
+    const previous = this.pendingUpdate;
+    this.pendingUpdate = update;
+    if (previous && previous !== update) void previous.close().catch(() => {});
   }
 }
 

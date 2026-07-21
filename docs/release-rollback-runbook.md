@@ -27,6 +27,24 @@ ZNet Sink desktop release. It applies to stable and prerelease channels.
    update/restart cycle.
 4. Promote the same commit to stable only after the checks above pass.
 
+## Client Update Channels
+
+- Stable builds continue to check GitHub's `releases/latest` manifest on the
+  normal schedule. Only a stable-to-stable update may show the global update
+  banner and title-bar indicator.
+- Prerelease (`-rc`) and test (`-alpha`, `-beta`, `-dev`, or other SemVer
+  prerelease) builds remain GitHub prereleases. They do not become
+  `releases/latest` and never produce a global update prompt.
+- Debug > Version Management lists published releases that contain a signed
+  `latest.json`. A user may explicitly install a stable, prerelease, or test
+  build from its release-specific manifest.
+- Selecting an older signed release enables Tauri's downgrade path. The client
+  requires confirmation and tells the user to back up application data first;
+  it does not claim configuration migrations are automatically reversible.
+- Draft releases and releases without a signed updater manifest are not
+  offered. This keeps manual channel selection inside the same signature and
+  platform checks as automatic stable updates.
+
 ## Stop Conditions
 
 Pause the rollout immediately when any of these is observed:

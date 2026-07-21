@@ -1,4 +1,5 @@
 pub mod app_config;
+pub mod app_update;
 pub mod capability;
 pub mod core;
 pub mod core_config;

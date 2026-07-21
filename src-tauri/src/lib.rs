@@ -9,6 +9,7 @@ pub mod services;
 pub mod state;
 
 use crate::commands::app_config as app_config_commands;
+use crate::commands::app_update as app_update_commands;
 use crate::commands::capability as capability_commands;
 use crate::commands::core as core_commands;
 use crate::commands::core_config as core_config_commands;
@@ -274,6 +275,7 @@ pub fn run() {
             proxy_mode_commands::gui_set_proxy_mode,
             app_config_commands::app_config_get,
             app_config_commands::app_config_update,
+            app_update_commands::app_check_release,
             proxy_config_commands::proxy_config_list,
             proxy_config_commands::proxy_config_get,
             proxy_config_commands::proxy_config_upsert,

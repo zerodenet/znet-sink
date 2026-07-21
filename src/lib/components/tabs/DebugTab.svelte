@@ -8,9 +8,10 @@
     serializeDebugFramesForClipboard,
   } from '$lib/services/diagnostic-copy';
   import DiagnosticsPanel from './DiagnosticsPanel.svelte';
+  import VersionManagementPanel from './VersionManagementPanel.svelte';
   import type { DebugFrame, DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
-  type SubTab = 'diagnostics' | 'frames';
+  type SubTab = 'diagnostics' | 'frames' | 'versions';
 
   const PAGE_SIZE = 400;
   const FRAME_TYPES = [
@@ -368,10 +369,13 @@
   <div class="debug-subtabs">
     <button class:active={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</button>
     <button class:active={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</button>
+    <button class:active={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</button>
   </div>
 
   {#if subTab === 'diagnostics'}
     <DiagnosticsPanel />
+  {:else if subTab === 'versions'}
+    <VersionManagementPanel />
   {:else}
     <div class="flex items-center justify-between flex-shrink-0">
       <div class="flex items-center gap-3">

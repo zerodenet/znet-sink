@@ -155,7 +155,7 @@
     {/if}
   </div>
 
-  {#if (updater.updateAvailable || updater.downloading) && store.isInitialized}
+  {#if updater.prominentUpdateAvailable && store.isInitialized}
     <div class="global-update-shell">
       <UpdateBanner />
     </div>
