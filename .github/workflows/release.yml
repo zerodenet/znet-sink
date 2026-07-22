@@ -178,7 +178,9 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'v__VERSION__'
           releaseBody: ${{ needs.changelog.outputs.body }}
-          releaseDraft: false
+          # Keep the release hidden while matrix jobs merge their platform
+          # entries into latest.json. A final job validates and publishes it.
+          releaseDraft: true
           # Prerelease tags (vX.Y.Z-beta.N / -rc.N / -dev) publish as GitHub
           # prereleases so they do NOT become "latest" and push to every
           # updater client.  Stable tags (vX.Y.Z) stay regular releases.
@@ -195,3 +197,38 @@ jobs:
   # platform.  Do NOT add a manual find/merge job: tauri build only emits
   # .sig files (not latest.json) to target/, and a manual merge would
   # overwrite tauri-action's correct output with an empty placeholder.
+
+  publish:
+    name: Validate and publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output latest.json
+
+      - name: Verify every updater platform is ready
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          EXPECTED_VERSION="${RELEASE_VERSION#v}"
+          jq -e --arg version "$EXPECTED_VERSION" '
+            .version == $version
+            and (.platforms["windows-x86_64-nsis"].url | type == "string")
+            and (.platforms["darwin-aarch64"].url | type == "string")
+            and (.platforms["darwin-x86_64"].url | type == "string")
+            and (.platforms["linux-x86_64"].url | type == "string")
+          ' latest.json >/dev/null
+
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          args=(--draft=false)
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            args+=(--latest)
+          fi
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${args[@]}"

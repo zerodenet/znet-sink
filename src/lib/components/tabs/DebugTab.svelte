@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
+  import { ChevronsUpDown, Clipboard, Pause, Radio, RefreshCcw, Trash2 } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
@@ -366,10 +368,10 @@
 </script>
 
 <div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
-  <div class="debug-subtabs">
-    <button class:active={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</button>
-    <button class:active={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</button>
-    <button class:active={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</button>
+  <div class="debug-subtabs" role="tablist" aria-label="调试功能">
+    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</Button>
+    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</Button>
+    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</Button>
   </div>
 
   {#if subTab === 'diagnostics'}
@@ -377,40 +379,44 @@
   {:else if subTab === 'versions'}
     <VersionManagementPanel />
   {:else}
-    <div class="flex items-center justify-between flex-shrink-0">
+    <div class="debug-toolbar">
       <div class="flex items-center gap-3">
         <h3 class="text-sm font-bold text-foreground">IPC 调试</h3>
         <span class="text-[11px] text-muted-foreground font-mono">
           {hasMore ? `${frames.length}+` : frames.length} · TX {frames.filter(f => f.direction === 'tx').length} / RX {frames.filter(f => f.direction === 'rx').length}
         </span>
       </div>
-      <div class="flex items-center gap-2">
-        <button onclick={toggleExpandAll} class="debug-sm-btn" title="展开或折叠全部">
+      <div class="debug-actions">
+        <Button variant="outline" size="xs" onclick={toggleExpandAll} title="展开或折叠全部">
+          <ChevronsUpDown />
           {expandAll ? '折叠全部' : '展开全部'}
-        </button>
+        </Button>
         <select bind:value={filterType} class="debug-filter">
           {#each FRAME_TYPES as t}
             <option value={t}>{t === 'all' ? '全部' : t}</option>
           {/each}
         </select>
-        <button onclick={() => autoRefresh = !autoRefresh} class="debug-toggle" class:active={autoRefresh} aria-pressed={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
+        <Button onclick={() => autoRefresh = !autoRefresh} variant={autoRefresh ? 'secondary' : 'outline'} size="xs" class="debug-live" aria-pressed={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
+          {#if autoRefresh}<Radio />{:else}<Pause />{/if}
           {autoRefresh ? 'LIVE' : 'PAUSE'}
-        </button>
-        <button
+        </Button>
+        <Button
           onclick={copyVisibleFrames}
           disabled={visibleFrames.length === 0}
-          class="debug-sm-btn copy"
+          variant="outline"
+          size="xs"
           title="复制当前筛选下已加载的完整 IPC 帧"
-        >复制当前</button>
-        <button onclick={() => refresh({ replace: true })} class="debug-sm-btn" disabled={refreshing || clearing}>
+        ><Clipboard />复制当前</Button>
+        <Button onclick={() => refresh({ replace: true })} variant="outline" size="xs" disabled={refreshing || clearing}>
+          <RefreshCcw class={refreshing ? 'animate-spin' : undefined} />
           {refreshing ? '刷新中...' : '刷新'}
-        </button>
-        <button
+        </Button>
+        <Button
           onclick={requestClearAll}
-          class="debug-sm-btn clear"
-          class:armed={clearArmed}
+          variant="destructive"
+          size="xs"
           disabled={clearing}
-        >{clearing ? '清空中...' : clearArmed ? '确认清空' : '清空'}</button>
+        ><Trash2 />{clearing ? '清空中...' : clearArmed ? '确认清空' : '清空'}</Button>
       </div>
     </div>
 
@@ -423,7 +429,7 @@
     {#if loadError && visibleFrames.length > 0}
       <div class="debug-inline-error" role="alert">
         <span>刷新失败，当前仍显示上一批数据：{loadError}</span>
-        <button class="debug-sm-btn" onclick={() => refresh({ replace: true })} disabled={refreshing}>重试</button>
+        <Button variant="outline" size="xs" onclick={() => refresh({ replace: true })} disabled={refreshing}>重试</Button>
       </div>
     {/if}
 
@@ -433,7 +439,7 @@
       {:else if loadError && visibleFrames.length === 0}
         <div class="debug-load-error" role="alert">
           <span>IPC 调试数据加载失败：{loadError}</span>
-          <button class="debug-sm-btn" onclick={() => refresh({ replace: true })}>重试</button>
+          <Button variant="outline" size="xs" onclick={() => refresh({ replace: true })}>重试</Button>
         </div>
       {:else if visibleFrames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">暂无匹配帧</div>
@@ -459,13 +465,14 @@
                   <polyline points="3 5 7 9 11 5"/>
                 </svg>
               </button>
-              <button
+              <Button
                 class="debug-frame-copy"
-                type="button"
+                variant="ghost"
+                size="xs"
                 title={`复制 IPC 帧 #${frame.id}`}
                 aria-label={`复制 IPC 帧 #${frame.id}`}
                 onclick={() => void copyFrame(frame)}
-              >复制</button>
+              ><Clipboard />复制</Button>
             </div>
             {#if expandedIds.has(frame.id)}
               <div class="debug-body">
@@ -480,9 +487,9 @@
 
         {#if hasMore}
           <div class="debug-more">
-            <button class="debug-sm-btn wide" onclick={loadMore} disabled={loadingMore}>
+            <Button variant="outline" size="sm" class="debug-load-more" onclick={loadMore} disabled={loadingMore}>
               {loadingMore ? '加载中...' : '加载更多'}
-            </button>
+            </Button>
           </div>
         {/if}
       {/if}
@@ -499,27 +506,11 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .debug-subtabs button {
-    padding: 3px 12px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    border-radius: 5px;
-    transition: all 0.12s ease;
-  }
+  :global(.debug-subtab) { min-width: 84px; color: var(--muted-foreground); }
+  :global(.debug-subtab[aria-pressed='true']) { background: var(--accent); color: var(--accent-foreground); }
 
-  .debug-subtabs button:hover {
-    color: var(--foreground);
-    background: var(--muted);
-  }
-
-  .debug-subtabs button.active {
-    color: var(--primary);
-    background: var(--muted);
-  }
+  .debug-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
+  .debug-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
 
   .debug-filter {
     height: 22px;
@@ -533,73 +524,8 @@
     cursor: pointer;
   }
 
-  .debug-toggle {
-    min-width: 48px;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--card);
-    color: var(--muted-foreground);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    transition: all 0.12s ease;
-  }
-
-  .debug-toggle.active {
-    border-color: #22C55E;
-    color: #22C55E;
-    background: rgba(34, 197, 94, 0.06);
-  }
-
-  .debug-sm-btn {
-    height: 22px;
-    padding: 0 7px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--card);
-    color: var(--muted-foreground);
-    font-size: 10.5px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s ease;
-    white-space: nowrap;
-  }
-
-  .debug-sm-btn:hover:not(:disabled) {
-    color: var(--foreground);
-    background: var(--muted);
-  }
-
-  .debug-sm-btn.copy {
-    color: var(--foreground);
-    font-weight: 600;
-  }
-
-  .debug-sm-btn.clear:hover {
-    color: var(--destructive);
-    background: rgba(239, 68, 68, 0.08);
-  }
-
-  .debug-sm-btn.clear.armed {
-    color: var(--destructive);
-    border-color: rgba(239, 68, 68, 0.35);
-    background: rgba(239, 68, 68, 0.08);
-  }
-
-  .debug-sm-btn:disabled {
-    opacity: 0.6;
-    cursor: progress;
-  }
-
-  .debug-sm-btn.wide {
-    min-width: 112px;
-    justify-content: center;
-  }
+  :global(.debug-live) { min-width: 66px; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.04em; }
+  :global(.debug-load-more) { min-width: 112px; }
 
   .debug-row {
     border-radius: 5px;
@@ -635,31 +561,18 @@
     min-width: 0;
   }
 
-  .debug-frame-copy {
+  :global(.debug-frame-copy) {
     align-self: center;
     flex-shrink: 0;
-    height: 20px;
     margin-right: 6px;
-    padding: 0 6px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--card);
-    color: var(--muted-foreground);
     font-size: 10px;
-    font-weight: 600;
-    cursor: pointer;
     opacity: 0;
-    transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+    transition: opacity 0.12s ease;
   }
 
-  .debug-row:hover .debug-frame-copy,
-  .debug-frame-copy:focus-visible {
+  .debug-row:hover :global(.debug-frame-copy),
+  :global(.debug-frame-copy:focus-visible) {
     opacity: 1;
-  }
-
-  .debug-frame-copy:hover {
-    color: var(--foreground);
-    background: var(--muted);
   }
 
   .debug-dir {
@@ -828,5 +741,11 @@
     background: rgba(239, 68, 68, 0.06);
     color: var(--destructive);
     font-size: 10.5px;
+  }
+
+  @media (max-width: 720px) {
+    .debug-subtabs { overflow-x: auto; }
+    .debug-toolbar { align-items: stretch; flex-direction: column; }
+    .debug-actions { justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }
   }
 </style>

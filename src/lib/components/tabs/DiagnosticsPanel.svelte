@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { Clipboard, LoaderCircle, Network, Search } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
   import { getAppErrorMessage, guiDnsLookup, guiTraceRoute } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import type { DnsLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
@@ -112,16 +115,17 @@
       <span class="diag-hint">解析域名记录（A / AAAA / CNAME / MX …）</span>
     </div>
     <div class="diag-form">
-      <input
+      <Input
         class="diag-input"
         placeholder="example.com"
         bind:value={dnsHost}
         onkeydown={onDnsKey}
         disabled={dnsLoading}
       />
-      <button class="diag-btn" onclick={runDns} disabled={dnsLoading || !dnsHost.trim()}>
+      <Button size="xs" onclick={runDns} disabled={dnsLoading || !dnsHost.trim()}>
+        {#if dnsLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}
         {dnsLoading ? '查询中…' : '查询'}
-      </button>
+      </Button>
     </div>
     {#if dnsLoading}
       <div class="diag-state">查询中…</div>
@@ -134,7 +138,7 @@
           {#if dnsResult.server}<span>server {dnsResult.server}</span>{/if}
           {#if dnsResult.elapsedMs != null}<span>{fmtElapsed(dnsResult.elapsedMs)}</span>{/if}
           {#if dnsCopyFeedback}<span class="copy-feedback" role="status">{dnsCopyFeedback}</span>{/if}
-          <button class="diag-copy" onclick={() => copyText(JSON.stringify(dnsResult, null, 2), 'dns')}>复制 JSON</button>
+          <Button variant="ghost" size="xs" class="diag-copy" onclick={() => copyText(JSON.stringify(dnsResult, null, 2), 'dns')}><Clipboard />复制 JSON</Button>
         </div>
         {#if dnsRecords(dnsResult).length > 0}
           <div class="dns-list">
@@ -163,35 +167,36 @@
       <span class="diag-hint">逐跳探测到目标的路径</span>
     </div>
     <div class="diag-form">
-      <input
+      <Input
         class="diag-input"
         placeholder="example.com"
         bind:value={traceTarget}
         onkeydown={onTraceKey}
         disabled={traceLoading}
       />
-      <input
+      <Input
         class="diag-input diag-input--port"
         type="number"
         placeholder="端口"
         bind:value={tracePort}
         disabled={traceLoading}
       />
-      <input
+      <Input
         class="diag-input diag-input--proto"
         placeholder="协议 (tcp/udp/icmp)"
         bind:value={traceProtocol}
         disabled={traceLoading}
       />
-      <input
+      <Input
         class="diag-input diag-input--inbound"
         placeholder="Inbound tag (optional)"
         bind:value={traceInboundTag}
         disabled={traceLoading}
       />
-      <button class="diag-btn" onclick={runTrace} disabled={traceLoading || !traceTarget.trim()}>
+      <Button size="xs" onclick={runTrace} disabled={traceLoading || !traceTarget.trim()}>
+        {#if traceLoading}<LoaderCircle class="animate-spin" />{:else}<Network />{/if}
         {traceLoading ? '追踪中…' : '追踪'}
-      </button>
+      </Button>
     </div>
     {#if traceLoading}
       <div class="diag-state">追踪中…（可能需要数秒）</div>
@@ -204,7 +209,7 @@
           {#if traceResult.totalHops != null}<span>{traceResult.totalHops} hops</span>{/if}
           {#if traceResult.elapsedMs != null}<span>{fmtElapsed(traceResult.elapsedMs)}</span>{/if}
           {#if traceCopyFeedback}<span class="copy-feedback" role="status">{traceCopyFeedback}</span>{/if}
-          <button class="diag-copy" onclick={() => copyText(JSON.stringify(traceResult, null, 2), 'trace')}>复制 JSON</button>
+          <Button variant="ghost" size="xs" class="diag-copy" onclick={() => copyText(JSON.stringify(traceResult, null, 2), 'trace')}><Clipboard />复制 JSON</Button>
         </div>
         {#if traceHops(traceResult).length > 0}
           <table class="hop-table">
@@ -275,51 +280,24 @@
     gap: 5px;
   }
 
-  .diag-input {
+  :global(.diag-input) {
     height: 24px;
-    padding: 0 7px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--background);
-    color: var(--foreground);
     font-size: 11px;
     flex: 1;
     min-width: 0;
   }
 
-  .diag-input:focus {
-    outline: none;
-    border-color: var(--primary);
-  }
-
-  .diag-input--port {
+  :global(.diag-input--port) {
     flex: 0 0 60px;
   }
 
-  .diag-input--proto {
+  :global(.diag-input--proto) {
     flex: 0 0 130px;
   }
 
-  .diag-input--inbound {
+  :global(.diag-input--inbound) {
     flex: 0 0 140px;
   }
-
-  .diag-btn {
-    height: 24px;
-    padding: 0 12px;
-    border-radius: 5px;
-    border: none;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: opacity 0.12s ease;
-  }
-
-  .diag-btn:hover:not(:disabled) { opacity: 0.88; }
-  .diag-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .diag-state {
     padding: 4px 2px;
@@ -353,16 +331,9 @@
     font-family: var(--font-mono);
   }
 
-  .diag-copy {
+  :global(.diag-copy) {
     margin-left: auto;
-    border: 1px solid var(--border);
-    background: var(--card);
-    color: var(--muted-foreground);
     font-size: 10px;
-    padding: 1px 7px;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.12s ease;
   }
 
   .copy-feedback {
@@ -371,13 +342,8 @@
     font-family: inherit;
   }
 
-  .copy-feedback + .diag-copy {
+  .copy-feedback + :global(.diag-copy) {
     margin-left: 0;
-  }
-
-  .diag-copy:hover {
-    color: var(--foreground);
-    background: var(--muted);
   }
 
   .dns-list {

@@ -1,7 +1,11 @@
 <script lang="ts">
   import { getVersion } from '@tauri-apps/api/app';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { updater } from '$lib/services/updater.svelte';
+  import { CircleCheck, Download, LoaderCircle, Power, RefreshCcw, RotateCcw, Search } from '@lucide/svelte';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import { formatBytes, updater } from '$lib/services/updater.svelte';
   import {
     compareAppVersions,
     fetchAppReleases,
@@ -15,7 +19,8 @@
   let query = $state('');
   let loading = $state(false);
   let loadError = $state<string | null>(null);
-  let installingTag = $state<string | null>(null);
+  let installError = $state<string | null>(null);
+  let workingTag = $state<string | null>(null);
 
   const visibleReleases = $derived.by(() => {
     const needle = query.trim().toLowerCase().replace(/^v/, '');
@@ -57,22 +62,53 @@
     return 'current';
   }
 
-  async function installRelease(release: AppRelease) {
-    const action = relation(release);
-    if (action === 'current' || installingTag || updater.downloading) return;
+  function isDownloaded(release: AppRelease): boolean {
+    return updater.selectedTag === release.tagName && updater.readyToInstall;
+  }
 
-    if (action === 'rollback') {
+  async function handleReleaseAction(release: AppRelease) {
+    const action = relation(release);
+    if (action === 'current' || workingTag || updater.downloading) return;
+
+    installError = null;
+
+    if (isDownloaded(release)) {
       const accepted = await confirm(
-        `将从 v${appVersion} 回退到 v${release.version}。请先备份应用数据；如果新版本执行过不兼容的配置迁移，旧版本可能无法直接读取。是否继续？`,
-        { title: '确认回退应用版本', kind: 'warning' },
+        `v${release.version} 已下载完成。安装后应用将立即重启，是否现在安装？`,
+        { title: '确认安装应用版本', kind: 'info' },
       );
       if (!accepted) return;
+
+      workingTag = release.tagName;
+      try {
+        const installed = await updater.installUpdate();
+        if (!installed) installError = updater.lastError ?? `无法安装 v${release.version}`;
+      } finally {
+        workingTag = null;
+      }
+      return;
     }
 
-    installingTag = release.tagName;
-    const selected = await updater.selectRelease(release);
-    if (selected) await updater.downloadAndInstall();
-    installingTag = null;
+    const accepted = await confirm(
+      action === 'rollback'
+        ? `将下载 v${release.version}，供后续回退安装。请先备份应用数据；下载完成后不会自动安装或重启。是否继续？`
+        : `将下载 v${release.version} 的升级包。下载完成后不会自动安装或重启，可由你确认安装时间。是否继续？`,
+      { title: action === 'rollback' ? '确认下载回退版本' : '确认下载升级版本', kind: action === 'rollback' ? 'warning' : 'info' },
+    );
+    if (!accepted) return;
+
+    workingTag = release.tagName;
+    try {
+      const selected = await updater.selectRelease(release);
+      if (!selected) {
+        installError = updater.lastError ?? `无法准备 v${release.version} 的安装包`;
+        return;
+      }
+      const downloaded = await updater.downloadUpdate();
+      if (!downloaded) installError = updater.lastError ?? `无法下载 v${release.version}`;
+    } finally {
+      workingTag = null;
+    }
   }
 
   function formatDate(value: string | null): string {
@@ -88,7 +124,7 @@
       <h2>版本管理</h2>
       <p>选择测试版、预发版或历史版本。日常检查更新仍在“关于”页面。</p>
     </div>
-    <span class="current-version">当前 v{appVersion}</span>
+    <Badge variant="secondary" class="current-version">当前 v{appVersion}</Badge>
   </header>
 
   <div class="separator"></div>
@@ -96,13 +132,13 @@
   <section>
     <div class="tools">
       <div class="search-wrap">
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
-          <circle cx="6" cy="6" r="4" />
-          <path d="M9 9l3 3" />
-        </svg>
-        <input bind:value={query} type="search" placeholder="检索版本号，例如 0.0.17" aria-label="检索应用版本" />
+        <Search class="search-icon" aria-hidden="true" />
+        <Input bind:value={query} type="search" placeholder="检索版本号，例如 0.0.17" aria-label="检索应用版本" class="search-input" />
       </div>
-      <button class="refresh" onclick={loadReleases} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
+      <Button variant="outline" size="sm" onclick={loadReleases} disabled={loading}>
+        <RefreshCcw class={loading ? 'animate-spin' : undefined} />
+        {loading ? '刷新中…' : '刷新'}
+      </Button>
     </div>
 
     <div class="channel-tabs" role="tablist" aria-label="应用发布渠道">
@@ -111,14 +147,40 @@
         { id: 'preview', label: '预发版' },
         { id: 'test', label: '测试版' },
       ] as item}
-        <button
-          class:active={channel === item.id}
+        <Button
+          variant="ghost"
+          size="xs"
+          class="channel-button"
           onclick={() => (channel = item.id as AppReleaseChannel)}
           role="tab"
+          aria-pressed={channel === item.id}
           aria-selected={channel === item.id}
-        >{item.label}</button>
+        >{item.label}</Button>
       {/each}
     </div>
+
+    {#if installError}
+      <div class="message error" role="alert">{installError}</div>
+    {/if}
+
+    {#if updater.downloading && updater.selectedTag}
+      <div class="download-progress" role="status" aria-live="polite">
+        <div class="progress-copy">
+          <span>正在下载 {updater.latestVersion ? `v${updater.latestVersion}` : '所选版本'}</span>
+          <span>{updater.progressPct != null ? `${updater.progressPct}%` : '计算大小中'} · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}</span>
+        </div>
+        <div
+          class="progress-track"
+          role="progressbar"
+          aria-label="版本下载进度"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={updater.progressPct ?? undefined}
+        >
+          <div class:indeterminate={updater.progressPct == null} class="progress-value" style={updater.progressPct != null ? `width: ${updater.progressPct}%` : ''}></div>
+        </div>
+      </div>
+    {/if}
 
     {#if loadError}
       <div class="message error">{loadError}</div>
@@ -134,29 +196,37 @@
             <div>
               <div class="version-line">
                 <strong>v{release.version}</strong>
-                {#if action === 'current'}<span>当前版本</span>{/if}
+                {#if action === 'current'}<Badge variant="secondary" class="release-badge">当前版本</Badge>{/if}
+                {#if isDownloaded(release)}<Badge variant="outline" class="release-badge"><CircleCheck />已下载</Badge>{/if}
               </div>
               <div class="meta">
                 <span>{formatDate(release.publishedAt)}</span>
                 {#if release.releaseUrl}<a href={release.releaseUrl} target="_blank" rel="noopener noreferrer">发布说明</a>{/if}
               </div>
             </div>
-            <button
+            <Button
+              variant={isDownloaded(release) ? 'default' : action === 'upgrade' ? 'default' : 'outline'}
+              size="sm"
               class="install"
-              class:rollback={action === 'rollback'}
-              onclick={() => installRelease(release)}
-              disabled={action === 'current' || installingTag !== null || updater.downloading}
+              onclick={() => handleReleaseAction(release)}
+              disabled={action === 'current' || workingTag !== null || updater.downloading}
             >
-              {#if installingTag === release.tagName}
-                {updater.downloading ? '安装中…' : '准备中…'}
+              {#if workingTag === release.tagName}
+                <LoaderCircle class="animate-spin" />
+                {updater.downloading ? '下载中…' : isDownloaded(release) ? '安装中…' : '准备中…'}
               {:else if action === 'current'}
                 已安装
+              {:else if isDownloaded(release)}
+                <Power />
+                安装并重启
               {:else if action === 'rollback'}
-                回退到此版本
+                <RotateCcw />
+                下载回退版本
               {:else}
-                安装
+                <Download />
+                下载升级包
               {/if}
-            </button>
+            </Button>
           </div>
         {/each}
       </div>
@@ -169,30 +239,33 @@
   header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; }
   h2 { margin: 0; color: var(--foreground); font-size: 15px; font-weight: 700; }
   header p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.45; }
-  .current-version { flex-shrink: 0; padding: 3px 8px; border-radius: 5px; background: var(--muted); color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+  :global(.current-version) { flex-shrink: 0; font-family: var(--font-mono); font-size: 11px; }
   .separator { height: 1px; margin: 0 12px; background: var(--border); }
   section { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; padding: 12px; }
-  .tools { display: flex; align-items: center; gap: 6px; }
-  .search-wrap { display: flex; align-items: center; flex: 1; gap: 6px; min-width: 0; height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted-foreground); }
-  input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--foreground); font-size: 11px; }
-  input::placeholder { color: var(--muted-foreground); }
-  .refresh, .channel-tabs button, .install { border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); cursor: pointer; font-size: 11px; }
-  .refresh { height: 32px; padding: 0 10px; color: var(--muted-foreground); }
+  .tools { display: flex; align-items: center; gap: 8px; }
+  .search-wrap { position: relative; flex: 1; min-width: 0; }
+  :global(.search-icon) { position: absolute; top: 50%; left: 9px; z-index: 1; width: 14px; height: 14px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
+  :global(.search-input) { height: 32px; padding-left: 30px; font-size: 11px; }
   .channel-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; border-radius: 8px; background: var(--muted); }
-  .channel-tabs button { padding: 5px 8px; border-color: transparent; background: transparent; color: var(--muted-foreground); }
-  .channel-tabs button.active { border-color: var(--border); background: var(--background); color: var(--foreground); font-weight: 600; }
+  :global(.channel-button) { width: 100%; color: var(--muted-foreground); }
+  :global(.channel-button[aria-pressed='true']) { border-color: var(--border); background: var(--background); color: var(--foreground); box-shadow: var(--shadow-xs); }
   .release-list { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
   .release-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 50px; padding: 8px 10px; }
   .release-row + .release-row { border-top: 1px solid var(--border); }
   .release-row.selected { background: color-mix(in srgb, var(--primary) 7%, transparent); }
   .version-line, .meta { display: flex; align-items: center; gap: 7px; }
   .version-line strong { font-family: var(--font-mono); font-size: 11.5px; }
-  .version-line > span { padding: 1px 5px; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); font-size: 9px; }
+  :global(.release-badge) { height: 17px; padding-inline: 6px; font-size: 9px; }
   .meta { margin-top: 3px; color: var(--muted-foreground); font-size: 9.5px; }
   .meta a { color: var(--primary); text-decoration: none; }
-  .install { min-width: 94px; padding: 5px 9px; color: var(--primary); font-weight: 600; }
-  .install.rollback { color: #b45309; }
-  button:disabled { cursor: not-allowed; opacity: 0.45; }
+  :global(.install) { min-width: 108px; font-size: 11px; }
+  .download-progress { padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--primary) 6%, var(--card)); }
+  .progress-copy { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: var(--muted-foreground); font-size: 10px; }
+  .progress-copy span:first-child { color: var(--foreground); font-weight: 600; }
+  .progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: var(--muted); }
+  .progress-value { height: 100%; border-radius: inherit; background: var(--primary); transition: width 160ms ease; }
+  .progress-value.indeterminate { width: 35%; animation: progress-slide 1.1s ease-in-out infinite; }
   .message { padding: 18px 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
   .message.error { color: var(--destructive); }
+  @keyframes progress-slide { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
 </style>

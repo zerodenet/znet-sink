@@ -1,4 +1,4 @@
-import { check, Update } from '@tauri-apps/plugin-updater';
+import { check, Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { info, warning } from '$lib/services/toast.svelte';
@@ -9,7 +9,7 @@ import {
   type AppRelease,
 } from '$lib/services/app-update-policy';
 
-export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'error' | 'unsupported';
+export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready-to-install' | 'error' | 'unsupported';
 
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
@@ -30,6 +30,7 @@ class UpdaterService {
   releaseNotes = $state<string | null>(null);
   checking = $state(false);
   downloading = $state(false);
+  readyToInstall = $state(false);
   lastError = $state<string | null>(null);
   /** Bytes downloaded so far in the current `downloadAndInstall` run. */
   downloaded = $state(0);
@@ -225,10 +226,13 @@ class UpdaterService {
       });
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.lastError = message;
+      const message = updaterErrorMessage(error, '选择应用版本失败');
+      const userMessage = isManifestUnavailable(message)
+        ? `v${release.version} 暂无适用于当前系统的安装包；该版本可能仍在构建或发布不完整，请稍后刷新后重试。`
+        : message;
+      this.lastError = userMessage;
       this.status = 'error';
-      void appendLog({ source: 'app', level: 'warn', message: `选择应用版本失败: ${message}` });
+      void appendLog({ source: 'app', level: 'warn', message: `选择应用版本失败: ${userMessage}` });
       return false;
     } finally {
       this.checking = false;
@@ -300,10 +304,81 @@ class UpdaterService {
     this.lastCheckAt = Date.now();
   }
 
+  /** Download a selected release without installing it. */
+  async downloadUpdate(): Promise<boolean> {
+    if (this.downloading || !this.pendingUpdate) return false;
+    this.downloading = true;
+    this.readyToInstall = false;
+    this.lastError = null;
+    this.status = 'downloading';
+    this.downloaded = 0;
+    this.total = null;
+
+    try {
+      const update = this.pendingUpdate;
+      await tracedOperation(
+        'update',
+        'update.download',
+        () => update.download((event) => this.applyDownloadEvent(event)),
+        { fromVersion: this.currentVersion, toVersion: update.version },
+      );
+      this.readyToInstall = true;
+      this.status = 'ready-to-install';
+      info(`v${update.version} 下载完成，可随时安装`);
+      return true;
+    } catch (error) {
+      this.lastError = updaterErrorMessage(error, '版本下载失败');
+      warning(`版本下载失败: ${this.lastError}`);
+      this.status = 'error';
+      return false;
+    } finally {
+      this.downloading = false;
+    }
+  }
+
+  /** Install a release previously downloaded with downloadUpdate(). */
+  async installUpdate(): Promise<boolean> {
+    if (this.downloading || !this.pendingUpdate || !this.readyToInstall) return false;
+    this.lastError = null;
+    try {
+      const update = this.pendingUpdate;
+      await tracedOperation(
+        'update',
+        'update.install',
+        () => update.install(),
+        { fromVersion: this.currentVersion, toVersion: update.version },
+      );
+      this.readyToInstall = false;
+      this.status = 'up-to-date';
+      return true;
+    } catch (error) {
+      this.lastError = updaterErrorMessage(error, '版本安装失败');
+      warning(`版本安装失败: ${this.lastError}`);
+      this.status = 'error';
+      return false;
+    }
+  }
+
   private replacePendingUpdate(update: Update | null) {
     const previous = this.pendingUpdate;
     this.pendingUpdate = update;
+    this.readyToInstall = false;
+    this.downloaded = 0;
+    this.total = null;
     if (previous && previous !== update) void previous.close().catch(() => {});
+  }
+
+  private applyDownloadEvent(event: DownloadEvent) {
+    switch (event.event) {
+      case 'Started':
+        this.total = event.data.contentLength ?? null;
+        break;
+      case 'Progress':
+        this.downloaded += event.data.chunkLength;
+        break;
+      case 'Finished':
+        break;
+    }
   }
 }
 
@@ -344,4 +419,14 @@ function isManifestUnavailable(message: string): boolean {
     || lower.includes('parse')
     || lower.includes('fallback platforms')
     || lower.includes('platforms object');
+}
+
+function updaterErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
 }
