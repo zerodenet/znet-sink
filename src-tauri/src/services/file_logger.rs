@@ -60,13 +60,14 @@ fn try_open() -> Result<std::path::PathBuf, AppError> {
         std::fs::create_dir_all(parent)
             .map_err(|e| AppError::internal(format!("create log dir: {e}")))?;
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| AppError::internal(format!("open log file: {e}")))?;
+    let file =
+        open_log_file(&path).map_err(|e| AppError::internal(format!("open log file: {e}")))?;
     let _ = LOGGER.set(Mutex::new(BufWriter::new(file)));
     Ok(path)
+}
+
+fn open_log_file(path: &std::path::Path) -> std::io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
 }
 
 fn install_panic_hook() {
@@ -120,6 +121,7 @@ pub fn emit(level: &str, source: &str, msg: &str, details: Option<Value>) {
 /// Truncate the active GUI lifecycle log without replacing its open file
 /// handle. Future records continue to append to the same file.
 pub(crate) fn clear() -> Result<(), AppError> {
+    let path = data_dir()?.join("logs").join("gui.log.jsonl");
     if let Some(logger) = LOGGER.get() {
         let mut writer = logger
             .lock()
@@ -127,17 +129,16 @@ pub(crate) fn clear() -> Result<(), AppError> {
         writer
             .flush()
             .map_err(|error| AppError::internal(format!("flush GUI log: {error}")))?;
-        writer
-            .get_mut()
-            .set_len(0)
-            .map_err(|error| AppError::internal(format!("clear GUI log: {error}")))?;
-        return Ok(());
+        return truncate_log_file(&path);
     }
 
-    let path = data_dir()?.join("logs").join("gui.log.jsonl");
     if !path.exists() {
         return Ok(());
     }
+    truncate_log_file(&path)
+}
+
+fn truncate_log_file(path: &std::path::Path) -> Result<(), AppError> {
     OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -152,4 +153,28 @@ pub(crate) fn clear() -> Result<(), AppError> {
 pub fn line(message: &str) {
     eprintln!("[ZNet] {message}");
     emit("info", "app", message, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_log_handle_can_be_truncated_and_keeps_appending() {
+        let path = std::env::temp_dir().join(format!(
+            "znet-gui-file-logger-{}-{}.jsonl",
+            std::process::id(),
+            common::now_unix_ms()
+        ));
+        std::fs::write(&path, b"old log\n").unwrap();
+        let mut writer = BufWriter::new(open_log_file(&path).unwrap());
+
+        truncate_log_file(&path).unwrap();
+        writeln!(writer, "new log").unwrap();
+        writer.flush().unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new log\n");
+        drop(writer);
+        let _ = std::fs::remove_file(path);
+    }
 }

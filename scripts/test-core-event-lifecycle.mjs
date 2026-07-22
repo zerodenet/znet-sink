@@ -55,8 +55,23 @@ async function testRootPageExclusivelyOwnsTheEventStream() {
   assert.equal(inactiveBranch.includes('coreEvents.stop()'), false);
 }
 
+async function testCoreWarningsStayOutOfTransientNotifications() {
+  const coreEvents = await readFile(
+    new URL('../src/lib/services/core-events.svelte.ts', import.meta.url),
+    'utf8',
+  );
+  const warningHandler = coreEvents.slice(
+    coreEvents.indexOf('private _handleCoreWarning'),
+    coreEvents.indexOf('private _handleCoreStatus'),
+  );
+
+  assert.equal(warningHandler.includes('this.warnings ='), true);
+  assert.equal(warningHandler.includes('showWarningToast('), false);
+}
+
 await testLifecycleOperationsStayOrdered();
 await testRejectedOperationDoesNotPoisonQueue();
 await testRootPageExclusivelyOwnsTheEventStream();
+await testCoreWarningsStayOutOfTransientNotifications();
 
 console.log('core event lifecycle tests passed');

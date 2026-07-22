@@ -887,6 +887,52 @@ fn parse_structured_field_value(value: &str) -> serde_json::Value {
     }
 }
 
+fn structured_field_starts(message: &str) -> Vec<(usize, usize)> {
+    let bytes = message.as_bytes();
+    let mut starts = Vec::new();
+    let mut index = 0;
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_quotes = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_quotes = true;
+            index += 1;
+            continue;
+        }
+
+        let at_token_boundary = index == 0 || bytes[index - 1].is_ascii_whitespace();
+        if at_token_boundary && (byte.is_ascii_alphanumeric() || byte == b'_') {
+            let key_start = index;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            if index < bytes.len() && bytes[index] == b'=' {
+                starts.push((key_start, index));
+                index += 1;
+                continue;
+            }
+        }
+        index += 1;
+    }
+
+    starts
+}
+
 fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
     let mut fields = serde_json::Map::new();
 
@@ -937,29 +983,32 @@ fn parse_kernel_log_line(line: &str) -> (LogLevel, serde_json::Value) {
         classify_stderr_level(line)
     };
 
-    // Extract key=value pairs conservatively. If a token is not a plain ASCII
-    // key=value field, keep it in the message instead of slicing through
-    // arbitrary byte offsets from kernel output.
-    let mut message_tokens = Vec::new();
-    for token in msg.split_whitespace() {
-        if let Some((key, value)) = token.split_once('=') {
-            if is_structured_field_key(key) {
-                fields.insert(key.to_string(), parse_structured_field_value(value));
-            } else {
-                message_tokens.push(token);
-            }
-        } else {
-            message_tokens.push(token);
+    // A tracing field value can contain spaces, either inside quotes (node
+    // tags) or as an unquoted Display value (errors). A field therefore ends
+    // at the next ASCII key= boundary, not at the next whitespace character.
+    let field_starts = structured_field_starts(msg);
+    let clean_msg = field_starts
+        .first()
+        .map_or(msg, |(start, _)| &msg[..*start])
+        .trim();
+    for (position, (field_start, equals)) in field_starts.iter().enumerate() {
+        let key = &msg[*field_start..*equals];
+        if !is_structured_field_key(key) {
+            continue;
         }
+        let value_end = field_starts
+            .get(position + 1)
+            .map_or(msg.len(), |(next_start, _)| *next_start);
+        let value = msg[*equals + 1..value_end].trim();
+        fields.insert(key.to_string(), parse_structured_field_value(value));
     }
 
-    let clean_msg = message_tokens.join(" ");
     fields.insert(
         "message".to_string(),
         serde_json::Value::String(if clean_msg.is_empty() {
             msg.to_string()
         } else {
-            clean_msg
+            clean_msg.to_string()
         }),
     );
 
@@ -1024,6 +1073,23 @@ mod tests {
         assert_eq!(fields["port"], 443);
         assert_eq!(fields["duration_ms"], 2339);
         assert_eq!(fields["bytes_down"], 987386);
+    }
+
+    #[test]
+    fn parse_kernel_log_line_preserves_spaced_tags_and_display_errors() {
+        let (level, fields) = parse_kernel_log_line(
+            "2026-07-22T01:52:03.985952Z WARN session failed session_id=93 inbound_tag=\"mixed-in\" outbound_tag=\"🇸🇬 新加坡 IEPL [0x11] [Std]\" protocol=\"http\" network=\"tcp\" mode=\"rule\" target=Domain(\"rank.similarweb.com\") port=443 stage=\"relay\" error=远程主机强迫关闭了一个现有的连接。 (os error 10054) upstream_server=\"example.com\" upstream_port=44330 duration_ms=12575",
+        );
+
+        assert_eq!(level, LogLevel::Warn);
+        assert_eq!(fields["message"], "session failed");
+        assert_eq!(fields["outbound_tag"], "🇸🇬 新加坡 IEPL [0x11] [Std]");
+        assert_eq!(
+            fields["error"],
+            "远程主机强迫关闭了一个现有的连接。 (os error 10054)"
+        );
+        assert_eq!(fields["upstream_server"], "example.com");
+        assert_eq!(fields["duration_ms"], 12575);
     }
 
     #[test]

@@ -3,6 +3,10 @@ import {
   buildNotificationLogInput,
   notificationLogLevel,
 } from '../src/lib/services/notification-log.ts';
+import {
+  MAX_ACTIVE_TOASTS,
+  planToastAdmission,
+} from '../src/lib/services/toast-policy.ts';
 
 assert.equal(notificationLogLevel('success'), 'info');
 assert.equal(notificationLogLevel('info'), 'info');
@@ -29,5 +33,20 @@ assert.deepEqual(input.fields, {
   durationMs: 8_000,
   placement: 'app-header-center',
 });
+
+const existing = [
+  { id: 1, type: 'info', message: 'one' },
+  { id: 2, type: 'warning', message: 'two' },
+  { id: 3, type: 'error', message: 'three' },
+];
+assert.equal(MAX_ACTIVE_TOASTS, 3);
+assert.deepEqual(
+  planToastAdmission(existing, { type: 'success', message: 'four' }),
+  { evictIds: [1] },
+);
+assert.deepEqual(
+  planToastAdmission(existing, { type: 'warning', message: 'two' }),
+  { duplicateId: 2, evictIds: [] },
+);
 
 console.log('notification-logging: ok');

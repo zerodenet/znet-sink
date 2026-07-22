@@ -419,8 +419,11 @@ class CoreEventsService {
     const w: CoreWarning = { code, message, timestamp: Date.now() };
     this.lastWarning = w;
     this.warnings = [w, ...this.warnings].slice(0, 50);
-
-    showWarningToast(message, 6000);
+    // engine.warning includes every tracing WARN/ERROR emitted by Zero. Those
+    // high-volume operational records already enter the persistent CORE log
+    // through the stderr pump; treating each one as a user notification makes
+    // transient relay failures obscure the controls without offering an
+    // actionable response.
   }
 
   private _handleCoreStatus(data: unknown) {

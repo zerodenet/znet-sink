@@ -1,9 +1,10 @@
 <script lang="ts">
   import { store } from '$lib/services/store.svelte';
   import { getToasts, dismissToast, type ToastType } from '$lib/services/toast.svelte';
+  import { MAX_ACTIVE_TOASTS } from '$lib/services/toast-policy';
 
   const toasts = getToasts();
-  const visibleToasts = $derived(Array.from(toasts.values()).slice(-3));
+  const visibleToasts = $derived(Array.from(toasts.values()).slice(-MAX_ACTIVE_TOASTS));
 
   function getAccentColor(type: ToastType): string {
     switch (type) {

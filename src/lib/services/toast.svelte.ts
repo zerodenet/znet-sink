@@ -4,6 +4,7 @@ import {
   buildNotificationLogInput,
   type NotificationType,
 } from '$lib/services/notification-log';
+import { planToastAdmission } from '$lib/services/toast-policy';
 
 export type ToastType = NotificationType;
 
@@ -18,6 +19,14 @@ let nextId = 0;
 const toasts = new SvelteMap<number, Toast>();
 
 export function showToast(type: ToastType, message: string, duration: number = 4000): number {
+  const admission = planToastAdmission(toasts.values(), { type, message });
+  if (admission.duplicateId !== undefined) {
+    return admission.duplicateId;
+  }
+  for (const id of admission.evictIds) {
+    toasts.delete(id);
+  }
+
   const id = ++nextId;
   const toast = { id, type, message, duration };
   toasts.set(id, toast);
