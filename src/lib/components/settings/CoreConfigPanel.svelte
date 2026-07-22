@@ -30,7 +30,7 @@
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
 
-  const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/zero/releases/latest';
+  const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/core/releases/latest';
   const CHANNEL_LABELS: Record<ReleaseChannel, string> = {
     stable: '稳定版',
     beta: '测试版',

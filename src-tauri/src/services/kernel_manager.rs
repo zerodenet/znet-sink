@@ -19,7 +19,7 @@ use crate::models::logs::{LogLevel, LogSource};
 use crate::services::{common, core_config, core_process, system_proxy_guard};
 
 const GITHUB_RELEASES_URL: &str =
-    "https://api.github.com/repos/zerodenet/zero/releases?per_page=30";
+    "https://api.github.com/repos/zerodenet/core/releases?per_page=30";
 const PROGRESS_EVENT: &str = "kernel:download-progress";
 const CHUNK_SIZE: usize = 8 * 1024;
 const PROGRESS_INTERVAL: u64 = 64 * 1024;

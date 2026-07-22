@@ -19,7 +19,7 @@ use crate::services::{app_config_store, rule_overlay};
 use crate::state::app_state::AppState;
 
 const EXPORTED_CORE_CONFIG_FILE: &str = "zero-active-config.json";
-const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerodenet/zero/releases/latest";
+const DEFAULT_CORE_DOWNLOAD_URL: &str = "https://github.com/zerodenet/core/releases/latest";
 const MANAGED_CORE_LOG_FILE: &str = "core.log.jsonl";
 
 pub fn snapshot(state: State<'_, AppState>) -> AppResult<CoreConfigSnapshot> {
@@ -471,7 +471,7 @@ pub fn download_latest(install_dir: Option<String>) -> AppResult<CoreDownloadRes
 
     // Fetch latest release info
     let mut resp = client
-        .get("https://api.github.com/repos/zerodenet/zero/releases/latest")
+        .get("https://api.github.com/repos/zerodenet/core/releases/latest")
         .header("Accept", "application/vnd.github+json")
         .send()
         .map_err(|e| AppError::internal(format!("failed to fetch release info: {e}")))?;
