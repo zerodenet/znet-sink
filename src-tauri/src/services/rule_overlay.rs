@@ -181,16 +181,31 @@ pub async fn set_binding(
 pub async fn reconcile_after_rule_change(app_handle: AppHandle) -> AppResult<()> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
-    let base = active_content(state.inner())?;
-    let effective = base
-        .as_ref()
-        .map(|base| compose_effective_config(state.inner(), base))
-        .transpose()?;
+    reconcile_current_config_locked(app_handle.clone()).await
+}
+
+/// Recompose and publish the current effective configuration while the caller
+/// holds `proxy_config_operation`.
+///
+/// Startup uses this after adopting an already-running kernel. That kernel may
+/// still have the configuration from the previous GUI process, including an
+/// older set of built-in/common rules.
+pub(crate) async fn reconcile_current_config_locked(app_handle: AppHandle) -> AppResult<()> {
+    let state = app_handle.state::<AppState>();
+    let effective = current_effective_config(state.inner())?;
+    let has_active_config = effective.is_some();
     apply_if_running(state.inner(), effective).await?;
-    if base.is_some() {
+    if has_active_config {
         core_config::export_active(state.clone())?;
     }
     Ok(())
+}
+
+fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
+    active_content(state)?
+        .as_ref()
+        .map(|base| compose_effective_config(state, base))
+        .transpose()
 }
 
 struct ComposeResult {
@@ -459,7 +474,10 @@ async fn apply_if_running(state: &AppState, config: Option<Value>) -> AppResult<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::app_config::AppConfig;
+    use crate::models::proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile};
     use crate::models::rule_set::{CommonRuleBinding, ZrsArtifact};
+    use crate::state::app_state::AppState;
     use zero_rule::protocol::decode_json;
     use zero_rule::zrs::encode;
     use zero_rule::RuleSetCompiler;
@@ -584,6 +602,42 @@ mod tests {
         );
         let _ = fs::remove_file(later_path);
         let _ = fs::remove_file(first_path);
+    }
+
+    #[test]
+    fn startup_reconcile_uses_newly_loaded_common_rules() {
+        let (profile, path) = verified_profile("new-default", 10, CommonRuleAction::Direct);
+        let base = json!({
+            "mode":{"type":"rule"},
+            "route":{"rule_sets":[],"rules":[],"final":{"type":"direct"}}
+        });
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".into(),
+                name: "Active".into(),
+                kernel: "zero".into(),
+                format: "zero-json".into(),
+                path: None,
+                content: Some(base),
+                active: true,
+                updated_at_unix_ms: 0,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            vec![profile],
+            Vec::new(),
+        );
+
+        let effective = current_effective_config(&state).unwrap().unwrap();
+        let expected_tag = common_tag("new-default");
+
+        assert_eq!(effective["route"]["rule_sets"][0]["tag"], expected_tag);
+        assert_eq!(
+            effective["route"]["rules"][0]["condition"]["tag"],
+            common_tag("new-default")
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]

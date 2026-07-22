@@ -144,7 +144,7 @@ pub struct AppTunConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppRoutingConfig {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub inject_common_rules: bool,
 }
 
@@ -296,4 +296,33 @@ pub fn default_network_probe_urls() -> Vec<String> {
         "https://ipinfo.io/json".to_string(),
         "https://httpbin.org/ip".to_string(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+    use serde_json::json;
+
+    #[test]
+    fn common_rule_injection_defaults_to_enabled_for_new_and_legacy_configs() {
+        let new_config = AppConfig::default();
+        assert!(new_config.routing.inject_common_rules);
+
+        let missing_routing: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(missing_routing.routing.inject_common_rules);
+
+        let legacy_empty_routing: AppConfig =
+            serde_json::from_value(json!({ "routing": {} })).unwrap();
+        assert!(legacy_empty_routing.routing.inject_common_rules);
+    }
+
+    #[test]
+    fn common_rule_injection_preserves_an_explicit_disabled_choice() {
+        let config: AppConfig = serde_json::from_value(json!({
+            "routing": { "injectCommonRules": false }
+        }))
+        .unwrap();
+
+        assert!(!config.routing.inject_common_rules);
+    }
 }

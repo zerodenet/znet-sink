@@ -425,6 +425,49 @@ pub fn run() {
                                 // No child — we don't own this process, so
                                 // stop() will fall through to kill_external().
                             }
+
+                            // The existing kernel belongs to the previous GUI
+                            // lifetime and may still be running an older
+                            // effective config. This matters when startup just
+                            // installed or upgraded built-in common rules: the
+                            // domain state is current, but no rule-set command
+                            // exists to trigger the normal reconciliation path.
+                            match crate::services::rule_overlay::reconcile_current_config_locked(
+                                app_handle.clone(),
+                            )
+                            .await
+                            {
+                                Ok(()) => {
+                                    crate::services::logs::znet_log_fields(
+                                        Some(state.inner()),
+                                        crate::models::logs::LogLevel::Info,
+                                        "reconciled current configuration with existing kernel",
+                                        serde_json::json!({
+                                            "schema": "znet.telemetry.v1",
+                                            "area": "rule",
+                                            "operation": "rule.overlay.startup_reconcile",
+                                            "outcome": "success"
+                                        }),
+                                    );
+                                }
+                                Err(error) => {
+                                    crate::services::logs::znet_log_fields(
+                                        Some(state.inner()),
+                                        crate::models::logs::LogLevel::Warn,
+                                        format!(
+                                            "failed to reconcile current configuration with existing kernel: {}",
+                                            error.message
+                                        ),
+                                        serde_json::json!({
+                                            "schema": "znet.telemetry.v1",
+                                            "area": "rule",
+                                            "operation": "rule.overlay.startup_reconcile",
+                                            "outcome": "failed",
+                                            "code": error.code
+                                        }),
+                                    );
+                                }
+                            }
                             return;
                         }
                     }
