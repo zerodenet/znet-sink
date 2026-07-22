@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { LayoutGrid, List } from '@lucide/svelte';
   import { getAppErrorMessage, handleAppError } from '$lib/services/core';
   import {
     listSubscriptions,
@@ -40,6 +42,8 @@
   const KERNEL_OPTIONS = [
     { value: 'zero', label: 'Zero' },
   ];
+  const VIEW_MODE_KEY = 'znet-subscriptions-view-mode';
+  type ViewMode = 'card' | 'list';
 
   type FormState = {
     name: string;
@@ -67,6 +71,7 @@
   let deleteTarget = $state<SubscriptionProfile | null>(null);
   let editingId = $state<string | null>(null);
   let searchQuery = $state('');
+  let viewMode = $state<ViewMode>('list');
 
   let form = $state<FormState>(emptyForm());
   const busy = $derived(
@@ -81,6 +86,23 @@
         )
       : subscriptions
   );
+
+  function loadViewMode(): ViewMode {
+    try {
+      return localStorage.getItem(VIEW_MODE_KEY) === 'card' ? 'card' : 'list';
+    } catch {
+      return 'list';
+    }
+  }
+
+  function setViewMode(mode: ViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // View preference persistence is best effort.
+    }
+  }
 
   function emptyForm(): FormState {
     return {
@@ -330,8 +352,9 @@
     return proxyConfigs.find(c => c.id === id)?.name ?? '自动创建';
   }
 
-  $effect(() => {
-    refresh();
+  onMount(() => {
+    viewMode = loadViewMode();
+    void refresh();
   });
 </script>
 
@@ -342,7 +365,33 @@
       <span class="panel-title">订阅管理</span>
       <span class="panel-subtitle">订阅链接会自动转换为 Zero 内核配置并关联代理配置</span>
     </div>
-    <div class="flex items-center gap-2">
+    <div class="header-actions">
+      {#if subscriptions.length > 0}
+        <div class="view-switch" role="group" aria-label="订阅显示方式">
+          <button
+            type="button"
+            class="view-switch-button"
+            class:active={viewMode === 'card'}
+            onclick={() => setViewMode('card')}
+            title="卡片视图"
+            aria-label="卡片视图"
+            aria-pressed={viewMode === 'card'}
+          >
+            <LayoutGrid class="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            class="view-switch-button"
+            class:active={viewMode === 'list'}
+            onclick={() => setViewMode('list')}
+            title="列表视图"
+            aria-label="列表视图"
+            aria-pressed={viewMode === 'list'}
+          >
+            <List class="h-3.5 w-3.5" />
+          </button>
+        </div>
+      {/if}
       {#if subscriptions.length > 0}
         <input
           bind:value={searchQuery}
@@ -401,7 +450,7 @@
       </div>
     </div>
   {:else}
-    <div class="list-scroll">
+    <div class="list-scroll" class:card-view={viewMode === 'card'}>
       {#if filtered.length === 0 && searchQuery}
         <div class="panel-empty">无匹配结果</div>
       {/if}
@@ -684,6 +733,48 @@
     opacity: 0.8;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .view-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--muted);
+  }
+
+  .view-switch-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 27px;
+    height: 25px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .view-switch-button:hover {
+    color: var(--foreground);
+  }
+
+  .view-switch-button.active {
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+
   .search-input {
     width: 130px;
     height: 28px;
@@ -769,6 +860,14 @@
     min-height: 0;
   }
 
+  .list-scroll.card-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    align-content: start;
+    gap: 10px;
+    padding: 10px;
+  }
+
   .list-row {
     display: flex;
     align-items: flex-start;
@@ -782,6 +881,59 @@
   .list-row:hover {
     background: var(--muted);
     border-color: var(--border);
+  }
+
+  .card-view .list-row {
+    min-height: 210px;
+    padding: 13px;
+    flex-direction: column;
+    align-items: stretch;
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--card) 94%, var(--muted));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .card-view .list-row:hover,
+  .card-view .list-row:focus-within {
+    background: var(--card);
+    border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.07);
+  }
+
+  .card-view .row-main {
+    width: 100%;
+  }
+
+  .card-view .row-name {
+    font-size: 13.5px;
+  }
+
+  .card-view .row-url {
+    max-width: 100%;
+  }
+
+  .card-view .traffic-bar-wrap {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .card-view .traffic-bar-track {
+    width: 100%;
+    max-width: none;
+  }
+
+  .card-view .traffic-label {
+    white-space: normal;
+  }
+
+  .card-view .row-actions {
+    width: 100%;
+    margin-top: auto;
+    padding-top: 8px;
+    justify-content: flex-end;
+    border-top: 1px solid var(--border);
+    opacity: 1;
   }
 
   .list-row.disabled .row-name {
@@ -1097,5 +1249,34 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 700px) {
+    .panel-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .header-actions {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+
+    .search-input {
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .search-input:focus {
+      width: auto;
+    }
+
+    .list-scroll.card-view {
+      grid-template-columns: 1fr;
+    }
+
+    .form-row {
+      flex-direction: column;
+    }
   }
 </style>
