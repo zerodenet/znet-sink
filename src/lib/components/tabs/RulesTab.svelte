@@ -437,23 +437,28 @@
             type="button"
             class="row-main"
             onclick={() => openEdit(item)}
-            disabled={busy}
+            disabled={busy || item.builtIn}
+            title={item.builtIn ? '内置规则随应用提供，可调整绑定但不能直接编辑' : '编辑规则'}
           >
             <div class="row-top">
               <span class="row-name">{item.name}</span>
               <Badge variant={item.artifact ? 'secondary' : 'outline'}>
                 {item.artifact ? 'ZRS 已就绪' : '待构建'}
               </Badge>
-              <Badge variant="outline">{item.source ? '外部来源' : '本地'}</Badge>
+              <Badge variant="outline">{item.builtIn ? '内置' : item.source ? '外部来源' : '本地'}</Badge>
               {#if item.commonBinding?.enabled}
                 <Badge variant="secondary">公共规则</Badge>
               {/if}
             </div>
 
             <div class="row-meta">
-              <span>{item.semanticIr.rules.length} 条源规则</span>
-              <span>→</span>
-              <span>{item.artifact?.entryCount ?? 0} 个索引项</span>
+              {#if item.builtIn}
+                <span>{item.artifact?.entryCount ?? 0} 条内置规则</span>
+              {:else}
+                <span>{item.semanticIr.rules.length} 条源规则</span>
+                <span>→</span>
+                <span>{item.artifact?.entryCount ?? 0} 个索引项</span>
+              {/if}
               <span>·</span>
               <span>{formatBytes(item.artifact?.fileSize)}</span>
               {#if item.artifact}
@@ -496,6 +501,7 @@
                   aria-label="匹配动作"
                 >
                   <option value="final">沿用最终路由</option>
+                  <option value="proxy">代理</option>
                   <option value="direct">直连</option>
                   <option value="reject">拒绝</option>
                 </select>
@@ -525,20 +531,22 @@
                 <RefreshCw class={`h-3.5 w-3.5 ${updatingId === item.id ? 'spin' : ''}`} />
               </Button>
             {/if}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              class="delete-button"
-              onclick={(event) => {
-                event.stopPropagation();
-                requestRemove(item);
-              }}
-              disabled={busy}
-              title="删除"
-              aria-label="删除"
-            >
-              <Trash2 class="h-3.5 w-3.5" />
-            </Button>
+            {#if !item.builtIn}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="delete-button"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  requestRemove(item);
+                }}
+                disabled={busy}
+                title="删除"
+                aria-label="删除"
+              >
+                <Trash2 class="h-3.5 w-3.5" />
+              </Button>
+            {/if}
           </div>
         </div>
       {/each}

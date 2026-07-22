@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use crate::errors::AppResult;
 use crate::models::app_config::AppConfig;
 use crate::services::domain_store::DomainStoreData;
-use crate::services::{app_config_store, debug_store, domain_store, log_store, system_proxy_guard};
+use crate::services::{
+    app_config_store, builtin_rules, debug_store, domain_store, log_store, system_proxy_guard,
+};
 
 use super::{Lifecycle, OnPhase, Phase};
 
@@ -70,7 +72,7 @@ impl OnPhase for ConfigPhase {
             );
             AppConfig::default()
         });
-        let domain_data = domain_store::load_all().unwrap_or_else(|e| {
+        let mut domain_data = domain_store::load_all().unwrap_or_else(|e| {
             crate::services::logs::znet_log(
                 None,
                 crate::models::logs::LogLevel::Warn,
@@ -78,6 +80,13 @@ impl OnPhase for ConfigPhase {
             );
             DomainStoreData::default()
         });
+        if let Err(error) = builtin_rules::install_defaults(&mut domain_data.rule_sets) {
+            crate::services::logs::znet_log(
+                None,
+                crate::models::logs::LogLevel::Warn,
+                format!("failed to install built-in rules: {error:?}"),
+            );
+        }
         let logs = log_store::load_recent(app_config.logs.max_entries).unwrap_or_else(|e| {
             crate::services::logs::znet_log(
                 None,

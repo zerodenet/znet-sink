@@ -1,5 +1,6 @@
 pub mod app_config;
 pub mod app_config_store;
+pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
 pub mod core_config;

@@ -141,11 +141,19 @@ pub struct AppTunConfig {
     pub mtu: u16,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppRoutingConfig {
     #[serde(default)]
     pub inject_common_rules: bool,
+}
+
+impl Default for AppRoutingConfig {
+    fn default() -> Self {
+        Self {
+            inject_common_rules: true,
+        }
+    }
 }
 
 impl Default for AppTunConfig {

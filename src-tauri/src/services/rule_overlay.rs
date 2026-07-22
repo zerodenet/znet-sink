@@ -274,6 +274,10 @@ fn compose_with(
             .action
         {
             CommonRuleAction::Final => final_action.clone(),
+            CommonRuleAction::Proxy => json!({
+                "type": "route",
+                "outbound": proxy_mode::resolve_global_outbound(base, None)
+            }),
             CommonRuleAction::Direct => json!({ "type": "direct" }),
             CommonRuleAction::Reject => json!({ "type": "reject" }),
         };
@@ -465,6 +469,8 @@ mod tests {
             id: id.into(),
             name: id.into(),
             enabled: true,
+            built_in: false,
+            provenance: None,
             managed_by_subscription_id: None,
             common_binding: Some(CommonRuleBinding {
                 enabled: true,
@@ -578,6 +584,28 @@ mod tests {
         );
         let _ = fs::remove_file(later_path);
         let _ = fs::remove_file(first_path);
+    }
+
+    #[test]
+    fn proxy_binding_routes_to_the_resolved_proxy_group() {
+        let (profile, path) = verified_profile("gfw", 40, CommonRuleAction::Proxy);
+        let base = json!({
+            "mode":{"type":"rule"},
+            "outbound_groups":[{"tag":"Auto","type":"url_test","outbounds":["node"]}],
+            "route":{"rule_sets":[],"rules":[],"final":{"type":"direct"}}
+        });
+
+        let composed = compose_with(&base, true, &[profile]).unwrap();
+
+        assert_eq!(
+            composed.config["route"]["rules"][0]["action"]["type"],
+            "route"
+        );
+        assert_eq!(
+            composed.config["route"]["rules"][0]["action"]["outbound"],
+            "Auto"
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]

@@ -8,6 +8,10 @@ pub struct RuleSetProfile {
     pub name: String,
     pub enabled: bool,
     #[serde(default)]
+    pub built_in: bool,
+    #[serde(default)]
+    pub provenance: Option<RuleSetProvenance>,
+    #[serde(default)]
     pub managed_by_subscription_id: Option<String>,
     #[serde(default)]
     pub common_binding: Option<CommonRuleBinding>,
@@ -30,8 +34,20 @@ pub struct RuleSetProfile {
 #[serde(rename_all = "snake_case")]
 pub enum CommonRuleAction {
     Final,
+    Proxy,
     Direct,
     Reject,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSetProvenance {
+    pub repository: String,
+    pub revision: String,
+    pub license: String,
+    pub source_url: String,
+    pub source_sha256: String,
+    pub ir_sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

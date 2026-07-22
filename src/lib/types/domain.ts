@@ -89,6 +89,8 @@ export interface RuleSetProfile {
   id: string;
   name: string;
   enabled: boolean;
+  builtIn: boolean;
+  provenance?: RuleSetProvenance;
   managedBySubscriptionId?: string;
   commonBinding?: CommonRuleBinding;
   semanticIr: ZeroRuleIr;
@@ -100,7 +102,16 @@ export interface RuleSetProfile {
   lastError?: string;
 }
 
-export type CommonRuleAction = 'final' | 'direct' | 'reject';
+export interface RuleSetProvenance {
+  repository: string;
+  revision: string;
+  license: string;
+  sourceUrl: string;
+  sourceSha256: string;
+  irSha256: string;
+}
+
+export type CommonRuleAction = 'final' | 'proxy' | 'direct' | 'reject';
 export interface CommonRuleBinding { enabled: boolean; action: CommonRuleAction; order: number; }
 export interface CommonRuleBindingInput { ruleSetId: string; enabled: boolean; action: CommonRuleAction; order: number; }
 export interface CommonRuleInjectionStatus {

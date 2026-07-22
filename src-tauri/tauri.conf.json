@@ -41,6 +41,10 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": "v1Compatible",
+    "resources": [
+      "resources/builtin-rules/NOTICE.md",
+      "resources/builtin-rules/LICENSE.meta-rules-dat"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

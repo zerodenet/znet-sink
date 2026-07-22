@@ -444,7 +444,7 @@ fn rule_count(content: &Value) -> usize {
         .unwrap_or(0)
 }
 
-fn resolve_global_outbound(content: &Value, provided: Option<&str>) -> String {
+pub(crate) fn resolve_global_outbound(content: &Value, provided: Option<&str>) -> String {
     provided
         .map(str::trim)
         .filter(|value| !value.is_empty())

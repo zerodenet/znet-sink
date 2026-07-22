@@ -118,6 +118,11 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         .iter()
         .find(|item| item.id == id)
         .cloned();
+    if previous_profile.as_ref().is_some_and(|item| item.built_in) {
+        return Err(AppError::invalid_argument(
+            "built-in rules can be rebound or disabled, but not edited",
+        ));
+    }
     if previous_profile
         .as_ref()
         .is_some_and(is_subscription_managed_rule_set)
@@ -174,6 +179,8 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         id: id.clone(),
         name,
         enabled: input.enabled.unwrap_or(true),
+        built_in: false,
+        provenance: None,
         managed_by_subscription_id: previous_profile
             .as_ref()
             .and_then(|item| item.managed_by_subscription_id.clone()),
@@ -423,6 +430,8 @@ pub(crate) async fn sync_managed_subscription_sources(
             id,
             name: format!("{subscription_name} / {}", managed.tag),
             enabled: true,
+            built_in: false,
+            provenance: None,
             managed_by_subscription_id: Some(subscription_id.to_string()),
             common_binding: None,
             semantic_ir,
@@ -464,6 +473,8 @@ fn push_managed_source_failure(
         id,
         name: format!("{subscription_name} / {tag}"),
         enabled: true,
+        built_in: false,
+        provenance: None,
         managed_by_subscription_id: Some(subscription_id.to_string()),
         common_binding: None,
         semantic_ir: json!({
@@ -569,6 +580,11 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     {
         return Err(AppError::invalid_argument(
             "subscription-managed rules must be removed through their subscription",
+        ));
+    }
+    if items.iter().any(|item| item.id == id && item.built_in) {
+        return Err(AppError::invalid_argument(
+            "built-in rules can be disabled, but not removed",
         ));
     }
     let mut next = items.clone();
@@ -1189,6 +1205,8 @@ mod tests {
             id: "asset".into(),
             name: "Asset".into(),
             enabled: true,
+            built_in: false,
+            provenance: None,
             managed_by_subscription_id: None,
             common_binding: None,
             semantic_ir: json!({"version":1,"name":"Asset","rules":[]}),

@@ -16,7 +16,7 @@ fn default_app_config_is_gui_schema() {
     assert_eq!(config.local_proxy.host, "127.0.0.1");
     assert_eq!(config.local_proxy.port, 7890);
     assert!(config.local_proxy.source_proxy_config_id.is_none());
-    assert!(!config.routing.inject_common_rules);
+    assert!(config.routing.inject_common_rules);
 }
 
 #[test]
