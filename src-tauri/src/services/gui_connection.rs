@@ -9,7 +9,8 @@ use crate::models::{
     gui_core::{GuiConnectionStatus, GuiCoreHealth},
 };
 use crate::services::{
-    common::lock, core_config, core_process, local_proxy, system_proxy, system_proxy_guard,
+    common::lock, core_config, core_process, local_proxy, network_probe, system_proxy,
+    system_proxy_guard,
 };
 use crate::state::app_state::AppState;
 
@@ -109,20 +110,26 @@ pub async fn connect(
         .await;
     }
 
-    build_status(state.inner(), "connected", None)
+    let status = build_status(state.inner(), "connected", None)
         .await
         .map(|status| GuiConnectionStatus {
             active_proxy_config_id,
             ..status
-        })
+        })?;
+    network_probe::emit_host_network_changed(&app_handle, "system_proxy.enabled");
+    Ok(status)
 }
 
-pub async fn disconnect(state: State<'_, AppState>) -> AppResult<GuiConnectionStatus> {
+pub async fn disconnect(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<GuiConnectionStatus> {
     let proxy_result = system_proxy_guard::disable_with_guard();
+    let proxy_changed = proxy_result.is_ok();
 
     let error = proxy_result.err().map(|error| error.message);
 
-    build_status(
+    let status = build_status(
         state.inner(),
         if error.is_some() {
             "failed"
@@ -131,7 +138,11 @@ pub async fn disconnect(state: State<'_, AppState>) -> AppResult<GuiConnectionSt
         },
         error,
     )
-    .await
+    .await?;
+    if proxy_changed {
+        network_probe::emit_host_network_changed(&app_handle, "system_proxy.disabled");
+    }
+    Ok(status)
 }
 
 async fn build_status(

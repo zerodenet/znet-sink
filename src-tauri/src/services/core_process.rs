@@ -233,6 +233,7 @@ pub fn restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
         };
         system_proxy_guard::enable_with_guard(&host, port)?;
     }
+    crate::services::network_probe::emit_host_network_changed(&app_handle, "core.restarted");
     Ok(status)
 }
 
@@ -628,6 +629,10 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
                         let _ = app_handle.emit(
                             "core:process-restarted",
                             json!({ "attempt": restart_budget }),
+                        );
+                        crate::services::network_probe::emit_host_network_changed(
+                            &app_handle,
+                            "core.watchdog_restarted",
                         );
                         continue 'outer; // back to Phase 1 with the new child
                     }

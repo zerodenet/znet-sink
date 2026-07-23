@@ -11,6 +11,7 @@ import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gu
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
+const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
 
 // ── Exported types ──
 
@@ -61,6 +62,7 @@ class CoreEventsService {
   private _unlistenEvent: UnlistenFn | null = null;
   private _unlistenStatus: UnlistenFn | null = null;
   private _unlistenProcess: UnlistenFn | null = null;
+  private _unlistenHostNetwork: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
   private _lifecycle = new EventLifecycleQueue();
 
@@ -114,6 +116,7 @@ class CoreEventsService {
       && this._unlistenEvent
       && this._unlistenStatus
       && this._unlistenProcess
+      && this._unlistenHostNetwork
     ) {
       return;
     }
@@ -138,6 +141,14 @@ class CoreEventsService {
         this._unlistenProcess = await listen<{ reason: string; code: number | null; message: string }>('core:process-exited', (event) => {
           this._handleProcessExited(event.payload);
         });
+      }
+      if (!this._unlistenHostNetwork) {
+        this._unlistenHostNetwork = await listen<{ reason: string; occurredAtUnixMs: number }>(
+          HOST_NETWORK_CHANGED_EVENT,
+          () => {
+            void guiState.probeNetwork();
+          },
+        );
       }
 
       const sub = await startGuiEvents(events);
@@ -165,9 +176,11 @@ class CoreEventsService {
     this._unlistenEvent?.();
     this._unlistenStatus?.();
     this._unlistenProcess?.();
+    this._unlistenHostNetwork?.();
     this._unlistenEvent = null;
     this._unlistenStatus = null;
     this._unlistenProcess = null;
+    this._unlistenHostNetwork = null;
     this._pendingDeltas = [];
     this.activeConnections = [];
     this._policyProbeWaiters.clear();

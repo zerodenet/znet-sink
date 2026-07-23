@@ -34,6 +34,8 @@ import type {
   GuiFeatureStatus,
 } from '$lib/types/gui-api';
 
+const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
+
 class GuiStateStore {
   selfTest = $state<SelfTestSnapshot | null>(null);
   connection = $state<ConnectionStatus | null>(null);
@@ -64,6 +66,8 @@ class GuiStateStore {
 
   private isInitialized = false;
   private lastStatusTick = -1;
+  private networkProbeTimer: ReturnType<typeof setInterval> | null = null;
+  private networkProbePending = false;
 
   async initialize() {
     if (this.isInitialized) return;
@@ -72,6 +76,7 @@ class GuiStateStore {
 
     // Host-network detection is GUI-owned and starts independently of all
     // kernel/config/runtime refresh work below.
+    this.startPeriodicNetworkProbe();
     void this.probeNetwork();
     await this.refreshAll();
 
@@ -251,8 +256,12 @@ class GuiStateStore {
   }
 
   async probeNetwork() {
-    if (this.networkProbeLoading) return;
+    if (this.networkProbeLoading) {
+      this.networkProbePending = true;
+      return;
+    }
     this.networkProbeLoading = true;
+    this.networkProbePending = false;
     this.networkProbeError = null;
     try {
       this.networkProbe = await guiNetworkProbe();
@@ -261,6 +270,9 @@ class GuiStateStore {
       this.networkProbeError = this.errorMessage(error);
     } finally {
       this.networkProbeLoading = false;
+      if (this.networkProbePending && this.isInitialized) {
+        void this.probeNetwork();
+      }
     }
   }
 
@@ -423,6 +435,21 @@ class GuiStateStore {
 
   destroy() {
     this.isInitialized = false;
+    this.networkProbePending = false;
+    this.stopPeriodicNetworkProbe();
+  }
+
+  private startPeriodicNetworkProbe() {
+    if (this.networkProbeTimer) return;
+    this.networkProbeTimer = setInterval(() => {
+      if (this.isInitialized) void this.probeNetwork();
+    }, NETWORK_PROBE_INTERVAL_MS);
+  }
+
+  private stopPeriodicNetworkProbe() {
+    if (!this.networkProbeTimer) return;
+    clearInterval(this.networkProbeTimer);
+    this.networkProbeTimer = null;
   }
 
   // Derived state

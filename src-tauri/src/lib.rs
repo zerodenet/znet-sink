@@ -27,7 +27,7 @@ use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
 use crate::lifecycle::phases;
-use crate::services::{core_process, local_proxy, system_proxy_guard};
+use crate::services::{core_process, local_proxy, network_probe, system_proxy_guard};
 use crate::state::app_state::AppState;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -85,14 +85,19 @@ fn tray_enable_system_proxy(app: tauri::AppHandle) {
             .lock()
             .map(|config| config.local_proxy.port)
             .unwrap_or(7890);
-        let _ = local_proxy::wait_until_listening(&host, port);
-        let _ = system_proxy_guard::enable_with_guard(&host, port);
+        if local_proxy::wait_until_listening(&host, port).is_ok()
+            && system_proxy_guard::enable_with_guard(&host, port).is_ok()
+        {
+            network_probe::emit_host_network_changed(&app, "system_proxy.enabled");
+        }
     });
 }
 
-fn tray_disable_system_proxy(_app: tauri::AppHandle) {
+fn tray_disable_system_proxy(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = system_proxy_guard::disable_with_guard();
+        if system_proxy_guard::disable_with_guard().is_ok() {
+            network_probe::emit_host_network_changed(&app, "system_proxy.disabled");
+        }
     });
 }
 

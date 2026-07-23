@@ -4,7 +4,8 @@ use crate::errors::AppResult;
 use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
 use crate::services::{
-    app_config, common, core_process, interaction_mode, kernel_manager, system_proxy_guard,
+    app_config, common, core_process, interaction_mode, kernel_manager, network_probe,
+    system_proxy_guard,
 };
 use crate::state::app_state::AppState;
 
@@ -78,6 +79,7 @@ pub async fn kernel_install_version(
                 error.message
             ))
         })?;
+        network_probe::emit_host_network_changed(&app, "core.version_restarted");
     }
 
     Ok(outcome.result)

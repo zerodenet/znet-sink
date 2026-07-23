@@ -1,8 +1,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tauri::{AppHandle, Emitter};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::default_network_probe_urls;
+
+pub const HOST_NETWORK_CHANGED_EVENT: &str = "host-network:changed";
+
+pub fn emit_host_network_changed(app_handle: &AppHandle, reason: &str) {
+    let _ = app_handle.emit(
+        HOST_NETWORK_CHANGED_EVENT,
+        serde_json::json!({
+            "reason": reason,
+            "occurredAtUnixMs": crate::services::common::now_unix_ms(),
+        }),
+    );
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

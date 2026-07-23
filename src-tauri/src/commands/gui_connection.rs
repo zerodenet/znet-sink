@@ -19,6 +19,9 @@ pub async fn gui_connect(
 }
 
 #[tauri::command]
-pub async fn gui_disconnect(state: State<'_, AppState>) -> AppResult<GuiConnectionStatus> {
-    gui_connection::disconnect(state).await
+pub async fn gui_disconnect(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<GuiConnectionStatus> {
+    gui_connection::disconnect(app_handle, state).await
 }
