@@ -5,14 +5,24 @@
   import AppLogo from '$lib/components/AppLogo.svelte';
 
   let step = $state(0);
-  let selectedMode = $state<'lite' | 'pro'>('lite');
-  const totalSteps = 3;
+  let selectedMode = $state<'lite' | 'pro'>(store.uiMode);
+  let entering = $state(false);
+  let enterError = $state<string | null>(null);
+  const totalSteps = 4;
 
   function next() { if (step < totalSteps - 1) step++; }
   function prev() { if (step > 0) step--; }
 
   async function enterApp(mode: 'lite' | 'pro') {
-    await store.startApp(mode);
+    if (entering) return;
+    entering = true;
+    enterError = null;
+    try {
+      await store.startApp(mode);
+    } catch (error) {
+      enterError = error instanceof Error ? error.message : String(error);
+      entering = false;
+    }
   }
 </script>
 
@@ -46,17 +56,34 @@
       {/each}
     </div>
 
-    <!-- Step 1: Kernel setup -->
+    <!-- Step 1: Mode selection -->
     {#if step === 0}
       <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
         <div class="step-number">01</div>
-        <h3 class="step-title">配置内核</h3>
+        <h3 class="step-title">选择界面模式</h3>
         <p class="step-desc">
-          GUI 和内核是分离的。内核负责代理引擎，系统代理由 GUI 作为外置开关设置。
+          简约模式保留日常使用入口；专业模式开放节点、静态配置、规则、连接和调试等完整控制面。
         </p>
-        <p class="step-desc" style="font-size: 12px; opacity: 0.7;">
-          完成引导后，在「设置 → 内核」中指定内核路径即可开始使用。
-        </p>
+        <div class="mode-cards">
+          <button
+            onclick={() => selectedMode = 'lite'}
+            class="mode-card {selectedMode === 'lite' ? 'selected' : ''}"
+            aria-pressed={selectedMode === 'lite'}
+          >
+            <span class="mode-card-title">简约模式</span>
+            <span class="mode-card-desc">概览、订阅、日志和设置</span>
+            <span class="mode-card-badge">推荐入门</span>
+          </button>
+          <button
+            onclick={() => selectedMode = 'pro'}
+            class="mode-card {selectedMode === 'pro' ? 'selected' : ''}"
+            aria-pressed={selectedMode === 'pro'}
+          >
+            <span class="mode-card-title">专业模式</span>
+            <span class="mode-card-desc">完整运行、配置与诊断入口</span>
+            <span class="mode-card-badge pro">高级控制</span>
+          </button>
+        </div>
         <div class="step-actions">
           <button onclick={next} class="primary-action">
             下一步
@@ -64,51 +91,66 @@
         </div>
       </div>
 
-    <!-- Step 2: Mode selection -->
+    <!-- Step 2: Kernel setup -->
     {:else if step === 1}
       <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
         <div class="step-number">02</div>
-        <h3 class="step-title">选择界面模式</h3>
+        <h3 class="step-title">安装 Zero 内核</h3>
         <p class="step-desc">
-          根据你的使用习惯选择模式。随时可以在标题栏切换。
+          GUI 负责管理，Zero 内核负责实际代理。进入应用后，可从概览页的「内核版本」卡片打开版本管理并安装；也可以在「设置 → 内核」选择已有可执行文件。
         </p>
-        <div class="mode-cards">
-          <button onclick={() => selectedMode = 'lite'} class="mode-card {selectedMode === 'lite' ? 'selected' : ''}">
-            <span class="mode-card-title">简约模式</span>
-            <span class="mode-card-desc">概览、配置、订阅、设置</span>
-            <span class="mode-card-badge">推荐入门</span>
-          </button>
-          <button onclick={() => selectedMode = 'pro'} class="mode-card {selectedMode === 'pro' ? 'selected' : ''}">
-            <span class="mode-card-title">专业模式</span>
-            <span class="mode-card-desc">完整界面：连接、日志、调试与能力信息</span>
-            <span class="mode-card-badge pro">高级用户</span>
-          </button>
-        </div>
+        <p class="step-desc subtle">
+          稳定版适合日常使用；beta 和 nightly 版本可在版本管理中按需选择。
+        </p>
         <div class="step-actions">
           <button onclick={prev} class="secondary-action">上一步</button>
           <button onclick={next} class="primary-action">下一步</button>
         </div>
       </div>
 
-    <!-- Step 3: Getting started -->
-    {:else}
+    <!-- Step 3: Add a proxy source -->
+    {:else if step === 2}
       <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
         <div class="step-number">03</div>
-        <h3 class="step-title">快速开始</h3>
+        <h3 class="step-title">添加代理来源</h3>
         <p class="step-desc">
-          配置好内核后，在概览页点击「一键开启服务」即可启动内核并设置系统代理。
-          以下是一些建议：
+          推荐在「订阅」页点击「新增」，保存订阅链接后执行同步。同步结果会写入关联的代理配置，并自动更新后续节点数据。
         </p>
         <ul class="tips-list">
-          <li>先在「设置 → 内核」中配置内核路径</li>
-          <li>在「配置」页添加代理配置文件（支持本地 JSON 或粘贴内容）</li>
-          <li>在「订阅」页添加订阅 URL，自动获取最新节点</li>
-          <li>配置完毕后，在「概览」页点击「一键开启服务」启动内核并设置系统代理</li>
+          <li>日常使用：新增订阅并同步，后续可启用自动同步</li>
+          <li>专业模式：也可在「配置」页导入本地 JSON 或粘贴静态配置</li>
+          <li>规则和公共规则可在专业模式的「规则」页继续管理</li>
         </ul>
         <div class="step-actions">
           <button onclick={prev} class="secondary-action">上一步</button>
-          <button onclick={() => enterApp(selectedMode)} class="primary-action">
-            开始使用
+          <button onclick={next} class="primary-action">下一步</button>
+        </div>
+      </div>
+
+    <!-- Step 4: Getting started -->
+    {:else}
+      <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
+        <div class="step-number">04</div>
+        <h3 class="step-title">开启服务</h3>
+        <p class="step-desc">
+          准备好内核和代理配置后，在概览页点击「开启服务」。应用会启动内核并开启系统代理；若内核已经运行，按钮会显示为「开启系统代理」。
+        </p>
+        <ul class="tips-list">
+          <li>概览页会显示内核、系统代理、TUN 和当前路由模式</li>
+          <li>本地公网 IP 会在启动、重启和代理切换后自动重新检测</li>
+          <li>简约/专业模式可随时在标题栏或设置中切换</li>
+        </ul>
+        {#if enterError}
+          <div class="enter-error" role="alert">保存界面模式失败：{enterError}</div>
+        {/if}
+        <div class="step-actions">
+          <button onclick={prev} class="secondary-action" disabled={entering}>上一步</button>
+          <button
+            onclick={() => enterApp(selectedMode)}
+            class="primary-action"
+            disabled={entering}
+          >
+            {entering ? '正在进入…' : '开始使用'}
           </button>
         </div>
       </div>
@@ -246,6 +288,23 @@
     max-width: 380px;
   }
 
+  .step-desc.subtle {
+    font-size: 12px;
+    opacity: 0.72;
+  }
+
+  .enter-error {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--destructive) 8%, transparent);
+    color: var(--destructive);
+    font-size: 11.5px;
+    line-height: 1.45;
+    text-align: left;
+  }
+
   .step-actions {
     display: flex;
     gap: 10px;
@@ -266,6 +325,11 @@
   }
 
   .primary-action:hover { opacity: 0.88; }
+  .primary-action:disabled,
+  .secondary-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
 
   .secondary-action {
     height: 36px;

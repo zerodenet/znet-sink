@@ -1,6 +1,11 @@
 import { browser } from '$app/environment';
 import type { ThemeMode } from './theme.svelte';
 import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from './core';
+import {
+  completeOnboarding,
+  isOnboardingRequired,
+  resetOnboarding as resetOnboardingStorage,
+} from './onboarding';
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
@@ -28,14 +33,12 @@ class AppStateStore {
     actions: new Map(),
     features: new Map(),
   });
+  private onboardingRequired = true;
 
   constructor() {
     if (browser) {
       this.hydrateFromLocalStorage();
-      if (localStorage.getItem('znet-reset') === '1') {
-        this.isInitialized = false;
-        this.appLoading = false;
-      }
+      this.onboardingRequired = isOnboardingRequired(localStorage);
     }
   }
 
@@ -72,11 +75,7 @@ class AppStateStore {
         this.activeTab = config.ui.defaultRoute;
       }
 
-      if (typeof localStorage !== 'undefined' && localStorage.getItem('znet-reset') === '1') {
-        localStorage.removeItem('znet-reset');
-      } else {
-        this.isInitialized = true;
-      }
+      this.isInitialized = !this.onboardingRequired;
     } catch (e) {
       this.loadError = `后端加载失败: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
@@ -102,11 +101,12 @@ class AppStateStore {
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
     }
-    await this.loadFromBackend();
-    if (!this.isInitialized) {
-      this.isInitialized = true;
-    }
     await this.persistUiMode(mode);
+    if (browser) {
+      completeOnboarding(localStorage);
+    }
+    this.onboardingRequired = false;
+    this.isInitialized = true;
   }
 
   openSettings(section: SettingsSection = 'core') {
@@ -211,16 +211,13 @@ class AppStateStore {
     await updateAppConfig({ ui: { uiMode: mode } });
   }
 
-  resetApp() {
+  resetOnboarding() {
+    this.onboardingRequired = true;
     this.isInitialized = false;
     this.activeTab = 'overview';
     this.settingsSection = 'general';
-    this.selectedTheme = 'system';
     if (browser) {
-      localStorage.removeItem('znet-is-init');
-      localStorage.removeItem('znet-ui-mode');
-      localStorage.removeItem('znet-theme');
-      localStorage.setItem('znet-reset', '1');
+      resetOnboardingStorage(localStorage);
     }
   }
 }

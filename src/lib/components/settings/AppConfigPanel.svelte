@@ -459,9 +459,9 @@
   <div class="config-row">
     <div class="config-row-label">
       <span class="label-text">重置引导</span>
-      <span class="label-desc">清除本地状态，重启后重新显示欢迎引导。</span>
+      <span class="label-desc">重新显示当前版本的新手引导，不会清除主题、模式或其他设置。</span>
     </div>
-    <button class="reset-btn" onclick={() => { store.resetApp(); location.reload(); }}>
+    <button class="reset-btn" onclick={() => store.resetOnboarding()}>
       重置
     </button>
   </div>
