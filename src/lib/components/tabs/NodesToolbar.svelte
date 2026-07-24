@@ -233,15 +233,16 @@
 
   .search-input {
     width: 130px;
-    height: 28px;
+    height: var(--control-height);
     padding: 0 8px 0 26px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--muted);
+    border-radius: var(--control-radius);
+    border: 1px solid var(--input);
+    background: var(--background);
     color: var(--foreground);
     font-size: 12px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     outline: none;
-    transition: border-color 0.15s ease, width 0.2s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, width 0.2s ease;
   }
 
   .search-input::placeholder {
@@ -250,7 +251,8 @@
   }
 
   .search-input:focus {
-    border-color: rgba(99, 102, 241, 0.4);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
     width: 180px;
   }
 
@@ -270,8 +272,8 @@
   }
 
   .view-btn {
-    width: 28px;
-    height: 24px;
+    width: var(--control-height-compact);
+    height: var(--control-height-compact);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -287,22 +289,26 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    height: 28px;
+    height: var(--control-height);
     padding: 0 10px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    color: var(--foreground);
-    font-size: 11.5px;
+    border-radius: var(--control-radius);
+    border: 1px solid transparent;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.12s ease, border-color 0.12s ease;
+    transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
     white-space: nowrap;
   }
 
   .probe-all-btn:hover:not(:disabled) {
-    background: var(--surface);
-    border-color: rgba(99, 102, 241, 0.2);
+    background: color-mix(in srgb, var(--primary) 88%, transparent);
+  }
+
+  .probe-all-btn:active:not(:disabled) {
+    transform: translateY(1px);
   }
 
   .probe-all-btn:disabled {

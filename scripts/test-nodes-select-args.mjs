@@ -74,5 +74,19 @@ assertContains(
   'isCoreAvailable: boolean;',
   'NodesToolbar should expose core readiness instead of a full connected-state flag',
 );
+assertContains(
+  'src/lib/components/tabs/NodesTab.svelte',
+  'class="node-list node-list-scroll"',
+  'NodesTab should give the single-group list view a dedicated scroll container',
+);
+assertContains(
+  'src/lib/components/tabs/NodesTab.svelte',
+  `.node-list-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }`,
+  'NodesTab single-group list view should fill the panel and scroll vertically',
+);
 
 console.log('nodes-select-args: ok');

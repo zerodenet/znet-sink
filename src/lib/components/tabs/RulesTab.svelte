@@ -327,7 +327,7 @@
   <div class="panel-header">
     <div class="panel-title-group">
       <span class="panel-title">规则集</span>
-      <span class="panel-subtitle">统一管理 Zero Rule IR，并构建为内核可直接加载的 ZRS 产物</span>
+      <span class="panel-subtitle">管理规则源与 ZRS 产物</span>
     </div>
 
     <div class="header-actions">
@@ -358,12 +358,12 @@
       {#if sourceCount > 0}
         <Button variant="outline" size="sm" onclick={updateAll} disabled={busy}>
           <RefreshCw class={`h-3.5 w-3.5 ${updatingAll ? 'spin' : ''}`} />
-          <span>{updatingAll ? '更新中...' : '全部更新'}</span>
+          <span>{updatingAll ? '更新中...' : '更新全部'}</span>
         </Button>
       {/if}
       <Button size="sm" onclick={openNew} disabled={busy}>
         <Plus class="h-3.5 w-3.5" />
-        <span>新建规则集</span>
+        <span>新建</span>
       </Button>
     </div>
   </div>
@@ -371,7 +371,7 @@
   <div class="summary-strip">
     <div class="summary-copy">
       <ShieldCheck class="summary-icon h-4 w-4" />
-      <span>编辑内容保存为语义规则，运行时只加载完整校验后的不可变 ZRS 产物。</span>
+      <span>保存后生成并校验 ZRS 产物。</span>
     </div>
     {#if items.length > 0}
       <div class="summary-counts">
@@ -797,17 +797,17 @@
     align-items: center;
     gap: 2px;
     padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--muted);
+    border: 0;
+    border-radius: var(--control-radius);
+    background: var(--segment-bg);
   }
 
   .view-switch-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 27px;
-    height: 25px;
+    width: var(--control-height-compact);
+    height: var(--control-height-compact);
     padding: 0;
     border: 0;
     border-radius: 5px;
@@ -822,9 +822,9 @@
   }
 
   .view-switch-button.active {
-    background: var(--card);
+    background: var(--segment-active-bg);
     color: var(--foreground);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--segment-active-shadow);
   }
 
   .summary-strip {
@@ -1227,19 +1227,21 @@
 
   .field-select {
     width: 100%;
-    height: 36px;
+    height: 32px;
     padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--muted);
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
     color: var(--foreground);
     font: inherit;
     font-size: 12px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     outline: none;
   }
 
   .field-select:focus {
-    border-color: rgba(99, 102, 241, 0.35);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 
   .rules-section {

@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
   import { ChevronsUpDown, Clipboard, Pause, Radio, RefreshCcw, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import * as Select from '$lib/components/ui/select';
   import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
@@ -367,11 +368,11 @@
   });
 </script>
 
-<div class="flex-1 w-full flex flex-col gap-2 animate-fade-in overflow-hidden min-h-0">
+<div class="debug-page">
   <div class="debug-subtabs" role="tablist" aria-label="调试功能">
-    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</Button>
-    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</Button>
-    <Button variant="ghost" size="xs" class="debug-subtab" role="tab" aria-selected={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</Button>
+    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</Button>
+    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</Button>
+    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</Button>
   </div>
 
   {#if subTab === 'diagnostics'}
@@ -379,24 +380,30 @@
   {:else if subTab === 'versions'}
     <VersionManagementPanel />
   {:else}
-    <div class="debug-toolbar">
-      <div class="flex items-center gap-3">
-        <h3 class="text-sm font-bold text-foreground">IPC 调试</h3>
-        <span class="text-[11px] text-muted-foreground font-mono">
-          {hasMore ? `${frames.length}+` : frames.length} · TX {frames.filter(f => f.direction === 'tx').length} / RX {frames.filter(f => f.direction === 'rx').length}
-        </span>
-      </div>
-      <div class="debug-actions">
-        <Button variant="outline" size="xs" onclick={toggleExpandAll} title="展开或折叠全部">
+    <div class="debug-content">
+      <div class="debug-toolbar">
+        <div class="debug-toolbar-copy">
+          <span class="debug-toolbar-title">IPC 帧</span>
+          <span class="debug-toolbar-meta">
+            {hasMore ? `${frames.length}+` : frames.length} · TX {frames.filter(f => f.direction === 'tx').length} / RX {frames.filter(f => f.direction === 'rx').length}
+          </span>
+        </div>
+        <div class="debug-actions">
+        <Button variant="outline" size="sm" onclick={toggleExpandAll} title="展开或折叠全部 IPC 帧">
           <ChevronsUpDown />
-          {expandAll ? '折叠全部' : '展开全部'}
+          {expandAll ? '折叠' : '展开'}
         </Button>
-        <select bind:value={filterType} class="debug-filter">
-          {#each FRAME_TYPES as t}
-            <option value={t}>{t === 'all' ? '全部' : t}</option>
-          {/each}
-        </select>
-        <Button onclick={() => autoRefresh = !autoRefresh} variant={autoRefresh ? 'secondary' : 'outline'} size="xs" class="debug-live" aria-pressed={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
+        <Select.Root type="single" bind:value={filterType}>
+          <Select.Trigger size="sm" class="debug-filter" aria-label="筛选 IPC 帧类型">
+            {filterType === 'all' ? '全部类型' : filterType}
+          </Select.Trigger>
+          <Select.Content>
+            {#each FRAME_TYPES as t}
+              <Select.Item value={t} label={t === 'all' ? '全部类型' : t} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        <Button onclick={() => autoRefresh = !autoRefresh} variant={autoRefresh ? 'secondary' : 'outline'} size="sm" class="debug-live" aria-pressed={autoRefresh} title={autoRefresh ? '自动刷新已开启' : '自动刷新已暂停'}>
           {#if autoRefresh}<Radio />{:else}<Pause />{/if}
           {autoRefresh ? 'LIVE' : 'PAUSE'}
         </Button>
@@ -404,17 +411,17 @@
           onclick={copyVisibleFrames}
           disabled={visibleFrames.length === 0}
           variant="outline"
-          size="xs"
+          size="sm"
           title="复制当前筛选下已加载的完整 IPC 帧"
-        ><Clipboard />复制当前</Button>
-        <Button onclick={() => refresh({ replace: true })} variant="outline" size="xs" disabled={refreshing || clearing}>
+        ><Clipboard />复制</Button>
+        <Button onclick={() => refresh({ replace: true })} size="sm" disabled={refreshing || clearing}>
           <RefreshCcw class={refreshing ? 'animate-spin' : undefined} />
           {refreshing ? '刷新中...' : '刷新'}
         </Button>
         <Button
           onclick={requestClearAll}
           variant="destructive"
-          size="xs"
+          size="sm"
           disabled={clearing}
         ><Trash2 />{clearing ? '清空中...' : clearArmed ? '确认清空' : '清空'}</Button>
       </div>
@@ -433,7 +440,7 @@
       </div>
     {/if}
 
-    <div class="flex-1 overflow-y-auto min-h-0 space-y-0.5" style="font-size: 11px;">
+    <div class="debug-frame-list">
       {#if loading && frames.length === 0}
         <div class="py-12 text-center text-muted-foreground" style="font-size: 12px;">加载中...</div>
       {:else if loadError && visibleFrames.length === 0}
@@ -494,49 +501,115 @@
         {/if}
       {/if}
     </div>
+    </div>
   {/if}
 </div>
 
 <style>
-  .debug-subtabs {
+  .debug-page {
     display: flex;
-    gap: 2px;
-    flex-shrink: 0;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
   }
 
-  :global(.debug-subtab) { min-width: 84px; color: var(--muted-foreground); }
-  :global(.debug-subtab[aria-pressed='true']) { background: var(--accent); color: var(--accent-foreground); }
+  .debug-subtabs {
+    display: flex;
+    width: fit-content;
+    flex-shrink: 0;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 10px;
+    background: var(--muted);
+  }
+
+  :global(.debug-subtab) {
+    min-width: 84px;
+    color: var(--muted-foreground);
+    box-shadow: none;
+  }
+
+  :global(.debug-subtab[aria-pressed='true']) {
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  }
+
+  .debug-content {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+  }
 
   .debug-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
-  .debug-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+  .debug-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 
-  .debug-filter {
-    height: 22px;
-    padding: 0 5px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--card);
-    color: var(--foreground);
+  .debug-toolbar-copy {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .debug-toolbar-title {
+    color: var(--muted-foreground);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .debug-toolbar-meta {
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
     font-size: 10.5px;
-    font-weight: 500;
-    cursor: pointer;
+  }
+
+  :global(.debug-filter) {
+    width: 112px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
   }
 
   :global(.debug-live) { min-width: 66px; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.04em; }
   :global(.debug-load-more) { min-width: 112px; }
 
-  .debug-row {
-    border-radius: 5px;
+  .debug-frame-list {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    overflow-y: auto;
     border: 1px solid var(--border);
-    background: var(--card);
+    border-radius: 10px;
+    font-size: 11px;
+  }
+
+  .debug-row {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
     overflow: hidden;
     transition: background 0.08s ease;
   }
 
+  .debug-row:last-child {
+    border-bottom: none;
+  }
+
   .debug-row:hover {
-    background: var(--surface);
+    background: var(--muted);
+  }
+
+  .debug-row.expanded {
+    background: var(--muted);
   }
 
   .debug-row-head {
@@ -686,6 +759,7 @@
 
   .debug-more {
     display: flex;
+    flex-shrink: 0;
     justify-content: center;
     padding: 10px 0 2px;
   }
@@ -744,8 +818,9 @@
   }
 
   @media (max-width: 720px) {
-    .debug-subtabs { overflow-x: auto; }
+    .debug-subtabs { max-width: 100%; overflow-x: auto; }
     .debug-toolbar { align-items: stretch; flex-direction: column; }
-    .debug-actions { justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }
+    .debug-actions { justify-content: flex-start; }
+    .debug-actions { overflow-x: auto; padding-bottom: 2px; }
   }
 </style>

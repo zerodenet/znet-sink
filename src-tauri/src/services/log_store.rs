@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ pub fn load_recent_from_path(path: &Path, limit: usize) -> AppResult<Vec<LogEntr
         details: Some(serde_json::json!({ "path": path.display().to_string() })),
     })?;
     let reader = BufReader::new(file);
-    let mut entries = Vec::new();
+    let mut entries = BTreeMap::new();
 
     for line in reader.lines() {
         let line = line.map_err(|error| AppError {
@@ -78,7 +78,7 @@ pub fn load_recent_from_path(path: &Path, limit: usize) -> AppResult<Vec<LogEntr
         match serde_json::from_str::<LogEntry>(line) {
             Ok(mut entry) => {
                 repair_log_entry(&mut entry);
-                entries.push(entry);
+                entries.insert(entry.id, entry);
             }
             Err(error) => {
                 return Err(AppError {
@@ -90,12 +90,11 @@ pub fn load_recent_from_path(path: &Path, limit: usize) -> AppResult<Vec<LogEntr
         }
     }
 
-    if entries.len() > limit {
-        let remove_count = entries.len() - limit;
-        entries.drain(0..remove_count);
+    while entries.len() > limit {
+        entries.pop_first();
     }
 
-    Ok(entries)
+    Ok(entries.into_values().collect())
 }
 
 pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage> {
@@ -116,7 +115,7 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
     let reader = BufReader::new(file);
     let before_id = query.before_id.unwrap_or(u64::MAX);
     let mut oldest_available_id = None;
-    let mut entries = VecDeque::with_capacity(limit);
+    let mut entries = BTreeMap::new();
 
     for line in reader.lines() {
         let line = line.map_err(|error| AppError {
@@ -158,19 +157,20 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
             continue;
         }
 
-        oldest_available_id.get_or_insert(entry.id);
+        oldest_available_id =
+            Some(oldest_available_id.map_or(entry.id, |oldest: u64| oldest.min(entry.id)));
 
         if entry.id >= before_id {
             continue;
         }
 
-        if entries.len() == limit {
-            entries.pop_front();
+        entries.insert(entry.id, entry);
+        while entries.len() > limit {
+            entries.pop_first();
         }
-        entries.push_back(entry);
     }
 
-    let items = entries.into_iter().collect::<Vec<_>>();
+    let items = entries.into_values().collect::<Vec<_>>();
     let has_more = match (oldest_available_id, items.first()) {
         (Some(oldest), Some(first)) => first.id > oldest,
         _ => false,
@@ -427,6 +427,60 @@ mod tests {
         );
         assert!(page.has_more);
         assert_eq!(page.oldest_available_id, Some(1));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_store_deduplicates_ids_and_keeps_the_latest_occurrence() {
+        let dir = std::env::temp_dir().join(format!("znet-log-deduplicate-{}", std::process::id()));
+        let path = dir.join("logs.jsonl");
+
+        for (id, message) in [
+            (10627, "before"),
+            (10628, "stale duplicate"),
+            (10629, "after"),
+            (10628, "latest duplicate"),
+        ] {
+            append_to_path(
+                &path,
+                &LogEntry {
+                    id,
+                    source: LogSource::App,
+                    level: LogLevel::Info,
+                    message: message.to_string(),
+                    fields: None,
+                    occurred_at_unix_ms: id,
+                },
+            )
+            .unwrap();
+        }
+
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|entry| (entry.id, entry.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (10627, "before"),
+                (10628, "latest duplicate"),
+                (10629, "after"),
+            ]
+        );
+
+        let recent = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(
+            recent
+                .iter()
+                .map(|entry| (entry.id, entry.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (10627, "before"),
+                (10628, "latest duplicate"),
+                (10629, "after"),
+            ]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

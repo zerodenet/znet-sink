@@ -6,19 +6,33 @@
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { initTheme, applyTheme } from '$lib/services/theme.svelte';
   import { updater } from '$lib/services/updater.svelte';
-  import { fade } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
+  import { cubicIn, cubicOut } from 'svelte/easing';
   import TitleBar from '$lib/components/TitleBar.svelte';
   import AppHeader from '$lib/components/AppHeader.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { Spinner } from '$lib/components/ui/Spinner';
+  import { Button } from '$lib/components/ui/button';
   import TabContent from '$lib/components/TabContent.svelte';
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
+  import { installDesktopWebviewGuards } from '$lib/services/desktop-webview';
+  import { NAV_TABS } from '$lib/constants/navigation';
+  import {
+    getTabTransitionDirection,
+    type TabTransitionDirection,
+  } from '$lib/utils/tab-transition';
+
+  const tabOrder = NAV_TABS.map((tab) => tab.id);
+  let renderedTab = $state(store.activeTab);
+  let tabDirection = $state<TabTransitionDirection>(1);
+  let reduceMotion = $state(false);
 
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
     const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry();
+    const uninstallDesktopWebviewGuards = installDesktopWebviewGuards();
     initTheme();
     void store.loadFromBackend();
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
@@ -39,11 +53,28 @@
       if (store.selectedTheme === 'system') applyTheme('system');
     };
     mediaQuery.addEventListener('change', onSystemThemeChange);
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onMotionPreferenceChange = () => {
+      reduceMotion = motionQuery.matches;
+    };
+    onMotionPreferenceChange();
+    motionQuery.addEventListener('change', onMotionPreferenceChange);
     return () => {
       mediaQuery.removeEventListener('change', onSystemThemeChange);
+      motionQuery.removeEventListener('change', onMotionPreferenceChange);
       unlistenNavigate?.();
       uninstallGlobalErrorTelemetry();
+      uninstallDesktopWebviewGuards();
     };
+  });
+
+  $effect(() => {
+    const nextTab = store.activeTab;
+    const previousTab = untrack(() => renderedTab);
+    if (nextTab === previousTab) return;
+
+    tabDirection = getTabTransitionDirection(tabOrder, previousTab, nextTab);
+    renderedTab = nextTab;
   });
 
   $effect(() => {
@@ -135,23 +166,40 @@
           style="font-size: 12px; color: var(--muted-foreground); max-width: 360px; text-align: center;"
           >{store.loadError}</span
         >
-        <button
-          class="retry-btn"
+        <Button
+          size="sm"
           onclick={() => {
             store.loadError = null;
             store.appLoading = true;
             store.loadFromBackend();
-          }}>{'重试'}</button
-        >
+          }}>{'重试'}</Button>
       </div>
     {:else if !store.isInitialized}
       <WelcomeGuide />
     {:else}
-      {#key store.activeTab}
-        <div class="flex-1 min-h-0 flex flex-col" transition:fade={{ duration: 160 }}>
-          <TabContent />
-        </div>
-      {/key}
+      <div class="tab-transition-viewport">
+        {#key renderedTab}
+          <div
+            class="tab-transition-page"
+            in:fly={{
+              x: tabDirection * 28,
+              y: 0,
+              opacity: 1,
+              duration: reduceMotion ? 0 : 180,
+              easing: cubicOut,
+            }}
+            out:fly={{
+              x: tabDirection * -20,
+              y: 0,
+              opacity: 1,
+              duration: reduceMotion ? 0 : 130,
+              easing: cubicIn,
+            }}
+          >
+            <TabContent tab={renderedTab} />
+          </div>
+        {/key}
+      </div>
     {/if}
   </div>
 
@@ -219,28 +267,29 @@
     }
   }
 
-  /* Retry button */
-  .retry-btn {
-    height: 32px;
-    padding: 0 16px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--card);
-    color: var(--foreground);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.13s ease, box-shadow 0.13s ease;
-  }
-
-  .retry-btn:hover {
-    background: var(--muted);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  }
-
   .global-update-shell {
     flex-shrink: 0;
     padding: 0 20px 14px;
+  }
+
+  .tab-transition-viewport {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .tab-transition-page {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    will-change: transform;
+  }
+
+  .tab-transition-page :global(.animate-fade-in) {
+    animation: none;
   }
 
   @media (max-width: 640px) {

@@ -82,13 +82,13 @@
     <span class="titlebar-divider flex-shrink-0" aria-hidden="true"></span>
 
     <!-- Mode segmented control — inline after identity -->
-    <div class="segment-root flex-shrink-0" style="height: 26px;">
+    <div class="segment-root flex-shrink-0">
       <button
         onclick={async () => await store.switchUIMode('lite')}
         disabled={store.isSwitchingUiMode}
         class="segment-item {store.uiMode === 'lite' ? 'active' : ''}"
         aria-pressed={store.uiMode === 'lite'}
-        style="min-width: 48px; padding: 4px 10px;"
+        style="min-width: 48px;"
         aria-label="简约模式"
         title="简约模式"
       >
@@ -99,7 +99,7 @@
         disabled={store.isSwitchingUiMode}
         class="segment-item {store.uiMode === 'pro' ? 'active' : ''}"
         aria-pressed={store.uiMode === 'pro'}
-        style="min-width: 48px; padding: 4px 10px;"
+        style="min-width: 48px;"
         aria-label="专业模式"
         title="专业模式"
       >

@@ -21,6 +21,7 @@
     serializeLogForClipboard,
     serializeLogsForClipboard,
   } from '$lib/services/diagnostic-copy';
+  import { mergeLogPage } from '$lib/services/log-page';
   import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
 
   const PAGE_SIZE = 400;
@@ -92,22 +93,6 @@
     };
   }
 
-  function mergePage(current: LogEntry[], page: LogPage): LogEntry[] {
-    const merged = new Map<number, LogEntry>();
-    const oldestAvailableId = page.oldestAvailableId;
-
-    for (const entry of current) {
-      if (oldestAvailableId == null || entry.id >= oldestAvailableId) {
-        merged.set(entry.id, entry);
-      }
-    }
-    for (const entry of page.items) {
-      merged.set(entry.id, entry);
-    }
-
-    return Array.from(merged.values()).sort((a, b) => a.id - b.id);
-  }
-
   function syncHasMore(page: LogPage, items: LogEntry[]) {
     if (page.oldestAvailableId == null || items.length === 0) {
       hasMore = false;
@@ -129,15 +114,15 @@
       const page = await getLogs(buildQuery());
       if (!refreshGate.canApply(request)) return;
 
-      const addedCount = page.items.reduce(
+      const nextLogs =
+        options.replace || (page.items.length === 0 && page.oldestAvailableId == null)
+          ? mergeLogPage([], page)
+          : mergeLogPage(logs, page);
+      const addedCount = nextLogs.reduce(
         (count, entry) => count + (knownIds.has(entry.id) ? 0 : 1),
         0,
       );
-      if (options.replace || (page.items.length === 0 && page.oldestAvailableId == null)) {
-        logs = page.items;
-      } else {
-        logs = mergePage(logs, page);
-      }
+      logs = nextLogs;
       syncHasMore(page, logs);
       loadError = '';
 
@@ -176,7 +161,7 @@
     try {
       const page = await getLogs(buildQuery(logs[0].id));
       if (!refreshGate.isCurrentGeneration(generation)) return;
-      logs = mergePage(logs, page);
+      logs = mergeLogPage(logs, page);
       syncHasMore(page, logs);
       loadError = '';
     } catch (cause) {
@@ -451,7 +436,7 @@
         </span>
       </div>
       <div class="level-summary" aria-label="已加载日志摘要">
-        <span>{logs.length}{hasMore ? '+' : ''} 条已加载</span>
+        <span>{logs.length}{hasMore ? '+' : ''} 条</span>
         {#if errorCount > 0}<span class="summary-error">{errorCount} 错误</span>{/if}
         {#if warningCount > 0}<span class="summary-warning">{warningCount} 警告</span>{/if}
       </div>
@@ -530,7 +515,7 @@
         title="复制当前筛选和搜索结果中的完整日志"
       >
         <Copy class="h-3.5 w-3.5" />
-        <span>复制当前</span>
+        <span>复制</span>
       </button>
 
       <button
@@ -583,7 +568,7 @@
         bind:this={searchEl}
         value={searchQuery}
         oninput={(event) => searchQuery = event.currentTarget.value}
-        placeholder="搜索已加载日志（Ctrl+F）"
+        placeholder="搜索日志（Ctrl+F）"
         aria-label="搜索已加载日志"
       />
       {#if searchQuery}
@@ -822,26 +807,27 @@
   .copy-feedback span { overflow: hidden; text-overflow: ellipsis; }
 
   .action-button {
-    height: 27px;
+    height: var(--control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 5px;
     padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
     color: var(--muted-foreground);
     font: inherit;
     font-size: 10.5px;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
   }
 
   .action-button.icon-only {
-    width: 27px;
+    width: var(--control-height);
     padding: 0;
   }
 
@@ -851,17 +837,21 @@
   }
 
   .action-button.active {
-    border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
-    background: color-mix(in srgb, var(--primary) 9%, var(--card));
-    color: var(--primary);
+    border-color: transparent;
+    background: var(--segment-active-bg);
+    color: var(--foreground);
+    box-shadow: var(--segment-active-shadow);
   }
 
   .action-button.primary-action {
-    color: var(--foreground);
+    border-color: transparent;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
   }
 
   .action-button.clear-action {
-    width: 27px;
+    width: var(--control-height);
     padding: 0;
   }
 
@@ -893,14 +883,14 @@
     align-items: center;
     gap: 1px;
     padding: 2px;
-    border-radius: 7px;
-    background: var(--muted);
+    border-radius: var(--control-radius);
+    background: var(--segment-bg);
     flex-shrink: 0;
   }
 
   .filter-button {
-    height: 23px;
-    padding: 0 7px;
+    height: var(--control-height-compact);
+    padding: 0 8px;
     border: 0;
     border-radius: 5px;
     background: transparent;
@@ -915,9 +905,9 @@
   .filter-button:hover { color: var(--foreground); }
 
   .filter-button.active {
-    background: var(--card);
+    background: var(--segment-active-bg);
     color: var(--foreground);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--segment-active-shadow);
   }
 
   .search-wrap {
@@ -939,20 +929,22 @@
 
   .search-wrap input {
     width: 100%;
-    height: 28px;
+    height: var(--control-height);
     padding: 0 29px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--muted);
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
     color: var(--foreground);
     font: inherit;
     font-size: 11px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     outline: none;
   }
 
   .search-wrap input:focus {
-    border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
-    background: var(--card);
+    border-color: var(--ring);
+    background: var(--background);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 
   .search-wrap input::placeholder {
@@ -1264,14 +1256,14 @@
   }
 
   .load-more-button {
-    height: 28px;
+    height: var(--control-height);
     display: inline-flex;
     align-items: center;
     gap: 6px;
     padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
     color: var(--foreground);
     font: inherit;
     font-size: 10.5px;

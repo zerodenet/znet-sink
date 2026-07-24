@@ -122,7 +122,7 @@
         onkeydown={onDnsKey}
         disabled={dnsLoading}
       />
-      <Button size="xs" onclick={runDns} disabled={dnsLoading || !dnsHost.trim()}>
+      <Button size="sm" onclick={runDns} disabled={dnsLoading || !dnsHost.trim()}>
         {#if dnsLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}
         {dnsLoading ? '查询中…' : '查询'}
       </Button>
@@ -183,17 +183,17 @@
       />
       <Input
         class="diag-input diag-input--proto"
-        placeholder="协议 (tcp/udp/icmp)"
+        placeholder="协议（可选）"
         bind:value={traceProtocol}
         disabled={traceLoading}
       />
       <Input
         class="diag-input diag-input--inbound"
-        placeholder="Inbound tag (optional)"
+        placeholder="入口标签（可选）"
         bind:value={traceInboundTag}
         disabled={traceLoading}
       />
-      <Button size="xs" onclick={runTrace} disabled={traceLoading || !traceTarget.trim()}>
+      <Button size="sm" onclick={runTrace} disabled={traceLoading || !traceTarget.trim()}>
         {#if traceLoading}<LoaderCircle class="animate-spin" />{:else}<Network />{/if}
         {traceLoading ? '追踪中…' : '追踪'}
       </Button>
@@ -240,7 +240,6 @@
   .diag-panel {
     display: flex;
     flex-direction: column;
-    gap: 10px;
     flex: 1;
     overflow-y: auto;
     min-height: 0;
@@ -249,40 +248,44 @@
   .diag-tool {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--card);
+    gap: 10px;
+    padding: 0 0 16px;
     flex-shrink: 0;
+  }
+
+  .diag-tool + .diag-tool {
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
   }
 
   .diag-head {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .diag-title {
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 500;
     color: var(--foreground);
   }
 
   .diag-hint {
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--muted-foreground);
-    opacity: 0.7;
+    opacity: 0.8;
   }
 
   .diag-form {
     display: flex;
-    gap: 5px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
   }
 
   :global(.diag-input) {
-    height: 24px;
-    font-size: 11px;
+    height: var(--control-height);
+    font-size: 12px;
     flex: 1;
     min-width: 0;
   }

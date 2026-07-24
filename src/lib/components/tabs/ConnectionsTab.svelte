@@ -4,7 +4,11 @@
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { coreEvents, type ConnectionDelta } from '$lib/services/core-events.svelte';
+  import { ConnectionDeltaBatcher } from '$lib/services/connection-delta-batcher';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
+  import { RefreshCw, Search, Trash2 } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
+  import * as Tabs from '$lib/components/ui/tabs';
 
  type DisplayConnection = Omit<GuiConnectionItem, 'source' | 'startedAtUnixMs'> & {
    source: string;
@@ -27,9 +31,8 @@
  let partialError = $state<string | null>(null);
  const MAX_CONNECTIONS = 500;
  const MAX_RENDER = 120;
- let pendingDeltas: ConnectionDelta[] = [];
- let flushTimer: ReturnType<typeof setTimeout> | null = null;
  let refreshGeneration = 0;
+ const deltaBatcher = new ConnectionDeltaBatcher<ConnectionDelta>(300, applyDeltas);
 
  function matchesSearch(c: DisplayConnection): boolean {
    const q = searchQuery.trim().toLowerCase();
@@ -62,13 +65,6 @@
  function clearList() {
    connections = connections.filter((c) => c.origin !== (activeTab === 'live' ? 'active' : 'recent'));
    expandedIds = new Set();
- }
-
- function flushDeltas() {
-   if (pendingDeltas.length === 0) return;
-   const deltas = pendingDeltas;
-   pendingDeltas = [];
-   applyDeltas(deltas);
  }
 
  function toggleExpand(id: string) {
@@ -247,11 +243,9 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
    const deltas = coreEvents.drainDeltas();
    if (deltas.length === 0) return;
 
-    // Throttle: batch deltas and flush at most every 300ms to avoid
-    // high-frequency DOM churn from burst event streams.
-    pendingDeltas.push(...deltas);
-    if (flushTimer) clearTimeout(flushTimer);
-    flushTimer = setTimeout(flushDeltas, 300);
+    // Throttle rather than debounce: continuous flow.updated traffic must
+    // still render every 300ms instead of postponing the UI indefinitely.
+    deltaBatcher.push(deltas);
   });
 
   function applyDeltas(deltas: ConnectionDelta[]) {
@@ -314,11 +308,11 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
   }
 
   onDestroy(() => {
-    if (flushTimer) clearTimeout(flushTimer);
+    deltaBatcher.destroy();
   });
 </script>
 
-<div class="desk-card flex-1 overflow-hidden flex flex-col animate-fade-in">
+<Tabs.Root bind:value={activeTab} class="desk-card flex-1 overflow-hidden flex flex-col gap-0 animate-fade-in">
  <!-- Panel header -->
  <div class="panel-header">
    <div class="panel-title-row">
@@ -326,46 +320,50 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
      <span class="count-badge">{activeTab === 'live' ? liveCount : historyCount} 个</span>
    </div>
    <!-- Tab switcher: live connections vs connection history -->
-   <div class="tab-switcher">
-     <button class="tab-btn {activeTab === 'live' ? 'active' : ''}" onclick={() => activeTab = 'live'}>实时连接</button>
-     <button class="tab-btn {activeTab === 'history' ? 'active' : ''}" onclick={() => activeTab = 'history'}>连接记录</button>
-   </div>
+   <Tabs.List class="tab-switcher" aria-label="连接数据范围">
+     <Tabs.Trigger class="tab-btn" value="live">实时连接</Tabs.Trigger>
+     <Tabs.Trigger class="tab-btn" value="history">连接记录</Tabs.Trigger>
+   </Tabs.List>
    <div class="header-actions">
-     <button class="action-btn" onclick={() => refresh(false)} disabled={loading}>
-       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-         <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
-       </svg>
+     <Button size="sm" onclick={() => refresh(false)} disabled={loading}>
+       <RefreshCw class={loading ? 'animate-spin' : undefined} />
        {loading ? '刷新中...' : '刷新'}
-     </button>
+     </Button>
      {#if tabConnections.length > 0}
-       <button class="action-btn danger" onclick={clearList} title="仅清空当前页面显示，不会关闭连接或删除内核记录">
-         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-           <path d="M3 4H9M5 4V3A1 1 0 0 1 6 2H6A1 1 0 0 1 7 3V4M4 4L4.5 10A1 1 0 0 0 5.5 11H6.5A1 1 0 0 0 7.5 10L8 4"/>
-         </svg>
-         清空显示
-       </button>
+       <Button variant="destructive" size="sm" onclick={clearList} title="仅清空当前页面显示，不会关闭连接或删除内核记录">
+         <Trash2 />
+         清空
+       </Button>
      {/if}
    </div>
  </div>
 
  <!-- Search / filter -->
  <div class="search-bar">
-   <svg class="search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-     <circle cx="6" cy="6" r="4"/><path d="M9 9L12 12"/>
-   </svg>
-   <input class="search-input" type="text" placeholder="搜索目标地址、来源、标签..." bind:value={searchQuery}>
+   <div class="search-field">
+     <span class="search-icon" aria-hidden="true">
+       <Search size={14} strokeWidth={1.7} />
+     </span>
+     <input
+       class="search-input"
+       type="search"
+       aria-label="搜索连接"
+       placeholder="搜索地址、来源或标签"
+       bind:value={searchQuery}
+     >
+   </div>
  </div>
 
  {#if partialError}
    <div class="connection-warning" role="status">
      <span>{partialError}</span>
-     <button class="action-btn" onclick={() => refresh(false)}>重试</button>
+     <Button variant="outline" size="xs" onclick={() => refresh(false)}>重试</Button>
    </div>
  {/if}
  {#if loadError && connections.length > 0}
    <div class="connection-warning error" role="alert">
      <span>刷新失败，当前仍显示上一批数据：{loadError}</span>
-     <button class="action-btn" onclick={() => refresh(false)}>重试</button>
+     <Button variant="outline" size="xs" onclick={() => refresh(false)}>重试</Button>
    </div>
  {/if}
 
@@ -376,7 +374,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
    <div class="panel-empty-block" role="alert">
      <span class="empty-title error-text">连接数据加载失败</span>
      <span class="empty-desc">{loadError}</span>
-     <button class="action-btn" onclick={() => refresh(true)}>重试</button>
+     <Button variant="outline" size="xs" onclick={() => refresh(true)}>重试</Button>
    </div>
  {:else if !flowSupported}
    <div class="panel-empty-block">
@@ -572,7 +570,7 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
      {/if}
    </div>
  {/if}
-</div>
+</Tabs.Root>
 
 <style>
   .panel-header {
@@ -609,22 +607,6 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     color: var(--muted-foreground);
   }
 
-  .action-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 7px;
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--muted);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    transition: background 0.12s ease;
-    white-space: nowrap;
-  }
-
   .header-actions {
     display: flex;
     align-items: center;
@@ -633,67 +615,71 @@ function mapGuiConnection(c: GuiConnectionItem, origin: 'active' | 'recent' = 'a
     min-width: 0;
   }
 
- .action-btn:hover { background: var(--surface); }
- .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
- .action-btn.danger:hover {
-   background: rgba(239, 68, 68, 0.08);
-   color: var(--destructive);
- }
-
  /* ---- Tab switcher ---- */
- .tab-switcher {
-   display: flex;
-   gap: 2px;
-   background: var(--muted);
-   border-radius: 7px;
-   padding: 2px;
+  :global(.tab-switcher) {
    justify-self: center;
    white-space: nowrap;
+    height: 36px;
  }
 
- .tab-btn {
-   padding: 4px 10px;
-   border-radius: 5px;
-   font-size: 11.5px;
-   font-weight: 500;
-   background: transparent;
-   color: var(--muted-foreground);
-   border: none;
-   cursor: pointer;
-   transition: all 0.12s ease;
- }
-
- .tab-btn:hover { color: var(--foreground); }
- .tab-btn.active {
-   background: var(--card);
-   color: var(--foreground);
-   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+ :global(.tab-btn) {
+   min-width: 76px;
+   font-size: 12px;
  }
 
  /* ---- Search bar ---- */
  .search-bar {
-   display: flex;
-   align-items: center;
-   gap: 7px;
    padding: 7px 14px;
    border-bottom: 1px solid var(--border);
    flex-shrink: 0;
  }
 
- .search-icon {
-   color: var(--muted-foreground);
-   opacity: 0.5;
-   flex-shrink: 0;
+ .search-field {
+   position: relative;
+   display: flex;
+   align-items: center;
+   width: 100%;
+   min-width: 0;
  }
 
- .search-input {
-   flex: 1;
-   border: none;
-   background: transparent;
+  .search-icon {
+   position: absolute;
+    left: 9px;
+   top: 50%;
+   width: 14px;
+   height: 14px;
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   transform: translateY(-50%);
+   color: var(--muted-foreground);
+   opacity: 0.55;
+   pointer-events: none;
+ }
+
+  .search-input {
+   width: 100%;
+   min-width: 0;
+    height: var(--control-height);
+    padding: 0 10px 0 30px;
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
    font-size: 12px;
+    line-height: var(--control-height);
    color: var(--foreground);
    outline: none;
+    appearance: none;
+  }
+
+  .search-input:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
+  }
+
+ .search-input::-webkit-search-cancel-button {
+   cursor: pointer;
  }
 
  .search-input::placeholder { color: var(--muted-foreground); opacity: 0.5; }

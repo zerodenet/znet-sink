@@ -622,15 +622,17 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    border: none;
-    background: transparent;
-    color: var(--primary);
+    height: var(--control-height);
+    border: 1px solid var(--input);
+    background: var(--background);
+    color: var(--foreground);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    padding: 4px 6px;
-    border-radius: 5px;
-    transition: background 0.12s ease;
+    padding: 0 10px;
+    border-radius: var(--control-radius);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    transition: background 0.12s ease, border-color 0.12s ease;
   }
 
   .check-update-btn:hover:not(:disabled) {
@@ -653,6 +655,11 @@
   .check-update-btn.danger,
   .storage-error {
     color: var(--destructive);
+  }
+
+  .check-update-btn.danger {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
   }
 
   .cleanup-notice {

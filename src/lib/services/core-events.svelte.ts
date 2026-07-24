@@ -633,6 +633,7 @@ class CoreEventsService {
     const stats = data['stats'];
     const runtime = data['runtime'];
     const policies = data['policies'];
+    const connectionSnapshot = data['connections'];
 
     if (stats && typeof stats === 'object') {
       overviewData.applyStatsEvent(stats as Record<string, unknown>);
@@ -642,6 +643,16 @@ class CoreEventsService {
     }
     if (policies) {
       overviewData.applyPolicyEvent(policies);
+    }
+    if (connectionSnapshot && typeof connectionSnapshot === 'object') {
+      const items = (connectionSnapshot as Record<string, unknown>)['items'];
+      if (Array.isArray(items)) {
+        const connections = items
+          .map((item) => this._parseConnectionEvent(item))
+          .filter((item): item is GuiConnectionItem => item !== null);
+        this._pushDelta({ type: 'snapshot', connections });
+        this.connectionTick++;
+      }
     }
 
     if (!stats || !runtime || !policies) {

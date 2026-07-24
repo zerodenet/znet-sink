@@ -548,7 +548,7 @@
     {:else if selectedGroup}
       <!-- Single group view -->
       {#if viewMode === 'list'}
-        <div class="node-list">
+        <div class="node-list node-list-scroll">
           {#each filteredNodes as node (node.id)}
             <NodesListRow
               {node}
@@ -809,6 +809,12 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+
+  .node-list-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   /* Grid view */

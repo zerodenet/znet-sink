@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { RefreshCw } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import { getAppErrorMessage, getGuiCapabilitiesSnapshot, getGuiZeroCapabilities } from '$lib/services/core';
   import type { GuiCapabilitySnapshot } from '$lib/types/capability';
   import type { GuiZeroCapabilities } from '$lib/types/gui-api';
@@ -55,13 +57,14 @@
 <div class="flex-1 w-full bg-card border border-card-border rounded-xl p-4 flex flex-col gap-4 animate-fade-in overflow-hidden">
   <div class="flex items-center justify-between flex-shrink-0">
     <h3 class="text-sm font-bold text-foreground">能力快照</h3>
-    <button
+    <Button
       onclick={refresh}
       disabled={loading}
-      class="px-3 py-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground text-xs font-medium"
+      size="sm"
     >
+      <RefreshCw class={loading ? 'animate-spin' : undefined} />
       {loading ? '刷新中...' : '刷新'}
-    </button>
+    </Button>
   </div>
 
   {#if partialError}
@@ -76,7 +79,7 @@
   {:else if loadError && !snapshot && !kernelCaps}
     <div class="flex-1 flex flex-col gap-2 items-center justify-center text-xs text-destructive" role="alert">
       <span>能力快照加载失败：{loadError}</span>
-      <button onclick={refresh} class="px-3 py-1.5 rounded-lg bg-muted text-foreground text-xs font-medium">重试</button>
+      <Button variant="outline" size="sm" onclick={refresh}>重试</Button>
     </div>
   {:else}
     <div class="flex-1 overflow-y-auto min-h-0 space-y-4">

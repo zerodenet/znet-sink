@@ -363,7 +363,7 @@
   <div class="panel-header">
     <div class="panel-title-group">
       <span class="panel-title">订阅管理</span>
-      <span class="panel-subtitle">订阅链接会自动转换为 Zero 内核配置并关联代理配置</span>
+      <span class="panel-subtitle">管理订阅、同步与关联配置</span>
     </div>
     <div class="header-actions">
       {#if subscriptions.length > 0}
@@ -414,7 +414,7 @@
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
             </svg>
-            全部同步
+            同步全部
           {/if}
         </button>
       {/if}
@@ -745,17 +745,17 @@
     align-items: center;
     gap: 2px;
     padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--muted);
+    border: 0;
+    border-radius: var(--control-radius);
+    background: var(--segment-bg);
   }
 
   .view-switch-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 27px;
-    height: 25px;
+    width: var(--control-height-compact);
+    height: var(--control-height-compact);
     padding: 0;
     border: 0;
     border-radius: 5px;
@@ -770,26 +770,28 @@
   }
 
   .view-switch-button.active {
-    background: var(--card);
+    background: var(--segment-active-bg);
     color: var(--foreground);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--segment-active-shadow);
   }
 
   .search-input {
     width: 130px;
-    height: 28px;
+    height: var(--control-height);
     padding: 0 9px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--muted);
+    border-radius: var(--control-radius);
+    border: 1px solid var(--input);
+    background: var(--background);
     color: var(--foreground);
     font-size: 12px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     outline: none;
-    transition: border-color 0.12s ease, width 0.15s ease;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease, width 0.15s ease;
   }
 
   .search-input:focus {
-    border-color: rgba(99, 102, 241, 0.4);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
     width: 170px;
   }
 
@@ -828,24 +830,27 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 10px;
-    border-radius: 7px;
+    height: var(--control-height);
+    padding: 0 10px;
+    border-radius: var(--control-radius);
     font-size: 12px;
     font-weight: 500;
-    background: var(--muted);
+    background: var(--background);
     color: var(--foreground);
-    border: 1px solid var(--border);
+    border: 1px solid var(--input);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     cursor: pointer;
     transition: background 0.12s ease;
   }
 
-  .action-btn:hover { background: var(--surface); }
+  .action-btn:hover { background: var(--muted); }
   .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .action-btn.primary {
     background: var(--primary);
     color: var(--primary-foreground);
     border-color: transparent;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
   }
 
   .action-btn.primary:hover { opacity: 0.9; }
@@ -1176,17 +1181,22 @@
 
   .field-input {
     width: 100%;
-    padding: 7px 10px;
-    border-radius: 7px;
-    background: var(--muted);
-    border: 1px solid var(--border);
+    min-height: 32px;
+    padding: 6px 10px;
+    border-radius: var(--control-radius);
+    background: var(--background);
+    border: 1px solid var(--input);
     color: var(--foreground);
     font-size: 12.5px;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     outline: none;
-    transition: border-color 0.12s ease;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
 
-  .field-input:focus { border-color: rgba(99, 102, 241, 0.4); }
+  .field-input:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
+  }
   .field-mono { font-family: var(--font-mono); font-size: 12px; }
 
   .toggle-row {
@@ -1202,13 +1212,15 @@
 
   .btn-ghost {
     flex: 1;
-    padding: 8px 14px;
-    border-radius: 8px;
-    background: var(--muted);
-    color: var(--muted-foreground);
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--control-radius);
+    background: var(--background);
+    color: var(--foreground);
     font-size: 12px;
     font-weight: 500;
-    border: 1px solid var(--border);
+    border: 1px solid var(--input);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
     cursor: pointer;
     transition: background 0.12s ease, color 0.12s ease;
   }
@@ -1218,8 +1230,9 @@
 
   .btn-primary {
     flex: 1;
-    padding: 8px 14px;
-    border-radius: 8px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--control-radius);
     background: var(--primary);
     color: var(--primary-foreground);
     font-size: 12px;
@@ -1234,13 +1247,14 @@
 
   .btn-danger {
     flex: 1;
-    padding: 8px 14px;
-    border-radius: 8px;
-    background: var(--destructive);
-    color: white;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--control-radius);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
     font-size: 12px;
     font-weight: 600;
-    border: none;
+    border: 1px solid transparent;
     cursor: pointer;
   }
 

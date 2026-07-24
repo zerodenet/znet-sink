@@ -5,6 +5,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import * as Tabs from '$lib/components/ui/tabs';
   import { formatBytes, updater } from '$lib/services/updater.svelte';
   import {
     compareAppVersions,
@@ -118,11 +119,11 @@
   }
 </script>
 
-<div class="versions-root desk-card">
+<Tabs.Root bind:value={channel} class="versions-root">
   <header>
     <div>
       <h2>版本管理</h2>
-      <p>选择测试版、预发版或历史版本。日常检查更新仍在“关于”页面。</p>
+      <p>下载指定版本；安装前会再次确认。</p>
     </div>
     <Badge variant="secondary" class="current-version">当前 v{appVersion}</Badge>
   </header>
@@ -141,23 +142,15 @@
       </Button>
     </div>
 
-    <div class="channel-tabs" role="tablist" aria-label="应用发布渠道">
+    <Tabs.List class="channel-tabs" aria-label="应用发布渠道">
       {#each [
         { id: 'stable', label: '正式版' },
         { id: 'preview', label: '预发版' },
         { id: 'test', label: '测试版' },
       ] as item}
-        <Button
-          variant="ghost"
-          size="xs"
-          class="channel-button"
-          onclick={() => (channel = item.id as AppReleaseChannel)}
-          role="tab"
-          aria-pressed={channel === item.id}
-          aria-selected={channel === item.id}
-        >{item.label}</Button>
+        <Tabs.Trigger class="channel-button" value={item.id}>{item.label}</Tabs.Trigger>
       {/each}
-    </div>
+    </Tabs.List>
 
     {#if installError}
       <div class="message error" role="alert">{installError}</div>
@@ -205,7 +198,7 @@
               </div>
             </div>
             <Button
-              variant={isDownloaded(release) ? 'default' : action === 'upgrade' ? 'default' : 'outline'}
+              variant={action === 'current' ? 'outline' : 'default'}
               size="sm"
               class="install"
               onclick={() => handleReleaseAction(release)}
@@ -218,13 +211,13 @@
                 已安装
               {:else if isDownloaded(release)}
                 <Power />
-                安装并重启
+                安装重启
               {:else if action === 'rollback'}
                 <RotateCcw />
-                下载回退版本
+                下载回退
               {:else}
                 <Download />
-                下载升级包
+                下载升级
               {/if}
             </Button>
           </div>
@@ -232,23 +225,22 @@
       </div>
     {/if}
   </section>
-</div>
+</Tabs.Root>
 
 <style>
-  .versions-root { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; }
-  h2 { margin: 0; color: var(--foreground); font-size: 15px; font-weight: 700; }
-  header p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.45; }
+  :global(.versions-root) { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 0; overflow: hidden; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 2px 0 10px; }
+  h2 { margin: 0; color: var(--foreground); font-size: 13px; font-weight: 500; }
+  header p { margin: 2px 0 0; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.45; opacity: 0.8; }
   :global(.current-version) { flex-shrink: 0; font-family: var(--font-mono); font-size: 11px; }
-  .separator { height: 1px; margin: 0 12px; background: var(--border); }
-  section { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; padding: 12px; }
+  .separator { height: 1px; background: var(--border); }
+  section { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; padding: 10px 0 0; }
   .tools { display: flex; align-items: center; gap: 8px; }
   .search-wrap { position: relative; flex: 1; min-width: 0; }
   :global(.search-icon) { position: absolute; top: 50%; left: 9px; z-index: 1; width: 14px; height: 14px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
-  :global(.search-input) { height: 32px; padding-left: 30px; font-size: 11px; }
-  .channel-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; border-radius: 8px; background: var(--muted); }
-  :global(.channel-button) { width: 100%; color: var(--muted-foreground); }
-  :global(.channel-button[aria-pressed='true']) { border-color: var(--border); background: var(--background); color: var(--foreground); box-shadow: var(--shadow-xs); }
+  :global(.search-input) { height: var(--control-height); padding-left: 30px; font-size: 11px; }
+  :global(.channel-tabs) { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; }
+  :global(.channel-button) { width: 100%; font-size: 12px; }
   .release-list { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
   .release-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 50px; padding: 8px 10px; }
   .release-row + .release-row { border-top: 1px solid var(--border); }

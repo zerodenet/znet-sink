@@ -212,11 +212,11 @@
       <span class="label-text">主题</span>
       <span class="label-desc">选择界面配色方案</span>
     </div>
-    <div class="theme-segment">
+    <div class="segment-root config-segment">
       {#each THEMES as theme}
         <button
           onclick={() => handleThemeChange(theme.value)}
-          class="theme-seg-btn {store.selectedTheme === theme.value ? 'active' : ''}"
+          class="segment-item {store.selectedTheme === theme.value ? 'active' : ''}"
           aria-pressed={store.selectedTheme === theme.value}
         >
           {theme.label}
@@ -230,11 +230,11 @@
       <span class="label-text">界面模式</span>
       <span class="label-desc">简约模式会收起高阶入口，专业模式展示完整控制面。</span>
     </div>
-    <div class="theme-segment">
+    <div class="segment-root config-segment">
       <button
         onclick={async () => await store.switchUIMode('lite')}
         disabled={store.isSwitchingUiMode}
-        class="theme-seg-btn {store.uiMode === 'lite' ? 'active' : ''}"
+        class="segment-item {store.uiMode === 'lite' ? 'active' : ''}"
         aria-pressed={store.uiMode === 'lite'}
       >
         简约
@@ -242,7 +242,7 @@
       <button
         onclick={async () => await store.switchUIMode('pro')}
         disabled={store.isSwitchingUiMode}
-        class="theme-seg-btn {store.uiMode === 'pro' ? 'active' : ''}"
+        class="segment-item {store.uiMode === 'pro' ? 'active' : ''}"
         aria-pressed={store.uiMode === 'pro'}
       >
         专业
@@ -541,42 +541,8 @@
     opacity: 0.8;
   }
 
-  .theme-segment {
-    display: inline-flex;
-    align-items: center;
-    gap: 1px;
-    background: var(--segment-bg, rgba(0, 0, 0, 0.055));
-    padding: 2px;
-    border-radius: 7px;
+  .config-segment {
     flex-shrink: 0;
-  }
-
-  .theme-seg-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 26px;
-    padding: 0 11px;
-    border-radius: 5px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.13s ease;
-    white-space: nowrap;
-  }
-
-  .theme-seg-btn:hover {
-    color: var(--foreground);
-  }
-
-  .theme-seg-btn.active {
-    background: var(--segment-active-bg, #ffffff);
-    box-shadow: var(--segment-active-shadow, 0 1px 3px rgba(0, 0, 0, 0.12));
-    color: var(--foreground);
-    font-weight: 600;
   }
 
   .menu-panel {
@@ -641,9 +607,9 @@
   }
 
   .reset-btn {
-    height: 28px;
+    height: var(--control-height);
     padding: 0 16px;
-    border-radius: 7px;
+    border-radius: var(--control-radius);
     border: 1px solid rgba(239, 68, 68, 0.3);
     background: rgba(239, 68, 68, 0.06);
     color: var(--destructive, #EF4444);
@@ -673,13 +639,14 @@
   }
 
   .log-action-btn {
-    height: 26px;
+    height: var(--control-height);
     padding: 0 10px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 11px;
+    border-radius: var(--control-radius);
+    border: 1px solid var(--input);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.13s ease;
@@ -711,7 +678,7 @@
       align-items: stretch;
     }
 
-    .theme-segment {
+    .config-segment {
       width: fit-content;
     }
   }

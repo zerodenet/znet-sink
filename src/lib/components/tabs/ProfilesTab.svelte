@@ -313,7 +313,7 @@
     <div class="toolbar-top">
       <div class="title-block">
         <div class="title">代理配置</div>
-        <div class="subtitle">只保留静态配置导入和 JSON 粘贴。编辑、启用、删除都在这里完成。</div>
+        <div class="subtitle">导入或粘贴 JSON，并在此启用与管理。</div>
       </div>
 
       <div class="toolbar-meta current-block">
@@ -322,7 +322,7 @@
         {#if canEdit}
           <Button size="sm" onclick={openCreate} disabled={loading || busy}>
             <Plus class="h-3.5 w-3.5" />
-            <span>新建配置</span>
+            <span>新建</span>
           </Button>
         {/if}
       </div>
@@ -631,20 +631,21 @@
 
   .search-input {
     width: 100%;
-    height: 36px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--muted);
+    height: 32px;
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
     color: var(--foreground);
     font-size: 12px;
     padding: 0 12px 0 30px;
     outline: none;
-    transition: border-color 0.15s ease, background 0.15s ease;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
   .search-input:focus {
-    border-color: rgba(99, 102, 241, 0.24);
-    background: var(--background);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 
   .search-input::placeholder {

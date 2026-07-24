@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { Component } from 'svelte';
-  import { store } from '$lib/services/store.svelte';
   import { recordTelemetry } from '$lib/services/telemetry';
+  import { Button } from '$lib/components/ui/button';
   import { Spinner } from '$lib/components/ui/Spinner';
+
+  let { tab }: { tab: string } = $props();
 
   type ComponentModule = { default: Component };
   type Loader = () => Promise<ComponentModule>;
@@ -30,7 +32,6 @@
   }
 
   $effect(() => {
-    const tab = store.activeTab;
     const currentRequest = ++requestId;
     ActiveComponent = null;
     activeProps = {};
@@ -71,7 +72,7 @@
   <div class="tab-load-state error">
     <strong>页面加载失败</strong>
     <span>{loadError}</span>
-    <button type="button" class="reload-button" onclick={reloadApplication}>重新加载应用</button>
+    <Button variant="outline" size="sm" onclick={reloadApplication}>重新加载</Button>
   </div>
 {:else if ActiveComponent}
   <ActiveComponent {...activeProps} />
@@ -101,18 +102,4 @@
     overflow-wrap: anywhere;
   }
 
-  .reload-button {
-    margin-top: 4px;
-    padding: 5px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    color: var(--foreground);
-    cursor: pointer;
-    font-size: 11px;
-  }
-
-  .reload-button:hover {
-    background: var(--muted);
-  }
 </style>

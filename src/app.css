@@ -4,8 +4,12 @@
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-border: var(--border);
   --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
   --color-card-border: var(--border);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -49,6 +53,8 @@
   /* Card = frosted glass feel */
   --card:              rgba(255, 255, 255, 0.88);
   --border:            rgba(0, 0, 0, 0.055);
+  --popover:           #FFFFFF;
+  --popover-foreground: #1A1A1E;
 
   /* Surface = slightly elevated from background */
   --surface:           rgba(255, 255, 255, 0.65);
@@ -89,6 +95,13 @@
   --segment-bg:        rgba(0, 0, 0, 0.055);
   --segment-active-bg: #FFFFFF;
   --segment-active-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 0 0 0.5px rgba(0,0,0,0.06);
+
+  /* Control sizing — follows Settings > General */
+  --control-height-compact: 26px;
+  --control-height: 30px;
+  --control-height-comfortable: 32px;
+  --control-radius-compact: 5px;
+  --control-radius: 7px;
 }
 
 /* ============================================
@@ -102,6 +115,8 @@
 
   --card:              rgba(255, 255, 255, 0.042);
   --border:            rgba(255, 255, 255, 0.064);
+  --popover:           #1C1E26;
+  --popover-foreground: #E8E8F0;
 
   --surface:           rgba(255, 255, 255, 0.028);
   --surface-border:    rgba(255, 255, 255, 0.052);
@@ -193,31 +208,31 @@ body {
   gap: 1px;
   background: var(--segment-bg);
   padding: 2px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
 }
 
 .segment-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  height: var(--control-height-compact);
+  border-radius: var(--control-radius-compact);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
-  padding: 5px 12px;
+  padding: 0 11px;
   color: var(--muted-foreground);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.13s ease, color 0.13s ease, box-shadow 0.13s ease;
   user-select: none;
   white-space: nowrap;
-  border: 1px solid transparent;
+  border: none;
+  background: transparent;
   outline: none;
 }
 
 .segment-item:hover:not(:disabled) {
   color: var(--foreground);
-  background: var(--muted);
 }
 
 .segment-item.active,
@@ -226,7 +241,7 @@ body {
   background: var(--segment-active-bg);
   box-shadow: var(--segment-active-shadow);
   color: var(--foreground);
-  border-color: var(--border);
+  font-weight: 600;
 }
 
 .segment-item:focus-visible {

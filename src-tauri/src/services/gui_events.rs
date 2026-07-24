@@ -13,7 +13,9 @@ use crate::events::emitter::{
 use crate::kernel::zero::{events, queries};
 use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreIpcOptions};
-use crate::models::gui_core::{GuiEventPayload, GuiEventStatus, GuiEventSubscription};
+use crate::models::gui_core::{
+    GuiConnectionListOptions, GuiEventPayload, GuiEventStatus, GuiEventSubscription,
+};
 
 pub fn start(
     app: AppHandle,
@@ -101,7 +103,14 @@ fn subscribe_and_forward_events(
                     let event = events::normalize_event(&source_event);
                     emit_gui_event(&app, GuiEventPayload { generation, event });
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // A lagged receiver has lost one or more flow deltas.
+                    // Re-establish an authoritative baseline instead of
+                    // silently leaving the live connection page stale.
+                    let snapshot = resync_snapshot(endpoint.clone(), timeout);
+                    emit_status(&app, generation, "subscribed", None, snapshot);
+                    continue;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     closed = true;
                     break;
@@ -136,12 +145,26 @@ fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
         let runtime =
             queries::query_value(json!({"runtime": {}}), "runtime", options.clone()).await;
         let stats = queries::query_value(json!({"stats": {}}), "stats", options.clone()).await;
-        let policies = queries::query_value(json!({"policies": {}}), "policies", options).await;
+        let policies =
+            queries::query_value(json!({"policies": {}}), "policies", options.clone()).await;
+        // Query active flows last. Events are already buffered by the receiver,
+        // so this snapshot becomes the baseline and subsequent buffered deltas
+        // apply on top without a reconnect gap.
+        let connections = queries::connections(
+            Some(GuiConnectionListOptions {
+                limit: Some(500),
+                inbound_tag: None,
+                principal_key: None,
+            }),
+            options,
+        )
+        .await;
 
         Some(json!({
             "runtime": runtime.ok(),
             "stats": stats.ok(),
             "policies": policies.ok(),
+            "connections": connections.ok(),
         }))
     })
 }
