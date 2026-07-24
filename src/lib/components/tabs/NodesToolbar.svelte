@@ -1,4 +1,6 @@
 <script lang="ts">
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+
   type ViewMode = 'list' | 'grid';
 
   interface ProbeProgress {
@@ -76,10 +78,14 @@
     </div>
 
     {#if !isLite}
-      <div class="view-seg">
-        <button
-          class="view-btn {viewMode === 'list' ? 'active' : ''}"
-          onclick={() => onViewModeChange('list')}
+      <SegmentedControl.Root
+        value={viewMode}
+        onValueChange={(value) => onViewModeChange(value as ViewMode)}
+        aria-label="节点显示方式"
+      >
+        <SegmentedControl.Item
+          value="list"
+          size="icon"
           title={'列表视图'}
           aria-label={'列表视图'}
         >
@@ -91,10 +97,10 @@
             <line x1="3" y1="12" x2="3.01" y2="12"></line>
             <line x1="3" y1="18" x2="3.01" y2="18"></line>
           </svg>
-        </button>
-        <button
-          class="view-btn {viewMode === 'grid' ? 'active' : ''}"
-          onclick={() => onViewModeChange('grid')}
+        </SegmentedControl.Item>
+        <SegmentedControl.Item
+          value="grid"
+          size="icon"
           title={'网格视图'}
           aria-label={'网格视图'}
         >
@@ -104,8 +110,8 @@
             <rect x="3" y="14" width="7" height="7"></rect>
             <rect x="14" y="14" width="7" height="7"></rect>
           </svg>
-        </button>
-      </div>
+        </SegmentedControl.Item>
+      </SegmentedControl.Root>
     {/if}
 
     <button
@@ -254,35 +260,6 @@
     border-color: var(--ring);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
     width: 180px;
-  }
-
-  .view-seg {
-    display: inline-flex;
-    gap: 1px;
-    background: var(--segment-bg);
-    padding: 2px;
-    border-radius: 6px;
-  }
-
-  .view-btn.active {
-    background: var(--segment-active-bg);
-    color: var(--foreground);
-    font-weight: 600;
-    box-shadow: var(--segment-active-shadow);
-  }
-
-  .view-btn {
-    width: var(--control-height-compact);
-    height: var(--control-height-compact);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: all 0.12s ease;
   }
 
   .probe-all-btn {

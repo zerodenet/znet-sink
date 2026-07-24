@@ -3,6 +3,7 @@
   import { ChevronsUpDown, Clipboard, Pause, Radio, RefreshCcw, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Select from '$lib/components/ui/select';
+  import * as Tabs from '$lib/components/AppTabs';
   import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
@@ -368,12 +369,12 @@
   });
 </script>
 
-<div class="debug-page">
-  <div class="debug-subtabs" role="tablist" aria-label="调试功能">
-    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'diagnostics'} aria-pressed={subTab === 'diagnostics'} onclick={() => (subTab = 'diagnostics')}>诊断工具</Button>
-    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'frames'} aria-pressed={subTab === 'frames'} onclick={() => (subTab = 'frames')}>IPC 调试</Button>
-    <Button variant="ghost" size="sm" class="debug-subtab" role="tab" aria-selected={subTab === 'versions'} aria-pressed={subTab === 'versions'} onclick={() => (subTab = 'versions')}>版本管理</Button>
-  </div>
+<Tabs.Root bind:value={subTab} class="debug-page">
+  <Tabs.List class="debug-subtabs" aria-label="调试功能">
+    <Tabs.Trigger class="debug-subtab" value="diagnostics">诊断工具</Tabs.Trigger>
+    <Tabs.Trigger class="debug-subtab" value="frames">IPC 调试</Tabs.Trigger>
+    <Tabs.Trigger class="debug-subtab" value="versions">版本管理</Tabs.Trigger>
+  </Tabs.List>
 
   {#if subTab === 'diagnostics'}
     <DiagnosticsPanel />
@@ -503,10 +504,10 @@
     </div>
     </div>
   {/if}
-</div>
+</Tabs.Root>
 
 <style>
-  .debug-page {
+  :global(.debug-page) {
     display: flex;
     flex: 1;
     width: 100%;
@@ -516,26 +517,13 @@
     overflow: hidden;
   }
 
-  .debug-subtabs {
-    display: flex;
+  :global(.debug-subtabs) {
     width: fit-content;
     flex-shrink: 0;
-    gap: 2px;
-    padding: 3px;
-    border-radius: 10px;
-    background: var(--muted);
   }
 
   :global(.debug-subtab) {
     min-width: 84px;
-    color: var(--muted-foreground);
-    box-shadow: none;
-  }
-
-  :global(.debug-subtab[aria-pressed='true']) {
-    background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
   }
 
   .debug-content {
@@ -818,7 +806,7 @@
   }
 
   @media (max-width: 720px) {
-    .debug-subtabs { max-width: 100%; overflow-x: auto; }
+    :global(.debug-subtabs) { max-width: 100%; overflow-x: auto; }
     .debug-toolbar { align-items: stretch; flex-direction: column; }
     .debug-actions { justify-content: flex-start; }
     .debug-actions { overflow-x: auto; padding-bottom: 2px; }

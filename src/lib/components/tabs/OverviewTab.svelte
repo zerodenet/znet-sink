@@ -6,6 +6,7 @@
   import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import TunStackStatus from '$lib/components/core/TunStackStatus.svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import {
     selectPolicy,
   } from '$lib/services/core';
@@ -281,19 +282,26 @@
         </div>
 
         <div class="mt-auto">
-          <div class="proxy-segment" role="radiogroup" aria-label="选择代理模式">
+          <SegmentedControl.Root
+            value={guiState.proxyMode?.currentMode ?? ''}
+            onValueChange={(value) => {
+              if (value === 'global' || value === 'rule' || value === 'direct') {
+                void guiState.setProxyMode(value);
+              }
+            }}
+            disabled={guiState.isSwitchingMode}
+            class="proxy-segment"
+            aria-label="选择代理模式"
+          >
             {#each PROXY_MODES as mode}
-              <button
-                role="radio"
-                onclick={() => guiState.setProxyMode(mode.value as any)}
-                disabled={guiState.isSwitchingMode}
-                class="proxy-seg-btn {guiState.proxyMode?.currentMode === mode.value ? 'active' : ''}"
-                aria-checked={guiState.proxyMode?.currentMode === mode.value}
+              <SegmentedControl.Item
+                value={mode.value}
+                style="flex: 1;"
               >
                 {mode.label}
-              </button>
+              </SegmentedControl.Item>
             {/each}
-          </div>
+          </SegmentedControl.Root>
         </div>
       </div>
 
@@ -633,16 +641,7 @@
 
   .mode-indicator { font-size: 11px; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 
-  .proxy-segment { display: flex; align-items: center; gap: 1px; background: var(--segment-bg, rgba(0,0,0,0.055)); padding: 2px; border-radius: 7px; width: 100%; }
-  .proxy-seg-btn {
-    flex: 1; display: inline-flex; align-items: center; justify-content: center;
-    height: 24px; border-radius: 5px; border: none; background: transparent;
-    color: var(--muted-foreground); font-size: 11.5px; font-weight: 500;
-    cursor: pointer; transition: all 0.13s ease; white-space: nowrap;
-  }
-  .proxy-seg-btn:hover:not(:disabled) { color: var(--foreground); }
-  .proxy-seg-btn.active { background: var(--segment-active-bg, #fff); box-shadow: var(--segment-active-shadow, 0 1px 3px rgba(0,0,0,0.12)); color: var(--foreground); font-weight: 600; }
-  .proxy-seg-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  :global(.proxy-segment) { width: 100%; }
 
   .expand-chevron { transition: transform 0.2s ease; opacity: 0.5; flex-shrink: 0; }
   .expand-chevron.expanded { transform: rotate(180deg); }

@@ -23,6 +23,7 @@
   } from '$lib/services/diagnostic-copy';
   import { mergeLogPage } from '$lib/services/log-page';
   import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
 
   const PAGE_SIZE = 400;
 
@@ -533,34 +534,32 @@
   </header>
 
   <div class="log-filters">
-    <div class="filter-group" aria-label="日志来源">
+    <SegmentedControl.Root
+      value={selectedSource}
+      onValueChange={(value) => selectedSource = value as LogSource | 'all'}
+      aria-label="日志来源"
+    >
       {#each sources as source}
-        <button
-          type="button"
-          onclick={() => selectedSource = source.value}
-          class="filter-button"
-          class:active={selectedSource === source.value}
-          aria-pressed={selectedSource === source.value}
-        >
+        <SegmentedControl.Item value={source.value}>
           {source.label}
-        </button>
+        </SegmentedControl.Item>
       {/each}
-    </div>
+    </SegmentedControl.Root>
 
-    <div class="filter-group" aria-label="最低日志级别">
+    <SegmentedControl.Root
+      value={selectedLevel}
+      onValueChange={(value) => selectedLevel = value as LogLevel}
+      aria-label="最低日志级别"
+    >
       {#each levels as level}
-        <button
-          type="button"
-          onclick={() => selectedLevel = level.value}
-          class="filter-button"
-          class:active={selectedLevel === level.value}
+        <SegmentedControl.Item
+          value={level.value}
           title={level.title}
-          aria-pressed={selectedLevel === level.value}
         >
           {level.label}
-        </button>
+        </SegmentedControl.Item>
       {/each}
-    </div>
+    </SegmentedControl.Root>
 
     <label class="search-wrap">
       <Search class="search-icon h-3.5 w-3.5" />
@@ -876,38 +875,6 @@
     border-bottom: 1px solid var(--border);
     background: var(--card);
     flex-shrink: 0;
-  }
-
-  .filter-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 1px;
-    padding: 2px;
-    border-radius: var(--control-radius);
-    background: var(--segment-bg);
-    flex-shrink: 0;
-  }
-
-  .filter-button {
-    height: var(--control-height-compact);
-    padding: 0 8px;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 10.5px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .filter-button:hover { color: var(--foreground); }
-
-  .filter-button.active {
-    background: var(--segment-active-bg);
-    color: var(--foreground);
-    box-shadow: var(--segment-active-shadow);
   }
 
   .search-wrap {

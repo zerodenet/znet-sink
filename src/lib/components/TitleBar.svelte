@@ -3,6 +3,7 @@
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { store } from '$lib/services/store.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import KernelStatusPill from '$lib/components/core/KernelStatusPill.svelte';
   import { updater } from '$lib/services/updater.svelte';
 
@@ -82,30 +83,32 @@
     <span class="titlebar-divider flex-shrink-0" aria-hidden="true"></span>
 
     <!-- Mode segmented control — inline after identity -->
-    <div class="segment-root flex-shrink-0">
-      <button
-        onclick={async () => await store.switchUIMode('lite')}
-        disabled={store.isSwitchingUiMode}
-        class="segment-item {store.uiMode === 'lite' ? 'active' : ''}"
-        aria-pressed={store.uiMode === 'lite'}
+    <SegmentedControl.Root
+      value={store.uiMode}
+      onValueChange={(value) => {
+        if (value === 'lite' || value === 'pro') void store.switchUIMode(value);
+      }}
+      disabled={store.isSwitchingUiMode}
+      class="flex-shrink-0"
+      aria-label="界面模式"
+    >
+      <SegmentedControl.Item
+        value="lite"
         style="min-width: 48px;"
         aria-label="简约模式"
         title="简约模式"
       >
         简约
-      </button>
-      <button
-        onclick={async () => await store.switchUIMode('pro')}
-        disabled={store.isSwitchingUiMode}
-        class="segment-item {store.uiMode === 'pro' ? 'active' : ''}"
-        aria-pressed={store.uiMode === 'pro'}
+      </SegmentedControl.Item>
+      <SegmentedControl.Item
+        value="pro"
         style="min-width: 48px;"
         aria-label="专业模式"
         title="专业模式"
       >
         专业
-      </button>
-    </div>
+      </SegmentedControl.Item>
+    </SegmentedControl.Root>
   </div>
 
   <!-- Right: Kernel status + Window controls -->

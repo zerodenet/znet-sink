@@ -1,4 +1,6 @@
 ﻿<script lang="ts">
+  import { Check, LoaderCircle, RefreshCw } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import type { ProxyNode } from '$lib/types/protocol';
   import {
     delayBarWidth,
@@ -21,7 +23,7 @@
     onSelectNode: (node: ProxyNode) => void | Promise<void>;
     onProbeNode: (node: ProxyNode) => void | Promise<void>;
     onShowPopover: (event: MouseEvent, node: ProxyNode) => void;
-    onHidePopover: () => void;
+    onHidePopover: (delay?: number) => void;
   }
 
   let {
@@ -48,8 +50,6 @@
 <div
   class="grid-card-wrap"
   role="listitem"
-  onmouseenter={(event) => onShowPopover(event, node)}
-  onmouseleave={onHidePopover}
 >
   <button
     class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
@@ -57,17 +57,15 @@
     disabled={selectDisabled}
   >
     <div class="grid-card-header">
+      {#if isActive}
+        <span class="grid-check" aria-hidden="true">
+          <Check />
+        </span>
+      {/if}
       <span class="grid-card-name {isActive ? 'grid-card-name-active' : ''}">
         {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
         {special?.label ?? (node.cleanName || node.name)}
       </span>
-      {#if isActive}
-        <span class="grid-check" aria-hidden="true">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="2,5 4,7 8,3"/>
-          </svg>
-        </span>
-      {/if}
     </div>
 
     <div class="grid-badges">
@@ -77,27 +75,34 @@
       {/each}
     </div>
 
-    <div class="grid-card-footer">
-      {#if isSwitching}
-        <span class="grid-spin">⟳</span>
-      {:else if special}
-        <span class="grid-special-copy">{special.description}</span>
-      {:else}
-        <span class="grid-delay" style="color: {delayState.color};">
-          {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
-          {#if delayState.grade && delayState.grade !== '—'}<span class="grid-delay-grade">{delayState.grade}</span>{/if}
-        </span>
-      {/if}
-    </div>
-
-    <span
-      class="grid-probe-time"
-      class:layout-placeholder={!node.lastProbeAt || !!special}
-      style="color: {probeTimeState.color};"
-      aria-hidden={!node.lastProbeAt || !!special}
+    <div
+      class="grid-history-trigger"
+      role="presentation"
+      onmouseenter={(event) => onShowPopover(event, node)}
+      onmouseleave={() => onHidePopover()}
     >
-      {#if node.lastProbeAt && !special}{probeTimeState.label}{:else}&nbsp;{/if}
-    </span>
+      <div class="grid-card-footer">
+        {#if isSwitching}
+          <span class="grid-spin">⟳</span>
+        {:else if special}
+          <span class="grid-special-copy">{special.description}</span>
+        {:else}
+          <span class="grid-delay" style="color: {delayState.color};">
+            {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
+            {#if delayState.grade && delayState.grade !== '—'}<span class="grid-delay-grade">{delayState.grade}</span>{/if}
+          </span>
+        {/if}
+      </div>
+
+      <span
+        class="grid-probe-time"
+        class:layout-placeholder={!node.lastProbeAt || !!special}
+        style="color: {probeTimeState.color};"
+        aria-hidden={!node.lastProbeAt || !!special}
+      >
+        {#if node.lastProbeAt && !special}{probeTimeState.label}{:else}&nbsp;{/if}
+      </span>
+    </div>
 
     <div class="grid-bar-track">
       <div class="grid-bar-fill" style="width: {special ? '0%' : delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
@@ -105,15 +110,22 @@
   </button>
 
   {#if !special}
-    <button
+    <Button
+      variant="ghost"
+      size="icon-xs"
       class="grid-probe-btn"
       onclick={() => onProbeNode(node)}
+      onmouseenter={() => onHidePopover(0)}
       disabled={probeDisabled || isProbing || probingAll}
       title="测试延迟"
       aria-label="测试 {node.name} 延迟"
     >
-      {#if isProbing}<span class="grid-probe-spin">⟳</span>{:else}测速{/if}
-    </button>
+      {#if isProbing}
+        <LoaderCircle class="animate-spin" />
+      {:else}
+        <RefreshCw />
+      {/if}
+    </Button>
   {/if}
 </div>
 
@@ -170,9 +182,9 @@
   .grid-card-header {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
-    gap: 4px;
+    gap: 5px;
     min-height: 31px;
+    padding-right: 20px;
   }
 
   .grid-card-name {
@@ -206,18 +218,25 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    background: rgba(99, 102, 241, 0.18);
-    color: var(--accent-foreground);
+    background: var(--primary);
+    color: var(--primary-foreground);
     flex-shrink: 0;
-    margin-top: 1px;
+    margin-top: 0.5px;
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+
+  .grid-check :global(svg) {
+    width: 9px;
+    height: 9px;
+    stroke-width: 2.5;
   }
 
   :global(.dark) .grid-check {
-    background: rgba(165, 180, 252, 0.18);
-    color: #a5b4fc;
+    background: color-mix(in srgb, var(--primary) 82%, white);
+    color: var(--primary-foreground);
   }
 
   .grid-badges {
@@ -281,11 +300,18 @@
     color: #fbbf24;
   }
 
+  .grid-history-trigger {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    width: 100%;
+    margin-top: auto;
+  }
+
   .grid-card-footer {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    margin-top: auto;
     min-height: 18px;
   }
 
@@ -341,41 +367,11 @@
     animation: spin 0.8s linear infinite;
   }
 
-  .grid-probe-btn {
+  :global(.grid-probe-btn) {
     position: absolute;
     top: 6px;
     right: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 34px;
-    height: 20px;
-    padding: 0 7px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    font-size: 10px;
-    font-weight: 600;
-    cursor: pointer;
-    z-index: 2;
-    transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
-  }
-
-  .grid-probe-btn:hover:not(:disabled) {
-    background: var(--accent, var(--muted));
-    color: var(--foreground);
-    border-color: var(--primary);
-  }
-
-  .grid-probe-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .grid-probe-spin {
-    display: inline-block;
-    animation: spin 0.8s linear infinite;
+    z-index: 3;
   }
 
   .grid-bar-track {

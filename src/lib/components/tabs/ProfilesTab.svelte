@@ -17,6 +17,7 @@
   import { Switch } from '$lib/components/ui/switch';
   import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
 
   type SourceMode = 'file' | 'inline';
 
@@ -443,28 +444,28 @@
     <div class="form-item">
       <span class="form-label">导入方式</span>
       <div class="form-input-wrap">
-      <div class="source-switch">
-        <button
-          type="button"
-          class="source-btn"
-          class:active={draft.sourceMode === 'file'}
-          onclick={() => setSourceMode('file')}
-          disabled={saving}
+      <SegmentedControl.Root
+        value={draft.sourceMode}
+        onValueChange={(value) => setSourceMode(value as SourceMode)}
+        disabled={saving}
+        class="source-switch"
+        aria-label="导入方式"
+      >
+        <SegmentedControl.Item
+          value="file"
+          size="comfortable"
         >
           <FolderOpen class="h-3.5 w-3.5" />
           <span>本地文件</span>
-        </button>
-        <button
-          type="button"
-          class="source-btn"
-          class:active={draft.sourceMode === 'inline'}
-          onclick={() => setSourceMode('inline')}
-          disabled={saving}
+        </SegmentedControl.Item>
+        <SegmentedControl.Item
+          value="inline"
+          size="comfortable"
         >
           <FileJson class="h-3.5 w-3.5" />
           <span>粘贴 JSON</span>
-        </button>
-      </div>
+        </SegmentedControl.Item>
+      </SegmentedControl.Root>
       </div>
     </div>
 
@@ -803,32 +804,9 @@
 
   .form-hint { margin-top: 4px; }
 
-  .source-switch {
+  :global(.source-switch) {
     display: inline-grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .source-btn {
-    height: 36px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-  }
-
-  .source-btn.active {
-    background: rgba(99, 102, 241, 0.08);
-    border-color: rgba(99, 102, 241, 0.24);
-    color: var(--foreground);
   }
 
   .file-picker-row {
@@ -898,7 +876,7 @@
       align-items: stretch;
     }
 
-    .source-switch {
+    :global(.source-switch) {
       grid-template-columns: 1fr;
     }
 

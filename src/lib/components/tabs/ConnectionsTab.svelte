@@ -8,7 +8,7 @@
   import type { GuiConnectionItem } from '$lib/types/gui-api';
   import { RefreshCw, Search, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
-  import * as Tabs from '$lib/components/ui/tabs';
+  import * as Tabs from '$lib/components/AppTabs';
 
  type DisplayConnection = Omit<GuiConnectionItem, 'source' | 'startedAtUnixMs'> & {
    source: string;

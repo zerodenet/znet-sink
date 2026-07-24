@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { AlertTriangle, Database, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -331,30 +332,28 @@
     </div>
 
     <div class="header-actions">
-      <div class="view-switch" role="group" aria-label="规则集显示方式">
-        <button
-          type="button"
-          class="view-switch-button"
-          class:active={viewMode === 'card'}
-          onclick={() => setViewMode('card')}
+      <SegmentedControl.Root
+        value={viewMode}
+        onValueChange={(value) => setViewMode(value as ViewMode)}
+        aria-label="规则集显示方式"
+      >
+        <SegmentedControl.Item
+          value="card"
+          size="icon"
           title="卡片视图"
           aria-label="卡片视图"
-          aria-pressed={viewMode === 'card'}
         >
           <LayoutGrid class="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          class="view-switch-button"
-          class:active={viewMode === 'list'}
-          onclick={() => setViewMode('list')}
+        </SegmentedControl.Item>
+        <SegmentedControl.Item
+          value="list"
+          size="icon"
           title="列表视图"
           aria-label="列表视图"
-          aria-pressed={viewMode === 'list'}
         >
           <List class="h-3.5 w-3.5" />
-        </button>
-      </div>
+        </SegmentedControl.Item>
+      </SegmentedControl.Root>
       {#if sourceCount > 0}
         <Button variant="outline" size="sm" onclick={updateAll} disabled={busy}>
           <RefreshCw class={`h-3.5 w-3.5 ${updatingAll ? 'spin' : ''}`} />
@@ -573,28 +572,19 @@
     <div class="form-item">
       <span class="form-label">创建方式</span>
       <div class="form-input-wrap">
-        <div class="source-switch">
-          <button
-            type="button"
-            class="source-button"
-            class:active={mode === 'visual'}
-            aria-pressed={mode === 'visual'}
-            onclick={() => mode = 'visual'}
-            disabled={saving}
-          >
+        <SegmentedControl.Root
+          value={mode}
+          onValueChange={(value) => mode = value as 'visual' | 'subscription'}
+          disabled={saving}
+          aria-label="创建方式"
+        >
+          <SegmentedControl.Item value="visual">
             手动创建
-          </button>
-          <button
-            type="button"
-            class="source-button"
-            class:active={mode === 'subscription'}
-            aria-pressed={mode === 'subscription'}
-            onclick={() => mode = 'subscription'}
-            disabled={saving}
-          >
+          </SegmentedControl.Item>
+          <SegmentedControl.Item value="subscription">
             外部导入
-          </button>
-        </div>
+          </SegmentedControl.Item>
+        </SegmentedControl.Root>
       </div>
     </div>
   {/if}
@@ -790,41 +780,6 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-  }
-
-  .view-switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
-    border: 0;
-    border-radius: var(--control-radius);
-    background: var(--segment-bg);
-  }
-
-  .view-switch-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-compact);
-    height: var(--control-height-compact);
-    padding: 0;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
-  }
-
-  .view-switch-button:hover {
-    color: var(--foreground);
-  }
-
-  .view-switch-button.active {
-    background: var(--segment-active-bg);
-    color: var(--foreground);
-    box-shadow: var(--segment-active-shadow);
   }
 
   .summary-strip {
@@ -1191,38 +1146,6 @@
     color: var(--muted-foreground);
     font-size: 10.5px;
     line-height: 1.45;
-  }
-
-  .source-switch {
-    display: inline-flex;
-    gap: 2px;
-    padding: 2px;
-    border-radius: 8px;
-    background: var(--segment-bg);
-  }
-
-  .source-button {
-    height: 28px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .source-button.active {
-    background: var(--segment-active-bg);
-    box-shadow: var(--segment-active-shadow);
-    color: var(--foreground);
-  }
-
-  .source-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   .field-select {

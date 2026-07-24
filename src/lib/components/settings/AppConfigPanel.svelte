@@ -5,6 +5,7 @@
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
   import type { AppConfig } from '$lib/types/app-config';
   import { Switch } from '$lib/components/ui/switch';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { NAV_TABS, TAB_LABELS } from '$lib/constants/navigation';
   import { onDestroy } from 'svelte';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -212,17 +213,18 @@
       <span class="label-text">主题</span>
       <span class="label-desc">选择界面配色方案</span>
     </div>
-    <div class="segment-root config-segment">
+    <SegmentedControl.Root
+      value={store.selectedTheme}
+      onValueChange={(value) => handleThemeChange(value as ThemeMode)}
+      class="config-segment"
+      aria-label="主题"
+    >
       {#each THEMES as theme}
-        <button
-          onclick={() => handleThemeChange(theme.value)}
-          class="segment-item {store.selectedTheme === theme.value ? 'active' : ''}"
-          aria-pressed={store.selectedTheme === theme.value}
-        >
+        <SegmentedControl.Item value={theme.value}>
           {theme.label}
-        </button>
+        </SegmentedControl.Item>
       {/each}
-    </div>
+    </SegmentedControl.Root>
   </div>
 
   <div class="config-row">
@@ -230,24 +232,18 @@
       <span class="label-text">界面模式</span>
       <span class="label-desc">简约模式会收起高阶入口，专业模式展示完整控制面。</span>
     </div>
-    <div class="segment-root config-segment">
-      <button
-        onclick={async () => await store.switchUIMode('lite')}
-        disabled={store.isSwitchingUiMode}
-        class="segment-item {store.uiMode === 'lite' ? 'active' : ''}"
-        aria-pressed={store.uiMode === 'lite'}
-      >
-        简约
-      </button>
-      <button
-        onclick={async () => await store.switchUIMode('pro')}
-        disabled={store.isSwitchingUiMode}
-        class="segment-item {store.uiMode === 'pro' ? 'active' : ''}"
-        aria-pressed={store.uiMode === 'pro'}
-      >
-        专业
-      </button>
-    </div>
+    <SegmentedControl.Root
+      value={store.uiMode}
+      onValueChange={(value) => {
+        if (value === 'lite' || value === 'pro') void store.switchUIMode(value);
+      }}
+      disabled={store.isSwitchingUiMode}
+      class="config-segment"
+      aria-label="界面模式"
+    >
+      <SegmentedControl.Item value="lite">简约</SegmentedControl.Item>
+      <SegmentedControl.Item value="pro">专业</SegmentedControl.Item>
+    </SegmentedControl.Root>
   </div>
 </div>
 
@@ -541,7 +537,7 @@
     opacity: 0.8;
   }
 
-  .config-segment {
+  :global(.config-segment) {
     flex-shrink: 0;
   }
 
@@ -678,7 +674,7 @@
       align-items: stretch;
     }
 
-    .config-segment {
+    :global(.config-segment) {
       width: fit-content;
     }
   }

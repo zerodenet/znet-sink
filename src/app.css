@@ -200,61 +200,6 @@ body {
 }
 
 /* ============================================
-   SEGMENTED CONTROL — reusable segment token
-   ============================================ */
-.segment-root {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  background: var(--segment-bg);
-  padding: 2px;
-  border-radius: var(--control-radius);
-}
-
-.segment-item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--control-height-compact);
-  border-radius: var(--control-radius-compact);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  padding: 0 11px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  transition: background 0.13s ease, color 0.13s ease, box-shadow 0.13s ease;
-  user-select: none;
-  white-space: nowrap;
-  border: none;
-  background: transparent;
-  outline: none;
-}
-
-.segment-item:hover:not(:disabled) {
-  color: var(--foreground);
-}
-
-.segment-item.active,
-.segment-item[aria-pressed="true"],
-.segment-item[aria-selected="true"] {
-  background: var(--segment-active-bg);
-  box-shadow: var(--segment-active-shadow);
-  color: var(--foreground);
-  font-weight: 600;
-}
-
-.segment-item:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 24%, transparent);
-}
-
-.segment-item:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-/* ============================================
    ANIMATIONS — subtle & native-feeling
    ============================================ */
 @keyframes fade-in {

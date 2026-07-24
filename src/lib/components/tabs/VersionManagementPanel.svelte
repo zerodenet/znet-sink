@@ -5,7 +5,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import * as Tabs from '$lib/components/ui/tabs';
+  import * as Tabs from '$lib/components/AppTabs';
   import { formatBytes, updater } from '$lib/services/updater.svelte';
   import {
     compareAppVersions,

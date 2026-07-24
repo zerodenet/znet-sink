@@ -28,6 +28,7 @@
     KernelInstallResult,
   } from '$lib/types/kernel-version';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
+  import * as Tabs from '$lib/components/AppTabs';
   import { success, warning } from '$lib/services/toast.svelte';
 
   const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/core/releases/latest';
@@ -446,18 +447,26 @@
     </Button>
   {/snippet}
 
-    <div class="channel-tabs">
+  <Tabs.Root
+    value={activeChannel}
+    onValueChange={(value) => {
+      activeChannel = value as ReleaseChannel;
+      installResult = null;
+      downloadProgress = null;
+    }}
+    class="kernel-channel-root"
+  >
+    <Tabs.List class="channel-tabs" aria-label="内核发布渠道">
       {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
-        <button
+        <Tabs.Trigger
+          value={ch}
           class="channel-tab"
-          class:active={activeChannel === ch}
-          onclick={() => { activeChannel = ch; installResult = null; downloadProgress = null; }}
           disabled={installBusy}
         >
           {CHANNEL_LABELS[ch]}
-        </button>
+        </Tabs.Trigger>
       {/each}
-    </div>
+    </Tabs.List>
 
     {#if installResult?.success}
       <div class="install-success">
@@ -533,6 +542,7 @@
         {/each}
       </div>
     {/if}
+  </Tabs.Root>
 
   {#snippet footer()}
     <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
@@ -780,41 +790,18 @@
 
   /* Modal content styles (layout provided by DraggableModal) */
 
-  /* Channel tabs */
-  .channel-tabs {
-    display: flex;
-    gap: 2px;
-    background: var(--muted);
-    border-radius: 8px;
-    padding: 3px;
+  :global(.kernel-channel-root) {
+    width: 100%;
   }
 
-  .channel-tab {
-    flex: 1;
-    padding: 6px 0;
-    border: none;
-    background: transparent;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: all 0.15s ease;
+  :global(.channel-tabs) {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
   }
 
-  .channel-tab:hover:not(:disabled) {
-    color: var(--foreground);
-  }
-
-  .channel-tab.active {
-    background: var(--card);
-    color: var(--foreground);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  }
-
-  .channel-tab:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  :global(.channel-tab) {
+    width: 100%;
   }
 
   /* Version list */
