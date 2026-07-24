@@ -69,6 +69,7 @@ const appHeader = read('src/lib/components/AppHeader.svelte');
 const debugTab = read('src/lib/components/tabs/DebugTab.svelte');
 const coreConfigPanel = read('src/lib/components/settings/CoreConfigPanel.svelte');
 const nodesGridCard = read('src/lib/components/tabs/NodesGridCard.svelte');
+const nodesGroupSidebar = read('src/lib/components/tabs/NodesGroupSidebar.svelte');
 const segmentedConsumers = [
   'src/lib/components/TitleBar.svelte',
   'src/lib/components/settings/AppConfigPanel.svelte',
@@ -147,6 +148,13 @@ assert.ok(
     nodesGridCard,
   ) && nodesGridCard.includes('padding-right: 20px'),
   'the selected marker should sit before the node name and reserve the probe action space',
+);
+assert.ok(
+  nodesGroupSidebar.includes('<div class="group-list">') &&
+    nodesGroupSidebar.includes('title={group.name}') &&
+    nodesGroupSidebar.includes('overflow-y: auto') &&
+    /<\/div>\s*\{#if getGroupKindStyle\(group.kind\)\}/.test(nodesGroupSidebar),
+  'the policy-group title should stay fixed while names expose a tooltip and kinds use a second line',
 );
 
 console.log('desktop-shell: ok');

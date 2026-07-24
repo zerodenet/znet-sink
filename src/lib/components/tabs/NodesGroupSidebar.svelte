@@ -24,51 +24,53 @@
     <span class="group-header-count">{groups.length}</span>
   </div>
 
-  {#if showAllNodes}
-    <button
-      class="group-item {!selectedGroup ? 'active' : ''}"
-      onclick={() => onSelectGroup(null)}
-    >
-      <div class="group-info">
-        <span class="group-name">{`全部节点`}</span>
-      </div>
-      <span class="group-count">{allNodesCount}</span>
-    </button>
-  {/if}
+  <div class="group-list">
+    {#if showAllNodes}
+      <button
+        class="group-item {!selectedGroup ? 'active' : ''}"
+        onclick={() => onSelectGroup(null)}
+      >
+        <div class="group-info">
+          <span class="group-name">{`全部节点`}</span>
+        </div>
+        <span class="group-count">{allNodesCount}</span>
+      </button>
+    {/if}
 
-  {#each groups as group}
-    <button
-      class="group-item {selectedGroup === group.name ? 'active' : ''}"
-      onclick={() => onSelectGroup(group.name)}
-    >
-      <div class="group-info">
-        <div class="group-name-row">
-          <span class="group-name truncate">{group.name}</span>
+    {#each groups as group}
+      <button
+        class="group-item {selectedGroup === group.name ? 'active' : ''}"
+        onclick={() => onSelectGroup(group.name)}
+      >
+        <div class="group-info">
+          <div class="group-name-row">
+            <span class="group-name truncate" title={group.name}>{group.name}</span>
+          </div>
           {#if getGroupKindStyle(group.kind)}
             <span
               class="group-kind"
               style="color: {getGroupKindStyle(group.kind)?.color}"
             >{getGroupKindStyle(group.kind)?.label}</span>
           {/if}
+          {#if group.selected}
+            <span class="group-selected truncate" title={group.selected}>
+              <span class="group-selected-dot"></span>
+              {group.selected}
+            </span>
+          {/if}
         </div>
-        {#if group.selected}
-          <span class="group-selected truncate">
-            <span class="group-selected-dot"></span>
-            {group.selected}
-          </span>
-        {/if}
-      </div>
-      <span class="group-count">{collectGroupNodeTags(groups, group.name).size}</span>
-    </button>
-  {/each}
+        <span class="group-count">{collectGroupNodeTags(groups, group.name).size}</span>
+      </button>
+    {/each}
 
-  {#if groups.length === 0}
-    {#if allNodesCount > 0}
-      <div class="group-empty">{`配置节点`} ({allNodesCount})</div>
-    {:else}
-      <div class="group-empty">{`等待数据…`}</div>
+    {#if groups.length === 0}
+      {#if allNodesCount > 0}
+        <div class="group-empty">{`配置节点`} ({allNodesCount})</div>
+      {:else}
+        <div class="group-empty">{`等待数据…`}</div>
+      {/if}
     {/if}
-  {/if}
+  </div>
 </aside>
 
 <style>
@@ -81,7 +83,8 @@
     padding: 10px 8px;
     border-right: 1px solid var(--border);
     background: var(--surface, rgba(0, 0, 0, 0.015));
-    overflow-y: auto;
+    min-height: 0;
+    overflow: hidden;
   }
 
   :global(.dark) .group-sidebar {
@@ -93,6 +96,17 @@
     align-items: center;
     justify-content: space-between;
     padding: 2px 8px 8px;
+    flex-shrink: 0;
+  }
+
+  .group-list {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 1px;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .group-header-label {
@@ -114,7 +128,7 @@
 
   .group-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 4px;
     width: 100%;
@@ -170,12 +184,19 @@
   }
 
   .group-kind {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    min-height: 16px;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: color-mix(in srgb, currentColor 9%, transparent);
     font-size: 9px;
     font-weight: 700;
+    line-height: 1;
     letter-spacing: 0.03em;
     text-transform: uppercase;
     opacity: 0.8;
-    flex-shrink: 0;
   }
 
   .group-selected {
@@ -211,6 +232,7 @@
     background: var(--muted);
     color: var(--muted-foreground);
     flex-shrink: 0;
+    margin-top: 1px;
   }
 
   .group-item.active .group-count {
