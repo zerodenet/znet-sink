@@ -479,15 +479,27 @@
     if (!popover.anchor) return '';
     const r = popover.anchor;
     const gap = 6;
-    // Estimate popover height (chart ~100px, list ~200px)
+    // The popover is rendered outside the scroll container. Flip it above or
+    // below the anchor based on the actual viewport edge, so the last row in
+    // either list or card layout is never clipped by the window bottom.
     const estimatedHeight = 200;
-    const top = r.top - gap;
-    const left = r.left + r.width / 2;
-    // If would overflow top of viewport, flip below the anchor
-    if (top - estimatedHeight < 0) {
-      return `position:fixed; left:${Math.round(left)}px; top:${Math.round(r.bottom + gap)}px; transform:translate(-50%, 0); z-index:9999;`;
+    const estimatedWidth = 260;
+    const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
+    const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth;
+    const centeredLeft = r.left + r.width / 2;
+    const left = Math.max(
+      estimatedWidth / 2 + gap,
+      Math.min(viewportWidth - estimatedWidth / 2 - gap, centeredLeft),
+    );
+    const canFitAbove = r.top - gap - estimatedHeight >= gap;
+    const canFitBelow = r.bottom + gap + estimatedHeight <= viewportHeight - gap;
+
+    if (canFitAbove || !canFitBelow) {
+      const top = canFitAbove ? r.top - gap : gap;
+      const transform = canFitAbove ? 'translate(-50%, -100%)' : 'translate(-50%, 0)';
+      return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; transform:${transform}; z-index:9999;`;
     }
-    return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; transform:translate(-50%, -100%); z-index:9999;`;
+    return `position:fixed; left:${Math.round(left)}px; top:${Math.round(r.bottom + gap)}px; transform:translate(-50%, 0); z-index:9999;`;
   }
 </script>
 

@@ -1,5 +1,8 @@
 use crate::services::common;
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 use crate::errors::{AppError, AppResult};
 
@@ -9,6 +12,12 @@ pub struct SystemProxyStatus {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub socks_enabled: bool,
+    #[serde(default)]
+    pub socks_host: String,
+    #[serde(default)]
+    pub socks_port: u16,
 }
 
 /// Snapshot of the user's original system-proxy configuration, captured
@@ -29,6 +38,12 @@ pub struct ProxyBackup {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub socks_enabled: bool,
+    #[serde(default)]
+    pub socks_host: String,
+    #[serde(default)]
+    pub socks_port: u16,
     /// Windows `ProxyOverride` (bypass list), e.g. `<local>;192.168.*`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_bypass: Option<String>,
@@ -46,12 +61,20 @@ pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
         return Err(AppError::invalid_argument("proxy port must not be zero"));
     }
 
-    set_proxy_platform(host, port, true)?;
+    let socks_enabled = supports_socks5(host, port);
+    set_proxy_platform(host, port, true, socks_enabled)?;
 
     Ok(SystemProxyStatus {
         enabled: true,
         host: host.to_string(),
         port,
+        socks_enabled,
+        socks_host: if socks_enabled {
+            host.to_string()
+        } else {
+            String::new()
+        },
+        socks_port: if socks_enabled { port } else { 0 },
     })
 }
 
@@ -63,12 +86,15 @@ pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
 /// on enable and [`restore`]s it on disable, so the user's original settings
 /// are recovered instead of being wiped.
 pub fn disable() -> AppResult<SystemProxyStatus> {
-    set_proxy_platform("", 0, false)?;
+    set_proxy_platform("", 0, false, false)?;
 
     Ok(SystemProxyStatus {
         enabled: false,
         host: String::new(),
         port: 0,
+        socks_enabled: false,
+        socks_host: String::new(),
+        socks_port: 0,
     })
 }
 
@@ -89,10 +115,32 @@ pub fn restore(backup: &ProxyBackup) -> AppResult<()> {
     restore_platform(backup)
 }
 
+fn supports_socks5(host: &str, port: u16) -> bool {
+    let timeout = Duration::from_millis(250);
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    for address in addresses {
+        let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+            continue;
+        };
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+        if stream.write_all(&[0x05, 0x01, 0x00]).is_err() {
+            continue;
+        }
+        let mut response = [0u8; 2];
+        if stream.read_exact(&mut response).is_ok() && response == [0x05, 0x00] {
+            return true;
+        }
+    }
+    false
+}
+
 // ── macOS ──
 
 #[cfg(target_os = "macos")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
+fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
     let services = active_network_services()?;
     if services.is_empty() {
         return Err(AppError::internal(
@@ -104,9 +152,15 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
         if enable {
             run_networksetup(&["-setwebproxy", service, host, &port.to_string()])?;
             run_networksetup(&["-setsecurewebproxy", service, host, &port.to_string()])?;
+            if socks_enabled {
+                run_networksetup(&["-setsocksfirewallproxy", service, host, &port.to_string()])?;
+            } else {
+                run_networksetup(&["-setsocksfirewallproxystate", service, "off"])?;
+            }
         } else {
             run_networksetup(&["-setwebproxystate", service, "off"])?;
             run_networksetup(&["-setsecurewebproxystate", service, "off"])?;
+            run_networksetup(&["-setsocksfirewallproxystate", service, "off"])?;
         }
     }
 
@@ -126,10 +180,20 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
                 let port: u16 = extract_prop(&output, "Port:")
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(0);
+                let socks = run_networksetup_output(&["-getsocksfirewallproxy", service])
+                    .unwrap_or_default();
+                let socks_enabled = socks.contains("Enabled: Yes");
+                let socks_host = extract_prop(&socks, "Server:").unwrap_or("").to_string();
+                let socks_port = extract_prop(&socks, "Port:")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
                 return Ok(SystemProxyStatus {
                     enabled: true,
                     host,
                     port,
+                    socks_enabled,
+                    socks_host,
+                    socks_port,
                 });
             }
         }
@@ -139,6 +203,9 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
         enabled: false,
         host: String::new(),
         port: 0,
+        socks_enabled: false,
+        socks_host: String::new(),
+        socks_port: 0,
     })
 }
 
@@ -147,8 +214,11 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
     let status = status_platform()?;
     Ok(ProxyBackup {
         enabled: status.enabled,
-        host: status.host,
+        host: status.host.clone(),
         port: status.port,
+        socks_enabled: status.socks_enabled,
+        socks_host: status.socks_host,
+        socks_port: status.socks_port,
         override_bypass: None,
         auto_config_url: None,
     })
@@ -157,9 +227,22 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 #[cfg(target_os = "macos")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true)
+        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled)?;
+        for service in active_network_services()? {
+            if backup.socks_enabled {
+                run_networksetup(&[
+                    "-setsocksfirewallproxy",
+                    &service,
+                    &backup.socks_host,
+                    &backup.socks_port.to_string(),
+                ])?;
+            } else {
+                run_networksetup(&["-setsocksfirewallproxystate", &service, "off"])?;
+            }
+        }
+        Ok(())
     } else {
-        set_proxy_platform("", 0, false)
+        set_proxy_platform("", 0, false, false)
     }
 }
 
@@ -237,12 +320,17 @@ const INTERNET_SETTINGS_KEY: &str =
     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
 #[cfg(target_os = "windows")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
+fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
     write_internet_setting_dword("ProxyEnable", if enable { 1 } else { 0 })?;
 
     // Set ProxyServer via registry
     if enable {
-        write_internet_setting_sz("ProxyServer", &format!("{host}:{port}"))?;
+        let server = if socks_enabled {
+            format!("http={host}:{port};https={host}:{port};socks={host}:{port}")
+        } else {
+            format!("http={host}:{port};https={host}:{port}")
+        };
+        write_internet_setting_sz("ProxyServer", &server)?;
     }
 
     notify_settings_changed();
@@ -258,16 +346,23 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
     if enabled {
         let server = query_internet_setting("ProxyServer").unwrap_or_default();
         let (host, port) = parse_server(&server);
+        let (socks_host, socks_port) = parse_named_server(&server, "socks");
         Ok(SystemProxyStatus {
             enabled: true,
             host,
             port,
+            socks_enabled: server.to_ascii_lowercase().contains("socks="),
+            socks_host,
+            socks_port,
         })
     } else {
         Ok(SystemProxyStatus {
             enabled: false,
             host: String::new(),
             port: 0,
+            socks_enabled: false,
+            socks_host: String::new(),
+            socks_port: 0,
         })
     }
 }
@@ -279,10 +374,14 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         .unwrap_or(false);
     let server = query_internet_setting("ProxyServer").unwrap_or_default();
     let (host, port) = parse_server(&server);
+    let (socks_host, socks_port) = parse_named_server(&server, "socks");
     Ok(ProxyBackup {
         enabled,
         host,
         port,
+        socks_enabled: !socks_host.is_empty(),
+        socks_host,
+        socks_port,
         override_bypass: query_internet_setting("ProxyOverride"),
         auto_config_url: query_internet_setting("AutoConfigURL"),
     })
@@ -297,7 +396,20 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     // delete the value so the GUI's own server doesn't linger (it would be
     // inert because ProxyEnable is off, but we keep the registry clean).
     if !backup.host.is_empty() {
-        write_internet_setting_sz("ProxyServer", &format!("{}:{}", backup.host, backup.port))?;
+        let server = if backup.socks_enabled {
+            format!(
+                "http={}:{};https={}:{};socks={}:{}",
+                backup.host,
+                backup.port,
+                backup.host,
+                backup.port,
+                backup.socks_host,
+                backup.socks_port
+            )
+        } else {
+            format!("{}:{}", backup.host, backup.port)
+        };
+        write_internet_setting_sz("ProxyServer", &server)?;
     } else {
         delete_internet_setting("ProxyServer");
     }
@@ -431,16 +543,33 @@ fn notify_settings_changed() {
 
 #[cfg(target_os = "windows")]
 fn parse_server(server: &str) -> (String, u16) {
+    if let Some((_, value)) = server.split(';').find_map(|item| item.split_once('=')) {
+        return value
+            .split_once(':')
+            .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap_or(0)))
+            .unwrap_or_default();
+    }
     server
         .split_once(':')
         .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap_or(0)))
         .unwrap_or_default()
 }
 
+#[cfg(target_os = "windows")]
+fn parse_named_server(server: &str, name: &str) -> (String, u16) {
+    server
+        .split(';')
+        .filter_map(|item| item.split_once('='))
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .and_then(|(_, value)| value.split_once(':'))
+        .map(|(host, port)| (host.to_string(), port.parse().unwrap_or(0)))
+        .unwrap_or_default()
+}
+
 // ── Linux ──
 
 #[cfg(target_os = "linux")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
+fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
     let mode = if enable { "manual" } else { "none" };
     let proxy_url = if enable {
         format!("http://{host}:{port}/")
@@ -476,6 +605,23 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool) -> AppResult<()> {
                 &port.to_string(),
             ])
             .output();
+        if socks_enabled {
+            let _ = common::background_command("gsettings")
+                .args(["set", "org.gnome.system.proxy.socks", "host", host])
+                .output();
+            let _ = common::background_command("gsettings")
+                .args([
+                    "set",
+                    "org.gnome.system.proxy.socks",
+                    "port",
+                    &port.to_string(),
+                ])
+                .output();
+        } else {
+            let _ = common::background_command("gsettings")
+                .args(["set", "org.gnome.system.proxy.socks", "host", ""])
+                .output();
+        }
     }
 
     gsettings_result
@@ -511,17 +657,39 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
             .trim()
             .parse()
             .unwrap_or(0);
+        let socks_host_output = common::background_command("gsettings")
+            .args(["get", "org.gnome.system.proxy.socks", "host"])
+            .output()
+            .unwrap_or_else(|_| output.clone());
+        let socks_host = String::from_utf8_lossy(&socks_host_output.stdout)
+            .trim()
+            .trim_matches('\'')
+            .to_string();
+        let socks_port_output = common::background_command("gsettings")
+            .args(["get", "org.gnome.system.proxy.socks", "port"])
+            .output()
+            .unwrap_or_else(|_| output.clone());
+        let socks_port: u16 = String::from_utf8_lossy(&socks_port_output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0);
 
         Ok(SystemProxyStatus {
             enabled: true,
             host,
             port,
+            socks_enabled: !socks_host.is_empty() && socks_port != 0,
+            socks_host,
+            socks_port,
         })
     } else {
         Ok(SystemProxyStatus {
             enabled: false,
             host: String::new(),
             port: 0,
+            socks_enabled: false,
+            socks_host: String::new(),
+            socks_port: 0,
         })
     }
 }
@@ -531,8 +699,11 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
     let status = status_platform()?;
     Ok(ProxyBackup {
         enabled: status.enabled,
-        host: status.host,
+        host: status.host.clone(),
         port: status.port,
+        socks_enabled: status.socks_enabled,
+        socks_host: status.socks_host,
+        socks_port: status.socks_port,
         override_bypass: None,
         auto_config_url: None,
     })
@@ -541,8 +712,27 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 #[cfg(target_os = "linux")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true)
+        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled)?;
+        if backup.socks_enabled {
+            let _ = common::background_command("gsettings")
+                .args([
+                    "set",
+                    "org.gnome.system.proxy.socks",
+                    "host",
+                    &backup.socks_host,
+                ])
+                .output();
+            let _ = common::background_command("gsettings")
+                .args([
+                    "set",
+                    "org.gnome.system.proxy.socks",
+                    "port",
+                    &backup.socks_port.to_string(),
+                ])
+                .output();
+        }
+        Ok(())
     } else {
-        set_proxy_platform("", 0, false)
+        set_proxy_platform("", 0, false, false)
     }
 }

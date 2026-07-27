@@ -236,6 +236,7 @@ export interface SystemProxyStatus {
   enabled: boolean;
   host: string;
   port: number;
+  socksEnabled?: boolean;
 }
 
 export async function enableSystemProxy(): Promise<SystemProxyStatus> {

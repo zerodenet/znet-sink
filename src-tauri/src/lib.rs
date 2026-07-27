@@ -31,6 +31,29 @@ use crate::services::{core_process, local_proxy, network_probe, system_proxy_gua
 use crate::state::app_state::AppState;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+fn proxy_environment_command(host: &str, port: u16) -> String {
+    let url = format!("http://{host}:{port}");
+    if cfg!(target_os = "windows") {
+        format!("$env:HTTP_PROXY='{url}'; $env:HTTPS_PROXY='{url}'; $env:ALL_PROXY='{url}'")
+    } else {
+        format!("export HTTP_PROXY='{url}' HTTPS_PROXY='{url}' ALL_PROXY='{url}'")
+    }
+}
+
+fn tray_copy_proxy_environment(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let endpoint = state
+        .app_config()
+        .lock()
+        .map(|config| (config.local_proxy.host.clone(), config.local_proxy.port));
+    if let Ok((host, port)) = endpoint {
+        let _ = app
+            .clipboard()
+            .write_text(proxy_environment_command(&host, port));
+    }
+}
 
 fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -206,10 +229,10 @@ pub fn run() {
                 .map(|config| config.core.cleanup_proxy_on_exit)
                 .unwrap_or(true);
             move || {
-              if cleanup {
-                // Restore the user's proxy only when the preference is enabled.
-                system_proxy_guard::disable_with_guard().ok();
-              }
+                if cleanup {
+                    // Restore the user's proxy only when the preference is enabled.
+                    system_proxy_guard::disable_with_guard().ok();
+                }
             }
         }),
     );
@@ -219,6 +242,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state)
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // ── Phase 4: Register commands ──
@@ -482,6 +506,25 @@ pub fn run() {
                                     );
                                 }
                             }
+
+                            // An already-running kernel is not represented by
+                            // a managed Child (therefore pid remains None),
+                            // but it still needs the normal GUI connection
+                            // handshake when auto-connect is enabled.
+                            if core_config.auto_connect {
+                                let connect_state = app_handle.state::<AppState>();
+                                if let Err(error) = crate::services::gui_connection::connect(
+                                    app_handle.clone(),
+                                    connect_state,
+                                )
+                                .await
+                                {
+                                    crate::services::file_logger::line(&format!(
+                                        "failed to auto-connect to existing kernel: {}",
+                                        error.message
+                                    ));
+                                }
+                            }
                             return;
                         }
                     }
@@ -519,6 +562,9 @@ pub fn run() {
             let restart_core_item = tauri::menu::MenuItemBuilder::new("重启内核")
                 .id("restart_core")
                 .build(app)?;
+            let copy_proxy_env_item = tauri::menu::MenuItemBuilder::new("复制代理环境变量")
+                .id("copy_proxy_env")
+                .build(app)?;
             let settings_item = tauri::menu::MenuItemBuilder::new("设置")
                 .id("settings")
                 .build(app)?;
@@ -536,6 +582,7 @@ pub fn run() {
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &start_core_item,
                     &restart_core_item,
+                    &copy_proxy_env_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &settings_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
@@ -563,6 +610,7 @@ pub fn run() {
                     "disable_proxy" => tray_disable_system_proxy(app.clone()),
                     "start_core" => tray_start_core(app.clone()),
                     "restart_core" => tray_restart_core(app.clone()),
+                    "copy_proxy_env" => tray_copy_proxy_environment(app),
                     "settings" => open_main_window_route(app, "settings", Some("general")),
                     "quit" => {
                         app.exit(0);

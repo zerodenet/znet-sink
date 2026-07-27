@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isRefreshShortcut } from '../src/lib/services/desktop-webview.ts';
+import { isBrowserShortcut, isRefreshShortcut } from '../src/lib/services/desktop-webview.ts';
 import { getTabTransitionDirection } from '../src/lib/utils/tab-transition.ts';
 
 function read(path) {
@@ -12,6 +12,13 @@ assert.equal(isRefreshShortcut({ key: 'r', ctrlKey: true, metaKey: false }), tru
 assert.equal(isRefreshShortcut({ key: 'R', ctrlKey: false, metaKey: true }), true);
 assert.equal(isRefreshShortcut({ key: 'r', ctrlKey: false, metaKey: false }), false);
 assert.equal(isRefreshShortcut({ key: 'f', ctrlKey: true, metaKey: false }), false);
+assert.equal(isBrowserShortcut({ key: 'f', ctrlKey: true, metaKey: false, shiftKey: false }), true);
+assert.equal(isBrowserShortcut({ key: 'f', ctrlKey: false, metaKey: true, shiftKey: false }), true);
+assert.equal(isBrowserShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false }), true);
+assert.equal(isBrowserShortcut({ key: '=', ctrlKey: true, metaKey: false, shiftKey: false }), true);
+assert.equal(isBrowserShortcut({ key: 'i', ctrlKey: true, metaKey: false, shiftKey: true }), true);
+assert.equal(isBrowserShortcut({ key: 'c', ctrlKey: true, metaKey: false, shiftKey: false }), false);
+assert.equal(isBrowserShortcut({ key: 'a', ctrlKey: true, metaKey: false, shiftKey: false }), false);
 
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
@@ -35,6 +42,16 @@ Object.defineProperties(refreshEvent, {
 });
 assert.equal(fakeWindow.dispatchEvent(refreshEvent), false);
 assert.equal(refreshEvent.defaultPrevented, true);
+
+const findEvent = new Event('keydown', { cancelable: true });
+Object.defineProperties(findEvent, {
+  key: { value: 'f' },
+  ctrlKey: { value: true },
+  metaKey: { value: false },
+  shiftKey: { value: false },
+});
+assert.equal(fakeWindow.dispatchEvent(findEvent), false);
+assert.equal(findEvent.defaultPrevented, true);
 
 uninstallGuards();
 globalThis.document = originalDocument;
