@@ -14,6 +14,7 @@ export interface AppCoreConfig {
   kernel: string;
   autoConnect: boolean;
   autoStart: boolean;
+  cleanupProxyOnExit: boolean;
   executablePath?: string;
   downloadUrl?: string;
   configPath?: string;
@@ -67,6 +68,7 @@ export interface AppCoreConfigPatch {
   kernel?: string;
   autoConnect?: boolean;
   autoStart?: boolean;
+  cleanupProxyOnExit?: boolean;
   executablePath?: string | null;
   downloadUrl?: string | null;
   configPath?: string | null;

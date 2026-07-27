@@ -42,6 +42,8 @@ pub struct AppCoreConfig {
     pub auto_connect: bool,
     #[serde(default)]
     pub auto_start: bool,
+    #[serde(default = "default_true")]
+    pub cleanup_proxy_on_exit: bool,
     #[serde(default)]
     pub executable_path: Option<String>,
     #[serde(default)]
@@ -62,6 +64,7 @@ impl Default for AppCoreConfig {
             kernel: default_kernel(),
             auto_connect: true,
             auto_start: true,
+            cleanup_proxy_on_exit: true,
             executable_path: None,
             download_url: None,
             config_path: None,
@@ -194,6 +197,7 @@ pub struct AppCoreConfigPatch {
     pub kernel: Option<String>,
     pub auto_connect: Option<bool>,
     pub auto_start: Option<bool>,
+    pub cleanup_proxy_on_exit: Option<bool>,
     pub executable_path: Option<Option<String>>,
     pub download_url: Option<Option<String>>,
     pub config_path: Option<Option<String>>,

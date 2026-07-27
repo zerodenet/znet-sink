@@ -21,6 +21,7 @@ import {
   type NetworkProbeResult,
   trayUpdateStatus,
 } from './core';
+import { getAppConfig } from './core';
 import { error as toastError, success as toastSuccess } from './toast.svelte';
 import { tracedOperation } from './telemetry';
 import type {
@@ -79,6 +80,27 @@ class GuiStateStore {
     this.startPeriodicNetworkProbe();
     void this.probeNetwork();
     await this.refreshAll();
+
+    // `autoConnect` is a GUI startup preference. Only connect when the
+    // startup lifecycle has already made the kernel available; this keeps
+    // disabling auto-start from implicitly starting a kernel via guiConnect.
+    try {
+      const appConfig = await getAppConfig();
+      if (appConfig.core.autoConnect && this.connection?.coreAvailable && !this.isConnected) {
+        await this.connect();
+      } else if (appConfig.core.autoConnect && !this.connection?.coreAvailable) {
+        // Kernel startup is asynchronous in Tauri. Give it a chance to
+        // finish, then perform the same check once more.
+        setTimeout(async () => {
+          await this.refreshConnectionStatus();
+          if (this.connection?.coreAvailable && !this.isConnected) {
+            await this.connect();
+          }
+        }, 1200);
+      }
+    } catch {
+      // Configuration errors must not prevent the rest of the UI from loading.
+    }
 
     // Unlock kernel action buttons after the first full state snapshot.
     // Until this point the UI may show stale pre-load state where buttons

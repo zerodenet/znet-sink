@@ -40,6 +40,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(auto_start) = core.auto_start {
             config.core.auto_start = auto_start;
         }
+        if let Some(cleanup_proxy_on_exit) = core.cleanup_proxy_on_exit {
+            config.core.cleanup_proxy_on_exit = cleanup_proxy_on_exit;
+        }
         if let Some(executable_path) = core.executable_path {
             config.core.executable_path = normalize_optional(executable_path);
         }

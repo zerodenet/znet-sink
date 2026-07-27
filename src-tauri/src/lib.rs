@@ -199,9 +199,18 @@ pub fn run() {
     shutdown_coord.register(
         lifecycle::Phase::Guard,
         "system_proxy_cleanup",
-        Box::new(move || {
-            // Ensure system proxy is disabled on clean exit
-            system_proxy_guard::disable_with_guard().ok();
+        Box::new({
+            let cleanup = app_state
+                .app_config()
+                .lock()
+                .map(|config| config.core.cleanup_proxy_on_exit)
+                .unwrap_or(true);
+            move || {
+              if cleanup {
+                // Restore the user's proxy only when the preference is enabled.
+                system_proxy_guard::disable_with_guard().ok();
+              }
+            }
         }),
     );
 

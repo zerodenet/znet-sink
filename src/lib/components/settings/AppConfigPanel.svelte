@@ -54,7 +54,7 @@
     }
   }
 
-  async function toggleCoreSetting(key: 'autoStart' | 'autoConnect') {
+  async function toggleCoreSetting(key: 'autoStart' | 'autoConnect' | 'cleanupProxyOnExit') {
     if (!config) return;
     loading = true;
     updateError = null;
@@ -63,7 +63,7 @@
       const updated = await updateAppConfig({ core: { [key]: !current } });
       config = updated;
     } catch (error) {
-      updateError = getAppErrorMessage(error, '更新内核行为失败');
+      updateError = getAppErrorMessage(error, '更新启动设置失败');
     } finally {
       loading = false;
     }
@@ -294,7 +294,7 @@
 <div class="config-separator"></div>
 
 <div class="config-section">
-  <div class="config-section-title">内核行为</div>
+  <div class="config-section-title">启动设置</div>
 
   {#if configLoading}
     <div class="config-loading">加载配置中...</div>
@@ -303,27 +303,40 @@
   {:else}
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">开机自动启动内核</span>
-        <span class="label-desc">系统启动时自动运行内核进程。</span>
+        <span class="label-text">应用启动时自动启动项目</span>
+        <span class="label-desc">打开应用时自动启动当前项目服务。</span>
       </div>
       <Switch
         checked={config.core.autoStart}
         onCheckedChange={() => toggleCoreSetting('autoStart')}
         disabled={loading}
-        aria-label="开机自动启动内核"
+        aria-label="应用启动时自动启动项目"
       />
     </div>
 
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">启动后自动连接</span>
-        <span class="label-desc">内核启动完成后自动建立连接。</span>
+        <span class="label-text">项目启动后自动连接</span>
+        <span class="label-desc">项目服务启动完成后自动开启系统代理。</span>
       </div>
       <Switch
         checked={config.core.autoConnect}
         onCheckedChange={() => toggleCoreSetting('autoConnect')}
         disabled={loading}
-        aria-label="启动后自动连接"
+        aria-label="项目启动后自动连接"
+      />
+    </div>
+
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">关闭应用时自动清理代理</span>
+        <span class="label-desc">退出应用时恢复应用启动前的系统代理配置。</span>
+      </div>
+      <Switch
+        checked={config.core.cleanupProxyOnExit}
+        onCheckedChange={() => toggleCoreSetting('cleanupProxyOnExit')}
+        disabled={loading}
+        aria-label="关闭应用时自动清理代理"
       />
     </div>
   {/if}
