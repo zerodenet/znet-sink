@@ -21,8 +21,13 @@
   let logPathsError = $state<string | null>(null);
   let copiedField = $state<string | null>(null);
   let pathActionError = $state<string | null>(null);
+  let proxyBypassDraft = $state('');
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
   let configRequestGeneration = 0;
+  const DEFAULT_PROXY_BYPASS = [
+    '<local>', 'localhost', '127.*', '[::1]', '10.*', '192.168.*',
+    ...Array.from({ length: 16 }, (_, index) => `172.${index + 16}.*`),
+  ];
 
   const menuTabs = NAV_TABS.filter((tab) => tab.id !== 'settings');
 
@@ -45,6 +50,7 @@
       const next = await getAppConfig();
       if (generation !== configRequestGeneration) return;
       config = next;
+      proxyBypassDraft = (next.localProxy.bypass ?? DEFAULT_PROXY_BYPASS).join('\n');
     } catch (error) {
       if (generation === configRequestGeneration) {
         configError = getAppErrorMessage(error, '加载应用配置失败');
@@ -64,6 +70,27 @@
       config = updated;
     } catch (error) {
       updateError = getAppErrorMessage(error, '更新启动设置失败');
+    } finally {
+      loading = false;
+    }
+  }
+
+  function parseProxyBypass(value: string): string[] {
+    return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  async function saveProxyBypass() {
+    if (!config) return;
+    loading = true;
+    updateError = null;
+    try {
+      const updated = await updateAppConfig({
+        localProxy: { bypass: parseProxyBypass(proxyBypassDraft) },
+      });
+      config = updated;
+      proxyBypassDraft = updated.localProxy.bypass.join('\n');
+    } catch (error) {
+      updateError = getAppErrorMessage(error, '更新本地地址绕过配置失败');
     } finally {
       loading = false;
     }
@@ -326,6 +353,19 @@
         aria-label="项目启动后自动连接"
       />
     </div>
+  {/if}
+</div>
+
+<div class="config-separator"></div>
+
+<div class="config-section">
+  <div class="config-section-title">系统代理</div>
+
+  {#if configLoading}
+    <div class="config-loading">加载配置中...</div>
+  {:else if !config}
+    <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
+  {:else}
 
     <div class="config-row">
       <div class="config-row-label">
@@ -338,6 +378,29 @@
         disabled={loading}
         aria-label="关闭应用时自动清理代理"
       />
+    </div>
+
+    <div class="proxy-bypass-editor">
+      <div class="config-row-label">
+        <span class="label-text">本地地址绕过</span>
+        <span class="label-desc">每行一项。匹配的本机或局域网地址不会进入系统代理。</span>
+      </div>
+      <textarea
+        class="bypass-textarea"
+        bind:value={proxyBypassDraft}
+        disabled={loading}
+        rows="6"
+        spellcheck="false"
+        aria-label="本地地址绕过列表"
+      ></textarea>
+      <div class="bypass-actions">
+        <button
+          class="log-action-btn"
+          onclick={() => (proxyBypassDraft = DEFAULT_PROXY_BYPASS.join('\n'))}
+          disabled={loading}
+        >恢复默认</button>
+        <button class="log-action-btn primary" onclick={saveProxyBypass} disabled={loading}>保存</button>
+      </div>
     </div>
   {/if}
 </div>
@@ -645,6 +708,39 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
+  }
+
+  .proxy-bypass-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  .bypass-textarea {
+    width: 100%;
+    min-height: 112px;
+    resize: vertical;
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
+    color: var(--foreground);
+    padding: 9px 10px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    outline: none;
+  }
+
+  .bypass-textarea:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
+  }
+
+  .bypass-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
   }
 
   .log-action-btn {

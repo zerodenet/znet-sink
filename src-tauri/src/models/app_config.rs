@@ -129,6 +129,8 @@ pub struct AppLocalProxyConfig {
     pub port: u16,
     #[serde(default)]
     pub source_proxy_config_id: Option<String>,
+    #[serde(default = "default_proxy_bypass")]
+    pub bypass: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,6 +178,7 @@ impl Default for AppLocalProxyConfig {
             host: default_local_proxy_host(),
             port: default_local_proxy_port(),
             source_proxy_config_id: None,
+            bypass: default_proxy_bypass(),
         }
     }
 }
@@ -229,6 +232,7 @@ pub struct AppLocalProxyConfigPatch {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub source_proxy_config_id: Option<Option<String>>,
+    pub bypass: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -292,6 +296,36 @@ fn default_tun_tag() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+pub fn default_proxy_bypass() -> Vec<String> {
+    [
+        "<local>",
+        "localhost",
+        "127.*",
+        "[::1]",
+        "10.*",
+        "192.168.*",
+        "172.16.*",
+        "172.17.*",
+        "172.18.*",
+        "172.19.*",
+        "172.20.*",
+        "172.21.*",
+        "172.22.*",
+        "172.23.*",
+        "172.24.*",
+        "172.25.*",
+        "172.26.*",
+        "172.27.*",
+        "172.28.*",
+        "172.29.*",
+        "172.30.*",
+        "172.31.*",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 pub fn default_network_probe_urls() -> Vec<String> {

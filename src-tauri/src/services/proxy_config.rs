@@ -538,19 +538,23 @@ async fn stop_core(app_handle: AppHandle) -> AppResult<()> {
     .map_err(|error| AppError::internal(format!("core stop task failed: {error}")))?
 }
 
-fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16)> {
+fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16, Vec<String>)> {
     let config = lock(state.app_config(), "app_config")?;
-    Ok((config.local_proxy.host.clone(), config.local_proxy.port))
+    Ok((
+        config.local_proxy.host.clone(),
+        config.local_proxy.port,
+        config.local_proxy.bypass.clone(),
+    ))
 }
 
 pub(crate) fn retarget_managed_system_proxy(state: &AppState) -> AppResult<()> {
-    let (host, port) = local_proxy_endpoint(state)?;
+    let (host, port, _) = local_proxy_endpoint(state)?;
     system_proxy_guard::retarget_if_enabled(&host, port)
 }
 
 fn enable_managed_system_proxy(state: &AppState) -> AppResult<()> {
-    let (host, port) = local_proxy_endpoint(state)?;
-    system_proxy_guard::enable_with_guard(&host, port)
+    let (host, port, bypass) = local_proxy_endpoint(state)?;
+    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
 }
 
 fn restore_managed_system_proxy_if_needed(state: &AppState, was_enabled: bool) -> AppResult<()> {

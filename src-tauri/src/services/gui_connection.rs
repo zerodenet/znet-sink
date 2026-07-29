@@ -81,6 +81,10 @@ pub async fn connect(
     }
 
     let (host, port) = local_proxy_endpoint(state.inner())?;
+    let bypass = lock(state.app_config(), "app_config")?
+        .local_proxy
+        .bypass
+        .clone();
     if let Err(error) = tauri::async_runtime::spawn_blocking({
         let host = host.clone();
         move || local_proxy::wait_until_listening(&host, port)
@@ -100,7 +104,7 @@ pub async fn connect(
         .await;
     }
 
-    if let Err(error) = system_proxy_guard::enable_with_guard(&host, port) {
+    if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass) {
         cleanup_failed_connect(state.clone());
         return build_status(
             state.inner(),

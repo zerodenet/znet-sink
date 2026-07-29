@@ -39,9 +39,15 @@ pub async fn system_proxy_enable(
             .clone()
     };
     let port = { lock(state.app_config(), "app_config")?.local_proxy.port };
+    let bypass = {
+        lock(state.app_config(), "app_config")?
+            .local_proxy
+            .bypass
+            .clone()
+    };
     let status = tauri::async_runtime::spawn_blocking(move || {
         local_proxy::wait_until_listening(&host, port)?;
-        system_proxy_guard::enable_with_guard(&host, port)?;
+        system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
         system_proxy::status()
     })
     .await

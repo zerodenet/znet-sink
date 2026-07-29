@@ -58,14 +58,18 @@ pub async fn kernel_install_version(
             let restart_state = restart_app.state::<AppState>();
             let proxy_endpoint = if restore_system_proxy {
                 let config = common::lock(restart_state.app_config(), "app_config")?;
-                Some((config.local_proxy.host.clone(), config.local_proxy.port))
+                Some((
+                    config.local_proxy.host.clone(),
+                    config.local_proxy.port,
+                    config.local_proxy.bypass.clone(),
+                ))
             } else {
                 None
             };
 
             core_process::start(restart_app.clone(), restart_state)?;
-            if let Some((host, port)) = proxy_endpoint {
-                system_proxy_guard::enable_with_guard(&host, port)?;
+            if let Some((host, port, bypass)) = proxy_endpoint {
+                system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
             }
             Ok(())
         })

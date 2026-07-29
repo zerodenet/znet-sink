@@ -40,6 +40,7 @@ export interface AppLocalProxyConfig {
   host: string;
   port: number;
   sourceProxyConfigId?: string;
+  bypass: string[];
 }
 
 export interface AppTunConfig {
@@ -94,6 +95,7 @@ export interface AppLocalProxyConfigPatch {
   host?: string;
   port?: number;
   sourceProxyConfigId?: string | null;
+  bypass?: string[];
 }
 
 export interface AppTunConfigPatch {

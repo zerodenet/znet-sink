@@ -7,6 +7,13 @@ use crate::models::app_config::default_network_probe_urls;
 
 pub const HOST_NETWORK_CHANGED_EVENT: &str = "host-network:changed";
 
+#[cfg(target_os = "windows")]
+static HOST_NETWORK_MONITOR: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "windows")]
+static LAST_HOST_NETWORK_EVENT_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 pub fn emit_host_network_changed(app_handle: &AppHandle, reason: &str) {
     let _ = app_handle.emit(
         HOST_NETWORK_CHANGED_EVENT,
@@ -15,6 +22,84 @@ pub fn emit_host_network_changed(app_handle: &AppHandle, reason: &str) {
             "occurredAtUnixMs": crate::services::common::now_unix_ms(),
         }),
     );
+}
+
+/// Start a process-lifetime watcher for Windows IP-interface changes. Mobile
+/// hotspot/ICS activation changes an interface, so the GUI can immediately
+/// refresh its sharing diagnostics even when the proxy was enabled first.
+pub fn start_host_network_monitor(app_handle: &AppHandle) -> AppResult<()> {
+    start_host_network_monitor_platform(app_handle)
+}
+
+#[cfg(target_os = "windows")]
+fn start_host_network_monitor_platform(app_handle: &AppHandle) -> AppResult<()> {
+    use std::ffi::c_void;
+
+    use windows_sys::Win32::{
+        Foundation::{ERROR_SUCCESS, HANDLE},
+        NetworkManagement::IpHelper::{
+            CancelMibChangeNotify2, NotifyIpInterfaceChange, MIB_IPINTERFACE_ROW,
+            MIB_NOTIFICATION_TYPE,
+        },
+        Networking::WinSock::AF_UNSPEC,
+    };
+
+    if HOST_NETWORK_MONITOR.get().is_some() {
+        return Ok(());
+    }
+
+    unsafe extern "system" fn interface_changed(
+        context: *const c_void,
+        _row: *const MIB_IPINTERFACE_ROW,
+        _notification_type: MIB_NOTIFICATION_TYPE,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        if context.is_null() {
+            return;
+        }
+        let now = crate::services::common::now_unix_ms();
+        let previous = LAST_HOST_NETWORK_EVENT_MS.swap(now, Ordering::Relaxed);
+        if now.saturating_sub(previous) < 1_500 {
+            return;
+        }
+        let app_handle = unsafe { &*(context as *const AppHandle) };
+        emit_host_network_changed(app_handle, "ip_interface.changed");
+    }
+
+    let context = Box::into_raw(Box::new(app_handle.clone()));
+    let mut notification_handle: HANDLE = std::ptr::null_mut();
+    let status = unsafe {
+        NotifyIpInterfaceChange(
+            AF_UNSPEC,
+            Some(interface_changed),
+            context.cast(),
+            false,
+            &mut notification_handle,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        unsafe { drop(Box::from_raw(context)) };
+        return Err(AppError::internal(format!(
+            "failed to watch Windows IP interface changes: error {status}"
+        )));
+    }
+
+    if HOST_NETWORK_MONITOR
+        .set((notification_handle as usize, context as usize))
+        .is_err()
+    {
+        unsafe {
+            CancelMibChangeNotify2(notification_handle);
+            drop(Box::from_raw(context));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_host_network_monitor_platform(_app_handle: &AppHandle) -> AppResult<()> {
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -130,6 +130,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(source_proxy_config_id) = local_proxy.source_proxy_config_id {
             config.local_proxy.source_proxy_config_id = normalize_optional(source_proxy_config_id);
         }
+        if let Some(bypass) = local_proxy.bypass {
+            config.local_proxy.bypass = normalize_proxy_bypass(bypass)?;
+        }
     }
 
     if let Some(tun) = patch.tun {
@@ -169,6 +172,27 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
     eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed(),);
 
     Ok(config)
+}
+
+fn normalize_proxy_bypass(values: Vec<String>) -> AppResult<Vec<String>> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.contains([';', '\r', '\n']) {
+            return Err(AppError::invalid_argument(
+                "localProxy.bypass entries must not contain semicolons or newlines",
+            ));
+        }
+        let key = value.to_ascii_lowercase();
+        if seen.insert(key) {
+            normalized.push(value.to_string());
+        }
+    }
+    Ok(normalized)
 }
 
 pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
@@ -248,7 +272,7 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_network_probe_urls;
+    use super::{normalize_network_probe_urls, normalize_proxy_bypass};
     use crate::models::app_config::default_network_probe_urls;
 
     #[test]
@@ -274,5 +298,27 @@ mod tests {
         assert!(normalize_network_probe_urls(vec!["socks5://127.0.0.1".to_string()]).is_err());
         assert!(normalize_network_probe_urls(vec!["   ".to_string()]).is_err());
         assert!(!default_network_probe_urls().is_empty());
+    }
+
+    #[test]
+    fn proxy_bypass_entries_trim_and_deduplicate_case_insensitively() {
+        let bypass = normalize_proxy_bypass(vec![
+            " localhost ".to_string(),
+            "LOCALHOST".to_string(),
+            "192.168.*".to_string(),
+            "".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            bypass,
+            vec!["localhost".to_string(), "192.168.*".to_string()]
+        );
+    }
+
+    #[test]
+    fn proxy_bypass_entries_reject_platform_separators() {
+        assert!(normalize_proxy_bypass(vec!["localhost;example.com".to_string()]).is_err());
+        assert!(normalize_proxy_bypass(vec!["localhost\nexample.com".to_string()]).is_err());
     }
 }

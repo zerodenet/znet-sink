@@ -40,6 +40,8 @@ struct ProxyMarker {
     /// (proxy off), which is a safe fallback.
     #[serde(default)]
     previous: system_proxy::ProxyBackup,
+    #[serde(default)]
+    bypass: Vec<String>,
 }
 
 fn marker_path() -> AppResult<PathBuf> {
@@ -124,11 +126,19 @@ pub fn cleanup_on_startup() {
 /// point (including between enabling the proxy and writing the marker) still
 /// leaves a restorable backup on disk.
 pub fn enable_with_guard(host: &str, port: u16) -> AppResult<()> {
+    enable_with_guard_and_bypass(
+        host,
+        port,
+        &crate::models::app_config::default_proxy_bypass(),
+    )
+}
+
+pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) -> AppResult<()> {
     let backup = system_proxy::capture_backup()?;
     // Persist the backup BEFORE touching the system. If the app dies right
     // after this line, cleanup_on_startup still has the backup to restore.
-    write_marker(host, port, backup)?;
-    if let Err(error) = system_proxy::enable(host, port) {
+    write_marker(host, port, backup, bypass)?;
+    if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
         // Enable failed — the proxy was never actually changed, so the
         // marker we just wrote would be misleading. Roll it back so a
         // later disable doesn't try to restore a state that never
@@ -176,9 +186,9 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
         return Ok(());
     }
 
-    write_marker(host, port, marker.previous.clone())?;
-    if let Err(error) = system_proxy::enable(host, port) {
-        let _ = write_marker(&marker.host, marker.port, marker.previous);
+    write_marker(host, port, marker.previous.clone(), &marker.bypass)?;
+    if let Err(error) = system_proxy::enable_with_bypass(host, port, &marker.bypass) {
+        let _ = write_marker(&marker.host, marker.port, marker.previous, &marker.bypass);
         return Err(error);
     }
     Ok(())
@@ -248,7 +258,12 @@ fn read_marker(path: &PathBuf) -> Result<ProxyMarker, String> {
         .and_then(|s| serde_json::from_str::<ProxyMarker>(&s).map_err(|e| e.to_string()))
 }
 
-fn write_marker(host: &str, port: u16, previous: system_proxy::ProxyBackup) -> AppResult<()> {
+fn write_marker(
+    host: &str,
+    port: u16,
+    previous: system_proxy::ProxyBackup,
+    bypass: &[String],
+) -> AppResult<()> {
     let path = marker_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
@@ -260,6 +275,7 @@ fn write_marker(host: &str, port: u16, previous: system_proxy::ProxyBackup) -> A
         port,
         enabled_at_unix_ms: crate::services::common::now_unix_ms(),
         previous,
+        bypass: bypass.to_vec(),
     };
     let json = serde_json::to_string_pretty(&marker).map_err(|e| {
         crate::errors::AppError::internal(format!("failed to serialize proxy marker: {e}"))

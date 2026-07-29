@@ -227,11 +227,15 @@ pub fn restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     stop(state.clone())?;
     let status = start(app_handle.clone(), state.clone())?;
     if reconnect_system_proxy {
-        let (host, port) = {
+        let (host, port, bypass) = {
             let config = lock(state.app_config(), "app_config")?;
-            (config.local_proxy.host.clone(), config.local_proxy.port)
+            (
+                config.local_proxy.host.clone(),
+                config.local_proxy.port,
+                config.local_proxy.bypass.clone(),
+            )
         };
-        system_proxy_guard::enable_with_guard(&host, port)?;
+        system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
     }
     crate::services::network_probe::emit_host_network_changed(&app_handle, "core.restarted");
     Ok(status)

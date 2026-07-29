@@ -13,6 +13,15 @@ const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
 const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
 
+export class PolicyProbeTimeoutError extends Error {
+  readonly code = 'policy_probe_timeout';
+
+  constructor(readonly policyTag: string) {
+    super(`policy probe timed out: ${policyTag}`);
+    this.name = 'PolicyProbeTimeoutError';
+  }
+}
+
 // ── Exported types ──
 
 export type ConnectionDelta =
@@ -97,7 +106,7 @@ class CoreEventsService {
       timer = setTimeout(() => {
         waiters.delete(complete);
         if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
-        reject(new Error(`policy probe timed out: ${policyTag}`));
+        reject(new PolicyProbeTimeoutError(policyTag));
       }, options.timeoutMs ?? 60_000);
     });
   }
@@ -147,6 +156,7 @@ class CoreEventsService {
           HOST_NETWORK_CHANGED_EVENT,
           () => {
             void guiState.probeNetwork();
+            void guiState.refreshSelfTest();
           },
         );
       }

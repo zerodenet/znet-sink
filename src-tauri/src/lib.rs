@@ -108,8 +108,13 @@ fn tray_enable_system_proxy(app: tauri::AppHandle) {
             .lock()
             .map(|config| config.local_proxy.port)
             .unwrap_or(7890);
+        let bypass = state
+            .app_config()
+            .lock()
+            .map(|config| config.local_proxy.bypass.clone())
+            .unwrap_or_else(|_| crate::models::app_config::default_proxy_bypass());
         if local_proxy::wait_until_listening(&host, port).is_ok()
-            && system_proxy_guard::enable_with_guard(&host, port).is_ok()
+            && system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass).is_ok()
         {
             network_probe::emit_host_network_changed(&app, "system_proxy.enabled");
         }
@@ -357,6 +362,12 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
+            if let Err(error) = network_probe::start_host_network_monitor(app.handle()) {
+                crate::services::file_logger::line(&format!(
+                    "runtime: host network monitor unavailable: {}",
+                    error.message
+                ));
+            }
             // Always check kernel health on startup. If the kernel is already
             // running (e.g. external daemon), just connect. If not, try to
             // start a managed kernel when auto_start is enabled (default).

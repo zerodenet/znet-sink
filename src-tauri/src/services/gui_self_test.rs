@@ -10,7 +10,10 @@ use crate::models::{
         GuiConnectionStatus, GuiSelfTestCheck, GuiSelfTestCheckStatus, GuiSelfTestSnapshot,
     },
 };
-use crate::services::{common::lock, core_config, core_process, gui_connection, proxy_mode};
+use crate::services::{
+    common::lock, core_config, core_process, gui_connection, internet_sharing, proxy_mode,
+    system_proxy,
+};
 use crate::state::app_state::AppState;
 
 pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapshot> {
@@ -28,6 +31,9 @@ pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapsh
     checks.push(check_core_config(&core_config));
     checks.push(check_local_proxy(&connection));
     checks.push(check_system_proxy(&connection));
+    if let Some(check) = check_internet_sharing(&connection) {
+        checks.push(check);
+    }
     checks.push(check_core_health(state.inner()).await);
 
     let blocking_issues: Vec<String> = checks
@@ -186,6 +192,13 @@ fn check_system_proxy(connection: &GuiConnectionStatus) -> GuiSelfTestCheck {
     };
 
     if connection.connected {
+        if matches!(system_proxy::local_bypass_configured(), Some(false)) {
+            return warn(
+                "systemProxy",
+                "system proxy is active without loopback/LAN bypass protection",
+                Some(json!(status)),
+            );
+        }
         return pass(
             "systemProxy",
             "system proxy points to the GUI local proxy",
@@ -205,6 +218,39 @@ fn check_system_proxy(connection: &GuiConnectionStatus) -> GuiSelfTestCheck {
         "system proxy is disabled; call gui_connect during self-test",
         Some(json!(status)),
     )
+}
+
+fn check_internet_sharing(connection: &GuiConnectionStatus) -> Option<GuiSelfTestCheck> {
+    match internet_sharing::is_active() {
+        Ok(None) => None,
+        Ok(Some(true)) if connection.connected => Some(warn(
+            "internetSharing",
+            "Windows Internet Connection Sharing or mobile hotspot is active; hotspot clients do not inherit the host system proxy",
+            Some(json!({
+                "active": true,
+                "systemProxyConnected": true,
+                "localProxyHost": connection.local_proxy_host,
+                "localProxyPort": connection.local_proxy_port,
+            })),
+        )),
+        Ok(Some(active)) => Some(pass(
+            "internetSharing",
+            if active {
+                "Windows Internet Connection Sharing is active while the system proxy is disabled"
+            } else {
+                "Windows Internet Connection Sharing is inactive"
+            },
+            Some(json!({
+                "active": active,
+                "systemProxyConnected": connection.connected,
+            })),
+        )),
+        Err(error) => Some(warn(
+            "internetSharing",
+            format!("failed to inspect Windows Internet Connection Sharing: {}", error.message),
+            None,
+        )),
+    }
 }
 
 async fn check_core_health(state: &AppState) -> GuiSelfTestCheck {

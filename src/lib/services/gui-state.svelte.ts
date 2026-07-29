@@ -22,7 +22,7 @@ import {
   trayUpdateStatus,
 } from './core';
 import { getAppConfig } from './core';
-import { error as toastError, success as toastSuccess } from './toast.svelte';
+import { error as toastError, success as toastSuccess, warning as toastWarning } from './toast.svelte';
 import { tracedOperation } from './telemetry';
 import type {
   ConfigProxyNode,
@@ -69,6 +69,7 @@ class GuiStateStore {
   private lastStatusTick = -1;
   private networkProbeTimer: ReturnType<typeof setInterval> | null = null;
   private networkProbePending = false;
+  private internetSharingWarningShown = false;
 
   async initialize() {
     if (this.isInitialized) return;
@@ -132,7 +133,15 @@ class GuiStateStore {
 
   async refreshSelfTest() {
     try {
-      this.selfTest = await getGuiSelfTestSnapshot();
+      const snapshot = await getGuiSelfTestSnapshot();
+      this.selfTest = snapshot;
+      const internetSharingWarning = snapshot.checks.some(
+        (check) => check.key === 'internetSharing' && check.status === 'warn',
+      );
+      if (internetSharingWarning && !this.internetSharingWarningShown) {
+        toastWarning('检测到 Windows 热点或网络共享；其他设备不会自动使用本机系统代理。');
+      }
+      this.internetSharingWarningShown = internetSharingWarning;
     } catch {
       this.selfTest = null;
     }
@@ -292,6 +301,7 @@ class GuiStateStore {
       this.networkProbeError = this.errorMessage(error);
     } finally {
       this.networkProbeLoading = false;
+      void this.refreshSelfTest();
       if (this.networkProbePending && this.isInitialized) {
         void this.probeNetwork();
       }
@@ -305,6 +315,7 @@ class GuiStateStore {
       this.syncTrayStatus();
       toastSuccess('系统代理已开启，服务已生效');
       await this.refreshPolicyPanels();
+      await this.refreshSelfTest();
     } catch (e: any) {
       toastError(`连接失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
@@ -368,6 +379,7 @@ class GuiStateStore {
       await tracedOperation('proxy', 'system_proxy.enable', () => enableSystemProxyCommand());
       toastSuccess('系统代理已开启');
       await this.refreshRuntimeState();
+      await this.refreshSelfTest();
     } catch (e: any) {
       toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();

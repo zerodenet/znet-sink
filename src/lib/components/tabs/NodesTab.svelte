@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { coreEvents } from '$lib/services/core-events.svelte';
+  import { coreEvents, PolicyProbeTimeoutError } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
   import { appendLog, guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
@@ -77,16 +77,18 @@
     targetTag?: string;
     policyTag?: string;
     failedTargets?: string[];
+    outcome?: 'failed' | 'timeout';
   }
 
   function recordProbeFailure(failure: ProbeFailureLog) {
     const target = failure.targetTag ?? failure.policyTag;
+    const timedOut = failure.outcome === 'timeout';
     const message = target
-      ? `节点测速失败（${target}）：${failure.message}`
-      : `节点测速失败：${failure.message}`;
+      ? `${timedOut ? '节点测速超时' : '节点测速失败'}（${target}）：${failure.message}`
+      : `${timedOut ? '节点测速超时' : '节点测速失败'}：${failure.message}`;
     void appendLog({
       source: 'app',
-      level: 'warn',
+      level: timedOut ? 'info' : 'warn',
       message,
       fields: {
         schema: 'znet.node-probe.v1',
@@ -96,6 +98,7 @@
         targetTag: failure.targetTag,
         policyTag: failure.policyTag,
         failedTargets: failure.failedTargets,
+        outcome: failure.outcome ?? 'failed',
       },
     }).catch((logError) => {
       console.error('[nodes] failed to persist probe failure', logError);
@@ -351,10 +354,12 @@
       try {
         await probePolicy(policyTag);
       } catch (error) {
+        const timedOut = error instanceof PolicyProbeTimeoutError;
         recordProbeFailure({
-          message: error instanceof Error ? error.message : String(error),
+          message: timedOut ? '等待内核返回测速结果超时' : (error instanceof Error ? error.message : String(error)),
           scope: 'policy',
           policyTag,
+          outcome: timedOut ? 'timeout' : 'failed',
         });
       }
       return;
@@ -416,9 +421,11 @@
         ...policyRequests,
       ]);
     } catch (error) {
+      const timedOut = error instanceof PolicyProbeTimeoutError;
       recordProbeFailure({
-        message: error instanceof Error ? error.message : String(error),
+        message: timedOut ? '等待内核返回测速结果超时' : (error instanceof Error ? error.message : String(error)),
         scope: 'batch',
+        outcome: timedOut ? 'timeout' : 'failed',
       });
     } finally {
       probingRequested = false;

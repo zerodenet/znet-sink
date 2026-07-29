@@ -53,6 +53,18 @@ pub struct ProxyBackup {
 }
 
 pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
+    enable_with_bypass(
+        host,
+        port,
+        &crate::models::app_config::default_proxy_bypass(),
+    )
+}
+
+pub fn enable_with_bypass(
+    host: &str,
+    port: u16,
+    bypass: &[String],
+) -> AppResult<SystemProxyStatus> {
     let host = host.trim();
     if host.is_empty() {
         return Err(AppError::invalid_argument("proxy host must not be empty"));
@@ -62,7 +74,7 @@ pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
     }
 
     let socks_enabled = supports_socks5(host, port);
-    set_proxy_platform(host, port, true, socks_enabled)?;
+    set_proxy_platform(host, port, true, socks_enabled, bypass)?;
 
     Ok(SystemProxyStatus {
         enabled: true,
@@ -86,7 +98,7 @@ pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
 /// on enable and [`restore`]s it on disable, so the user's original settings
 /// are recovered instead of being wiped.
 pub fn disable() -> AppResult<SystemProxyStatus> {
-    set_proxy_platform("", 0, false, false)?;
+    set_proxy_platform("", 0, false, false, &[])?;
 
     Ok(SystemProxyStatus {
         enabled: false,
@@ -100,6 +112,12 @@ pub fn disable() -> AppResult<SystemProxyStatus> {
 
 pub fn status() -> AppResult<SystemProxyStatus> {
     status_platform()
+}
+
+/// Whether the current platform exposes and has the managed local-network
+/// bypass protection. `None` means the platform backend cannot inspect it.
+pub fn local_bypass_configured() -> Option<bool> {
+    local_bypass_configured_platform()
 }
 
 /// Read the current OS proxy settings into a [`ProxyBackup`] so they can be
@@ -140,7 +158,13 @@ fn supports_socks5(host: &str, port: u16) -> bool {
 // ── macOS ──
 
 #[cfg(target_os = "macos")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
+fn set_proxy_platform(
+    host: &str,
+    port: u16,
+    enable: bool,
+    socks_enabled: bool,
+    _bypass: &[String],
+) -> AppResult<()> {
     let services = active_network_services()?;
     if services.is_empty() {
         return Err(AppError::internal(
@@ -227,7 +251,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 #[cfg(target_os = "macos")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled)?;
+        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled, &[])?;
         for service in active_network_services()? {
             if backup.socks_enabled {
                 run_networksetup(&[
@@ -242,8 +266,13 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
         }
         Ok(())
     } else {
-        set_proxy_platform("", 0, false, false)
+        set_proxy_platform("", 0, false, false, &[])
     }
+}
+
+#[cfg(target_os = "macos")]
+fn local_bypass_configured_platform() -> Option<bool> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -320,7 +349,13 @@ const INTERNET_SETTINGS_KEY: &str =
     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
 #[cfg(target_os = "windows")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
+fn set_proxy_platform(
+    host: &str,
+    port: u16,
+    enable: bool,
+    socks_enabled: bool,
+    bypass: &[String],
+) -> AppResult<()> {
     write_internet_setting_dword("ProxyEnable", if enable { 1 } else { 0 })?;
 
     // Set ProxyServer via registry
@@ -331,6 +366,14 @@ fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) 
             format!("http={host}:{port};https={host}:{port}")
         };
         write_internet_setting_sz("ProxyServer", &server)?;
+        // Never send loopback or LAN traffic back into the local mixed
+        // listener. This also protects adapters that appear after Wi-Fi is
+        // enabled while the application proxy is already active.
+        if bypass.is_empty() {
+            delete_internet_setting("ProxyOverride");
+        } else {
+            write_internet_setting_sz("ProxyOverride", &bypass.join(";"))?;
+        }
     }
 
     notify_settings_changed();
@@ -419,6 +462,8 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     // were absent and untouched; leaving them alone is correct.
     if let Some(bypass) = &backup.override_bypass {
         write_internet_setting_sz("ProxyOverride", bypass)?;
+    } else {
+        delete_internet_setting("ProxyOverride");
     }
     if let Some(url) = &backup.auto_config_url {
         write_internet_setting_sz("AutoConfigURL", url)?;
@@ -454,6 +499,12 @@ fn query_internet_setting(value_name: &str) -> Option<String> {
         return Some(rest[kind_end..].trim().to_string());
     }
     None
+}
+
+#[cfg(target_os = "windows")]
+fn local_bypass_configured_platform() -> Option<bool> {
+    let bypass = query_internet_setting("ProxyOverride")?.to_ascii_lowercase();
+    Some(bypass.contains("<local>") && bypass.contains("localhost") && bypass.contains("127.*"))
 }
 
 #[cfg(target_os = "windows")]
@@ -569,7 +620,13 @@ fn parse_named_server(server: &str, name: &str) -> (String, u16) {
 // ── Linux ──
 
 #[cfg(target_os = "linux")]
-fn set_proxy_platform(host: &str, port: u16, enable: bool, socks_enabled: bool) -> AppResult<()> {
+fn set_proxy_platform(
+    host: &str,
+    port: u16,
+    enable: bool,
+    socks_enabled: bool,
+    _bypass: &[String],
+) -> AppResult<()> {
     let mode = if enable { "manual" } else { "none" };
     let proxy_url = if enable {
         format!("http://{host}:{port}/")
@@ -712,7 +769,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 #[cfg(target_os = "linux")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled)?;
+        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled, &[])?;
         if backup.socks_enabled {
             let _ = common::background_command("gsettings")
                 .args([
@@ -733,6 +790,11 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
         }
         Ok(())
     } else {
-        set_proxy_platform("", 0, false, false)
+        set_proxy_platform("", 0, false, false, &[])
     }
+}
+
+#[cfg(target_os = "linux")]
+fn local_bypass_configured_platform() -> Option<bool> {
+    None
 }

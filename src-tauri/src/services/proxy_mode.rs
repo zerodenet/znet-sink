@@ -132,8 +132,11 @@ pub async fn set(
                         let endpoint = common::lock(state.app_config(), "app_config")?
                             .local_proxy
                             .clone();
-                        let _ =
-                            system_proxy_guard::enable_with_guard(&endpoint.host, endpoint.port);
+                        let _ = system_proxy_guard::enable_with_guard_and_bypass(
+                            &endpoint.host,
+                            endpoint.port,
+                            &endpoint.bypass,
+                        );
                     }
                     let mut message = format!(
                         "failed to restart the kernel after changing proxy mode: {}",

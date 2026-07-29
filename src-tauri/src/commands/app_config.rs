@@ -73,9 +73,10 @@ pub async fn app_config_update(
                     && runtime_rollback.is_none()
                     && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
                 {
-                    if let Err(proxy_error) = system_proxy_guard::enable_with_guard(
+                    if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
                         &old_config.local_proxy.host,
                         old_config.local_proxy.port,
+                        &old_config.local_proxy.bypass,
                     ) {
                         runtime_rollback = Some(format!(
                             "system proxy rollback failed: {}",
@@ -95,6 +96,23 @@ pub async fn app_config_update(
                 }
                 return Err(AppError::internal(message));
             }
+        }
+    }
+
+    if managed_proxy_enabled && old_config.local_proxy.bypass != new_config.local_proxy.bypass {
+        system_proxy_guard::disable_with_guard()?;
+        if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(
+            &new_config.local_proxy.host,
+            new_config.local_proxy.port,
+            &new_config.local_proxy.bypass,
+        ) {
+            let _ = system_proxy_guard::enable_with_guard_and_bypass(
+                &old_config.local_proxy.host,
+                old_config.local_proxy.port,
+                &old_config.local_proxy.bypass,
+            );
+            let _ = app_config::replace(state.inner(), old_config);
+            return Err(error);
         }
     }
 
