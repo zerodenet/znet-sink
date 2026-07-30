@@ -14,6 +14,7 @@ import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gu
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
+const TRAFFIC_SAMPLED_EVENT = 'traffic.sampled';
 const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
 
 export class PolicyProbeTimeoutError extends Error {
@@ -73,6 +74,7 @@ class CoreEventsService {
 
   private _unlistenEvent: UnlistenFn | null = null;
   private _unlistenStatus: UnlistenFn | null = null;
+  private _unlistenTrafficSample: UnlistenFn | null = null;
   private _unlistenProcess: UnlistenFn | null = null;
   private _unlistenHostNetwork: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
@@ -127,6 +129,7 @@ class CoreEventsService {
       && this._activeGeneration !== null
       && this._unlistenEvent
       && this._unlistenStatus
+      && this._unlistenTrafficSample
       && this._unlistenProcess
       && this._unlistenHostNetwork
     ) {
@@ -148,6 +151,14 @@ class CoreEventsService {
         this._unlistenStatus = await listen<CoreEventStatus>(STATUS_NAME, (event) => {
           this._handleStatus(event.payload);
         });
+      }
+      if (!this._unlistenTrafficSample) {
+        this._unlistenTrafficSample = await listen<Record<string, unknown>>(
+          TRAFFIC_SAMPLED_EVENT,
+          (event) => {
+            if (!this._stopped) overviewData.applyStatsEvent(event.payload);
+          },
+        );
       }
       if (!this._unlistenProcess) {
         this._unlistenProcess = await listen<{ reason: string; code: number | null; message: string }>('core:process-exited', (event) => {
@@ -188,10 +199,12 @@ class CoreEventsService {
     this.status = 'idle';
     this._unlistenEvent?.();
     this._unlistenStatus?.();
+    this._unlistenTrafficSample?.();
     this._unlistenProcess?.();
     this._unlistenHostNetwork?.();
     this._unlistenEvent = null;
     this._unlistenStatus = null;
+    this._unlistenTrafficSample = null;
     this._unlistenProcess = null;
     this._unlistenHostNetwork = null;
     this._pendingDeltas = [];
