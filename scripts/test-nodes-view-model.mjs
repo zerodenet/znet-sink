@@ -13,7 +13,11 @@ import {
   policyProbeTagForNode,
   resolveProbeDisplay,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
-import { buildPolicyProbeHistoryUpdates } from '../src/lib/services/policy-probe-history.ts';
+import {
+  buildPolicyProbeHistoryUpdates,
+  buildProbeHistoryUpdates,
+  projectSelectedGroupHistoryUpdates,
+} from '../src/lib/services/policy-probe-history.ts';
 import { parseNodeName } from '../src/lib/services/node-utils.ts';
 
 function node(tag, delay, extra = {}) {
@@ -293,6 +297,85 @@ function testPolicyProbeHistoryDoesNotInventMissingSelectedResult() {
   ]);
 }
 
+function testSelectorHistoryProjectsSelectedMemberProbeToGroup() {
+  const groups = [{
+    ...group('Proxy', [{ tag: 'HK' }, { tag: 'JP' }], 'selector'),
+    selected: 'HK',
+  }];
+
+  assert.deepEqual(buildProbeHistoryUpdates(groups, 'HK', 42, true, 3_000), [
+    { tag: 'HK', delayMs: 42, reachable: true, at: 3_000 },
+    {
+      tag: 'Proxy',
+      delayMs: 42,
+      reachable: true,
+      at: 3_000,
+      selectedTag: 'HK',
+    },
+  ]);
+  assert.deepEqual(buildProbeHistoryUpdates(groups, 'JP', 63, true, 3_001), [
+    { tag: 'JP', delayMs: 63, reachable: true, at: 3_001 },
+  ]);
+}
+
+function testNestedSelectedGroupsProjectThroughEveryLevel() {
+  const groups = [
+    { ...group('Auto', [{ tag: 'HK' }], 'url_test'), selected: 'HK' },
+    { ...group('Proxy', [{ tag: 'Auto' }], 'selector'), selected: 'Auto' },
+  ];
+
+  assert.deepEqual(buildProbeHistoryUpdates(groups, 'HK', 28, true, 4_000), [
+    { tag: 'HK', delayMs: 28, reachable: true, at: 4_000 },
+    { tag: 'Auto', delayMs: 28, reachable: true, at: 4_000, selectedTag: 'HK' },
+    { tag: 'Proxy', delayMs: 28, reachable: true, at: 4_000, selectedTag: 'Auto' },
+  ]);
+}
+
+function testPolicyHistoryProjectsIntoParentSelectorWithoutDuplicates() {
+  const groups = [
+    { ...group('Auto', [{ tag: 'HK' }, { tag: 'JP' }], 'url_test'), selected: 'HK' },
+    { ...group('Proxy', [{ tag: 'Auto' }], 'selector'), selected: 'Auto' },
+  ];
+  const base = buildPolicyProbeHistoryUpdates({
+    policyTag: 'Auto',
+    completedAtUnixMs: 5_000,
+    selected: 'HK',
+    members: [
+      { tag: 'HK', type: 'proxy', alive: true, delayMs: 31 },
+      { tag: 'JP', type: 'proxy', alive: true, delayMs: 52 },
+    ],
+  });
+  const updates = projectSelectedGroupHistoryUpdates(groups, base);
+
+  assert.equal(updates.filter((update) => update.tag === 'Auto').length, 1);
+  assert.equal(updates.filter((update) => update.tag === 'Proxy').length, 1);
+  assert.deepEqual(updates.find((update) => update.tag === 'Proxy'), {
+    tag: 'Proxy',
+    delayMs: 31,
+    reachable: true,
+    at: 5_000,
+    selectedTag: 'Auto',
+  });
+}
+
+function testGroupCardPrefersOwnProjectedHistoryOverSelectedFallback() {
+  const groups = [{
+    ...group('Proxy', [{ tag: 'HK' }, { tag: 'JP' }], 'selector'),
+    selected: 'JP',
+  }];
+  const nodes = buildAllNodes({
+    configNodes: [{ tag: 'Proxy', protocol: 'selector', isSelector: true }],
+    groups,
+    runtimeOverlay: buildRuntimeOverlay(groups),
+    latestDelay: (tag) => ({ Proxy: 35, JP: 90 })[tag],
+    latestProbeTime: (tag) => ({ Proxy: 2_000, JP: 3_000 })[tag],
+    fallbackNodes: [],
+  });
+
+  assert.equal(nodes[0].delay, 35);
+  assert.equal(nodes[0].lastProbeAt, 2_000);
+}
+
 testBuildSectionsKeepsOrphansWhenGroupsExist();
 testNodeTitlesPreserveCompleteEmojiGraphemes();
 testPolicyProbeAnimationCoversGroupAndEveryMemberCard();
@@ -309,5 +392,9 @@ testSpecialOutboundsRenderButNeverBecomeProbeTargets();
 testSingleCardProbeUsesPolicyOnlyForNestedUrlTestGroup();
 testPolicyProbeHistoryUsesSelectedResultFromSameScheduledEvent();
 testPolicyProbeHistoryDoesNotInventMissingSelectedResult();
+testSelectorHistoryProjectsSelectedMemberProbeToGroup();
+testNestedSelectedGroupsProjectThroughEveryLevel();
+testPolicyHistoryProjectsIntoParentSelectorWithoutDuplicates();
+testGroupCardPrefersOwnProjectedHistoryOverSelectedFallback();
 
 console.log('nodes-view-model: ok');

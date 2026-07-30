@@ -16,6 +16,7 @@
   import NodesToolbar from '$lib/components/tabs/NodesToolbar.svelte';
   import { createNodesProbeController } from '$lib/components/tabs/nodes-probe-controller.js';
   import { delayHistory, type DelayEntry } from '$lib/services/delay-history.svelte';
+  import { buildProbeHistoryUpdates } from '$lib/services/policy-probe-history';
   import { error as toastError } from '$lib/services/toast.svelte';
   import {
     buildAllNodes,
@@ -114,8 +115,18 @@
     listen,
     probeNode: guiClientProbeNode,
     probeAll: guiClientProbeStart,
-    recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) =>
-      delayHistory.record(targetTag, latencyMs, reachable),
+    recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) => {
+      const at = Date.now();
+      for (const update of buildProbeHistoryUpdates(groups, targetTag, latencyMs, reachable, at)) {
+        delayHistory.record(
+          update.tag,
+          update.delayMs,
+          update.reachable,
+          update.at,
+          update.selectedTag,
+        );
+      }
+    },
     onProbeFailure: (failure: { targetTag?: string; message: string; scope: 'single' | 'batch' }) =>
       recordProbeFailure(failure),
     refreshPolicyGroups: () => guiState.refreshPolicyGroups(),
@@ -445,14 +456,26 @@
     }
   });
 
-  // Render the popover outside .nodes-root so transformed ancestors do not
-  // turn it into a clipped descendant of the animated panel container.
+  // Render the popover in document.body. Merely placing it after .nodes-root
+  // is not enough: the tab transition viewport has overflow:hidden and a
+  // transformed containing block, which clips even position:fixed children.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
   interface PopoverState {
     visible: boolean;
-    anchor: DOMRect | null;
+    anchor: HTMLElement | null;
     node: ProxyNode | null;
   }
   let popover = $state<PopoverState>({ visible: false, anchor: null, node: null });
+  let popoverElement = $state<HTMLDivElement | null>(null);
+  let popoverPositionVersion = $state(0);
   const popoverHistory = $derived.by<DelayEntry[]>(() =>
     popover.node ? delayHistory.getHistory(popover.node.tag) : [],
   );
@@ -463,8 +486,7 @@
     }
     const hist = delayHistory.getHistory(node.tag);
     if (hist.length < 2) return;
-    const el = e.currentTarget as HTMLElement;
-    popover = { visible: true, anchor: el.getBoundingClientRect(), node };
+    popover = { visible: true, anchor: e.currentTarget as HTMLElement, node };
   }
 
   function hidePopover(delay = 300) {
@@ -482,31 +504,52 @@
     }
   }
 
+  $effect(() => {
+    if (!popover.visible || typeof window === 'undefined') return;
+
+    const refreshPosition = () => {
+      popoverPositionVersion += 1;
+    };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(refreshPosition);
+    if (popoverElement) resizeObserver?.observe(popoverElement);
+
+    window.addEventListener('resize', refreshPosition);
+    window.addEventListener('scroll', refreshPosition, true);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', refreshPosition);
+      window.removeEventListener('scroll', refreshPosition, true);
+    };
+  });
+
   function popoverStyle(): string {
+    void popoverPositionVersion;
     if (!popover.anchor) return '';
-    const r = popover.anchor;
+    const r = popover.anchor.getBoundingClientRect();
     const gap = 6;
-    // The popover is rendered outside the scroll container. Flip it above or
-    // below the anchor based on the actual viewport edge, so the last row in
-    // either list or card layout is never clipped by the window bottom.
-    const estimatedHeight = 200;
-    const estimatedWidth = 260;
+    const edgePadding = 8;
+    // Use the rendered dimensions instead of an estimate. The chart and list
+    // views have different heights, so an estimate can choose the wrong side.
+    const popoverHeight = popoverElement?.offsetHeight ?? 112;
+    const popoverWidth = popoverElement?.offsetWidth ?? 220;
     const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
     const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth;
-    const centeredLeft = r.left + r.width / 2;
     const left = Math.max(
-      estimatedWidth / 2 + gap,
-      Math.min(viewportWidth - estimatedWidth / 2 - gap, centeredLeft),
+      edgePadding,
+      Math.min(viewportWidth - popoverWidth - edgePadding, r.left + (r.width - popoverWidth) / 2),
     );
-    const canFitAbove = r.top - gap - estimatedHeight >= gap;
-    const canFitBelow = r.bottom + gap + estimatedHeight <= viewportHeight - gap;
+    const spaceAbove = r.top - gap - edgePadding;
+    const spaceBelow = viewportHeight - r.bottom - gap - edgePadding;
+    const placeAbove = spaceAbove >= popoverHeight || spaceAbove >= spaceBelow;
+    const preferredTop = placeAbove ? r.top - gap - popoverHeight : r.bottom + gap;
+    const top = Math.max(
+      edgePadding,
+      Math.min(viewportHeight - popoverHeight - edgePadding, preferredTop),
+    );
 
-    if (canFitAbove || !canFitBelow) {
-      const top = canFitAbove ? r.top - gap : gap;
-      const transform = canFitAbove ? 'translate(-50%, -100%)' : 'translate(-50%, 0)';
-      return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; transform:${transform}; z-index:9999;`;
-    }
-    return `position:fixed; left:${Math.round(left)}px; top:${Math.round(r.bottom + gap)}px; transform:translate(-50%, 0); z-index:9999;`;
+    return `position:fixed; left:${Math.round(left)}px; top:${Math.round(top)}px; z-index:9999;`;
   }
 </script>
 
@@ -672,6 +715,8 @@
 
 {#if popover.visible && popover.node}
   <div
+    bind:this={popoverElement}
+    use:portal
     class="popover-anchor"
     style={popoverStyle()}
     onmouseenter={keepPopover}
@@ -854,7 +899,6 @@
   .popover-anchor {
     position: fixed;
     z-index: 9999;
-    transform: translate(-50%, -100%);
     pointer-events: auto;
   }
 

@@ -3,7 +3,10 @@ import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime 
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { delayHistory } from '$lib/services/delay-history.svelte';
-import { buildPolicyProbeHistoryUpdates } from '$lib/services/policy-probe-history';
+import {
+  buildPolicyProbeHistoryUpdates,
+  projectSelectedGroupHistoryUpdates,
+} from '$lib/services/policy-probe-history';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
@@ -281,7 +284,11 @@ class CoreEventsService {
       const probe = data as PolicyProbeCompletedEvent;
       if (probe?.policyTag && Array.isArray(probe.members)) {
         guiState.applyPolicyProbeCompleted(probe);
-        for (const update of buildPolicyProbeHistoryUpdates(probe)) {
+        const historyUpdates = projectSelectedGroupHistoryUpdates(
+          guiState.policyGroups,
+          buildPolicyProbeHistoryUpdates(probe),
+        );
+        for (const update of historyUpdates) {
           delayHistory.record(
             update.tag,
             update.delayMs,

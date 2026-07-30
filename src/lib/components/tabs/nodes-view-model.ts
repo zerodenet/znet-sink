@@ -165,7 +165,8 @@ export function buildAllNodes(options: {
       if (configNode.isSelector) {
         const group = groups.find((g) => g.name === configNode.tag);
         const selectedTag = group?.selected;
-        if (selectedTag) {
+        const hasOwnProbe = probeDisplay.delay !== 0 || probeDisplay.at !== undefined;
+        if (!hasOwnProbe && selectedTag) {
           const selectedRuntime = runtimeOverlay.get(selectedTag);
           const selectedDisplay = resolveProbeDisplay({
             runtimeDelay: selectedRuntime?.delayMs,
@@ -219,8 +220,14 @@ export function buildAllNodes(options: {
       if (!memberTags.has(group.name)) continue;
       if (existingTags.has(group.name)) continue;
       const parsed = parseNodeName(group.name);
-      let probeDisplay: { delay: number; at?: number } = { delay: 0 };
-      if (group.selected) {
+      let probeDisplay = resolveProbeDisplay({
+        runtimeDelay: runtimeOverlay.get(group.name)?.delayMs,
+        runtimeAt: runtimeOverlay.get(group.name)?.lastCheckedUnixMs,
+        localDelay: latestDelay(group.name),
+        localAt: latestProbeTime?.(group.name),
+      });
+      const hasOwnProbe = probeDisplay.delay !== 0 || probeDisplay.at !== undefined;
+      if (!hasOwnProbe && group.selected) {
         const selectedRuntime = runtimeOverlay.get(group.selected);
         probeDisplay = resolveProbeDisplay({
           runtimeDelay: selectedRuntime?.delayMs,
