@@ -144,10 +144,24 @@ pub async fn gui_select_policy(
     policy_tag: String,
     target_tag: String,
 ) -> AppResult<GuiPolicySelectionResult> {
+    let _operation = state.proxy_config_operation().lock().await;
     let opts = default_opts(state.inner());
-    ZeroAdapter::new()
-        .select_policy(policy_tag, target_tag, opts)
-        .await
+    let result = ZeroAdapter::new()
+        .select_policy(policy_tag.clone(), target_tag.clone(), opts)
+        .await?;
+    if result.accepted {
+        let selected = result.selected.as_deref().unwrap_or(&target_tag);
+        if crate::services::policy_selection::record_active_subscription_selection(
+            state.inner(),
+            &policy_tag,
+            selected,
+        )? {
+            // Keep the exported launch config in sync as well, so both a
+            // managed restart and an external Zero restart restore the choice.
+            core_config::export_active(state.clone())?;
+        }
+    }
+    Ok(result)
 }
 
 /// Probe a single outbound through the kernel proxy stack.

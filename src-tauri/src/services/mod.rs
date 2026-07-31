@@ -20,6 +20,7 @@ pub mod local_proxy;
 pub mod log_store;
 pub mod logs;
 pub mod network_probe;
+pub mod policy_selection;
 pub mod probe;
 pub mod proxy_config;
 pub mod proxy_mode;

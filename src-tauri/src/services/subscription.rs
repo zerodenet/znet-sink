@@ -127,6 +127,7 @@ pub fn upsert(
                 kernel,
                 format,
                 target_proxy_config_id,
+                policy_selections: Default::default(),
                 update_interval_secs,
                 user_agent,
                 node_count: None,
@@ -1493,6 +1494,13 @@ async fn upsert_synced_proxy_config(
             port,
         )?;
     }
+    // A sync replaces the generated proxy config. Reapply choices that are
+    // still valid before hot-loading it; stale choices are omitted, which
+    // makes Zero fall back to the selector's first member.
+    crate::services::policy_selection::apply_selections(
+        &mut parsed.content,
+        &subscription.policy_selections,
+    );
     ensure_subscription_unchanged(state, subscription)?;
     let input = build_synced_proxy_config_upsert(
         subscription,
@@ -1570,6 +1578,10 @@ fn update_sync_success(
     metadata: SyncMetadata,
     synced_at_unix_ms: u64,
 ) -> AppResult<SubscriptionProfile> {
+    let synced_content = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.id == target_proxy_config_id)
+        .and_then(|profile| profile.content.clone());
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
     let mut next = subscriptions.clone();
     let subscription = next
@@ -1578,6 +1590,12 @@ fn update_sync_success(
         .ok_or_else(|| AppError::not_found("subscription", id.to_string()))?;
 
     subscription.target_proxy_config_id = Some(target_proxy_config_id);
+    if let Some(content) = synced_content.as_ref() {
+        crate::services::policy_selection::retain_valid_selections(
+            &mut subscription.policy_selections,
+            content,
+        );
+    }
     subscription.last_sync_at_unix_ms = Some(synced_at_unix_ms);
     subscription.last_error = None;
     subscription.updated_at_unix_ms = synced_at_unix_ms;
@@ -2098,6 +2116,7 @@ rule-providers:
             kernel: "zero".to_string(),
             format: "clash-yaml".to_string(),
             target_proxy_config_id: None,
+            policy_selections: Default::default(),
             update_interval_secs: None,
             user_agent: None,
             node_count: None,
@@ -2318,6 +2337,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                policy_selections: Default::default(),
                 update_interval_secs: interval,
                 user_agent: None,
                 node_count: None,
@@ -2377,6 +2397,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                policy_selections: Default::default(),
                 update_interval_secs: Some(interval_secs),
                 user_agent: None,
                 node_count: None,
@@ -2470,6 +2491,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                policy_selections: Default::default(),
                 update_interval_secs: Some(60),
                 user_agent: None,
                 node_count: None,

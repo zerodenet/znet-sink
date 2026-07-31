@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { AlertTriangle, Database, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
+  import { openUrl as openLink } from '@tauri-apps/plugin-opener';
+  import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Badge } from '$lib/components/ui/badge';
@@ -55,6 +56,8 @@
   let commonStatus = $state<CommonRuleInjectionStatus | null>(null);
   let commonSaving = $state(false);
   let bindingId = $state<string | null>(null);
+  let builtinDetails = $state<RuleSetProfile | null>(null);
+  let builtinDetailsError = $state('');
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
@@ -176,6 +179,32 @@
     retainSource = !!item.source;
     editorError = '';
     showEditor = true;
+  }
+
+  function openRuleSet(item: RuleSetProfile) {
+    if (busy) return;
+    if (item.builtIn) {
+      builtinDetails = item;
+      builtinDetailsError = '';
+      return;
+    }
+    openEdit(item);
+  }
+
+  function closeBuiltinDetails() {
+    builtinDetails = null;
+    builtinDetailsError = '';
+  }
+
+  async function openBuiltinSource() {
+    const url = builtinDetails?.provenance?.sourceUrl;
+    if (!url) return;
+    builtinDetailsError = '';
+    try {
+      await openLink(url);
+    } catch (cause) {
+      builtinDetailsError = getAppErrorMessage(cause, '打开内置规则源失败');
+    }
   }
 
   function closeEditor() {
@@ -388,7 +417,7 @@
   <div class="common-injection-row">
     <div class="common-injection-copy">
       <span class="common-injection-title">在规则模式下注入公共规则</span>
-      <span class="common-injection-hint">{commonStatusCopy()}。公共规则优先于机场订阅规则，且不会写回订阅原配置。</span>
+      <span class="common-injection-hint">{commonStatusCopy()}。机场订阅规则优先，公共规则作为补充，且不会写回订阅原配置。</span>
     </div>
     <Switch
       checked={commonStatus?.enabled ?? false}
@@ -435,9 +464,9 @@
           <button
             type="button"
             class="row-main"
-            onclick={() => openEdit(item)}
-            disabled={busy || item.builtIn}
-            title={item.builtIn ? '内置规则随应用提供，可调整绑定但不能直接编辑' : '编辑规则'}
+            onclick={() => openRuleSet(item)}
+            disabled={busy}
+            title={item.builtIn ? '查看内置规则详情' : '编辑规则'}
           >
             <div class="row-top">
               <span class="row-name">{item.name}</span>
@@ -702,6 +731,92 @@
 </DraggableModal>
 
 <DraggableModal
+  title={builtinDetails?.name ?? '内置规则集'}
+  description="内置规则以只读 ZRS 产物随应用提供；可查看版本与来源，但不能直接编辑或删除。"
+  open={builtinDetails !== null}
+  onClose={closeBuiltinDetails}
+  width="min(680px, 92vw)"
+>
+  {#if builtinDetails}
+    <div class="builtin-details">
+      <div class="builtin-stat-grid">
+        <div class="builtin-stat">
+          <span class="builtin-stat-label">规则条目</span>
+          <span class="builtin-stat-value">{builtinDetails.artifact?.entryCount ?? 0}</span>
+        </div>
+        <div class="builtin-stat">
+          <span class="builtin-stat-label">产物大小</span>
+          <span class="builtin-stat-value">{formatBytes(builtinDetails.artifact?.fileSize)}</span>
+        </div>
+        <div class="builtin-stat">
+          <span class="builtin-stat-label">ZRS 版本</span>
+          <span class="builtin-stat-value">
+            {builtinDetails.artifact
+              ? `${builtinDetails.artifact.majorVersion}.${builtinDetails.artifact.minorVersion}`
+              : '—'}
+          </span>
+        </div>
+        <div class="builtin-stat">
+          <span class="builtin-stat-label">CRC32</span>
+          <span class="builtin-stat-value mono">
+            {builtinDetails.artifact
+              ? builtinDetails.artifact.checksum.toString(16).padStart(8, '0')
+              : '—'}
+          </span>
+        </div>
+      </div>
+
+      {#if builtinDetails.provenance}
+        <dl class="builtin-provenance">
+          <div>
+            <dt>来源仓库</dt>
+            <dd class="mono">{builtinDetails.provenance.repository}</dd>
+          </div>
+          <div>
+            <dt>固定提交</dt>
+            <dd class="mono">{builtinDetails.provenance.revision}</dd>
+          </div>
+          <div>
+            <dt>许可证</dt>
+            <dd>{builtinDetails.provenance.license}</dd>
+          </div>
+          <div>
+            <dt>源文件 SHA-256</dt>
+            <dd class="mono">{builtinDetails.provenance.sourceSha256}</dd>
+          </div>
+          <div>
+            <dt>语义规则 SHA-256</dt>
+            <dd class="mono">{builtinDetails.provenance.irSha256}</dd>
+          </div>
+        </dl>
+
+        <div class="builtin-source-note">
+          完整规则内容保存在固定提交对应的上游源文件中。打开后可直接搜索域名或 CIDR。
+        </div>
+      {/if}
+
+      {#if builtinDetailsError}
+        <div class="error-banner modal-error" role="alert">
+          <AlertTriangle class="h-3.5 w-3.5" />
+          <span>{builtinDetailsError}</span>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#snippet footer()}
+    <Button variant="outline" onclick={closeBuiltinDetails}>关闭</Button>
+    <Button
+      onclick={openBuiltinSource}
+      disabled={!builtinDetails?.provenance?.sourceUrl}
+    >
+      <ExternalLink class="h-3.5 w-3.5" />
+      <span>查看原始规则内容</span>
+    </Button>
+  {/snippet}
+</DraggableModal>
+
+<DraggableModal
   title="删除规则集"
   description="此操作会删除管理记录和订阅关联；已发布的不可变 ZRS 文件会保留，以免影响仍在映射它的内核进程。"
   open={pendingDelete !== null}
@@ -856,6 +971,92 @@
   .modal-error {
     border: 1px solid color-mix(in srgb, var(--destructive) 22%, var(--border));
     border-radius: 7px;
+  }
+
+  .builtin-details {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .builtin-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .builtin-stat {
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--muted) 55%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .builtin-stat-label,
+  .builtin-provenance dt {
+    color: var(--muted-foreground);
+    font-size: 10.5px;
+  }
+
+  .builtin-stat-value {
+    color: var(--foreground);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .builtin-provenance {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .builtin-provenance > div {
+    min-width: 0;
+    padding: 8px 10px;
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+
+  .builtin-provenance > div + div {
+    border-top: 1px solid var(--border);
+  }
+
+  .builtin-provenance dt,
+  .builtin-provenance dd {
+    margin: 0;
+  }
+
+  .builtin-provenance dd {
+    min-width: 0;
+    color: var(--foreground);
+    font-size: 10.5px;
+    overflow-wrap: anywhere;
+  }
+
+  .builtin-source-note {
+    color: var(--muted-foreground);
+    font-size: 10.5px;
+    line-height: 1.6;
+  }
+
+  @media (max-width: 620px) {
+    .builtin-stat-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .builtin-provenance > div {
+      grid-template-columns: 1fr;
+      gap: 3px;
+    }
   }
 
   .panel-empty {

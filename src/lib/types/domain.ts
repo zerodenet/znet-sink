@@ -50,6 +50,8 @@ export interface SubscriptionProfile {
   kernel: string;
   format: string;
   targetProxyConfigId?: string;
+  /** Persisted selector choices keyed by policy-group tag. */
+  policySelections: Record<string, string>;
   /** Auto-sync interval in seconds. When set and enabled, the
    * background scheduler re-syncs this subscription. */
   updateIntervalSecs?: number;

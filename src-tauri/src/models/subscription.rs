@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +11,10 @@ pub struct SubscriptionProfile {
     pub kernel: String,
     pub format: String,
     pub target_proxy_config_id: Option<String>,
+    /// User-selected targets for selector policy groups. This runtime
+    /// preference belongs to the subscription and survives kernel restarts.
+    #[serde(default)]
+    pub policy_selections: BTreeMap<String, String>,
     /// Auto-sync interval in seconds. When `Some` and `enabled`, the
     /// background scheduler will re-sync this subscription once the
     /// interval elapses since `last_sync_at_unix_ms`.

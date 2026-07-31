@@ -14,7 +14,8 @@ use crate::models::rule_set::{
     CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, RuleSetProfile,
 };
 use crate::services::{
-    app_config, common, core_config, core_process, domain_store, proxy_mode, rule_set,
+    app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
+    rule_set,
 };
 use crate::state::app_state::AppState;
 
@@ -25,7 +26,9 @@ pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Val
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_with(base, enabled, &profiles).map(|result| result.config)
+    let mut config = compose_with(base, enabled, &profiles)?.config;
+    policy_selection::apply_saved_selections(state, base, &mut config)?;
+    Ok(config)
 }
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
@@ -301,8 +304,11 @@ fn compose_with(
     let injected_count = rules.len();
     rule_sets.extend(definitions);
     let existing_rules = array_field(route, "rules")?;
-    rules.append(existing_rules);
-    *existing_rules = rules;
+    // Subscription rules are usually more specific than GUI-wide rules
+    // (for example, an AI service group versus the broad built-in GFW
+    // domain set). Preserve those semantics by evaluating the subscription
+    // first and using common rules only as a fallback before `route.final`.
+    existing_rules.extend(rules);
     Ok(ComposeResult {
         config,
         injected_count,
@@ -568,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn common_rules_prepend_in_binding_order_and_composition_is_idempotent() {
+    fn common_rules_follow_subscription_rules_in_binding_order_and_composition_is_idempotent() {
         let (later, later_path) = verified_profile("later", 20, CommonRuleAction::Reject);
         let (first, first_path) = verified_profile("first", 10, CommonRuleAction::Direct);
         let base = json!({
@@ -582,9 +588,9 @@ mod tests {
         let composed = compose_with(&base, true, &[later, first]).unwrap();
         assert_eq!(composed.injected_count, 2);
         let rules = composed.config["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules[0]["action"]["type"], "direct");
-        assert_eq!(rules[1]["action"]["type"], "reject");
-        assert_eq!(rules[2]["condition"]["tag"], "airport");
+        assert_eq!(rules[0]["condition"]["tag"], "airport");
+        assert_eq!(rules[1]["action"]["type"], "direct");
+        assert_eq!(rules[2]["action"]["type"], "reject");
         let recomposed = compose_with(&composed.config, true, &[]).unwrap();
         assert_eq!(
             recomposed.config["route"]["rules"]

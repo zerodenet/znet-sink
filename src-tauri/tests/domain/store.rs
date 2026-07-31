@@ -34,6 +34,7 @@ fn domain_store_roundtrips_profiles() {
             kernel: "zero".to_string(),
             format: "auto".to_string(),
             target_proxy_config_id: None,
+            policy_selections: Default::default(),
             update_interval_secs: None,
             user_agent: None,
             node_count: None,
