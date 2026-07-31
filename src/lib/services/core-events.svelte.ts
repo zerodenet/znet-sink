@@ -5,12 +5,15 @@ import { guiState } from '$lib/services/gui-state.svelte';
 import { delayHistory } from '$lib/services/delay-history.svelte';
 import {
   buildPolicyProbeHistoryUpdates,
+  buildPolicySnapshotHistoryUpdates,
+  policyProbeEventFromSnapshot,
+  policyProbeWaitTimeoutMs,
   projectSelectedGroupHistoryUpdates,
 } from '$lib/services/policy-probe-history';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
-import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
+import type { GuiConnectionItem, PolicyGroup, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
@@ -92,27 +95,65 @@ class CoreEventsService {
     policyTag: string,
     options: { timeoutMs?: number; trigger?: string } = {},
   ): Promise<PolicyProbeCompletedEvent> {
+    const requestedAtUnixMs = Date.now();
+    const runtimeGroup = guiState.policyGroups.find((group) => group.name === policyTag);
+    const configGroup = guiState.configPolicyGroups.find((group) => group.name === policyTag);
+    const memberCount = runtimeGroup?.outbounds.length ?? configGroup?.outbounds.length ?? 1;
+    const timeoutMs = options.timeoutMs ?? policyProbeWaitTimeoutMs(memberCount);
+
     return new Promise((resolve, reject) => {
       const waiters = this._policyProbeWaiters.get(policyTag) ?? new Set();
-      let timer: ReturnType<typeof setTimeout>;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        waiters.delete(complete);
+        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
+      };
+
       const complete = (event: PolicyProbeCompletedEvent) => {
+        if (settled) return;
         // A scheduled probe for the same policy may finish while a manual
         // request is in flight. It should still update global state, but must
         // not end the clicked card's lifecycle. Older kernels that omit the
         // trigger remain compatible.
         if (options.trigger && event.trigger && event.trigger !== options.trigger) return;
-        clearTimeout(timer);
-        waiters.delete(complete);
-        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
+        settled = true;
+        cleanup();
         resolve(event);
       };
+
       waiters.add(complete);
       this._policyProbeWaiters.set(policyTag, waiters);
       timer = setTimeout(() => {
-        waiters.delete(complete);
-        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
-        reject(new PolicyProbeTimeoutError(policyTag));
-      }, options.timeoutMs ?? 60_000);
+        // A reconnect or lagged event receiver can lose the completion event
+        // even though the kernel has already committed fresh policy state.
+        // Reconcile once before declaring a timeout.
+        void (async () => {
+          try {
+            await guiState.refreshPolicyGroups();
+            this._recordPolicySnapshotHistory(guiState.policyGroups);
+            if (settled) return;
+            const recovered = policyProbeEventFromSnapshot(
+              guiState.policyGroups.find((group) => group.name === policyTag),
+              requestedAtUnixMs,
+              options.trigger,
+            );
+            if (recovered) {
+              complete(recovered);
+              return;
+            }
+          } catch {
+            // The original timeout remains the actionable result.
+          }
+
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new PolicyProbeTimeoutError(policyTag));
+        })();
+      }, timeoutMs);
     });
   }
 
@@ -651,6 +692,18 @@ class CoreEventsService {
     return 'data' in obj ? obj['data'] : payload;
   }
 
+  private _recordPolicySnapshotHistory(groups: PolicyGroup[]) {
+    for (const update of buildPolicySnapshotHistoryUpdates(groups)) {
+      delayHistory.record(
+        update.tag,
+        update.delayMs,
+        update.reachable,
+        update.at,
+        update.selectedTag,
+      );
+    }
+  }
+
   // ── Auto-reconnect with exponential backoff ──
 
   private async _applyResyncSnapshot(snapshot: unknown) {
@@ -673,6 +726,8 @@ class CoreEventsService {
     }
     if (policies) {
       overviewData.applyPolicyEvent(policies);
+      await guiState.refreshPolicyGroups();
+      this._recordPolicySnapshotHistory(guiState.policyGroups);
     }
     if (connectionSnapshot && typeof connectionSnapshot === 'object') {
       const items = (connectionSnapshot as Record<string, unknown>)['items'];
@@ -690,8 +745,6 @@ class CoreEventsService {
     }
   }
 
-  
-
   private async _fetchInitialState() {
     try {
       const [statsResult, runtimeResult] = await Promise.all([
@@ -701,6 +754,8 @@ class CoreEventsService {
       overviewData.applyStatsEvent(statsResult);
       overviewData.applyRuntimeEvent(runtimeResult);
       await overviewData.refreshPolicyNodes();
+      await guiState.refreshPolicyGroups();
+      this._recordPolicySnapshotHistory(guiState.policyGroups);
     } catch {
       // Best-effort initial fetch
     }
