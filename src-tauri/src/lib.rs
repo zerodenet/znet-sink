@@ -92,6 +92,10 @@ fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<(String, u32)>
             .env("HTTPS_PROXY", &http_url)
             .env("ALL_PROXY", &socks_url)
             .env("NO_PROXY", no_proxy)
+            .env("http_proxy", &http_url)
+            .env("https_proxy", &http_url)
+            .env("all_proxy", &socks_url)
+            .env("no_proxy", no_proxy)
             .args([
                 "-NoLogo",
                 "-NoExit",
