@@ -27,10 +27,10 @@ pub struct SystemProxyStatus {
 /// proxies (e.g. their own `127.0.0.1:1080`) whenever the kernel stopped or
 /// the app exited.
 ///
-/// The Windows-specific `override_bypass` (`ProxyOverride`) and
-/// `auto_config_url` (`AutoConfigURL`) fields use `None` to mean "the value
-/// was absent before we touched anything". Because the GUI never creates
-/// those values, `None` also means "leave untouched" on restore.
+/// Windows keeps the original `ProxyServer` string verbatim because it may
+/// contain a protocol map with different endpoints. The other optional
+/// Windows fields use `None` to mean the registry value was absent before the
+/// GUI touched the system and therefore must be absent again after restore.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyBackup {
@@ -44,6 +44,9 @@ pub struct ProxyBackup {
     pub socks_host: String,
     #[serde(default)]
     pub socks_port: u16,
+    /// Windows `ProxyServer`, preserved verbatim for lossless restore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_server: Option<String>,
     /// Windows `ProxyOverride` (bypass list), e.g. `<local>;192.168.*`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_bypass: Option<String>,
@@ -155,6 +158,39 @@ fn supports_socks5(host: &str, port: u16) -> bool {
     false
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_proxy_server(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_restore_server(backup: &ProxyBackup) -> Option<String> {
+    if let Some(server) = backup
+        .raw_server
+        .as_deref()
+        .map(str::trim)
+        .filter(|server| !server.is_empty())
+    {
+        return Some(server.to_string());
+    }
+    if backup.host.is_empty() {
+        return None;
+    }
+    if backup.socks_enabled {
+        Some(format!(
+            "http={}:{};https={}:{};socks={}:{}",
+            backup.host,
+            backup.port,
+            backup.host,
+            backup.port,
+            backup.socks_host,
+            backup.socks_port
+        ))
+    } else {
+        Some(windows_proxy_server(&backup.host, backup.port))
+    }
+}
+
 // ── macOS ──
 
 #[cfg(target_os = "macos")]
@@ -243,6 +279,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         socks_enabled: status.socks_enabled,
         socks_host: status.socks_host,
         socks_port: status.socks_port,
+        raw_server: None,
         override_bypass: None,
         auto_config_url: None,
     })
@@ -353,19 +390,15 @@ fn set_proxy_platform(
     host: &str,
     port: u16,
     enable: bool,
-    socks_enabled: bool,
+    _socks_enabled: bool,
     bypass: &[String],
 ) -> AppResult<()> {
-    write_internet_setting_dword("ProxyEnable", if enable { 1 } else { 0 })?;
-
-    // Set ProxyServer via registry
     if enable {
-        let server = if socks_enabled {
-            format!("http={host}:{port};https={host}:{port};socks={host}:{port}")
-        } else {
-            format!("http={host}:{port};https={host}:{port}")
-        };
-        write_internet_setting_sz("ProxyServer", &server)?;
+        // Windows Settings exposes one manual proxy endpoint. A protocol map
+        // such as `http=...;https=...;socks=...` is only partially supported
+        // by consumers and is not round-trippable through the Settings UI.
+        write_internet_setting_sz("ProxyServer", &windows_proxy_server(host, port))?;
+
         // Never send loopback or LAN traffic back into the local mixed
         // listener. This also protects adapters that appear after Wi-Fi is
         // enabled while the application proxy is already active.
@@ -374,6 +407,17 @@ fn set_proxy_platform(
         } else {
             write_internet_setting_sz("ProxyOverride", &bypass.join(";"))?;
         }
+
+        // A PAC script can take precedence over the manual proxy for some
+        // clients. The guard has already backed it up, so remove it while our
+        // proxy is active and restore it on disconnect.
+        delete_internet_setting("AutoConfigURL");
+
+        // Enable last so Windows never observes the old server with the new
+        // enabled state during the registry update.
+        write_internet_setting_dword("ProxyEnable", 1)?;
+    } else {
+        write_internet_setting_dword("ProxyEnable", 0)?;
     }
 
     notify_settings_changed();
@@ -425,6 +469,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         socks_enabled: !socks_host.is_empty(),
         socks_host,
         socks_port,
+        raw_server: (!server.trim().is_empty()).then_some(server),
         override_bypass: query_internet_setting("ProxyOverride"),
         auto_config_url: query_internet_setting("AutoConfigURL"),
     })
@@ -432,43 +477,27 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 
 #[cfg(target_os = "windows")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
-    // ProxyEnable — always written so it reflects the original state.
-    write_internet_setting_dword("ProxyEnable", if backup.enabled { 1 } else { 0 })?;
-
-    // ProxyServer — restore the original value if one existed; otherwise
-    // delete the value so the GUI's own server doesn't linger (it would be
-    // inert because ProxyEnable is off, but we keep the registry clean).
-    if !backup.host.is_empty() {
-        let server = if backup.socks_enabled {
-            format!(
-                "http={}:{};https={}:{};socks={}:{}",
-                backup.host,
-                backup.port,
-                backup.host,
-                backup.port,
-                backup.socks_host,
-                backup.socks_port
-            )
-        } else {
-            format!("{}:{}", backup.host, backup.port)
-        };
+    // Restore values before ProxyEnable so clients cannot briefly use a stale
+    // server while the original state is being reconstructed.
+    if let Some(server) = windows_restore_server(backup) {
         write_internet_setting_sz("ProxyServer", &server)?;
     } else {
         delete_internet_setting("ProxyServer");
     }
 
-    // ProxyOverride / AutoConfigURL — only restore when the user actually
-    // had them. The GUI never creates these values, so `None` means they
-    // were absent and untouched; leaving them alone is correct.
     if let Some(bypass) = &backup.override_bypass {
         write_internet_setting_sz("ProxyOverride", bypass)?;
     } else {
         delete_internet_setting("ProxyOverride");
     }
+
     if let Some(url) = &backup.auto_config_url {
         write_internet_setting_sz("AutoConfigURL", url)?;
+    } else {
+        delete_internet_setting("AutoConfigURL");
     }
 
+    write_internet_setting_dword("ProxyEnable", if backup.enabled { 1 } else { 0 })?;
     notify_settings_changed();
     Ok(())
 }
@@ -761,6 +790,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         socks_enabled: status.socks_enabled,
         socks_host: status.socks_host,
         socks_port: status.socks_port,
+        raw_server: None,
         override_bypass: None,
         auto_config_url: None,
     })
@@ -797,4 +827,45 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
 #[cfg(target_os = "linux")]
 fn local_bypass_configured_platform() -> Option<bool> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{windows_proxy_server, windows_restore_server, ProxyBackup};
+
+    #[test]
+    fn windows_manual_proxy_uses_settings_compatible_endpoint() {
+        assert_eq!(windows_proxy_server("127.0.0.1", 7890), "127.0.0.1:7890");
+    }
+
+    #[test]
+    fn windows_restore_preserves_protocol_map_verbatim() {
+        let backup = ProxyBackup {
+            raw_server: Some(
+                "http=127.0.0.1:8080;https=127.0.0.1:8443;socks=127.0.0.1:1080"
+                    .to_string(),
+            ),
+            ..ProxyBackup::default()
+        };
+
+        assert_eq!(
+            windows_restore_server(&backup).as_deref(),
+            Some("http=127.0.0.1:8080;https=127.0.0.1:8443;socks=127.0.0.1:1080")
+        );
+    }
+
+    #[test]
+    fn windows_restore_supports_legacy_markers() {
+        let backup = ProxyBackup {
+            enabled: true,
+            host: "127.0.0.1".to_string(),
+            port: 1080,
+            ..ProxyBackup::default()
+        };
+
+        assert_eq!(
+            windows_restore_server(&backup).as_deref(),
+            Some("127.0.0.1:1080")
+        );
+    }
 }
