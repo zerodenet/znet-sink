@@ -119,7 +119,9 @@ pub async fn apply_config(config: Value, options: Option<CoreIpcOptions>) -> App
             "config must be a JSON object",
         ));
     }
-    run_command("config.apply", json!({ "config": config }), options).await
+    let response = run_command("config.apply", json!({ "config": config }), options).await?;
+    ensure_config_apply_accepted(&response)?;
+    Ok(response)
 }
 
 /// Validate a config without applying it.
@@ -237,9 +239,26 @@ pub(crate) async fn run_command(
     unwrap_call_result(call.response, call.error)
 }
 
+fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
+    if response.get("accepted").and_then(Value::as_bool) == Some(false) {
+        return Err(crate::errors::AppError::core_response(response.clone()));
+    }
+    if response
+        .get("result")
+        .and_then(|result| result.get("applied"))
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return Err(crate::errors::AppError::core_response(response.clone()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS};
+    use super::{
+        ensure_config_apply_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
+    };
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
@@ -271,5 +290,24 @@ mod tests {
 
         assert_eq!(options.socket.as_deref(), Some("test-pipe"));
         assert_eq!(options.timeout_ms, Some(PROBE_IPC_TIMEOUT_MS));
+    }
+
+    #[test]
+    fn config_apply_rejects_unaccepted_or_unapplied_response() {
+        assert!(ensure_config_apply_accepted(&json!({
+            "accepted": false,
+            "result": { "applied": false }
+        }))
+        .is_err());
+        assert!(ensure_config_apply_accepted(&json!({
+            "accepted": true,
+            "result": { "applied": false }
+        }))
+        .is_err());
+        assert!(ensure_config_apply_accepted(&json!({
+            "accepted": true,
+            "result": { "applied": true }
+        }))
+        .is_ok());
     }
 }

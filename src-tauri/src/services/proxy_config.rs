@@ -326,14 +326,13 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
         let previous = profiles.iter().find(|profile| profile.active).cloned();
         (previous, target)
     };
-    if target.active {
-        return Ok(target);
-    }
-
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     if !running {
         let active = set_active(state.clone(), id)?;
-        retarget_managed_system_proxy(state.inner())?;
+        if let Err(error) = export_and_retarget_active(state.clone()) {
+            rollback_stopped_activation(state.clone(), previous_active.as_ref());
+            return Err(error);
+        }
         return Ok(active);
     }
 
@@ -345,7 +344,7 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     match ZeroAdapter::new().apply_config(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
-                if let Err(error) = retarget_managed_system_proxy(state.inner()) {
+                if let Err(error) = export_and_retarget_active(state.clone()) {
                     rollback_hot_activation(state.clone(), previous_active.as_ref()).await;
                     return Err(error);
                 }
@@ -484,6 +483,21 @@ async fn rollback_hot_activation(
     let _ = reapply_profile(state.inner(), previous).await;
     let _ = set_active(state.clone(), previous.id.clone());
     let _ = retarget_managed_system_proxy(state.inner());
+}
+
+fn rollback_stopped_activation(state: State<'_, AppState>, previous: Option<&ProxyConfigProfile>) {
+    let Some(previous) = previous else {
+        return;
+    };
+    if set_active(state.clone(), previous.id.clone()).is_ok() {
+        let _ = core_config::export_active(state.clone());
+        let _ = retarget_managed_system_proxy(state.inner());
+    }
+}
+
+fn export_and_retarget_active(state: State<'_, AppState>) -> AppResult<()> {
+    core_config::export_active(state.clone())?;
+    retarget_managed_system_proxy(state.inner())
 }
 
 async fn rollback_restarted_activation(
