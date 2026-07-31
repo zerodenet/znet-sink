@@ -34,7 +34,12 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
 use std::process::Command;
+
+#[cfg(target_os = "windows")]
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 fn proxy_environment_command(host: &str, port: u16) -> String {
     let http_url = format!("http://{host}:{port}");
@@ -67,7 +72,7 @@ fn tray_copy_proxy_environment(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<()> {
+fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<(String, u32)> {
     let http_url = format!("http://{host}:{port}");
     let socks_url = format!("socks5h://{host}:{port}");
     let no_proxy = "localhost,127.0.0.1,::1";
@@ -76,6 +81,10 @@ fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<()> {
     for program in ["pwsh.exe", "powershell.exe"] {
         let mut command = Command::new(program);
         command
+            // Tauri is built as a Windows GUI process, so child console
+            // applications do not reliably receive a visible console unless
+            // one is explicitly requested.
+            .creation_flags(CREATE_NEW_CONSOLE)
             // The Zero mixed listener accepts both HTTP CONNECT and SOCKS5.
             // Protocol-specific variables maximize compatibility with package
             // managers, while ALL_PROXY covers tools that support SOCKS5.
@@ -91,7 +100,7 @@ fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<()> {
             ]);
 
         match command.spawn() {
-            Ok(_) => return Ok(()),
+            Ok(child) => return Ok((program.to_string(), child.id())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 last_not_found = Some(error);
             }
@@ -109,7 +118,11 @@ fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn tray_open_proxy_terminal(app: tauri::AppHandle) {
+    crate::services::file_logger::line("tray: open terminal requested");
+
     tauri::async_runtime::spawn_blocking(move || {
+        crate::services::file_logger::line("tray: preparing terminal with proxy environment");
+
         let state = app.state::<AppState>();
         let _operation = state.proxy_config_operation().blocking_lock();
 
@@ -120,6 +133,7 @@ fn tray_open_proxy_terminal(app: tauri::AppHandle) {
             ));
             return;
         }
+        crate::services::file_logger::line("tray: core is ready for terminal");
 
         let endpoint = state
             .app_config()
@@ -131,6 +145,9 @@ fn tray_open_proxy_terminal(app: tauri::AppHandle) {
             );
             return;
         };
+        crate::services::file_logger::line(&format!(
+            "tray: waiting for terminal proxy endpoint {host}:{port}"
+        ));
 
         if let Err(error) = local_proxy::wait_until_listening(&host, port) {
             crate::services::file_logger::line(&format!(
@@ -139,11 +156,19 @@ fn tray_open_proxy_terminal(app: tauri::AppHandle) {
             ));
             return;
         }
+        crate::services::file_logger::line("tray: terminal proxy endpoint is listening");
 
-        if let Err(error) = spawn_proxy_terminal(&host, port) {
-            crate::services::file_logger::line(&format!(
-                "tray: failed to open terminal with proxy environment: {error}"
-            ));
+        match spawn_proxy_terminal(&host, port) {
+            Ok((program, pid)) => {
+                crate::services::file_logger::line(&format!(
+                    "tray: opened terminal using {program}, pid={pid}"
+                ));
+            }
+            Err(error) => {
+                crate::services::file_logger::line(&format!(
+                    "tray: failed to open terminal with proxy environment: {error}"
+                ));
+            }
         }
     });
 }
