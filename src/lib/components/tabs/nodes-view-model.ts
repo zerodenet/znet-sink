@@ -28,12 +28,70 @@ export function resolveProbeDisplay(options: {
   localAt?: number;
 }): { delay: number; at?: number } {
   const { runtimeDelay, runtimeAt, localDelay, localAt } = options;
-  if (localDelay !== undefined && localAt !== undefined && (runtimeAt === undefined || localAt > runtimeAt)) {
+  // Event-projected history is authoritative for the same probe timestamp.
+  // This matters for nested groups whose parent-member snapshot can carry a
+  // stale delay with the child's fresh timestamp.
+  if (localDelay !== undefined && localAt !== undefined && (runtimeAt === undefined || localAt >= runtimeAt)) {
     return { delay: localDelay, at: localAt };
   }
   if (runtimeDelay !== undefined) return { delay: runtimeDelay, at: runtimeAt ?? localAt };
   if (localDelay !== undefined) return { delay: localDelay, at: localAt };
   return { delay: 0, at: runtimeAt ?? localAt };
+}
+
+function hasProbeDisplay(display: { delay: number; at?: number }): boolean {
+  return display.delay !== 0 || display.at !== undefined;
+}
+
+/**
+ * Resolve a policy-group card independently from the runtime overlay entry
+ * created when that group appears as a member of another group. The latter is
+ * parent state and may lag behind the group's own urltest completion event.
+ */
+export function resolveGroupProbeDisplay(options: {
+  groupTag: string;
+  selectedTag?: string;
+  runtimeOverlay: Map<string, RuntimeOverlay>;
+  latestDelay: (tag: string) => number | undefined;
+  latestProbeTime?: (tag: string) => number | undefined;
+}): { delay: number; at?: number } {
+  const {
+    groupTag,
+    selectedTag,
+    runtimeOverlay,
+    latestDelay,
+    latestProbeTime,
+  } = options;
+  const ownDelay = latestDelay(groupTag);
+  const ownAt = latestProbeTime?.(groupTag);
+
+  // Group-keyed history is produced from policy.probe.completed or the
+  // reconciled policy snapshot. Prefer it even when the parent group exposes
+  // a newer-looking member timestamp, because that member entry is not the
+  // child's authoritative probe state.
+  if (ownDelay !== undefined || ownAt !== undefined) {
+    return { delay: ownDelay ?? 0, at: ownAt };
+  }
+
+  const runtime = runtimeOverlay.get(groupTag);
+  const runtimeDisplay = resolveProbeDisplay({
+    runtimeDelay: runtime?.delayMs,
+    runtimeAt: runtime?.lastCheckedUnixMs,
+  });
+  if (hasProbeDisplay(runtimeDisplay)) return runtimeDisplay;
+
+  if (selectedTag) {
+    const selectedRuntime = runtimeOverlay.get(selectedTag);
+    const selectedDisplay = resolveProbeDisplay({
+      runtimeDelay: selectedRuntime?.delayMs,
+      runtimeAt: selectedRuntime?.lastCheckedUnixMs,
+      localDelay: latestDelay(selectedTag),
+      localAt: latestProbeTime?.(selectedTag),
+    });
+    if (hasProbeDisplay(selectedDisplay)) return selectedDisplay;
+  }
+
+  return runtimeDisplay;
 }
 
 function isUrlTestGroup(group: PolicyGroup | undefined): boolean {
@@ -151,32 +209,22 @@ export function buildAllNodes(options: {
     const nodeItems: ProxyNode[] = configNodes.map<ProxyNode>((configNode) => {
       const runtime = runtimeOverlay.get(configNode.tag);
       const parsed = parseNodeName(configNode.tag);
-      let probeDisplay = resolveProbeDisplay({
-        runtimeDelay: runtime?.delayMs,
-        runtimeAt: runtime?.lastCheckedUnixMs,
-        localDelay: latestDelay(configNode.tag),
-        localAt: latestProbeTime?.(configNode.tag),
-      });
-      // Selector (group) nodes have no own latency — inherit the delay
-      // of the group's currently-selected outbound. Switching the
-      // selection only re-reads that node's stored delay from history;
-      // it never mutates other nodes' entries, so previous measurements
-      // remain visible.
-      if (configNode.isSelector) {
-        const group = groups.find((g) => g.name === configNode.tag);
-        const selectedTag = group?.selected;
-        const hasOwnProbe = probeDisplay.delay !== 0 || probeDisplay.at !== undefined;
-        if (!hasOwnProbe && selectedTag) {
-          const selectedRuntime = runtimeOverlay.get(selectedTag);
-          const selectedDisplay = resolveProbeDisplay({
-            runtimeDelay: selectedRuntime?.delayMs,
-            runtimeAt: selectedRuntime?.lastCheckedUnixMs,
-            localDelay: latestDelay(selectedTag),
-            localAt: latestProbeTime?.(selectedTag),
+      const group = groups.find((candidate) => candidate.name === configNode.tag);
+      const probeDisplay = group
+        ? resolveGroupProbeDisplay({
+            groupTag: group.name,
+            selectedTag: group.selected,
+            runtimeOverlay,
+            latestDelay,
+            latestProbeTime,
+          })
+        : resolveProbeDisplay({
+            runtimeDelay: runtime?.delayMs,
+            runtimeAt: runtime?.lastCheckedUnixMs,
+            localDelay: latestDelay(configNode.tag),
+            localAt: latestProbeTime?.(configNode.tag),
           });
-          if (selectedDisplay.delay !== 0 || selectedDisplay.at !== undefined) probeDisplay = selectedDisplay;
-        }
-      }
+
       return {
         id: configNode.tag,
         tag: configNode.tag,
@@ -187,7 +235,7 @@ export function buildAllNodes(options: {
         delay: probeDisplay.delay,
         lastProbeAt: probeDisplay.at,
         selected: runtime?.selected,
-        alive: runtime?.alive,
+        alive: group ? undefined : runtime?.alive,
         domain: runtime?.groupName ?? 'policy',
         server: configNode.server,
         port: configNode.port,
@@ -220,22 +268,13 @@ export function buildAllNodes(options: {
       if (!memberTags.has(group.name)) continue;
       if (existingTags.has(group.name)) continue;
       const parsed = parseNodeName(group.name);
-      let probeDisplay = resolveProbeDisplay({
-        runtimeDelay: runtimeOverlay.get(group.name)?.delayMs,
-        runtimeAt: runtimeOverlay.get(group.name)?.lastCheckedUnixMs,
-        localDelay: latestDelay(group.name),
-        localAt: latestProbeTime?.(group.name),
+      const probeDisplay = resolveGroupProbeDisplay({
+        groupTag: group.name,
+        selectedTag: group.selected,
+        runtimeOverlay,
+        latestDelay,
+        latestProbeTime,
       });
-      const hasOwnProbe = probeDisplay.delay !== 0 || probeDisplay.at !== undefined;
-      if (!hasOwnProbe && group.selected) {
-        const selectedRuntime = runtimeOverlay.get(group.selected);
-        probeDisplay = resolveProbeDisplay({
-          runtimeDelay: selectedRuntime?.delayMs,
-          runtimeAt: selectedRuntime?.lastCheckedUnixMs,
-          localDelay: latestDelay(group.selected),
-          localAt: latestProbeTime?.(group.selected),
-        });
-      }
       groupItems.push({
         id: group.name,
         tag: group.name,
@@ -262,23 +301,32 @@ export function buildAllNodes(options: {
       if (seen.has(key)) continue;
       seen.add(key);
       const parsed = parseNodeName(outbound.tag);
-      const probeDisplay = resolveProbeDisplay({
-        runtimeDelay: outbound.delayMs,
-        runtimeAt: outbound.lastCheckedUnixMs,
-        localDelay: latestDelay(outbound.tag),
-        localAt: latestProbeTime?.(outbound.tag),
-      });
+      const nestedGroup = groups.find((candidate) => candidate.name === outbound.tag);
+      const probeDisplay = nestedGroup
+        ? resolveGroupProbeDisplay({
+            groupTag: nestedGroup.name,
+            selectedTag: nestedGroup.selected,
+            runtimeOverlay,
+            latestDelay,
+            latestProbeTime,
+          })
+        : resolveProbeDisplay({
+            runtimeDelay: outbound.delayMs,
+            runtimeAt: outbound.lastCheckedUnixMs,
+            localDelay: latestDelay(outbound.tag),
+            localAt: latestProbeTime?.(outbound.tag),
+          });
       runtimeNodes.push({
         id: `${group.name}:${outbound.tag}`,
         tag: outbound.tag,
         name: outbound.tag,
         emoji: parsed.emoji,
         cleanName: parsed.cleanName,
-        protocol: outbound.type || 'proxy',
+        protocol: nestedGroup?.kind || outbound.type || 'proxy',
         delay: probeDisplay.delay,
         lastProbeAt: probeDisplay.at,
         selected: group.selected === outbound.tag,
-        alive: outbound.alive,
+        alive: nestedGroup ? undefined : outbound.alive,
         domain: group.name,
       });
     }
