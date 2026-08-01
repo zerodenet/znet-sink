@@ -5,6 +5,11 @@ import {
   policyProbeEventFromSnapshot,
   policyProbeWaitTimeoutMs,
 } from '../src/lib/services/policy-probe-history.ts';
+import {
+  buildAllNodes,
+  buildRuntimeOverlay,
+  resolveProbeDisplay,
+} from '../src/lib/components/tabs/nodes-view-model.ts';
 
 function group(name, selected, outbounds, kind = 'url_test') {
   return { name, kind, selected, outbounds };
@@ -51,8 +56,47 @@ function testSnapshotRecoversOnlyFreshPendingProbe() {
   });
 }
 
+function testSameTimestampHistoryOverridesStaleRuntimeValue() {
+  assert.deepEqual(resolveProbeDisplay({
+    runtimeDelay: 999,
+    runtimeAt: 20_000,
+    localDelay: 35,
+    localAt: 20_000,
+  }), {
+    delay: 35,
+    at: 20_000,
+  });
+}
+
+function testNestedUrlTestCardUsesOwnPolicyHistory() {
+  const checkedAt = 30_000;
+  const groups = [
+    group('Proxy', 'Auto', [
+      { tag: 'Auto', type: 'url_test', delayMs: 999, alive: true, lastCheckedUnixMs: checkedAt },
+    ], 'selector'),
+    group('Auto', 'HK', [
+      { tag: 'HK', type: 'shadowsocks', delayMs: 35, alive: true, lastCheckedUnixMs: checkedAt },
+    ], 'url_test'),
+  ];
+
+  const [auto] = buildAllNodes({
+    configNodes: [{ tag: 'Auto', protocol: 'url_test', isSelector: true }],
+    groups,
+    runtimeOverlay: buildRuntimeOverlay(groups),
+    latestDelay: (tag) => tag === 'Auto' ? 35 : undefined,
+    latestProbeTime: (tag) => tag === 'Auto' ? checkedAt : undefined,
+    fallbackNodes: [],
+  });
+
+  assert.equal(auto.delay, 35);
+  assert.equal(auto.lastProbeAt, checkedAt);
+  assert.equal(auto.protocol, 'url_test');
+}
+
 testAdaptivePolicyProbeTimeout();
 testScheduledSnapshotAppendsMembersAndSelectedGroup();
 testSnapshotRecoversOnlyFreshPendingProbe();
+testSameTimestampHistoryOverridesStaleRuntimeValue();
+testNestedUrlTestCardUsesOwnPolicyHistory();
 
 console.log('policy probe history tests passed');
