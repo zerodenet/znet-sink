@@ -33,12 +33,28 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+use std::process::Command;
+
+#[cfg(target_os = "windows")]
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+
 fn proxy_environment_command(host: &str, port: u16) -> String {
-    let url = format!("http://{host}:{port}");
+    let http_url = format!("http://{host}:{port}");
+    let socks_url = format!("socks5h://{host}:{port}");
+    let no_proxy = "localhost,127.0.0.1,::1";
     if cfg!(target_os = "windows") {
-        format!("$env:HTTP_PROXY='{url}'; $env:HTTPS_PROXY='{url}'; $env:ALL_PROXY='{url}'")
+        format!(
+            "$env:HTTP_PROXY='{http_url}'; $env:HTTPS_PROXY='{http_url}'; \
+             $env:ALL_PROXY='{socks_url}'; $env:NO_PROXY='{no_proxy}'"
+        )
     } else {
-        format!("export HTTP_PROXY='{url}' HTTPS_PROXY='{url}' ALL_PROXY='{url}'")
+        format!(
+            "export HTTP_PROXY='{http_url}' HTTPS_PROXY='{http_url}' \
+             ALL_PROXY='{socks_url}' NO_PROXY='{no_proxy}'"
+        )
     }
 }
 
@@ -53,6 +69,112 @@ fn tray_copy_proxy_environment(app: &tauri::AppHandle) {
             .clipboard()
             .write_text(proxy_environment_command(&host, port));
     }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_proxy_terminal(host: &str, port: u16) -> std::io::Result<(String, u32)> {
+    let http_url = format!("http://{host}:{port}");
+    let socks_url = format!("socks5h://{host}:{port}");
+    let no_proxy = "localhost,127.0.0.1,::1";
+    let mut last_not_found = None;
+
+    for program in ["pwsh.exe", "powershell.exe"] {
+        let mut command = Command::new(program);
+        command
+            // Tauri is built as a Windows GUI process, so child console
+            // applications do not reliably receive a visible console unless
+            // one is explicitly requested.
+            .creation_flags(CREATE_NEW_CONSOLE)
+            // The Zero mixed listener accepts both HTTP CONNECT and SOCKS5.
+            // Protocol-specific variables maximize compatibility with package
+            // managers, while ALL_PROXY covers tools that support SOCKS5.
+            .env("HTTP_PROXY", &http_url)
+            .env("HTTPS_PROXY", &http_url)
+            .env("ALL_PROXY", &socks_url)
+            .env("NO_PROXY", no_proxy)
+            .env("http_proxy", &http_url)
+            .env("https_proxy", &http_url)
+            .env("all_proxy", &socks_url)
+            .env("no_proxy", no_proxy)
+            .args([
+                "-NoLogo",
+                "-NoExit",
+                "-Command",
+                "$Host.UI.RawUI.WindowTitle = 'ZNet Sink Terminal'; Write-Host ('Proxy enabled: ' + $env:HTTP_PROXY); Write-Host ('SOCKS5 fallback: ' + $env:ALL_PROXY)",
+            ]);
+
+        match command.spawn() {
+            Ok(child) => return Ok((program.to_string(), child.id())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                last_not_found = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_not_found.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "PowerShell executable was not found",
+        )
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn tray_open_proxy_terminal(app: tauri::AppHandle) {
+    crate::services::file_logger::line("tray: open terminal requested");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::file_logger::line("tray: preparing terminal with proxy environment");
+
+        let state = app.state::<AppState>();
+        let _operation = state.proxy_config_operation().blocking_lock();
+
+        if let Err(error) = core_process::start(app.clone(), state.clone()) {
+            crate::services::file_logger::line(&format!(
+                "tray: failed to start core before opening terminal: {}",
+                error.message
+            ));
+            return;
+        }
+        crate::services::file_logger::line("tray: core is ready for terminal");
+
+        let endpoint = state
+            .app_config()
+            .lock()
+            .map(|config| (config.local_proxy.host.clone(), config.local_proxy.port));
+        let Ok((host, port)) = endpoint else {
+            crate::services::file_logger::line(
+                "tray: failed to read local proxy endpoint for terminal",
+            );
+            return;
+        };
+        crate::services::file_logger::line(&format!(
+            "tray: waiting for terminal proxy endpoint {host}:{port}"
+        ));
+
+        if let Err(error) = local_proxy::wait_until_listening(&host, port) {
+            crate::services::file_logger::line(&format!(
+                "tray: local proxy is not ready for terminal: {}",
+                error.message
+            ));
+            return;
+        }
+        crate::services::file_logger::line("tray: terminal proxy endpoint is listening");
+
+        match spawn_proxy_terminal(&host, port) {
+            Ok((program, pid)) => {
+                crate::services::file_logger::line(&format!(
+                    "tray: opened terminal using {program}, pid={pid}"
+                ));
+            }
+            Err(error) => {
+                crate::services::file_logger::line(&format!(
+                    "tray: failed to open terminal with proxy environment: {error}"
+                ));
+            }
+        }
+    });
 }
 
 fn toggle_main_window(app: &tauri::AppHandle) {
@@ -385,8 +507,8 @@ pub fn run() {
                     );
 
                     // Fast probe: try a ping with a 200ms timeout.  On local
-                    // IPC this should connect in sub-ms time if the kernel is
-                    // alive.  A timeout means the pipe is a stale leftover
+                    // IPC this should connect in sub-ms time if the kernel
+                    // is alive. A timeout means the pipe is a stale leftover
                     // from a crashed/killed previous session — clean up and
                     // start fresh.
                     let probe_opts = crate::models::core::CoreIpcOptions {
@@ -418,7 +540,7 @@ pub fn run() {
                     };
 
                     // Extract values needed for decision-making before
-                    // consuming `state`.  All three are needed regardless of
+                    // consuming `state`. All three are needed regardless of
                     // which branch we take below.
                     let core_config = state
                         .app_config()
@@ -430,7 +552,7 @@ pub fn run() {
 
                     if kernel_alive {
                         // Check whether the running kernel matches the
-                        // configured executable path.  If the user changed
+                        // configured executable path. If the user changed
                         // the path between sessions the old kernel is still
                         // listening on the pipe but is no longer the binary
                         // the user intended.
@@ -459,7 +581,7 @@ pub fn run() {
                             );
 
                             // Update the process state so the UI reflects the
-                            // actual kernel status.  Without this the UI shows
+                            // actual kernel status. Without this the UI shows
                             // "not started" even though the kernel is alive,
                             // which confuses users and also means stop() won't
                             // know to kill the external process.
@@ -576,6 +698,10 @@ pub fn run() {
             let copy_proxy_env_item = tauri::menu::MenuItemBuilder::new("复制代理环境变量")
                 .id("copy_proxy_env")
                 .build(app)?;
+            #[cfg(target_os = "windows")]
+            let open_proxy_terminal_item = tauri::menu::MenuItemBuilder::new("打开终端")
+                .id("open_proxy_terminal")
+                .build(app)?;
             let settings_item = tauri::menu::MenuItemBuilder::new("设置")
                 .id("settings")
                 .build(app)?;
@@ -583,6 +709,27 @@ pub fn run() {
                 .id("quit")
                 .build(app)?;
 
+            #[cfg(target_os = "windows")]
+            let tray_menu = tauri::menu::Menu::with_items(
+                app,
+                &[
+                    &show_item,
+                    &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &enable_proxy_item,
+                    &disable_proxy_item,
+                    &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &start_core_item,
+                    &restart_core_item,
+                    &copy_proxy_env_item,
+                    &open_proxy_terminal_item,
+                    &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &settings_item,
+                    &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &quit_item,
+                ],
+            )?;
+
+            #[cfg(not(target_os = "windows"))]
             let tray_menu = tauri::menu::Menu::with_items(
                 app,
                 &[
@@ -622,6 +769,8 @@ pub fn run() {
                     "start_core" => tray_start_core(app.clone()),
                     "restart_core" => tray_restart_core(app.clone()),
                     "copy_proxy_env" => tray_copy_proxy_environment(app),
+                    #[cfg(target_os = "windows")]
+                    "open_proxy_terminal" => tray_open_proxy_terminal(app.clone()),
                     "settings" => open_main_window_route(app, "settings", Some("general")),
                     "quit" => {
                         app.exit(0);
@@ -666,4 +815,20 @@ pub fn run() {
 
     // ── Shutdown: runs after Tauri event loop exits ──
     lifecycle.shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proxy_environment_command;
+
+    #[test]
+    fn copied_proxy_environment_uses_http_and_socks_endpoints() {
+        let command = proxy_environment_command("127.0.0.1", 7890);
+
+        assert!(command.contains("HTTP_PROXY"));
+        assert!(command.contains("http://127.0.0.1:7890"));
+        assert!(command.contains("ALL_PROXY"));
+        assert!(command.contains("socks5h://127.0.0.1:7890"));
+        assert!(command.contains("NO_PROXY"));
+    }
 }
