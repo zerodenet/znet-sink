@@ -485,7 +485,7 @@
       hideTimer = null;
     }
     const hist = delayHistory.getHistory(node.tag);
-    if (hist.length < 2) return;
+    if (hist.length === 0) return;
     popover = { visible: true, anchor: e.currentTarget as HTMLElement, node };
   }
 
