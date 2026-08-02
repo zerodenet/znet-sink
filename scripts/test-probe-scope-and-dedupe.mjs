@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { planProbeTargets } from '../src/lib/components/tabs/nodes-view-model.ts';
-import { buildDelayHistoryScope } from '../src/lib/services/delay-history-scope.ts';
+import {
+  buildDelayHistoryScope,
+  planDelayHistoryScopeTransition,
+  splitDelayHistoryScope,
+} from '../src/lib/services/delay-history-scope.ts';
 
 const node = (tag, protocol = 'proxy') => ({ id: tag, tag, name: tag, protocol, delay: 0, domain: 'policy' });
 const group = (name, members, kind = 'selector') => ({
@@ -38,5 +42,33 @@ const profileB = buildDelayHistoryScope('profile-b', nodes, [group('Auto', ['HK'
 const changed = buildDelayHistoryScope('profile-a', nodes, [group('Auto', ['JP'], 'url_test')]);
 assert.notEqual(profileA, profileB);
 assert.notEqual(profileA, changed);
+
+const emptyFingerprint = splitDelayHistoryScope(
+  buildDelayHistoryScope(undefined, [], []),
+).fingerprint;
+const unscopedA = buildDelayHistoryScope(undefined, nodes, [group('Auto', ['HK'], 'url_test')]);
+assert.deepEqual(
+  planDelayHistoryScopeTransition(unscopedA, profileA, null, emptyFingerprint),
+  { migrateFrom: unscopedA, provisionalScope: null },
+);
+
+const emptyA = buildDelayHistoryScope('profile-a', [], []);
+assert.deepEqual(
+  planDelayHistoryScopeTransition(emptyA, profileA, emptyA, emptyFingerprint),
+  { migrateFrom: emptyA, provisionalScope: profileA },
+);
+
+const staleProfile = buildDelayHistoryScope('profile-a', nodes, [group('Auto', ['JP'], 'url_test')]);
+const confirmedProfile = buildDelayHistoryScope('profile-b', nodes, [group('Auto', ['JP'], 'url_test')]);
+assert.deepEqual(
+  planDelayHistoryScopeTransition(staleProfile, confirmedProfile, staleProfile, emptyFingerprint),
+  { migrateFrom: staleProfile, provisionalScope: null },
+);
+
+// Two genuinely distinct profiles with identical structure must not migrate.
+assert.deepEqual(
+  planDelayHistoryScopeTransition(profileA, profileB, null, emptyFingerprint),
+  { provisionalScope: null },
+);
 
 console.log('probe scope and dedupe tests passed');
