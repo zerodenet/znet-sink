@@ -26,6 +26,38 @@ export function policyProbeWaitTimeoutMs(memberCount: number): number {
 }
 
 /**
+ * A policy waiter should finish on any authoritative result completed after
+ * the request. A scheduled cycle can overlap a manual click, and kernels may
+ * coalesce triggers while that group is already probing. Requiring an exact
+ * trigger match therefore leaves the card spinning even though a fresh result
+ * for the same policy has already arrived.
+ */
+export function isPolicyProbeEventFresh(
+  event: PolicyProbeCompletedEvent,
+  requestedAtUnixMs: number,
+): boolean {
+  const completedAt = event.completedAtUnixMs ?? event.startedAtUnixMs;
+  return completedAt === undefined || completedAt >= requestedAtUnixMs;
+}
+
+/** Build the visible policy-group failure observation used when no completion
+ * event or fresh snapshot arrives before the UI deadline. A later real kernel
+ * result has a newer timestamp and naturally replaces this timeout entry. */
+export function buildPolicyProbeTimeoutUpdate(
+  groups: PolicyGroup[],
+  policyTag: string,
+  at = Date.now(),
+): PolicyProbeHistoryUpdate {
+  const selectedTag = groups.find((group) => group.name === policyTag)?.selected;
+  return {
+    tag: policyTag,
+    reachable: false,
+    at,
+    ...(selectedTag ? { selectedTag } : {}),
+  };
+}
+
+/**
  * Record one concrete probe target and project that observation through every
  * policy group whose current selection points at it. This also supports nested
  * groups and stops safely when a malformed configuration contains a cycle.
