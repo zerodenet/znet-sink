@@ -82,33 +82,75 @@ function mergeHistory(left: HistoryMap, right: HistoryMap): HistoryMap {
 class DelayHistoryStore {
   private scopedHistory = $state<ScopedHistoryMap>({});
   private legacyHistory: HistoryMap = {};
-  private lastScope: string | null = null;
-  private provisionalScope: string | null = null;
+  private legacyTargetScope: string | null = null;
+  private lastWriteScope: string | null = null;
+  private provisionalWriteScope: string | null = null;
 
   constructor() {
     this.scopedHistory = loadScoped();
     this.legacyHistory = loadLegacy();
   }
 
-  private currentScope(): string {
-    const candidate = buildDelayHistoryScope(
+  private scopeCandidate(): string {
+    return buildDelayHistoryScope(
       guiState.selfTest?.activeProxyConfigId,
       guiState.configNodes,
       guiState.configPolicyGroups,
     );
+  }
+
+  /** Resolve history without mutating Svelte state. This method is called from
+   * derived node view-models, where state writes would be unsafe. */
+  private currentHistory(): HistoryMap {
+    const candidate = this.scopeCandidate();
+    let current = this.scopedHistory[candidate] ?? {};
+
+    // If a write happened while config structure and active profile id were
+    // refreshing independently, keep that provisional history readable until
+    // the next write can migrate it into the authoritative scope.
+    if (Object.keys(current).length === 0 && this.provisionalWriteScope) {
+      const provisional = splitDelayHistoryScope(this.provisionalWriteScope);
+      const resolved = splitDelayHistoryScope(candidate);
+      if (provisional.fingerprint === resolved.fingerprint) {
+        current = this.scopedHistory[this.provisionalWriteScope] ?? current;
+      }
+    }
+
+    // Legacy tag-only history is shown only in the first active scope that
+    // reads it. This restores pre-v2 hover history without exposing the same
+    // global data in every profile. It is permanently imported on the next
+    // write for that scope.
+    if (Object.keys(this.legacyHistory).length > 0) {
+      this.legacyTargetScope ??= candidate;
+      if (this.legacyTargetScope === candidate) {
+        current = mergeHistory(current, this.legacyHistory);
+      }
+    }
+
+    return current;
+  }
+
+  /** Prepare a scope for a write, performing safe migrations outside derived
+   * reads. */
+  private prepareScopeForWrite(): string {
+    const candidate = this.scopeCandidate();
     const transition = planDelayHistoryScopeTransition(
-      this.lastScope,
+      this.lastWriteScope,
       candidate,
-      this.provisionalScope,
+      this.provisionalWriteScope,
       EMPTY_FINGERPRINT,
     );
 
     if (transition.migrateFrom && transition.migrateFrom !== candidate) {
       this.mergeScope(transition.migrateFrom, candidate);
     }
-    this.provisionalScope = transition.provisionalScope;
-    this.lastScope = candidate;
-    this.importLegacy(candidate);
+    this.provisionalWriteScope = transition.provisionalScope;
+    this.lastWriteScope = candidate;
+
+    if (Object.keys(this.legacyHistory).length > 0) {
+      this.legacyTargetScope ??= candidate;
+      if (this.legacyTargetScope === candidate) this.importLegacy(candidate);
+    }
     return candidate;
   }
 
@@ -122,10 +164,10 @@ class DelayHistoryStore {
     this.persist();
   }
 
-  /** Import tag-only history into the first resolved active scope once.
+  /** Import tag-only history into the assigned active scope once.
    * Perfect profile separation is impossible for already-global legacy data,
-   * so it is assigned only to the currently active configuration and then the
-   * legacy key is removed. It will not reappear in every later profile. */
+   * so it is assigned only to one configuration and then the old key is
+   * removed. It will not reappear in every later profile. */
   private importLegacy(target: string): void {
     if (Object.keys(this.legacyHistory).length === 0) return;
     this.scopedHistory = {
@@ -146,7 +188,7 @@ class DelayHistoryStore {
   /** Current configuration's history map. Reading this also tracks the active
    * profile and config structure as Svelte dependencies. */
   get history(): HistoryMap {
-    return this.scopedHistory[this.currentScope()] ?? {};
+    return this.currentHistory();
   }
 
   /** Record a probe result for a node or policy group in the active config. */
@@ -158,7 +200,7 @@ class DelayHistoryStore {
     selectedTag?: string,
   ): void {
     if (!tag) return;
-    const scope = this.currentScope();
+    const scope = this.prepareScopeForWrite();
     const scoped = this.scopedHistory[scope] ?? {};
     // `-1` marks a timeout / unreachable probe (e.g. kernel not running) so
     // the UI can show "timeout" instead of mistaking it for "never probed".
@@ -249,7 +291,7 @@ class DelayHistoryStore {
 
   /** Remove history for one tag in the active configuration. */
   clear(tag: string): void {
-    const scope = this.currentScope();
+    const scope = this.prepareScopeForWrite();
     const scoped = this.scopedHistory[scope];
     if (!scoped?.[tag]) return;
     const nextScope = { ...scoped };
@@ -263,7 +305,7 @@ class DelayHistoryStore {
 
   /** Remove all history for the active configuration only. */
   clearAll(): void {
-    const scope = this.currentScope();
+    const scope = this.prepareScopeForWrite();
     if (!this.scopedHistory[scope]) return;
     const next = { ...this.scopedHistory };
     delete next[scope];
