@@ -7,12 +7,20 @@
 
 import { browser } from '$app/environment';
 import { guiState } from '$lib/services/gui-state.svelte';
-import { buildDelayHistoryScope } from '$lib/services/delay-history-scope';
+import {
+  buildDelayHistoryScope,
+  planDelayHistoryScopeTransition,
+  splitDelayHistoryScope,
+} from '$lib/services/delay-history-scope';
 
 const STORAGE_KEY = 'znet-delay-history-v2';
+const LEGACY_STORAGE_KEY = 'znet-delay-history';
 const MAX_ENTRIES = 20; // per node
 const MAX_NODES = 500; // across all configuration scopes
 const PRUNE_AFTER_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+const EMPTY_FINGERPRINT = splitDelayHistoryScope(
+  buildDelayHistoryScope(undefined, [], []),
+).fingerprint;
 
 export interface DelayEntry {
   /** Latency in ms. `-1` = timeout/unreachable, `0` = idle/zero, `>0` = latency. */
@@ -26,7 +34,7 @@ export interface DelayEntry {
 type HistoryMap = Record<string, DelayEntry[]>;
 type ScopedHistoryMap = Record<string, HistoryMap>;
 
-function load(): ScopedHistoryMap {
+function loadScoped(): ScopedHistoryMap {
   if (!browser) return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -38,19 +46,101 @@ function load(): ScopedHistoryMap {
   }
 }
 
+function loadLegacy(): HistoryMap {
+  if (!browser) return {};
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as HistoryMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function mergeEntries(left: DelayEntry[], right: DelayEntry[]): DelayEntry[] {
+  const merged = [...left, ...right]
+    .sort((a, b) => a.at - b.at)
+    .filter((entry, index, entries) => index === 0 || !(
+      entries[index - 1].at === entry.at
+      && entries[index - 1].delay === entry.delay
+      && entries[index - 1].selectedTag === entry.selectedTag
+    ));
+  return merged.length > MAX_ENTRIES
+    ? merged.slice(merged.length - MAX_ENTRIES)
+    : merged;
+}
+
+function mergeHistory(left: HistoryMap, right: HistoryMap): HistoryMap {
+  const merged: HistoryMap = { ...left };
+  for (const [tag, entries] of Object.entries(right)) {
+    merged[tag] = mergeEntries(merged[tag] ?? [], entries);
+  }
+  return merged;
+}
+
 class DelayHistoryStore {
   private scopedHistory = $state<ScopedHistoryMap>({});
+  private legacyHistory: HistoryMap = {};
+  private lastScope: string | null = null;
+  private provisionalScope: string | null = null;
 
   constructor() {
-    this.scopedHistory = load();
+    this.scopedHistory = loadScoped();
+    this.legacyHistory = loadLegacy();
   }
 
   private currentScope(): string {
-    return buildDelayHistoryScope(
+    const candidate = buildDelayHistoryScope(
       guiState.selfTest?.activeProxyConfigId,
       guiState.configNodes,
       guiState.configPolicyGroups,
     );
+    const transition = planDelayHistoryScopeTransition(
+      this.lastScope,
+      candidate,
+      this.provisionalScope,
+      EMPTY_FINGERPRINT,
+    );
+
+    if (transition.migrateFrom && transition.migrateFrom !== candidate) {
+      this.mergeScope(transition.migrateFrom, candidate);
+    }
+    this.provisionalScope = transition.provisionalScope;
+    this.lastScope = candidate;
+    this.importLegacy(candidate);
+    return candidate;
+  }
+
+  private mergeScope(source: string, target: string): void {
+    const sourceHistory = this.scopedHistory[source];
+    if (!sourceHistory) return;
+    const next = { ...this.scopedHistory };
+    next[target] = mergeHistory(next[target] ?? {}, sourceHistory);
+    delete next[source];
+    this.scopedHistory = next;
+    this.persist();
+  }
+
+  /** Import tag-only history into the first resolved active scope once.
+   * Perfect profile separation is impossible for already-global legacy data,
+   * so it is assigned only to the currently active configuration and then the
+   * legacy key is removed. It will not reappear in every later profile. */
+  private importLegacy(target: string): void {
+    if (Object.keys(this.legacyHistory).length === 0) return;
+    this.scopedHistory = {
+      ...this.scopedHistory,
+      [target]: mergeHistory(this.scopedHistory[target] ?? {}, this.legacyHistory),
+    };
+    this.legacyHistory = {};
+    if (browser) {
+      try {
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      } catch {
+        // Storage cleanup is best effort.
+      }
+    }
+    this.persist();
   }
 
   /** Current configuration's history map. Reading this also tracks the active
