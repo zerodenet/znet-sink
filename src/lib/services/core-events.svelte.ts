@@ -151,12 +151,13 @@ class CoreEventsService {
           }
 
           if (settled) return;
-          // A timeout is itself a terminal observation for the card. Record it
-          // so the group latency and "last checked" label do not remain stale
-          // while waiting for a later kernel event that may never arrive.
+          // Use the request time for the synthetic timeout observation. If a
+          // delayed real event arrives later with its actual completion time,
+          // that authoritative result can still become the newest history item.
           const timeoutUpdate = buildPolicyProbeTimeoutUpdate(
             guiState.policyGroups,
             policyTag,
+            requestedAtUnixMs,
           );
           delayHistory.record(
             timeoutUpdate.tag,
