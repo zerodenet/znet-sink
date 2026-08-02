@@ -5,7 +5,9 @@ import { guiState } from '$lib/services/gui-state.svelte';
 import { delayHistory } from '$lib/services/delay-history.svelte';
 import {
   buildPolicyProbeHistoryUpdates,
+  buildPolicyProbeTimeoutUpdate,
   buildPolicySnapshotHistoryUpdates,
+  isPolicyProbeEventFresh,
   policyProbeEventFromSnapshot,
   policyProbeWaitTimeoutMs,
   projectSelectedGroupHistoryUpdates,
@@ -114,11 +116,11 @@ class CoreEventsService {
 
       const complete = (event: PolicyProbeCompletedEvent) => {
         if (settled) return;
-        // A scheduled probe for the same policy may finish while a manual
-        // request is in flight. It should still update global state, but must
-        // not end the clicked card's lifecycle. Older kernels that omit the
-        // trigger remain compatible.
-        if (options.trigger && event.trigger && event.trigger !== options.trigger) return;
+        // A scheduled cycle can overlap a manual click, and kernels may
+        // coalesce triggers while this policy is already probing. Any result
+        // completed after the request is authoritative enough to finish the
+        // card lifecycle; stale events are still ignored.
+        if (!isPolicyProbeEventFresh(event, requestedAtUnixMs)) return;
         settled = true;
         cleanup();
         resolve(event);
@@ -149,6 +151,20 @@ class CoreEventsService {
           }
 
           if (settled) return;
+          // A timeout is itself a terminal observation for the card. Record it
+          // so the group latency and "last checked" label do not remain stale
+          // while waiting for a later kernel event that may never arrive.
+          const timeoutUpdate = buildPolicyProbeTimeoutUpdate(
+            guiState.policyGroups,
+            policyTag,
+          );
+          delayHistory.record(
+            timeoutUpdate.tag,
+            timeoutUpdate.delayMs,
+            timeoutUpdate.reachable,
+            timeoutUpdate.at,
+            timeoutUpdate.selectedTag,
+          );
           settled = true;
           cleanup();
           reject(new PolicyProbeTimeoutError(policyTag));
