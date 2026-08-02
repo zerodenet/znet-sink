@@ -130,6 +130,28 @@ export function mergePolicyGroups(configGroups: PolicyGroup[], runtimeGroups: Po
   });
 }
 
+function collectDescendantProbeTags(
+  groupsByName: Map<string, PolicyGroup>,
+  groupTag: string,
+  visited = new Set<string>(),
+): Set<string> {
+  if (visited.has(groupTag)) return new Set();
+  visited.add(groupTag);
+  const group = groupsByName.get(groupTag);
+  if (!group) return new Set();
+
+  const tags = new Set<string>();
+  for (const member of group.outbounds) {
+    tags.add(member.tag);
+    if (groupsByName.has(member.tag)) {
+      for (const nested of collectDescendantProbeTags(groupsByName, member.tag, visited)) {
+        tags.add(nested);
+      }
+    }
+  }
+  return tags;
+}
+
 export function planProbeTargets(options: {
   groups: PolicyGroup[];
   selectedGroup: string | null;
@@ -143,18 +165,32 @@ export function planProbeTargets(options: {
 
   const groupsByName = new Map(groups.map((group) => [group.name, group]));
   const policyTags = new Set<string>();
+  for (const node of visibleNodes) {
+    const memberGroup = groupsByName.get(node.tag);
+    if (isUrlTestGroup(memberGroup)) policyTags.add(memberGroup!.name);
+  }
+
+  // A nested urltest owns all of its member probes. Exclude those same tags
+  // from the ordinary batch so one parent-group action cannot probe a direct
+  // member once through `probe_outbound` and again through `policies.probe`.
+  const policyOwnedTags = new Set<string>();
+  for (const policyTag of policyTags) {
+    for (const tag of collectDescendantProbeTags(groupsByName, policyTag)) {
+      policyOwnedTags.add(tag);
+    }
+  }
+
+  const seenNodeTags = new Set<string>();
   const nodes: ProxyNode[] = [];
   for (const node of visibleNodes) {
     if (isSpecialOutboundProtocol(node.protocol)) continue;
     const memberGroup = groupsByName.get(node.tag);
-    if (isUrlTestGroup(memberGroup)) {
-      policyTags.add(memberGroup!.name);
-    } else {
-      // A nested non-url_test group is still a probeable outbound target.
-      // Keep it in the same synchronous probe flow as a regular node so its
-      // card receives the same per-target lifecycle and spinner state.
-      nodes.push(node);
-    }
+    if (isUrlTestGroup(memberGroup)) continue;
+    if (policyOwnedTags.has(node.tag) || seenNodeTags.has(node.tag)) continue;
+    seenNodeTags.add(node.tag);
+    // A nested non-url_test group is still a probeable outbound target.
+    // Keep it in the ordinary flow unless a nested urltest already owns it.
+    nodes.push(node);
   }
   return { nodes, policyTags: [...policyTags] };
 }
