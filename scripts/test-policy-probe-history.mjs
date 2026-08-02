@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 
 import {
+  buildPolicyProbeTimeoutUpdate,
   buildPolicySnapshotHistoryUpdates,
+  isPolicyProbeEventFresh,
   policyProbeEventFromSnapshot,
   policyProbeWaitTimeoutMs,
 } from '../src/lib/services/policy-probe-history.ts';
@@ -20,6 +22,40 @@ function testAdaptivePolicyProbeTimeout() {
   assert.equal(policyProbeWaitTimeoutMs(5), 65_000);
   assert.equal(policyProbeWaitTimeoutMs(12), 135_000);
   assert.equal(policyProbeWaitTimeoutMs(1000), 600_000);
+}
+
+function testFreshScheduledResultCanSettleManualWaiter() {
+  const requestedAt = 10_000;
+  assert.equal(isPolicyProbeEventFresh({
+    policyTag: 'Auto',
+    trigger: 'scheduled',
+    completedAtUnixMs: 10_001,
+    members: [],
+  }, requestedAt), true);
+  assert.equal(isPolicyProbeEventFresh({
+    policyTag: 'Auto',
+    trigger: 'manual',
+    completedAtUnixMs: 9_999,
+    members: [],
+  }, requestedAt), false);
+  // Older kernels can omit timing metadata; keep their events compatible.
+  assert.equal(isPolicyProbeEventFresh({
+    policyTag: 'Auto',
+    trigger: 'scheduled',
+    members: [],
+  }, requestedAt), true);
+}
+
+function testPolicyTimeoutProducesVisibleGroupObservation() {
+  const update = buildPolicyProbeTimeoutUpdate([
+    group('Auto', 'HK', [{ tag: 'HK' }]),
+  ], 'Auto', 12_345);
+  assert.deepEqual(update, {
+    tag: 'Auto',
+    reachable: false,
+    at: 12_345,
+    selectedTag: 'HK',
+  });
 }
 
 function testScheduledSnapshotAppendsMembersAndSelectedGroup() {
@@ -94,6 +130,8 @@ function testNestedUrlTestCardUsesOwnPolicyHistory() {
 }
 
 testAdaptivePolicyProbeTimeout();
+testFreshScheduledResultCanSettleManualWaiter();
+testPolicyTimeoutProducesVisibleGroupObservation();
 testScheduledSnapshotAppendsMembersAndSelectedGroup();
 testSnapshotRecoversOnlyFreshPendingProbe();
 testSameTimestampHistoryOverridesStaleRuntimeValue();
