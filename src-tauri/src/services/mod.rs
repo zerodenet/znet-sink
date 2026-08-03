@@ -22,10 +22,12 @@ pub mod logs;
 pub mod network_probe;
 pub mod policy_selection;
 pub mod probe;
+#[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
 pub mod proxy_mode;
 pub mod rule_overlay;
 pub mod rule_set;
+#[path = "subscription_wrapper.rs"]
 pub mod subscription;
 pub mod system_proxy;
 pub mod system_proxy_guard;
