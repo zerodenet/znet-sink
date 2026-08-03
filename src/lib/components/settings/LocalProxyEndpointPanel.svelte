@@ -86,9 +86,8 @@
         <label class="endpoint-field port-field">
           <span>监听端口</span>
           <input
-            type="number"
-            min="1"
-            max="65535"
+            type="text"
+            inputmode="numeric"
             bind:value={port}
             disabled={saving}
             aria-label="Mixed 监听端口"
