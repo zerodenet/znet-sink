@@ -24,6 +24,11 @@ import {
 import { getAppConfig } from './core';
 import { error as toastError, success as toastSuccess, warning as toastWarning } from './toast.svelte';
 import { tracedOperation } from './telemetry';
+import { createLatestRequestGate } from './latest-request-gate.js';
+import {
+  retainConfiguredPolicyGroups,
+  shouldApplyPolicyProbeEvent,
+} from './node-state-reconcile';
 import type {
   ConfigProxyNode,
   SelfTestSnapshot,
@@ -70,6 +75,9 @@ class GuiStateStore {
   private networkProbeTimer: ReturnType<typeof setInterval> | null = null;
   private networkProbePending = false;
   private internetSharingWarningShown = false;
+  private configNodesRefreshGate = createLatestRequestGate();
+  private configPolicyGroupsRefreshGate = createLatestRequestGate();
+  private policyGroupsRefreshGate = createLatestRequestGate();
 
   async initialize() {
     if (this.isInitialized) return;
@@ -173,34 +181,75 @@ class GuiStateStore {
   }
 
   async refreshConfigNodes() {
+    const request = this.configNodesRefreshGate.begin();
     try {
-      this.configNodes = await getConfigProxyNodes();
+      const nodes = await getConfigProxyNodes();
+      if (this.configNodesRefreshGate.canApply(request)) {
+        this.configNodes = nodes;
+      }
     } catch {
-      this.configNodes = [];
+      // Keep the last known-good config snapshot during a config reload. A
+      // transient IPC failure must not make the node page look unconfigured.
     }
   }
 
   async refreshConfigPolicyGroups() {
+    const request = this.configPolicyGroupsRefreshGate.begin();
     try {
-      this.configPolicyGroups = await getConfigPolicyGroups();
+      const groups = await getConfigPolicyGroups();
+      if (this.configPolicyGroupsRefreshGate.canApply(request)) {
+        this.configPolicyGroups = groups;
+      }
     } catch {
-      this.configPolicyGroups = [];
+      // Preserve the previous snapshot until a newer request succeeds.
     }
   }
 
   async refreshPolicyGroups() {
+    const request = this.policyGroupsRefreshGate.begin();
     try {
       const groups = await getGuiPolicyGroups();
-      console.warn('[gui-state] policy groups loaded:', groups.length, 'groups');
-      this.policyGroups = groups;
+      if (this.policyGroupsRefreshGate.canApply(request)) {
+        this.policyGroups = groups;
+      }
     } catch (e: any) {
       console.warn('[gui-state] policy groups failed:', this.errorMessage(e));
-      this.policyGroups = [];
+      // Runtime queries can briefly fail while config.apply reconciles the
+      // engine. Retain the last known-good groups instead of flashing empty.
     }
+  }
+
+  /**
+   * Reconcile node state after the active profile changes.
+   *
+   * Invalidate every older request first, then load the config skeleton before
+   * querying runtime policy state. This prevents a late response from the
+   * previous profile from overwriting the newly activated profile.
+   */
+  async refreshNodeStateAfterConfigChange() {
+    this.configNodesRefreshGate.reset();
+    this.configPolicyGroupsRefreshGate.reset();
+    this.policyGroupsRefreshGate.reset();
+
+    await Promise.allSettled([
+      this.refreshConfigNodes(),
+      this.refreshConfigPolicyGroups(),
+    ]);
+
+    // Drop runtime groups that cannot belong to the new config before the
+    // runtime query completes. Matching groups remain visible with their last
+    // known-good status, so this avoids both stale extra groups and UI flicker.
+    this.policyGroups = retainConfiguredPolicyGroups(this.policyGroups, this.configPolicyGroups);
+    await this.refreshPolicyGroups();
   }
 
   applyPolicyProbeCompleted(event: import('$lib/types/gui-api').PolicyProbeCompletedEvent) {
     const existing = this.policyGroups.find((group) => group.name === event.policyTag);
+    // A probe that began before a profile switch can complete after the new
+    // profile is active. Never resurrect a group that belongs to the old
+    // profile, and invalidate runtime queries that predate this event.
+    if (!shouldApplyPolicyProbeEvent(this.configPolicyGroups, this.policyGroups, event.policyTag)) return;
+    this.policyGroupsRefreshGate.reset();
     const previousMembers = new Map(existing?.outbounds.map((member) => [member.tag, member]) ?? []);
     const outbounds = event.members.map((member) => ({
       ...previousMembers.get(member.tag),

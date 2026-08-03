@@ -385,7 +385,7 @@ class CoreEventsService {
     }
 
     if (eventType === 'core.configChanged') {
-      awaitIgnore(this._fetchInitialState());
+      awaitIgnore(this._refreshAfterConfigChanged());
       this.statusTick++;
       return;
     }
@@ -776,6 +776,14 @@ class CoreEventsService {
     } catch {
       // Best-effort initial fetch
     }
+  }
+
+  private async _refreshAfterConfigChanged() {
+    // Config-derived nodes/groups establish the identity boundary first;
+    // runtime snapshots fetched afterwards can no longer overwrite the new
+    // profile with responses that began before configChanged.
+    await guiState.refreshNodeStateAfterConfigChange();
+    await this._fetchInitialState();
   }
 }
 

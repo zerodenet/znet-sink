@@ -216,11 +216,7 @@
       // When the saved profile is active, mirror it into GUI state so the
       // node page picks up the new config without a manual tab switch.
       if (draft.active) {
-        await Promise.allSettled([
-          guiState.refreshConfigNodes(),
-          guiState.refreshConfigPolicyGroups(),
-          guiState.refreshPolicyGroups(),
-        ]);
+        await guiState.refreshNodeStateAfterConfigChange();
       }
 
       saving = false;
@@ -255,11 +251,7 @@
       await refresh();
       // Removing the active profile makes the backend promote another
       // profile (or none), so re-sync GUI state to the new active config.
-      await Promise.allSettled([
-        guiState.refreshConfigNodes(),
-        guiState.refreshConfigPolicyGroups(),
-        guiState.refreshPolicyGroups(),
-      ]);
+      await guiState.refreshNodeStateAfterConfigChange();
     } catch (error) {
       handleAppError(error, '删除代理配置失败');
     } finally {
@@ -277,11 +269,7 @@
       // Propagate the new active config to GUI state so the node page
       // and overview render the freshly activated configuration instead
       // of stale data from the previously active profile.
-      await Promise.allSettled([
-        guiState.refreshConfigNodes(),
-        guiState.refreshConfigPolicyGroups(),
-        guiState.refreshPolicyGroups(),
-      ]);
+      await guiState.refreshNodeStateAfterConfigChange();
     } catch (error) {
       handleAppError(error, '切换当前代理配置失败');
     } finally {

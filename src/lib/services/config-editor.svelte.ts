@@ -352,10 +352,7 @@ class ConfigEditorService {
 
       // Refresh config-derived GUI state (node list, policy sidebar) so the
       // node page reflects the freshly applied configuration.
-      await Promise.allSettled([
-        guiState.refreshConfigNodes(),
-        guiState.refreshConfigPolicyGroups(),
-      ]);
+      await guiState.refreshNodeStateAfterConfigChange();
     } catch {
       // Reconciliation is best-effort; don't change phase
     }
