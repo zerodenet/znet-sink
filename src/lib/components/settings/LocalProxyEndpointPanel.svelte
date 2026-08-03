@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Button } from '$lib/components/ui/button';
   import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
 
   const DEFAULT_HOST = '127.0.0.1';
@@ -31,7 +32,7 @@
         port = String(config.localProxy.port || DEFAULT_PORT);
       }
     } catch (cause) {
-      error = getAppErrorMessage(cause, '加载 Mixed 入站配置失败');
+      error = getAppErrorMessage(cause, '加载代理端口配置失败');
     } finally {
       loading = false;
     }
@@ -65,7 +66,7 @@
       port = String(config.localProxy.port);
       saved = true;
     } catch (cause) {
-      error = getAppErrorMessage(cause, '保存 Mixed 入站配置失败');
+      error = getAppErrorMessage(cause, '保存代理端口配置失败');
     } finally {
       saving = false;
     }
@@ -77,16 +78,16 @@
 </script>
 
 <div class="config-section">
-  <div class="config-section-title">订阅入站</div>
+  <div class="config-section-title">代理端口</div>
 
   {#if loading}
     <div class="config-loading">加载配置中...</div>
   {:else}
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">缺省 Mixed 监听</span>
+        <span class="label-text">代理监听</span>
         <span class="label-desc">
-          订阅缺少可用的 mixed、HTTP 或 SOCKS5 入站时自动补充。未显式设置时使用 127.0.0.1:7890，完整的自定义入站不会被覆盖。
+          配置本地代理入口的监听地址和端口。当前用于自动补充 mixed 混合代理端口，默认使用 127.0.0.1:7890；订阅中完整定义的代理入站不会被覆盖。
         </span>
       </div>
 
@@ -99,7 +100,7 @@
             oninput={() => (saved = false)}
             disabled={saving}
             spellcheck="false"
-            aria-label="Mixed 监听地址"
+            aria-label="代理监听地址"
           />
           <span class="endpoint-colon">:</span>
           <input
@@ -109,22 +110,17 @@
             bind:value={port}
             oninput={() => (saved = false)}
             disabled={saving}
-            aria-label="Mixed 监听端口"
+            aria-label="代理监听端口"
           />
         </div>
 
         <div class="endpoint-actions">
-          <button class="log-action-btn" type="button" onclick={resetDefault} disabled={saving}>
+          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving}>
             恢复默认
-          </button>
-          <button
-            class="log-action-btn primary"
-            type="button"
-            onclick={saveEndpoint}
-            disabled={saving}
-          >
+          </Button>
+          <Button size="sm" onclick={saveEndpoint} disabled={saving}>
             {saving ? '保存中...' : saved ? '已保存' : '保存'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -246,40 +242,6 @@
     color: var(--muted-foreground);
     font-family: var(--font-mono);
     font-size: 12px;
-  }
-
-  .log-action-btn {
-    height: var(--control-height);
-    padding: 0 10px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    font-size: 12px;
-    font-weight: 500;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: all 0.13s ease;
-  }
-
-  .log-action-btn:hover:not(:disabled) {
-    background: var(--muted);
-  }
-
-  .log-action-btn.primary {
-    border-color: var(--primary);
-    background: var(--primary);
-    color: var(--primary-foreground);
-  }
-
-  .log-action-btn.primary:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .log-action-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
   }
 
   .settings-error {
