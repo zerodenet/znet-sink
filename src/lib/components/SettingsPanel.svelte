@@ -22,7 +22,7 @@
   ];
 
   const panelLoaders: Record<SettingsSection, () => Promise<{ default: Component }>> = {
-    general: () => import('$lib/components/settings/AppConfigPanel.svelte'),
+    general: () => import('$lib/components/settings/GeneralSettingsPanel.svelte'),
     core: () => import('$lib/components/settings/CoreConfigPanel.svelte'),
     config: () => import('$lib/components/settings/ConfigEditorPanel.svelte'),
     about: () => import('$lib/components/settings/AboutPanel.svelte'),
