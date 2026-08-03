@@ -6,9 +6,7 @@ pub use original::{
     parse_config_content, remove, remove_runtime, set_active, update_active_content, upsert,
     LocalProxyEndpoint,
 };
-pub(crate) use original::{
-    persist_profile_transition, retarget_managed_system_proxy, sync_local_proxy_from_profile,
-};
+pub(crate) use original::{persist_profile_transition, retarget_managed_system_proxy};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
