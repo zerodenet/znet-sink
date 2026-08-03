@@ -28,8 +28,8 @@ fn normalize_upsert(mut input: SubscriptionUpsert) -> SubscriptionUpsert {
 }
 
 fn migrate_legacy_auto_profiles(state: &AppState) -> AppResult<()> {
-    let previous = lock(state.subscriptions(), "subscription")?.clone();
-    let mut next = previous.clone();
+    let mut subscriptions = lock(state.subscriptions(), "subscription")?;
+    let mut next = subscriptions.clone();
     let mut changed = false;
 
     for profile in &mut next {
@@ -46,7 +46,7 @@ fn migrate_legacy_auto_profiles(state: &AppState) -> AppResult<()> {
     }
 
     domain_store::save_subscriptions(&next)?;
-    *lock(state.subscriptions(), "subscription")? = next;
+    *subscriptions = next;
     Ok(())
 }
 
