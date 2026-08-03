@@ -1,0 +1,52 @@
+name: Run subscription inbound fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Extract and run patch script
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/apply-subscription-inbound-fix.yml').read_text().splitlines()
+          start = source.index("          python3 <<'PY'") + 1
+          end = source.index("          PY", start)
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in source[start:end])
+          Path('/tmp/apply_subscription_fix.py').write_text(script + '\n')
+          PY
+          python3 /tmp/apply_subscription_fix.py
+
+      - name: Format and validate patch
+        shell: bash
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          git diff --check
+
+      - name: Commit generated fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-subscription-inbound-fix.yml \
+                 .github/workflows/run-subscription-inbound-fix.yml
+          git add src-tauri/src/services/subscription.rs \
+                  src/lib/components/tabs/SubscriptionsTab.svelte \
+                  src/lib/components/settings/AppConfigPanel.svelte
+          git commit -m "fix(subscriptions): prefer native Zero and manage mixed inbound"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
