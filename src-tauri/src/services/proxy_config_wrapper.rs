@@ -1,7 +1,14 @@
 #[path = "proxy_config.rs"]
 mod original;
 
-pub use original::*;
+pub use original::{
+    activate_runtime, analyze_capabilities, extract_local_proxy, get, import, import_runtime, list,
+    parse_config_content, remove, remove_runtime, set_active, update_active_content, upsert,
+    LocalProxyEndpoint,
+};
+pub(crate) use original::{
+    persist_profile_transition, retarget_managed_system_proxy, sync_local_proxy_from_profile,
+};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -147,16 +154,15 @@ fn prepare_subscription_upsert(state: &AppState, input: &mut ProxyConfigUpsert) 
         let config = lock(state.app_config(), "app_config")?;
         (config.local_proxy.host.clone(), config.local_proxy.port)
     };
-    let existing_content = input.id.as_ref().and_then(|id| {
-        lock(state.proxy_configs(), "proxy_config")
-            .ok()
-            .and_then(|profiles| {
-                profiles
-                    .iter()
-                    .find(|profile| profile.id == *id)
-                    .and_then(|profile| profile.content.clone())
-            })
-    });
+    let existing_content = if let Some(id) = input.id.as_ref() {
+        let profiles = lock(state.proxy_configs(), "proxy_config")?;
+        profiles
+            .iter()
+            .find(|profile| profile.id == *id)
+            .and_then(|profile| profile.content.clone())
+    } else {
+        None
+    };
 
     if let Some(content) = input.content.as_mut() {
         ensure_subscription_local_inbound(content, existing_content.as_ref(), &host, port)?;
