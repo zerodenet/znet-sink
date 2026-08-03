@@ -141,6 +141,71 @@ async function testBatchProbeLifecycle() {
   assert.equal(refreshCalls, 1);
 }
 
+async function testBatchProbeCompletesWhenAggregateEventIsLost() {
+  const states = [];
+  let refreshCalls = 0;
+  const registry = createListenerRegistry();
+
+  const controller = createNodesProbeController({
+    listen: registry.listen,
+    probeNode: async () => ({ targetTag: 'unused', reachable: true }),
+    probeAll: async (_targetTags, sessionId) => {
+      await registry.emit('probe:result', {
+        sessionId,
+        targetTag: 'A',
+        reachable: true,
+        latencyMs: 20,
+      });
+      await registry.emit('probe:result', {
+        sessionId,
+        targetTag: 'B',
+        reachable: true,
+        latencyMs: 30,
+      });
+      // Intentionally omit probe:complete. Individual terminal results must
+      // still settle the batch and clear every spinner.
+    },
+    recordDelay: () => {},
+    refreshPolicyGroups: async () => {
+      refreshCalls += 1;
+    },
+    onStateChange: (state) => states.push(state),
+  });
+
+  await controller.handleProbeAll([
+    { id: 'node-1', tag: 'A' },
+    { id: 'node-2', tag: 'B' },
+  ]);
+
+  assert.equal(states.at(-1).probingAll, false);
+  assert.equal(states.at(-1).probingNodeIds.size, 0);
+  assert.deepEqual(states.at(-1).probeProgress, { done: 2, total: 2 });
+  assert.equal(refreshCalls, 1);
+}
+
+async function testBatchProbeWatchdogClearsStuckState() {
+  const failures = [];
+  const states = [];
+  const controller = createNodesProbeController({
+    listen: async () => () => {},
+    probeNode: async () => ({ targetTag: 'unused', reachable: true }),
+    probeAll: async () => {},
+    batchTimeoutMs: 10,
+    recordDelay: () => {},
+    onProbeFailure: (failure) => failures.push(failure),
+    refreshPolicyGroups: async () => {},
+    onStateChange: (state) => states.push(state),
+  });
+
+  await controller.handleProbeAll([{ id: 'node-1', tag: 'A' }]);
+
+  assert.equal(states.at(-1).probingAll, false);
+  assert.equal(states.at(-1).probingNodeIds.size, 0);
+  assert.match(controller.getState().lastError, /batch probe timed out/);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].scope, 'batch');
+}
+
 async function testEmptyBatchProbeIsNoOp() {
   const states = [];
   let probeAllCalls = 0;
@@ -227,6 +292,8 @@ await testSingleProbeLifecycle();
 await testSingleProbeCompletionDoesNotWaitForSnapshotRefresh();
 await testSingleProbeFailureUsesNonBlockingFailureCallback();
 await testBatchProbeLifecycle();
+await testBatchProbeCompletesWhenAggregateEventIsLost();
+await testBatchProbeWatchdogClearsStuckState();
 await testEmptyBatchProbeIsNoOp();
 await testBatchProbeDoesNotStartWhileSingleProbeIsRunning();
 await testBatchProbePreservesStructuredErrorMessage();

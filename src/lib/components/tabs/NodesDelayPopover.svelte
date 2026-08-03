@@ -1,6 +1,6 @@
 ﻿<script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
-  import { gradeDelay, formatProbeTime, formatDelay } from '$lib/services/node-utils';
+  import { gradeDelay, formatProbeTime } from '$lib/services/node-utils';
   import { meanDelay, buildSparkline, sparklinePath } from '$lib/components/tabs/nodes-delay-sparkline.js';
   import type { DelayEntry } from '$lib/services/delay-history.svelte';
 
@@ -15,9 +15,16 @@
   let viewMode = $state<ViewMode>('chart');
   let hoveredIndex = $state<number | null>(null);
 
-  const delayState = $derived(gradeDelay(node.delay, node.alive));
+  // `node` is the card snapshot captured when the popover opened. The node
+  // list is rebuilt after every policy probe, so an already-open popover must
+  // use the live history tail rather than keeping that snapshot's delay/time.
+  const latestEntry = $derived(hist.length > 0 ? hist[hist.length - 1] : undefined);
+  const currentDelay = $derived(latestEntry?.delay ?? node.delay);
+  const currentAlive = $derived(latestEntry ? latestEntry.delay >= 0 : node.alive);
+  const currentProbeAt = $derived(latestEntry?.at ?? node.lastProbeAt);
+  const delayState = $derived(gradeDelay(currentDelay, currentAlive));
   const spark = $derived(buildSparkline(hist));
-  const lastProbeLabel = $derived(formatProbeTime(node.lastProbeAt));
+  const lastProbeLabel = $derived(formatProbeTime(currentProbeAt));
 
   // Reversed history for list view (newest first)
   const reversedHist = $derived([...hist].reverse());
@@ -173,12 +180,14 @@
     </div>
   {/if}
 
-  <span class="popover-stats">
-    最新 {hist[hist.length - 1].delay > 0 ? hist[hist.length - 1].delay + 'ms' : '超时'}
-    {#if hist[hist.length - 1].selectedTag}· {hist[hist.length - 1].selectedTag}{/if}
-    · 均 {meanDelay(hist)}ms
-  </span>
-  {#if node.lastProbeAt}
+  {#if latestEntry}
+    <span class="popover-stats">
+      最新 {latestEntry.delay > 0 ? latestEntry.delay + 'ms' : '超时'}
+      {#if latestEntry.selectedTag}· {latestEntry.selectedTag}{/if}
+      · 均 {meanDelay(hist)}ms
+    </span>
+  {/if}
+  {#if currentProbeAt}
     <span class="popover-time">测速: {lastProbeLabel}</span>
   {/if}
 </div>

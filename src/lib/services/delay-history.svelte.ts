@@ -2,14 +2,25 @@
 //
 // Records the last N probe results per outbound tag, persisted to
 // localStorage so history survives tab switches and app restarts.
-// Used by the NodesTab delay popover to show a mini trend chart.
+// Histories are namespaced by active proxy configuration so profiles that
+// reuse node or policy tags cannot merge into one another.
 
 import { browser } from '$app/environment';
+import { guiState } from '$lib/services/gui-state.svelte';
+import {
+  buildDelayHistoryScope,
+  planDelayHistoryScopeTransition,
+  splitDelayHistoryScope,
+} from '$lib/services/delay-history-scope';
 
-const STORAGE_KEY = 'znet-delay-history';
+const STORAGE_KEY = 'znet-delay-history-v2';
+const LEGACY_STORAGE_KEY = 'znet-delay-history';
 const MAX_ENTRIES = 20; // per node
-const MAX_NODES = 500; // bound total memory footprint
+const MAX_NODES = 500; // across all configuration scopes
 const PRUNE_AFTER_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+const EMPTY_FINGERPRINT = splitDelayHistoryScope(
+  buildDelayHistoryScope(undefined, [], []),
+).fingerprint;
 
 export interface DelayEntry {
   /** Latency in ms. `-1` = timeout/unreachable, `0` = idle/zero, `>0` = latency. */
@@ -21,11 +32,24 @@ export interface DelayEntry {
 }
 
 type HistoryMap = Record<string, DelayEntry[]>;
+type ScopedHistoryMap = Record<string, HistoryMap>;
 
-function load(): HistoryMap {
+function loadScoped(): ScopedHistoryMap {
   if (!browser) return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ScopedHistoryMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadLegacy(): HistoryMap {
+  if (!browser) return {};
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as HistoryMap;
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -34,14 +58,140 @@ function load(): HistoryMap {
   }
 }
 
+function mergeEntries(left: DelayEntry[], right: DelayEntry[]): DelayEntry[] {
+  const merged = [...left, ...right]
+    .sort((a, b) => a.at - b.at)
+    .filter((entry, index, entries) => index === 0 || !(
+      entries[index - 1].at === entry.at
+      && entries[index - 1].delay === entry.delay
+      && entries[index - 1].selectedTag === entry.selectedTag
+    ));
+  return merged.length > MAX_ENTRIES
+    ? merged.slice(merged.length - MAX_ENTRIES)
+    : merged;
+}
+
+function mergeHistory(left: HistoryMap, right: HistoryMap): HistoryMap {
+  const merged: HistoryMap = { ...left };
+  for (const [tag, entries] of Object.entries(right)) {
+    merged[tag] = mergeEntries(merged[tag] ?? [], entries);
+  }
+  return merged;
+}
+
 class DelayHistoryStore {
-  history = $state<HistoryMap>({});
+  private scopedHistory = $state<ScopedHistoryMap>({});
+  private legacyHistory: HistoryMap = {};
+  private legacyTargetScope: string | null = null;
+  private lastWriteScope: string | null = null;
+  private provisionalWriteScope: string | null = null;
 
   constructor() {
-    this.history = load();
+    this.scopedHistory = loadScoped();
+    this.legacyHistory = loadLegacy();
   }
 
-  /** Record a probe result for a node or policy group. */
+  private scopeCandidate(): string {
+    return buildDelayHistoryScope(
+      guiState.selfTest?.activeProxyConfigId,
+      guiState.configNodes,
+      guiState.configPolicyGroups,
+    );
+  }
+
+  /** Resolve history without mutating Svelte state. This method is called from
+   * derived node view-models, where state writes would be unsafe. */
+  private currentHistory(): HistoryMap {
+    const candidate = this.scopeCandidate();
+    let current = this.scopedHistory[candidate] ?? {};
+
+    // If a write happened while config structure and active profile id were
+    // refreshing independently, keep that provisional history readable until
+    // the next write can migrate it into the authoritative scope.
+    if (Object.keys(current).length === 0 && this.provisionalWriteScope) {
+      const provisional = splitDelayHistoryScope(this.provisionalWriteScope);
+      const resolved = splitDelayHistoryScope(candidate);
+      if (provisional.fingerprint === resolved.fingerprint) {
+        current = this.scopedHistory[this.provisionalWriteScope] ?? current;
+      }
+    }
+
+    // Legacy tag-only history is shown only in the first active scope that
+    // reads it. This restores pre-v2 hover history without exposing the same
+    // global data in every profile. It is permanently imported on the next
+    // write for that scope.
+    if (Object.keys(this.legacyHistory).length > 0) {
+      this.legacyTargetScope ??= candidate;
+      if (this.legacyTargetScope === candidate) {
+        current = mergeHistory(current, this.legacyHistory);
+      }
+    }
+
+    return current;
+  }
+
+  /** Prepare a scope for a write, performing safe migrations outside derived
+   * reads. */
+  private prepareScopeForWrite(): string {
+    const candidate = this.scopeCandidate();
+    const transition = planDelayHistoryScopeTransition(
+      this.lastWriteScope,
+      candidate,
+      this.provisionalWriteScope,
+      EMPTY_FINGERPRINT,
+    );
+
+    if (transition.migrateFrom && transition.migrateFrom !== candidate) {
+      this.mergeScope(transition.migrateFrom, candidate);
+    }
+    this.provisionalWriteScope = transition.provisionalScope;
+    this.lastWriteScope = candidate;
+
+    if (Object.keys(this.legacyHistory).length > 0) {
+      this.legacyTargetScope ??= candidate;
+      if (this.legacyTargetScope === candidate) this.importLegacy(candidate);
+    }
+    return candidate;
+  }
+
+  private mergeScope(source: string, target: string): void {
+    const sourceHistory = this.scopedHistory[source];
+    if (!sourceHistory) return;
+    const next = { ...this.scopedHistory };
+    next[target] = mergeHistory(next[target] ?? {}, sourceHistory);
+    delete next[source];
+    this.scopedHistory = next;
+    this.persist();
+  }
+
+  /** Import tag-only history into the assigned active scope once.
+   * Perfect profile separation is impossible for already-global legacy data,
+   * so it is assigned only to one configuration and then the old key is
+   * removed. It will not reappear in every later profile. */
+  private importLegacy(target: string): void {
+    if (Object.keys(this.legacyHistory).length === 0) return;
+    this.scopedHistory = {
+      ...this.scopedHistory,
+      [target]: mergeHistory(this.scopedHistory[target] ?? {}, this.legacyHistory),
+    };
+    this.legacyHistory = {};
+    if (browser) {
+      try {
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      } catch {
+        // Storage cleanup is best effort.
+      }
+    }
+    this.persist();
+  }
+
+  /** Current configuration's history map. Reading this also tracks the active
+   * profile and config structure as Svelte dependencies. */
+  get history(): HistoryMap {
+    return this.currentHistory();
+  }
+
+  /** Record a probe result for a node or policy group in the active config. */
   record(
     tag: string,
     delayMs: number | undefined,
@@ -50,6 +200,8 @@ class DelayHistoryStore {
     selectedTag?: string,
   ): void {
     if (!tag) return;
+    const scope = this.prepareScopeForWrite();
+    const scoped = this.scopedHistory[scope] ?? {};
     // `-1` marks a timeout / unreachable probe (e.g. kernel not running) so
     // the UI can show "timeout" instead of mistaking it for "never probed".
     const value = reachable ? Math.max(0, delayMs ?? 0) : -1;
@@ -59,7 +211,7 @@ class DelayHistoryStore {
       ...(selectedTag ? { selectedTag } : {}),
     };
 
-    const existing = this.history[tag] ?? [];
+    const existing = scoped[tag] ?? [];
     if (existing.some((item) =>
       item.at === entry.at
       && item.delay === entry.delay
@@ -70,77 +222,101 @@ class DelayHistoryStore {
       next.splice(0, next.length - MAX_ENTRIES);
     }
 
-    this.history = { ...this.history, [tag]: next };
+    this.scopedHistory = {
+      ...this.scopedHistory,
+      [scope]: { ...scoped, [tag]: next },
+    };
     this.persist();
   }
 
-  /** Get the ordered history entries for a node (oldest → newest). */
+  /** Get the active configuration's ordered entries (oldest → newest). */
   getHistory(tag: string): DelayEntry[] {
     return this.history[tag] ?? [];
   }
 
-  /** Latest known latency for a node, or undefined if never probed. */
+  /** Latest known latency in the active configuration. */
   latest(tag: string): number | undefined {
     const entries = this.history[tag];
     if (!entries || entries.length === 0) return undefined;
     return entries[entries.length - 1].delay;
   }
 
-  /** Timestamp of the latest probe for a node, or undefined if never probed. */
+  /** Timestamp of the latest probe in the active configuration. */
   latestTime(tag: string): number | undefined {
     const entries = this.history[tag];
     if (!entries || entries.length === 0) return undefined;
     return entries[entries.length - 1].at;
   }
 
-  /** Prune stale entries (older than PRUNE_AFTER_MS) and over-sized maps. */
+  /** Prune stale entries and enforce one total node bound across profiles. */
   prune(): void {
     const cutoff = Date.now() - PRUNE_AFTER_MS;
-    const tags = Object.keys(this.history);
     let changed = false;
-    const next: HistoryMap = {};
+    const next: ScopedHistoryMap = {};
 
-    for (const tag of tags) {
-      const fresh = (this.history[tag] ?? []).filter((e) => e.at >= cutoff);
-      if (fresh.length > 0) next[tag] = fresh;
-      if (fresh.length !== (this.history[tag]?.length ?? 0)) changed = true;
+    for (const [scope, history] of Object.entries(this.scopedHistory)) {
+      const scopedNext: HistoryMap = {};
+      for (const [tag, entries] of Object.entries(history)) {
+        const fresh = entries.filter((entry) => entry.at >= cutoff);
+        if (fresh.length > 0) scopedNext[tag] = fresh;
+        if (fresh.length !== entries.length) changed = true;
+      }
+      if (Object.keys(scopedNext).length > 0) next[scope] = scopedNext;
+      else if (Object.keys(history).length > 0) changed = true;
     }
 
-    // Hard cap on total node count — drop oldest-tagged entries first.
-    const keys = Object.keys(next);
-    if (keys.length > MAX_NODES) {
-      const latestAt = (entries: DelayEntry[] | undefined): number =>
-        entries && entries.length > 0 ? entries[entries.length - 1].at : 0;
-      const sorted = keys.sort((a, b) => latestAt(next[b]) - latestAt(next[a]));
-      for (const k of sorted.slice(MAX_NODES)) delete next[k];
+    const records = Object.entries(next).flatMap(([scope, history]) =>
+      Object.entries(history).map(([tag, entries]) => ({ scope, tag, entries })),
+    );
+    if (records.length > MAX_NODES) {
+      records.sort((left, right) => {
+        const leftAt = left.entries[left.entries.length - 1]?.at ?? 0;
+        const rightAt = right.entries[right.entries.length - 1]?.at ?? 0;
+        return rightAt - leftAt;
+      });
+      for (const record of records.slice(MAX_NODES)) {
+        delete next[record.scope]?.[record.tag];
+        if (next[record.scope] && Object.keys(next[record.scope]).length === 0) {
+          delete next[record.scope];
+        }
+      }
       changed = true;
     }
 
     if (changed) {
-      this.history = next;
+      this.scopedHistory = next;
       this.persist();
     }
   }
 
-  /** Remove all history for a single node. */
+  /** Remove history for one tag in the active configuration. */
   clear(tag: string): void {
-    if (!this.history[tag]) return;
-    const next = { ...this.history };
-    delete next[tag];
-    this.history = next;
+    const scope = this.prepareScopeForWrite();
+    const scoped = this.scopedHistory[scope];
+    if (!scoped?.[tag]) return;
+    const nextScope = { ...scoped };
+    delete nextScope[tag];
+    const next = { ...this.scopedHistory };
+    if (Object.keys(nextScope).length > 0) next[scope] = nextScope;
+    else delete next[scope];
+    this.scopedHistory = next;
     this.persist();
   }
 
-  /** Remove all history. */
+  /** Remove all history for the active configuration only. */
   clearAll(): void {
-    this.history = {};
+    const scope = this.prepareScopeForWrite();
+    if (!this.scopedHistory[scope]) return;
+    const next = { ...this.scopedHistory };
+    delete next[scope];
+    this.scopedHistory = next;
     this.persist();
   }
 
   private persist(): void {
     if (!browser) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.history));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.scopedHistory));
     } catch {
       // Storage may be full / unavailable — history is best-effort only.
     }

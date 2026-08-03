@@ -1,5 +1,10 @@
 import { createBatchProbeState } from './nodes-probe-state.js';
 
+const MAX_CONCURRENT_PROBES = 8;
+const MIN_BATCH_PROBE_TIMEOUT_MS = 30_000;
+const BATCH_PROBE_TIMEOUT_PER_WAVE_MS = 15_000;
+const MAX_BATCH_PROBE_TIMEOUT_MS = 5 * 60_000;
+
 /**
  * @typedef {{ id: string, tag: string }} ProbeNode
  * @typedef {{ done: number, total: number }} ProbeProgress
@@ -22,6 +27,7 @@ import { createBatchProbeState } from './nodes-probe-state.js';
  *   recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) => void,
  *   onProbeFailure?: (failure: { targetTag?: string, message: string, scope: 'single' | 'batch' }) => void,
  *   refreshPolicyGroups: () => Promise<void>,
+ *   batchTimeoutMs?: number | ((total: number) => number),
  *   onStateChange?: (state: ProbeControllerState) => void,
  * }} ProbeControllerDeps
  */
@@ -39,6 +45,27 @@ function probeErrorMessage(error) {
     // Fall through to the platform string representation.
   }
   return String(error);
+}
+
+/** @param {number} total */
+function defaultBatchProbeTimeoutMs(total) {
+  const waves = Math.max(1, Math.ceil(total / MAX_CONCURRENT_PROBES));
+  const estimated = 15_000 + waves * BATCH_PROBE_TIMEOUT_PER_WAVE_MS;
+  return Math.min(
+    MAX_BATCH_PROBE_TIMEOUT_MS,
+    Math.max(MIN_BATCH_PROBE_TIMEOUT_MS, estimated),
+  );
+}
+
+/** @param {ProbeControllerDeps} deps @param {number} total */
+function resolveBatchProbeTimeoutMs(deps, total) {
+  const configured = typeof deps.batchTimeoutMs === 'function'
+    ? deps.batchTimeoutMs(total)
+    : deps.batchTimeoutMs;
+  if (typeof configured === 'number' && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return defaultBatchProbeTimeoutMs(total);
 }
 
 /** @param {ProbeControllerDeps} deps */
@@ -173,6 +200,9 @@ export function createNodesProbeController(deps) {
       const targetTags = batchNodes.map((node) => node.tag);
       const batchProbeState = createBatchProbeState(batchNodes);
       const sessionId = createSessionId();
+      const timeoutMs = resolveBatchProbeTimeoutMs(deps, batchNodes.length);
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      let timeoutHandle = null;
 
       probingAll = true;
       probingNodeIds = batchProbeState.probingNodeIds();
@@ -190,6 +220,16 @@ export function createNodesProbeController(deps) {
         });
         activeProbeCompletionResolve = resolveCompletion;
 
+        const finishBatch = () => {
+          batchProbeState.clear();
+          probingNodeIds = batchProbeState.probingNodeIds();
+          probingAll = false;
+          probeProgress = { done: batchNodes.length, total: batchNodes.length };
+          emit();
+          resolveCompletion?.();
+          activeProbeCompletionResolve = null;
+        };
+
         activeProbeResultUnlisten = await deps.listen(
           'probe:result',
           /** @param {{ payload: { sessionId: string, targetTag: string, reachable: boolean, latencyMs?: number, message?: string } }} event */
@@ -206,7 +246,18 @@ export function createNodesProbeController(deps) {
             }
             batchProbeState.resolveTag(targetTag);
             probingNodeIds = batchProbeState.probingNodeIds();
-            emit();
+            probeProgress = {
+              done: Math.max(probeProgress.done, batchNodes.length - probingNodeIds.size),
+              total: batchNodes.length,
+            };
+            // `probe:complete` is advisory. Every target result is already an
+            // authoritative terminal state, so do not leave the UI spinning
+            // forever merely because the final aggregate event was dropped.
+            if (probingNodeIds.size === 0) {
+              finishBatch();
+            } else {
+              emit();
+            }
           },
         );
 
@@ -223,20 +274,27 @@ export function createNodesProbeController(deps) {
         activeProbeCompleteUnlisten = await deps.listen(
           'probe:complete',
           /** @param {{ payload: { sessionId: string } }} event */
-          async (event) => {
+          (event) => {
             if (!isActiveSessionPayload(event.payload)) return;
-            batchProbeState.clear();
-            probingNodeIds = batchProbeState.probingNodeIds();
-            probingAll = false;
-            emit();
-            resolveCompletion?.();
-            activeProbeCompletionResolve = null;
-            void deps.refreshPolicyGroups();
+            finishBatch();
           },
         );
 
-        await deps.probeAll(targetTags, sessionId);
-        await completion;
+        const watchdog = new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(
+              `batch probe timed out after ${timeoutMs}ms; ${probingNodeIds.size} target(s) still pending`,
+            ));
+          }, timeoutMs);
+        });
+
+        await Promise.race([
+          (async () => {
+            await deps.probeAll(targetTags, sessionId);
+            await completion;
+          })(),
+          watchdog,
+        ]);
       } catch (error) {
         lastError = probeErrorMessage(error);
         deps.onProbeFailure?.({
@@ -248,7 +306,9 @@ export function createNodesProbeController(deps) {
         probingNodeIds = batchProbeState.probingNodeIds();
         emit();
       } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         cleanup();
+        void deps.refreshPolicyGroups();
       }
     },
   };

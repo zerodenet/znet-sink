@@ -8,6 +8,55 @@ export interface PolicyProbeHistoryUpdate {
   selectedTag?: string;
 }
 
+const MIN_POLICY_PROBE_WAIT_MS = 60_000;
+const POLICY_PROBE_WAIT_BASE_MS = 15_000;
+const POLICY_PROBE_WAIT_PER_MEMBER_MS = 10_000;
+const MAX_POLICY_PROBE_WAIT_MS = 10 * 60_000;
+
+/**
+ * A manual urltest request can be queued behind an already-running scheduled
+ * cycle. Older kernels probe members serially with a five-second per-member
+ * bound, so the GUI must allow for both the in-flight cycle and the requested
+ * cycle instead of applying one fixed 60-second timeout to every group.
+ */
+export function policyProbeWaitTimeoutMs(memberCount: number): number {
+  const count = Math.max(1, Math.floor(Number.isFinite(memberCount) ? memberCount : 1));
+  const estimated = POLICY_PROBE_WAIT_BASE_MS + count * POLICY_PROBE_WAIT_PER_MEMBER_MS;
+  return Math.min(MAX_POLICY_PROBE_WAIT_MS, Math.max(MIN_POLICY_PROBE_WAIT_MS, estimated));
+}
+
+/**
+ * A policy waiter should finish on any authoritative result completed after
+ * the request. A scheduled cycle can overlap a manual click, and kernels may
+ * coalesce triggers while that group is already probing. Requiring an exact
+ * trigger match therefore leaves the card spinning even though a fresh result
+ * for the same policy has already arrived.
+ */
+export function isPolicyProbeEventFresh(
+  event: PolicyProbeCompletedEvent,
+  requestedAtUnixMs: number,
+): boolean {
+  const completedAt = event.completedAtUnixMs ?? event.startedAtUnixMs;
+  return completedAt === undefined || completedAt >= requestedAtUnixMs;
+}
+
+/** Build the visible policy-group failure observation used when no completion
+ * event or fresh snapshot arrives before the UI deadline. A later real kernel
+ * result has a newer timestamp and naturally replaces this timeout entry. */
+export function buildPolicyProbeTimeoutUpdate(
+  groups: PolicyGroup[],
+  policyTag: string,
+  at = Date.now(),
+): PolicyProbeHistoryUpdate {
+  const selectedTag = groups.find((group) => group.name === policyTag)?.selected;
+  return {
+    tag: policyTag,
+    reachable: false,
+    at,
+    ...(selectedTag ? { selectedTag } : {}),
+  };
+}
+
 /**
  * Record one concrete probe target and project that observation through every
  * policy group whose current selection points at it. This also supports nested
@@ -121,4 +170,61 @@ export function buildPolicyProbeHistoryUpdates(
     selectedTag: selected.tag,
   });
   return updates;
+}
+
+/**
+ * Recover probe history from an authoritative policy snapshot. This is used
+ * after event-stream reconnects and ordinary policy refreshes so scheduled
+ * urltest observations are not lost merely because their completion event was
+ * missed while the GUI was disconnected or lagging.
+ */
+export function buildPolicySnapshotHistoryUpdates(
+  groups: PolicyGroup[],
+): PolicyProbeHistoryUpdate[] {
+  const updates: PolicyProbeHistoryUpdate[] = [];
+
+  for (const group of groups) {
+    for (const member of group.outbounds) {
+      const at = member.lastCheckedUnixMs;
+      if (typeof at !== 'number' || !Number.isFinite(at)) continue;
+      if (member.delayMs === undefined && member.alive === undefined && !member.lastError) continue;
+      updates.push({
+        tag: member.tag,
+        delayMs: member.delayMs,
+        reachable: member.alive !== false && !member.lastError,
+        at,
+      });
+    }
+  }
+
+  return projectSelectedGroupHistoryUpdates(groups, updates);
+}
+
+/**
+ * Convert a refreshed policy snapshot into the completion shape expected by a
+ * pending waiter. The snapshot is accepted only when it contains a probe time
+ * at or after this request, preventing an old cached result from hiding a real
+ * timeout.
+ */
+export function policyProbeEventFromSnapshot(
+  group: PolicyGroup | undefined,
+  requestedAtUnixMs: number,
+  trigger?: string,
+): PolicyProbeCompletedEvent | undefined {
+  if (!group) return undefined;
+  const completedAtUnixMs = group.outbounds.reduce<number | undefined>((latest, member) => {
+    const checkedAt = member.lastCheckedUnixMs;
+    if (typeof checkedAt !== 'number' || !Number.isFinite(checkedAt)) return latest;
+    return latest === undefined ? checkedAt : Math.max(latest, checkedAt);
+  }, undefined);
+
+  if (completedAtUnixMs === undefined || completedAtUnixMs < requestedAtUnixMs) return undefined;
+
+  return {
+    policyTag: group.name,
+    ...(trigger ? { trigger } : {}),
+    completedAtUnixMs,
+    selected: group.selected,
+    members: group.outbounds,
+  };
 }
