@@ -187,6 +187,18 @@ mod wrapper_tests {
     use serde_json::json;
 
     #[test]
+    fn appends_mixed_when_inbounds_are_missing() {
+        let mut content = json!({ "outbounds": [] });
+
+        ensure_subscription_local_inbound(&mut content, None, "127.0.0.1", 7890).unwrap();
+
+        assert_eq!(content["inbounds"].as_array().unwrap().len(), 1);
+        assert_eq!(content["inbounds"][0]["tag"], MANAGED_MIXED_TAG);
+        assert_eq!(content["inbounds"][0]["listen"]["address"], "127.0.0.1");
+        assert_eq!(content["inbounds"][0]["listen"]["port"], 7890);
+    }
+
+    #[test]
     fn appends_mixed_when_native_subscription_has_only_tun() {
         let mut content = json!({
             "inbounds": [{
