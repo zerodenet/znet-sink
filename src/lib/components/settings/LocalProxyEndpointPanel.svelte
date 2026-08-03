@@ -2,20 +2,34 @@
   import { onMount } from 'svelte';
   import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
 
-  let host = $state('127.0.0.1');
-  let port = $state('7890');
+  const DEFAULT_HOST = '127.0.0.1';
+  const DEFAULT_PORT = 7890;
+
+  let host = $state(DEFAULT_HOST);
+  let port = $state(String(DEFAULT_PORT));
   let loading = $state(true);
   let saving = $state(false);
   let error = $state<string | null>(null);
   let saved = $state(false);
+
+  function resetDefault() {
+    host = DEFAULT_HOST;
+    port = String(DEFAULT_PORT);
+    saved = false;
+    error = null;
+  }
 
   async function loadEndpoint() {
     loading = true;
     error = null;
     try {
       const config = await getAppConfig();
-      host = config.localProxy.host;
-      port = String(config.localProxy.port);
+      if (config.localProxy.sourceProxyConfigId) {
+        resetDefault();
+      } else {
+        host = config.localProxy.host || DEFAULT_HOST;
+        port = String(config.localProxy.port || DEFAULT_PORT);
+      }
     } catch (cause) {
       error = getAppErrorMessage(cause, '加载 Mixed 入站配置失败');
     } finally {
@@ -41,7 +55,11 @@
     saving = true;
     try {
       const config = await updateAppConfig({
-        localProxy: { host: normalizedHost, port: normalizedPort },
+        localProxy: {
+          host: normalizedHost,
+          port: normalizedPort,
+          sourceProxyConfigId: null,
+        },
       });
       host = config.localProxy.host;
       port = String(config.localProxy.port);
@@ -61,53 +79,60 @@
 <div class="config-section">
   <div class="config-section-title">订阅入站</div>
 
-  <div class="endpoint-panel">
-    <div class="endpoint-copy">
-      <span class="label-text">缺省 Mixed 监听</span>
-      <span class="label-desc">
-        当订阅没有可用的 mixed、HTTP 或 SOCKS5 入站，或历史托管入站仍使用旧端口时，GUI 会按此地址补充或覆盖。保存后重新同步订阅生效。
-      </span>
-    </div>
+  {#if loading}
+    <div class="config-loading">加载配置中...</div>
+  {:else}
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">缺省 Mixed 监听</span>
+        <span class="label-desc">
+          订阅缺少可用的 mixed、HTTP 或 SOCKS5 入站时自动补充。未显式设置时使用 127.0.0.1:7890，完整的自定义入站不会被覆盖。
+        </span>
+      </div>
 
-    {#if loading}
-      <div class="endpoint-state">加载配置中...</div>
-    {:else}
-      <div class="endpoint-grid">
-        <label class="endpoint-field">
-          <span>监听地址</span>
+      <div class="endpoint-editor">
+        <div class="endpoint-fields">
           <input
+            class="endpoint-input host-input"
             type="text"
             bind:value={host}
+            oninput={() => (saved = false)}
             disabled={saving}
             spellcheck="false"
             aria-label="Mixed 监听地址"
           />
-        </label>
-        <label class="endpoint-field port-field">
-          <span>监听端口</span>
+          <span class="endpoint-colon">:</span>
           <input
+            class="endpoint-input port-input"
             type="text"
             inputmode="numeric"
             bind:value={port}
+            oninput={() => (saved = false)}
             disabled={saving}
             aria-label="Mixed 监听端口"
           />
-        </label>
-      </div>
+        </div>
 
-      <div class="endpoint-actions">
-        <button type="button" class="save-button" onclick={saveEndpoint} disabled={saving}>
-          {saving ? '保存中...' : '保存'}
-        </button>
+        <div class="endpoint-actions">
+          <button class="log-action-btn" type="button" onclick={resetDefault} disabled={saving}>
+            恢复默认
+          </button>
+          <button
+            class="log-action-btn primary"
+            type="button"
+            onclick={saveEndpoint}
+            disabled={saving}
+          >
+            {saving ? '保存中...' : saved ? '已保存' : '保存'}
+          </button>
+        </div>
       </div>
-    {/if}
+    </div>
+  {/if}
 
-    {#if error}
-      <div class="endpoint-message error" role="alert">{error}</div>
-    {:else if saved}
-      <div class="endpoint-message success">已保存；重新同步订阅后应用到托管入站。</div>
-    {/if}
-  </div>
+  {#if error}
+    <div class="settings-error" role="alert">{error}</div>
+  {/if}
 </div>
 
 <div class="config-separator"></div>
@@ -116,116 +141,174 @@
   .config-section {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 2px;
   }
 
   .config-section-title {
-    color: var(--foreground);
-    font-size: 13px;
-    font-weight: 650;
+    padding: 0 0 8px;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    opacity: 0.7;
   }
 
   .config-separator {
     height: 1px;
-    margin: 18px 0;
+    margin: 16px 0;
     background: var(--border);
-    opacity: 0.65;
   }
 
-  .endpoint-panel {
-    display: grid;
+  .config-loading {
+    padding: 14px 0;
+    color: var(--muted-foreground);
+    font-size: 12px;
+    text-align: center;
+    opacity: 0.6;
+  }
+
+  .config-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: 12px;
-    padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--muted) 45%, transparent);
+    padding: 10px 0;
   }
 
-  .endpoint-copy {
-    display: grid;
-    gap: 4px;
+  .config-row-label {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .label-text {
     color: var(--foreground);
-    font-size: 12.5px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
   }
 
-  .label-desc,
-  .endpoint-state {
+  .label-desc {
     color: var(--muted-foreground);
     font-size: 11.5px;
-    line-height: 1.6;
+    line-height: 1.5;
+    opacity: 0.8;
   }
 
-  .endpoint-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 160px;
-    gap: 10px;
+  .endpoint-editor {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
   }
 
-  .endpoint-field {
-    display: grid;
-    gap: 6px;
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-  }
-
-  .endpoint-field input {
-    width: 100%;
-    min-width: 0;
-    height: 34px;
-    padding: 0 10px;
-    color: var(--foreground);
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-  }
-
-  .endpoint-field input:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-
+  .endpoint-fields,
   .endpoint-actions {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
   }
 
-  .save-button {
-    height: 32px;
-    padding: 0 14px;
-    color: var(--primary-foreground);
-    background: var(--primary);
-    border: 0;
-    border-radius: 8px;
+  .endpoint-input {
+    height: var(--control-height);
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    outline: none;
+    background: var(--background);
+    color: var(--foreground);
+    padding: 0 9px;
+    font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
   }
 
-  .save-button:disabled {
+  .endpoint-input:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
+  }
+
+  .endpoint-input:disabled {
     cursor: not-allowed;
     opacity: 0.55;
   }
 
-  .endpoint-message {
+  .host-input {
+    width: 126px;
+  }
+
+  .port-input {
+    width: 68px;
+  }
+
+  .endpoint-colon {
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .log-action-btn {
+    height: var(--control-height);
+    padding: 0 10px;
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.13s ease;
+  }
+
+  .log-action-btn:hover:not(:disabled) {
+    background: var(--muted);
+  }
+
+  .log-action-btn.primary {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .log-action-btn.primary:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .log-action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .settings-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 0;
+    padding: 8px 10px;
+    border: 1px solid rgba(239, 68, 68, 0.22);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.07);
+    color: var(--destructive);
     font-size: 11.5px;
   }
 
-  .endpoint-message.error {
-    color: var(--destructive);
-  }
+  @media (max-width: 900px) {
+    .config-row,
+    .endpoint-editor {
+      align-items: stretch;
+      flex-direction: column;
+    }
 
-  .endpoint-message.success {
-    color: var(--primary);
-  }
+    .endpoint-editor {
+      width: 100%;
+    }
 
-  @media (max-width: 640px) {
-    .endpoint-grid {
-      grid-template-columns: 1fr;
+    .endpoint-actions {
+      justify-content: flex-end;
     }
   }
 </style>
