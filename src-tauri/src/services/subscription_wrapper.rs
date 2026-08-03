@@ -102,7 +102,7 @@ pub fn spawn_auto_sync_scheduler(app: AppHandle) {
 
 #[cfg(test)]
 mod wrapper_tests {
-    use super::{should_prefer_native_zero, uses_implicit_user_agent};
+    use super::{parse_subscription_content, should_prefer_native_zero, uses_implicit_user_agent};
 
     #[test]
     fn implicit_auto_prefers_native_zero() {
@@ -120,5 +120,32 @@ mod wrapper_tests {
         assert!(uses_implicit_user_agent(None));
         assert!(uses_implicit_user_agent(Some("  ")));
         assert!(!uses_implicit_user_agent(Some("Clash.Meta")));
+    }
+
+    #[test]
+    fn native_zero_preserves_mieru_protocol_fields() {
+        let parsed = parse_subscription_content(
+            r#"{
+                "outbounds": [{
+                    "tag": "mieru-node",
+                    "protocol": {
+                        "type": "mieru",
+                        "server": "node.example",
+                        "port": 443,
+                        "password": "test-password",
+                        "transport": "UDP"
+                    }
+                }]
+            }"#,
+            "zero-json",
+        )
+        .unwrap();
+
+        let protocol = &parsed.content["outbounds"][0]["protocol"];
+        assert_eq!(protocol["type"], "mieru");
+        assert_eq!(protocol["server"], "node.example");
+        assert_eq!(protocol["port"], 443);
+        assert_eq!(protocol["password"], "test-password");
+        assert_eq!(protocol["transport"], "UDP");
     }
 }
