@@ -1,7 +1,7 @@
 #[path = "subscription.rs"]
 mod original;
 
-pub use original::*;
+pub use original::{parse_subscription_content, ParsedSubscriptionConfig, SyncAllOutcome};
 
 use tauri::{AppHandle, Manager, State};
 
