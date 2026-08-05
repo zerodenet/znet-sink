@@ -5,17 +5,19 @@
 //! upfront health check — each probe handles its own timeout and failure.
 
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::client_core::{
-    ProbeJobKind, ProbeJobSnapshot, ProbeJobState, ProbeObservation, ProbeObservationSource,
-    ProbeTargetResult,
+    ProbeJobId, ProbeJobKind, ProbeJobSnapshot, ProbeJobState, ProbeObservation,
+    ProbeObservationSource, ProbeTargetResult,
 };
 use crate::errors::AppError;
 use crate::kernel::zero::commands;
 use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyProbeCompletedEvent};
-use crate::services::{common, core_config};
+use crate::models::logs::LogLevel;
+use crate::services::{common, core_config, logs};
 use crate::state::app_state::AppState;
 
 /// Maximum concurrent probe requests to the core.
@@ -42,45 +44,165 @@ pub struct ProbeResult {
 
 /// Probe a single node through the core's full outbound proxy stack.
 /// No upfront health check — the probe itself handles timeout/failure.
-pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
+pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str) -> ProbeResult {
     let target_tag = target_tag.trim().to_string();
+    let requested_at_unix_ms = common::now_unix_ms();
+    let started = Instant::now();
+    log_probe_request(state, job_id, &target_tag, requested_at_unix_ms);
+
     if target_tag.is_empty() {
-        return ProbeResult {
+        let result = ProbeResult {
             target_tag: target_tag.clone(),
             reachable: false,
             latency_ms: None,
             message: Some("target tag must not be empty".to_string()),
         };
+        log_probe_response(
+            state,
+            job_id,
+            &result,
+            requested_at_unix_ms,
+            started.elapsed().as_millis() as u64,
+            Some("invalid_argument"),
+            None,
+        );
+        return result;
     }
 
-    // Build IPC options from app config
+    // Build IPC options from app config.
     let options = match default_ipc_options(state) {
         Ok(opts) => opts,
-        Err(e) => {
-            return ProbeResult {
+        Err(error) => {
+            let result = ProbeResult {
                 target_tag,
                 reachable: false,
                 latency_ms: None,
-                message: Some(format!("IPC config error: {}", e.message)),
+                message: Some(format!("IPC config error: {}", error.message)),
             };
+            log_probe_response(
+                state,
+                job_id,
+                &result,
+                requested_at_unix_ms,
+                started.elapsed().as_millis() as u64,
+                Some(error.code),
+                error.details.as_ref(),
+            );
+            return result;
         }
     };
 
-    // Send probe command directly — no readiness health check
+    // Persist the normalized Zero response at the Rust boundary. This remains
+    // observable even when the node page is closed or misses a Tauri event.
     match commands::probe_outbound(target_tag.clone(), None, options).await {
-        Ok(result) => ProbeResult {
-            target_tag: result.target_tag,
-            reachable: result.reachable,
-            latency_ms: result.latency_ms,
-            message: result.message,
-        },
-        Err(e) => ProbeResult {
-            target_tag,
-            reachable: false,
-            latency_ms: None,
-            message: Some(e.message),
-        },
+        Ok(response) => {
+            let result = ProbeResult {
+                target_tag: response.target_tag,
+                reachable: response.reachable,
+                latency_ms: response.latency_ms,
+                message: response.message,
+            };
+            log_probe_response(
+                state,
+                job_id,
+                &result,
+                requested_at_unix_ms,
+                started.elapsed().as_millis() as u64,
+                None,
+                None,
+            );
+            result
+        }
+        Err(error) => {
+            let result = ProbeResult {
+                target_tag,
+                reachable: false,
+                latency_ms: None,
+                message: Some(error.message.clone()),
+            };
+            log_probe_response(
+                state,
+                job_id,
+                &result,
+                requested_at_unix_ms,
+                started.elapsed().as_millis() as u64,
+                Some(error.code),
+                error.details.as_ref(),
+            );
+            result
+        }
     }
+}
+
+fn log_probe_request(
+    state: &AppState,
+    job_id: ProbeJobId,
+    target_tag: &str,
+    requested_at_unix_ms: u64,
+) {
+    logs::znet_log_fields(
+        Some(state),
+        LogLevel::Debug,
+        format!("节点测速内核请求（{target_tag}）"),
+        serde_json::json!({
+            "schema": "znet.node-probe.v1",
+            "area": "nodes",
+            "operation": "probe.request",
+            "method": "diagnostics.probe_outbound",
+            "probeJobId": job_id.0,
+            "targetTag": target_tag,
+            "requestedAtUnixMs": requested_at_unix_ms,
+        }),
+    );
+}
+
+fn log_probe_response(
+    state: &AppState,
+    job_id: ProbeJobId,
+    result: &ProbeResult,
+    requested_at_unix_ms: u64,
+    duration_ms: u64,
+    error_code: Option<&str>,
+    error_details: Option<&serde_json::Value>,
+) {
+    let responded_at_unix_ms = common::now_unix_ms();
+    let detail = if result.reachable {
+        result
+            .latency_ms
+            .map(|latency| format!("{latency} ms"))
+            .unwrap_or_else(|| "reachable".to_string())
+    } else {
+        result
+            .message
+            .clone()
+            .unwrap_or_else(|| "unreachable".to_string())
+    };
+    logs::znet_log_fields(
+        Some(state),
+        if result.reachable {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        },
+        format!("节点测速内核响应（{}）：{detail}", result.target_tag),
+        serde_json::json!({
+            "schema": "znet.node-probe.v1",
+            "area": "nodes",
+            "operation": "probe.response",
+            "method": "diagnostics.probe_outbound",
+            "probeJobId": job_id.0,
+            "targetTag": result.target_tag,
+            "requestedAtUnixMs": requested_at_unix_ms,
+            "respondedAtUnixMs": responded_at_unix_ms,
+            "durationMs": duration_ms,
+            "reachable": result.reachable,
+            "latencyMs": result.latency_ms,
+            "kernelMessage": result.message,
+            "errorCode": error_code,
+            "errorDetails": error_details,
+            "outcome": if result.reachable { "success" } else { "failed" },
+        }),
+    );
 }
 
 /// Execute a Client Core-owned probe job. Tauri is only used to schedule work
@@ -111,7 +233,7 @@ async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
             {
                 return;
             }
-            let result = probe_single(state.inner(), &target_tag).await;
+            let result = probe_single(state.inner(), job_id, &target_tag).await;
             let update = state.record_client_probe_result(
                 job_id,
                 &scope,

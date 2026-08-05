@@ -22,6 +22,11 @@
     policyProbeTagForNode,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
+  import {
+    applyProbeJobSnapshot,
+    mergeActiveProbeJobs,
+    shouldApplyNodeScreenSnapshot,
+  } from '$lib/components/tabs/nodes-probe-state';
 
   // View state
   type ViewMode = 'list' | 'grid';
@@ -53,6 +58,10 @@
   let switching = $state<string | null>(null);
   let lastError = $state<string | null>(null);
   let nodeScreen = $state<NodeScreenSnapshot | null>(null);
+  let directProbeJobs = $state<Map<number, ProbeJobSnapshot>>(new Map());
+  let terminalProbeJobIds = $state<Set<number>>(new Set());
+  let nodeScreenRequestSequence = 0;
+  let lastAppliedNodeScreenRequest = 0;
   let unlistenProbeJobs: (() => void) | null = null;
   let unlistenClientCore: (() => void) | null = null;
   const reportedProbeJobs = new Set<number>();
@@ -129,23 +138,51 @@
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
   async function refreshNodeScreen() {
+    const requestSequence = ++nodeScreenRequestSequence;
     try {
-      nodeScreen = await getNodeScreenSnapshot();
+      const snapshot = await getNodeScreenSnapshot();
+      if (!shouldApplyNodeScreenSnapshot({
+        currentRevision: nodeScreen?.revision,
+        candidateRevision: snapshot.revision,
+        requestSequence,
+        lastAppliedRequest: lastAppliedNodeScreenRequest,
+      })) return;
+      lastAppliedNodeScreenRequest = requestSequence;
+      nodeScreen = snapshot;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
   }
 
+  function applyProbeJob(job: ProbeJobSnapshot) {
+    const next = applyProbeJobSnapshot({
+      directJobs: directProbeJobs,
+      terminalJobIds: terminalProbeJobIds,
+    }, job);
+    directProbeJobs = next.directJobs;
+    terminalProbeJobIds = next.terminalJobIds;
+  }
+
+  function probeScope(job: ProbeJobSnapshot): 'single' | 'batch' | 'policy' {
+    if (job.kind === 'manual_policy') return 'policy';
+    return job.targetTags.length > 1 ? 'batch' : 'single';
+  }
+
   function handleProbeJobUpdate(job: ProbeJobSnapshot) {
+    applyProbeJob(job);
+    if (job.state === 'running') return;
+
+    // Node observations/history are refreshed only after the authoritative job
+    // enters a terminal state. The spinner is driven by the job snapshot itself.
     void refreshNodeScreen();
-    if (job.state === 'running' || reportedProbeJobs.has(job.id)) return;
+    if (reportedProbeJobs.has(job.id)) return;
     reportedProbeJobs.add(job.id);
     if (job.state === 'failed' || job.state === 'partially_failed' || job.state === 'timed_out') {
       recordProbeFailure({
         message: job.state === 'timed_out'
           ? `probe job ${job.id} timed out with ${job.completed}/${job.targetTags.length} completed`
           : `${job.failed}/${job.targetTags.length} targets failed`,
-        scope: job.kind === 'manual_policy' ? 'policy' : (job.targetTags.length > 1 ? 'batch' : 'single'),
+        scope: probeScope(job),
         policyTag: job.kind === 'manual_policy' && job.targetTags.length === 1 ? job.targetTags[0] : undefined,
         targetTag: job.kind === 'outbound' && job.targetTags.length === 1 ? job.targetTags[0] : undefined,
         failedTargets: job.results.filter((result) => !result.reachable).map((result) => result.targetTag),
@@ -222,7 +259,11 @@
     });
   });
 
-  const activeProbeJobs = $derived(nodeScreen?.activeProbeJobs ?? []);
+  const activeProbeJobs = $derived.by(() => mergeActiveProbeJobs(
+    nodeScreen?.activeProbeJobs ?? [],
+    directProbeJobs,
+    terminalProbeJobIds,
+  ));
   const probingNodeTags = $derived.by(() => new Set(
     activeProbeJobs
       .filter((job) => job.kind === 'outbound')
@@ -380,8 +421,9 @@
       return;
     }
     try {
-      await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
-      await refreshNodeScreen();
+      const job = await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
+      applyProbeJob(job);
+      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({ message, scope: 'single', targetTag: node.tag });
@@ -392,12 +434,13 @@
   async function probePolicy(policyTag: string) {
     try {
       const memberCount = groups.find((group) => group.name === policyTag)?.outbounds.length ?? 1;
-      await startProbeJob({
+      const job = await startProbeJob({
         kind: 'manual_policy',
         targetTags: [policyTag],
         timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
       });
-      await refreshNodeScreen();
+      applyProbeJob(job);
+      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({ message, scope: 'policy', policyTag });
@@ -435,8 +478,11 @@
           timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
         }));
       }
-      await Promise.all(requests);
-      await refreshNodeScreen();
+      const jobs = await Promise.all(requests);
+      for (const job of jobs) {
+        applyProbeJob(job);
+      }
+      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({
