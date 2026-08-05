@@ -222,6 +222,17 @@ fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeComplet
     })
 }
 
+/// Normalize legacy Zero trigger spellings at the kernel boundary so the
+/// application layer only decides workflow semantics from one predicate.
+pub fn policy_probe_is_scheduled(trigger: Option<&str>) -> bool {
+    trigger.is_some_and(|trigger| {
+        matches!(
+            trigger.trim().to_ascii_lowercase().as_str(),
+            "scheduled" | "schedule" | "timer" | "interval" | "periodic"
+        )
+    })
+}
+
 fn parse_policy_probe_member(payload: &Value, selected: Option<&str>) -> Option<GuiPolicyMember> {
     let tag = string_at(payload, &["target_tag", "targetTag", "tag", "name"])?;
     Some(GuiPolicyMember {
@@ -250,4 +261,18 @@ fn unknown_payload(message: &'static str, payload: &Value) -> GuiEventData {
         message: Some(message.to_string()),
         summary: Some(payload.clone()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::policy_probe_is_scheduled;
+
+    #[test]
+    fn scheduled_trigger_compatibility_is_normalized_at_zero_boundary() {
+        for trigger in ["scheduled", "schedule", "timer", "interval", "periodic"] {
+            assert!(policy_probe_is_scheduled(Some(trigger)));
+        }
+        assert!(!policy_probe_is_scheduled(Some("manual")));
+        assert!(!policy_probe_is_scheduled(None));
+    }
 }

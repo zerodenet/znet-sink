@@ -20,8 +20,10 @@ pub mod local_proxy;
 pub mod log_store;
 pub mod logs;
 pub mod network_probe;
+pub mod node_screen;
 pub mod policy_selection;
 pub mod probe;
+pub mod probe_history;
 #[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
 pub mod proxy_mode;

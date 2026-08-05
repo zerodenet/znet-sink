@@ -1,3 +1,4 @@
+pub mod client_core;
 pub mod commands;
 pub mod config;
 pub mod errors;
@@ -369,6 +370,9 @@ pub fn run() {
         data.domain_data.rule_sets,
         data.logs,
     );
+    if let Ok(observations) = crate::services::probe_history::load() {
+        app_state.restore_client_probe_observations(observations);
+    }
     crate::services::file_logger::line("lifecycle:   → app_state");
 
     // Register core-process shutdown guard: stop core on exit.
@@ -449,6 +453,12 @@ pub fn run() {
             core_config_commands::core_config_export_active,
             core_config_commands::core_download_latest,
             gui_core_commands::gui_core_overview,
+            gui_core_commands::gui_client_core_snapshot,
+            gui_core_commands::gui_node_screen_snapshot,
+            gui_core_commands::gui_probe_job_start,
+            gui_core_commands::gui_probe_job_get,
+            gui_core_commands::gui_probe_job_list,
+            gui_core_commands::gui_probe_job_cancel,
             gui_core_commands::gui_core_health,
             gui_core_commands::gui_zero_capabilities,
             gui_core_commands::gui_traffic_stats,
@@ -458,8 +468,6 @@ pub fn run() {
             gui_core_commands::gui_proxy_nodes,
             gui_core_commands::gui_select_policy,
             gui_core_commands::gui_probe_target,
-            gui_core_commands::gui_client_probe_node,
-            gui_core_commands::gui_client_probe_start,
             gui_core_commands::gui_connections,
             gui_core_commands::gui_connection_detail,
             gui_core_commands::gui_close_connection,
@@ -622,7 +630,10 @@ pub fn run() {
                                 "kernel alive but path mismatch, restarting",
                             );
                             // Use fresh State — the outer `state` is not `Copy`.
-                            let _ = core_process::stop(app_handle.state::<AppState>());
+                            let _ = core_process::stop(
+                                app_handle.clone(),
+                                app_handle.state::<AppState>(),
+                            );
                             crate::kernel::connection::reset();
                             // Fall through to start the configured kernel.
                         } else {

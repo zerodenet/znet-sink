@@ -224,7 +224,7 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
 pub fn restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
     let reconnect_system_proxy = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-    stop(state.clone())?;
+    stop(app_handle.clone(), state.clone())?;
     let status = start(app_handle.clone(), state.clone())?;
     if reconnect_system_proxy {
         let (host, port, bypass) = {
@@ -397,6 +397,14 @@ fn spawn_core_child(
         )
     };
 
+    // Only advance the Client Core generation after the process has survived
+    // startup and the running status has been committed.
+    state.client_core_instance_started();
+    let _ = app_handle.emit(
+        crate::services::probe::CLIENT_CORE_UPDATED_EVENT,
+        state.client_core_snapshot(),
+    );
+
     let _ = logs::append_entry(
         state,
         LogSource::App,
@@ -560,6 +568,12 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
                 process.child = None;
                 drop(process);
 
+                state.client_core_instance_lost();
+                let _ = app_handle.emit(
+                    crate::services::probe::CLIENT_CORE_UPDATED_EVENT,
+                    state.client_core_snapshot(),
+                );
+
                 let _ = system_proxy_guard::disable_with_guard();
                 let msg = format!("core process {} (code={})", reason_str, code.unwrap_or(-1));
                 let _ =
@@ -654,7 +668,7 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
     });
 }
 
-pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     let proxy_result = system_proxy_guard::disable_with_guard();
     // Drop the multiplexed connection so the next request opens a fresh one
     // instead of reusing a handle whose peer (the kernel) is about to die.
@@ -711,8 +725,14 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
             )?;
 
             proxy_result?;
-
-            Ok(process.status.clone())
+            let status = process.status.clone();
+            drop(process);
+            state.client_core_instance_lost();
+            let _ = app_handle.emit(
+                crate::services::probe::CLIENT_CORE_UPDATED_EVENT,
+                state.client_core_snapshot(),
+            );
+            Ok(status)
         }
         (Err(error), _) | (_, Err(error)) => {
             let message = format!("failed to stop core process: {error}");
@@ -735,7 +755,18 @@ pub fn stop(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
 pub(crate) fn refresh_status(state: &AppState) -> AppResult<CoreProcessStatus> {
     let mut process = lock(state.core_process(), "core_process")?;
     refresh_locked_status(&mut process, state)?;
-    Ok(process.status.clone())
+    let status = process.status.clone();
+    drop(process);
+    let source_status = match status.state {
+        CoreProcessState::Running => crate::client_core::SourceStatus::Ready,
+        CoreProcessState::Starting => crate::client_core::SourceStatus::Initializing,
+        CoreProcessState::Failed => crate::client_core::SourceStatus::Degraded,
+        CoreProcessState::NotStarted | CoreProcessState::Exited => {
+            crate::client_core::SourceStatus::Offline
+        }
+    };
+    state.set_client_core_source_status(source_status);
+    Ok(status)
 }
 
 fn refresh_locked_status(

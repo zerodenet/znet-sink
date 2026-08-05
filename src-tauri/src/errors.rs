@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::io;
 
+use crate::client_core::ClientCoreError;
 use crate::models::core::CoreEndpoint;
 
 #[derive(Clone, Debug, Serialize)]
@@ -13,6 +14,19 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub(crate) fn client_core(error: ClientCoreError) -> Self {
+        let code = match error.code.as_str() {
+            "active_profile_required" => "active_profile_required",
+            "probe_targets_required" => "probe_targets_required",
+            _ => "client_core_error",
+        };
+        Self {
+            code,
+            message: error.message,
+            details: Some(json!({ "clientCoreCode": error.code })),
+        }
+    }
+
     pub(crate) fn invalid_argument(message: impl Into<String>) -> Self {
         Self {
             code: "invalid_argument",

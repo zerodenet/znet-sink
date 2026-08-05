@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
 import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -22,6 +22,30 @@ export function handleAppError(error: unknown, fallbackMessage: string): void {
 }
 
 // Core process lifecycle
+
+export async function getClientCoreSnapshot(): Promise<ClientCoreSnapshot> {
+  return invoke('gui_client_core_snapshot');
+}
+
+export async function getNodeScreenSnapshot(): Promise<NodeScreenSnapshot> {
+  return invoke('gui_node_screen_snapshot');
+}
+
+export async function startProbeJob(request: StartProbeRequest): Promise<ProbeJobSnapshot> {
+  return invoke('gui_probe_job_start', { request });
+}
+
+export async function getProbeJob(jobId: number): Promise<ProbeJobSnapshot> {
+  return invoke('gui_probe_job_get', { jobId });
+}
+
+export async function listProbeJobs(profileId?: string): Promise<ProbeJobSnapshot[]> {
+  return invoke('gui_probe_job_list', { profileId });
+}
+
+export async function cancelProbeJob(jobId: number): Promise<ProbeJobSnapshot> {
+  return invoke('gui_probe_job_cancel', { jobId });
+}
 
 export async function getCoreProcessStatus(): Promise<CoreProcessStatus> {
   return invoke('core_process_status');
@@ -327,55 +351,6 @@ export async function guiSelectPolicy(policyTag: string, targetTag: string): Pro
 
 export async function guiProbeTarget(targetTag: string): Promise<GuiTargetProbeResult> {
   return invoke('gui_probe_target', { targetTag });
-}
-
-// Client-side probe
-
-export interface ClientProbeResult {
-  targetTag: string;
-  reachable: boolean;
-  latencyMs?: number;
-  message?: string;
-}
-
-export interface ProbeProgress {
-  done: number;
-  total: number;
-}
-
-export interface ClientProbeResultEvent extends ClientProbeResult {
-  sessionId: string;
-}
-
-export interface ClientProbeProgressEvent extends ProbeProgress {
-  sessionId: string;
-}
-
-export interface ClientProbeCompleteEvent {
-  sessionId: string;
-  total: number;
-  reachable: number;
-  failed: number;
-}
-
-/** Probe a single node, returns result directly. */
-export async function guiClientProbeNode(targetTag: string): Promise<ClientProbeResult> {
-  return invoke('gui_client_probe_node', { targetTag });
-}
-
-/**
- * Start a batch probe (returns immediately).
- * Listen for events:
- *   `probe:result`   -> { sessionId, ...ClientProbeResult }
- *   `probe:progress` -> { sessionId, done, total }
- *   `probe:complete` -> { sessionId, total, reachable, failed }
- */
-export async function guiClientProbeStart(
-  targetTags: string[],
-  sessionId: string,
-  maxConcurrent?: number,
-): Promise<void> {
-  return invoke('gui_client_probe_start', { targetTags, sessionId, maxConcurrent });
 }
 
 // Feature status (TUN / DNS / Rules)

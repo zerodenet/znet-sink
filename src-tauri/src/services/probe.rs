@@ -4,53 +4,40 @@
 //! Individual node probes go through the core engine's outbound IPC probe without any
 //! upfront health check — each probe handles its own timeout and failure.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::client_core::{
+    ProbeJobKind, ProbeJobSnapshot, ProbeJobState, ProbeObservation, ProbeObservationSource,
+    ProbeTargetResult,
+};
 use crate::errors::AppError;
 use crate::kernel::zero::commands;
+use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyProbeCompletedEvent};
 use crate::services::{common, core_config};
 use crate::state::app_state::AppState;
 
 /// Maximum concurrent probe requests to the core.
 pub const MAX_CONCURRENT_PROBES: usize = 8;
+pub const PROBE_JOB_UPDATED_EVENT: &str = "client-core:probe-job-updated";
+pub const CLIENT_CORE_UPDATED_EVENT: &str = "client-core:updated";
+
+static PROBE_CONCURRENCY: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn probe_semaphore() -> Arc<tokio::sync::Semaphore> {
+    PROBE_CONCURRENCY
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES)))
+        .clone()
+}
 
 /// Per-node probe result.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct ProbeResult {
     pub target_tag: String,
     pub reachable: bool,
     pub latency_ms: Option<u64>,
     pub message: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProbeResultEvent {
-    pub session_id: String,
-    #[serde(flatten)]
-    pub result: ProbeResult,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProbeProgressEvent {
-    pub session_id: String,
-    pub done: usize,
-    pub total: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProbeCompleteEvent {
-    pub session_id: String,
-    pub total: usize,
-    pub reachable: usize,
-    pub failed: usize,
 }
 
 /// Probe a single node through the core's full outbound proxy stack.
@@ -96,96 +83,307 @@ pub async fn probe_single(state: &AppState, target_tag: &str) -> ProbeResult {
     }
 }
 
-/// Run a batch probe with bounded concurrency. Emits Tauri events for each result.
-///
-/// Events:
-/// - `probe:progress` — `{ done, total }`
-/// - `probe:result`   — `ProbeResult`
-/// - `probe:complete` — `{ total, reachable, failed }`
-pub async fn run_probe_batch(
-    app_handle: AppHandle,
-    session_id: String,
-    target_tags: Vec<String>,
-    max_concurrent: usize,
-) {
-    let total = target_tags.len();
-    if total == 0 {
-        return;
+/// Execute a Client Core-owned probe job. Tauri is only used to schedule work
+/// and publish advisory updates; the job remains recoverable from AppState.
+pub async fn run_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
+    match job.kind {
+        ProbeJobKind::Outbound => run_outbound_probe_job(app_handle, job).await,
+        ProbeJobKind::ManualPolicy => run_policy_probe_job(app_handle, job).await,
+        ProbeJobKind::ScheduledPolicyObservation => {}
     }
+}
 
-    let max_concurrent = max_concurrent.clamp(1, MAX_CONCURRENT_PROBES);
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-    let done_count = Arc::new(AtomicUsize::new(0));
-    let reachable_count = Arc::new(AtomicUsize::new(0));
-    let failed_count = Arc::new(AtomicUsize::new(0));
+async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
+    let mut handles = Vec::with_capacity(job.target_tags.len());
 
-    // Emit initial progress
-    let _ = app_handle.emit(
-        "probe:progress",
-        ProbeProgressEvent {
-            session_id: session_id.clone(),
-            done: 0,
-            total,
-        },
-    );
-
-    let mut handles = Vec::with_capacity(total);
-
-    for target_tag in target_tags {
-        let permit = semaphore.clone().acquire_owned().await.ok();
-        let app_handle = app_handle.clone();
-        let session_id = session_id.clone();
-        let done_count = done_count.clone();
-        let reachable_count = reachable_count.clone();
-        let failed_count = failed_count.clone();
-
-        let handle = tauri::async_runtime::spawn(async move {
-            let state = app_handle.state::<AppState>();
-            let result = probe_single(state.inner(), &target_tag).await;
-
-            if result.reachable {
-                reachable_count.fetch_add(1, Ordering::Relaxed);
-            } else {
-                failed_count.fetch_add(1, Ordering::Relaxed);
+    for target_tag in job.target_tags.clone() {
+        let app = app_handle.clone();
+        let scope = job.scope.clone();
+        let job_id = job.id;
+        handles.push(tauri::async_runtime::spawn(async move {
+            let Ok(_permit) = probe_semaphore().acquire_owned().await else {
+                return;
+            };
+            let state = app.state::<AppState>();
+            if state
+                .get_client_probe_job(job_id)
+                .is_none_or(|current| current.state != ProbeJobState::Running)
+            {
+                return;
             }
-            let done = done_count.fetch_add(1, Ordering::Relaxed) + 1;
-
-            let _ = app_handle.emit(
-                "probe:result",
-                ProbeResultEvent {
-                    session_id: session_id.clone(),
-                    result: result.clone(),
+            let result = probe_single(state.inner(), &target_tag).await;
+            let update = state.record_client_probe_result(
+                job_id,
+                &scope,
+                ProbeTargetResult {
+                    target_tag: result.target_tag,
+                    reachable: result.reachable,
+                    latency_ms: result.latency_ms,
+                    message: result.message,
+                    source: ProbeObservationSource::ManualOutbound,
+                    observed_at_unix_ms: common::now_unix_ms(),
                 },
             );
-            let _ = app_handle.emit(
-                "probe:progress",
-                ProbeProgressEvent {
-                    session_id,
-                    done,
-                    total,
-                },
-            );
-
-            drop(permit);
-            result
-        });
-
-        handles.push(handle);
+            if let Some(update) = update {
+                let _ = app.emit(PROBE_JOB_UPDATED_EVENT, update);
+            }
+        }));
     }
 
     for handle in handles {
         let _ = handle.await;
     }
+}
 
-    let _ = app_handle.emit(
-        "probe:complete",
-        ProbeCompleteEvent {
-            session_id,
-            total,
-            reachable: reachable_count.load(Ordering::Relaxed),
-            failed: failed_count.load(Ordering::Relaxed),
+async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
+    for policy_tag in job.target_tags.clone() {
+        let Ok(_permit) = probe_semaphore().acquire_owned().await else {
+            return;
+        };
+        let state = app_handle.state::<AppState>();
+        if state
+            .get_client_probe_job(job.id)
+            .is_none_or(|current| current.state != ProbeJobState::Running)
+        {
+            return;
+        }
+        let options = match default_ipc_options(state.inner()) {
+            Ok(options) => options,
+            Err(error) => {
+                record_policy_job_failure(&app_handle, &job, policy_tag, error.message);
+                continue;
+            }
+        };
+        let command = commands::probe_policy(policy_tag.clone(), options).await;
+        let rejection = match command {
+            Err(error) => Some(error.message),
+            Ok(response) if !commands::policy_probe_command_accepted(&response) => {
+                Some("kernel rejected the policy probe request".to_string())
+            }
+            Ok(_) => None,
+        };
+        if let Some(message) = rejection {
+            record_policy_job_failure(&app_handle, &job, policy_tag, message);
+        } else {
+            wait_for_policy_target(&app_handle, job.id, &policy_tag).await;
+        }
+    }
+}
+
+async fn wait_for_policy_target(
+    app_handle: &AppHandle,
+    job_id: crate::client_core::ProbeJobId,
+    target: &str,
+) {
+    loop {
+        let state = app_handle.state::<AppState>();
+        let Some(job) = state.get_client_probe_job(job_id) else {
+            return;
+        };
+        if job.state.is_terminal() || job.results.iter().any(|result| result.target_tag == target) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn record_policy_job_failure(
+    app_handle: &AppHandle,
+    job: &ProbeJobSnapshot,
+    policy_tag: String,
+    message: String,
+) {
+    let state = app_handle.state::<AppState>();
+    let update = state.record_client_probe_result(
+        job.id,
+        &job.scope,
+        ProbeTargetResult {
+            target_tag: policy_tag,
+            reachable: false,
+            latency_ms: None,
+            message: Some(message),
+            source: ProbeObservationSource::ManualPolicy,
+            observed_at_unix_ms: common::now_unix_ms(),
         },
     );
+    if let Some(update) = update {
+        let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
+    }
+}
+
+/// Reconcile a normalized Zero policy completion event into any matching
+/// manual policy job. Scheduled observations remain distinguishable and do
+/// not masquerade as completion of an overlapping manual request.
+pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyProbeCompletedEvent) {
+    let scheduled =
+        crate::kernel::zero::events::policy_probe_is_scheduled(event.trigger.as_deref());
+
+    let state = app_handle.state::<AppState>();
+    let current_scope = state.client_core_snapshot().scope;
+    let observation_source = if scheduled {
+        ProbeObservationSource::ScheduledPolicy
+    } else {
+        ProbeObservationSource::ManualPolicy
+    };
+    let observation_kind = if scheduled {
+        ProbeJobKind::ScheduledPolicyObservation
+    } else {
+        ProbeJobKind::ManualPolicy
+    };
+    let observed_at_unix_ms = event
+        .completed_at_unix_ms
+        .unwrap_or_else(common::now_unix_ms);
+    for member in &event.members {
+        state.record_client_probe_observation(ProbeObservation {
+            scope: current_scope.clone(),
+            job_kind: observation_kind,
+            target_tag: member.tag.clone(),
+            reachable: member.alive.unwrap_or(member.last_error.is_none()),
+            latency_ms: member.delay_ms,
+            message: member.last_error.clone(),
+            source: observation_source,
+            observed_at_unix_ms: member.last_checked_unix_ms.unwrap_or(observed_at_unix_ms),
+            selected_tag: event.selected.clone(),
+        });
+    }
+    let _ = app_handle.emit(CLIENT_CORE_UPDATED_EVENT, state.client_core_snapshot());
+    if scheduled {
+        return;
+    }
+
+    let matching_jobs: Vec<_> = state
+        .list_client_probe_jobs(None)
+        .into_iter()
+        .filter(|job| {
+            job.state == ProbeJobState::Running
+                && job.kind == ProbeJobKind::ManualPolicy
+                && job.scope == current_scope
+                && job.target_tags.contains(&event.policy_tag)
+                && policy_completion_is_fresh(event, job)
+        })
+        .collect();
+    if matching_jobs.is_empty() {
+        return;
+    }
+
+    let failed = event
+        .members
+        .iter()
+        .filter(|member| member.alive == Some(false) || member.last_error.is_some())
+        .count();
+    let latency_ms = event
+        .selected
+        .as_deref()
+        .and_then(|selected| event.members.iter().find(|member| member.tag == selected))
+        .and_then(|member| member.delay_ms)
+        .or_else(|| {
+            event
+                .members
+                .iter()
+                .filter_map(|member| member.delay_ms)
+                .min()
+        });
+    for job in matching_jobs {
+        let update = state.record_client_probe_result(
+            job.id,
+            &job.scope,
+            ProbeTargetResult {
+                target_tag: event.policy_tag.clone(),
+                reachable: failed == 0 && !event.members.is_empty(),
+                latency_ms,
+                message: (failed > 0)
+                    .then(|| format!("{failed}/{} policy members failed", event.members.len())),
+                source: ProbeObservationSource::ManualPolicy,
+                observed_at_unix_ms,
+            },
+        );
+        if let Some(update) = update {
+            let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
+        }
+    }
+}
+
+fn policy_completion_is_fresh(
+    event: &GuiPolicyProbeCompletedEvent,
+    job: &ProbeJobSnapshot,
+) -> bool {
+    if event
+        .started_at_unix_ms
+        .is_some_and(|started| started < job.started_at_unix_ms)
+        || event
+            .completed_at_unix_ms
+            .is_some_and(|completed| completed < job.started_at_unix_ms)
+    {
+        return false;
+    }
+    let latest_member_check = event
+        .members
+        .iter()
+        .filter_map(|member| member.last_checked_unix_ms)
+        .max();
+    latest_member_check.is_none_or(|checked| checked >= job.started_at_unix_ms)
+}
+
+/// Recover manual policy jobs after an event gap by comparing the latest
+/// kernel policy snapshot with each job's request time.
+pub fn reconcile_policy_snapshot(app_handle: &AppHandle, groups: &[GuiPolicyGroup]) {
+    let state = app_handle.state::<AppState>();
+    let current_scope = state.client_core_snapshot().scope;
+    let jobs: Vec<_> = state
+        .list_client_probe_jobs(None)
+        .into_iter()
+        .filter(|job| {
+            job.state == ProbeJobState::Running
+                && job.kind == ProbeJobKind::ManualPolicy
+                && job.scope == current_scope
+        })
+        .collect();
+
+    for job in jobs {
+        for target in &job.target_tags {
+            let Some(group) = groups.iter().find(|group| group.name == *target) else {
+                continue;
+            };
+            let completed_at_unix_ms = group
+                .outbounds
+                .iter()
+                .filter_map(|member| member.last_checked_unix_ms)
+                .max();
+            if completed_at_unix_ms.is_none_or(|completed| completed < job.started_at_unix_ms) {
+                continue;
+            }
+            record_policy_probe_completed(
+                app_handle,
+                &GuiPolicyProbeCompletedEvent {
+                    policy_tag: group.name.clone(),
+                    trigger: Some("manual".to_string()),
+                    url: None,
+                    started_at_unix_ms: Some(job.started_at_unix_ms),
+                    completed_at_unix_ms,
+                    duration_ms: completed_at_unix_ms
+                        .map(|completed| completed.saturating_sub(job.started_at_unix_ms)),
+                    selected: group.selected.clone(),
+                    members: group.outbounds.clone(),
+                },
+            );
+        }
+    }
+}
+
+pub fn spawn_probe_timeout(app_handle: AppHandle, job: &ProbeJobSnapshot) {
+    let wait_ms = job
+        .deadline_at_unix_ms
+        .saturating_sub(common::now_unix_ms());
+    let job_id = job.id;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+        let state = app_handle.state::<AppState>();
+        if let Some(update) = state.timeout_client_probe(job_id) {
+            if update.state == ProbeJobState::TimedOut {
+                let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
+            }
+        }
+    });
 }
 
 fn default_ipc_options(
@@ -197,66 +395,81 @@ fn default_ipc_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{ProbeCompleteEvent, ProbeProgressEvent, ProbeResult, ProbeResultEvent};
-    use serde_json::json;
+    use super::policy_completion_is_fresh;
+    use crate::client_core::{
+        ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
+        ProbeJobState, ProfileId,
+    };
+    use crate::models::gui_core::{GuiPolicyMember, GuiPolicyProbeCompletedEvent};
 
-    #[test]
-    fn probe_result_event_serializes_session_id_and_result_fields() {
-        let payload = serde_json::to_value(ProbeResultEvent {
-            session_id: "session-1".to_string(),
-            result: ProbeResult {
-                target_tag: "HK".to_string(),
-                reachable: true,
-                latency_ms: Some(42),
-                message: None,
+    fn job(started_at: u64) -> ProbeJobSnapshot {
+        ProbeJobSnapshot {
+            id: ProbeJobId(1),
+            scope: ClientScope {
+                profile_id: Some(ProfileId("profile-a".to_string())),
+                config_revision: ConfigRevision(10),
+                core_instance_id: CoreInstanceId(2),
             },
-        })
-        .expect("probe result payload should serialize");
+            kind: ProbeJobKind::ManualPolicy,
+            state: ProbeJobState::Running,
+            target_tags: vec!["auto".to_string()],
+            results: Vec::new(),
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+            started_at_unix_ms: started_at,
+            updated_at_unix_ms: started_at,
+            deadline_at_unix_ms: started_at + 30_000,
+        }
+    }
 
-        assert_eq!(
-            payload,
-            json!({
-                "sessionId": "session-1",
-                "targetTag": "HK",
-                "reachable": true,
-                "latencyMs": 42,
-                "message": null
-            })
-        );
+    fn event(
+        started: Option<u64>,
+        completed: Option<u64>,
+        checked: Option<u64>,
+    ) -> GuiPolicyProbeCompletedEvent {
+        GuiPolicyProbeCompletedEvent {
+            policy_tag: "auto".to_string(),
+            trigger: Some("manual".to_string()),
+            url: None,
+            started_at_unix_ms: started,
+            completed_at_unix_ms: completed,
+            duration_ms: None,
+            selected: Some("node-a".to_string()),
+            members: vec![GuiPolicyMember {
+                tag: "node-a".to_string(),
+                kind: None,
+                selected: true,
+                alive: Some(true),
+                delay_ms: Some(20),
+                last_checked_unix_ms: checked,
+                last_error: None,
+            }],
+        }
     }
 
     #[test]
-    fn probe_progress_and_complete_events_include_session_id() {
-        let progress = serde_json::to_value(ProbeProgressEvent {
-            session_id: "session-2".to_string(),
-            done: 1,
-            total: 3,
-        })
-        .expect("probe progress payload should serialize");
-        let complete = serde_json::to_value(ProbeCompleteEvent {
-            session_id: "session-2".to_string(),
-            total: 3,
-            reachable: 2,
-            failed: 1,
-        })
-        .expect("probe complete payload should serialize");
+    fn delayed_completion_from_before_job_start_is_rejected() {
+        let job = job(1_000);
+        assert!(!policy_completion_is_fresh(
+            &event(Some(800), Some(900), Some(900)),
+            &job
+        ));
+        assert!(!policy_completion_is_fresh(
+            &event(None, None, Some(900)),
+            &job
+        ));
+        assert!(policy_completion_is_fresh(
+            &event(Some(1_000), Some(1_100), Some(1_050)),
+            &job
+        ));
+    }
 
-        assert_eq!(
-            progress,
-            json!({
-                "sessionId": "session-2",
-                "done": 1,
-                "total": 3
-            })
-        );
-        assert_eq!(
-            complete,
-            json!({
-                "sessionId": "session-2",
-                "total": 3,
-                "reachable": 2,
-                "failed": 1
-            })
-        );
+    #[test]
+    fn timestamp_free_legacy_completion_has_deterministic_compatibility_fallback() {
+        assert!(policy_completion_is_fresh(
+            &event(None, None, None),
+            &job(1_000)
+        ));
     }
 }

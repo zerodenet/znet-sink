@@ -131,6 +131,21 @@ pub(crate) fn persist_profile_transition(
     previous: &[ProxyConfigProfile],
     next: Vec<ProxyConfigProfile>,
 ) -> AppResult<()> {
+    let previous_active = previous.iter().find(|profile| profile.active);
+    let next_active = next.iter().find(|profile| profile.active);
+    let active_config_changed = match (previous_active, next_active) {
+        (Some(previous), Some(next)) => {
+            previous.id != next.id
+                || previous.kernel != next.kernel
+                || previous.format != next.format
+                || previous.path != next.path
+                || previous.content != next.content
+        }
+        (None, None) => false,
+        _ => true,
+    };
+    let next_active_profile = next_active.cloned();
+
     if let Some(active) = next.iter().find(|profile| profile.active) {
         ensure_managed_system_proxy_compatible(active.content.as_ref())?;
     }
@@ -145,6 +160,9 @@ pub(crate) fn persist_profile_transition(
         return Err(error);
     }
     *lock(state.proxy_configs(), "proxy_config")? = next;
+    if active_config_changed {
+        state.client_core_configuration_committed(next_active_profile.as_ref());
+    }
     Ok(())
 }
 
@@ -546,7 +564,7 @@ async fn restart_core(app_handle: AppHandle) -> AppResult<()> {
 async fn stop_core(app_handle: AppHandle) -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        core_process::stop(state).map(|_| ())
+        core_process::stop(app_handle.clone(), state).map(|_| ())
     })
     .await
     .map_err(|error| AppError::internal(format!("core stop task failed: {error}")))?

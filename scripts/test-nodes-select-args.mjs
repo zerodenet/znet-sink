@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 function read(path) {
-  return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 }
 
 function assertUsesTag(path, expectedSnippet) {
@@ -46,8 +46,8 @@ assertContains(
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',
-  'const isCoreAvailable = $derived(guiState.isProcessRunning);',
-  'NodesTab should gate node actions on core readiness, not full proxy-connected state',
+  "const isCoreAvailable = $derived(nodeScreen?.sourceStatus === 'ready');",
+  'NodesTab should gate node actions on the authoritative Client Core snapshot',
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',

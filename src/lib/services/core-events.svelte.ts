@@ -2,34 +2,15 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime } from '$lib/services/core';
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
-import { delayHistory } from '$lib/services/delay-history.svelte';
-import {
-  buildPolicyProbeHistoryUpdates,
-  buildPolicyProbeTimeoutUpdate,
-  buildPolicySnapshotHistoryUpdates,
-  isPolicyProbeEventFresh,
-  policyProbeEventFromSnapshot,
-  policyProbeWaitTimeoutMs,
-  projectSelectedGroupHistoryUpdates,
-} from '$lib/services/policy-probe-history';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
-import type { GuiConnectionItem, PolicyGroup, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
+import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
 const TRAFFIC_SAMPLED_EVENT = 'traffic.sampled';
 const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
-
-export class PolicyProbeTimeoutError extends Error {
-  readonly code = 'policy_probe_timeout';
-
-  constructor(readonly policyTag: string) {
-    super(`policy probe timed out: ${policyTag}`);
-    this.name = 'PolicyProbeTimeoutError';
-  }
-}
 
 // ── Exported types ──
 
@@ -86,94 +67,6 @@ class CoreEventsService {
   private _lifecycle = new EventLifecycleQueue();
 
   private _stopped = true;
-  private _policyProbeWaiters = new Map<
-    string,
-    Set<(event: PolicyProbeCompletedEvent) => void>
-  >();
-
-  /** Register before sending policies.probe so a fast completion event
-   * cannot race past the UI lifecycle. */
-  waitForPolicyProbe(
-    policyTag: string,
-    options: { timeoutMs?: number; trigger?: string } = {},
-  ): Promise<PolicyProbeCompletedEvent> {
-    const requestedAtUnixMs = Date.now();
-    const runtimeGroup = guiState.policyGroups.find((group) => group.name === policyTag);
-    const configGroup = guiState.configPolicyGroups.find((group) => group.name === policyTag);
-    const memberCount = runtimeGroup?.outbounds.length ?? configGroup?.outbounds.length ?? 1;
-    const timeoutMs = options.timeoutMs ?? policyProbeWaitTimeoutMs(memberCount);
-
-    return new Promise((resolve, reject) => {
-      const waiters = this._policyProbeWaiters.get(policyTag) ?? new Set();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-
-      const cleanup = () => {
-        if (timer) clearTimeout(timer);
-        waiters.delete(complete);
-        if (waiters.size === 0) this._policyProbeWaiters.delete(policyTag);
-      };
-
-      const complete = (event: PolicyProbeCompletedEvent) => {
-        if (settled) return;
-        // A scheduled cycle can overlap a manual click, and kernels may
-        // coalesce triggers while this policy is already probing. Any result
-        // completed after the request is authoritative enough to finish the
-        // card lifecycle; stale events are still ignored.
-        if (!isPolicyProbeEventFresh(event, requestedAtUnixMs)) return;
-        settled = true;
-        cleanup();
-        resolve(event);
-      };
-
-      waiters.add(complete);
-      this._policyProbeWaiters.set(policyTag, waiters);
-      timer = setTimeout(() => {
-        // A reconnect or lagged event receiver can lose the completion event
-        // even though the kernel has already committed fresh policy state.
-        // Reconcile once before declaring a timeout.
-        void (async () => {
-          try {
-            await guiState.refreshPolicyGroups();
-            this._recordPolicySnapshotHistory(guiState.policyGroups);
-            if (settled) return;
-            const recovered = policyProbeEventFromSnapshot(
-              guiState.policyGroups.find((group) => group.name === policyTag),
-              requestedAtUnixMs,
-              options.trigger,
-            );
-            if (recovered) {
-              complete(recovered);
-              return;
-            }
-          } catch {
-            // The original timeout remains the actionable result.
-          }
-
-          if (settled) return;
-          // Use the request time for the synthetic timeout observation. If a
-          // delayed real event arrives later with its actual completion time,
-          // that authoritative result can still become the newest history item.
-          const timeoutUpdate = buildPolicyProbeTimeoutUpdate(
-            guiState.policyGroups,
-            policyTag,
-            requestedAtUnixMs,
-          );
-          delayHistory.record(
-            timeoutUpdate.tag,
-            timeoutUpdate.delayMs,
-            timeoutUpdate.reachable,
-            timeoutUpdate.at,
-            timeoutUpdate.selectedTag,
-          );
-          settled = true;
-          cleanup();
-          reject(new PolicyProbeTimeoutError(policyTag));
-        })();
-      }, timeoutMs);
-    });
-  }
-
   start(events?: string[]): Promise<void> {
     return this._lifecycle.enqueue(() => this._start(events));
   }
@@ -267,7 +160,6 @@ class CoreEventsService {
     this._unlistenHostNetwork = null;
     this._pendingDeltas = [];
     this.activeConnections = [];
-    this._policyProbeWaiters.clear();
   }
 
   /** 获取并清空待处理的连接增量事件 */
@@ -355,23 +247,6 @@ class CoreEventsService {
       const probe = data as PolicyProbeCompletedEvent;
       if (probe?.policyTag && Array.isArray(probe.members)) {
         guiState.applyPolicyProbeCompleted(probe);
-        const historyUpdates = projectSelectedGroupHistoryUpdates(
-          guiState.policyGroups,
-          buildPolicyProbeHistoryUpdates(probe),
-        );
-        for (const update of historyUpdates) {
-          delayHistory.record(
-            update.tag,
-            update.delayMs,
-            update.reachable,
-            update.at,
-            update.selectedTag,
-          );
-        }
-        const waiters = this._policyProbeWaiters.get(probe.policyTag);
-        if (waiters) {
-          for (const complete of [...waiters]) complete(probe);
-        }
       }
       awaitIgnore(overviewData.refreshPolicyNodes());
       this.statusTick++;
@@ -709,18 +584,6 @@ class CoreEventsService {
     return 'data' in obj ? obj['data'] : payload;
   }
 
-  private _recordPolicySnapshotHistory(groups: PolicyGroup[]) {
-    for (const update of buildPolicySnapshotHistoryUpdates(groups)) {
-      delayHistory.record(
-        update.tag,
-        update.delayMs,
-        update.reachable,
-        update.at,
-        update.selectedTag,
-      );
-    }
-  }
-
   // ── Auto-reconnect with exponential backoff ──
 
   private async _applyResyncSnapshot(snapshot: unknown) {
@@ -744,7 +607,6 @@ class CoreEventsService {
     if (policies) {
       overviewData.applyPolicyEvent(policies);
       await guiState.refreshPolicyGroups();
-      this._recordPolicySnapshotHistory(guiState.policyGroups);
     }
     if (connectionSnapshot && typeof connectionSnapshot === 'object') {
       const items = (connectionSnapshot as Record<string, unknown>)['items'];
@@ -772,7 +634,6 @@ class CoreEventsService {
       overviewData.applyRuntimeEvent(runtimeResult);
       await overviewData.refreshPolicyNodes();
       await guiState.refreshPolicyGroups();
-      this._recordPolicySnapshotHistory(guiState.policyGroups);
     } catch {
       // Best-effort initial fetch
     }

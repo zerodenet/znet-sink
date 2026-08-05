@@ -4,8 +4,12 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::client_core::{
+    ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
+    StartProbeRequest,
+};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
@@ -23,6 +27,71 @@ use crate::state::app_state::AppState;
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Return the revisioned authoritative client scope. This is the recovery
+/// point for future ordered node/probe updates and is intentionally a thin
+/// Tauri adapter over the Rust Client Core.
+#[tauri::command]
+pub fn gui_client_core_snapshot(state: State<'_, AppState>) -> ClientCoreSnapshot {
+    state.client_core_snapshot()
+}
+
+#[tauri::command]
+pub async fn gui_node_screen_snapshot(state: State<'_, AppState>) -> AppResult<NodeScreenSnapshot> {
+    crate::services::node_screen::snapshot(state.inner()).await
+}
+
+#[tauri::command]
+pub fn gui_probe_job_get(
+    state: State<'_, AppState>,
+    job_id: ProbeJobId,
+) -> AppResult<ProbeJobSnapshot> {
+    state
+        .get_client_probe_job(job_id)
+        .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))
+}
+
+#[tauri::command]
+pub fn gui_probe_job_list(
+    state: State<'_, AppState>,
+    profile_id: Option<String>,
+) -> Vec<ProbeJobSnapshot> {
+    state.list_client_probe_jobs(profile_id)
+}
+
+#[tauri::command]
+pub fn gui_probe_job_cancel(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    job_id: ProbeJobId,
+) -> AppResult<ProbeJobSnapshot> {
+    let job = state
+        .cancel_client_probe(job_id)
+        .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))?;
+    let _ = app_handle.emit(probe::PROBE_JOB_UPDATED_EVENT, job.clone());
+    Ok(job)
+}
+
+#[tauri::command]
+pub fn gui_probe_job_start(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    request: StartProbeRequest,
+) -> AppResult<ProbeJobSnapshot> {
+    if request.kind == ProbeJobKind::ScheduledPolicyObservation {
+        return Err(AppError::invalid_argument(
+            "scheduled policy observations are recorded from kernel events and cannot be started manually",
+        ));
+    }
+    let outcome = state
+        .start_client_probe(request)
+        .map_err(AppError::client_core)?;
+    if outcome.created {
+        probe::spawn_probe_timeout(app_handle.clone(), &outcome.job);
+        tauri::async_runtime::spawn(probe::run_probe_job(app_handle, outcome.job.clone()));
+    }
+    Ok(outcome.job)
+}
 
 fn default_opts(state: &AppState) -> crate::models::core::CoreIpcOptions {
     core_config::ipc_options_from_app_config(
@@ -305,49 +374,6 @@ pub fn gui_config_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<Gui
 
     let adapter = ZeroAdapter::new();
     adapter.policy_groups_from_config(content)
-}
-
-/// Probe a single node. Returns the result directly.
-/// No upfront health check — if core is unavailable the probe returns an error result.
-#[tauri::command]
-pub async fn gui_client_probe_node(
-    state: State<'_, AppState>,
-    target_tag: String,
-) -> AppResult<probe::ProbeResult> {
-    Ok(probe::probe_single(state.inner(), &target_tag).await)
-}
-
-/// Start a batch probe. Returns immediately; results arrive via Tauri events:
-/// - `probe:result`   — `{ sessionId, targetTag, reachable, latencyMs?, message? }`
-/// - `probe:progress` — `{ sessionId, done, total }`
-/// - `probe:complete` — `{ sessionId, total, reachable, failed }`
-#[tauri::command]
-pub async fn gui_client_probe_start(
-    app_handle: AppHandle,
-    target_tags: Vec<String>,
-    session_id: String,
-    max_concurrent: Option<usize>,
-) -> AppResult<()> {
-    if target_tags.is_empty() {
-        return Ok(());
-    }
-    if session_id.trim().is_empty() {
-        return Err(AppError::invalid_argument(
-            "probe batch session_id must not be empty",
-        ));
-    }
-
-    let max_concurrent = max_concurrent.unwrap_or(probe::MAX_CONCURRENT_PROBES);
-
-    // Spawn batch in background — command returns immediately
-    tauri::async_runtime::spawn(probe::run_probe_batch(
-        app_handle,
-        session_id,
-        target_tags,
-        max_concurrent,
-    ));
-
-    Ok(())
 }
 
 /// Apply a config to the running kernel without restart (hot-reload).

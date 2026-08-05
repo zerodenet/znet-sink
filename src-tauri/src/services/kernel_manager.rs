@@ -260,7 +260,7 @@ pub fn install_version(
     // Keep the kernel running during the network transfer so environments
     // that depend on the kernel's mixed-port can still reach the release
     // asset. We only stop it immediately before replacing the executable.
-    core_process::stop(state.clone())?;
+    core_process::stop(app.clone(), state.clone())?;
 
     let _ = crate::services::logs::append_entry(
         state.inner(),

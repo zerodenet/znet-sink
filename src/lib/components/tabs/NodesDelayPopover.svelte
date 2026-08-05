@@ -2,7 +2,8 @@
   import type { ProxyNode } from '$lib/types/protocol';
   import { gradeDelay, formatProbeTime } from '$lib/services/node-utils';
   import { meanDelay, buildSparkline, sparklinePath } from '$lib/components/tabs/nodes-delay-sparkline.js';
-  import type { DelayEntry } from '$lib/services/delay-history.svelte';
+
+  type DelayEntry = { delay: number; at: number; selectedTag?: string };
 
   interface Props {
     node: ProxyNode;

@@ -23,6 +23,131 @@ export interface SelfTestSnapshot {
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type ProxyMode = 'global' | 'rule' | 'direct';
 
+export type ClientSourceStatus = 'initializing' | 'ready' | 'degraded' | 'offline';
+
+export interface ClientScope {
+  profileId?: string;
+  configRevision: number;
+  coreInstanceId: number;
+}
+
+/** Revisioned recovery point owned by the Rust Client Core. */
+export interface ClientCoreSnapshot {
+  revision: number;
+  scope: ClientScope;
+  sourceStatus: ClientSourceStatus;
+  activeProbeJobs: ProbeJobSnapshot[];
+}
+
+export type ProbeJobKind = 'outbound' | 'manual_policy' | 'scheduled_policy_observation';
+export type ProbeJobState =
+  | 'running'
+  | 'completed'
+  | 'partially_failed'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'invalidated_by_config_change'
+  | 'invalidated_by_core_restart';
+export type ProbeObservationSource = 'manual_outbound' | 'manual_policy' | 'scheduled_policy';
+
+export interface ProbeTargetResult {
+  targetTag: string;
+  reachable: boolean;
+  latencyMs?: number;
+  message?: string;
+  source: ProbeObservationSource;
+  observedAtUnixMs: number;
+}
+
+export interface ProbeObservation extends ProbeTargetResult {
+  scope: ClientScope;
+  jobKind: ProbeJobKind;
+  selectedTag?: string;
+}
+
+export interface ProbeJobSnapshot {
+  id: number;
+  scope: ClientScope;
+  kind: ProbeJobKind;
+  state: ProbeJobState;
+  targetTags: string[];
+  results: ProbeTargetResult[];
+  completed: number;
+  succeeded: number;
+  failed: number;
+  startedAtUnixMs: number;
+  updatedAtUnixMs: number;
+  deadlineAtUnixMs: number;
+}
+
+export interface StartProbeRequest {
+  kind: ProbeJobKind;
+  targetTags: string[];
+  timeoutMs?: number;
+}
+
+export interface StableNodeId {
+  profileId: string;
+  configRevision: number;
+  tag: string;
+}
+
+export interface StablePolicyId {
+  profileId: string;
+  configRevision: number;
+  tag: string;
+}
+
+export type NodeObservationSource =
+  | 'runtime_snapshot'
+  | 'manual_outbound'
+  | 'manual_policy'
+  | 'scheduled_policy';
+
+export interface NodeSnapshot {
+  id: StableNodeId;
+  tag: string;
+  protocol: string;
+  server?: string;
+  port?: number;
+  udp?: boolean;
+  network?: string;
+  tls?: boolean;
+  sni?: string;
+  cipher?: string;
+  groupTags: string[];
+  selectedIn: string[];
+  runtimeAvailable: boolean;
+  alive?: boolean;
+  latencyMs?: number;
+  lastObservedAtUnixMs?: number;
+  lastObservationSource?: NodeObservationSource;
+  activeProbeJobIds: number[];
+  history: ProbeObservation[];
+  actionValid: boolean;
+}
+
+export interface NodeGroupSnapshot {
+  id: StablePolicyId;
+  tag: string;
+  kind: string;
+  selected?: string;
+  memberTags: string[];
+  runtimeAvailable: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+export interface NodeScreenSnapshot {
+  revision: number;
+  scope: ClientScope;
+  sourceStatus: ClientSourceStatus;
+  groups: NodeGroupSnapshot[];
+  nodes: NodeSnapshot[];
+  activeProbeJobs: ProbeJobSnapshot[];
+}
+
 export interface ConnectionStatus {
   state: ConnectionState;
   message?: string;

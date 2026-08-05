@@ -93,7 +93,7 @@ fn subscribe_and_forward_events(
         // Register before snapshot queries so events arriving during resync
         // remain buffered for this consumer instead of being dropped.
         let mut receiver = conn.subscribe_events();
-        let snapshot = resync_snapshot(endpoint.clone(), timeout);
+        let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
         emit_status(&app, generation, "subscribed", None, snapshot);
 
         let mut closed = false;
@@ -101,13 +101,18 @@ fn subscribe_and_forward_events(
             match receiver.blocking_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
+                    if let crate::models::gui_core::GuiEventData::PolicyProbeCompleted(probe) =
+                        &event.payload
+                    {
+                        crate::services::probe::record_policy_probe_completed(&app, probe);
+                    }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     // A lagged receiver has lost one or more flow deltas.
                     // Re-establish an authoritative baseline instead of
                     // silently leaving the live connection page stale.
-                    let snapshot = resync_snapshot(endpoint.clone(), timeout);
+                    let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
                     emit_status(&app, generation, "subscribed", None, snapshot);
                     continue;
                 }
@@ -133,9 +138,10 @@ fn next_reconnect_backoff(current: Duration) -> Duration {
     (current * 2).min(MAX_RECONNECT_BACKOFF)
 }
 
-fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
+fn resync_snapshot(app: &AppHandle, endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
     // Safe to block_on here: this runs on a `spawn_blocking` thread (see
     // `start` above), not a tokio worker — so we don't nest runtimes.
+    let app = app.clone();
     tauri::async_runtime::block_on(async move {
         let options = Some(CoreIpcOptions {
             socket: Some(endpoint.path),
@@ -147,6 +153,10 @@ fn resync_snapshot(endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
         let stats = queries::query_value(json!({"stats": {}}), "stats", options.clone()).await;
         let policies =
             queries::query_value(json!({"policies": {}}), "policies", options.clone()).await;
+        if let Ok(value) = &policies {
+            let groups = crate::kernel::zero::parsing::parse_policy_groups(value);
+            crate::services::probe::reconcile_policy_snapshot(&app, &groups);
+        }
         // Query active flows last. Events are already buffered by the receiver,
         // so this snapshot becomes the baseline and subsequent buffered deltas
         // apply on top without a reconnect gap.

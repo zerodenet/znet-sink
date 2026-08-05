@@ -49,7 +49,7 @@ pub async fn app_config_update(
                     core_process::restart(transition_app).map(|_| ())
                 } else {
                     let transition_state = transition_app.state::<AppState>();
-                    core_process::stop(transition_state).map(|_| ())
+                    core_process::stop(transition_app.clone(), transition_state).map(|_| ())
                 }
             })
             .await

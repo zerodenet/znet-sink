@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::process::Child;
 use std::sync::{
@@ -6,6 +7,11 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
+use crate::client_core::{
+    ClientCore, ClientCoreError, ClientCoreSnapshot, ClientScope, ProbeJobId, ProbeJobSnapshot,
+    ProbeObservation, ProbeTargetResult, ProfileId, SourceStatus, StartProbeOutcome,
+    StartProbeRequest,
+};
 use crate::kernel::zero::adapter::TrafficSample;
 use crate::models::{
     app_config::AppConfig,
@@ -17,6 +23,7 @@ use crate::models::{
 };
 
 pub struct AppState {
+    client_core: Mutex<ClientCore>,
     core_event_generation: Arc<AtomicU64>,
     gui_event_generation: Arc<AtomicU64>,
     core_process_monitor_generation: Arc<AtomicU64>,
@@ -81,8 +88,12 @@ impl AppState {
     ) -> Self {
         let next_record_id = logs.iter().map(|entry| entry.id).max().unwrap_or(0);
         let proxy_configs = normalize_proxy_configs(proxy_configs);
+        let active_profile = proxy_configs.iter().find(|profile| profile.active);
+        let active_profile_id = active_profile.map(|profile| ProfileId(profile.id.clone()));
+        let config_revision = config_revision(active_profile);
 
         Self {
+            client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
             core_event_generation: Arc::new(AtomicU64::default()),
             gui_event_generation: Arc::new(AtomicU64::default()),
             core_process_monitor_generation: Arc::new(AtomicU64::default()),
@@ -116,6 +127,156 @@ impl AppState {
 
     pub(crate) fn gui_event_generation(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.gui_event_generation)
+    }
+
+    pub(crate) fn client_core_snapshot(&self) -> ClientCoreSnapshot {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot()
+    }
+
+    pub(crate) fn client_core_configuration_committed(
+        &self,
+        active_profile: Option<&ProxyConfigProfile>,
+    ) {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .configuration_committed(
+                active_profile.map(|profile| ProfileId(profile.id.clone())),
+                config_revision(active_profile),
+                crate::services::common::now_unix_ms(),
+            );
+    }
+
+    pub(crate) fn client_core_instance_started(&self) {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .core_instance_started(crate::services::common::now_unix_ms());
+    }
+
+    pub(crate) fn client_core_instance_lost(&self) {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .core_instance_lost(crate::services::common::now_unix_ms());
+    }
+
+    pub(crate) fn set_client_core_source_status(&self, status: SourceStatus) {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .set_source_status(status);
+    }
+
+    pub(crate) fn start_client_probe(
+        &self,
+        request: StartProbeRequest,
+    ) -> Result<StartProbeOutcome, ClientCoreError> {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_probe(request, crate::services::common::now_unix_ms())
+    }
+
+    pub(crate) fn record_client_probe_result(
+        &self,
+        id: ProbeJobId,
+        scope: &ClientScope,
+        result: ProbeTargetResult,
+    ) -> Option<ProbeJobSnapshot> {
+        let (updated, observations) = {
+            let mut core = self
+                .client_core
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let updated = core.record_probe_result(id, scope, result);
+            let observations = updated.is_some().then(|| core.observations(None));
+            (updated, observations)
+        };
+        if let Some(observations) = observations {
+            let _ = crate::services::probe_history::save(&observations);
+        }
+        updated
+    }
+
+    pub(crate) fn record_client_probe_observation(&self, observation: ProbeObservation) -> bool {
+        let (recorded, observations) = {
+            let mut core = self
+                .client_core
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let recorded = core.record_observation(observation);
+            let observations = recorded.then(|| core.observations(None));
+            (recorded, observations)
+        };
+        if let Some(observations) = observations {
+            let _ = crate::services::probe_history::save(&observations);
+        }
+        recorded
+    }
+
+    pub(crate) fn client_probe_observations_for_config(
+        &self,
+        scope: &ClientScope,
+    ) -> Vec<ProbeObservation> {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .observations_for_config(scope)
+    }
+
+    pub(crate) fn restore_client_probe_observations(&self, observations: Vec<ProbeObservation>) {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .restore_observations(observations);
+    }
+
+    pub(crate) fn get_client_probe_job(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_probe_job(id)
+    }
+
+    pub(crate) fn list_client_probe_jobs(
+        &self,
+        profile_id: Option<String>,
+    ) -> Vec<ProbeJobSnapshot> {
+        let profile_id = profile_id.map(ProfileId);
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .list_probe_jobs(profile_id.as_ref())
+    }
+
+    pub(crate) fn cancel_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
+        self.client_core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cancel_probe(id, crate::services::common::now_unix_ms())
+    }
+
+    pub(crate) fn timeout_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
+        let (updated, observations) = {
+            let mut core = self
+                .client_core
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let updated = core.timeout_probe(id, crate::services::common::now_unix_ms());
+            let observations = updated
+                .as_ref()
+                .is_some_and(|job| job.state == crate::client_core::ProbeJobState::TimedOut)
+                .then(|| core.observations(None));
+            (updated, observations)
+        };
+        if let Some(observations) = observations {
+            let _ = crate::services::probe_history::save(&observations);
+        }
+        updated
     }
 
     pub(crate) fn next_core_process_monitor_generation(&self) -> u64 {
@@ -228,6 +389,23 @@ impl Default for ManagedCoreProcess {
             },
         }
     }
+}
+
+fn config_revision(profile: Option<&ProxyConfigProfile>) -> crate::client_core::ConfigRevision {
+    let Some(profile) = profile else {
+        return crate::client_core::ConfigRevision(0);
+    };
+    let bytes = serde_json::to_vec(&(
+        &profile.kernel,
+        &profile.format,
+        &profile.path,
+        &profile.content,
+    ))
+    .unwrap_or_default();
+    let digest = Sha256::digest(bytes);
+    crate::client_core::ConfigRevision(u64::from_be_bytes(
+        digest[..8].try_into().expect("sha256 prefix length"),
+    ))
 }
 
 #[cfg(test)]

@@ -1,34 +1,25 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { coreEvents, PolicyProbeTimeoutError } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { appendLog, guiSelectPolicy, guiClientProbeNode, guiClientProbeStart, guiProbePolicy } from '$lib/services/core';
+  import { appendLog, getNodeScreenSnapshot, guiSelectPolicy, startProbeJob } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
   import { getGroupKindStyle, isSpecialOutboundProtocol } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
-  import type { PolicyGroup } from '$lib/types/gui-api';
+  import type { NodeScreenSnapshot, PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
   import NodesDelayPopover from '$lib/components/tabs/NodesDelayPopover.svelte';
   import NodesGridCard from '$lib/components/tabs/NodesGridCard.svelte';
   import NodesGroupSidebar from '$lib/components/tabs/NodesGroupSidebar.svelte';
   import NodesListRow from '$lib/components/tabs/NodesListRow.svelte';
   import NodesToolbar from '$lib/components/tabs/NodesToolbar.svelte';
-  import { createNodesProbeController } from '$lib/components/tabs/nodes-probe-controller.js';
-  import { delayHistory, type DelayEntry } from '$lib/services/delay-history.svelte';
-  import { buildProbeHistoryUpdates } from '$lib/services/policy-probe-history';
   import { error as toastError } from '$lib/services/toast.svelte';
   import {
-    buildAllNodes,
-    buildRuntimeOverlay,
     buildSections,
     collectProbingPolicyNodeTags,
     filterNodes,
     getActiveNodeTag,
-    mergePolicyGroups,
     planProbeTargets,
     policyProbeTagForNode,
-    resolveNodeGroup,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
 
@@ -60,12 +51,12 @@
 
   // Action state
   let switching = $state<string | null>(null);
-  let probingNodeIds = $state<Set<string>>(new Set());
-  let probingPolicyTags = $state<Set<string>>(new Set());
-  let probingAll = $state(false);
-  let probingRequested = $state(false);
-  let probeProgress = $state({ done: 0, total: 0 });
   let lastError = $state<string | null>(null);
+  let nodeScreen = $state<NodeScreenSnapshot | null>(null);
+  let unlistenProbeJobs: (() => void) | null = null;
+  let unlistenClientCore: (() => void) | null = null;
+  const reportedProbeJobs = new Set<number>();
+  type DelayEntry = { delay: number; at: number; selectedTag?: string };
 
   function reportActionError(message: string) {
     lastError = message;
@@ -105,38 +96,6 @@
       console.error('[nodes] failed to persist probe failure', logError);
     });
   }
-  type ProbeControllerState = {
-    probingNodeIds: Set<string>;
-    probingAll: boolean;
-    probeProgress: { done: number; total: number };
-    lastError: string | null;
-  };
-  const probeController = createNodesProbeController({
-    listen,
-    probeNode: guiClientProbeNode,
-    probeAll: guiClientProbeStart,
-    recordDelay: (targetTag: string, latencyMs: number | undefined, reachable: boolean) => {
-      const at = Date.now();
-      for (const update of buildProbeHistoryUpdates(groups, targetTag, latencyMs, reachable, at)) {
-        delayHistory.record(
-          update.tag,
-          update.delayMs,
-          update.reachable,
-          update.at,
-          update.selectedTag,
-        );
-      }
-    },
-    onProbeFailure: (failure: { targetTag?: string; message: string; scope: 'single' | 'batch' }) =>
-      recordProbeFailure(failure),
-    refreshPolicyGroups: () => guiState.refreshPolicyGroups(),
-    onStateChange: (state: ProbeControllerState) => {
-      probingNodeIds = state.probingNodeIds;
-      probingAll = state.probingAll;
-      probeProgress = state.probeProgress;
-      lastError = state.lastError;
-    },
-  });
 
   // Collapsible group sections persisted to localStorage
   const COLLAPSE_KEY = 'znet-nodes-collapsed';
@@ -165,52 +124,119 @@
   }
 
   // Kernel connection state
-  const isCoreAvailable = $derived(guiState.isProcessRunning);
+  const isCoreAvailable = $derived(nodeScreen?.sourceStatus === 'ready');
   const probeDisabledReason = $derived(
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
-  // On mount, reload config-derived data so the page reflects the active profile.
-  // Also pull runtime policy groups once in case the kernel is already connected.
+  async function refreshNodeScreen() {
+    try {
+      nodeScreen = await getNodeScreenSnapshot();
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function handleProbeJobUpdate(job: ProbeJobSnapshot) {
+    void refreshNodeScreen();
+    if (job.state === 'running' || reportedProbeJobs.has(job.id)) return;
+    reportedProbeJobs.add(job.id);
+    if (job.state === 'failed' || job.state === 'partially_failed' || job.state === 'timed_out') {
+      recordProbeFailure({
+        message: job.state === 'timed_out'
+          ? `probe job ${job.id} timed out with ${job.completed}/${job.targetTags.length} completed`
+          : `${job.failed}/${job.targetTags.length} targets failed`,
+        scope: job.kind === 'manual_policy' ? 'policy' : (job.targetTags.length > 1 ? 'batch' : 'single'),
+        policyTag: job.kind === 'manual_policy' && job.targetTags.length === 1 ? job.targetTags[0] : undefined,
+        targetTag: job.kind === 'outbound' && job.targetTags.length === 1 ? job.targetTags[0] : undefined,
+        failedTargets: job.results.filter((result) => !result.reachable).map((result) => result.targetTag),
+        outcome: job.state === 'timed_out' ? 'timeout' : 'failed',
+      });
+    }
+  }
+
   onMount(() => {
     viewMode = isLite ? 'list' : loadViewMode();
-    void Promise.allSettled([
-      guiState.refreshConfigNodes(),
-      guiState.refreshConfigPolicyGroups(),
-      guiState.refreshPolicyGroups(),
-    ]);
+    void refreshNodeScreen();
+    void listen<ProbeJobSnapshot>('client-core:probe-job-updated', (event) => {
+      handleProbeJobUpdate(event.payload);
+    }).then((unlisten) => {
+      unlistenProbeJobs = unlisten;
+    });
+    void listen('client-core:updated', () => {
+      void refreshNodeScreen();
+    }).then((unlisten) => {
+      unlistenClientCore = unlisten;
+    });
   });
 
   onDestroy(() => {
     if (hideTimer) clearTimeout(hideTimer);
-    probeController.cleanup();
+    unlistenProbeJobs?.();
+    unlistenClientCore?.();
   });
 
-  // Policy groups: config skeleton first, runtime overlay second
-  const groups = $derived.by<PolicyGroup[]>(() => {
-    const config = guiState.configPolicyGroups;
-    const runtime = guiState.policyGroups;
+  // Presentation adapters over the single authoritative Rust snapshot.
+  const groups = $derived.by<PolicyGroup[]>(() =>
+    (nodeScreen?.groups ?? []).map((group) => ({
+      name: group.tag,
+      kind: group.kind,
+      selected: group.selected,
+      available: group.available,
+      reason: group.reason,
+      outbounds: group.memberTags.map((tag) => {
+        const node = nodeScreen?.nodes.find((candidate) => candidate.tag === tag);
+        return {
+          tag,
+          type: node?.protocol ?? 'unknown',
+          delayMs: node?.latencyMs,
+          alive: node?.alive,
+          lastCheckedUnixMs: node?.lastObservedAtUnixMs,
+        };
+      }),
+    })),
+  );
 
-    return mergePolicyGroups(config, runtime);
-  });
-
-  const runtimeOverlay = $derived.by(() => {
-    return buildRuntimeOverlay(groups);
-  });
-
-  // Build the full node list from config data plus runtime overlay.
-  // Falls back to runtime-only or event-derived nodes when no config exists.
   const allNodes = $derived.by<ProxyNode[]>(() => {
-    void runtimeOverlay;
-    void delayHistory.history; // re-run when history updates
-    return buildAllNodes({
-      configNodes: guiState.configNodes,
-      groups,
-      runtimeOverlay,
-      latestDelay: (tag) => delayHistory.latest(tag),
-      latestProbeTime: (tag) => delayHistory.latestTime(tag),
-      fallbackNodes: overviewData.proxyNodes,
-    });
+    return (nodeScreen?.nodes ?? []).map((node) => ({
+      id: `${node.id.profileId}:${node.id.configRevision}:${node.id.tag}`,
+      tag: node.tag,
+      name: node.tag,
+      protocol: node.protocol,
+      delay: node.latencyMs ?? 0,
+      lastProbeAt: node.lastObservedAtUnixMs,
+      domain: node.groupTags[0] ?? 'default',
+      server: node.server,
+      port: node.port,
+      udp: node.udp,
+      network: node.network,
+      tls: node.tls,
+      sni: node.sni,
+      cipher: node.cipher,
+      selected: node.selectedIn.length > 0,
+      alive: node.alive,
+    }));
   });
+
+  const activeProbeJobs = $derived(nodeScreen?.activeProbeJobs ?? []);
+  const probingNodeTags = $derived.by(() => new Set(
+    activeProbeJobs
+      .filter((job) => job.kind === 'outbound')
+      .flatMap((job) => job.targetTags),
+  ));
+  const probingPolicyTags = $derived.by(() => new Set(
+    activeProbeJobs
+      .filter((job) => job.kind === 'manual_policy')
+      .flatMap((job) => job.targetTags),
+  ));
+  const probingNodeIds = $derived.by(() => new Set(
+    allNodes.filter((node) => probingNodeTags.has(node.tag)).map((node) => node.id),
+  ));
+  const probingAll = $derived(activeProbeJobs.some((job) => job.targetTags.length > 1));
+  const probingRequested = $derived(activeProbeJobs.length > 0);
+  const probeProgress = $derived.by(() => ({
+    done: activeProbeJobs.reduce((total, job) => total + job.completed, 0),
+    total: activeProbeJobs.reduce((total, job) => total + job.targetTags.length, 0),
+  }));
 
   const filteredNodes = $derived.by(() => {
     return filterNodes({
@@ -252,12 +278,10 @@
   // Actions
   /** Resolve the policy group a node belongs to. */
   function groupForNode(node: ProxyNode): PolicyGroup | undefined {
-    return resolveNodeGroup({
-      groups,
-      runtimeOverlay,
-      selectedGroup,
-      nodeTag: node.tag,
-    });
+    if (selectedGroup) {
+      return groups.find((group) => group.name === selectedGroup && group.outbounds.some((item) => item.tag === node.tag));
+    }
+    return groups.find((group) => group.outbounds.some((item) => item.tag === node.tag));
   }
 
   const GROUP_NODE_PROTOCOLS = new Set([
@@ -310,12 +334,8 @@
       const result = await guiSelectPolicy(policyTag, node.tag);
       if (!result.accepted) {
         reportActionError(result.message ?? '内核未接受此选择');
-      } else if (result.selected && result.selected !== node.tag) {
-        // Kernel may have resolved to a different target — this is informational, not an error
-        await guiState.refreshPolicyGroups();
-      } else {
-        await guiState.refreshPolicyGroups();
       }
+      await refreshNodeScreen();
     } catch (e) {
       reportActionError((e as { message?: string }).message ?? '切换节点失败');
     } finally {
@@ -332,18 +352,12 @@
         return selectedGroup;
       }
     }
-    // 2. Try runtime overlay
-    const overlayGroup = runtimeOverlay.get(node.tag)?.groupName;
-    if (overlayGroup) {
-      const g = groups.find((g) => g.name === overlayGroup);
-      if (g?.kind?.toLowerCase() === 'selector') return overlayGroup;
-    }
-    // 3. Find first selector group containing this node
+    // 2. Find first selector group containing this node
     const selectorGroup = groups.find(
       (g) => g.kind?.toLowerCase() === 'selector' && g.outbounds.some((o) => o.tag === node.tag),
     );
     if (selectorGroup) return selectorGroup.name;
-    // 4. Fallback
+    // 3. Fallback
     return 'proxy';
   }
 
@@ -354,61 +368,35 @@
       return;
     }
 
-    // A nested url_test group is rendered as a regular node card, but its
-    // probe contract remains group-level: policies.probe measures every
-    // member and completes through policy.probe.completed. A leaf card inside
-    // that group still uses the ordinary single-outbound probe controller.
     const policyTag = policyProbeTagForNode(groups, node.tag);
     if (policyTag) {
       if (probingPolicyTags.has(policyTag)) return;
-      lastError = null;
-      try {
-        await probePolicy(policyTag);
-      } catch (error) {
-        const timedOut = error instanceof PolicyProbeTimeoutError;
-        recordProbeFailure({
-          message: timedOut ? '等待内核返回测速结果超时' : (error instanceof Error ? error.message : String(error)),
-          scope: 'policy',
-          policyTag,
-          outcome: timedOut ? 'timeout' : 'failed',
-        });
-      }
+      await probePolicy(policyTag);
       return;
     }
-
-    await probeController.handleProbe(node);
+    try {
+      await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
+      await refreshNodeScreen();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordProbeFailure({ message, scope: 'single', targetTag: node.tag });
+      reportActionError(message);
+    }
   }
 
   async function probePolicy(policyTag: string) {
-    probingPolicyTags = new Set([...probingPolicyTags, policyTag]);
-    // Register before sending the command so even an extremely fast probe
-    // completion cannot race past the UI waiter.
-    const completion = coreEvents.waitForPolicyProbe(policyTag, { trigger: 'manual' });
     try {
-      const accepted = await guiProbePolicy(policyTag);
-      if (!accepted.accepted || accepted.result?.probeTriggered === false) {
-        void completion.catch(() => undefined);
-        throw new Error(`内核未接受 ${policyTag} 的策略测速请求`);
-      }
-      const completed = await completion;
-      const failedMembers = completed.members.filter(
-        (member) => member.alive === false || !!member.lastError,
-      );
-      if (failedMembers.length > 0) {
-        recordProbeFailure({
-          message: `${failedMembers.length}/${completed.members.length} 个节点不可达`,
-          scope: 'policy',
-          policyTag,
-          failedTargets: failedMembers.map((member) => member.tag),
-        });
-      }
+      const memberCount = groups.find((group) => group.name === policyTag)?.outbounds.length ?? 1;
+      await startProbeJob({
+        kind: 'manual_policy',
+        targetTags: [policyTag],
+        timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
+      });
+      await refreshNodeScreen();
     } catch (error) {
-      void completion.catch(() => undefined);
-      throw error;
-    } finally {
-      const next = new Set(probingPolicyTags);
-      next.delete(policyTag);
-      probingPolicyTags = next;
+      const message = error instanceof Error ? error.message : String(error);
+      recordProbeFailure({ message, scope: 'policy', policyTag });
+      reportActionError(message);
     }
   }
 
@@ -423,23 +411,35 @@
     const targets = plannedProbeTargets;
     if (targets.nodes.length === 0 && targets.policyTags.length === 0) return;
 
-    probingRequested = true;
     lastError = null;
     try {
-      const policyRequests = targets.policyTags.map((policyTag) => probePolicy(policyTag));
-      await Promise.all([
-        targets.nodes.length > 0 ? probeController.handleProbeAll(targets.nodes) : Promise.resolve(),
-        ...policyRequests,
-      ]);
+      const waves = Math.max(1, Math.ceil(targets.nodes.length / 8));
+      const requests: Promise<ProbeJobSnapshot>[] = [];
+      if (targets.nodes.length > 0) {
+        requests.push(startProbeJob({
+          kind: 'outbound',
+          targetTags: targets.nodes.map((node) => node.tag),
+          timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + waves * 15_000)),
+        }));
+      }
+      for (const policyTag of targets.policyTags) {
+        const memberCount = groups.find((group) => group.name === policyTag)?.outbounds.length ?? 1;
+        requests.push(startProbeJob({
+          kind: 'manual_policy',
+          targetTags: [policyTag],
+          timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
+        }));
+      }
+      await Promise.all(requests);
+      await refreshNodeScreen();
     } catch (error) {
-      const timedOut = error instanceof PolicyProbeTimeoutError;
+      const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({
-        message: timedOut ? '等待内核返回测速结果超时' : (error instanceof Error ? error.message : String(error)),
+        message,
         scope: 'batch',
-        outcome: timedOut ? 'timeout' : 'failed',
+        outcome: 'failed',
       });
-    } finally {
-      probingRequested = false;
+      reportActionError(message);
     }
   }
 
@@ -476,15 +476,22 @@
   let popover = $state<PopoverState>({ visible: false, anchor: null, node: null });
   let popoverElement = $state<HTMLDivElement | null>(null);
   let popoverPositionVersion = $state(0);
+  function historyForNode(tag: string): DelayEntry[] {
+    return (nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).map((entry) => ({
+      delay: entry.reachable ? (entry.latencyMs ?? 0) : -1,
+      at: entry.observedAtUnixMs,
+      selectedTag: entry.selectedTag,
+    }));
+  }
   const popoverHistory = $derived.by<DelayEntry[]>(() =>
-    popover.node ? delayHistory.getHistory(popover.node.tag) : [],
+    popover.node ? historyForNode(popover.node.tag) : [],
   );
   function showPopover(e: MouseEvent, node: ProxyNode) {
     if (hideTimer) {
       clearTimeout(hideTimer);
       hideTimer = null;
     }
-    const hist = delayHistory.getHistory(node.tag);
+    const hist = historyForNode(node.tag);
     if (hist.length === 0) return;
     popover = { visible: true, anchor: e.currentTarget as HTMLElement, node };
   }

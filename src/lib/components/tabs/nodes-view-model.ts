@@ -1,13 +1,10 @@
-import { isSpecialOutboundProtocol, parseNodeName } from '$lib/services/node-utils';
-import type { PolicyGroup, ConfigProxyNode } from '$lib/types/gui-api';
+import type { PolicyGroup } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
+import { isSpecialOutboundProtocol } from '$lib/services/node-utils';
 
-export interface RuntimeOverlay {
-  delayMs?: number;
-  alive?: boolean;
-  selected?: boolean;
-  groupName?: string;
-  lastCheckedUnixMs?: number;
+export interface ProbeTargets {
+  nodes: ProxyNode[];
+  policyTags: string[];
 }
 
 export interface NodeSection {
@@ -16,118 +13,17 @@ export interface NodeSection {
   nodes: ProxyNode[];
 }
 
-export interface ProbeTargets {
-  nodes: ProxyNode[];
-  policyTags: string[];
-}
-
-export function resolveProbeDisplay(options: {
-  runtimeDelay?: number;
-  runtimeAt?: number;
-  localDelay?: number;
-  localAt?: number;
-}): { delay: number; at?: number } {
-  const { runtimeDelay, runtimeAt, localDelay, localAt } = options;
-  // Event-projected history is authoritative for the same probe timestamp.
-  // This matters for nested groups whose parent-member snapshot can carry a
-  // stale delay with the child's fresh timestamp.
-  if (localDelay !== undefined && localAt !== undefined && (runtimeAt === undefined || localAt >= runtimeAt)) {
-    return { delay: localDelay, at: localAt };
-  }
-  if (runtimeDelay !== undefined) return { delay: runtimeDelay, at: runtimeAt ?? localAt };
-  if (localDelay !== undefined) return { delay: localDelay, at: localAt };
-  return { delay: 0, at: runtimeAt ?? localAt };
-}
-
-function hasProbeDisplay(display: { delay: number; at?: number }): boolean {
-  return display.delay !== 0 || display.at !== undefined;
-}
-
-/**
- * Resolve a policy-group card independently from the runtime overlay entry
- * created when that group appears as a member of another group. The latter is
- * parent state and may lag behind the group's own urltest completion event.
- */
-export function resolveGroupProbeDisplay(options: {
-  groupTag: string;
-  selectedTag?: string;
-  runtimeOverlay: Map<string, RuntimeOverlay>;
-  latestDelay: (tag: string) => number | undefined;
-  latestProbeTime?: (tag: string) => number | undefined;
-}): { delay: number; at?: number } {
-  const {
-    groupTag,
-    selectedTag,
-    runtimeOverlay,
-    latestDelay,
-    latestProbeTime,
-  } = options;
-  const ownDelay = latestDelay(groupTag);
-  const ownAt = latestProbeTime?.(groupTag);
-
-  // Group-keyed history is produced from policy.probe.completed or the
-  // reconciled policy snapshot. Prefer it even when the parent group exposes
-  // a newer-looking member timestamp, because that member entry is not the
-  // child's authoritative probe state.
-  if (ownDelay !== undefined || ownAt !== undefined) {
-    return { delay: ownDelay ?? 0, at: ownAt };
-  }
-
-  const runtime = runtimeOverlay.get(groupTag);
-  const runtimeDisplay = resolveProbeDisplay({
-    runtimeDelay: runtime?.delayMs,
-    runtimeAt: runtime?.lastCheckedUnixMs,
-  });
-  if (hasProbeDisplay(runtimeDisplay)) return runtimeDisplay;
-
-  if (selectedTag) {
-    const selectedRuntime = runtimeOverlay.get(selectedTag);
-    const selectedDisplay = resolveProbeDisplay({
-      runtimeDelay: selectedRuntime?.delayMs,
-      runtimeAt: selectedRuntime?.lastCheckedUnixMs,
-      localDelay: latestDelay(selectedTag),
-      localAt: latestProbeTime?.(selectedTag),
-    });
-    if (hasProbeDisplay(selectedDisplay)) return selectedDisplay;
-  }
-
-  return runtimeDisplay;
-}
-
 function isUrlTestGroup(group: PolicyGroup | undefined): boolean {
   const kind = group?.kind?.toLowerCase();
   return kind === 'url_test' || kind === 'urltest';
 }
 
-/** Resolve a node-card click to the policy probe contract only when the card
- * itself represents a url_test group. Leaf nodes inside that group must keep
- * the normal single-outbound probe behavior. */
 export function policyProbeTagForNode(
   groups: PolicyGroup[],
   nodeTag: string,
 ): string | undefined {
   const group = groups.find((item) => item.name === nodeTag);
   return isUrlTestGroup(group) ? group?.name : undefined;
-}
-
-export function mergePolicyGroups(configGroups: PolicyGroup[], runtimeGroups: PolicyGroup[]): PolicyGroup[] {
-  if (configGroups.length === 0) return runtimeGroups;
-
-  const runtimeByName = new Map(runtimeGroups.map((group) => [group.name, group]));
-  return configGroups.map((configGroup) => {
-    const runtimeGroup = runtimeByName.get(configGroup.name);
-    if (!runtimeGroup) return configGroup;
-
-    const runtimeMembers = new Map(runtimeGroup.outbounds.map((member) => [member.tag, member]));
-    return {
-      ...configGroup,
-      selected: runtimeGroup.selected ?? configGroup.selected,
-      outbounds: configGroup.outbounds.map((member) => ({
-        ...member,
-        ...runtimeMembers.get(member.tag),
-      })),
-    };
-  });
 }
 
 function collectDescendantProbeTags(
@@ -139,7 +35,6 @@ function collectDescendantProbeTags(
   visited.add(groupTag);
   const group = groupsByName.get(groupTag);
   if (!group) return new Set();
-
   const tags = new Set<string>();
   for (const member of group.outbounds) {
     tags.add(member.tag);
@@ -152,6 +47,7 @@ function collectDescendantProbeTags(
   return tags;
 }
 
+/** UI intent projection only. Node/group state itself is supplied by Rust. */
 export function planProbeTargets(options: {
   groups: PolicyGroup[];
   selectedGroup: string | null;
@@ -159,9 +55,7 @@ export function planProbeTargets(options: {
 }): ProbeTargets {
   const { groups, selectedGroup, visibleNodes } = options;
   const selected = groups.find((group) => group.name === selectedGroup);
-  if (isUrlTestGroup(selected)) {
-    return { nodes: [], policyTags: [selected!.name] };
-  }
+  if (isUrlTestGroup(selected)) return { nodes: [], policyTags: [selected!.name] };
 
   const groupsByName = new Map(groups.map((group) => [group.name, group]));
   const policyTags = new Set<string>();
@@ -169,10 +63,6 @@ export function planProbeTargets(options: {
     const memberGroup = groupsByName.get(node.tag);
     if (isUrlTestGroup(memberGroup)) policyTags.add(memberGroup!.name);
   }
-
-  // A nested urltest owns all of its member probes. Exclude those same tags
-  // from the ordinary batch so one parent-group action cannot probe a direct
-  // member once through `probe_outbound` and again through `policies.probe`.
   const policyOwnedTags = new Set<string>();
   for (const policyTag of policyTags) {
     for (const tag of collectDescendantProbeTags(groupsByName, policyTag)) {
@@ -180,24 +70,17 @@ export function planProbeTargets(options: {
     }
   }
 
-  const seenNodeTags = new Set<string>();
-  const nodes: ProxyNode[] = [];
-  for (const node of visibleNodes) {
-    if (isSpecialOutboundProtocol(node.protocol)) continue;
-    const memberGroup = groupsByName.get(node.tag);
-    if (isUrlTestGroup(memberGroup)) continue;
-    if (policyOwnedTags.has(node.tag) || seenNodeTags.has(node.tag)) continue;
-    seenNodeTags.add(node.tag);
-    // A nested non-url_test group is still a probeable outbound target.
-    // Keep it in the ordinary flow unless a nested urltest already owns it.
-    nodes.push(node);
-  }
+  const seen = new Set<string>();
+  const nodes = visibleNodes.filter((node) => {
+    if (isSpecialOutboundProtocol(node.protocol)) return false;
+    if (isUrlTestGroup(groupsByName.get(node.tag))) return false;
+    if (policyOwnedTags.has(node.tag) || seen.has(node.tag)) return false;
+    seen.add(node.tag);
+    return true;
+  });
   return { nodes, policyTags: [...policyTags] };
 }
 
-/** Expand active policy-level probes to the cards affected by that probe.
- * A url_test request is tracked by group tag in the kernel, while the page
- * renders its member outbounds as separate cards. */
 export function collectProbingPolicyNodeTags(
   groups: PolicyGroup[],
   probingPolicyTags: ReadonlySet<string>,
@@ -211,182 +94,16 @@ export function collectProbingPolicyNodeTags(
   return tags;
 }
 
-export function buildRuntimeOverlay(groups: PolicyGroup[]): Map<string, RuntimeOverlay> {
-  const map = new Map<string, RuntimeOverlay>();
-  for (const group of groups) {
-    for (const outbound of group.outbounds) {
-      const existing = map.get(outbound.tag);
-      const lastCheckedUnixMs = outbound.lastCheckedUnixMs ?? existing?.lastCheckedUnixMs;
-      map.set(outbound.tag, {
-        delayMs: outbound.delayMs ?? existing?.delayMs,
-        alive: outbound.alive ?? existing?.alive,
-        selected: existing?.selected || group.selected === outbound.tag,
-        ...(lastCheckedUnixMs !== undefined ? { lastCheckedUnixMs } : {}),
-        // Keep the first matching group so the runtime overlay stays
-        // consistent with the all-nodes section assignment.
-        groupName: existing?.groupName ?? group.name,
-      });
-    }
-  }
-  return map;
-}
-
-export function buildAllNodes(options: {
-  configNodes: ConfigProxyNode[];
-  groups: PolicyGroup[];
-  runtimeOverlay: Map<string, RuntimeOverlay>;
-  latestDelay: (tag: string) => number | undefined;
-  latestProbeTime?: (tag: string) => number | undefined;
-  fallbackNodes: ProxyNode[];
-}): ProxyNode[] {
-  const { configNodes, groups, runtimeOverlay, latestDelay, latestProbeTime, fallbackNodes } = options;
-
-  if (configNodes.length > 0) {
-    const nodeItems: ProxyNode[] = configNodes.map<ProxyNode>((configNode) => {
-      const runtime = runtimeOverlay.get(configNode.tag);
-      const parsed = parseNodeName(configNode.tag);
-      const group = groups.find((candidate) => candidate.name === configNode.tag);
-      const probeDisplay = group
-        ? resolveGroupProbeDisplay({
-            groupTag: group.name,
-            selectedTag: group.selected,
-            runtimeOverlay,
-            latestDelay,
-            latestProbeTime,
-          })
-        : resolveProbeDisplay({
-            runtimeDelay: runtime?.delayMs,
-            runtimeAt: runtime?.lastCheckedUnixMs,
-            localDelay: latestDelay(configNode.tag),
-            localAt: latestProbeTime?.(configNode.tag),
-          });
-
-      return {
-        id: configNode.tag,
-        tag: configNode.tag,
-        name: configNode.tag,
-        emoji: parsed.emoji,
-        cleanName: parsed.cleanName,
-        protocol: configNode.protocol !== 'unknown' ? configNode.protocol : 'proxy',
-        delay: probeDisplay.delay,
-        lastProbeAt: probeDisplay.at,
-        selected: runtime?.selected,
-        alive: group ? undefined : runtime?.alive,
-        domain: runtime?.groupName ?? 'policy',
-        server: configNode.server,
-        port: configNode.port,
-        udp: configNode.udp,
-        network: configNode.network,
-        tls: configNode.tls,
-        sni: configNode.sni,
-        cipher: configNode.cipher,
-      };
-    });
-
-    // Also surface every policy group as a node. A group nested inside
-    // another group (group B listed as a member of group A) then renders as
-    // a regular member card inside A — same display, same interaction —
-    // instead of being recursively expanded into its leaf nodes. This does
-    // not enlarge the default view: the "全部节点" entry is gated to global
-    // mode in NodesGroupSidebar, so in rule mode users still pick a specific
-    // group and see only its direct members (nodes + nested-group cards).
-    // Only render a group as a node when it is nested inside another group
-    // (its tag appears in another group's outbounds). Top-level groups stay
-    // in the sidebar — clicking a top-level group card has no clear selection
-    // semantics and would duplicate the sidebar entries.
-    const memberTags = new Set<string>();
-    for (const g of groups) {
-      for (const o of g.outbounds) memberTags.add(o.tag);
-    }
-    const existingTags = new Set(nodeItems.map((n) => n.tag));
-    const groupItems: ProxyNode[] = [];
-    for (const group of groups) {
-      if (!memberTags.has(group.name)) continue;
-      if (existingTags.has(group.name)) continue;
-      const parsed = parseNodeName(group.name);
-      const probeDisplay = resolveGroupProbeDisplay({
-        groupTag: group.name,
-        selectedTag: group.selected,
-        runtimeOverlay,
-        latestDelay,
-        latestProbeTime,
-      });
-      groupItems.push({
-        id: group.name,
-        tag: group.name,
-        name: group.name,
-        emoji: parsed.emoji,
-        cleanName: parsed.cleanName,
-        protocol: group.kind || 'group',
-        delay: probeDisplay.delay,
-        lastProbeAt: probeDisplay.at,
-        selected: runtimeOverlay.get(group.name)?.selected,
-        alive: undefined,
-        domain: 'policy',
-      });
-    }
-
-    return [...nodeItems, ...groupItems];
-  }
-
-  const seen = new Set<string>();
-  const runtimeNodes: ProxyNode[] = [];
-  for (const group of groups) {
-    for (const outbound of group.outbounds) {
-      const key = outbound.tag.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const parsed = parseNodeName(outbound.tag);
-      const nestedGroup = groups.find((candidate) => candidate.name === outbound.tag);
-      const probeDisplay = nestedGroup
-        ? resolveGroupProbeDisplay({
-            groupTag: nestedGroup.name,
-            selectedTag: nestedGroup.selected,
-            runtimeOverlay,
-            latestDelay,
-            latestProbeTime,
-          })
-        : resolveProbeDisplay({
-            runtimeDelay: outbound.delayMs,
-            runtimeAt: outbound.lastCheckedUnixMs,
-            localDelay: latestDelay(outbound.tag),
-            localAt: latestProbeTime?.(outbound.tag),
-          });
-      runtimeNodes.push({
-        id: `${group.name}:${outbound.tag}`,
-        tag: outbound.tag,
-        name: outbound.tag,
-        emoji: parsed.emoji,
-        cleanName: parsed.cleanName,
-        protocol: nestedGroup?.kind || outbound.type || 'proxy',
-        delay: probeDisplay.delay,
-        lastProbeAt: probeDisplay.at,
-        selected: group.selected === outbound.tag,
-        alive: nestedGroup ? undefined : outbound.alive,
-        domain: group.name,
-      });
-    }
-  }
-
-  return runtimeNodes.length > 0 ? runtimeNodes : fallbackNodes;
-}
-
 export function matchesSearch(node: ProxyNode, query: string): boolean {
   if (!query) return true;
-  const haystack = `${node.name} ${node.protocol} ${node.server ?? ''} ${node.cleanName ?? ''}`.toLowerCase();
-  return haystack.includes(query);
+  return `${node.name} ${node.protocol} ${node.server ?? ''} ${node.cleanName ?? ''}`
+    .toLowerCase()
+    .includes(query);
 }
 
-export function collectGroupNodeTags(
-  groups: PolicyGroup[],
-  groupName: string,
-): Set<string> {
-  // Direct members only — a nested group stays as a member tag rather than
-  // being recursively expanded into its leaves, so it can render as a member
-  // card alongside regular nodes (see buildAllNodes).
+export function collectGroupNodeTags(groups: PolicyGroup[], groupName: string): Set<string> {
   const group = groups.find((item) => item.name === groupName);
-  if (!group) return new Set();
-  return new Set(group.outbounds.map((outbound) => outbound.tag));
+  return new Set(group?.outbounds.map((outbound) => outbound.tag) ?? []);
 }
 
 export function filterNodes(options: {
@@ -396,25 +113,14 @@ export function filterNodes(options: {
   selectedGroup: string | null;
 }): ProxyNode[] {
   const { allNodes, groups, query, selectedGroup } = options;
-  let nodes = allNodes.filter((node) => matchesSearch(node, query));
-
-  if (selectedGroup) {
-    const group = groups.find((g) => g.name === selectedGroup);
-    if (group) {
-      // Render members in the order declared in the group's outbounds, so a
-      // nested group listed first stays first — instead of being pushed after
-      // regular nodes by the allNodes ordering (which appends group cards at
-      // the tail).
-      const nodeMap = new Map(nodes.map((n) => [n.tag, n]));
-      const ordered = group.outbounds
-        .map((o) => o.tag)
-        .map((tag) => nodeMap.get(tag))
-        .filter((n): n is ProxyNode => n !== undefined);
-      if (ordered.length > 0) nodes = ordered;
-    }
-  }
-
-  return nodes;
+  const nodes = allNodes.filter((node) => matchesSearch(node, query));
+  if (!selectedGroup) return nodes;
+  const group = groups.find((item) => item.name === selectedGroup);
+  if (!group) return nodes;
+  const byTag = new Map(nodes.map((node) => [node.tag, node]));
+  return group.outbounds
+    .map((outbound) => byTag.get(outbound.tag))
+    .filter((node): node is ProxyNode => node !== undefined);
 }
 
 export function buildSections(options: {
@@ -425,40 +131,17 @@ export function buildSections(options: {
 }): NodeSection[] {
   const { allNodes, groups, query, orphanSectionName = '其他' } = options;
   const filtered = allNodes.filter((node) => matchesSearch(node, query));
-  if (filtered.length === 0) return [];
-
-  const tagToGroup = new Map<string, string>();
-  for (const group of groups) {
-    for (const outbound of group.outbounds) {
-      if (!tagToGroup.has(outbound.tag)) tagToGroup.set(outbound.tag, group.name);
-    }
-  }
-
-  const buckets = new Map<string, ProxyNode[]>();
-  const orphan: ProxyNode[] = [];
-
-  for (const node of filtered) {
-    const groupName = tagToGroup.get(node.tag);
-    if (groupName) {
-      if (!buckets.has(groupName)) buckets.set(groupName, []);
-      buckets.get(groupName)!.push(node);
-    } else {
-      orphan.push(node);
-    }
-  }
-
-  const sections: NodeSection[] = [];
-  for (const group of groups) {
-    const items = buckets.get(group.name);
-    if (items && items.length > 0) {
-      sections.push({ name: group.name, kind: group.kind, nodes: items });
-    }
-  }
-
-  if (orphan.length > 0) {
-    sections.push({ name: orphanSectionName, nodes: orphan });
-  }
-
+  const assigned = new Set<string>();
+  const sections: NodeSection[] = groups.flatMap((group) => {
+    const byTag = new Map(filtered.map((node) => [node.tag, node]));
+    const nodes = group.outbounds
+      .map((outbound) => byTag.get(outbound.tag))
+      .filter((node): node is ProxyNode => node !== undefined && !assigned.has(node.id));
+    for (const node of nodes) assigned.add(node.id);
+    return nodes.length > 0 ? [{ name: group.name, kind: group.kind, nodes }] : [];
+  });
+  const orphan = filtered.filter((node) => !assigned.has(node.id));
+  if (orphan.length > 0) sections.push({ name: orphanSectionName, nodes: orphan });
   return sections;
 }
 
@@ -466,14 +149,8 @@ export function getActiveNodeTag(
   groups: PolicyGroup[],
   selectedGroup: string | null = null,
 ): string | undefined {
-  if (selectedGroup) {
-    return groups.find((group) => group.name === selectedGroup)?.selected;
-  }
-
-  for (const group of groups) {
-    if (group.selected) return group.selected;
-  }
-  return undefined;
+  if (selectedGroup) return groups.find((group) => group.name === selectedGroup)?.selected;
+  return groups.find((group) => group.selected)?.selected;
 }
 
 export function normalizeSelectedGroup(
@@ -484,24 +161,6 @@ export function normalizeSelectedGroup(
   return groups.some((group) => group.name === selectedGroup) ? selectedGroup : null;
 }
 
-export function resolveNodeGroup(options: {
-  groups: PolicyGroup[];
-  runtimeOverlay: Map<string, RuntimeOverlay>;
-  selectedGroup: string | null;
-  nodeTag: string;
-}): PolicyGroup | undefined {
-  const { groups, runtimeOverlay, selectedGroup, nodeTag } = options;
-  const byName = (name: string | null | undefined) =>
-    name ? groups.find((group) => group.name === name) : undefined;
-
-  return (
-    byName(selectedGroup) ??
-    byName(runtimeOverlay.get(nodeTag)?.groupName) ??
-    groups.find((group) => group.outbounds.some((outbound) => outbound.tag === nodeTag))
-  );
-}
-
 export function isSelectableGroup(group?: PolicyGroup): boolean {
-  if (!group) return true;
-  return group.kind?.toLowerCase() === 'selector';
+  return !group || group.kind?.toLowerCase() === 'selector';
 }

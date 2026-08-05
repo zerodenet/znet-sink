@@ -68,6 +68,21 @@ pub async fn probe_policy(policy_tag: String, options: Option<CoreIpcOptions>) -
     .await
 }
 
+/// Normalize legacy policy-probe acknowledgement fields at the Zero boundary.
+/// Older kernels omitted these flags, which remains a compatible acceptance.
+pub fn policy_probe_command_accepted(response: &Value) -> bool {
+    response.get("accepted").and_then(Value::as_bool) != Some(false)
+        && response
+            .get("result")
+            .and_then(|result| {
+                result
+                    .get("probeTriggered")
+                    .or_else(|| result.get("probe_triggered"))
+            })
+            .and_then(Value::as_bool)
+            != Some(false)
+}
+
 /// Probe a single target for reachability and latency.
 pub async fn probe_target(
     target_tag: String,
@@ -257,7 +272,8 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_config_apply_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
+        ensure_config_apply_accepted, policy_probe_command_accepted, probe_ipc_options,
+        trace_route_params, PROBE_IPC_TIMEOUT_MS,
     };
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
@@ -309,5 +325,20 @@ mod tests {
             "result": { "applied": true }
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn policy_probe_ack_compatibility_is_normalized_at_zero_boundary() {
+        assert!(!policy_probe_command_accepted(
+            &json!({ "accepted": false })
+        ));
+        assert!(!policy_probe_command_accepted(&json!({
+            "result": { "probeTriggered": false }
+        })));
+        assert!(!policy_probe_command_accepted(&json!({
+            "result": { "probe_triggered": false }
+        })));
+        assert!(policy_probe_command_accepted(&json!({ "accepted": true })));
+        assert!(policy_probe_command_accepted(&json!({})));
     }
 }
