@@ -26,7 +26,7 @@ const group = (name, tags, kind = 'selector', selected) => ({
 
 {
   const groups = [group('Auto', ['HK', 'JP'], 'url_test'), group('Manual', ['US'])];
-  assert.deepEqual([...collectProbingPolicyNodeTags(groups, new Set(['Auto']))], ['Auto', 'HK', 'JP']);
+  assert.deepEqual([...collectProbingPolicyNodeTags(groups, new Set(['Auto']))], ['Auto']);
   assert.equal(policyProbeTagForNode(groups, 'Auto'), 'Auto');
   assert.equal(policyProbeTagForNode(groups, 'HK'), undefined);
 }
@@ -35,12 +35,30 @@ const group = (name, tags, kind = 'selector', selected) => ({
   const groups = [group('Proxy', ['HK', 'Auto']), group('Auto', ['JP', 'US'], 'url_test')];
   const hk = node('HK');
   const auto = node('Auto', 'url_test');
+  const jp = node('JP');
+  const us = node('US');
+
+  // A nested URLTest group remains one effective card in its parent group.
   assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Proxy', visibleNodes: [hk, auto] }), {
     nodes: [hk],
     policyTags: ['Auto'],
   });
-  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [node('JP')] }), {
-    nodes: [],
+
+  // Once the URLTest group is opened, its visible direct members are probed
+  // independently and progress reflects the actual cards instead of 0/1.
+  assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [jp, us] }), {
+    nodes: [jp, us],
+    policyTags: [],
+  });
+
+  // The global view follows the same visible-card semantics: the nested group
+  // card and each separately visible member are counted independently.
+  assert.deepEqual(planProbeTargets({
+    groups,
+    selectedGroup: null,
+    visibleNodes: [hk, auto, jp, us],
+  }), {
+    nodes: [hk, jp, us],
     policyTags: ['Auto'],
   });
 }
