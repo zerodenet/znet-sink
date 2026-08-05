@@ -26,70 +26,55 @@ export function policyProbeTagForNode(
   return isUrlTestGroup(group) ? group?.name : undefined;
 }
 
-function collectDescendantProbeTags(
-  groupsByName: Map<string, PolicyGroup>,
-  groupTag: string,
-  visited = new Set<string>(),
-): Set<string> {
-  if (visited.has(groupTag)) return new Set();
-  visited.add(groupTag);
-  const group = groupsByName.get(groupTag);
-  if (!group) return new Set();
-  const tags = new Set<string>();
-  for (const member of group.outbounds) {
-    tags.add(member.tag);
-    if (groupsByName.has(member.tag)) {
-      for (const nested of collectDescendantProbeTags(groupsByName, member.tag, visited)) {
-        tags.add(nested);
-      }
-    }
-  }
-  return tags;
-}
-
-/** UI intent projection only. Node/group state itself is supplied by Rust. */
+/**
+ * Build probe targets from the cards that are currently visible to the user.
+ *
+ * A normal card is one outbound probe target. A nested URLTest group is also
+ * one visible card, so it becomes one policy probe target. We intentionally do
+ * not collapse a selected URLTest group into a single policy job: once the user
+ * opens that group, its direct members are the effective visible targets and
+ * progress must reflect those cards individually.
+ */
 export function planProbeTargets(options: {
   groups: PolicyGroup[];
   selectedGroup: string | null;
   visibleNodes: ProxyNode[];
 }): ProbeTargets {
-  const { groups, selectedGroup, visibleNodes } = options;
-  const selected = groups.find((group) => group.name === selectedGroup);
-  if (isUrlTestGroup(selected)) return { nodes: [], policyTags: [selected!.name] };
-
+  const { groups, visibleNodes } = options;
   const groupsByName = new Map(groups.map((group) => [group.name, group]));
   const policyTags = new Set<string>();
+  const nodeTags = new Set<string>();
+  const nodes: ProxyNode[] = [];
+
   for (const node of visibleNodes) {
-    const memberGroup = groupsByName.get(node.tag);
-    if (isUrlTestGroup(memberGroup)) policyTags.add(memberGroup!.name);
-  }
-  const policyOwnedTags = new Set<string>();
-  for (const policyTag of policyTags) {
-    for (const tag of collectDescendantProbeTags(groupsByName, policyTag)) {
-      policyOwnedTags.add(tag);
+    if (isSpecialOutboundProtocol(node.protocol)) continue;
+
+    const nestedGroup = groupsByName.get(node.tag);
+    if (isUrlTestGroup(nestedGroup)) {
+      policyTags.add(nestedGroup!.name);
+      continue;
     }
+
+    if (nodeTags.has(node.tag)) continue;
+    nodeTags.add(node.tag);
+    nodes.push(node);
   }
 
-  const seen = new Set<string>();
-  const nodes = visibleNodes.filter((node) => {
-    if (isSpecialOutboundProtocol(node.protocol)) return false;
-    if (isUrlTestGroup(groupsByName.get(node.tag))) return false;
-    if (policyOwnedTags.has(node.tag) || seen.has(node.tag)) return false;
-    seen.add(node.tag);
-    return true;
-  });
   return { nodes, policyTags: [...policyTags] };
 }
 
+/**
+ * A policy probe belongs to the nested group card that started it. Its member
+ * cards may receive runtime observations later, but they must not all enter the
+ * manual loading state for a single card action.
+ */
 export function collectProbingPolicyNodeTags(
   groups: PolicyGroup[],
   probingPolicyTags: ReadonlySet<string>,
 ): Set<string> {
   const tags = new Set<string>();
   for (const group of groups) {
-    if (!probingPolicyTags.has(group.name)) continue;
-    tags.add(group.name);
-    for (const member of group.outbounds) tags.add(member.tag);
+    if (probingPolicyTags.has(group.name)) tags.add(group.name);
   }
   return tags;
 }
