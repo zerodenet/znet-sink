@@ -4,7 +4,7 @@
   import { store } from '$lib/services/store.svelte';
   import { appendLog, getNodeScreenSnapshot, guiSelectPolicy, startProbeJob } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
-  import { getGroupKindStyle, isSpecialOutboundProtocol } from '$lib/services/node-utils';
+  import { getGroupKindStyle, isSpecialOutboundProtocol, parseNodeName } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
   import type { NodeScreenSnapshot, PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
   import NodesDelayPopover from '$lib/components/tabs/NodesDelayPopover.svelte';
@@ -197,24 +197,29 @@
   );
 
   const allNodes = $derived.by<ProxyNode[]>(() => {
-    return (nodeScreen?.nodes ?? []).map((node) => ({
-      id: `${node.id.profileId}:${node.id.configRevision}:${node.id.tag}`,
-      tag: node.tag,
-      name: node.tag,
-      protocol: node.protocol,
-      delay: node.latencyMs ?? 0,
-      lastProbeAt: node.lastObservedAtUnixMs,
-      domain: node.groupTags[0] ?? 'default',
-      server: node.server,
-      port: node.port,
-      udp: node.udp,
-      network: node.network,
-      tls: node.tls,
-      sni: node.sni,
-      cipher: node.cipher,
-      selected: node.selectedIn.length > 0,
-      alive: node.alive,
-    }));
+    return (nodeScreen?.nodes ?? []).map((node) => {
+      const parsed = parseNodeName(node.tag);
+      return {
+        id: `${node.id.profileId}:${node.id.configRevision}:${node.id.tag}`,
+        tag: node.tag,
+        name: node.tag,
+        emoji: parsed.emoji,
+        cleanName: parsed.cleanName,
+        protocol: node.protocol !== 'unknown' ? node.protocol : 'proxy',
+        delay: node.latencyMs ?? 0,
+        lastProbeAt: node.lastObservedAtUnixMs,
+        domain: node.groupTags[0] ?? 'default',
+        server: node.server,
+        port: node.port,
+        udp: node.udp,
+        network: node.network,
+        tls: node.tls,
+        sni: node.sni,
+        cipher: node.cipher,
+        selected: node.selectedIn.length > 0,
+        alive: node.alive,
+      };
+    });
   });
 
   const activeProbeJobs = $derived(nodeScreen?.activeProbeJobs ?? []);
