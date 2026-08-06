@@ -15,6 +15,7 @@ pub mod gui_events;
 pub mod gui_self_test;
 pub mod interaction_mode;
 pub mod internet_sharing;
+pub mod ipc_observability;
 pub mod kernel_manager;
 pub mod local_proxy;
 pub mod log_store;

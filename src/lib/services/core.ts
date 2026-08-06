@@ -27,8 +27,8 @@ export async function getClientCoreSnapshot(): Promise<ClientCoreSnapshot> {
   return invoke('gui_client_core_snapshot');
 }
 
-export async function getNodeScreenSnapshot(): Promise<NodeScreenSnapshot> {
-  return invoke('gui_node_screen_snapshot');
+export async function getNodeScreenSnapshot(reason?: string): Promise<NodeScreenSnapshot> {
+  return invoke('gui_node_screen_snapshot', { reason });
 }
 
 export async function startProbeJob(request: StartProbeRequest): Promise<ProbeJobSnapshot> {

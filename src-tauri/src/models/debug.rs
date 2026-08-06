@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// A captured IPC frame for the debug diagnostic page.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,6 +48,16 @@ static DEBUG_FRAMES: std::sync::LazyLock<Mutex<Vec<DebugFrame>>> =
 
 static DEBUG_FRAME_ID: AtomicU64 = AtomicU64::new(0);
 
+type DebugFrameObserver = Arc<dyn Fn(&DebugFrame) + Send + Sync + 'static>;
+static DEBUG_FRAME_OBSERVER: OnceLock<DebugFrameObserver> = OnceLock::new();
+
+/// Install one process-wide observer for captured IPC frames. The transport
+/// remains independent of application state; the Tauri composition root
+/// decides whether and how frames are projected into user-visible logs.
+pub(crate) fn install_debug_frame_observer(observer: DebugFrameObserver) -> bool {
+    DEBUG_FRAME_OBSERVER.set(observer).is_ok()
+}
+
 /// Push a frame into the ring buffer from anywhere in the crate.
 pub(crate) fn push_debug_frame(frame: DebugFrame) {
     let mut frame = frame;
@@ -60,6 +70,10 @@ pub(crate) fn push_debug_frame(frame: DebugFrame) {
         frames.push(frame);
     }
     let _ = crate::services::debug_store::append(&persisted);
+    if let Some(observer) = DEBUG_FRAME_OBSERVER.get() {
+        // Diagnostics must never be able to break the IPC path.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(&persisted)));
+    }
 }
 
 /// Clear all captured debug frames.

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::client_core::{
     NodeGroupSnapshot, NodeObservationSource, NodeScreenSnapshot, NodeSnapshot, ProbeJobState,
@@ -8,20 +9,36 @@ use crate::errors::AppResult;
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
 use crate::models::gui_core::{ConfigProxyNode, GuiPolicyGroup, GuiPolicyMember};
-use crate::services::{common, core_config};
+use crate::models::logs::LogLevel;
+use crate::services::{common, core_config, logs};
 use crate::state::app_state::AppState;
 
-pub async fn snapshot(state: &AppState) -> AppResult<NodeScreenSnapshot> {
+pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeScreenSnapshot> {
+    let started = Instant::now();
+    let reason = reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or("unspecified");
     let client = state.client_core_snapshot();
     let Some(profile_id) = client.scope.profile_id.clone() else {
-        return Ok(NodeScreenSnapshot {
+        let snapshot = NodeScreenSnapshot {
             revision: client.revision,
             scope: client.scope,
             source_status: client.source_status,
             groups: Vec::new(),
             nodes: Vec::new(),
             active_probe_jobs: client.active_probe_jobs,
-        });
+        };
+        log_snapshot_refresh(
+            state,
+            reason,
+            &snapshot,
+            started.elapsed().as_millis() as u64,
+            false,
+            None,
+            None,
+        );
+        return Ok(snapshot);
     };
 
     let active_content = common::lock(state.proxy_configs(), "proxy_config")?
@@ -44,10 +61,16 @@ pub async fn snapshot(state: &AppState) -> AppResult<NodeScreenSnapshot> {
         let config = common::lock(state.app_config(), "app_config")?;
         core_config::ipc_options_from_app_config(&config.core)
     };
-    let (runtime_groups, runtime_available) = match adapter.policy_groups(options).await {
-        Ok(groups) => (groups, true),
-        Err(_) => (Vec::new(), false),
-    };
+    let (runtime_groups, runtime_available, runtime_error_code, runtime_error_message) =
+        match adapter.policy_groups(options).await {
+            Ok(groups) => (groups, true, None, None),
+            Err(error) => (
+                Vec::new(),
+                false,
+                Some(error.code.to_string()),
+                Some(error.message),
+            ),
+        };
 
     // Configuration is the ordering and membership skeleton. Runtime state
     // overlays it by tag, but must never reorder groups/nodes or replace a
@@ -108,27 +131,77 @@ pub async fn snapshot(state: &AppState) -> AppResult<NodeScreenSnapshot> {
         });
     }
 
-    let source_status = if runtime_available {
-        client.source_status
-    } else if client.source_status == SourceStatus::Offline {
-        SourceStatus::Offline
-    } else {
-        SourceStatus::Degraded
-    };
+    // One failed runtime policy query means this projection is stale, not that
+    // the Client Core or Zero process became unavailable. Runtime freshness is
+    // already represented on each node/group through `runtime_available`.
+    let source_status = snapshot_source_status(client.source_status, runtime_available);
     for node in &mut nodes {
         node.active_probe_job_ids.sort_unstable();
         node.active_probe_job_ids.dedup();
         node.action_valid = source_status == SourceStatus::Ready && action_valid(&node.protocol);
     }
 
-    Ok(NodeScreenSnapshot {
+    let snapshot = NodeScreenSnapshot {
         revision: client.revision,
         scope: client.scope,
         source_status,
         groups,
         nodes,
         active_probe_jobs: client.active_probe_jobs,
-    })
+    };
+    log_snapshot_refresh(
+        state,
+        reason,
+        &snapshot,
+        started.elapsed().as_millis() as u64,
+        runtime_available,
+        runtime_error_code.as_deref(),
+        runtime_error_message.as_deref(),
+    );
+    Ok(snapshot)
+}
+
+fn snapshot_source_status(client_status: SourceStatus, _runtime_available: bool) -> SourceStatus {
+    client_status
+}
+
+fn log_snapshot_refresh(
+    state: &AppState,
+    reason: &str,
+    snapshot: &NodeScreenSnapshot,
+    duration_ms: u64,
+    runtime_groups_available: bool,
+    runtime_error_code: Option<&str>,
+    runtime_error_message: Option<&str>,
+) {
+    logs::znet_log_fields(
+        Some(state),
+        LogLevel::Debug,
+        if runtime_groups_available {
+            "节点页面快照刷新完成"
+        } else {
+            "节点页面快照刷新使用静态配置回退"
+        },
+        serde_json::json!({
+            "schema": "znet.node-screen.v1",
+            "area": "nodes",
+            "operation": "node_screen.refresh",
+            "reason": reason,
+            "durationMs": duration_ms,
+            "revision": snapshot.revision.0,
+            "profileId": snapshot.scope.profile_id.as_ref().map(|profile| profile.0.as_str()),
+            "configRevision": snapshot.scope.config_revision.0,
+            "coreInstanceId": snapshot.scope.core_instance_id.0,
+            "sourceStatus": snapshot.source_status,
+            "runtimeGroupsAvailable": runtime_groups_available,
+            "runtimeErrorCode": runtime_error_code,
+            "runtimeErrorMessage": runtime_error_message,
+            "groupCount": snapshot.groups.len(),
+            "nodeCount": snapshot.nodes.len(),
+            "activeProbeJobCount": snapshot.active_probe_jobs.len(),
+            "outcome": if runtime_groups_available { "fresh" } else { "stale_fallback" },
+        }),
+    );
 }
 
 fn node_from_config(
@@ -374,8 +447,10 @@ fn action_valid(protocol: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{action_valid, merge_policy_groups, project_nodes};
-    use crate::client_core::{ClientScope, ConfigRevision, CoreInstanceId, ProfileId};
+    use super::{action_valid, merge_policy_groups, project_nodes, snapshot_source_status};
+    use crate::client_core::{
+        ClientScope, ConfigRevision, CoreInstanceId, ProfileId, SourceStatus,
+    };
     use crate::models::gui_core::{ConfigProxyNode, GuiPolicyGroup, GuiPolicyMember};
 
     fn scope() -> ClientScope {
@@ -427,6 +502,22 @@ mod tests {
             sni: Some(format!("{tag}.example.test")),
             cipher: Some("aes-256-gcm".to_string()),
         }
+    }
+
+    #[test]
+    fn runtime_query_failure_does_not_mark_client_core_unavailable() {
+        assert_eq!(
+            snapshot_source_status(SourceStatus::Ready, false),
+            SourceStatus::Ready
+        );
+        assert_eq!(
+            snapshot_source_status(SourceStatus::Degraded, false),
+            SourceStatus::Degraded
+        );
+        assert_eq!(
+            snapshot_source_status(SourceStatus::Offline, true),
+            SourceStatus::Offline
+        );
     }
 
     #[test]

@@ -133,14 +133,16 @@
   }
 
   // Kernel connection state
-  const isCoreAvailable = $derived(nodeScreen?.sourceStatus === 'ready');
+  const isCoreAvailable = $derived(
+    nodeScreen?.sourceStatus === 'ready' || nodeScreen?.sourceStatus === 'degraded',
+  );
   const probeDisabledReason = $derived(
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
-  async function refreshNodeScreen() {
+  async function refreshNodeScreen(reason: string) {
     const requestSequence = ++nodeScreenRequestSequence;
     try {
-      const snapshot = await getNodeScreenSnapshot();
+      const snapshot = await getNodeScreenSnapshot(reason);
       if (!shouldApplyNodeScreenSnapshot({
         currentRevision: nodeScreen?.revision,
         candidateRevision: snapshot.revision,
@@ -174,7 +176,7 @@
 
     // Node observations/history are refreshed only after the authoritative job
     // enters a terminal state. The spinner is driven by the job snapshot itself.
-    void refreshNodeScreen();
+    void refreshNodeScreen('probe_terminal');
     if (reportedProbeJobs.has(job.id)) return;
     reportedProbeJobs.add(job.id);
     if (job.state === 'failed' || job.state === 'partially_failed' || job.state === 'timed_out') {
@@ -193,14 +195,14 @@
 
   onMount(() => {
     viewMode = isLite ? 'list' : loadViewMode();
-    void refreshNodeScreen();
+    void refreshNodeScreen('mount');
     void listen<ProbeJobSnapshot>('client-core:probe-job-updated', (event) => {
       handleProbeJobUpdate(event.payload);
     }).then((unlisten) => {
       unlistenProbeJobs = unlisten;
     });
     void listen('client-core:updated', () => {
-      void refreshNodeScreen();
+      void refreshNodeScreen('client_core_updated');
     }).then((unlisten) => {
       unlistenClientCore = unlisten;
     });
@@ -385,7 +387,7 @@
       if (!result.accepted) {
         reportActionError(result.message ?? '内核未接受此选择');
       }
-      await refreshNodeScreen();
+      await refreshNodeScreen('policy_select');
     } catch (e) {
       reportActionError((e as { message?: string }).message ?? '切换节点失败');
     } finally {
@@ -427,7 +429,6 @@
     try {
       const job = await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
       applyProbeJob(job);
-      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({ message, scope: 'single', targetTag: node.tag });
@@ -444,7 +445,6 @@
         timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
       });
       applyProbeJob(job);
-      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({ message, scope: 'policy', policyTag });
@@ -486,7 +486,6 @@
       for (const job of jobs) {
         applyProbeJob(job);
       }
-      void refreshNodeScreen();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({
