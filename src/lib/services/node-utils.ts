@@ -25,8 +25,8 @@ const REGIONAL_INDICATOR_Z = 0x1f1ff;
 
 /**
  * Convert a two-regional-indicator flag such as 🇯🇵 into `JP`.
- * Windows does not consistently compose these code points into a flag glyph,
- * so the UI can render a stable country badge instead of two letter symbols.
+ * The code is only an internal key for selecting a bundled SVG flag; it is
+ * never used as the visible replacement for the original emoji.
  */
 export function flagCodeFromEmoji(emoji: string): string | undefined {
   const codePoints = Array.from(emoji, (character) => character.codePointAt(0));

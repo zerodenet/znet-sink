@@ -61,10 +61,11 @@
       <span class="node-name {isActive ? 'active-name' : ''}">
         {#if node.flagCode}
           <span
-            class="node-country-code"
-            title="国家/地区 {node.flagCode}"
-            aria-label="国家/地区 {node.flagCode}"
-          >{node.flagCode}</span>
+            class="node-country-flag fi fi-{node.flagCode.toLowerCase()}"
+            role="img"
+            title="国旗 {node.flagCode}"
+            aria-label="国旗 {node.flagCode}"
+          ></span>
         {:else if node.emoji}
           <span class="node-emoji">{node.emoji}</span>
         {/if}
@@ -234,24 +235,16 @@
     font-weight: 600;
   }
 
-  .node-country-code {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 19px;
-    height: 14px;
-    padding: 0 3px;
+  .node-country-flag {
+    display: inline-block;
+    width: 18px;
+    height: 13.5px;
     margin-right: 4px;
-    border: 1px solid color-mix(in srgb, var(--border) 82%, var(--foreground));
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--muted) 78%, var(--card));
-    color: var(--foreground);
-    font-family: var(--font-mono);
-    font-size: 8px;
-    font-weight: 800;
-    line-height: 1;
-    letter-spacing: 0.04em;
-    vertical-align: 1px;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 82%, transparent);
+    vertical-align: -2px;
+    overflow: hidden;
+    flex-shrink: 0;
   }
 
   .node-emoji {

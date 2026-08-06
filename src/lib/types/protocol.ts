@@ -17,7 +17,7 @@ export interface ProxyNode {
   name: string;
   /** Emoji / flag extracted from the name, if present. */
   emoji?: string;
-  /** Country code derived from a leading regional-indicator flag. */
+  /** Country code used internally to select the bundled SVG flag. */
   flagCode?: string;
   /** Cleaned name with leading emoji stripped. */
   cleanName?: string;
