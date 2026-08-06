@@ -1,4 +1,4 @@
-import type { PolicyGroup } from '$lib/types/gui-api';
+import type { PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
 import { isSpecialOutboundProtocol } from '$lib/services/node-utils';
 
@@ -77,6 +77,74 @@ export function collectProbingPolicyNodeTags(
     if (probingPolicyTags.has(group.name)) tags.add(group.name);
   }
   return tags;
+}
+
+export interface ProbeProgress {
+  done: number;
+  total: number;
+}
+
+function policyProbeLeafTags(
+  groupsByName: ReadonlyMap<string, PolicyGroup>,
+  policyTag: string,
+): Set<string> {
+  const leaves = new Set<string>();
+  const visiting = new Set<string>();
+
+  const visit = (tag: string) => {
+    const group = groupsByName.get(tag);
+    if (!group) {
+      leaves.add(tag);
+      return;
+    }
+    if (visiting.has(tag)) return;
+    visiting.add(tag);
+    for (const member of group.outbounds) visit(member.tag);
+    visiting.delete(tag);
+  };
+
+  visit(policyTag);
+  if (leaves.size === 0) leaves.add(policyTag);
+  return leaves;
+}
+
+/**
+ * Project active Client Core jobs into the number of effective node probes.
+ * Policy jobs carry a policy tag as their job target, so expand that tag through
+ * nested groups and de-duplicate leaf nodes before displaying progress. The
+ * current kernel only returns policy completion as a whole, therefore policy
+ * leaves move from 0/N to N/N together when the policy result arrives.
+ */
+export function summarizeProbeProgress(
+  groups: PolicyGroup[],
+  jobs: ProbeJobSnapshot[],
+): ProbeProgress {
+  const groupsByName = new Map(groups.map((group) => [group.name, group]));
+  const requested = new Set<string>();
+  const completed = new Set<string>();
+
+  for (const job of jobs) {
+    if (job.kind === 'outbound') {
+      for (const targetTag of job.targetTags) requested.add(targetTag);
+      for (const result of job.results) completed.add(result.targetTag);
+      continue;
+    }
+    if (job.kind !== 'manual_policy') continue;
+
+    for (const policyTag of job.targetTags) {
+      const leaves = policyProbeLeafTags(groupsByName, policyTag);
+      for (const leaf of leaves) requested.add(leaf);
+      if (job.results.some((result) => result.targetTag === policyTag)) {
+        for (const leaf of leaves) completed.add(leaf);
+      }
+    }
+  }
+
+  let done = 0;
+  for (const tag of requested) {
+    if (completed.has(tag)) done += 1;
+  }
+  return { done, total: requested.size };
 }
 
 export function matchesSearch(node: ProxyNode, query: string): boolean {

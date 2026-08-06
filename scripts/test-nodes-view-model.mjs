@@ -7,6 +7,7 @@ import {
   normalizeSelectedGroup,
   planProbeTargets,
   policyProbeTagForNode,
+  summarizeProbeProgress,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 
 const node = (tag, protocol = 'proxy') => ({
@@ -61,6 +62,40 @@ const group = (name, tags, kind = 'selector', selected) => ({
     nodes: [hk, jp, us],
     policyTags: ['Auto'],
   });
+}
+
+{
+  const groups = [
+    group('Proxy', ['HK', 'Auto']),
+    group('Auto', ['JP', 'Nested', 'JP'], 'url_test'),
+    group('Nested', ['US', 'SG'], 'url_test'),
+  ];
+  const runningPolicy = {
+    id: 1,
+    kind: 'manual_policy',
+    state: 'running',
+    targetTags: ['Auto'],
+    results: [],
+  };
+  assert.deepEqual(summarizeProbeProgress(groups, [runningPolicy]), { done: 0, total: 3 });
+
+  const completedPolicy = {
+    ...runningPolicy,
+    results: [{ targetTag: 'Auto', reachable: true }],
+  };
+  assert.deepEqual(summarizeProbeProgress(groups, [completedPolicy]), { done: 3, total: 3 });
+
+  const mixedJobs = [
+    runningPolicy,
+    {
+      id: 2,
+      kind: 'outbound',
+      state: 'running',
+      targetTags: ['JP', 'HK'],
+      results: [{ targetTag: 'HK', reachable: true }],
+    },
+  ];
+  assert.deepEqual(summarizeProbeProgress(groups, mixedJobs), { done: 1, total: 4 });
 }
 
 {

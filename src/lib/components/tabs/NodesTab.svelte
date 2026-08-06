@@ -20,6 +20,7 @@
     getActiveNodeTag,
     planProbeTargets,
     policyProbeTagForNode,
+    summarizeProbeProgress,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
   import {
@@ -285,10 +286,9 @@
     (job) => job.kind === 'outbound' && job.targetTags.length > 1,
   ));
   const probingRequested = $derived(activeProbeJobs.length > 0);
-  const probeProgress = $derived.by(() => ({
-    done: activeProbeJobs.reduce((total, job) => total + job.completed, 0),
-    total: activeProbeJobs.reduce((total, job) => total + job.targetTags.length, 0),
-  }));
+  const probeProgress = $derived.by(() =>
+    summarizeProbeProgress(groups, activeProbeJobs),
+  );
 
   const filteredNodes = $derived.by(() => {
     return filterNodes({
@@ -628,7 +628,7 @@
       {searchQuery}
       {viewMode}
       {isLite}
-      probingAll={probingAll}
+      probing={probingRequested}
       {probeProgress}
       canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && (plannedProbeTargets.nodes.length > 0 || plannedProbeTargets.policyTags.length > 0)}
       {probeDisabledReason}
