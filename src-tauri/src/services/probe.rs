@@ -143,12 +143,15 @@ fn log_probe_request(
     logs::znet_log_fields(
         Some(state),
         LogLevel::Debug,
-        format!("节点测速内核请求（{target_tag}）"),
+        format!("应用向内核发送节点测速请求（{target_tag}）"),
         serde_json::json!({
             "schema": "znet.node-probe.v1",
             "area": "nodes",
             "operation": "probe.request",
             "method": "diagnostics.probe_outbound",
+            "observer": "znet-sink",
+            "peer": "zero-core",
+            "direction": "request",
             "probeJobId": job_id.0,
             "targetTag": target_tag,
             "requestedAtUnixMs": requested_at_unix_ms,
@@ -184,12 +187,18 @@ fn log_probe_response(
         } else {
             LogLevel::Warn
         },
-        format!("节点测速内核响应（{}）：{detail}", result.target_tag),
+        format!(
+            "应用收到内核节点测速响应（{}）：{detail}",
+            result.target_tag
+        ),
         serde_json::json!({
             "schema": "znet.node-probe.v1",
             "area": "nodes",
             "operation": "probe.response",
             "method": "diagnostics.probe_outbound",
+            "observer": "znet-sink",
+            "peer": "zero-core",
+            "direction": "response",
             "probeJobId": job_id.0,
             "targetTag": result.target_tag,
             "requestedAtUnixMs": requested_at_unix_ms,

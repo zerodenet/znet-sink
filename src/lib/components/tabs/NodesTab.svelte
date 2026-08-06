@@ -277,7 +277,11 @@
   const probingNodeIds = $derived.by(() => new Set(
     allNodes.filter((node) => probingNodeTags.has(node.tag)).map((node) => node.id),
   ));
-  const probingAll = $derived(activeProbeJobs.some((job) => job.targetTags.length > 1));
+  // Only an actual multi-target outbound job is a page-wide batch probe.
+  // A single outbound or policy probe must not disable unrelated node actions.
+  const probingAll = $derived(activeProbeJobs.some(
+    (job) => job.kind === 'outbound' && job.targetTags.length > 1,
+  ));
   const probingRequested = $derived(activeProbeJobs.length > 0);
   const probeProgress = $derived.by(() => ({
     done: activeProbeJobs.reduce((total, job) => total + job.completed, 0),
@@ -629,7 +633,7 @@
       {searchQuery}
       {viewMode}
       {isLite}
-      probingAll={probingRequested || probingAll}
+      probingAll={probingAll}
       {probeProgress}
       canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && (plannedProbeTargets.nodes.length > 0 || plannedProbeTargets.policyTags.length > 0)}
       {probeDisabledReason}
@@ -675,7 +679,7 @@
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
               isProbing={isNodeProbing(node)}
-              probingAll={probingRequested || probingAll}
+              probingAll={probingAll}
               probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
@@ -693,7 +697,7 @@
               isActive={activeNodeId === node.tag}
               isSwitching={switching === node.id}
               isProbing={isNodeProbing(node)}
-              probingAll={probingRequested || probingAll}
+              probingAll={probingAll}
               probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
@@ -733,7 +737,7 @@
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
                       isProbing={isNodeProbing(node)}
-                      probingAll={probingRequested || probingAll}
+                      probingAll={probingAll}
                       probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
@@ -751,7 +755,7 @@
                       isActive={activeNodeId === node.tag}
                       isSwitching={switching === node.id}
                       isProbing={isNodeProbing(node)}
-                      probingAll={probingRequested || probingAll}
+                      probingAll={probingAll}
                       probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
