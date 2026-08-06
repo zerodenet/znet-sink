@@ -91,7 +91,48 @@ pub struct ProbeResult {
     pub target_tag: String,
     pub reachable: bool,
     pub latency_ms: Option<u64>,
+    /// Stable business-facing message used by Client Core and the node page.
     pub message: Option<String>,
+    /// Exact message returned by Zero for diagnostics. Never use this as UI copy.
+    pub kernel_message: Option<String>,
+    pub client_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OutboundProbeFailure {
+    client_error_code: String,
+    client_message: String,
+}
+
+/// Normalize legacy kernel implementation details at the client boundary while
+/// retaining the exact kernel message separately for raw diagnostics.
+fn normalize_outbound_probe_failure(
+    raw_message: Option<&str>,
+    fallback_error_code: Option<&str>,
+) -> OutboundProbeFailure {
+    let raw_message = raw_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    let timed_out = raw_message
+        .is_some_and(|message| message.to_ascii_lowercase().contains("timed out"))
+        || fallback_error_code.is_some_and(|code| {
+            matches!(
+                code.trim().to_ascii_lowercase().as_str(),
+                "timeout" | "timed_out" | "deadline_exceeded"
+            )
+        });
+
+    if timed_out {
+        return OutboundProbeFailure {
+            client_error_code: "probe_timeout".to_string(),
+            client_message: "节点延迟测速超时".to_string(),
+        };
+    }
+
+    OutboundProbeFailure {
+        client_error_code: fallback_error_code.unwrap_or("probe_failed").to_string(),
+        client_message: raw_message.unwrap_or("节点延迟测速失败").to_string(),
+    }
 }
 
 /// Probe a single node through the core's full outbound proxy stack.
@@ -108,6 +149,8 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
             reachable: false,
             latency_ms: None,
             message: Some("target tag must not be empty".to_string()),
+            kernel_message: None,
+            client_error_code: Some("invalid_argument".to_string()),
         };
         log_probe_response(
             state,
@@ -130,6 +173,8 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
                 reachable: false,
                 latency_ms: None,
                 message: Some(format!("IPC config error: {}", error.message)),
+                kernel_message: None,
+                client_error_code: Some(error.code.to_string()),
             };
             log_probe_response(
                 state,
@@ -148,11 +193,18 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
     // observable even when the node page is closed or misses a Tauri event.
     match commands::probe_outbound(target_tag.clone(), None, options).await {
         Ok(response) => {
+            let kernel_message = response.message;
+            let normalized_failure = (!response.reachable)
+                .then(|| normalize_outbound_probe_failure(kernel_message.as_deref(), None));
             let result = ProbeResult {
                 target_tag: response.target_tag,
                 reachable: response.reachable,
                 latency_ms: response.latency_ms,
-                message: response.message,
+                message: normalized_failure
+                    .as_ref()
+                    .map(|failure| failure.client_message.clone()),
+                kernel_message,
+                client_error_code: normalized_failure.map(|failure| failure.client_error_code),
             };
             log_probe_response(
                 state,
@@ -166,11 +218,15 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
             result
         }
         Err(error) => {
+            let normalized_failure =
+                normalize_outbound_probe_failure(Some(error.message.as_str()), Some(error.code));
             let result = ProbeResult {
                 target_tag,
                 reachable: false,
                 latency_ms: None,
-                message: Some(error.message.clone()),
+                message: Some(normalized_failure.client_message),
+                kernel_message: None,
+                client_error_code: Some(normalized_failure.client_error_code),
             };
             log_probe_response(
                 state,
@@ -201,6 +257,8 @@ fn log_probe_request(
             "area": "nodes",
             "operation": "probe.request",
             "method": "diagnostics.probe_outbound",
+            "probeKind": "outbound",
+            "affectsPolicySelection": false,
             "observer": "znet-sink",
             "peer": "zero-core",
             "direction": "request",
@@ -240,7 +298,8 @@ fn log_probe_response(
             LogLevel::Warn
         },
         format!(
-            "应用收到内核节点测速响应（{}）：{detail}",
+            "节点延迟测速{}（{}）：{detail}",
+            if result.reachable { "完成" } else { "失败" },
             result.target_tag
         ),
         serde_json::json!({
@@ -248,6 +307,8 @@ fn log_probe_response(
             "area": "nodes",
             "operation": "probe.response",
             "method": "diagnostics.probe_outbound",
+            "probeKind": "outbound",
+            "affectsPolicySelection": false,
             "observer": "znet-sink",
             "peer": "zero-core",
             "direction": "response",
@@ -258,7 +319,9 @@ fn log_probe_response(
             "durationMs": duration_ms,
             "reachable": result.reachable,
             "latencyMs": result.latency_ms,
-            "kernelMessage": result.message,
+            "clientErrorCode": result.client_error_code.as_deref(),
+            "clientMessage": result.message.as_deref(),
+            "kernelMessage": result.kernel_message.as_deref(),
             "errorCode": error_code,
             "errorDetails": error_details,
             "outcome": if result.reachable { "success" } else { "failed" },
@@ -595,7 +658,9 @@ fn default_ipc_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{policy_completion_is_fresh, policy_probe_timeout_ms};
+    use super::{
+        normalize_outbound_probe_failure, policy_completion_is_fresh, policy_probe_timeout_ms,
+    };
     use crate::client_core::{
         ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
         ProbeJobState, ProfileId,
@@ -667,6 +732,20 @@ mod tests {
             &event(Some(800), Some(1_100), Some(800)),
             &job
         ));
+    }
+
+    #[test]
+    fn outbound_timeout_hides_urltest_implementation_detail() {
+        let failure = normalize_outbound_probe_failure(Some("urltest probe timed out"), None);
+        assert_eq!(failure.client_error_code, "probe_timeout");
+        assert_eq!(failure.client_message, "节点延迟测速超时");
+    }
+
+    #[test]
+    fn unknown_outbound_failure_keeps_its_diagnostic_detail() {
+        let failure = normalize_outbound_probe_failure(Some("tls handshake failed"), None);
+        assert_eq!(failure.client_error_code, "probe_failed");
+        assert_eq!(failure.client_message, "tls handshake failed");
     }
 
     #[test]
