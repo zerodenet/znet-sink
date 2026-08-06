@@ -8,6 +8,7 @@ import {
   planProbeTargets,
   summarizeProbeProgress,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
+import { flagCodeFromEmoji, parseNodeName } from '../src/lib/services/node-utils.ts';
 
 const node = (tag, protocol = 'proxy') => ({
   id: tag,
@@ -23,6 +24,20 @@ const group = (name, tags, kind = 'selector', selected) => ({
   selected,
   outbounds: tags.map((tag) => ({ tag, type: 'proxy' })),
 });
+
+{
+  assert.equal(flagCodeFromEmoji('🇯🇵'), 'JP');
+  assert.equal(flagCodeFromEmoji('🚀'), undefined);
+  assert.deepEqual(parseNodeName('🇯🇵 日本 IEPL'), {
+    emoji: '🇯🇵',
+    flagCode: 'JP',
+    cleanName: '日本 IEPL',
+  });
+  assert.deepEqual(parseNodeName('🚀 Fast'), {
+    emoji: '🚀',
+    cleanName: 'Fast',
+  });
+}
 
 {
   const groups = [group('Auto', ['HK', 'JP'], 'url_test'), group('Manual', ['US'])];

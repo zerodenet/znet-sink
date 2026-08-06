@@ -243,6 +243,7 @@
         tag: node.tag,
         name: node.tag,
         emoji: parsed.emoji,
+        flagCode: parsed.flagCode,
         cleanName: parsed.cleanName,
         protocol: node.protocol !== 'unknown' ? node.protocol : 'proxy',
         delay: node.latencyMs ?? 0,

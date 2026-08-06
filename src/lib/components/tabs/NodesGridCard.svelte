@@ -63,7 +63,15 @@
         </span>
       {/if}
       <span class="grid-card-name {isActive ? 'grid-card-name-active' : ''}">
-        {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
+        {#if node.flagCode}
+          <span
+            class="node-country-code"
+            title="国家/地区 {node.flagCode}"
+            aria-label="国家/地区 {node.flagCode}"
+          >{node.flagCode}</span>
+        {:else if node.emoji}
+          <span class="node-emoji">{node.emoji}</span>
+        {/if}
         {special?.label ?? (node.cleanName || node.name)}
       </span>
     </div>
@@ -206,8 +214,29 @@
     color: #a5b4fc;
   }
 
+  .node-country-code {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 19px;
+    height: 14px;
+    padding: 0 3px;
+    margin-right: 4px;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, var(--foreground));
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--muted) 78%, var(--card));
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    vertical-align: 1px;
+  }
+
   .node-emoji {
     margin-right: 2px;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   }
 
   .grid-check {
