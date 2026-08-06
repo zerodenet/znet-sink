@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { Check, LoaderCircle, RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -84,8 +84,6 @@
       <div class="grid-card-footer">
         {#if isSwitching}
           <span class="grid-spin">⟳</span>
-        {:else if special}
-          <span class="grid-special-copy">{special.description}</span>
         {:else}
           <span class="grid-delay" style="color: {delayState.color};">
             {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
@@ -96,21 +94,20 @@
 
       <span
         class="grid-probe-time"
-        class:layout-placeholder={!node.lastProbeAt || !!special}
+        class:layout-placeholder={!node.lastProbeAt}
         style="color: {probeTimeState.color};"
-        aria-hidden={!node.lastProbeAt || !!special}
+        aria-hidden={!node.lastProbeAt}
       >
-        {#if node.lastProbeAt && !special}{probeTimeState.label}{:else}&nbsp;{/if}
+        {#if node.lastProbeAt}{probeTimeState.label}{:else}&nbsp;{/if}
       </span>
     </div>
 
     <div class="grid-bar-track">
-      <div class="grid-bar-fill" style="width: {special ? '0%' : delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
+      <div class="grid-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
     </div>
   </button>
 
-  {#if !special}
-    <Button
+  <Button
       variant="ghost"
       size="icon-xs"
       class="grid-probe-btn"
@@ -126,7 +123,6 @@
         <RefreshCw />
       {/if}
     </Button>
-  {/if}
 </div>
 
 <style>

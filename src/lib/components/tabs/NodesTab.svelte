@@ -4,7 +4,7 @@
   import { store } from '$lib/services/store.svelte';
   import { appendLog, getNodeScreenSnapshot, guiSelectPolicy, startProbeJob } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
-  import { getGroupKindStyle, isSpecialOutboundProtocol, parseNodeName } from '$lib/services/node-utils';
+  import { getGroupKindStyle, parseNodeName } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
   import type { NodeScreenSnapshot, PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
   import NodesDelayPopover from '$lib/components/tabs/NodesDelayPopover.svelte';
@@ -19,7 +19,6 @@
     filterNodes,
     getActiveNodeTag,
     planProbeTargets,
-    policyProbeTagForNode,
     summarizeProbeProgress,
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
@@ -414,38 +413,17 @@
   }
 
   async function handleProbe(node: ProxyNode) {
-    if (isSpecialOutboundProtocol(node.protocol)) return;
     if (!isCoreAvailable) {
       recordProbeFailure({ message: '内核未就绪', scope: 'single', targetTag: node.tag });
       return;
     }
 
-    const policyTag = policyProbeTagForNode(groups, node.tag);
-    if (policyTag) {
-      if (probingPolicyTags.has(policyTag)) return;
-      await probePolicy(policyTag);
-      return;
-    }
     try {
       const job = await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
       applyProbeJob(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({ message, scope: 'single', targetTag: node.tag });
-      reportActionError(message);
-    }
-  }
-
-  async function probePolicy(policyTag: string) {
-    try {
-      const job = await startProbeJob({
-        kind: 'manual_policy',
-        targetTags: [policyTag],
-      });
-      applyProbeJob(job);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      recordProbeFailure({ message, scope: 'policy', policyTag });
       reportActionError(message);
     }
   }
@@ -459,29 +437,17 @@
       return;
     }
     const targets = plannedProbeTargets;
-    if (targets.nodes.length === 0 && targets.policyTags.length === 0) return;
+    if (targets.nodes.length === 0) return;
 
     lastError = null;
     try {
       const waves = Math.max(1, Math.ceil(targets.nodes.length / 8));
-      const requests: Promise<ProbeJobSnapshot>[] = [];
-      if (targets.nodes.length > 0) {
-        requests.push(startProbeJob({
-          kind: 'outbound',
-          targetTags: targets.nodes.map((node) => node.tag),
-          timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + waves * 15_000)),
-        }));
-      }
-      for (const policyTag of targets.policyTags) {
-        requests.push(startProbeJob({
-          kind: 'manual_policy',
-          targetTags: [policyTag],
-        }));
-      }
-      const jobs = await Promise.all(requests);
-      for (const job of jobs) {
-        applyProbeJob(job);
-      }
+      const job = await startProbeJob({
+        kind: 'outbound',
+        targetTags: targets.nodes.map((node) => node.tag),
+        timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + waves * 15_000)),
+      });
+      applyProbeJob(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordProbeFailure({
@@ -630,7 +596,7 @@
       {isLite}
       probing={probingRequested}
       {probeProgress}
-      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && (plannedProbeTargets.nodes.length > 0 || plannedProbeTargets.policyTags.length > 0)}
+      canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && plannedProbeTargets.nodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={setViewMode}
@@ -675,7 +641,7 @@
               isSwitching={switching === node.id}
               isProbing={isNodeProbing(node)}
               probingAll={probingAll}
-              probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
+              probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
               onProbeNode={handleProbe}
@@ -693,7 +659,7 @@
               isSwitching={switching === node.id}
               isProbing={isNodeProbing(node)}
               probingAll={probingAll}
-              probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
+              probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
               onProbeNode={handleProbe}
@@ -733,7 +699,7 @@
                       isSwitching={switching === node.id}
                       isProbing={isNodeProbing(node)}
                       probingAll={probingAll}
-                      probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
+                      probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
                       onProbeNode={handleProbe}
@@ -751,7 +717,7 @@
                       isSwitching={switching === node.id}
                       isProbing={isNodeProbing(node)}
                       probingAll={probingAll}
-                      probeDisabled={!isCoreAvailable || isSpecialOutboundProtocol(node.protocol)}
+                      probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
                       onProbeNode={handleProbe}

@@ -6,7 +6,6 @@ import {
   getActiveNodeTag,
   normalizeSelectedGroup,
   planProbeTargets,
-  policyProbeTagForNode,
   summarizeProbeProgress,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 
@@ -28,8 +27,6 @@ const group = (name, tags, kind = 'selector', selected) => ({
 {
   const groups = [group('Auto', ['HK', 'JP'], 'url_test'), group('Manual', ['US'])];
   assert.deepEqual([...collectProbingPolicyNodeTags(groups, new Set(['Auto']))], ['Auto']);
-  assert.equal(policyProbeTagForNode(groups, 'Auto'), 'Auto');
-  assert.equal(policyProbeTagForNode(groups, 'HK'), undefined);
 }
 
 {
@@ -39,28 +36,38 @@ const group = (name, tags, kind = 'selector', selected) => ({
   const jp = node('JP');
   const us = node('US');
 
-  // A nested URLTest group remains one effective card in its parent group.
+  // A nested URLTest group remains one effective outbound card in its parent
+  // group. Probing the card measures its current selected route; it does not
+  // implicitly start a full URLTest policy refresh.
   assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Proxy', visibleNodes: [hk, auto] }), {
-    nodes: [hk],
-    policyTags: ['Auto'],
+    nodes: [hk, auto],
   });
 
-  // Once the URLTest group is opened, its visible direct members are probed
-  // independently and progress reflects the actual cards instead of 0/1.
+  // Once the URLTest group is opened, its visible direct members remain
+  // independent outbound targets.
   assert.deepEqual(planProbeTargets({ groups, selectedGroup: 'Auto', visibleNodes: [jp, us] }), {
     nodes: [jp, us],
-    policyTags: [],
   });
 
-  // The global view follows the same visible-card semantics: the nested group
-  // card and each separately visible member are counted independently.
+  // The global view follows the same visible-card semantics.
   assert.deepEqual(planProbeTargets({
     groups,
     selectedGroup: null,
     visibleNodes: [hk, auto, jp, us],
   }), {
-    nodes: [hk, jp, us],
-    policyTags: ['Auto'],
+    nodes: [hk, auto, jp, us],
+  });
+
+  // Built-in outbounds are not filtered by the GUI; the kernel owns the
+  // diagnostic outcome for direct, reject, DNS, pass, and similar targets.
+  const direct = node('DIRECT', 'direct');
+  const reject = node('REJECT', 'reject');
+  assert.deepEqual(planProbeTargets({
+    groups,
+    selectedGroup: 'Proxy',
+    visibleNodes: [direct, reject],
+  }), {
+    nodes: [direct, reject],
   });
 }
 
@@ -70,6 +77,19 @@ const group = (name, tags, kind = 'selector', selected) => ({
     group('Auto', ['JP', 'Nested', 'JP'], 'url_test'),
     group('Nested', ['US', 'SG'], 'url_test'),
   ];
+  const runningNestedOutbound = {
+    id: 0,
+    kind: 'outbound',
+    state: 'running',
+    targetTags: ['Auto'],
+    results: [],
+  };
+  assert.deepEqual(summarizeProbeProgress(groups, [runningNestedOutbound]), { done: 0, total: 1 });
+  assert.deepEqual(summarizeProbeProgress(groups, [{
+    ...runningNestedOutbound,
+    results: [{ targetTag: 'Auto', reachable: true }],
+  }]), { done: 1, total: 1 });
+
   const runningPolicy = {
     id: 1,
     kind: 'manual_policy',

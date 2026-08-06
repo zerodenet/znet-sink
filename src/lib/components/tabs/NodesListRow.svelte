@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
   import {
     delayBarWidth,
@@ -70,7 +70,7 @@
         {#if node.domain && node.domain !== 'selected' && node.domain !== 'policy' && node.domain !== 'unavailable'}
           <span class="node-domain">{node.domain}</span>
         {/if}
-        {#if !special && delayState.level === 'dead'}
+        {#if delayState.level === 'dead'}
           <span class="node-unavailable">离线</span>
         {/if}
       </div>
@@ -78,10 +78,7 @@
   </button>
 
     <div class="node-actions">
-      {#if special}
-        <span class="special-state">特殊出口</span>
-      {:else}
-        <div
+      <div
           class="delay-wrap"
           role="presentation"
           onmouseenter={(event) => onShowPopover(event, node)}
@@ -122,7 +119,6 @@
             </svg>
           {/if}
         </button>
-      {/if}
   </div>
 </div>
 
