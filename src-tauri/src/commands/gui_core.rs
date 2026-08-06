@@ -37,8 +37,11 @@ pub fn gui_client_core_snapshot(state: State<'_, AppState>) -> ClientCoreSnapsho
 }
 
 #[tauri::command]
-pub async fn gui_node_screen_snapshot(state: State<'_, AppState>) -> AppResult<NodeScreenSnapshot> {
-    crate::services::node_screen::snapshot(state.inner()).await
+pub async fn gui_node_screen_snapshot(
+    state: State<'_, AppState>,
+    reason: Option<String>,
+) -> AppResult<NodeScreenSnapshot> {
+    crate::services::node_screen::snapshot(state.inner(), reason.as_deref()).await
 }
 
 #[tauri::command]

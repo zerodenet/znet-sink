@@ -542,6 +542,21 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
+            let ipc_observer = std::sync::Arc::new(
+                crate::services::ipc_observability::IpcLogObserver::default(),
+            );
+            let observer_app = app.handle().clone();
+            let installed = crate::models::debug::install_debug_frame_observer(
+                std::sync::Arc::new(move |frame| {
+                    let state = observer_app.state::<AppState>();
+                    ipc_observer.observe(state.inner(), frame);
+                }),
+            );
+            if !installed {
+                crate::services::file_logger::line(
+                    "runtime: IPC debug frame observer was already installed",
+                );
+            }
             if let Err(error) = network_probe::start_host_network_monitor(app.handle()) {
                 crate::services::file_logger::line(&format!(
                     "runtime: host network monitor unavailable: {}",
