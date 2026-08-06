@@ -17,6 +17,8 @@ export interface ProxyNode {
   name: string;
   /** Emoji / flag extracted from the name, if present. */
   emoji?: string;
+  /** Country code used internally to select the bundled SVG flag. */
+  flagCode?: string;
   /** Cleaned name with leading emoji stripped. */
   cleanName?: string;
   /** Protocol family: shadowsocks / vmess / trojan / … */

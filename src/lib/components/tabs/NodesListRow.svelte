@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
   import {
     delayBarWidth,
@@ -59,7 +59,16 @@
 
     <div class="node-info">
       <span class="node-name {isActive ? 'active-name' : ''}">
-        {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
+        {#if node.flagCode}
+          <span
+            class="node-country-flag fi fi-{node.flagCode.toLowerCase()}"
+            role="img"
+            title="国旗 {node.flagCode}"
+            aria-label="国旗 {node.flagCode}"
+          ></span>
+        {:else if node.emoji}
+          <span class="node-emoji">{node.emoji}</span>
+        {/if}
         {special?.label ?? (node.cleanName || node.name)}
       </span>
       <div class="node-meta">
@@ -70,7 +79,7 @@
         {#if node.domain && node.domain !== 'selected' && node.domain !== 'policy' && node.domain !== 'unavailable'}
           <span class="node-domain">{node.domain}</span>
         {/if}
-        {#if !special && delayState.level === 'dead'}
+        {#if delayState.level === 'dead'}
           <span class="node-unavailable">离线</span>
         {/if}
       </div>
@@ -78,10 +87,7 @@
   </button>
 
     <div class="node-actions">
-      {#if special}
-        <span class="special-state">特殊出口</span>
-      {:else}
-        <div
+      <div
           class="delay-wrap"
           role="presentation"
           onmouseenter={(event) => onShowPopover(event, node)}
@@ -122,7 +128,6 @@
             </svg>
           {/if}
         </button>
-      {/if}
   </div>
 </div>
 
@@ -230,8 +235,21 @@
     font-weight: 600;
   }
 
+  .node-country-flag {
+    display: inline-block;
+    width: 18px;
+    height: 13.5px;
+    margin-right: 4px;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 82%, transparent);
+    vertical-align: -2px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
   .node-emoji {
     margin-right: 2px;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   }
 
   .node-meta {

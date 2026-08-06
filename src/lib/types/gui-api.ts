@@ -63,6 +63,7 @@ export interface ProbeTargetResult {
 export interface ProbeObservation extends ProbeTargetResult {
   scope: ClientScope;
   jobKind: ProbeJobKind;
+  policyTag?: string;
   selectedTag?: string;
 }
 

@@ -2,13 +2,13 @@ use std::collections::{BTreeMap, HashSet};
 
 use super::domain::{
     ClientCoreError, ClientCoreSnapshot, ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId,
-    ProbeJobSnapshot, ProbeJobState, ProbeObservation, ProbeTargetResult, ProfileId,
+    ProbeJobKind, ProbeJobSnapshot, ProbeJobState, ProbeObservation, ProbeTargetResult, ProfileId,
     SnapshotRevision, SourceStatus, StartProbeOutcome, StartProbeRequest,
 };
 
 const DEFAULT_PROBE_TIMEOUT_MS: u64 = 30_000;
 const MIN_PROBE_TIMEOUT_MS: u64 = 1_000;
-const MAX_PROBE_TIMEOUT_MS: u64 = 5 * 60_000;
+const MAX_PROBE_TIMEOUT_MS: u64 = 10 * 60_000;
 const MAX_RETAINED_PROBE_JOBS: usize = 256;
 const MAX_RETAINED_OBSERVATIONS: usize = 10_000;
 const MAX_OBSERVATIONS_PER_TARGET: usize = 20;
@@ -197,6 +197,8 @@ impl ClientCore {
                 message: result.message.clone(),
                 source: result.source,
                 observed_at_unix_ms: result.observed_at_unix_ms,
+                policy_tag: (job.kind == ProbeJobKind::ManualPolicy)
+                    .then(|| result.target_tag.clone()),
                 selected_tag: None,
             };
             job.results.push(result);
@@ -271,6 +273,8 @@ impl ClientCore {
                             }
                         },
                         observed_at_unix_ms: now_unix_ms,
+                        policy_tag: (job.kind == ProbeJobKind::ManualPolicy)
+                            .then(|| target.clone()),
                         selected_tag: None,
                     })
                     .collect::<Vec<_>>()
@@ -709,6 +713,7 @@ mod tests {
             message: None,
             source: ProbeObservationSource::ScheduledPolicy,
             observed_at_unix_ms: 101,
+            policy_tag: Some("auto".to_string()),
             selected_tag: Some("node-a".to_string()),
         }));
 
@@ -735,6 +740,7 @@ mod tests {
             message: None,
             source: ProbeObservationSource::ManualOutbound,
             observed_at_unix_ms: 100,
+            policy_tag: None,
             selected_tag: None,
         }));
 
@@ -787,6 +793,7 @@ mod tests {
             message: None,
             source: ProbeObservationSource::ScheduledPolicy,
             observed_at_unix_ms: 102,
+            policy_tag: None,
             selected_tag: None,
         }));
     }

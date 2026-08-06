@@ -15,7 +15,7 @@
     searchQuery: string;
     viewMode: ViewMode;
     isLite: boolean;
-    probingAll: boolean;
+    probing: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
     probeDisabledReason?: string | null;
@@ -31,7 +31,7 @@
     searchQuery,
     viewMode,
     isLite,
-    probingAll,
+    probing,
     probeProgress,
     canProbeAll,
     probeDisabledReason = null,
@@ -120,7 +120,7 @@
       disabled={!canProbeAll}
       title={probeDisabledReason ?? undefined}
     >
-      {#if probingAll}
+      {#if probing}
         <span class="probe-spinner">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="animate-spin">
             <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>

@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { Check, LoaderCircle, RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -63,7 +63,16 @@
         </span>
       {/if}
       <span class="grid-card-name {isActive ? 'grid-card-name-active' : ''}">
-        {#if node.emoji}<span class="node-emoji">{node.emoji}</span>{/if}
+        {#if node.flagCode}
+          <span
+            class="node-country-flag fi fi-{node.flagCode.toLowerCase()}"
+            role="img"
+            title="国旗 {node.flagCode}"
+            aria-label="国旗 {node.flagCode}"
+          ></span>
+        {:else if node.emoji}
+          <span class="node-emoji">{node.emoji}</span>
+        {/if}
         {special?.label ?? (node.cleanName || node.name)}
       </span>
     </div>
@@ -84,8 +93,6 @@
       <div class="grid-card-footer">
         {#if isSwitching}
           <span class="grid-spin">⟳</span>
-        {:else if special}
-          <span class="grid-special-copy">{special.description}</span>
         {:else}
           <span class="grid-delay" style="color: {delayState.color};">
             {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
@@ -96,21 +103,20 @@
 
       <span
         class="grid-probe-time"
-        class:layout-placeholder={!node.lastProbeAt || !!special}
+        class:layout-placeholder={!node.lastProbeAt}
         style="color: {probeTimeState.color};"
-        aria-hidden={!node.lastProbeAt || !!special}
+        aria-hidden={!node.lastProbeAt}
       >
-        {#if node.lastProbeAt && !special}{probeTimeState.label}{:else}&nbsp;{/if}
+        {#if node.lastProbeAt}{probeTimeState.label}{:else}&nbsp;{/if}
       </span>
     </div>
 
     <div class="grid-bar-track">
-      <div class="grid-bar-fill" style="width: {special ? '0%' : delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
+      <div class="grid-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
     </div>
   </button>
 
-  {#if !special}
-    <Button
+  <Button
       variant="ghost"
       size="icon-xs"
       class="grid-probe-btn"
@@ -126,7 +132,6 @@
         <RefreshCw />
       {/if}
     </Button>
-  {/if}
 </div>
 
 <style>
@@ -210,8 +215,21 @@
     color: #a5b4fc;
   }
 
+  .node-country-flag {
+    display: inline-block;
+    width: 18px;
+    height: 13.5px;
+    margin-right: 4px;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 82%, transparent);
+    vertical-align: -2px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
   .node-emoji {
     margin-right: 2px;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   }
 
   .grid-check {

@@ -76,7 +76,7 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
     // overlays it by tag, but must never reorder groups/nodes or replace a
     // direct member list with an incomplete kernel snapshot.
     let merged_groups = merge_policy_groups(config_groups, runtime_groups);
-    let groups: Vec<_> = merged_groups
+    let mut groups: Vec<_> = merged_groups
         .iter()
         .map(|group| group_snapshot(&client.scope, group, runtime_available))
         .collect();
@@ -90,6 +90,25 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         .iter()
         .enumerate()
         .map(|(index, node)| (node.tag.clone(), index))
+        .collect();
+    let group_indexes: HashMap<_, _> = groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| (group.tag.clone(), index))
+        .collect();
+    let mut group_observed_at: HashMap<_, _> = merged_groups
+        .iter()
+        .map(|group| {
+            (
+                group.name.clone(),
+                group
+                    .outbounds
+                    .iter()
+                    .filter_map(|member| member.last_checked_unix_ms)
+                    .max()
+                    .unwrap_or_default(),
+            )
+        })
         .collect();
 
     for job in state.list_client_probe_jobs(Some(profile_id.0.clone())) {
@@ -108,6 +127,31 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         }
     }
     for observation in state.client_probe_observations_for_config(&client.scope) {
+        let policy_summary =
+            observation.policy_tag.as_deref() == Some(observation.target_tag.as_str());
+        if policy_summary {
+            if let Some(group_index) = group_indexes.get(&observation.target_tag).copied() {
+                let current = group_observed_at
+                    .get(&observation.target_tag)
+                    .copied()
+                    .unwrap_or_default();
+                if observation.observed_at_unix_ms >= current {
+                    if let Some(selected) = observation.selected_tag.clone() {
+                        groups[group_index].selected = Some(selected);
+                    }
+                    group_observed_at.insert(
+                        observation.target_tag.clone(),
+                        observation.observed_at_unix_ms,
+                    );
+                }
+            }
+        }
+
+        // A nested group tag may also appear as a member of its parent.
+        // Only the nested group's own summary may drive its card state.
+        if group_indexes.contains_key(&observation.target_tag) && !policy_summary {
+            continue;
+        }
         let Some(node) = node_indexes
             .get(&observation.target_tag)
             .and_then(|index| nodes.get_mut(*index))

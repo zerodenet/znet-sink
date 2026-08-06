@@ -1,10 +1,8 @@
-import type { PolicyGroup } from '$lib/types/gui-api';
+import type { PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
-import { isSpecialOutboundProtocol } from '$lib/services/node-utils';
 
 export interface ProbeTargets {
   nodes: ProxyNode[];
-  policyTags: string[];
 }
 
 export interface NodeSection {
@@ -13,54 +11,29 @@ export interface NodeSection {
   nodes: ProxyNode[];
 }
 
-function isUrlTestGroup(group: PolicyGroup | undefined): boolean {
-  const kind = group?.kind?.toLowerCase();
-  return kind === 'url_test' || kind === 'urltest';
-}
-
-export function policyProbeTagForNode(
-  groups: PolicyGroup[],
-  nodeTag: string,
-): string | undefined {
-  const group = groups.find((item) => item.name === nodeTag);
-  return isUrlTestGroup(group) ? group?.name : undefined;
-}
-
 /**
- * Build probe targets from the cards that are currently visible to the user.
+ * Build one outbound diagnostic target for every visible node card.
  *
- * A normal card is one outbound probe target. A nested URLTest group is also
- * one visible card, so it becomes one policy probe target. We intentionally do
- * not collapse a selected URLTest group into a single policy job: once the user
- * opens that group, its direct members are the effective visible targets and
- * progress must reflect those cards individually.
+ * Nested policy groups are effective outbounds in their parent group, so a
+ * URLTest card probes its currently selected route instead of implicitly
+ * starting a full policy refresh. Built-in outbounds such as direct and reject
+ * follow the same path and let the kernel report success or failure.
  */
 export function planProbeTargets(options: {
   groups: PolicyGroup[];
   selectedGroup: string | null;
   visibleNodes: ProxyNode[];
 }): ProbeTargets {
-  const { groups, visibleNodes } = options;
-  const groupsByName = new Map(groups.map((group) => [group.name, group]));
-  const policyTags = new Set<string>();
   const nodeTags = new Set<string>();
   const nodes: ProxyNode[] = [];
 
-  for (const node of visibleNodes) {
-    if (isSpecialOutboundProtocol(node.protocol)) continue;
-
-    const nestedGroup = groupsByName.get(node.tag);
-    if (isUrlTestGroup(nestedGroup)) {
-      policyTags.add(nestedGroup!.name);
-      continue;
-    }
-
+  for (const node of options.visibleNodes) {
     if (nodeTags.has(node.tag)) continue;
     nodeTags.add(node.tag);
     nodes.push(node);
   }
 
-  return { nodes, policyTags: [...policyTags] };
+  return { nodes };
 }
 
 /**
@@ -77,6 +50,74 @@ export function collectProbingPolicyNodeTags(
     if (probingPolicyTags.has(group.name)) tags.add(group.name);
   }
   return tags;
+}
+
+export interface ProbeProgress {
+  done: number;
+  total: number;
+}
+
+function policyProbeLeafTags(
+  groupsByName: ReadonlyMap<string, PolicyGroup>,
+  policyTag: string,
+): Set<string> {
+  const leaves = new Set<string>();
+  const visiting = new Set<string>();
+
+  const visit = (tag: string) => {
+    const group = groupsByName.get(tag);
+    if (!group) {
+      leaves.add(tag);
+      return;
+    }
+    if (visiting.has(tag)) return;
+    visiting.add(tag);
+    for (const member of group.outbounds) visit(member.tag);
+    visiting.delete(tag);
+  };
+
+  visit(policyTag);
+  if (leaves.size === 0) leaves.add(policyTag);
+  return leaves;
+}
+
+/**
+ * Project active Client Core jobs into the number of effective node probes.
+ * Policy jobs carry a policy tag as their job target, so expand that tag through
+ * nested groups and de-duplicate leaf nodes before displaying progress. The
+ * current kernel only returns policy completion as a whole, therefore policy
+ * leaves move from 0/N to N/N together when the policy result arrives.
+ */
+export function summarizeProbeProgress(
+  groups: PolicyGroup[],
+  jobs: ProbeJobSnapshot[],
+): ProbeProgress {
+  const groupsByName = new Map(groups.map((group) => [group.name, group]));
+  const requested = new Set<string>();
+  const completed = new Set<string>();
+
+  for (const job of jobs) {
+    if (job.kind === 'outbound') {
+      for (const targetTag of job.targetTags) requested.add(targetTag);
+      for (const result of job.results) completed.add(result.targetTag);
+      continue;
+    }
+    if (job.kind !== 'manual_policy') continue;
+
+    for (const policyTag of job.targetTags) {
+      const leaves = policyProbeLeafTags(groupsByName, policyTag);
+      for (const leaf of leaves) requested.add(leaf);
+      if (job.results.some((result) => result.targetTag === policyTag)) {
+        for (const leaf of leaves) completed.add(leaf);
+      }
+    }
+  }
+
+  let done = 0;
+  for (const tag of requested) {
+    if (completed.has(tag)) done += 1;
+  }
+  return { done, total: requested.size };
 }
 
 export function matchesSearch(node: ProxyNode, query: string): boolean {

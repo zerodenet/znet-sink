@@ -15,7 +15,33 @@ const LEADING_EMOJI_RE = /^(?:\p{Regional_Indicator}{2}|(?:\p{Extended_Pictograp
 
 export interface ParsedName {
   emoji?: string;
+  /** ISO 3166-1 alpha-2 code derived from a regional-indicator flag. */
+  flagCode?: string;
   cleanName: string;
+}
+
+const REGIONAL_INDICATOR_A = 0x1f1e6;
+const REGIONAL_INDICATOR_Z = 0x1f1ff;
+
+/**
+ * Convert a two-regional-indicator flag such as 🇯🇵 into `JP`.
+ * The code is only an internal key for selecting a bundled SVG flag; it is
+ * never used as the visible replacement for the original emoji.
+ */
+export function flagCodeFromEmoji(emoji: string): string | undefined {
+  const codePoints = Array.from(emoji, (character) => character.codePointAt(0));
+  if (
+    codePoints.length !== 2
+    || codePoints.some((codePoint) => codePoint === undefined
+      || codePoint < REGIONAL_INDICATOR_A
+      || codePoint > REGIONAL_INDICATOR_Z)
+  ) {
+    return undefined;
+  }
+
+  return codePoints
+    .map((codePoint) => String.fromCharCode(65 + codePoint! - REGIONAL_INDICATOR_A))
+    .join('');
 }
 
 /** Split a raw node tag into leading emoji (if any) + remainder. */
@@ -28,7 +54,12 @@ export function parseNodeName(raw: string): ParsedName {
   const emojiMatch = trimmed.match(LEADING_EMOJI_RE);
   if (emojiMatch) {
     const emoji = emojiMatch[0];
-    return { emoji, cleanName: trimmed.slice(emoji.length).trim() || trimmed };
+    const flagCode = flagCodeFromEmoji(emoji);
+    return {
+      emoji,
+      ...(flagCode ? { flagCode } : {}),
+      cleanName: trimmed.slice(emoji.length).trim() || trimmed,
+    };
   }
 
   return { cleanName: trimmed };

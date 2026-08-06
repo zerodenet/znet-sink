@@ -11,10 +11,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::client_core::{
     ProbeJobId, ProbeJobKind, ProbeJobSnapshot, ProbeJobState, ProbeObservation,
-    ProbeObservationSource, ProbeTargetResult,
+    ProbeObservationSource, ProbeTargetResult, StartProbeRequest,
 };
 use crate::errors::AppError;
-use crate::kernel::zero::commands;
+use crate::kernel::adapter::KernelAdapter;
+use crate::kernel::zero::{commands, ZeroAdapter};
 use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyProbeCompletedEvent};
 use crate::models::logs::LogLevel;
 use crate::services::{common, core_config, logs};
@@ -33,13 +34,105 @@ fn probe_semaphore() -> Arc<tokio::sync::Semaphore> {
         .clone()
 }
 
+const MIN_POLICY_PROBE_TIMEOUT_MS: u64 = 60_000;
+const POLICY_PROBE_BASE_TIMEOUT_MS: u64 = 15_000;
+const POLICY_PROBE_MEMBER_TIMEOUT_MS: u64 = 10_000;
+const MAX_POLICY_PROBE_TIMEOUT_MS: u64 = 10 * 60_000;
+
+fn policy_probe_timeout_ms(member_count: usize) -> u64 {
+    POLICY_PROBE_BASE_TIMEOUT_MS
+        .saturating_add((member_count.max(1) as u64).saturating_mul(POLICY_PROBE_MEMBER_TIMEOUT_MS))
+        .clamp(MIN_POLICY_PROBE_TIMEOUT_MS, MAX_POLICY_PROBE_TIMEOUT_MS)
+}
+
+/// Apply a backend-owned policy deadline derived from the active configuration.
+/// A manual click can overlap an in-flight scheduled cycle, and older kernels
+/// may effectively probe members serially, so five seconds per member is not a
+/// safe client deadline. Explicit callers may request a longer budget, but not
+/// shorten this compatibility floor.
+pub fn normalize_start_request(
+    state: &AppState,
+    mut request: StartProbeRequest,
+) -> Result<StartProbeRequest, AppError> {
+    if request.kind != ProbeJobKind::ManualPolicy {
+        return Ok(request);
+    }
+
+    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone());
+    let adapter = ZeroAdapter::new();
+    let groups = active_content
+        .as_ref()
+        .map(|content| adapter.policy_groups_from_config(content))
+        .transpose()?
+        .unwrap_or_default();
+    let member_count = request
+        .target_tags
+        .iter()
+        .map(|target| {
+            groups
+                .iter()
+                .find(|group| group.name == *target)
+                .map(|group| group.outbounds.len())
+                .unwrap_or(1)
+        })
+        .sum::<usize>()
+        .max(1);
+    let timeout_ms = policy_probe_timeout_ms(member_count);
+    request.timeout_ms = Some(request.timeout_ms.unwrap_or_default().max(timeout_ms));
+    Ok(request)
+}
+
 /// Per-node probe result.
 #[derive(Clone, Debug)]
 pub struct ProbeResult {
     pub target_tag: String,
     pub reachable: bool,
     pub latency_ms: Option<u64>,
+    /// Stable business-facing message used by Client Core and the node page.
     pub message: Option<String>,
+    /// Exact message returned by Zero for diagnostics. Never use this as UI copy.
+    pub kernel_message: Option<String>,
+    pub client_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OutboundProbeFailure {
+    client_error_code: String,
+    client_message: String,
+}
+
+/// Normalize legacy kernel implementation details at the client boundary while
+/// retaining the exact kernel message separately for raw diagnostics.
+fn normalize_outbound_probe_failure(
+    raw_message: Option<&str>,
+    fallback_error_code: Option<&str>,
+) -> OutboundProbeFailure {
+    let raw_message = raw_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    let timed_out = raw_message
+        .is_some_and(|message| message.to_ascii_lowercase().contains("timed out"))
+        || fallback_error_code.is_some_and(|code| {
+            matches!(
+                code.trim().to_ascii_lowercase().as_str(),
+                "timeout" | "timed_out" | "deadline_exceeded"
+            )
+        });
+
+    if timed_out {
+        return OutboundProbeFailure {
+            client_error_code: "probe_timeout".to_string(),
+            client_message: "节点延迟测速超时".to_string(),
+        };
+    }
+
+    OutboundProbeFailure {
+        client_error_code: fallback_error_code.unwrap_or("probe_failed").to_string(),
+        client_message: raw_message.unwrap_or("节点延迟测速失败").to_string(),
+    }
 }
 
 /// Probe a single node through the core's full outbound proxy stack.
@@ -56,6 +149,8 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
             reachable: false,
             latency_ms: None,
             message: Some("target tag must not be empty".to_string()),
+            kernel_message: None,
+            client_error_code: Some("invalid_argument".to_string()),
         };
         log_probe_response(
             state,
@@ -78,6 +173,8 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
                 reachable: false,
                 latency_ms: None,
                 message: Some(format!("IPC config error: {}", error.message)),
+                kernel_message: None,
+                client_error_code: Some(error.code.to_string()),
             };
             log_probe_response(
                 state,
@@ -96,11 +193,18 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
     // observable even when the node page is closed or misses a Tauri event.
     match commands::probe_outbound(target_tag.clone(), None, options).await {
         Ok(response) => {
+            let kernel_message = response.message;
+            let normalized_failure = (!response.reachable)
+                .then(|| normalize_outbound_probe_failure(kernel_message.as_deref(), None));
             let result = ProbeResult {
                 target_tag: response.target_tag,
                 reachable: response.reachable,
                 latency_ms: response.latency_ms,
-                message: response.message,
+                message: normalized_failure
+                    .as_ref()
+                    .map(|failure| failure.client_message.clone()),
+                kernel_message,
+                client_error_code: normalized_failure.map(|failure| failure.client_error_code),
             };
             log_probe_response(
                 state,
@@ -114,11 +218,15 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
             result
         }
         Err(error) => {
+            let normalized_failure =
+                normalize_outbound_probe_failure(Some(error.message.as_str()), Some(error.code));
             let result = ProbeResult {
                 target_tag,
                 reachable: false,
                 latency_ms: None,
-                message: Some(error.message.clone()),
+                message: Some(normalized_failure.client_message),
+                kernel_message: None,
+                client_error_code: Some(normalized_failure.client_error_code),
             };
             log_probe_response(
                 state,
@@ -149,6 +257,8 @@ fn log_probe_request(
             "area": "nodes",
             "operation": "probe.request",
             "method": "diagnostics.probe_outbound",
+            "probeKind": "outbound",
+            "affectsPolicySelection": false,
             "observer": "znet-sink",
             "peer": "zero-core",
             "direction": "request",
@@ -188,7 +298,8 @@ fn log_probe_response(
             LogLevel::Warn
         },
         format!(
-            "应用收到内核节点测速响应（{}）：{detail}",
+            "节点延迟测速{}（{}）：{detail}",
+            if result.reachable { "完成" } else { "失败" },
             result.target_tag
         ),
         serde_json::json!({
@@ -196,6 +307,8 @@ fn log_probe_response(
             "area": "nodes",
             "operation": "probe.response",
             "method": "diagnostics.probe_outbound",
+            "probeKind": "outbound",
+            "affectsPolicySelection": false,
             "observer": "znet-sink",
             "peer": "zero-core",
             "direction": "response",
@@ -206,7 +319,9 @@ fn log_probe_response(
             "durationMs": duration_ms,
             "reachable": result.reachable,
             "latencyMs": result.latency_ms,
-            "kernelMessage": result.message,
+            "clientErrorCode": result.client_error_code.as_deref(),
+            "clientMessage": result.message.as_deref(),
+            "kernelMessage": result.kernel_message.as_deref(),
             "errorCode": error_code,
             "errorDetails": error_details,
             "outcome": if result.reachable { "success" } else { "failed" },
@@ -364,44 +479,12 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
     let observed_at_unix_ms = event
         .completed_at_unix_ms
         .unwrap_or_else(common::now_unix_ms);
-    for member in &event.members {
-        state.record_client_probe_observation(ProbeObservation {
-            scope: current_scope.clone(),
-            job_kind: observation_kind,
-            target_tag: member.tag.clone(),
-            reachable: member.alive.unwrap_or(member.last_error.is_none()),
-            latency_ms: member.delay_ms,
-            message: member.last_error.clone(),
-            source: observation_source,
-            observed_at_unix_ms: member.last_checked_unix_ms.unwrap_or(observed_at_unix_ms),
-            selected_tag: event.selected.clone(),
-        });
-    }
-    let _ = app_handle.emit(CLIENT_CORE_UPDATED_EVENT, state.client_core_snapshot());
-    if scheduled {
-        return;
-    }
-
-    let matching_jobs: Vec<_> = state
-        .list_client_probe_jobs(None)
-        .into_iter()
-        .filter(|job| {
-            job.state == ProbeJobState::Running
-                && job.kind == ProbeJobKind::ManualPolicy
-                && job.scope == current_scope
-                && job.target_tags.contains(&event.policy_tag)
-                && policy_completion_is_fresh(event, job)
-        })
-        .collect();
-    if matching_jobs.is_empty() {
-        return;
-    }
-
     let failed = event
         .members
         .iter()
         .filter(|member| member.alive == Some(false) || member.last_error.is_some())
         .count();
+    let reachable = failed == 0 && !event.members.is_empty();
     let latency_ms = event
         .selected
         .as_deref()
@@ -414,16 +497,77 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
                 .filter_map(|member| member.delay_ms)
                 .min()
         });
+    let message =
+        (failed > 0).then(|| format!("{failed}/{} policy members failed", event.members.len()));
+
+    for member in &event.members {
+        state.record_client_probe_observation(ProbeObservation {
+            scope: current_scope.clone(),
+            job_kind: observation_kind,
+            target_tag: member.tag.clone(),
+            reachable: member.alive.unwrap_or(member.last_error.is_none()),
+            latency_ms: member.delay_ms,
+            message: member.last_error.clone(),
+            source: observation_source,
+            observed_at_unix_ms: member.last_checked_unix_ms.unwrap_or(observed_at_unix_ms),
+            policy_tag: Some(event.policy_tag.clone()),
+            selected_tag: event.selected.clone(),
+        });
+    }
+
+    state.record_client_probe_observation(ProbeObservation {
+        scope: current_scope.clone(),
+        job_kind: observation_kind,
+        target_tag: event.policy_tag.clone(),
+        reachable,
+        latency_ms,
+        message: message.clone(),
+        source: observation_source,
+        observed_at_unix_ms,
+        policy_tag: Some(event.policy_tag.clone()),
+        selected_tag: event.selected.clone(),
+    });
+    let _ = app_handle.emit(CLIENT_CORE_UPDATED_EVENT, state.client_core_snapshot());
+
+    let matching_jobs: Vec<_> = state
+        .list_client_probe_jobs(None)
+        .into_iter()
+        .filter(|job| {
+            job.state == ProbeJobState::Running
+                && job.kind == ProbeJobKind::ManualPolicy
+                && job.scope == current_scope
+                && job.target_tags.contains(&event.policy_tag)
+                && policy_completion_is_fresh(event, job)
+        })
+        .collect();
+
     for job in matching_jobs {
+        if scheduled {
+            logs::znet_log_fields(
+                Some(state.inner()),
+                LogLevel::Debug,
+                format!("周期测速结果完成主动策略测速（{}）", event.policy_tag),
+                serde_json::json!({
+                    "schema": "znet.node-probe.v1",
+                    "area": "nodes",
+                    "operation": "probe.policy.coalesced_completion",
+                    "probeJobId": job.id.0,
+                    "policyTag": event.policy_tag,
+                    "trigger": event.trigger,
+                    "selectedTag": event.selected,
+                    "completedAtUnixMs": event.completed_at_unix_ms,
+                    "outcome": if reachable { "success" } else { "failed" },
+                }),
+            );
+        }
         let update = state.record_client_probe_result(
             job.id,
             &job.scope,
             ProbeTargetResult {
                 target_tag: event.policy_tag.clone(),
-                reachable: failed == 0 && !event.members.is_empty(),
+                reachable,
                 latency_ms,
-                message: (failed > 0)
-                    .then(|| format!("{failed}/{} policy members failed", event.members.len())),
+                message: message.clone(),
                 source: ProbeObservationSource::ManualPolicy,
                 observed_at_unix_ms,
             },
@@ -438,67 +582,55 @@ fn policy_completion_is_fresh(
     event: &GuiPolicyProbeCompletedEvent,
     job: &ProbeJobSnapshot,
 ) -> bool {
-    if event
-        .started_at_unix_ms
-        .is_some_and(|started| started < job.started_at_unix_ms)
-        || event
-            .completed_at_unix_ms
-            .is_some_and(|completed| completed < job.started_at_unix_ms)
-    {
-        return false;
+    if let Some(completed) = event.completed_at_unix_ms {
+        return completed >= job.started_at_unix_ms;
     }
-    let latest_member_check = event
+    if let Some(checked) = event
         .members
         .iter()
         .filter_map(|member| member.last_checked_unix_ms)
-        .max();
-    latest_member_check.is_none_or(|checked| checked >= job.started_at_unix_ms)
+        .max()
+    {
+        return checked >= job.started_at_unix_ms;
+    }
+    event
+        .started_at_unix_ms
+        .is_none_or(|started| started >= job.started_at_unix_ms)
 }
 
 /// Recover manual policy jobs after an event gap by comparing the latest
 /// kernel policy snapshot with each job's request time.
 pub fn reconcile_policy_snapshot(app_handle: &AppHandle, groups: &[GuiPolicyGroup]) {
-    let state = app_handle.state::<AppState>();
-    let current_scope = state.client_core_snapshot().scope;
-    let jobs: Vec<_> = state
-        .list_client_probe_jobs(None)
-        .into_iter()
-        .filter(|job| {
-            job.state == ProbeJobState::Running
-                && job.kind == ProbeJobKind::ManualPolicy
-                && job.scope == current_scope
-        })
-        .collect();
-
-    for job in jobs {
-        for target in &job.target_tags {
-            let Some(group) = groups.iter().find(|group| group.name == *target) else {
-                continue;
-            };
-            let completed_at_unix_ms = group
-                .outbounds
-                .iter()
-                .filter_map(|member| member.last_checked_unix_ms)
-                .max();
-            if completed_at_unix_ms.is_none_or(|completed| completed < job.started_at_unix_ms) {
-                continue;
-            }
-            record_policy_probe_completed(
-                app_handle,
-                &GuiPolicyProbeCompletedEvent {
-                    policy_tag: group.name.clone(),
-                    trigger: Some("manual".to_string()),
-                    url: None,
-                    started_at_unix_ms: Some(job.started_at_unix_ms),
-                    completed_at_unix_ms,
-                    duration_ms: completed_at_unix_ms
-                        .map(|completed| completed.saturating_sub(job.started_at_unix_ms)),
-                    selected: group.selected.clone(),
-                    members: group.outbounds.clone(),
-                },
-            );
-        }
+    for group in groups.iter().filter(|group| is_urltest_kind(&group.kind)) {
+        let completed_at_unix_ms = group
+            .outbounds
+            .iter()
+            .filter_map(|member| member.last_checked_unix_ms)
+            .max();
+        let Some(completed_at_unix_ms) = completed_at_unix_ms else {
+            continue;
+        };
+        record_policy_probe_completed(
+            app_handle,
+            &GuiPolicyProbeCompletedEvent {
+                policy_tag: group.name.clone(),
+                trigger: Some("scheduled".to_string()),
+                url: None,
+                started_at_unix_ms: None,
+                completed_at_unix_ms: Some(completed_at_unix_ms),
+                duration_ms: None,
+                selected: group.selected.clone(),
+                members: group.outbounds.clone(),
+            },
+        );
     }
+}
+
+fn is_urltest_kind(kind: &str) -> bool {
+    matches!(
+        kind.trim().to_ascii_lowercase().as_str(),
+        "url_test" | "urltest" | "url-test"
+    )
 }
 
 pub fn spawn_probe_timeout(app_handle: AppHandle, job: &ProbeJobSnapshot) {
@@ -526,7 +658,9 @@ fn default_ipc_options(
 
 #[cfg(test)]
 mod tests {
-    use super::policy_completion_is_fresh;
+    use super::{
+        normalize_outbound_probe_failure, policy_completion_is_fresh, policy_probe_timeout_ms,
+    };
     use crate::client_core::{
         ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
         ProbeJobState, ProfileId,
@@ -594,6 +728,31 @@ mod tests {
             &event(Some(1_000), Some(1_100), Some(1_050)),
             &job
         ));
+        assert!(policy_completion_is_fresh(
+            &event(Some(800), Some(1_100), Some(800)),
+            &job
+        ));
+    }
+
+    #[test]
+    fn outbound_timeout_hides_urltest_implementation_detail() {
+        let failure = normalize_outbound_probe_failure(Some("urltest probe timed out"), None);
+        assert_eq!(failure.client_error_code, "probe_timeout");
+        assert_eq!(failure.client_message, "节点延迟测速超时");
+    }
+
+    #[test]
+    fn unknown_outbound_failure_keeps_its_diagnostic_detail() {
+        let failure = normalize_outbound_probe_failure(Some("tls handshake failed"), None);
+        assert_eq!(failure.client_error_code, "probe_failed");
+        assert_eq!(failure.client_message, "tls handshake failed");
+    }
+
+    #[test]
+    fn policy_timeout_scales_for_large_groups_and_keeps_a_ten_minute_cap() {
+        assert_eq!(policy_probe_timeout_ms(1), 60_000);
+        assert_eq!(policy_probe_timeout_ms(50), 515_000);
+        assert_eq!(policy_probe_timeout_ms(100), 600_000);
     }
 
     #[test]

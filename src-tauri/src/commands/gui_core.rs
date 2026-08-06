@@ -86,6 +86,7 @@ pub fn gui_probe_job_start(
             "scheduled policy observations are recorded from kernel events and cannot be started manually",
         ));
     }
+    let request = probe::normalize_start_request(state.inner(), request)?;
     let outcome = state
         .start_client_probe(request)
         .map_err(AppError::client_core)?;
