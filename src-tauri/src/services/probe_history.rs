@@ -84,6 +84,7 @@ mod tests {
             message: None,
             source: ProbeObservationSource::ManualPolicy,
             observed_at_unix_ms: 1_000,
+            policy_tag: Some(tag.to_string()),
             selected_tag: Some(tag.to_string()),
         }
     }

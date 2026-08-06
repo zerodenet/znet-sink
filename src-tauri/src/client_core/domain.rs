@@ -135,6 +135,8 @@ pub struct ProbeObservation {
     pub message: Option<String>,
     pub source: ProbeObservationSource,
     pub observed_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_tag: Option<String>,
     pub selected_tag: Option<String>,
 }
 

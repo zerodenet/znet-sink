@@ -438,11 +438,9 @@
 
   async function probePolicy(policyTag: string) {
     try {
-      const memberCount = groups.find((group) => group.name === policyTag)?.outbounds.length ?? 1;
       const job = await startProbeJob({
         kind: 'manual_policy',
         targetTags: [policyTag],
-        timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
       });
       applyProbeJob(job);
     } catch (error) {
@@ -475,11 +473,9 @@
         }));
       }
       for (const policyTag of targets.policyTags) {
-        const memberCount = groups.find((group) => group.name === policyTag)?.outbounds.length ?? 1;
         requests.push(startProbeJob({
           kind: 'manual_policy',
           targetTags: [policyTag],
-          timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + memberCount * 5_000)),
         }));
       }
       const jobs = await Promise.all(requests);
