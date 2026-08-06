@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test:nodes": "pnpm test:nodes-view-model && pnpm test:nodes-select",
+    "test:nodes": "pnpm test:nodes-view-model && pnpm test:nodes-probe-state && pnpm test:nodes-select",
     "test:nodes-view-model": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-view-model.mjs",
     "test:nodes-select": "node scripts/test-nodes-select-args.mjs",
     "test:notifications": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-notification-logging.mjs",
@@ -30,7 +30,8 @@
     "tauri": "tauri",
     "prepare": "husky",
     "commit": "git-cz",
-    "lint:commit": "commitlint --edit"
+    "lint:commit": "commitlint --edit",
+    "test:nodes-probe-state": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-probe-state.mjs"
   },
   "config": {
     "commitizen": {
