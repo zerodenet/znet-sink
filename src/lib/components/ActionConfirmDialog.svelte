@@ -28,7 +28,6 @@
   }: Props = $props();
 
   let dialogElement = $state<HTMLDivElement>();
-  let cancelButton = $state<HTMLButtonElement>();
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -84,7 +83,7 @@
     }
 
     window.addEventListener('keydown', handleKeydown);
-    void tick().then(() => (cancelButton ?? dialogElement)?.focus());
+    void tick().then(() => (focusableElements()[0] ?? dialogElement)?.focus());
 
     return () => {
       window.removeEventListener('keydown', handleKeydown);
@@ -127,7 +126,7 @@
       </div>
 
       <div class="mt-5 flex justify-end gap-2">
-        <Button bind:ref={cancelButton} variant="outline" size="sm" disabled={busy} onclick={close}>
+        <Button variant="outline" size="sm" disabled={busy} onclick={close}>
           取消
         </Button>
         <Button
