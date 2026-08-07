@@ -361,6 +361,16 @@
     }
   }
 
+  function eventStatusClass(): string {
+    switch (coreEvents.status) {
+      case 'subscribed': return 'text-emerald-600';
+      case 'reconnecting':
+      case 'offline': return 'text-amber-600';
+      case 'error': return 'text-destructive';
+      default: return 'text-muted-foreground';
+    }
+  }
+
   function sourceLabel(connection: DisplayConnection): string {
     if (hasText(connection.processName)) return connection.processName;
     if (hasText(connection.source)) return connection.source;
@@ -485,15 +495,12 @@
     </Tabs.List>
 
     <div
-      class="flex items-center justify-self-end gap-1.5 text-[10.5px] text-muted-foreground"
-      class:text-emerald-600={coreEvents.status === 'subscribed'}
-      class:text-amber-600={coreEvents.status === 'reconnecting' || coreEvents.status === 'offline'}
-      class:text-destructive={coreEvents.status === 'error'}
+      class={`flex items-center justify-self-end gap-1.5 text-[10.5px] ${eventStatusClass()}`}
       title={coreEvents.lastError ?? eventStatusLabel()}
       aria-label={eventStatusLabel()}
     >
       <span class="size-1.5 rounded-full bg-current opacity-75"></span>
-      <span>{eventStatusLabel()}</span>
+      <span class="hidden sm:inline">{eventStatusLabel()}</span>
     </div>
   </header>
 
@@ -615,7 +622,7 @@
     <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
       <span class="mr-1 text-[10.5px] font-medium text-muted-foreground">筛选条件</span>
 
-      <Select.Root bind:value={protocolFilter}>
+      <Select.Root type="single" bind:value={protocolFilter}>
         <Select.Trigger size="sm" class="w-full sm:w-[142px]" aria-label="按协议过滤">
           {protocolFilter === 'all' ? '全部协议' : protocolFilter.toUpperCase()}
         </Select.Trigger>
@@ -627,7 +634,7 @@
         </Select.Content>
       </Select.Root>
 
-      <Select.Root bind:value={outboundFilter}>
+      <Select.Root type="single" bind:value={outboundFilter}>
         <Select.Trigger size="sm" class="w-full sm:w-[160px]" aria-label="按出口过滤">
           {outboundFilter === 'all' ? '全部出口' : outboundFilter}
         </Select.Trigger>
@@ -640,7 +647,7 @@
       </Select.Root>
 
       {#if activeTab === 'history'}
-        <Select.Root bind:value={resultFilter}>
+        <Select.Root type="single" bind:value={resultFilter}>
           <Select.Trigger size="sm" class="w-full sm:w-[150px]" aria-label="按结果过滤">
             {resultFilter === 'all' ? '全部结果' : resultFilter}
           </Select.Trigger>
