@@ -22,12 +22,12 @@
     AlertTriangle,
     ChevronLeft,
     ChevronRight,
+    CircleX,
     Pause,
     Play,
     RotateCcw,
     Search,
     Trash2,
-    XCircle,
   } from '@lucide/svelte';
 
   const HISTORY_SCOPE = 'connection-history';
@@ -473,7 +473,7 @@
         type="button"
         disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
         onclick={() => closeAllConfirm = true}
-      ><XCircle size={14} />关闭全部</button>
+      ><CircleX size={14} />关闭全部</button>
     {:else}
       <button class="toolbar-button danger" type="button" disabled={clearingHistory} onclick={() => clearHistoryConfirm = true}>
         <Trash2 size={14} />清空记录
@@ -531,7 +531,7 @@
               title="终止连接"
               aria-label={`终止连接 ${connection.destination}`}
               onclick={() => requestSingleTerminate(connection)}
-            ><XCircle size={15} /></button>
+            ><CircleX size={15} /></button>
           {/if}
         </article>
       {/each}
