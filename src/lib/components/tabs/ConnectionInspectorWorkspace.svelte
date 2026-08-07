@@ -22,7 +22,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import * as Select from '$lib/components/ui/select';
+  import { ClearableSelect } from '$lib/components/ui/select';
   import { Spinner } from '$lib/components/ui/Spinner';
   import {
     CircleX,
@@ -767,90 +767,39 @@
     <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
       <span class="mr-1 text-[10.5px] font-medium text-muted-foreground">筛选条件</span>
 
-      <div class="relative w-full sm:w-[142px]">
-        <Select.Root type="single" bind:value={protocolFilter}>
-          <Select.Trigger size="sm" class={protocolFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按协议过滤">
-            {protocolFilter === 'all' ? '全部协议' : protocolFilter.toUpperCase()}
-          </Select.Trigger>
-          <Select.Content>
-            <Select.Item value="all" label="全部协议" />
-            {#each protocolOptions as protocol}
-              <Select.Item value={protocol} label={protocol.toUpperCase()} />
-            {/each}
-          </Select.Content>
-        </Select.Root>
-        {#if protocolFilter !== 'all'}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
-            title="清除协议筛选"
-            aria-label="清除协议筛选"
-            onpointerdown={(event) => event.stopPropagation()}
-            onclick={(event) => {
-              event.stopPropagation();
-              protocolFilter = 'all';
-            }}
-          ><X class="size-3" /></Button>
-        {/if}
-      </div>
+      <ClearableSelect
+        bind:value={protocolFilter}
+        class="w-full sm:w-[142px]"
+        ariaLabel="按协议过滤"
+        clearLabel="清除协议筛选"
+        options={[
+          { value: 'all', label: '全部协议' },
+          ...protocolOptions.map((protocol) => ({ value: protocol, label: protocol.toUpperCase() })),
+        ]}
+      />
 
-      <div class="relative w-full sm:w-[160px]">
-        <Select.Root type="single" bind:value={outboundFilter}>
-          <Select.Trigger size="sm" class={outboundFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按出口过滤">
-            {outboundFilter === 'all' ? '全部出口' : outboundFilter}
-          </Select.Trigger>
-          <Select.Content>
-            <Select.Item value="all" label="全部出口" />
-            {#each outboundOptions as outbound}
-              <Select.Item value={outbound} label={outbound} />
-            {/each}
-          </Select.Content>
-        </Select.Root>
-        {#if outboundFilter !== 'all'}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
-            title="清除出口筛选"
-            aria-label="清除出口筛选"
-            onpointerdown={(event) => event.stopPropagation()}
-            onclick={(event) => {
-              event.stopPropagation();
-              outboundFilter = 'all';
-            }}
-          ><X class="size-3" /></Button>
-        {/if}
-      </div>
+      <ClearableSelect
+        bind:value={outboundFilter}
+        class="w-full sm:w-[160px]"
+        ariaLabel="按出口过滤"
+        clearLabel="清除出口筛选"
+        options={[
+          { value: 'all', label: '全部出口' },
+          ...outboundOptions.map((outbound) => ({ value: outbound, label: outbound })),
+        ]}
+      />
 
       {#if activeTab === 'history'}
-        <div class="relative w-full sm:w-[150px]">
-          <Select.Root type="single" bind:value={resultFilter}>
-            <Select.Trigger size="sm" class={resultFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按结果过滤">
-              {resultFilter === 'all' ? '全部结果' : resultFilter}
-            </Select.Trigger>
-            <Select.Content>
-              <Select.Item value="all" label="全部结果" />
-              {#each resultOptions as result}
-                <Select.Item value={result} label={result} />
-              {/each}
-            </Select.Content>
-          </Select.Root>
-          {#if resultFilter !== 'all'}
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
-              title="清除结果筛选"
-              aria-label="清除结果筛选"
-              onpointerdown={(event) => event.stopPropagation()}
-              onclick={(event) => {
-                event.stopPropagation();
-                resultFilter = 'all';
-              }}
-            ><X class="size-3" /></Button>
-          {/if}
-        </div>
+        <ClearableSelect
+          bind:value={resultFilter}
+          class="w-full sm:w-[150px]"
+          ariaLabel="按结果过滤"
+          clearLabel="清除结果筛选"
+          options={[
+            { value: 'all', label: '全部结果' },
+            ...resultOptions.map((result) => ({ value: result, label: result })),
+          ]}
+        />
       {/if}
 
       {#if structuredFilterCount > 0}
