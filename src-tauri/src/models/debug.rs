@@ -29,6 +29,14 @@ pub struct DebugFrameQuery {
     pub frame_type: Option<String>,
     pub limit: Option<usize>,
     pub before_id: Option<u64>,
+    /// Connection-history-only text search across the persisted event record.
+    pub search: Option<String>,
+    /// Connection-history-only exact protocol/network filter.
+    pub protocol: Option<String>,
+    /// Connection-history-only exact outbound tag filter.
+    pub outbound: Option<String>,
+    /// Connection-history-only exact outcome or close-reason filter.
+    pub outcome: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
