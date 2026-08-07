@@ -259,6 +259,10 @@
     actionMenuKey = null;
   }
 
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') actionMenuKey = null;
+  }
+
   function sourceLabel(connection: DisplayConnection): string {
     if (hasText(connection.processName)) return connection.processName;
     if (hasText(connection.source)) return connection.source;
@@ -358,6 +362,8 @@
   });
 </script>
 
+<svelte:window onclick={() => actionMenuKey = null} onkeydown={handleWindowKeydown} />
+
 <Tabs.Root bind:value={activeTab} class="connections-shell desk-card flex-1 overflow-hidden flex flex-col gap-0 animate-fade-in">
   <div class="panel-header">
     <div class="panel-title-row">
@@ -404,7 +410,7 @@
   {:else if tabConnections.length === 0}
     <div class="panel-empty-block"><span class="empty-title">{searchQuery ? '无匹配结果' : '无记录'}</span><span class="empty-desc">{searchQuery ? '尝试更换搜索关键词' : (activeTab === 'live' ? '暂无活动连接' : '暂无连接记录')}</span></div>
   {:else}
-    <div class="list-scroll" onclick={() => actionMenuKey = null}>
+    <div class="list-scroll">
       {#each visibleConnections as connection (connectionKey(connection))}
         {@const key = connectionKey(connection)}
         <article class="flow-row">
@@ -437,11 +443,22 @@
 
           {#if connection.origin === 'active' && store.isActionOperable('core.flow.close')}
             <div class="row-actions">
-              <button type="button" class="more-button" aria-label="连接操作" title="连接操作" onclick={(event) => { event.stopPropagation(); actionMenuKey = actionMenuKey === key ? null : key; }}><MoreHorizontal size={16} /></button>
+              <button
+                type="button"
+                class="more-button"
+                aria-label="连接操作"
+                aria-haspopup="true"
+                aria-expanded={actionMenuKey === key}
+                title="连接操作"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  actionMenuKey = actionMenuKey === key ? null : key;
+                }}
+              ><MoreHorizontal size={16} /></button>
               {#if actionMenuKey === key}
-                <div class="action-menu" role="menu" onclick={(event) => event.stopPropagation()}>
-                  <button type="button" role="menuitem" onclick={() => openDetails(connection)}><Eye size={14} />查看详情</button>
-                  <button type="button" class="danger" role="menuitem" onclick={() => requestTerminate(connection)}><AlertTriangle size={14} />终止连接</button>
+                <div class="action-menu" role="group" aria-label="连接操作">
+                  <button type="button" onclick={() => openDetails(connection)}><Eye size={14} />查看详情</button>
+                  <button type="button" class="danger" onclick={() => requestTerminate(connection)}><AlertTriangle size={14} />终止连接</button>
                 </div>
               {/if}
             </div>
