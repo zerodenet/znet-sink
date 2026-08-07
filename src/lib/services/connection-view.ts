@@ -1,12 +1,15 @@
+import type { ConnectionWireMetadata } from '$lib/services/connection-wire';
 import type { GuiConnectionItem } from '$lib/types/gui-api';
 
 export type ConnectionOrigin = 'active' | 'recent';
 
-export type DisplayConnection = Omit<GuiConnectionItem, 'source'> & {
-  source: string;
-  origin: ConnectionOrigin;
-  protocol: string;
-};
+export type DisplayConnection = Omit<GuiConnectionItem, 'source'>
+  & Partial<ConnectionWireMetadata>
+  & {
+    source: string;
+    origin: ConnectionOrigin;
+    protocol: string;
+  };
 
 export interface ConnectionViewInput {
   activeSnapshot: GuiConnectionItem[];
@@ -66,7 +69,7 @@ export function toDisplayConnection(
     source: connection.source ?? '-',
     origin,
     protocol: connection.network,
-  };
+  } as DisplayConnection;
 }
 
 export function mergeConnectionLists(
