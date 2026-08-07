@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ConnectionsWorkspace from './ConnectionsWorkspace.svelte';
+  import ConnectionInspectorWorkspace from './ConnectionInspectorWorkspace.svelte';
 </script>
 
-<ConnectionsWorkspace />
+<ConnectionInspectorWorkspace />
