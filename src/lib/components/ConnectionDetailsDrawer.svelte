@@ -18,7 +18,7 @@
 
   let activeSection = $state<'details' | 'diagnostics'>('details');
   let activeConnectionIdentity = $state<string | null>(null);
-  let drawerElement: HTMLDivElement;
+  let drawerElement = $state<HTMLDivElement>();
 
   function connectionIdentity(item: DisplayConnection): string {
     const lifetime = item.startedAtUnixMs
@@ -160,7 +160,7 @@
         </button>
       </header>
 
-      <nav class="drawer-tabs" role="tablist" aria-label="连接详情栏目">
+      <div class="drawer-tabs" role="tablist" aria-label="连接详情栏目">
         <button
           id="connection-details-tab"
           type="button"
@@ -179,7 +179,7 @@
           class:active={activeSection === 'diagnostics'}
           onclick={() => activeSection = 'diagnostics'}
         >诊断数据</button>
-      </nav>
+      </div>
 
       <div class="drawer-content">
         {#if activeSection === 'details'}
