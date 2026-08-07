@@ -36,11 +36,7 @@ fn is_zero_alias(value: &str) -> bool {
 fn is_clash_alias(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "clash"
-            | "clash-yaml"
-            | "yaml"
-            | "clash-base64-yaml"
-            | "base64-yaml"
+        "clash" | "clash-yaml" | "yaml" | "clash-base64-yaml" | "base64-yaml"
     )
 }
 
@@ -69,9 +65,11 @@ fn public_format(value: &str) -> String {
 }
 
 fn contains_client_identity(value: &str) -> bool {
-    value
-        .split_whitespace()
-        .any(|token| token.to_ascii_lowercase().starts_with(CLIENT_USER_AGENT_PREFIX))
+    value.split_whitespace().any(|token| {
+        token
+            .to_ascii_lowercase()
+            .starts_with(CLIENT_USER_AGENT_PREFIX)
+    })
 }
 
 fn effective_user_agent(value: Option<&str>) -> String {
@@ -92,10 +90,11 @@ fn public_user_agent(value: Option<&str>) -> Option<String> {
     }
 
     let mut tokens = value.split_whitespace().collect::<Vec<_>>();
-    if tokens
-        .last()
-        .is_some_and(|token| token.to_ascii_lowercase().starts_with(CLIENT_USER_AGENT_PREFIX))
-    {
+    if tokens.last().is_some_and(|token| {
+        token
+            .to_ascii_lowercase()
+            .starts_with(CLIENT_USER_AGENT_PREFIX)
+    }) {
         tokens.pop();
     }
 
@@ -209,9 +208,8 @@ pub fn parse_subscription_content(
     let format = public_format(format);
     let mut parsed = match format.as_str() {
         "zero" => original::parse_subscription_content(content, "zero-base64-json"),
-        "clash" => original::parse_subscription_content(content, "clash-yaml").or_else(|_| {
-            original::parse_subscription_content(content, "clash-base64-yaml")
-        }),
+        "clash" => original::parse_subscription_content(content, "clash-yaml")
+            .or_else(|_| original::parse_subscription_content(content, "clash-base64-yaml")),
         "auto" => {
             if let Ok(value) = serde_json::from_str::<Value>(content.trim()) {
                 if looks_like_zero_config(&value) {
@@ -315,10 +313,15 @@ mod wrapper_tests {
     #[test]
     fn clash_accepts_raw_and_base64_yaml_under_one_name() {
         let yaml = "proxies:\n  - {name: x, type: ss, server: s, port: 1, password: p}\n";
-        assert_eq!(parse_subscription_content(yaml, "clash").unwrap().format, "clash");
+        assert_eq!(
+            parse_subscription_content(yaml, "clash").unwrap().format,
+            "clash"
+        );
         let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
         assert_eq!(
-            parse_subscription_content(&encoded, "clash").unwrap().format,
+            parse_subscription_content(&encoded, "clash")
+                .unwrap()
+                .format,
             "clash"
         );
     }
