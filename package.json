@@ -18,7 +18,7 @@
     "test:release-version": "node scripts/test-version-manifests.mjs",
     "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs",
     "test:onboarding": "node --experimental-strip-types scripts/test-onboarding-state.mjs",
-    "test:connections": "node --experimental-strip-types scripts/test-connection-delta-batcher.mjs",
+    "test:connections": "node --experimental-strip-types scripts/test-connection-delta-batcher.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-view.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-wire.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-history.mjs",
     "test:logs": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-log-page.mjs",
     "test:desktop-shell": "node --experimental-strip-types scripts/test-desktop-shell.mjs",
     "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:release-version && pnpm test:app-update && pnpm test:onboarding && pnpm test:connections && pnpm test:logs && pnpm test:desktop-shell && pnpm check && pnpm build",
@@ -72,7 +72,6 @@
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.2",
     "tailwindcss": "^4.3.0",
-    "tw-animate-css": "^1.4.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.13"
   }

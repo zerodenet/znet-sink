@@ -20,6 +20,14 @@ export interface DebugFrameQuery {
   frameType?: string;
   limit?: number;
   beforeId?: number;
+  /** Connection-history-only full-record text search. */
+  search?: string;
+  /** Connection-history-only exact protocol/network filter. */
+  protocol?: string;
+  /** Connection-history-only exact outbound tag filter. */
+  outbound?: string;
+  /** Connection-history-only exact outcome/close-reason filter. */
+  outcome?: string;
 }
 
 export interface DebugFramePage {

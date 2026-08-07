@@ -29,6 +29,14 @@ pub struct DebugFrameQuery {
     pub frame_type: Option<String>,
     pub limit: Option<usize>,
     pub before_id: Option<u64>,
+    /// Connection-history-only text search across the persisted event record.
+    pub search: Option<String>,
+    /// Connection-history-only exact protocol/network filter.
+    pub protocol: Option<String>,
+    /// Connection-history-only exact outbound tag filter.
+    pub outbound: Option<String>,
+    /// Connection-history-only exact outcome or close-reason filter.
+    pub outcome: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -70,6 +78,7 @@ pub(crate) fn push_debug_frame(frame: DebugFrame) {
         frames.push(frame);
     }
     let _ = crate::services::debug_store::append(&persisted);
+    let _ = crate::services::connection_history_store::append_if_completed(&persisted);
     if let Some(observer) = DEBUG_FRAME_OBSERVER.get() {
         // Diagnostics must never be able to break the IPC path.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(&persisted)));
