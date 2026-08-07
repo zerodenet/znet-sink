@@ -4,9 +4,7 @@
     getAppErrorMessage,
     getGuiConnections,
     getGuiDebugFrames,
-    getGuiRecentConnections,
     guiCloseConnection,
-    queryCore,
     queryFlows,
     closeFlow,
     handleAppError,
@@ -18,9 +16,12 @@
   import {
     attachConnectionWireMetadata,
     buildConnectionWireIndex,
-    mergeConnectionWireIndexes,
     type ConnectionWireIndex,
   } from '$lib/services/connection-wire';
+  import {
+    buildPersistedConnectionHistory,
+    type PersistedConnection,
+  } from '$lib/services/connection-history';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
   import ConnectionDetailsDrawer from '$lib/components/ConnectionDetailsDrawer.svelte';
   import { AlertTriangle, Eye, MoreHorizontal, RefreshCw, Search } from '@lucide/svelte';
@@ -29,10 +30,13 @@
 
   const MAX_CONNECTIONS = 500;
   const MAX_RENDER = 120;
-  const RECONCILE_INTERVAL_MS = 5_000;
+  const MAX_LOCAL_EVENT_FRAMES = 5_000;
 
+  // A one-shot bootstrap snapshot only. Ongoing state is projected from IPC
+  // broadcasts in coreEvents; this page never polls the kernel.
   let activeSnapshot = $state<GuiConnectionItem[]>([]);
-  let recentSnapshot = $state<GuiConnectionItem[]>([]);
+  // Completed records are rebuilt from the GUI-owned local IPC event journal.
+  let recentSnapshot = $state<PersistedConnection[]>([]);
   let wireIndex = $state<ConnectionWireIndex>({});
   let loading = $state(true);
   let refreshing = $state(false);
@@ -43,8 +47,6 @@
   let terminateConfirmKey = $state<string | null>(null);
   let activeTab = $state<'live' | 'history'>('live');
   let searchQuery = $state('');
-  let flowSupported = $state(true);
-  let historySupported = $state(true);
   let loadError = $state<string | null>(null);
   let partialError = $state<string | null>(null);
   let refreshGeneration = 0;
@@ -52,7 +54,7 @@
 
   const connectionView = $derived(buildConnectionView({
     activeSnapshot: activeSnapshot.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
-    recentSnapshot: recentSnapshot.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
+    recentSnapshot,
     activeEvents: coreEvents.activeConnections.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
     recentEvents: coreEvents.connectionHistory.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
     limit: MAX_CONNECTIONS,
@@ -116,53 +118,45 @@
   const liveCount = $derived(activeConnections.length);
   const historyCount = $derived(connectionView.recent.length);
 
-  async function refresh(showLoading = connections.length === 0, includeWireQueries = showLoading) {
+  async function refresh(showLoading = connections.length === 0, includeLocalHistory = false) {
     if (refreshing) return;
     const generation = ++refreshGeneration;
     refreshing = true;
     if (showLoading) loading = true;
 
     try {
-      const [activeResult, recentResult, wireResult] = await Promise.allSettled([
+      const [activeResult, localHistoryResult] = await Promise.allSettled([
         loadActiveConnections(),
-        getGuiRecentConnections({ limit: MAX_CONNECTIONS }),
-        loadWireIndex(includeWireQueries),
+        includeLocalHistory
+          ? getGuiDebugFrames({ frameType: 'event', limit: MAX_LOCAL_EVENT_FRAMES })
+          : Promise.resolve(undefined),
       ]);
       if (generation !== refreshGeneration) return;
 
       const errors: string[] = [];
-      let successCount = 0;
 
       if (activeResult.status === 'fulfilled') {
         activeSnapshot = activeResult.value;
-        flowSupported = true;
-        successCount++;
       } else if (isUnsupportedError(activeResult.reason)) {
-        flowSupported = false;
+        errors.push('当前内核无法提供活动连接恢复快照；后续连接仍由 IPC 事件实时更新');
       } else {
-        errors.push(`实时连接：${getAppErrorMessage(activeResult.reason, '查询失败')}`);
+        errors.push(`活动连接恢复：${getAppErrorMessage(activeResult.reason, '查询失败')}`);
       }
 
-      if (recentResult.status === 'fulfilled') {
-        recentSnapshot = recentResult.value.items;
-        historySupported = true;
-        successCount++;
-      } else if (isUnsupportedError(recentResult.reason) || isModeRestricted(recentResult.reason)) {
-        historySupported = false;
-      } else {
-        errors.push(`连接记录：${getAppErrorMessage(recentResult.reason, '查询失败')}`);
+      if (localHistoryResult.status === 'fulfilled' && localHistoryResult.value) {
+        const frames = localHistoryResult.value.items;
+        recentSnapshot = buildPersistedConnectionHistory(frames, MAX_CONNECTIONS);
+        wireIndex = buildConnectionWireIndex({ eventFrames: frames });
+      } else if (localHistoryResult.status === 'rejected') {
+        errors.push(`本地连接记录：${getAppErrorMessage(localHistoryResult.reason, '读取失败')}`);
       }
 
-      if (wireResult.status === 'fulfilled') {
-        wireIndex = mergeConnectionWireIndexes(wireIndex, wireResult.value);
-      }
-
-      if (successCount === 0 && errors.length > 0 && connections.length === 0) {
+      if (errors.length > 0 && connections.length === 0) {
         loadError = errors.join('；');
         partialError = null;
       } else {
         loadError = null;
-        partialError = errors.length > 0 ? `部分连接数据未能加载：${errors.join('；')}` : null;
+        partialError = errors.length > 0 ? errors.join('；') : null;
       }
     } finally {
       if (generation === refreshGeneration) {
@@ -179,27 +173,6 @@
       if (!isModeRestricted(error)) throw error;
       return (await queryFlows()).map(mapFlowInfo);
     }
-  }
-
-  async function loadWireIndex(includeQueries: boolean): Promise<ConnectionWireIndex> {
-    const activeRawPromise = includeQueries
-      ? queryCore({ active_flows: { limit: MAX_CONNECTIONS, filter: {} } })
-      : Promise.resolve(undefined);
-    const recentRawPromise = includeQueries
-      ? queryCore({ recent_flows: { limit: MAX_CONNECTIONS, filter: {} } })
-      : Promise.resolve(undefined);
-
-    const [activeRaw, recentRaw, eventFrames] = await Promise.allSettled([
-      activeRawPromise,
-      recentRawPromise,
-      getGuiDebugFrames({ frameType: 'event', limit: MAX_CONNECTIONS }),
-    ]);
-
-    return buildConnectionWireIndex({
-      activeResponse: activeRaw.status === 'fulfilled' ? activeRaw.value : undefined,
-      recentResponse: recentRaw.status === 'fulfilled' ? recentRaw.value : undefined,
-      eventFrames: eventFrames.status === 'fulfilled' ? eventFrames.value.items : [],
-    });
   }
 
   function mapFlowInfo(flow: FlowInfo): GuiConnectionItem {
@@ -224,7 +197,7 @@
     const appError = error as { code?: string; message?: string };
     return appError?.code === 'unsupported'
       || appError?.code === 'not_supported'
-      || /(?:not supported|unsupported|unknown.*(?:active_flows|recent_flows|flow))/i.test(appError?.message ?? '');
+      || /(?:not supported|unsupported|unknown.*(?:active_flows|flow))/i.test(appError?.message ?? '');
   }
 
   function requestTerminate(connection: DisplayConnection) {
@@ -246,7 +219,8 @@
       activeSnapshot = activeSnapshot.filter((item) => item.flowId !== connection.flowId);
       terminateConfirmKey = null;
       if (selectedKey === connectionKey(connection)) selectedKey = null;
-      void refresh(false, false);
+      // Do not query after a command. The connection.closed IPC event is the
+      // authoritative state transition and will move the record into history.
     } catch (error) {
       handleAppError(error, '终止连接失败');
     } finally {
@@ -347,17 +321,15 @@
   });
 
   onMount(() => {
+    // One-time bootstrap: an active snapshot for connections that existed before
+    // this page mounted, plus history rebuilt from the local event journal.
     void refresh(true, true);
     const clockTimer = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
-    const reconcileTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh(false, false);
-    }, RECONCILE_INTERVAL_MS);
 
     return () => {
       window.clearInterval(clockTimer);
-      window.clearInterval(reconcileTimer);
     };
   });
 </script>
@@ -375,9 +347,14 @@
       <Tabs.Trigger class="tab-btn" value="history">连接记录</Tabs.Trigger>
     </Tabs.List>
     <div class="header-actions">
-      <Button size="sm" onclick={() => refresh(false, true)} disabled={refreshing}>
+      <Button
+        size="sm"
+        title="重新获取一次活动连接快照；实时变化始终由 IPC 事件驱动"
+        onclick={() => refresh(false, false)}
+        disabled={refreshing}
+      >
         <RefreshCw class={refreshing ? 'animate-spin' : undefined} />
-        {refreshing ? '刷新中...' : '刷新'}
+        {refreshing ? '同步中...' : '重新同步'}
       </Button>
     </div>
   </div>
@@ -392,23 +369,18 @@
   {#if partialError}
     <div class="connection-warning" role="status"><span>{partialError}</span><Button variant="outline" size="xs" onclick={() => refresh(false, true)}>重试</Button></div>
   {/if}
-  {#if activeTab === 'history' && !historySupported}
-    <div class="connection-warning" role="status"><span>当前模式无法查询内核连接记录，暂时仅显示本次客户端会话收到的结束事件。</span></div>
-  {/if}
   {#if loadError && connections.length > 0}
-    <div class="connection-warning error" role="alert"><span>刷新失败，当前仍显示上一批数据：{loadError}</span><Button variant="outline" size="xs" onclick={() => refresh(false, true)}>重试</Button></div>
+    <div class="connection-warning error" role="alert"><span>初始化失败，当前仍显示已收到的事件数据：{loadError}</span><Button variant="outline" size="xs" onclick={() => refresh(false, true)}>重试</Button></div>
   {/if}
 
   {#if loading && connections.length === 0}
     <div class="panel-empty">加载中...</div>
   {:else if loadError && connections.length === 0}
-    <div class="panel-empty-block" role="alert"><span class="empty-title error-text">连接数据加载失败</span><span class="empty-desc">{loadError}</span><Button variant="outline" size="xs" onclick={() => refresh(true, true)}>重试</Button></div>
-  {:else if activeTab === 'live' && !flowSupported}
-    <div class="panel-empty-block"><span class="empty-title">内核不支持实时连接</span><span class="empty-desc">当前内核未声明 active_flows 能力</span></div>
+    <div class="panel-empty-block" role="alert"><span class="empty-title error-text">连接数据初始化失败</span><span class="empty-desc">{loadError}</span><Button variant="outline" size="xs" onclick={() => refresh(true, true)}>重试</Button></div>
   {:else if connections.length === 0}
     <div class="panel-empty-block"><span class="empty-title">无连接</span><span class="empty-desc">内核未运行或暂无流量</span></div>
   {:else if tabConnections.length === 0}
-    <div class="panel-empty-block"><span class="empty-title">{searchQuery ? '无匹配结果' : '无记录'}</span><span class="empty-desc">{searchQuery ? '尝试更换搜索关键词' : (activeTab === 'live' ? '暂无活动连接' : '暂无连接记录')}</span></div>
+    <div class="panel-empty-block"><span class="empty-title">{searchQuery ? '无匹配结果' : '无记录'}</span><span class="empty-desc">{searchQuery ? '尝试更换搜索关键词' : (activeTab === 'live' ? '暂无活动连接' : '暂无本地连接记录')}</span></div>
   {:else}
     <div class="list-scroll">
       {#each visibleConnections as connection (connectionKey(connection))}
@@ -478,7 +450,15 @@
   />
 
   {#if terminateConfirmConnection}
-    <div class="confirm-backdrop" role="presentation" onclick={(event) => { if (event.currentTarget === event.target && terminatingId === null) terminateConfirmKey = null; }}>
+    <div class="confirm-layer">
+      <button
+        class="confirm-scrim"
+        type="button"
+        tabindex="-1"
+        aria-label="取消终止连接"
+        disabled={terminatingId !== null}
+        onclick={() => terminateConfirmKey = null}
+      ></button>
       <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-label="终止连接确认">
         <div class="confirm-icon"><AlertTriangle size={18} /></div>
         <div class="confirm-content"><h3>终止这个活动连接？</h3><p>内核将立即取消到 <strong>{terminateConfirmConnection.destination}</strong> 的连接。对应应用可能会自动重新发起连接。</p></div>
@@ -549,8 +529,9 @@
   .action-menu button:hover { background: var(--muted); }
   .action-menu button.danger { color: var(--destructive); }
   .list-truncated { padding: 9px; color: var(--muted-foreground); font-size: 11px; text-align: center; opacity: 0.58; }
-  .confirm-backdrop { position: absolute; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgb(0 0 0 / 0.35); backdrop-filter: blur(1px); }
-  .confirm-dialog { width: min(420px, 100%); display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 11px; background: var(--background); box-shadow: 0 18px 50px rgb(0 0 0 / 0.24); }
+  .confirm-layer { position: absolute; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .confirm-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.35); backdrop-filter: blur(1px); }
+  .confirm-dialog { position: relative; width: min(420px, 100%); display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 11px; background: var(--background); box-shadow: 0 18px 50px rgb(0 0 0 / 0.24); }
   .confirm-icon { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: color-mix(in srgb, var(--destructive) 10%, transparent); color: var(--destructive); }
   .confirm-content h3 { margin: 1px 0 5px; font-size: 13px; }
   .confirm-content p { margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.55; }
