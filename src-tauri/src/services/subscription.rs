@@ -572,8 +572,11 @@ pub fn parse_subscription_content(
     let format = format.trim().to_ascii_lowercase();
     match format.as_str() {
         "" | "auto" => parse_auto_subscription_content(content),
-        "zero" | "zero-json" => parse_zero_json_subscription_content(content),
-        "zero-base64-json" | "base64-json" => parse_base64_json_subscription_content(content),
+        "zero" | "zero-base64-json" | "base64-json" | "znet-sink"
+        | "znet-sink-base64" => parse_base64_json_subscription_content(content),
+        "zero-json" => Err(AppError::invalid_argument(
+            "plaintext Zero JSON subscriptions are not supported; use Base64 Zero JSON (format: zero)",
+        )),
         "clash" | "clash-yaml" | "yaml" => parse_clash_yaml_subscription_content(content),
         "clash-base64-yaml" | "base64-yaml" => {
             parse_base64_clash_yaml_subscription_content(content)
@@ -585,15 +588,13 @@ pub fn parse_subscription_content(
 }
 
 fn parse_auto_subscription_content(content: &str) -> AppResult<ParsedSubscriptionConfig> {
-    // 1. Raw Zero JSON (many providers serve plain JSON).
+    // 1. Plaintext Zero JSON is intentionally rejected at the external subscription boundary.
     if content.starts_with('{') || content.starts_with('[') {
         if let Ok(value) = serde_json::from_str::<Value>(content) {
             if looks_like_zero_config(&value) {
-                return Ok(ParsedSubscriptionConfig {
-                    content: value,
-                    format: "zero-json".to_string(),
-                    rule_providers: Vec::new(),
-                });
+                return Err(AppError::invalid_argument(
+                    "plaintext Zero JSON subscriptions are not supported; use Base64 Zero JSON (format: zero)",
+                ));
             }
         }
     }
@@ -615,7 +616,7 @@ fn parse_auto_subscription_content(content: &str) -> AppResult<ParsedSubscriptio
 
     Err(AppError::invalid_argument(
         "subscription content did not match any supported format \
-         (zero-json, zero-base64-json, clash-yaml, clash-base64-yaml)",
+         (zero, clash)",
     ))
 }
 
