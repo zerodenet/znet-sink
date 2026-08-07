@@ -18,6 +18,7 @@
   import {
     attachConnectionWireMetadata,
     buildConnectionWireIndex,
+    mergeConnectionWireIndexes,
     type ConnectionWireIndex,
   } from '$lib/services/connection-wire';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
@@ -135,7 +136,7 @@
       }
 
       if (wireResult.status === 'fulfilled') {
-        wireIndex = mergeWireIndexes(wireIndex, wireResult.value);
+        wireIndex = mergeConnectionWireIndexes(wireIndex, wireResult.value);
       }
 
       if (successCount === 0 && errors.length > 0 && connections.length === 0) {
@@ -181,17 +182,6 @@
       recentResponse: recentRaw.status === 'fulfilled' ? recentRaw.value : undefined,
       eventFrames: eventFrames.status === 'fulfilled' ? eventFrames.value.items : [],
     });
-  }
-
-  function mergeWireIndexes(
-    current: ConnectionWireIndex,
-    incoming: ConnectionWireIndex,
-  ): ConnectionWireIndex {
-    const merged: ConnectionWireIndex = { ...current };
-    for (const [flowId, records] of Object.entries(incoming)) {
-      merged[flowId] = [...(merged[flowId] ?? []), ...records].slice(-20);
-    }
-    return merged;
   }
 
   function mapFlowInfo(flow: FlowInfo): GuiConnectionItem {
