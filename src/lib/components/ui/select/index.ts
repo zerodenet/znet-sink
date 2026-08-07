@@ -9,6 +9,7 @@ import ScrollDownButton from "./select-scroll-down-button.svelte";
 import ScrollUpButton from "./select-scroll-up-button.svelte";
 import GroupHeading from "./select-group-heading.svelte";
 import Portal from "./select-portal.svelte";
+import Clearable from "./clearable-select.svelte";
 
 export {
 	Root,
@@ -22,6 +23,7 @@ export {
 	ScrollUpButton,
 	GroupHeading,
 	Portal,
+	Clearable,
 	//
 	Root as Select,
 	Group as SelectGroup,
@@ -34,4 +36,5 @@ export {
 	ScrollUpButton as SelectScrollUpButton,
 	GroupHeading as SelectGroupHeading,
 	Portal as SelectPortal,
+	Clearable as ClearableSelect,
 };
