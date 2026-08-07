@@ -477,16 +477,18 @@
   .dialog-footer > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dialog-footer strong { font-size: 11.5px; }
   .dialog-footer span { color: var(--muted-foreground); font-size: 10px; }
-  @media (max-width: 720px), (max-height: 720px) {
+  @media (max-width: 720px) {
     .dialog-layer { padding: 12px; }
     .dialog { max-height: calc(100dvh - 24px); }
     .summary-grid, .property-grid { grid-template-columns: 1fr; }
     .property.wide { grid-column: auto; }
+    .dialog-footer { align-items: flex-start; flex-direction: column; }
+    .dialog-footer :global(button) { width: 100%; }
+  }
+  @media (max-width: 720px), (max-height: 720px) {
     .raw-block pre { max-height: min(42dvh, 360px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent; }
     .raw-block pre::-webkit-scrollbar { width: 9px; height: 9px; }
     .raw-block pre::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }
     .raw-block pre::-webkit-scrollbar-track { background: transparent; }
-    .dialog-footer { align-items: flex-start; flex-direction: column; }
-    .dialog-footer :global(button) { width: 100%; }
   }
 </style>
