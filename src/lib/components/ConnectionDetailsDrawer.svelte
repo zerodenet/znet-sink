@@ -17,10 +17,29 @@
   }>();
 
   let activeSection = $state<'details' | 'diagnostics'>('details');
+  let activeConnectionIdentity = $state<string | null>(null);
+  let drawerElement: HTMLDivElement;
+
+  function connectionIdentity(item: DisplayConnection): string {
+    const lifetime = item.startedAtUnixMs
+      ?? item.endedAtUnixMs
+      ?? item.eventOccurredAtUnixMs
+      ?? 0;
+    return `${item.origin}:${item.flowId}:${lifetime}`;
+  }
 
   $effect(() => {
-    if (connection) activeSection = 'details';
+    const nextIdentity = connection ? connectionIdentity(connection) : null;
+    if (nextIdentity === activeConnectionIdentity) return;
+
+    activeConnectionIdentity = nextIdentity;
+    activeSection = 'details';
+    if (nextIdentity) queueMicrotask(() => drawerElement?.focus());
   });
+
+  function handleDialogKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') onclose();
+  }
 
   function isNumber(value: unknown): value is number {
     return typeof value === 'number' && Number.isFinite(value);
@@ -107,14 +126,17 @@
 </script>
 
 {#if connection}
-  <div
-    class="drawer-backdrop"
-    role="presentation"
-    onclick={(event) => {
-      if (event.currentTarget === event.target) onclose();
-    }}
-  >
-    <aside class="drawer" role="dialog" aria-modal="true" aria-label="连接详情">
+  <div class="drawer-layer">
+    <button class="drawer-scrim" type="button" tabindex="-1" aria-label="关闭连接详情" onclick={onclose}></button>
+    <div
+      class="drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-label="连接详情"
+      tabindex="-1"
+      bind:this={drawerElement}
+      onkeydown={handleDialogKeydown}
+    >
       <header class="drawer-header">
         <div class="drawer-heading">
           <div class="drawer-title-row">
@@ -138,102 +160,122 @@
         </button>
       </header>
 
-      <nav class="drawer-tabs" aria-label="连接详情栏目">
-        <button type="button" class:active={activeSection === 'details'} onclick={() => activeSection = 'details'}>详情</button>
-        <button type="button" class:active={activeSection === 'diagnostics'} onclick={() => activeSection = 'diagnostics'}>诊断数据</button>
+      <nav class="drawer-tabs" role="tablist" aria-label="连接详情栏目">
+        <button
+          id="connection-details-tab"
+          type="button"
+          role="tab"
+          aria-selected={activeSection === 'details'}
+          aria-controls="connection-details-panel"
+          class:active={activeSection === 'details'}
+          onclick={() => activeSection = 'details'}
+        >详情</button>
+        <button
+          id="connection-diagnostics-tab"
+          type="button"
+          role="tab"
+          aria-selected={activeSection === 'diagnostics'}
+          aria-controls="connection-diagnostics-panel"
+          class:active={activeSection === 'diagnostics'}
+          onclick={() => activeSection = 'diagnostics'}
+        >诊断数据</button>
       </nav>
 
       <div class="drawer-content">
         {#if activeSection === 'details'}
-          <section class="summary-grid">
-            <article class="summary-card">
-              <span class="summary-label">上传</span>
-              <strong>{formatBytes(connection.bytesUp)}</strong>
-              {#if connection.origin === 'active'}<small>{formatRate(connection.throughputUpBps)}</small>{/if}
-            </article>
-            <article class="summary-card">
-              <span class="summary-label">下载</span>
-              <strong>{formatBytes(connection.bytesDown)}</strong>
-              {#if connection.origin === 'active'}<small>{formatRate(connection.throughputDownBps)}</small>{/if}
-            </article>
-            <article class="summary-card">
-              <span class="summary-label">持续时间</span>
-              <strong>{formatDuration(connection.startedAtUnixMs, connection.durationMs)}</strong>
-              <small>{connection.origin === 'active' ? '持续更新' : '最终时长'}</small>
-            </article>
-          </section>
+          <div id="connection-details-panel" role="tabpanel" aria-labelledby="connection-details-tab">
+            <section class="summary-grid">
+              <article class="summary-card">
+                <span class="summary-label">上传</span>
+                <strong>{formatBytes(connection.bytesUp)}</strong>
+                {#if connection.origin === 'active'}<small>{formatRate(connection.throughputUpBps)}</small>{/if}
+              </article>
+              <article class="summary-card">
+                <span class="summary-label">下载</span>
+                <strong>{formatBytes(connection.bytesDown)}</strong>
+                {#if connection.origin === 'active'}<small>{formatRate(connection.throughputDownBps)}</small>{/if}
+              </article>
+              <article class="summary-card">
+                <span class="summary-label">持续时间</span>
+                <strong>{formatDuration(connection.startedAtUnixMs, connection.durationMs)}</strong>
+                <small>{connection.origin === 'active' ? '持续更新' : '最终时长'}</small>
+              </article>
+            </section>
 
-          <section class="detail-section">
-            <h3>连接信息</h3>
-            <div class="property-grid">
-              <div class="property"><span>来源</span><strong title={connection.source}>{sourceLabel(connection)}</strong></div>
-              {#if hasText(connection.processName) || hasText(connection.processPath) || isNumber(connection.processId)}
-                <div class="property"><span>进程</span><strong title={connection.processPath}>{connection.processName ?? connection.processPath ?? `PID ${connection.processId}`}</strong></div>
-              {/if}
-              <div class="property"><span>目标</span><strong title={connection.targetHost}>{connection.targetHost ?? connection.destination}</strong></div>
-              {#if hasText(connection.targetIp)}<div class="property"><span>解析地址</span><strong>{connection.targetIp}</strong></div>{/if}
-              {#if hasText(connection.sniffedHost)}<div class="property"><span>嗅探域名</span><strong>{connection.sniffedHost}</strong></div>{/if}
-              {#if hasText(connection.remoteDestination)}<div class="property"><span>实际远端</span><strong>{connection.remoteDestination}</strong></div>{/if}
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <h3>转发路径</h3>
-            <div class="property-grid">
-              {#if hasText(connection.inboundTag)}<div class="property"><span>入口</span><strong>{connection.inboundTag}{connection.inboundProtocol ? ` · ${connection.inboundProtocol}` : ''}</strong></div>{/if}
-              {#if hasText(connection.outboundTag)}<div class="property"><span>出口</span><strong>{connection.outboundTag}{connection.outboundProtocol ? ` · ${connection.outboundProtocol}` : ''}</strong></div>{/if}
-              {#if hasText(connection.policyTag)}<div class="property"><span>策略</span><strong>{connection.policyTag}</strong></div>{/if}
-              {#if hasText(connection.routeMode)}<div class="property"><span>路由模式</span><strong>{modeLabel(connection.routeMode)}{connection.routeAction ? ` · ${connection.routeAction}` : ''}</strong></div>{/if}
-              {#if hasText(connection.matchedRule)}<div class="property wide"><span>命中规则{isNumber(connection.matchedRuleIndex) ? ` #${connection.matchedRuleIndex}` : ''}</span><strong>{connection.matchedRule}</strong></div>{/if}
-              {#if connection.selectionChain.length > 0}<div class="property wide"><span>选择链</span><strong>{connection.selectionChain.join(' → ')}</strong></div>{/if}
-              {#if connection.relayChain.length > 0}<div class="property wide"><span>中继链</span><strong>{connection.relayChain.join(' → ')}</strong></div>{/if}
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <h3>时间</h3>
-            <div class="property-grid">
-              <div class="property"><span>开始时间</span><strong>{formatTimestamp(connection.startedAtUnixMs)}</strong></div>
-              <div class="property"><span>最后活动</span><strong>{formatTimestamp(connection.lastActivityAtUnixMs)}</strong></div>
-              <div class="property"><span>速率采样时间</span><strong>{formatTimestamp(connection.updatedAtUnixMs)}</strong></div>
-              {#if connection.origin === 'recent'}<div class="property"><span>结束时间</span><strong>{formatTimestamp(connection.endedAtUnixMs)}</strong></div>{/if}
-            </div>
-            <p class="section-note">“速率采样时间”来自内核吞吐统计的 sampled_at_unix_ms，并不是通用的数据修改时间。</p>
-          </section>
-
-          {#if connection.outcome || connection.failureMessage || connection.closeReason}
             <section class="detail-section">
-              <h3>结果</h3>
+              <h3>连接信息</h3>
               <div class="property-grid">
-                {#if connection.outcome}<div class="property"><span>结果</span><strong>{connection.outcome}</strong></div>{/if}
-                {#if connection.closeReason}<div class="property"><span>结束原因</span><strong>{connection.closeReason}</strong></div>{/if}
-                {#if connection.failureMessage}<div class="property wide failure"><span>失败{connection.failureStage ? ` · ${connection.failureStage}` : ''}{connection.failureCode ? ` · ${connection.failureCode}` : ''}</span><strong>{connection.failureMessage}</strong></div>{/if}
+                <div class="property"><span>来源</span><strong title={connection.source}>{sourceLabel(connection)}</strong></div>
+                {#if hasText(connection.processName) || hasText(connection.processPath) || isNumber(connection.processId)}
+                  <div class="property"><span>进程</span><strong title={connection.processPath}>{connection.processName ?? connection.processPath ?? `PID ${connection.processId}`}</strong></div>
+                {/if}
+                <div class="property"><span>目标</span><strong title={connection.targetHost}>{connection.targetHost ?? connection.destination}</strong></div>
+                {#if hasText(connection.targetIp)}<div class="property"><span>解析地址</span><strong>{connection.targetIp}</strong></div>{/if}
+                {#if hasText(connection.sniffedHost)}<div class="property"><span>嗅探域名</span><strong>{connection.sniffedHost}</strong></div>{/if}
+                {#if hasText(connection.remoteDestination)}<div class="property"><span>实际远端</span><strong>{connection.remoteDestination}</strong></div>{/if}
               </div>
             </section>
-          {/if}
-        {:else}
-          <section class="detail-section diagnostics-intro">
-            <h3>事件与记录</h3>
-            <p>这里保留内核原始结构，用于排查字段缺失和版本兼容问题；日常查看连接不需要展开原始 JSON。</p>
-            <div class="property-grid">
-              <div class="property"><span>数据来源</span><strong>{rawSourceLabel(connection.rawSource)}</strong></div>
-              <div class="property"><span>记录版本</span><strong>{isNumber(connection.revision) ? connection.revision : '当前查询模型未提供'}</strong></div>
-              {#if connection.eventType}<div class="property"><span>事件类型</span><strong>{connection.eventType}</strong></div>{/if}
-              {#if isNumber(connection.eventSequence)}<div class="property"><span>事件序号</span><strong>{connection.eventSequence}</strong></div>{/if}
-              {#if connection.eventId}<div class="property wide"><span>事件 ID</span><strong>{connection.eventId}</strong></div>{/if}
-              {#if isNumber(connection.eventOccurredAtUnixMs)}<div class="property"><span>事件发生时间</span><strong>{formatTimestamp(connection.eventOccurredAtUnixMs)}</strong></div>{/if}
-              {#if isNumber(connection.capturedAtUnixMs)}<div class="property"><span>客户端接收时间</span><strong>{formatTimestamp(connection.capturedAtUnixMs)}</strong></div>{/if}
-            </div>
-          </section>
 
-          {#if connection.rawPayload !== undefined}
-            <details class="raw-block" open><summary>内核原始记录</summary><pre>{formatRaw(connection.rawPayload)}</pre></details>
-          {:else}
-            <div class="raw-empty">没有关联到对应生命周期的原始内核记录。</div>
-          {/if}
-          {#if connection.rawEnvelope !== undefined}
-            <details class="raw-block"><summary>完整事件报文</summary><pre>{formatRaw(connection.rawEnvelope)}</pre></details>
-          {/if}
+            <section class="detail-section">
+              <h3>转发路径</h3>
+              <div class="property-grid">
+                {#if hasText(connection.inboundTag)}<div class="property"><span>入口</span><strong>{connection.inboundTag}{connection.inboundProtocol ? ` · ${connection.inboundProtocol}` : ''}</strong></div>{/if}
+                {#if hasText(connection.outboundTag)}<div class="property"><span>出口</span><strong>{connection.outboundTag}{connection.outboundProtocol ? ` · ${connection.outboundProtocol}` : ''}</strong></div>{/if}
+                {#if hasText(connection.policyTag)}<div class="property"><span>策略</span><strong>{connection.policyTag}</strong></div>{/if}
+                {#if hasText(connection.routeMode)}<div class="property"><span>路由模式</span><strong>{modeLabel(connection.routeMode)}{connection.routeAction ? ` · ${connection.routeAction}` : ''}</strong></div>{/if}
+                {#if hasText(connection.matchedRule)}<div class="property wide"><span>命中规则{isNumber(connection.matchedRuleIndex) ? ` #${connection.matchedRuleIndex}` : ''}</span><strong>{connection.matchedRule}</strong></div>{/if}
+                {#if connection.selectionChain.length > 0}<div class="property wide"><span>选择链</span><strong>{connection.selectionChain.join(' → ')}</strong></div>{/if}
+                {#if connection.relayChain.length > 0}<div class="property wide"><span>中继链</span><strong>{connection.relayChain.join(' → ')}</strong></div>{/if}
+              </div>
+            </section>
+
+            <section class="detail-section">
+              <h3>时间</h3>
+              <div class="property-grid">
+                <div class="property"><span>开始时间</span><strong>{formatTimestamp(connection.startedAtUnixMs)}</strong></div>
+                <div class="property"><span>最后活动</span><strong>{formatTimestamp(connection.lastActivityAtUnixMs)}</strong></div>
+                <div class="property"><span>速率采样时间</span><strong>{formatTimestamp(connection.updatedAtUnixMs)}</strong></div>
+                {#if connection.origin === 'recent'}<div class="property"><span>结束时间</span><strong>{formatTimestamp(connection.endedAtUnixMs)}</strong></div>{/if}
+              </div>
+              <p class="section-note">“速率采样时间”来自内核吞吐统计的 sampled_at_unix_ms，并不是通用的数据修改时间。</p>
+            </section>
+
+            {#if connection.outcome || connection.failureMessage || connection.closeReason}
+              <section class="detail-section">
+                <h3>结果</h3>
+                <div class="property-grid">
+                  {#if connection.outcome}<div class="property"><span>结果</span><strong>{connection.outcome}</strong></div>{/if}
+                  {#if connection.closeReason}<div class="property"><span>结束原因</span><strong>{connection.closeReason}</strong></div>{/if}
+                  {#if connection.failureMessage}<div class="property wide failure"><span>失败{connection.failureStage ? ` · ${connection.failureStage}` : ''}{connection.failureCode ? ` · ${connection.failureCode}` : ''}</span><strong>{connection.failureMessage}</strong></div>{/if}
+                </div>
+              </section>
+            {/if}
+          </div>
+        {:else}
+          <div id="connection-diagnostics-panel" role="tabpanel" aria-labelledby="connection-diagnostics-tab">
+            <section class="detail-section diagnostics-intro first-section">
+              <h3>事件与记录</h3>
+              <p>这里保留内核原始结构，用于排查字段缺失和版本兼容问题；日常查看连接不需要展开原始 JSON。</p>
+              <div class="property-grid">
+                <div class="property"><span>数据来源</span><strong>{rawSourceLabel(connection.rawSource)}</strong></div>
+                <div class="property"><span>记录版本</span><strong>{isNumber(connection.revision) ? connection.revision : '当前查询模型未提供'}</strong></div>
+                {#if connection.eventType}<div class="property"><span>事件类型</span><strong>{connection.eventType}</strong></div>{/if}
+                {#if isNumber(connection.eventSequence)}<div class="property"><span>事件序号</span><strong>{connection.eventSequence}</strong></div>{/if}
+                {#if connection.eventId}<div class="property wide"><span>事件 ID</span><strong>{connection.eventId}</strong></div>{/if}
+                {#if isNumber(connection.eventOccurredAtUnixMs)}<div class="property"><span>事件发生时间</span><strong>{formatTimestamp(connection.eventOccurredAtUnixMs)}</strong></div>{/if}
+                {#if isNumber(connection.capturedAtUnixMs)}<div class="property"><span>客户端接收时间</span><strong>{formatTimestamp(connection.capturedAtUnixMs)}</strong></div>{/if}
+              </div>
+            </section>
+
+            {#if connection.rawPayload !== undefined}
+              <details class="raw-block" open><summary>内核原始记录</summary><pre>{formatRaw(connection.rawPayload)}</pre></details>
+            {:else}
+              <div class="raw-empty">没有关联到对应生命周期的原始内核记录。</div>
+            {/if}
+            {#if connection.rawEnvelope !== undefined}
+              <details class="raw-block"><summary>完整事件报文</summary><pre>{formatRaw(connection.rawEnvelope)}</pre></details>
+            {/if}
+          </div>
         {/if}
       </div>
 
@@ -245,13 +287,14 @@
           </button>
         </footer>
       {/if}
-    </aside>
+    </div>
   </div>
 {/if}
 
 <style>
-  .drawer-backdrop { position: absolute; inset: 0; z-index: 50; display: flex; justify-content: flex-end; background: rgb(0 0 0 / 0.28); backdrop-filter: blur(1px); }
-  .drawer { width: min(560px, 92%); height: 100%; display: flex; flex-direction: column; background: var(--background); border-left: 1px solid var(--border); box-shadow: -16px 0 40px rgb(0 0 0 / 0.18); animation: drawer-in 0.18s ease-out; }
+  .drawer-layer { position: absolute; inset: 0; z-index: 50; display: flex; justify-content: flex-end; }
+  .drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.28); backdrop-filter: blur(1px); cursor: default; }
+  .drawer { position: relative; width: min(560px, 92%); height: 100%; display: flex; flex-direction: column; background: var(--background); border-left: 1px solid var(--border); box-shadow: -16px 0 40px rgb(0 0 0 / 0.18); animation: drawer-in 0.18s ease-out; outline: none; }
   @keyframes drawer-in { from { transform: translateX(18px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   .drawer-header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--border); }
   .drawer-heading { min-width: 0; flex: 1; }
@@ -268,12 +311,14 @@
   .drawer-tabs { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--border); }
   .drawer-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
   .drawer-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
+  .drawer-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
   .drawer-content { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 22px; }
   .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .summary-card { min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--muted) 45%, transparent); }
   .summary-label, .summary-card small { color: var(--muted-foreground); font-size: 10.5px; }
   .summary-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 13px; }
   .detail-section { margin-top: 18px; }
+  .detail-section.first-section { margin-top: 0; }
   .detail-section h3 { margin: 0 0 9px; font-size: 11px; font-weight: 700; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
   .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 18px; }
   .property { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
