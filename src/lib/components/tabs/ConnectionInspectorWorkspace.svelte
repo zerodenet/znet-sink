@@ -25,7 +25,6 @@
   import * as Select from '$lib/components/ui/select';
   import { Spinner } from '$lib/components/ui/Spinner';
   import {
-    ArrowUp,
     CircleX,
     MoreHorizontal,
     Pause,
@@ -61,11 +60,15 @@
   let historyLoading = $state(true);
   let historyLoadingMore = $state(false);
   let historyError = $state<string | null>(null);
-  let historyStale = $state(false);
+  let historyPaused = $state(false);
+  let historyPendingEvents = $state(0);
   let latestObservedHistoryKey = '';
   let historyFilterSignature = '';
   let historyRequestGeneration = 0;
   let historyScrollElement = $state<HTMLDivElement>();
+  let historySyncInFlight = false;
+  let historySyncQueued = false;
+  let historySyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   let selectedKey = $state<string | null>(null);
   let singleConfirmKey = $state<string | null>(null);
@@ -209,11 +212,12 @@
     historyItems = [];
     historyBeforeId = undefined;
     historyHasMore = false;
+    historyPendingEvents = 0;
     historyError = null;
     if (selectedKey?.startsWith('recent:')) selectedKey = null;
   }
 
-  function togglePause() {
+  function toggleLivePause() {
     if (livePaused) {
       livePaused = false;
       pausedSnapshot = [];
@@ -224,12 +228,26 @@
     livePaused = true;
   }
 
+  function toggleHistoryPause() {
+    historyPaused = !historyPaused;
+    if (!historyPaused && historyPendingEvents > 0) scheduleHistoryHeadSync(0);
+  }
+
   function persistedConnectionKey(connection: PersistedConnection): string {
     return [
       connection.flowId,
       connection.startedAtUnixMs ?? '',
       connection.endedAtUnixMs ?? '',
     ].join(':');
+  }
+
+  function historyTimestamp(connection: PersistedConnection): number {
+    return connection.endedAtUnixMs
+      ?? connection.updatedAtUnixMs
+      ?? connection.lastActivityAtUnixMs
+      ?? connection.startedAtUnixMs
+      ?? connection.eventOccurredAtUnixMs
+      ?? 0;
   }
 
   function appendUniqueHistory(records: PersistedConnection[]) {
@@ -241,6 +259,15 @@
       return true;
     });
     historyItems = [...historyItems, ...additions];
+  }
+
+  function mergeHistoryHead(records: PersistedConnection[]) {
+    const merged = new Map<string, PersistedConnection>();
+    for (const record of historyItems) merged.set(persistedConnectionKey(record), record);
+    for (const record of records) merged.set(persistedConnectionKey(record), record);
+    historyItems = [...merged.values()]
+      .sort((left, right) => historyTimestamp(right) - historyTimestamp(left))
+      .slice(0, HISTORY_LIMIT);
   }
 
   async function loadHistory(reset = false) {
@@ -274,7 +301,7 @@
 
       historyBeforeId = result.items[0]?.id;
       historyHasMore = result.hasMore;
-      if (reset) historyStale = false;
+      historyPendingEvents = 0;
 
       await tick();
       shouldFillViewport = Boolean(
@@ -301,6 +328,69 @@
   async function refreshHistory() {
     historyScrollElement?.scrollTo({ top: 0 });
     await loadHistory(true);
+  }
+
+  function scheduleHistoryHeadSync(delay = 120) {
+    if (historyPaused || activeTab !== 'history') return;
+    if (historySyncTimer) clearTimeout(historySyncTimer);
+    historySyncTimer = setTimeout(() => {
+      historySyncTimer = null;
+      void syncHistoryHead();
+    }, delay);
+  }
+
+  async function syncHistoryHead() {
+    if (historyPaused || activeTab !== 'history') return;
+    if (historySyncInFlight || historyLoading || historyLoadingMore || clearingHistory) {
+      historySyncQueued = true;
+      return;
+    }
+
+    historySyncInFlight = true;
+    historySyncQueued = false;
+    const generation = historyRequestGeneration;
+    const requestedSignature = historySignature();
+    const scrollElement = historyScrollElement;
+    const previousHeight = scrollElement?.scrollHeight ?? 0;
+    const previousTop = scrollElement?.scrollTop ?? 0;
+    const wasAtTop = previousTop <= 12;
+
+    try {
+      const result = await getGuiDebugFrames({
+        frameType: HISTORY_SCOPE,
+        limit: HISTORY_BATCH_SIZE,
+        search: searchQuery.trim() || undefined,
+        protocol: protocolFilter === 'all' ? undefined : protocolFilter,
+        outbound: outboundFilter === 'all' ? undefined : outboundFilter,
+        outcome: resultFilter === 'all' ? undefined : resultFilter,
+      });
+      if (generation !== historyRequestGeneration || requestedSignature !== historySignature()) return;
+
+      const head = buildPersistedConnectionHistory(result.items, HISTORY_BATCH_SIZE);
+      mergeHistoryHead(head);
+      if (historyBeforeId === undefined) {
+        historyBeforeId = result.items[0]?.id;
+        historyHasMore = result.hasMore;
+      }
+      historyPendingEvents = 0;
+      historyError = null;
+
+      await tick();
+      if (scrollElement) {
+        if (wasAtTop) scrollElement.scrollTop = 0;
+        else scrollElement.scrollTop = previousTop + Math.max(0, scrollElement.scrollHeight - previousHeight);
+      }
+    } catch (error) {
+      if (generation === historyRequestGeneration) {
+        historyError = getAppErrorMessage(error, '更新连接记录失败');
+      }
+    } finally {
+      historySyncInFlight = false;
+      if (historySyncQueued && !historyPaused && activeTab === 'history') {
+        historySyncQueued = false;
+        scheduleHistoryHeadSync(0);
+      }
+    }
   }
 
   function infiniteHistory(node: HTMLElement) {
@@ -482,8 +572,11 @@
   }
 
   $effect(() => {
-    activeTab;
+    const currentTab = activeTab;
     actionsOpen = false;
+    if (currentTab === 'history' && !historyPaused && historyPendingEvents > 0) {
+      scheduleHistoryHeadSync(0);
+    }
   });
 
   $effect(() => {
@@ -505,7 +598,8 @@
       : '';
     if (!key || key === latestObservedHistoryKey) return;
     latestObservedHistoryKey = key;
-    historyStale = true;
+    historyPendingEvents += 1;
+    if (!historyPaused && activeTab === 'history') scheduleHistoryHeadSync();
   });
 
   $effect(() => {
@@ -520,7 +614,10 @@
     const clock = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
-    return () => window.clearInterval(clock);
+    return () => {
+      window.clearInterval(clock);
+      if (historySyncTimer) clearTimeout(historySyncTimer);
+    };
   });
 </script>
 
@@ -594,27 +691,18 @@
     </Button>
 
     <div class="ml-auto flex items-center gap-2">
-      {#if activeTab === 'history' && historyStale}
-        <Button variant="secondary" size="sm" onclick={refreshHistory}>
-          <ArrowUp data-icon="inline-start" class="size-3.5" />
-          有新记录
-        </Button>
-      {/if}
-
-      {#if activeTab === 'live'}
-        <Button
-          variant={livePaused ? 'secondary' : 'outline'}
-          size="sm"
-          aria-pressed={livePaused}
-          onclick={togglePause}
-        >
-          {#if livePaused}
-            <Play data-icon="inline-start" class="size-3.5" />继续查看
-          {:else}
-            <Pause data-icon="inline-start" class="size-3.5" />暂停查看
-          {/if}
-        </Button>
-      {/if}
+      <Button
+        variant={(activeTab === 'live' ? livePaused : historyPaused) ? 'secondary' : 'outline'}
+        size="sm"
+        aria-pressed={activeTab === 'live' ? livePaused : historyPaused}
+        onclick={activeTab === 'live' ? toggleLivePause : toggleHistoryPause}
+      >
+        {#if activeTab === 'live' ? livePaused : historyPaused}
+          <Play data-icon="inline-start" class="size-3.5" />继续查看
+        {:else}
+          <Pause data-icon="inline-start" class="size-3.5" />暂停查看
+        {/if}
+      </Button>
 
       <div class="relative">
         <Button
@@ -679,42 +767,90 @@
     <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
       <span class="mr-1 text-[10.5px] font-medium text-muted-foreground">筛选条件</span>
 
-      <Select.Root type="single" bind:value={protocolFilter}>
-        <Select.Trigger size="sm" class="w-full sm:w-[142px]" aria-label="按协议过滤">
-          {protocolFilter === 'all' ? '全部协议' : protocolFilter.toUpperCase()}
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="all" label="全部协议" />
-          {#each protocolOptions as protocol}
-            <Select.Item value={protocol} label={protocol.toUpperCase()} />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-
-      <Select.Root type="single" bind:value={outboundFilter}>
-        <Select.Trigger size="sm" class="w-full sm:w-[160px]" aria-label="按出口过滤">
-          {outboundFilter === 'all' ? '全部出口' : outboundFilter}
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="all" label="全部出口" />
-          {#each outboundOptions as outbound}
-            <Select.Item value={outbound} label={outbound} />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-
-      {#if activeTab === 'history'}
-        <Select.Root type="single" bind:value={resultFilter}>
-          <Select.Trigger size="sm" class="w-full sm:w-[150px]" aria-label="按结果过滤">
-            {resultFilter === 'all' ? '全部结果' : resultFilter}
+      <div class="relative w-full sm:w-[142px]">
+        <Select.Root type="single" bind:value={protocolFilter}>
+          <Select.Trigger size="sm" class={protocolFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按协议过滤">
+            {protocolFilter === 'all' ? '全部协议' : protocolFilter.toUpperCase()}
           </Select.Trigger>
           <Select.Content>
-            <Select.Item value="all" label="全部结果" />
-            {#each resultOptions as result}
-              <Select.Item value={result} label={result} />
+            <Select.Item value="all" label="全部协议" />
+            {#each protocolOptions as protocol}
+              <Select.Item value={protocol} label={protocol.toUpperCase()} />
             {/each}
           </Select.Content>
         </Select.Root>
+        {#if protocolFilter !== 'all'}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
+            title="清除协议筛选"
+            aria-label="清除协议筛选"
+            onpointerdown={(event) => event.stopPropagation()}
+            onclick={(event) => {
+              event.stopPropagation();
+              protocolFilter = 'all';
+            }}
+          ><X class="size-3" /></Button>
+        {/if}
+      </div>
+
+      <div class="relative w-full sm:w-[160px]">
+        <Select.Root type="single" bind:value={outboundFilter}>
+          <Select.Trigger size="sm" class={outboundFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按出口过滤">
+            {outboundFilter === 'all' ? '全部出口' : outboundFilter}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="all" label="全部出口" />
+            {#each outboundOptions as outbound}
+              <Select.Item value={outbound} label={outbound} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        {#if outboundFilter !== 'all'}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
+            title="清除出口筛选"
+            aria-label="清除出口筛选"
+            onpointerdown={(event) => event.stopPropagation()}
+            onclick={(event) => {
+              event.stopPropagation();
+              outboundFilter = 'all';
+            }}
+          ><X class="size-3" /></Button>
+        {/if}
+      </div>
+
+      {#if activeTab === 'history'}
+        <div class="relative w-full sm:w-[150px]">
+          <Select.Root type="single" bind:value={resultFilter}>
+            <Select.Trigger size="sm" class={resultFilter === 'all' ? 'w-full' : 'w-full pr-12'} aria-label="按结果过滤">
+              {resultFilter === 'all' ? '全部结果' : resultFilter}
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="all" label="全部结果" />
+              {#each resultOptions as result}
+                <Select.Item value={result} label={result} />
+              {/each}
+            </Select.Content>
+          </Select.Root>
+          {#if resultFilter !== 'all'}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
+              title="清除结果筛选"
+              aria-label="清除结果筛选"
+              onpointerdown={(event) => event.stopPropagation()}
+              onclick={(event) => {
+                event.stopPropagation();
+                resultFilter = 'all';
+              }}
+            ><X class="size-3" /></Button>
+          {/if}
+        </div>
       {/if}
 
       {#if structuredFilterCount > 0}
@@ -731,6 +867,14 @@
       <span>列表显示已暂停，后台仍在接收连接事件。</span>
       <Badge variant="outline" class="ml-auto h-5 rounded-md px-1.5 text-[9.5px]">
         {pendingLiveEvents > 0 ? `${pendingLiveEvents} 个新事件` : '暂无新事件'}
+      </Badge>
+    </div>
+  {:else if historyPaused && activeTab === 'history'}
+    <div class="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[10.5px] text-muted-foreground" role="status">
+      <Pause class="size-3.5" />
+      <span>连接记录自动更新已暂停，当前列表仍可继续浏览和筛选。</span>
+      <Badge variant="outline" class="ml-auto h-5 rounded-md px-1.5 text-[9.5px]">
+        {historyPendingEvents > 0 ? `${historyPendingEvents} 条新记录` : '暂无新记录'}
       </Badge>
     </div>
   {/if}
@@ -752,7 +896,7 @@
   {:else if currentSource.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
       <strong class="text-xs font-semibold text-foreground">{activeTab === 'live' ? '暂无活动连接' : '暂无连接记录'}</strong>
-      <span class="text-[11px] text-muted-foreground">{activeTab === 'live' ? '连接事件到达后会自动显示' : '完成的连接会保存在本地记录中'}</span>
+      <span class="text-[11px] text-muted-foreground">{activeTab === 'live' ? '连接事件到达后会自动显示' : '完成的连接会自动显示并保存在本地'}</span>
     </div>
   {:else if filteredConnections.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
@@ -760,15 +904,15 @@
       <span class="text-[11px] text-muted-foreground">调整搜索关键词或筛选条件</span>
     </div>
   {:else}
-    <div bind:this={historyScrollElement} class="min-h-0 flex-1 overflow-y-auto">
+    <div bind:this={historyScrollElement} class="min-h-0 flex-1 space-y-1 overflow-y-auto p-1.5">
       {#each visibleConnections as connection (connectionKey(connection))}
         <article
-          class="group relative flex border-b border-border/70 transition-colors hover:bg-muted/40"
-          style="content-visibility: auto; contain-intrinsic-size: 76px;"
+          class="group relative flex rounded-lg border border-border/70 bg-background transition-colors hover:bg-muted/40"
+          style="content-visibility: auto; contain-intrinsic-size: 82px;"
         >
           <button
             type="button"
-            class="flex min-w-0 flex-1 flex-col gap-1.5 bg-transparent px-3.5 py-2.5 pr-12 text-left text-foreground outline-none focus-visible:bg-muted/50"
+            class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-12 text-left text-foreground outline-none focus-visible:bg-muted/50"
             aria-label={`查看连接 ${connection.destination}`}
             onclick={() => openDetails(connection)}
           >
@@ -829,7 +973,7 @@
           仅渲染前 {visibleConnections.length} / {filteredConnections.length} 条，请使用筛选缩小范围
         </div>
       {:else if activeTab === 'history'}
-        <div use:infiniteHistory class="flex min-h-12 items-center justify-center gap-2 px-3 py-3 text-[10.5px] text-muted-foreground">
+        <div use:infiniteHistory class="flex min-h-12 items-center justify-center gap-2 rounded-lg px-3 py-3 text-[10.5px] text-muted-foreground">
           {#if historyLoadingMore}
             <Spinner size="sm" color="default" />
             加载更多记录…
