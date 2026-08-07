@@ -15,7 +15,7 @@
     profiles: () => import('./tabs/ProfilesTab.svelte'),
     subscriptions: () => import('./tabs/SubscriptionsTab.svelte'),
     rules: () => import('./tabs/RulesTab.svelte'),
-    connections: () => import('./tabs/ConnectionsWorkspace.svelte'),
+    connections: () => import('./tabs/ConnectionsTab.svelte'),
     logs: () => import('./tabs/LogsTab.svelte'),
     settings: () => import('./SettingsPanel.svelte'),
     capabilities: () => import('./tabs/CapabilitiesTab.svelte'),
