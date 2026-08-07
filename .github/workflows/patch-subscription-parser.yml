@@ -1,0 +1,84 @@
+name: Patch subscription parser
+
+on:
+  push:
+    branches:
+      - agent/fix-subscription-format-detection
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-subscription-format-detection
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Reject plaintext Zero in the underlying parser
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/services/subscription.rs')
+          text = path.read_text()
+          old = '''        "" | "auto" => parse_auto_subscription_content(content),
+                  "zero" | "zero-json" => parse_zero_json_subscription_content(content),
+                  "zero-base64-json" | "base64-json" => parse_base64_json_subscription_content(content),
+                  "clash" | "clash-yaml" | "yaml" => parse_clash_yaml_subscription_content(content),'''
+          new = '''        "" | "auto" => parse_auto_subscription_content(content),
+                  "zero" | "zero-base64-json" | "base64-json" | "znet-sink"
+                  | "znet-sink-base64" => parse_base64_json_subscription_content(content),
+                  "zero-json" => Err(AppError::invalid_argument(
+                      "plaintext Zero JSON subscriptions are not supported; use Base64 Zero JSON (format: zero)",
+                  )),
+                  "clash" | "clash-yaml" | "yaml" => parse_clash_yaml_subscription_content(content),'''
+          if old not in text:
+              raise SystemExit('format dispatch block did not match')
+          text = text.replace(old, new, 1)
+
+          old_auto = '''    // 1. Raw Zero JSON (many providers serve plain JSON).
+              if content.starts_with('{') || content.starts_with('[') {
+                  if let Ok(value) = serde_json::from_str::<Value>(content) {
+                      if looks_like_zero_config(&value) {
+                          return Ok(ParsedSubscriptionConfig {
+                              content: value,
+                              format: "zero-json".to_string(),
+                              rule_providers: Vec::new(),
+                          });
+                      }
+                  }
+              }
+
+              // 2. Base64-encoded Zero JSON.'''
+          new_auto = '''    // 1. Plaintext Zero JSON is intentionally rejected at the external subscription boundary.
+              if content.starts_with('{') || content.starts_with('[') {
+                  if let Ok(value) = serde_json::from_str::<Value>(content) {
+                      if looks_like_zero_config(&value) {
+                          return Err(AppError::invalid_argument(
+                              "plaintext Zero JSON subscriptions are not supported; use Base64 Zero JSON (format: zero)",
+                          ));
+                      }
+                  }
+              }
+
+              // 2. Base64-encoded Zero JSON.'''
+          if old_auto not in text:
+              raise SystemExit('auto detection block did not match')
+          text = text.replace(old_auto, new_auto, 1)
+          text = text.replace(
+              '(zero-json, zero-base64-json, clash-yaml, clash-base64-yaml)',
+              '(zero, clash)',
+              1,
+          )
+          path.write_text(text)
+          PY
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          rm .github/workflows/patch-subscription-parser.yml
+      - name: Commit parser hardening
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/services/subscription.rs .github/workflows/patch-subscription-parser.yml
+          git commit -m "fix(subscriptions): reject plaintext Zero in sync parser"
+          git push origin HEAD:agent/fix-subscription-format-detection
