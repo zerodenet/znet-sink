@@ -3,8 +3,10 @@
   import {
     getAppErrorMessage,
     getGuiConnections,
+    getGuiDebugFrames,
     getGuiRecentConnections,
     guiCloseConnection,
+    queryCore,
     queryFlows,
     closeFlow,
     handleAppError,
@@ -13,7 +15,13 @@
   import { store } from '$lib/services/store.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { buildConnectionView, type DisplayConnection } from '$lib/services/connection-view';
+  import {
+    attachConnectionWireMetadata,
+    buildConnectionWireIndex,
+    type ConnectionWireIndex,
+  } from '$lib/services/connection-wire';
   import type { GuiConnectionItem } from '$lib/types/gui-api';
+  import ConnectionWireDetails from '$lib/components/ConnectionWireDetails.svelte';
   import { RefreshCw, Search } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Tabs from '$lib/components/AppTabs';
@@ -24,6 +32,7 @@
 
   let activeSnapshot = $state<GuiConnectionItem[]>([]);
   let recentSnapshot = $state<GuiConnectionItem[]>([]);
+  let wireIndex = $state<ConnectionWireIndex>({});
   let loading = $state(true);
   let closingId = $state<string | null>(null);
   let expandedIds = $state<Set<string>>(new Set());
@@ -38,10 +47,10 @@
   let now = $state(Date.now());
 
   const connectionView = $derived(buildConnectionView({
-    activeSnapshot,
-    recentSnapshot,
-    activeEvents: coreEvents.activeConnections,
-    recentEvents: coreEvents.connectionHistory,
+    activeSnapshot: activeSnapshot.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
+    recentSnapshot: recentSnapshot.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
+    activeEvents: coreEvents.activeConnections.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
+    recentEvents: coreEvents.connectionHistory.map((connection) => attachConnectionWireMetadata(connection, wireIndex)),
     limit: MAX_CONNECTIONS,
   }));
   const activeConnections = $derived(
@@ -65,6 +74,7 @@
       || (connection.processPath?.toLowerCase().includes(query) ?? false)
       || (connection.matchedRule?.toLowerCase().includes(query) ?? false)
       || (connection.remoteDestination?.toLowerCase().includes(query) ?? false)
+      || (connection.eventType?.toLowerCase().includes(query) ?? false)
       || connection.selectionChain.some((item) => item.toLowerCase().includes(query))
       || connection.relayChain.some((item) => item.toLowerCase().includes(query))
     );
@@ -86,15 +96,16 @@
     expandedIds = next;
   }
 
-  async function refresh(showLoading = connections.length === 0) {
+  async function refresh(showLoading = connections.length === 0, includeWireQueries = showLoading) {
     if (loading && !showLoading) return;
     const generation = ++refreshGeneration;
     loading = true;
 
     try {
-      const [activeResult, recentResult] = await Promise.allSettled([
+      const [activeResult, recentResult, wireResult] = await Promise.allSettled([
         loadActiveConnections(),
         getGuiRecentConnections({ limit: MAX_CONNECTIONS }),
+        loadWireIndex(includeWireQueries),
       ]);
       if (generation !== refreshGeneration) return;
 
@@ -121,6 +132,10 @@
         errors.push(`连接记录：${getAppErrorMessage(recentResult.reason, '查询失败')}`);
       }
 
+      if (wireResult.status === 'fulfilled') {
+        wireIndex = mergeWireIndexes(wireIndex, wireResult.value);
+      }
+
       if (successCount === 0 && errors.length > 0 && connections.length === 0) {
         loadError = errors.join('；');
         partialError = null;
@@ -140,6 +155,38 @@
       if (!isModeRestricted(error)) throw error;
       return (await queryFlows()).map(mapFlowInfo);
     }
+  }
+
+  async function loadWireIndex(includeQueries: boolean): Promise<ConnectionWireIndex> {
+    const activeRawPromise = includeQueries
+      ? queryCore({ active_flows: { limit: MAX_CONNECTIONS, filter: {} } })
+      : Promise.resolve(undefined);
+    const recentRawPromise = includeQueries
+      ? queryCore({ recent_flows: { limit: MAX_CONNECTIONS, filter: {} } })
+      : Promise.resolve(undefined);
+
+    const [activeRaw, recentRaw, eventFrames] = await Promise.allSettled([
+      activeRawPromise,
+      recentRawPromise,
+      getGuiDebugFrames({ frameType: 'event', limit: MAX_CONNECTIONS }),
+    ]);
+
+    return buildConnectionWireIndex({
+      activeResponse: activeRaw.status === 'fulfilled' ? activeRaw.value : undefined,
+      recentResponse: recentRaw.status === 'fulfilled' ? recentRaw.value : undefined,
+      eventFrames: eventFrames.status === 'fulfilled' ? eventFrames.value.items : [],
+    });
+  }
+
+  function mergeWireIndexes(
+    current: ConnectionWireIndex,
+    incoming: ConnectionWireIndex,
+  ): ConnectionWireIndex {
+    const merged: ConnectionWireIndex = { ...current };
+    for (const [flowId, records] of Object.entries(incoming)) {
+      merged[flowId] = [...(merged[flowId] ?? []), ...records].slice(-20);
+    }
+    return merged;
   }
 
   function mapFlowInfo(flow: FlowInfo): GuiConnectionItem {
@@ -179,7 +226,7 @@
       }
       suppressedActiveIds = new Set([...suppressedActiveIds, flowId]);
       activeSnapshot = activeSnapshot.filter((connection) => connection.flowId !== flowId);
-      void refresh(false);
+      void refresh(false, false);
     } catch (error) {
       handleAppError(error, '关闭连接失败');
     } finally {
@@ -205,6 +252,32 @@
     return `${hr}h ${min % 60}m`;
   }
 
+  function connectionOccurredAt(connection: DisplayConnection): number | undefined {
+    if (connection.origin === 'recent') {
+      return connection.endedAtUnixMs
+        ?? connection.eventOccurredAtUnixMs
+        ?? connection.updatedAtUnixMs
+        ?? connection.startedAtUnixMs;
+    }
+    return connection.startedAtUnixMs
+      ?? connection.eventOccurredAtUnixMs
+      ?? connection.updatedAtUnixMs;
+  }
+
+  function formatListTimestamp(timestamp?: number): string {
+    if (timestamp === undefined) return '-';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  }
+
   function modeLabel(mode?: string): string {
     switch (mode) {
       case 'global': return '全局';
@@ -225,12 +298,12 @@
   });
 
   onMount(() => {
-    void refresh(true);
+    void refresh(true, true);
     const clockTimer = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
     const reconcileTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh(false);
+      if (document.visibilityState === 'visible') void refresh(false, false);
     }, RECONCILE_INTERVAL_MS);
 
     return () => {
@@ -253,7 +326,7 @@
      <Tabs.Trigger class="tab-btn" value="history">连接记录</Tabs.Trigger>
    </Tabs.List>
    <div class="header-actions">
-     <Button size="sm" onclick={() => refresh(false)} disabled={loading}>
+     <Button size="sm" onclick={() => refresh(false, true)} disabled={loading}>
        <RefreshCw class={loading ? 'animate-spin' : undefined} />
        {loading ? '刷新中...' : '刷新'}
      </Button>
@@ -270,7 +343,7 @@
        class="search-input"
        type="search"
        aria-label="搜索连接"
-       placeholder="搜索地址、来源或标签"
+       placeholder="搜索地址、来源、标签或事件类型"
        bind:value={searchQuery}
      >
    </div>
@@ -279,7 +352,7 @@
  {#if partialError}
    <div class="connection-warning" role="status">
      <span>{partialError}</span>
-     <Button variant="outline" size="xs" onclick={() => refresh(false)}>重试</Button>
+     <Button variant="outline" size="xs" onclick={() => refresh(false, true)}>重试</Button>
    </div>
  {/if}
  {#if activeTab === 'history' && !historySupported}
@@ -290,7 +363,7 @@
  {#if loadError && connections.length > 0}
    <div class="connection-warning error" role="alert">
      <span>刷新失败，当前仍显示上一批数据：{loadError}</span>
-     <Button variant="outline" size="xs" onclick={() => refresh(false)}>重试</Button>
+     <Button variant="outline" size="xs" onclick={() => refresh(false, true)}>重试</Button>
    </div>
  {/if}
 
@@ -301,7 +374,7 @@
    <div class="panel-empty-block" role="alert">
      <span class="empty-title error-text">连接数据加载失败</span>
      <span class="empty-desc">{loadError}</span>
-     <Button variant="outline" size="xs" onclick={() => refresh(true)}>重试</Button>
+     <Button variant="outline" size="xs" onclick={() => refresh(true, true)}>重试</Button>
    </div>
  {:else if activeTab === 'live' && !flowSupported}
    <div class="panel-empty-block">
@@ -344,30 +417,31 @@
                 <span class="flow-id-minor">#{conn.flowId}</span>
               </div>
               <div class="flow-stats">
-              <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
-              <span class="flow-stat down">↓ {formatBytes(conn.bytesDown)}</span>
-              <span class="flow-dur">{formatDuration(conn.startedAtUnixMs, conn.durationMs)}</span>
-            </div>
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="expand-chevron" class:expanded={expandedIds.has(conn.flowId)}>
-              <polyline points="3 5 7 9 11 5"/>
-            </svg>
-          </div>
-          </button>
-
-          {#if conn.origin === 'active' && store.isActionOperable('core.flow.close')}
-            <button
-              class="flow-close"
-              onclick={(event) => {
-                event.stopPropagation();
-                handleClose(conn.flowId);
-              }}
-              disabled={closingId !== null}
-              title="关闭连接"
-            >
-              <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-                <line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/>
+                <span class="flow-stat up">↑ {formatBytes(conn.bytesUp)}</span>
+                <span class="flow-stat down">↓ {formatBytes(conn.bytesDown)}</span>
+                <span class="flow-dur">{formatDuration(conn.startedAtUnixMs, conn.durationMs)}</span>
+                <span class="flow-occurred">{formatListTimestamp(connectionOccurredAt(conn))}</span>
+              </div>
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="expand-chevron" class:expanded={expandedIds.has(conn.flowId)}>
+                <polyline points="3 5 7 9 11 5"/>
               </svg>
+            </div>
             </button>
+
+            {#if conn.origin === 'active' && store.isActionOperable('core.flow.close')}
+              <button
+                class="flow-close"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  handleClose(conn.flowId);
+                }}
+                disabled={closingId !== null}
+                title="关闭连接"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                  <line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/>
+                </svg>
+              </button>
             {/if}
           </div>
 
@@ -379,6 +453,18 @@
                   <span class="detail-key">来源</span>
                   <span class="detail-val" title={conn.source}>{conn.source}</span>
                 </div>
+                {#if conn.state}
+                  <div class="detail-item">
+                    <span class="detail-key">状态</span>
+                    <span class="detail-val">{conn.state}</span>
+                  </div>
+                {/if}
+                {#if conn.revision !== undefined}
+                  <div class="detail-item">
+                    <span class="detail-key">Revision</span>
+                    <span class="detail-val">{conn.revision}</span>
+                  </div>
+                {/if}
                 {#if conn.processName || conn.processPath || conn.processId}
                   <div class="detail-item">
                     <span class="detail-key">进程</span>
@@ -389,6 +475,12 @@
                   <div class="detail-item">
                     <span class="detail-key">目标</span>
                     <span class="detail-val" title={conn.targetHost}>{conn.targetHost ?? conn.destination}{conn.targetIp && conn.targetIp !== conn.targetHost ? ` → ${conn.targetIp}` : ''}</span>
+                  </div>
+                {/if}
+                {#if conn.sniffedHost}
+                  <div class="detail-item">
+                    <span class="detail-key">嗅探域名</span>
+                    <span class="detail-val" title={conn.sniffedHost}>{conn.sniffedHost}</span>
                   </div>
                 {/if}
                 {#if conn.inboundTag}
@@ -475,18 +567,7 @@
                     <span class="detail-val">{formatDuration(conn.startedAtUnixMs, conn.durationMs)}</span>
                   </div>
                 {/if}
-                {#if conn.updatedAtUnixMs}
-                  <div class="detail-item">
-                    <span class="detail-key">最后更新</span>
-                    <span class="detail-val">{new Date(conn.updatedAtUnixMs).toLocaleTimeString('zh-CN', { hour12: false })}</span>
-                  </div>
-                {/if}
-                {#if conn.endedAtUnixMs}
-                  <div class="detail-item">
-                    <span class="detail-key">结束时间</span>
-                    <span class="detail-val">{new Date(conn.endedAtUnixMs).toLocaleTimeString('zh-CN', { hour12: false })}</span>
-                  </div>
-                {/if}
+                <ConnectionWireDetails connection={conn} />
               </div>
             </div>
           {/if}
@@ -825,6 +906,7 @@
     align-items: center;
     gap: 10px;
     font-size: 12px;
+    flex-wrap: wrap;
   }
 
   .flow-stat {
@@ -835,10 +917,15 @@
   .flow-stat.up { color: rgba(34, 197, 94, 0.85); }
   .flow-stat.down { color: rgba(59, 130, 246, 0.85); }
 
-  .flow-dur {
+  .flow-dur,
+  .flow-occurred {
     color: var(--muted-foreground);
     opacity: 0.6;
     font-family: var(--font-mono);
+  }
+
+  .flow-occurred {
+    margin-left: auto;
   }
 
   .flow-close {
