@@ -24,10 +24,58 @@
     type TabTransitionDirection,
   } from '$lib/utils/tab-transition';
 
+  const EVENT_STREAM_RETRY_MIN_MS = 500;
+  const EVENT_STREAM_RETRY_MAX_MS = 5_000;
   const tabOrder = NAV_TABS.map((tab) => tab.id);
   let renderedTab = $state(store.activeTab);
   let tabDirection = $state<TabTransitionDirection>(1);
   let reduceMotion = $state(false);
+
+  function waitForRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+
+    return new Promise((resolve) => {
+      const finish = (shouldRetry: boolean) => {
+        window.clearTimeout(timer);
+        signal.removeEventListener('abort', handleAbort);
+        resolve(shouldRetry);
+      };
+      const handleAbort = () => finish(false);
+      const timer = window.setTimeout(() => finish(true), delayMs);
+      signal.addEventListener('abort', handleAbort, { once: true });
+    });
+  }
+
+  async function initializeRuntime(signal: AbortSignal) {
+    await guiState.initialize();
+    if (signal.aborted) return;
+
+    let retryDelayMs = EVENT_STREAM_RETRY_MIN_MS;
+    let lastReportedError: string | null = null;
+
+    while (!signal.aborted) {
+      await coreEvents.start();
+      if (signal.aborted || coreEvents.status !== 'error') return;
+
+      const message = coreEvents.lastError ?? 'event stream startup failed';
+      if (message !== lastReportedError) {
+        lastReportedError = message;
+        console.warn('[ZNet] event stream start failed; retrying', message);
+        void recordTelemetry({
+          level: 'warn',
+          area: 'ipc',
+          operation: 'event-stream.start',
+          code: 'event_stream_start_failed',
+          message,
+          context: { retryDelayMs },
+        });
+      }
+
+      const shouldRetry = await waitForRetry(retryDelayMs, signal);
+      if (!shouldRetry || coreEvents.status !== 'error') return;
+      retryDelayMs = Math.min(retryDelayMs * 2, EVENT_STREAM_RETRY_MAX_MS);
+    }
+  }
 
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
@@ -91,12 +139,16 @@
       return;
     }
 
+    const abortController = new AbortController();
     untrack(() => {
-      void guiState.initialize();
-      void coreEvents.start();
+      // Runtime state initialization can reconcile or reconnect the existing
+      // kernel. Start the event stream only after that first snapshot settles,
+      // otherwise a transient startup race becomes a terminal error state.
+      void initializeRuntime(abortController.signal);
       updater.startPeriodicChecks();
     });
     return () => {
+      abortController.abort();
       untrack(() => {
         guiState.destroy();
         void coreEvents.stop();
