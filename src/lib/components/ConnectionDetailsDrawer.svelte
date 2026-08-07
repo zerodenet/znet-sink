@@ -435,7 +435,7 @@
 <style>
   .dialog-layer { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
   .dialog-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.38); backdrop-filter: blur(2px); cursor: default; }
-  .dialog { position: relative; z-index: 1; width: min(860px, 100%); max-height: min(820px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 24px 70px rgb(0 0 0 / 0.28); animation: dialog-in 0.16s ease-out; outline: none; }
+  .dialog { position: relative; z-index: 1; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 24px 70px rgb(0 0 0 / 0.28); animation: dialog-in 0.16s ease-out; outline: none; }
   @keyframes dialog-in { from { transform: translateY(8px) scale(0.985); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
   .dialog-header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--border); }
   .dialog-heading { min-width: 0; flex: 1; }
@@ -479,7 +479,7 @@
   .dialog-footer span { color: var(--muted-foreground); font-size: 10px; }
   @media (max-width: 720px) {
     .dialog-layer { padding: 12px; }
-    .dialog { max-height: calc(100vh - 24px); }
+    .dialog { max-height: calc(100dvh - 24px); }
     .summary-grid, .property-grid { grid-template-columns: 1fr; }
     .property.wide { grid-column: auto; }
     .dialog-footer { align-items: flex-start; flex-direction: column; }
