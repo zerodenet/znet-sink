@@ -16,18 +16,26 @@
     type PersistedConnection,
   } from '$lib/services/connection-history';
   import { success as showSuccessToast, warning as showWarningToast } from '$lib/services/toast.svelte';
+  import ActionConfirmDialog from '$lib/components/ActionConfirmDialog.svelte';
   import ConnectionDetailsDrawer from '$lib/components/ConnectionDetailsDrawer.svelte';
   import * as Tabs from '$lib/components/AppTabs';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import * as Select from '$lib/components/ui/select';
+  import { Spinner } from '$lib/components/ui/Spinner';
   import {
-    AlertTriangle,
     ChevronLeft,
     ChevronRight,
     CircleX,
+    MoreHorizontal,
     Pause,
     Play,
     RotateCcw,
     Search,
+    SlidersHorizontal,
     Trash2,
+    X,
   } from '@lucide/svelte';
 
   const HISTORY_SCOPE = 'connection-history';
@@ -40,6 +48,8 @@
   let protocolFilter = $state('all');
   let outboundFilter = $state('all');
   let resultFilter = $state('all');
+  let filtersOpen = $state(false);
+  let actionsOpen = $state(false);
 
   let livePaused = $state(false);
   let pausedSnapshot = $state<DisplayConnection[]>([]);
@@ -51,6 +61,7 @@
   let historyPageIndex = $state(0);
   let historyLoading = $state(true);
   let historyError = $state<string | null>(null);
+  let historyStale = $state(false);
   let latestObservedHistoryKey = '';
   let historyFilterSignature = '';
   let historyRequestGeneration = 0;
@@ -119,8 +130,18 @@
     return [...values].sort();
   });
 
+  const structuredFilterCount = $derived(
+    Number(protocolFilter !== 'all')
+      + Number(outboundFilter !== 'all')
+      + Number(activeTab === 'history' && resultFilter !== 'all'),
+  );
+
   function hasText(value: unknown): value is string {
     return typeof value === 'string' && value.trim().length > 0 && value !== '-';
+  }
+
+  function isNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
   }
 
   function matchesFilters(connection: DisplayConnection): boolean {
@@ -160,18 +181,24 @@
   const pendingLiveEvents = $derived(
     livePaused ? Math.max(0, coreEvents.connectionTick - pausedAtTick) : 0,
   );
-  const hasFilters = $derived(
-    Boolean(searchQuery.trim())
-      || protocolFilter !== 'all'
-      || outboundFilter !== 'all'
-      || resultFilter !== 'all',
-  );
 
-  function resetFilters() {
-    searchQuery = '';
+  function resetStructuredFilters() {
     protocolFilter = 'all';
     outboundFilter = 'all';
     resultFilter = 'all';
+  }
+
+  function clearSearch() {
+    searchQuery = '';
+  }
+
+  function historySignature(): string {
+    return JSON.stringify([
+      searchQuery.trim(),
+      protocolFilter,
+      outboundFilter,
+      resultFilter,
+    ]);
   }
 
   function resetHistoryPagination() {
@@ -229,6 +256,7 @@
       nextBeforeIds[index + 1] = result.items[0]?.id;
       historyPageBeforeIds = nextBeforeIds;
       historyPageIndex = index;
+      historyStale = false;
     } catch (error) {
       if (generation !== historyRequestGeneration) return;
       historyError = getAppErrorMessage(error, '读取连接记录失败');
@@ -347,6 +375,14 @@
     return `${bytes} B`;
   }
 
+  function listMetric(connection: DisplayConnection, direction: 'up' | 'down'): string {
+    const rate = direction === 'up'
+      ? connection.throughputUpBps
+      : connection.throughputDownBps;
+    if (connection.origin === 'active' && isNumber(rate)) return `${formatBytes(rate)}/s`;
+    return formatBytes(direction === 'up' ? connection.bytesUp : connection.bytesDown);
+  }
+
   function formatDuration(connection: DisplayConnection): string {
     const elapsed = connection.durationMs
       ?? (connection.startedAtUnixMs ? Math.max(0, now - connection.startedAtUnixMs) : undefined);
@@ -381,15 +417,16 @@
     singleConfirmKey = connectionKey(connection);
   }
 
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Escape') return;
+    actionsOpen = false;
+    filtersOpen = false;
+  }
+
   $effect(() => {
     if (activeTab !== 'history') return;
-    const signature = JSON.stringify([
-      searchQuery.trim(),
-      protocolFilter,
-      outboundFilter,
-      resultFilter,
-    ]);
-    if (signature === historyFilterSignature) return;
+    const signature = historySignature();
+    if (signature === historyFilterSignature && !historyStale) return;
     historyFilterSignature = signature;
 
     const timer = window.setTimeout(() => {
@@ -405,7 +442,10 @@
       : '';
     if (!key || key === latestObservedHistoryKey) return;
     latestObservedHistoryKey = key;
-    if (historyPageIndex === 0 && !historyLoading) void refreshFirstHistoryPage();
+    historyStale = true;
+    if (activeTab === 'history' && historyPageIndex === 0 && !historyLoading) {
+      void refreshFirstHistoryPage();
+    }
   });
 
   $effect(() => {
@@ -415,6 +455,7 @@
   });
 
   onMount(() => {
+    historyFilterSignature = historySignature();
     void refreshFirstHistoryPage();
     const clock = window.setInterval(() => {
       now = Date.now();
@@ -423,130 +464,327 @@
   });
 </script>
 
-<Tabs.Root bind:value={activeTab} class="connections-shell desk-card flex-1 overflow-hidden flex flex-col gap-0 animate-fade-in">
-  <div class="panel-header">
-    <div class="panel-title-row">
-      <span class="panel-title">连接</span>
-      <span class="count-badge">{activeTab === 'live' ? liveSource.length : historyView.length}</span>
+<svelte:window onclick={() => actionsOpen = false} onkeydown={handleWindowKeydown} />
+
+<Tabs.Root bind:value={activeTab} class="connections-shell desk-card flex min-h-0 flex-1 flex-col gap-0 overflow-hidden animate-fade-in">
+  <header class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-border px-3.5 py-2.5">
+    <div class="flex min-w-0 items-center gap-2">
+      <span class="text-[13px] font-semibold text-foreground">连接</span>
+      <Badge
+        variant="secondary"
+        class="h-5 min-w-6 rounded-md px-1.5 font-mono text-[10px]"
+        title={activeTab === 'history' ? '当前页记录数' : '当前活动连接数'}
+      >
+        {activeTab === 'live' ? liveSource.length : historyView.length}
+      </Badge>
     </div>
-    <Tabs.List class="tab-switcher" aria-label="连接数据范围">
-      <Tabs.Trigger class="tab-btn" value="live">实时连接</Tabs.Trigger>
-      <Tabs.Trigger class="tab-btn" value="history">连接记录</Tabs.Trigger>
+
+    <Tabs.List class="h-8 justify-self-center" aria-label="连接数据范围">
+      <Tabs.Trigger class="min-w-[76px] text-xs" value="live">实时连接</Tabs.Trigger>
+      <Tabs.Trigger class="min-w-[76px] text-xs" value="history">连接记录</Tabs.Trigger>
     </Tabs.List>
-    <div class="stream-health" class:healthy={coreEvents.status === 'subscribed'} title={coreEvents.lastError ?? eventStatusLabel()}>
-      <span class="health-dot"></span>{eventStatusLabel()}
+
+    <div
+      class="flex items-center justify-self-end gap-1.5 text-[10.5px] text-muted-foreground"
+      class:text-emerald-600={coreEvents.status === 'subscribed'}
+      class:text-amber-600={coreEvents.status === 'reconnecting' || coreEvents.status === 'offline'}
+      class:text-destructive={coreEvents.status === 'error'}
+      title={coreEvents.lastError ?? eventStatusLabel()}
+      aria-label={eventStatusLabel()}
+    >
+      <span class="size-1.5 rounded-full bg-current opacity-75"></span>
+      <span>{eventStatusLabel()}</span>
+    </div>
+  </header>
+
+  <div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+    <div class="relative min-w-[220px] max-w-md flex-1">
+      <Search class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        class="h-[30px] pl-8 pr-8 text-xs"
+        aria-label="搜索连接"
+        placeholder="搜索目标、进程、出口、规则或 ID"
+        bind:value={searchQuery}
+      />
+      {#if searchQuery}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          class="absolute right-0.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+          title="清除搜索"
+          aria-label="清除搜索"
+          onclick={clearSearch}
+        >
+          <X class="size-3.5" />
+        </Button>
+      {/if}
+    </div>
+
+    <Button
+      variant="outline"
+      size="sm"
+      aria-pressed={filtersOpen}
+      onclick={() => filtersOpen = !filtersOpen}
+    >
+      <SlidersHorizontal data-icon="inline-start" class="size-3.5" />
+      筛选
+      {#if structuredFilterCount > 0}
+        <span class="ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] leading-4 text-primary-foreground">
+          {structuredFilterCount}
+        </span>
+      {/if}
+    </Button>
+
+    <div class="ml-auto flex items-center gap-2">
+      {#if activeTab === 'live'}
+        <Button
+          variant={livePaused ? 'secondary' : 'outline'}
+          size="sm"
+          aria-pressed={livePaused}
+          onclick={togglePause}
+        >
+          {#if livePaused}
+            <Play data-icon="inline-start" class="size-3.5" />继续查看
+          {:else}
+            <Pause data-icon="inline-start" class="size-3.5" />暂停查看
+          {/if}
+        </Button>
+      {/if}
+
+      <div class="relative">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="更多操作"
+          aria-label="更多操作"
+          aria-haspopup="menu"
+          aria-expanded={actionsOpen}
+          onclick={(event) => {
+            event.stopPropagation();
+            actionsOpen = !actionsOpen;
+          }}
+        >
+          <MoreHorizontal class="size-4" />
+        </Button>
+
+        {#if actionsOpen}
+          <div
+            class="absolute right-0 top-[calc(100%+6px)] z-50 w-52 rounded-lg border border-border bg-popover p-1 shadow-lg"
+            role="menu"
+            aria-label="连接操作"
+          >
+            {#if activeTab === 'live'}
+              <Button
+                variant="ghost"
+                size="sm"
+                class="w-full justify-start text-destructive hover:text-destructive"
+                role="menuitem"
+                disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
+                onclick={() => {
+                  actionsOpen = false;
+                  closeAllConfirm = true;
+                }}
+              >
+                <CircleX data-icon="inline-start" class="size-3.5" />
+                关闭全部连接
+              </Button>
+            {:else}
+              <Button
+                variant="ghost"
+                size="sm"
+                class="w-full justify-start text-destructive hover:text-destructive"
+                role="menuitem"
+                disabled={clearingHistory}
+                onclick={() => {
+                  actionsOpen = false;
+                  clearHistoryConfirm = true;
+                }}
+              >
+                <Trash2 data-icon="inline-start" class="size-3.5" />
+                清空连接记录
+              </Button>
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 
-  <div class="control-bar">
-    <div class="search-field">
-      <Search size={14} strokeWidth={1.7} />
-      <input type="search" aria-label="搜索连接" placeholder="搜索目标、进程、出口、规则或 ID" bind:value={searchQuery}>
+  {#if filtersOpen}
+    <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
+      <span class="mr-1 text-[10.5px] font-medium text-muted-foreground">筛选条件</span>
+
+      <Select.Root bind:value={protocolFilter}>
+        <Select.Trigger size="sm" class="w-full sm:w-[142px]" aria-label="按协议过滤">
+          {protocolFilter === 'all' ? '全部协议' : protocolFilter.toUpperCase()}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="all" label="全部协议" />
+          {#each protocolOptions as protocol}
+            <Select.Item value={protocol} label={protocol.toUpperCase()} />
+          {/each}
+        </Select.Content>
+      </Select.Root>
+
+      <Select.Root bind:value={outboundFilter}>
+        <Select.Trigger size="sm" class="w-full sm:w-[160px]" aria-label="按出口过滤">
+          {outboundFilter === 'all' ? '全部出口' : outboundFilter}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="all" label="全部出口" />
+          {#each outboundOptions as outbound}
+            <Select.Item value={outbound} label={outbound} />
+          {/each}
+        </Select.Content>
+      </Select.Root>
+
+      {#if activeTab === 'history'}
+        <Select.Root bind:value={resultFilter}>
+          <Select.Trigger size="sm" class="w-full sm:w-[150px]" aria-label="按结果过滤">
+            {resultFilter === 'all' ? '全部结果' : resultFilter}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="all" label="全部结果" />
+            {#each resultOptions as result}
+              <Select.Item value={result} label={result} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      {/if}
+
+      {#if structuredFilterCount > 0}
+        <Button variant="ghost" size="xs" class="text-muted-foreground" onclick={resetStructuredFilters}>
+          <RotateCcw data-icon="inline-start" class="size-3.5" />重置
+        </Button>
+      {/if}
     </div>
-
-    <select aria-label="按协议过滤" bind:value={protocolFilter}>
-      <option value="all">全部协议</option>
-      {#each protocolOptions as protocol}<option value={protocol}>{protocol.toUpperCase()}</option>{/each}
-    </select>
-    <select aria-label="按出口过滤" bind:value={outboundFilter}>
-      <option value="all">全部出口</option>
-      {#each outboundOptions as outbound}<option value={outbound}>{outbound}</option>{/each}
-    </select>
-    {#if activeTab === 'history'}
-      <select aria-label="按结果过滤" bind:value={resultFilter}>
-        <option value="all">全部结果</option>
-        {#each resultOptions as result}<option value={result}>{result}</option>{/each}
-      </select>
-    {/if}
-
-    {#if hasFilters}
-      <button class="toolbar-button quiet" type="button" onclick={resetFilters} title="重置过滤"><RotateCcw size={14} />重置</button>
-    {/if}
-
-    <div class="toolbar-spacer"></div>
-    {#if activeTab === 'live'}
-      <button class="toolbar-button" class:active={livePaused} type="button" onclick={togglePause}>
-        {#if livePaused}<Play size={14} />继续查看{:else}<Pause size={14} />暂停查看{/if}
-      </button>
-      <button
-        class="toolbar-button danger"
-        type="button"
-        disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
-        onclick={() => closeAllConfirm = true}
-      ><CircleX size={14} />关闭全部</button>
-    {:else}
-      <button class="toolbar-button danger" type="button" disabled={clearingHistory} onclick={() => clearHistoryConfirm = true}>
-        <Trash2 size={14} />清空记录
-      </button>
-    {/if}
-  </div>
+  {/if}
 
   {#if livePaused && activeTab === 'live'}
-    <div class="paused-banner" role="status">
-      <span>当前列表已冻结，不影响后台事件接收。</span>
-      <strong>{pendingLiveEvents > 0 ? `已收到 ${pendingLiveEvents} 个连接事件` : '暂无新事件'}</strong>
+    <div class="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[10.5px] text-muted-foreground" role="status">
+      <Pause class="size-3.5" />
+      <span>列表显示已暂停，后台仍在接收连接事件。</span>
+      <Badge variant="outline" class="ml-auto h-5 rounded-md px-1.5 text-[9.5px]">
+        {pendingLiveEvents > 0 ? `${pendingLiveEvents} 个新事件` : '暂无新事件'}
+      </Badge>
     </div>
   {/if}
 
   {#if historyError && activeTab === 'history'}
-    <div class="warning-bar"><span>{historyError}</span><button type="button" onclick={() => refreshFirstHistoryPage()}>重试</button></div>
+    <div class="flex items-center gap-3 border-b border-border bg-destructive/5 px-3 py-2 text-xs text-destructive">
+      <span class="min-w-0 flex-1 truncate">{historyError}</span>
+      <Button variant="ghost" size="xs" class="text-destructive hover:text-destructive" onclick={() => refreshFirstHistoryPage()}>
+        重试
+      </Button>
+    </div>
   {/if}
 
   {#if activeTab === 'history' && historyLoading}
-    <div class="empty-state">加载连接记录...</div>
+    <div class="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+      <Spinner size="sm" color="default" />
+      加载连接记录…
+    </div>
   {:else if currentSource.length === 0}
-    <div class="empty-state"><strong>{activeTab === 'live' ? '暂无活动连接' : '暂无连接记录'}</strong><span>{activeTab === 'live' ? '连接事件到达后会自动显示' : '完成的连接会保存在本地记录中'}</span></div>
+    <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
+      <strong class="text-xs font-semibold text-foreground">{activeTab === 'live' ? '暂无活动连接' : '暂无连接记录'}</strong>
+      <span class="text-[11px] text-muted-foreground">{activeTab === 'live' ? '连接事件到达后会自动显示' : '完成的连接会保存在本地记录中'}</span>
+    </div>
   {:else if filteredConnections.length === 0}
-    <div class="empty-state"><strong>无匹配结果</strong><span>调整搜索条件或过滤器</span></div>
+    <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
+      <strong class="text-xs font-semibold text-foreground">无匹配结果</strong>
+      <span class="text-[11px] text-muted-foreground">调整搜索关键词或筛选条件</span>
+    </div>
   {:else}
-    <div class="list-scroll">
+    <div class="min-h-0 flex-1 overflow-y-auto">
       {#each visibleConnections as connection (connectionKey(connection))}
-        <article class="flow-row">
-          <button type="button" class="flow-open" onclick={() => openDetails(connection)}>
-            <div class="flow-heading">
-              <div class="flow-title">
-                <span class="destination" title={connection.destination}>{connection.destination}</span>
-                <span class="tag">{connection.protocol.toUpperCase()}</span>
-                {#if connection.policyTag}<span class="tag">{connection.policyTag}</span>{/if}
-                {#if connection.outcome}<span class="tag result">{connection.outcome}</span>{/if}
+        <article class="group relative flex border-b border-border/70 transition-colors hover:bg-muted/40">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 flex-col gap-1.5 bg-transparent px-3.5 py-2.5 pr-12 text-left text-foreground outline-none focus-visible:bg-muted/50"
+            aria-label={`查看连接 ${connection.destination}`}
+            onclick={() => openDetails(connection)}
+          >
+            <div class="flex min-w-0 items-center justify-between gap-3">
+              <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <span class="truncate font-mono text-xs font-semibold" title={connection.destination}>{connection.destination}</span>
+                <Badge variant="secondary" class="h-[18px] rounded px-1.5 text-[9px] font-semibold">
+                  {connection.protocol.toUpperCase()}
+                </Badge>
+                {#if connection.policyTag}
+                  <Badge variant="outline" class="h-[18px] max-w-32 truncate rounded px-1.5 text-[9px]">
+                    {connection.policyTag}
+                  </Badge>
+                {/if}
+                {#if connection.outcome}
+                  <Badge variant="outline" class="h-[18px] rounded px-1.5 text-[9px]">
+                    {connection.outcome}
+                  </Badge>
+                {/if}
               </div>
-              <span class="timestamp">{formatTimestamp(connection)}</span>
+              <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{formatTimestamp(connection)}</span>
             </div>
-            <div class="flow-route">
-              <span>{sourceLabel(connection)}</span>
-              {#if connection.outboundTag}<span class="arrow">→</span><strong>{connection.outboundTag}</strong>{/if}
-              <span class="flow-id">#{connection.flowId}</span>
+
+            <div class="flex min-w-0 items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground">
+              <span class="truncate">{sourceLabel(connection)}</span>
+              {#if connection.outboundTag}
+                <span class="opacity-50">→</span>
+                <span class="truncate font-semibold text-foreground">{connection.outboundTag}</span>
+              {/if}
+              <span class="ml-auto shrink-0 opacity-55">#{connection.flowId}</span>
             </div>
-            <div class="flow-stats">
-              <span>↑ {formatBytes(connection.bytesUp)}</span>
-              <span>↓ {formatBytes(connection.bytesDown)}</span>
+
+            <div class="flex items-center gap-3 font-mono text-[10.5px] text-muted-foreground">
+              <span>↑ {listMetric(connection, 'up')}</span>
+              <span>↓ {listMetric(connection, 'down')}</span>
               <span>{formatDuration(connection)}</span>
             </div>
           </button>
+
           {#if connection.origin === 'active' && store.isActionOperable('core.flow.close')}
-            <button
-              class="row-close"
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
               disabled={terminatingIds.has(connection.flowId)}
               title="终止连接"
               aria-label={`终止连接 ${connection.destination}`}
               onclick={() => requestSingleTerminate(connection)}
-            ><CircleX size={15} /></button>
+            >
+              <CircleX class="size-3.5" />
+            </Button>
           {/if}
         </article>
       {/each}
+
       {#if activeTab === 'live' && filteredConnections.length > visibleConnections.length}
-        <div class="list-note">仅渲染前 {visibleConnections.length} / {filteredConnections.length} 条，请使用过滤器缩小范围</div>
+        <div class="px-3 py-2 text-center text-[10.5px] text-muted-foreground">
+          仅渲染前 {visibleConnections.length} / {filteredConnections.length} 条，请使用筛选缩小范围
+        </div>
       {/if}
     </div>
   {/if}
 
   {#if activeTab === 'history'}
-    <footer class="pagination-bar">
-      <span>第 {historyPageIndex + 1} 页 · 每页 {HISTORY_PAGE_SIZE} 条</span>
-      <div>
-        <button type="button" disabled={historyPageIndex === 0 || historyLoading} onclick={() => loadHistoryPage(historyPageIndex - 1)}><ChevronLeft size={14} />上一页</button>
-        <button type="button" disabled={!historyPageHasMore[historyPageIndex] || historyLoading} onclick={() => loadHistoryPage(historyPageIndex + 1)}>下一页<ChevronRight size={14} /></button>
+    <footer class="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-[10.5px] text-muted-foreground">
+      <span>第 {historyPageIndex + 1} 页 · 本页 {historyView.length} 条</span>
+      <div class="flex items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={historyPageIndex === 0 || historyLoading}
+          onclick={() => loadHistoryPage(historyPageIndex - 1)}
+        >
+          <ChevronLeft data-icon="inline-start" class="size-3.5" />上一页
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={!historyPageHasMore[historyPageIndex] || historyLoading}
+          onclick={() => loadHistoryPage(historyPageIndex + 1)}
+        >
+          下一页<ChevronRight data-icon="inline-end" class="size-3.5" />
+        </Button>
       </div>
     </footer>
   {/if}
@@ -558,106 +796,48 @@
     onclose={() => selectedKey = null}
     onrequestterminate={requestSingleTerminate}
   />
-
-  {#if singleConfirmConnection}
-    <div class="confirm-layer">
-      <button class="confirm-scrim" type="button" aria-label="取消终止连接" onclick={() => singleConfirmKey = null}></button>
-      <div class="confirm-dialog" role="alertdialog" aria-modal="true">
-        <AlertTriangle size={20} />
-        <h3>终止这个连接？</h3>
-        <p>内核将立即关闭到 <strong>{singleConfirmConnection.destination}</strong> 的连接，对应应用可能重新建立连接。</p>
-        <div><button type="button" onclick={() => singleConfirmKey = null}>取消</button><button class="danger" type="button" onclick={() => closeSingle(singleConfirmConnection)}>终止连接</button></div>
-      </div>
-    </div>
-  {/if}
-
-  {#if closeAllConfirm}
-    <div class="confirm-layer">
-      <button class="confirm-scrim" type="button" aria-label="取消关闭全部连接" onclick={() => closeAllConfirm = false}></button>
-      <div class="confirm-dialog" role="alertdialog" aria-modal="true">
-        <AlertTriangle size={20} />
-        <h3>关闭当前全部连接？</h3>
-        <p>将尝试关闭当前检测到的 <strong>{liveView.length}</strong> 条活动连接。应用可能立即重新建立部分连接。</p>
-        <div><button type="button" disabled={closingAll} onclick={() => closeAllConfirm = false}>取消</button><button class="danger" type="button" disabled={closingAll} onclick={closeAllConnections}>{closingAll ? '关闭中...' : '关闭全部'}</button></div>
-      </div>
-    </div>
-  {/if}
-
-  {#if clearHistoryConfirm}
-    <div class="confirm-layer">
-      <button class="confirm-scrim" type="button" aria-label="取消清空连接记录" onclick={() => clearHistoryConfirm = false}></button>
-      <div class="confirm-dialog" role="alertdialog" aria-modal="true">
-        <Trash2 size={20} />
-        <h3>清空本地连接记录？</h3>
-        <p>只删除客户端保存的连接历史，不会关闭活动连接，也不会清空其他诊断日志。</p>
-        <div><button type="button" disabled={clearingHistory} onclick={() => clearHistoryConfirm = false}>取消</button><button class="danger" type="button" disabled={clearingHistory} onclick={clearHistory}>{clearingHistory ? '清空中...' : '清空记录'}</button></div>
-      </div>
-    </div>
-  {/if}
 </Tabs.Root>
 
+<ActionConfirmDialog
+  open={Boolean(singleConfirmConnection)}
+  title="终止这个连接？"
+  description={singleConfirmConnection
+    ? `内核将立即关闭到 ${singleConfirmConnection.destination} 的连接，对应应用可能重新建立连接。`
+    : ''}
+  confirmLabel="终止连接"
+  busyLabel="终止中…"
+  busy={singleConfirmConnection ? terminatingIds.has(singleConfirmConnection.flowId) : false}
+  destructive
+  onClose={() => singleConfirmKey = null}
+  onConfirm={() => singleConfirmConnection && closeSingle(singleConfirmConnection)}
+/>
+
+<ActionConfirmDialog
+  open={closeAllConfirm}
+  title="关闭当前全部连接？"
+  description={`将尝试关闭当前检测到的 ${liveView.length} 条活动连接。应用可能立即重新建立部分连接。`}
+  confirmLabel="关闭全部"
+  busyLabel="关闭中…"
+  busy={closingAll}
+  destructive
+  onClose={() => closeAllConfirm = false}
+  onConfirm={closeAllConnections}
+/>
+
+<ActionConfirmDialog
+  open={clearHistoryConfirm}
+  title="清空本地连接记录？"
+  description="只删除客户端保存的连接历史，不会关闭活动连接，也不会清空其他诊断日志。"
+  confirmLabel="清空记录"
+  busyLabel="清空中…"
+  busy={clearingHistory}
+  destructive
+  onClose={() => clearHistoryConfirm = false}
+  onConfirm={clearHistory}
+/>
+
 <style>
-  :global(.connections-shell) { position: relative; }
-  .panel-header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  .panel-title-row { display: flex; align-items: center; gap: 7px; }
-  .panel-title { font-size: 13px; font-weight: 700; }
-  .count-badge { min-width: 26px; padding: 2px 7px; border-radius: 5px; background: var(--muted); color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; text-align: center; }
-  :global(.tab-switcher) { justify-self: center; height: 36px; }
-  :global(.tab-btn) { min-width: 78px; font-size: 12px; }
-  .stream-health { justify-self: end; display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 10.5px; }
-  .stream-health.healthy { color: var(--primary); }
-  .health-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
-  .control-bar { display: flex; align-items: center; gap: 7px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
-  .search-field { position: relative; min-width: 220px; flex: 1; }
-  .search-field svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
-  .search-field input, select { height: var(--control-height); border: 1px solid var(--input); border-radius: var(--control-radius); background: var(--background); color: var(--foreground); font-size: 11.5px; outline: none; }
-  .search-field input { width: 100%; padding: 0 10px 0 30px; }
-  select { max-width: 150px; padding: 0 24px 0 9px; }
-  .toolbar-spacer { flex: .4; }
-  .toolbar-button { height: var(--control-height); display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--control-radius); padding: 0 10px; background: var(--background); color: var(--foreground); font-size: 11px; cursor: pointer; white-space: nowrap; }
-  .toolbar-button:hover:not(:disabled), .toolbar-button.active { background: var(--muted); }
-  .toolbar-button.quiet { color: var(--muted-foreground); }
-  .toolbar-button.danger { color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 30%, var(--border)); }
-  .toolbar-button:disabled { opacity: .45; cursor: not-allowed; }
-  .paused-banner, .warning-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 14px; border-bottom: 1px solid var(--border); font-size: 10.5px; }
-  .paused-banner { background: color-mix(in srgb, var(--warning) 8%, transparent); color: var(--warning); }
-  .warning-bar { color: var(--destructive); background: color-mix(in srgb, var(--destructive) 6%, transparent); }
-  .warning-bar button { border: 0; background: transparent; color: inherit; cursor: pointer; font-weight: 700; }
-  .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: var(--muted-foreground); font-size: 11.5px; }
-  .empty-state strong { color: var(--foreground); font-size: 12.5px; }
-  .list-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-  .flow-row { position: relative; display: flex; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent); }
-  .flow-row:hover { background: color-mix(in srgb, var(--muted) 45%, transparent); }
-  .flow-open { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; border: 0; padding: 10px 46px 10px 14px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-  .flow-heading, .flow-title, .flow-route, .flow-stats { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .flow-heading { justify-content: space-between; }
-  .flow-title { overflow: hidden; }
-  .destination { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; font-weight: 700; }
-  .tag { flex-shrink: 0; padding: 2px 5px; border-radius: 4px; background: var(--muted); color: var(--muted-foreground); font-size: 9.5px; font-weight: 700; }
-  .tag.result { color: var(--foreground); }
-  .timestamp, .flow-route, .flow-stats { color: var(--muted-foreground); font-family: var(--font-mono); font-size: 10.5px; }
-  .timestamp { flex-shrink: 0; }
-  .flow-route span, .flow-route strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .flow-route strong { color: var(--foreground); font-weight: 600; }
-  .arrow { opacity: .5; }
-  .flow-id { margin-left: auto; opacity: .55; }
-  .flow-stats { gap: 14px; }
-  .row-close { position: absolute; right: 12px; top: 50%; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; transform: translateY(-50%); border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
-  .row-close:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 10%, transparent); color: var(--destructive); }
-  .row-close:disabled { opacity: .4; }
-  .list-note { padding: 9px 14px; color: var(--muted-foreground); font-size: 10.5px; text-align: center; }
-  .pagination-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 10.5px; }
-  .pagination-bar div { display: flex; gap: 6px; }
-  .pagination-bar button, .confirm-dialog button { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--background); color: var(--foreground); font-size: 10.5px; cursor: pointer; }
-  .pagination-bar button:disabled, .confirm-dialog button:disabled { opacity: .45; cursor: not-allowed; }
-  .confirm-layer { position: absolute; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center; }
-  .confirm-scrim { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: rgb(0 0 0 / .34); }
-  .confirm-dialog { position: relative; width: min(390px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid var(--border); border-radius: 11px; background: var(--background); box-shadow: 0 18px 60px rgb(0 0 0 / .28); }
-  .confirm-dialog > svg { color: var(--destructive); }
-  .confirm-dialog h3, .confirm-dialog p { margin: 0; }
-  .confirm-dialog h3 { font-size: 14px; }
-  .confirm-dialog p { color: var(--muted-foreground); font-size: 11.5px; line-height: 1.6; }
-  .confirm-dialog > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
-  .confirm-dialog button.danger { border-color: color-mix(in srgb, var(--destructive) 35%, var(--border)); background: color-mix(in srgb, var(--destructive) 8%, transparent); color: var(--destructive); }
-  @media (max-width: 900px) { .control-bar { flex-wrap: wrap; } .toolbar-spacer { display: none; } .search-field { min-width: 100%; } }
+  :global(.connections-shell) {
+    position: relative;
+  }
 </style>
