@@ -3,6 +3,7 @@ pub mod app_config_store;
 pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
+pub mod connection_history_store;
 pub mod core_config;
 pub mod core_events;
 pub mod core_process;
