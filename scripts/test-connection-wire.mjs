@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   attachConnectionWireMetadata,
   buildConnectionWireIndex,
+  mergeConnectionWireIndexes,
 } from '../src/lib/services/connection-wire.ts';
 
 function connection(flowId, overrides = {}) {
@@ -85,6 +86,9 @@ function connection(flowId, overrides = {}) {
   assert.equal(enriched.eventSequence, 44);
   assert.equal(enriched.eventOccurredAtUnixMs, 8_000);
   assert.deepEqual(enriched.rawEnvelope, eventFrame.payload);
+
+  const repeated = mergeConnectionWireIndexes(index, index);
+  assert.equal(repeated['completed-1'].length, 1, 're-reading debug frames must not duplicate wire records');
 }
 
 {
