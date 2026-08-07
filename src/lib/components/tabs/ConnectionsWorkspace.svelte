@@ -256,7 +256,7 @@
       nextBeforeIds[index + 1] = result.items[0]?.id;
       historyPageBeforeIds = nextBeforeIds;
       historyPageIndex = index;
-      historyStale = false;
+      if (index === 0) historyStale = false;
     } catch (error) {
       if (generation !== historyRequestGeneration) return;
       historyError = getAppErrorMessage(error, '读取连接记录失败');
@@ -434,9 +434,16 @@
   }
 
   $effect(() => {
+    const currentTab = activeTab;
+    actionsOpen = false;
+    if (currentTab === 'live') return;
+  });
+
+  $effect(() => {
     if (activeTab !== 'history') return;
     const signature = historySignature();
-    if (signature === historyFilterSignature && !historyStale) return;
+    const filtersChanged = signature !== historyFilterSignature;
+    if (!filtersChanged && (!historyStale || historyPageIndex !== 0)) return;
     historyFilterSignature = signature;
 
     const timer = window.setTimeout(() => {
@@ -453,9 +460,6 @@
     if (!key || key === latestObservedHistoryKey) return;
     latestObservedHistoryKey = key;
     historyStale = true;
-    if (activeTab === 'history' && historyPageIndex === 0 && !historyLoading) {
-      void refreshFirstHistoryPage();
-    }
   });
 
   $effect(() => {
@@ -774,7 +778,14 @@
 
   {#if activeTab === 'history'}
     <footer class="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-[10.5px] text-muted-foreground">
-      <span>第 {historyPageIndex + 1} 页 · 本页 {historyView.length} 条</span>
+      <div class="flex items-center gap-2">
+        <span>第 {historyPageIndex + 1} 页 · 本页 {historyView.length} 条</span>
+        {#if historyStale && historyPageIndex > 0}
+          <Button variant="ghost" size="xs" onclick={() => refreshFirstHistoryPage()}>
+            有新记录
+          </Button>
+        {/if}
+      </div>
       <div class="flex items-center gap-1.5">
         <Button
           variant="outline"
@@ -816,7 +827,9 @@
   busy={singleConfirmConnection ? terminatingIds.has(singleConfirmConnection.flowId) : false}
   destructive
   onClose={() => singleConfirmKey = null}
-  onConfirm={() => singleConfirmConnection && closeSingle(singleConfirmConnection)}
+  onConfirm={() => {
+    if (singleConfirmConnection) return closeSingle(singleConfirmConnection);
+  }}
 />
 
 <ActionConfirmDialog
