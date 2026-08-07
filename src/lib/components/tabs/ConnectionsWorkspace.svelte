@@ -200,9 +200,6 @@
       return;
     }
 
-    if (force && index === 0) {
-      resetHistoryPagination();
-    }
     const generation = ++historyRequestGeneration;
     const beforeId = historyPageBeforeIds[index];
     historyLoading = true;
@@ -240,14 +237,18 @@
     }
   }
 
+  async function refreshFirstHistoryPage() {
+    resetHistoryPagination();
+    await loadHistoryPage(0, true);
+  }
+
   async function clearHistory() {
     if (clearingHistory) return;
     clearingHistory = true;
     try {
       await invoke('gui_debug_clear', { scope: HISTORY_SCOPE });
-      resetHistoryPagination();
       clearHistoryConfirm = false;
-      await loadHistoryPage(0, true);
+      await refreshFirstHistoryPage();
       showSuccessToast('连接记录已清空');
     } catch (error) {
       handleAppError(error, '清空连接记录失败');
@@ -392,8 +393,7 @@
     historyFilterSignature = signature;
 
     const timer = window.setTimeout(() => {
-      resetHistoryPagination();
-      void loadHistoryPage(0, true);
+      void refreshFirstHistoryPage();
     }, 250);
     return () => window.clearTimeout(timer);
   });
@@ -405,7 +405,7 @@
       : '';
     if (!key || key === latestObservedHistoryKey) return;
     latestObservedHistoryKey = key;
-    if (historyPageIndex === 0 && !historyLoading) void loadHistoryPage(0, true);
+    if (historyPageIndex === 0 && !historyLoading) void refreshFirstHistoryPage();
   });
 
   $effect(() => {
@@ -415,7 +415,7 @@
   });
 
   onMount(() => {
-    void loadHistoryPage(0, true);
+    void refreshFirstHistoryPage();
     const clock = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
@@ -489,7 +489,7 @@
   {/if}
 
   {#if historyError && activeTab === 'history'}
-    <div class="warning-bar"><span>{historyError}</span><button type="button" onclick={() => loadHistoryPage(historyPageIndex, true)}>重试</button></div>
+    <div class="warning-bar"><span>{historyError}</span><button type="button" onclick={() => refreshFirstHistoryPage()}>重试</button></div>
   {/if}
 
   {#if activeTab === 'history' && historyLoading}
