@@ -7,7 +7,7 @@
   import Content from './select-content.svelte';
   import Item from './select-item.svelte';
 
-  export interface ClearableSelectOption {
+  interface ClearableSelectOption {
     value: string;
     label: string;
     disabled?: boolean;
