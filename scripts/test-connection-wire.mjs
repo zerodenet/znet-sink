@@ -39,9 +39,10 @@ function connection(flowId, overrides = {}) {
     connection('active-1', { startedAtUnixMs: 1_000 }),
     index,
   );
+  const rawPayload = enriched.rawPayload;
 
   assert.equal(enriched.rawSource, 'active_flows');
-  assert.equal(enriched.rawPayload.extra_kernel_field, 'preserved');
+  assert.equal(rawPayload.extra_kernel_field, 'preserved');
 }
 
 {
