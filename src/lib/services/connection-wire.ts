@@ -63,6 +63,26 @@ export function selectConnectionWireMetadata(
   })[0];
 }
 
+export function mergeConnectionWireIndexes(
+  current: ConnectionWireIndex,
+  incoming: ConnectionWireIndex,
+  limitPerFlow = 20,
+): ConnectionWireIndex {
+  const merged: ConnectionWireIndex = { ...current };
+
+  for (const [flowId, records] of Object.entries(incoming)) {
+    const unique = new Map<string, ConnectionWireMetadata>();
+    for (const record of [...(merged[flowId] ?? []), ...records]) {
+      unique.set(metadataIdentity(record), record);
+    }
+    merged[flowId] = [...unique.values()]
+      .sort((left, right) => metadataTimestamp(left) - metadataTimestamp(right))
+      .slice(-limitPerFlow);
+  }
+
+  return merged;
+}
+
 function collectQueryRecords(
   index: ConnectionWireIndex,
   response: unknown,
@@ -199,12 +219,34 @@ function metadataScore(connection: GuiConnectionItem, metadata: ConnectionWireMe
   return score;
 }
 
+function metadataIdentity(metadata: ConnectionWireMetadata): string {
+  if (metadata.eventId) return `event-id:${metadata.eventId}`;
+  if (metadata.eventSequence !== undefined) {
+    return `event-sequence:${metadata.eventType ?? ''}:${metadata.eventSequence}`;
+  }
+  return [
+    metadata.rawSource,
+    metadata.eventType ?? '',
+    metadata.startedAtUnixMs ?? '',
+    metadata.endedAtUnixMs ?? '',
+    stableSerialize(metadata.rawPayload),
+  ].join(':');
+}
+
 function metadataTimestamp(metadata: ConnectionWireMetadata): number {
   return metadata.eventOccurredAtUnixMs
     ?? metadata.capturedAtUnixMs
     ?? metadata.endedAtUnixMs
     ?? metadata.startedAtUnixMs
     ?? 0;
+}
+
+function stableSerialize(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function timestampFrom(value: unknown, kind: 'started' | 'ended'): number | undefined {
