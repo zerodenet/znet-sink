@@ -34,6 +34,7 @@
   let recentSnapshot = $state<GuiConnectionItem[]>([]);
   let wireIndex = $state<ConnectionWireIndex>({});
   let loading = $state(true);
+  let refreshing = $state(false);
   let closingId = $state<string | null>(null);
   let expandedIds = $state<Set<string>>(new Set());
   let suppressedActiveIds = $state<Set<string>>(new Set());
@@ -97,9 +98,10 @@
   }
 
   async function refresh(showLoading = connections.length === 0, includeWireQueries = showLoading) {
-    if (loading && !showLoading) return;
+    if (refreshing) return;
     const generation = ++refreshGeneration;
-    loading = true;
+    refreshing = true;
+    if (showLoading) loading = true;
 
     try {
       const [activeResult, recentResult, wireResult] = await Promise.allSettled([
@@ -144,7 +146,10 @@
         partialError = errors.length > 0 ? `部分连接数据未能加载：${errors.join('；')}` : null;
       }
     } finally {
-      if (generation === refreshGeneration) loading = false;
+      if (generation === refreshGeneration) {
+        refreshing = false;
+        if (showLoading) loading = false;
+      }
     }
   }
 
@@ -326,9 +331,9 @@
      <Tabs.Trigger class="tab-btn" value="history">连接记录</Tabs.Trigger>
    </Tabs.List>
    <div class="header-actions">
-     <Button size="sm" onclick={() => refresh(false, true)} disabled={loading}>
-       <RefreshCw class={loading ? 'animate-spin' : undefined} />
-       {loading ? '刷新中...' : '刷新'}
+     <Button size="sm" onclick={() => refresh(false, true)} disabled={refreshing}>
+       <RefreshCw class={refreshing ? 'animate-spin' : undefined} />
+       {refreshing ? '刷新中...' : '刷新'}
      </Button>
    </div>
  </div>
