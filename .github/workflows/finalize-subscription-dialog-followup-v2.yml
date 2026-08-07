@@ -1,0 +1,74 @@
+name: Finalize verified subscription dialog patch
+
+on:
+  push:
+    branches:
+      - agent/fix-subscription-format-detection
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-subscription-format-detection
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply and verify patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/patch-subscription-dialog-followup.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY", start)
+          script = textwrap.dedent(source[start:end])
+          Path('/tmp/subscription-followup.py').write_text(script, encoding='utf-8')
+          PY
+          python /tmp/subscription-followup.py
+          rustfmt --edition 2021 src-tauri/src/services/subscription_wrapper.rs
+
+          python - <<'PY'
+          from pathlib import Path
+
+          page = Path('src/lib/components/tabs/SubscriptionsTab.svelte')
+          text = page.read_text(encoding='utf-8')
+          text = text.replace('<Dialog.Body class="form-fields">', '<Dialog.Body class="grid gap-[15px]">', 1)
+          text = text.replace('  .form-fields { display: grid; gap: 15px; }\n', '', 1)
+          page.write_text(text, encoding='utf-8')
+
+          test = Path('scripts/test-subscription-contract.mjs')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace(
+              'assert.match(editor, /<Dialog\\.Body class="form-fields">/);',
+              'assert.match(editor, /<Dialog\\.Body class="grid gap-\\[15px\\]">/);',
+              1,
+          )
+          test.write_text(text, encoding='utf-8')
+          PY
+
+          node scripts/test-subscription-contract.mjs
+          rustfmt --edition 2021 --check src-tauri/src/services/subscription_wrapper.rs
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          rm .github/workflows/patch-subscription-dialog-followup.yml
+          rm .github/workflows/retry-subscription-dialog-followup.yml
+          rm .github/workflows/finalize-subscription-dialog-followup.yml
+          rm .github/workflows/finalize-subscription-dialog-followup-v2.yml
+          git config user.name "Kovawx"
+          git config user.email "kovawx@gmail.com"
+          git add -A
+          git commit -m "fix(subscriptions): pin dialog chrome and honor custom ua"
+          git push origin HEAD:agent/fix-subscription-format-detection
