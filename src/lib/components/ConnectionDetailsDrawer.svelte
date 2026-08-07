@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import type { DisplayConnection } from '$lib/services/connection-view';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { success as showSuccessToast, warning as showWarningToast } from '$lib/services/toast.svelte';
@@ -23,8 +23,17 @@
   let activeSection = $state<'details' | 'diagnostics'>('details');
   let activeConnectionIdentity = $state<string | null>(null);
   let copiedRaw = $state<'payload' | 'envelope' | null>(null);
-  let drawerElement = $state<HTMLDivElement>();
+  let dialogElement = $state<HTMLDivElement>();
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
 
   function connectionIdentity(item: DisplayConnection): string {
     const lifetime = item.startedAtUnixMs
@@ -34,6 +43,17 @@
     return `${item.origin}:${item.flowId}:${lifetime}`;
   }
 
+  function focusableElements(): HTMLElement[] {
+    if (!dialogElement) return [];
+    return Array.from(dialogElement.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary, [tabindex]:not([tabindex="-1"])',
+    ));
+  }
+
+  function close() {
+    if (!terminating) onclose();
+  }
+
   $effect(() => {
     const nextIdentity = connection ? connectionIdentity(connection) : null;
     if (nextIdentity === activeConnectionIdentity) return;
@@ -41,12 +61,52 @@
     activeConnectionIdentity = nextIdentity;
     activeSection = 'details';
     copiedRaw = null;
-    if (nextIdentity) queueMicrotask(() => drawerElement?.focus());
   });
 
-  function handleDialogKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') onclose();
-  }
+  $effect(() => {
+    if (!connection) return;
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogElement?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeydown);
+    void tick().then(() => (focusableElements()[0] ?? dialogElement)?.focus());
+
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+      document.body.style.overflow = previousBodyOverflow;
+      previouslyFocused?.focus();
+    };
+  });
 
   function isNumber(value: unknown): value is number {
     return typeof value === 'number' && Number.isFinite(value);
@@ -152,27 +212,35 @@
 </script>
 
 {#if connection}
-  <div class="drawer-layer">
-    <button class="drawer-scrim" type="button" tabindex="-1" aria-label="关闭连接详情" onclick={onclose}></button>
+  <div use:portal class="dialog-layer" role="presentation">
+    <button
+      class="dialog-scrim"
+      type="button"
+      tabindex="-1"
+      aria-label="关闭连接详情"
+      disabled={terminating}
+      onclick={close}
+    ></button>
+
     <div
-      class="drawer"
+      class="dialog"
       role="dialog"
       aria-modal="true"
-      aria-label="连接详情"
+      aria-labelledby="connection-dialog-title"
+      aria-describedby="connection-dialog-description"
       tabindex="-1"
-      bind:this={drawerElement}
-      onkeydown={handleDialogKeydown}
+      bind:this={dialogElement}
     >
-      <header class="drawer-header">
-        <div class="drawer-heading">
-          <div class="drawer-title-row">
-            <span class="drawer-title" title={connection.destination}>{connection.destination}</span>
+      <header class="dialog-header">
+        <div class="dialog-heading">
+          <div class="dialog-title-row">
+            <h2 id="connection-dialog-title" class="dialog-title" title={connection.destination}>{connection.destination}</h2>
             <span class="tag">{connection.protocol.toUpperCase()}</span>
             <span class:active-state={connection.origin === 'active'} class="state-tag">
               {connection.origin === 'active' ? '活动中' : '已结束'}
             </span>
           </div>
-          <div class="drawer-subtitle">
+          <div id="connection-dialog-description" class="dialog-subtitle">
             <span>{sourceLabel(connection)}</span>
             {#if hasText(connection.outboundTag)}
               <span class="route-arrow">→</span>
@@ -181,12 +249,19 @@
             <span class="flow-id">#{connection.flowId}</span>
           </div>
         </div>
-        <button class="icon-button" type="button" onclick={onclose} aria-label="关闭连接详情" title="关闭详情">
-          <X size={17} />
-        </button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onclick={close}
+          disabled={terminating}
+          aria-label="关闭连接详情"
+          title="关闭详情"
+        >
+          <X class="size-4" />
+        </Button>
       </header>
 
-      <div class="drawer-tabs" role="tablist" aria-label="连接详情栏目">
+      <div class="dialog-tabs" role="tablist" aria-label="连接详情栏目">
         <button
           id="connection-details-tab"
           type="button"
@@ -207,7 +282,7 @@
         >诊断数据</button>
       </div>
 
-      <div class="drawer-content">
+      <div class="dialog-content">
         {#if activeSection === 'details'}
           <div id="connection-details-panel" role="tabpanel" aria-labelledby="connection-details-tab">
             <section class="summary-grid">
@@ -340,11 +415,17 @@
       </div>
 
       {#if connection.origin === 'active' && canTerminate}
-        <footer class="drawer-footer">
+        <footer class="dialog-footer">
           <div><strong>终止活动连接</strong><span>将请求内核立即取消该连接，应用可能会自动重新建立。</span></div>
-          <button class="terminate-button" type="button" disabled={terminating} onclick={() => onrequestterminate?.(connection)}>
-            <AlertTriangle size={15} />{terminating ? '终止中...' : '终止连接'}
-          </button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={terminating}
+            onclick={() => onrequestterminate?.(connection)}
+          >
+            <AlertTriangle data-icon="inline-start" class="size-3.5" />
+            {terminating ? '终止中…' : '终止连接'}
+          </Button>
         </footer>
       {/if}
     </div>
@@ -352,27 +433,28 @@
 {/if}
 
 <style>
-  .drawer-layer { position: absolute; inset: 0; z-index: 50; display: flex; justify-content: flex-end; }
-  .drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.28); backdrop-filter: blur(1px); cursor: default; }
-  .drawer { position: relative; width: min(560px, 92%); height: 100%; display: flex; flex-direction: column; background: var(--background); border-left: 1px solid var(--border); box-shadow: -16px 0 40px rgb(0 0 0 / 0.18); animation: drawer-in 0.18s ease-out; outline: none; }
-  @keyframes drawer-in { from { transform: translateX(18px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-  .drawer-header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--border); }
-  .drawer-heading { min-width: 0; flex: 1; }
-  .drawer-title-row, .drawer-subtitle { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .drawer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
-  .drawer-subtitle { margin-top: 5px; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; }
-  .drawer-subtitle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dialog-layer { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .dialog-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.38); backdrop-filter: blur(2px); cursor: default; }
+  .dialog { position: relative; z-index: 1; width: min(860px, 100%); max-height: min(820px, calc(100vh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 24px 70px rgb(0 0 0 / 0.28); animation: dialog-in 0.16s ease-out; outline: none; }
+  @keyframes dialog-in { from { transform: translateY(8px) scale(0.985); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+  .dialog-header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--border); }
+  .dialog-heading { min-width: 0; flex: 1; }
+  .dialog-title-row, .dialog-subtitle { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .dialog-title { min-width: 0; overflow: hidden; margin: 0; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
+  .dialog-subtitle { margin-top: 5px; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; }
+  .dialog-subtitle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .flow-id { margin-left: auto; opacity: 0.55; }
   .route-arrow { opacity: 0.45; }
   .tag, .state-tag { flex-shrink: 0; border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 700; }
   .state-tag.active-state { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
-  .icon-button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
-  .icon-button:hover { background: var(--muted); color: var(--foreground); }
-  .drawer-tabs { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--border); }
-  .drawer-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
-  .drawer-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
-  .drawer-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
-  .drawer-content { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 22px; }
+  .dialog-tabs { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--border); }
+  .dialog-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
+  .dialog-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
+  .dialog-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
+  .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px 24px; }
+  .dialog-content::-webkit-scrollbar { width: 9px; }
+  .dialog-content::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }
+  .dialog-content::-webkit-scrollbar-track { background: transparent; }
   .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .summary-card { min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--muted) 45%, transparent); }
   .summary-label, .summary-card small { color: var(--muted-foreground); font-size: 10.5px; }
@@ -391,12 +473,16 @@
   .raw-block summary { padding: 9px 82px 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
   .raw-block pre { max-height: 420px; overflow: auto; margin: 0; padding: 11px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
   .raw-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
-  .drawer-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--background); }
-  .drawer-footer > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .drawer-footer strong { font-size: 11.5px; }
-  .drawer-footer span { color: var(--muted-foreground); font-size: 10px; }
-  .terminate-button { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border)); border-radius: 7px; padding: 7px 10px; background: color-mix(in srgb, var(--destructive) 8%, transparent); color: var(--destructive); font-size: 11px; font-weight: 700; cursor: pointer; }
-  .terminate-button:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 14%, transparent); }
-  .terminate-button:disabled { opacity: 0.55; cursor: not-allowed; }
-  @media (max-width: 720px) { .drawer { width: 100%; } .summary-grid { grid-template-columns: 1fr; } .property-grid { grid-template-columns: 1fr; } }
+  .dialog-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--background); }
+  .dialog-footer > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .dialog-footer strong { font-size: 11.5px; }
+  .dialog-footer span { color: var(--muted-foreground); font-size: 10px; }
+  @media (max-width: 720px) {
+    .dialog-layer { padding: 12px; }
+    .dialog { max-height: calc(100vh - 24px); }
+    .summary-grid, .property-grid { grid-template-columns: 1fr; }
+    .property.wide { grid-column: auto; }
+    .dialog-footer { align-items: flex-start; flex-direction: column; }
+    .dialog-footer :global(button) { width: 100%; }
+  }
 </style>
