@@ -39,6 +39,7 @@
   const canClear = $derived(!disabled && value !== defaultValue);
 
   function clear(event: MouseEvent) {
+    event.preventDefault();
     event.stopPropagation();
     value = defaultValue;
   }
@@ -68,7 +69,10 @@
       class="absolute right-6 top-1/2 z-10 -translate-y-1/2 text-muted-foreground"
       title={clearLabel}
       aria-label={clearLabel}
-      onpointerdown={(event) => event.stopPropagation()}
+      onpointerdown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onclick={clear}
     >
       <X class="size-3" />
