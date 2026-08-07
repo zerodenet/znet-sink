@@ -50,10 +50,6 @@
     if (!busy) onClose();
   }
 
-  function handleBackdropClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) close();
-  }
-
   $effect(() => {
     if (!open) return;
 
@@ -100,13 +96,20 @@
 {#if open}
   <div
     use:portal
-    class="fixed inset-0 z-[100] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[1px]"
+    class="fixed inset-0 z-[100] flex items-center justify-center p-4"
     role="presentation"
-    onclick={handleBackdropClick}
   >
+    <button
+      type="button"
+      class="absolute inset-0 size-full border-0 bg-black/35 backdrop-blur-[1px]"
+      aria-label="取消操作"
+      disabled={busy}
+      onclick={close}
+    ></button>
+
     <div
       bind:this={dialogElement}
-      class="w-full max-w-[390px] rounded-xl border border-border bg-background p-5 shadow-2xl outline-none"
+      class="relative z-10 w-full max-w-[390px] rounded-xl border border-border bg-background p-5 shadow-2xl outline-none"
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="action-confirm-title"
