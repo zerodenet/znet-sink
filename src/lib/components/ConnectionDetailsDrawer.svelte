@@ -217,7 +217,7 @@
       class="dialog-scrim"
       type="button"
       tabindex="-1"
-      aria-label="关闭连接详情"
+      aria-label="关闭连接详情弹窗"
       disabled={terminating}
       onclick={close}
     ></button>
@@ -254,8 +254,8 @@
           size="icon-sm"
           onclick={close}
           disabled={terminating}
-          aria-label="关闭连接详情"
-          title="关闭详情"
+          aria-label="关闭连接详情弹窗"
+          title="关闭弹窗"
         >
           <X class="size-4" />
         </Button>
