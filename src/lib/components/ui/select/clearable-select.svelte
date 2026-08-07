@@ -43,7 +43,7 @@
 </script>
 
 <div class={cn('flex items-center gap-1', className)} data-slot="clearable-select">
-  <Root type="single" bind:value disabled={disabled}>
+  <Root type="single" bind:value items={options} disabled={disabled}>
     <Trigger
       {size}
       class="min-w-0 flex-1"
