@@ -34,23 +34,24 @@ export function buildConnectionView({
   limit = DEFAULT_LIMIT,
 }: ConnectionViewInput): ConnectionView {
   const activeCandidates = mergeConnectionLists(activeEvents, activeSnapshot);
-  const recentCandidates = mergeConnectionLists(recentEvents, recentSnapshot);
-  const recentById = new Map(recentCandidates.map((connection) => [connection.flowId, connection]));
+  const recentCandidates = mergeConnectionLists(
+    recentEvents,
+    recentSnapshot,
+    connectionLifecycleKey,
+  );
+  const latestCompletedById = latestCompletedConnections(recentCandidates);
 
   const active = activeCandidates
     .filter((connection) => {
-      const completed = recentById.get(connection.flowId);
+      const completed = latestCompletedById.get(connection.flowId);
       return !completed || activeRepresentsNewLifetime(connection, completed);
     })
     .sort((left, right) => connectionTimestamp(right) - connectionTimestamp(left))
     .slice(0, limit);
 
-  const activeById = new Map(active.map((connection) => [connection.flowId, connection]));
+  // Completed lifetimes belong to client history. A currently active flow with
+  // a reused numeric ID must not erase an older completed lifetime.
   const recent = recentCandidates
-    .filter((connection) => {
-      const current = activeById.get(connection.flowId);
-      return !current || !activeRepresentsNewLifetime(current, connection);
-    })
     .sort((left, right) => completedTimestamp(right) - completedTimestamp(left))
     .slice(0, limit);
 
@@ -75,15 +76,17 @@ export function toDisplayConnection(
 export function mergeConnectionLists(
   primary: GuiConnectionItem[],
   fallback: GuiConnectionItem[],
+  keyOf: (connection: GuiConnectionItem) => string = (connection) => connection.flowId,
 ): GuiConnectionItem[] {
   const merged = new Map<string, GuiConnectionItem>();
 
   for (const connection of fallback) {
-    merged.set(connection.flowId, connection);
+    merged.set(keyOf(connection), connection);
   }
   for (const connection of primary) {
-    const current = merged.get(connection.flowId);
-    merged.set(connection.flowId, mergeConnection(current, connection));
+    const key = keyOf(connection);
+    const current = merged.get(key);
+    merged.set(key, mergeConnection(current, connection));
   }
 
   return [...merged.values()];
@@ -97,6 +100,29 @@ export function compareConnectionFreshness(
     return left.revision - right.revision;
   }
   return connectionTimestamp(left) - connectionTimestamp(right);
+}
+
+export function connectionLifecycleKey(connection: GuiConnectionItem): string {
+  return [
+    connection.flowId,
+    connection.startedAtUnixMs ?? '',
+    connection.endedAtUnixMs ?? '',
+  ].join(':');
+}
+
+function latestCompletedConnections(
+  connections: GuiConnectionItem[],
+): Map<string, GuiConnectionItem> {
+  const latest = new Map<string, GuiConnectionItem>();
+
+  for (const connection of connections) {
+    const current = latest.get(connection.flowId);
+    if (!current || completedTimestamp(connection) >= completedTimestamp(current)) {
+      latest.set(connection.flowId, connection);
+    }
+  }
+
+  return latest;
 }
 
 function mergeConnection(
