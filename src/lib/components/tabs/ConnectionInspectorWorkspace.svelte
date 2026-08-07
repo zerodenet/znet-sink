@@ -482,11 +482,8 @@
   }
 
   $effect(() => {
-    const currentTab = activeTab;
+    activeTab;
     actionsOpen = false;
-    if (currentTab === 'history' && historyItems.length === 0 && !historyLoading) {
-      void loadHistory(true);
-    }
   });
 
   $effect(() => {
