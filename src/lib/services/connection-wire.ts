@@ -47,7 +47,12 @@ export function attachConnectionWireMetadata(
   index: ConnectionWireIndex,
 ): WireConnection {
   const metadata = selectConnectionWireMetadata(connection, index[connection.flowId] ?? []);
-  return metadata ? { ...connection, ...metadata } : connection;
+  if (!metadata) return normalizeNullableConnection(connection);
+
+  return {
+    ...hydrateConnectionFromRaw(connection, metadata.rawPayload),
+    ...metadata,
+  };
 }
 
 export function selectConnectionWireMetadata(
@@ -81,6 +86,105 @@ export function mergeConnectionWireIndexes(
   }
 
   return merged;
+}
+
+function hydrateConnectionFromRaw(
+  connection: GuiConnectionItem,
+  rawPayload: unknown,
+): GuiConnectionItem {
+  const normalized = normalizeNullableConnection(connection);
+  const raw = objectValue(rawPayload);
+  if (!raw) return normalized;
+
+  const source = objectValue(raw['source']);
+  const throughput = objectValue(raw['throughput']) ?? raw;
+  const timing = objectValue(raw['timing']) ?? raw;
+
+  const sourceIp = stringValue(source ?? raw, ['ip', 'source_ip', 'sourceIp', 'client_ip', 'clientIp']);
+  const sourcePort = numberValue(source ?? raw, ['port', 'source_port', 'sourcePort', 'client_port', 'clientPort']);
+  const sourceDisplay = sourceIp
+    ? endpointDisplay(sourceIp, sourcePort)
+    : undefined;
+
+  return {
+    ...normalized,
+    revision: firstNumber(normalized.revision, numberValue(raw, ['revision'])),
+    state: firstText(normalized.state, stringValue(raw, ['state'])),
+    source: firstText(normalized.source === '-' ? undefined : normalized.source, sourceDisplay),
+    sourceIp: firstText(normalized.sourceIp, sourceIp),
+    sourcePort: firstNumber(normalized.sourcePort, sourcePort),
+    processId: firstNumber(
+      normalized.processId,
+      numberValue(source ?? raw, ['process_id', 'processId', 'pid']),
+    ),
+    processName: firstText(
+      normalized.processName,
+      stringValue(source ?? raw, ['process_name', 'processName', 'process']),
+    ),
+    processPath: firstText(
+      normalized.processPath,
+      stringValue(source ?? raw, ['process_path', 'processPath']),
+    ),
+    throughputUpBps: firstNumber(
+      normalized.throughputUpBps,
+      numberValue(throughput, ['upload_bps', 'uploadBps', 'throughput_up_bps', 'throughputUpBps']),
+    ),
+    throughputDownBps: firstNumber(
+      normalized.throughputDownBps,
+      numberValue(throughput, ['download_bps', 'downloadBps', 'throughput_down_bps', 'throughputDownBps']),
+    ),
+    startedAtUnixMs: firstNumber(
+      normalized.startedAtUnixMs,
+      numberValue(timing, ['started_at_unix_ms', 'startedAtUnixMs', 'started_at']),
+    ),
+    lastActivityAtUnixMs: firstNumber(
+      normalized.lastActivityAtUnixMs,
+      numberValue(timing, ['last_activity_at_unix_ms', 'lastActivityAtUnixMs']),
+    ),
+    endedAtUnixMs: firstNumber(
+      normalized.endedAtUnixMs,
+      numberValue(timing, [
+        'ended_at_unix_ms',
+        'endedAtUnixMs',
+        'finished_at_unix_ms',
+        'finishedAtUnixMs',
+      ]),
+    ),
+    updatedAtUnixMs: firstNumber(
+      normalized.updatedAtUnixMs,
+      numberValue(throughput, [
+        'sampled_at_unix_ms',
+        'sampledAtUnixMs',
+        'snapshot_at_unix_ms',
+        'snapshotAtUnixMs',
+      ]),
+    ),
+    durationMs: firstNumber(
+      normalized.durationMs,
+      numberValue(timing, ['duration_ms', 'durationMs']),
+    ),
+  };
+}
+
+function normalizeNullableConnection(connection: GuiConnectionItem): GuiConnectionItem {
+  return {
+    ...connection,
+    source: firstText(connection.source),
+    revision: firstNumber(connection.revision),
+    state: firstText(connection.state),
+    sourceIp: firstText(connection.sourceIp),
+    sourcePort: firstNumber(connection.sourcePort),
+    processId: firstNumber(connection.processId),
+    processName: firstText(connection.processName),
+    processPath: firstText(connection.processPath),
+    throughputUpBps: firstNumber(connection.throughputUpBps),
+    throughputDownBps: firstNumber(connection.throughputDownBps),
+    startedAtUnixMs: firstNumber(connection.startedAtUnixMs),
+    lastActivityAtUnixMs: firstNumber(connection.lastActivityAtUnixMs),
+    endedAtUnixMs: firstNumber(connection.endedAtUnixMs),
+    updatedAtUnixMs: firstNumber(connection.updatedAtUnixMs),
+    durationMs: firstNumber(connection.durationMs),
+  };
 }
 
 function collectQueryRecords(
@@ -193,8 +297,8 @@ function extractConnectionRecords(value: unknown, includeDirect = false): unknow
 
 function metadataScore(connection: GuiConnectionItem, metadata: ConnectionWireMetadata): number {
   let score = metadata.rawSource === 'event' ? 20 : 10;
-  const connectionStarted = connection.startedAtUnixMs;
-  const connectionEnded = connection.endedAtUnixMs;
+  const connectionStarted = finiteNumber(connection.startedAtUnixMs);
+  const connectionEnded = finiteNumber(connection.endedAtUnixMs);
 
   if (connectionStarted !== undefined && metadata.startedAtUnixMs !== undefined) {
     const delta = Math.abs(connectionStarted - metadata.startedAtUnixMs);
@@ -265,7 +369,14 @@ function timestampFrom(value: unknown, kind: 'started' | 'ended'): number | unde
 
 function flowIdFrom(value: unknown): string | undefined {
   const object = objectValue(value);
-  return object ? stringValue(object, ['flow_id', 'flowId', 'id', 'connection_id', 'connectionId']) : undefined;
+  return object
+    ? stringValue(object, ['flow_id', 'flowId', 'id', 'connection_id', 'connectionId'])
+    : undefined;
+}
+
+function endpointDisplay(host: string, port?: number): string {
+  if (port === undefined) return host;
+  return host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -277,7 +388,8 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 function stringValue(object: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = object[key];
-    if (typeof value === 'string') return value;
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return undefined;
 }
@@ -286,6 +398,25 @@ function numberValue(object: Record<string, unknown>, keys: string[]): number | 
   for (const key of keys) {
     const value = object[key];
     if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== undefined) return number;
+  }
+  return undefined;
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
   }
   return undefined;
 }
