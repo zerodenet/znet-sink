@@ -180,7 +180,7 @@
     historyPageBeforeIds = [undefined];
     historyPageHasMore = [];
     historyPageIndex = 0;
-    selectedKey = null;
+    if (selectedKey?.startsWith('recent:')) selectedKey = null;
   }
 
   function togglePause() {
