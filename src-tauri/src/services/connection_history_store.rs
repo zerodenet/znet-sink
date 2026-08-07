@@ -90,7 +90,7 @@ fn query_page_from_path(path: &Path, query: &DebugFrameQuery) -> AppResult<Debug
         let Ok(frame) = serde_json::from_str::<DebugFrame>(line.trim()) else {
             continue;
         };
-        if !is_completed_connection_frame(&frame) {
+        if !is_completed_connection_frame(&frame) || !matches_query(&frame, query) {
             continue;
         }
 
@@ -222,6 +222,88 @@ fn is_completed_connection_frame(frame: &DebugFrame) -> bool {
     matches!(event_type, Some("flow.completed" | "connection.closed"))
 }
 
+fn matches_query(frame: &DebugFrame, query: &DebugFrameQuery) -> bool {
+    let Some(envelope) = frame.payload.as_object() else {
+        return false;
+    };
+    let payload = envelope
+        .get("payload")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(envelope);
+    let record = payload
+        .get("record")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(payload);
+
+    if let Some(search) = normalized_filter(query.search.as_deref()) {
+        let haystack = serde_json::to_string(record)
+            .unwrap_or_default()
+            .to_lowercase();
+        if !haystack.contains(&search) {
+            return false;
+        }
+    }
+
+    if let Some(expected) = normalized_filter(query.protocol.as_deref()) {
+        let actual = text(record, &["network", "protocol"])
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if actual != expected {
+            return false;
+        }
+    }
+
+    if let Some(expected) = normalized_filter(query.outbound.as_deref()) {
+        let path = object(record.get("path"));
+        let outbound = path
+            .and_then(|value| object(value.get("outbound")))
+            .or_else(|| object(record.get("outbound")));
+        let actual = outbound
+            .and_then(|value| text(value, &["tag"]))
+            .or_else(|| text(record, &["outbound_tag", "outboundTag"]))
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if actual != expected {
+            return false;
+        }
+    }
+
+    if let Some(expected) = normalized_filter(query.outcome.as_deref()) {
+        let result = object(record.get("result"));
+        let actual = result
+            .and_then(|value| text(value, &["outcome", "close_reason", "closeReason"]))
+            .or_else(|| text(record, &["outcome", "close_reason", "closeReason"]))
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if actual != expected {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn normalized_filter(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all")
+        .map(str::to_lowercase)
+}
+
+fn object(value: Option<&serde_json::Value>) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    value.and_then(serde_json::Value::as_object)
+}
+
+fn text<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -245,7 +327,14 @@ mod tests {
             frame_type: "event".to_string(),
             payload: serde_json::json!({
                 "eventType": "connection.closed",
-                "payload": { "flowId": format!("flow-{id}") }
+                "payload": {
+                    "record": {
+                        "flowId": format!("flow-{id}"),
+                        "network": "tcp",
+                        "path": { "outbound": { "tag": "proxy-a" } },
+                        "result": { "outcome": "success" }
+                    }
+                }
             }),
             elapsed_ms: None,
             error: None,
@@ -260,5 +349,18 @@ mod tests {
         let mut updated = completed.clone();
         updated.payload["eventType"] = serde_json::json!("connection.updated");
         assert!(!is_completed_connection_frame(&updated));
+    }
+
+    #[test]
+    fn filters_connection_history_before_paging() {
+        let frame = completed_frame(1, now_unix_ms());
+        let query = DebugFrameQuery {
+            protocol: Some("tcp".to_string()),
+            outbound: Some("proxy-a".to_string()),
+            outcome: Some("success".to_string()),
+            search: Some("flow-1".to_string()),
+            ..DebugFrameQuery::default()
+        };
+        assert!(matches_query(&frame, &query));
     }
 }
