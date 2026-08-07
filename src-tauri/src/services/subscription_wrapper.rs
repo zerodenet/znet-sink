@@ -64,45 +64,49 @@ fn public_format(value: &str) -> String {
     }
 }
 
-fn contains_client_identity(value: &str) -> bool {
-    value.split_whitespace().any(|token| {
-        token
-            .to_ascii_lowercase()
-            .starts_with(CLIENT_USER_AGENT_PREFIX)
-    })
+fn is_default_user_agent(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.split_whitespace().count() == 1 && value.starts_with(CLIENT_USER_AGENT_PREFIX)
+}
+
+fn strip_legacy_appended_client_identity(value: &str) -> String {
+    let mut tokens = value.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() > 1
+        && tokens.last().is_some_and(|token| {
+            token
+                .to_ascii_lowercase()
+                .starts_with(CLIENT_USER_AGENT_PREFIX)
+        })
+    {
+        tokens.pop();
+    }
+    tokens.join(" ")
 }
 
 fn effective_user_agent(value: Option<&str>) -> String {
     let value = value.unwrap_or_default().trim();
     if value.is_empty() {
-        return CLIENT_USER_AGENT.to_string();
+        CLIENT_USER_AGENT.to_string()
+    } else {
+        value.to_string()
     }
-    if contains_client_identity(value) {
-        return value.to_string();
+}
+
+fn normalize_stored_user_agent(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() || is_default_user_agent(value) {
+        CLIENT_USER_AGENT.to_string()
+    } else {
+        strip_legacy_appended_client_identity(value)
     }
-    format!("{value} {CLIENT_USER_AGENT}")
 }
 
 fn public_user_agent(value: Option<&str>) -> Option<String> {
     let value = value.unwrap_or_default().trim();
-    if value.is_empty() {
-        return None;
-    }
-
-    let mut tokens = value.split_whitespace().collect::<Vec<_>>();
-    if tokens.last().is_some_and(|token| {
-        token
-            .to_ascii_lowercase()
-            .starts_with(CLIENT_USER_AGENT_PREFIX)
-    }) {
-        tokens.pop();
-    }
-
-    let prefix = tokens.join(" ");
-    if prefix.is_empty() {
+    if value.is_empty() || is_default_user_agent(value) {
         None
     } else {
-        Some(prefix)
+        Some(strip_legacy_appended_client_identity(value))
     }
 }
 
@@ -131,7 +135,7 @@ fn migrate_profiles(state: &AppState) -> AppResult<()> {
         } else {
             storage_format(Some(&profile.format))
         };
-        let next_user_agent = effective_user_agent(profile.user_agent.as_deref());
+        let next_user_agent = normalize_stored_user_agent(profile.user_agent.as_deref());
 
         if profile.format != next_format {
             profile.format = next_format;
@@ -263,27 +267,20 @@ mod wrapper_tests {
     }
 
     #[test]
-    fn user_agent_always_contains_the_client_identity() {
+    fn user_agent_defaults_when_blank_and_custom_values_override() {
         assert_eq!(effective_user_agent(None), CLIENT_USER_AGENT);
         assert_eq!(
             effective_user_agent(Some("CustomClient/1.0")),
-            format!("CustomClient/1.0 {CLIENT_USER_AGENT}")
-        );
-        assert_eq!(
-            effective_user_agent(Some(CLIENT_USER_AGENT)),
-            CLIENT_USER_AGENT
-        );
-        assert_eq!(
-            effective_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
-            "CustomClient/1.0 ZNet-Sink/0.0.1"
+            "CustomClient/1.0"
         );
         assert_eq!(public_user_agent(Some(CLIENT_USER_AGENT)), None);
+        assert_eq!(public_user_agent(Some("ZNet-Sink/0.0.1")), None);
         assert_eq!(
-            public_user_agent(Some(&format!("CustomClient/1.0 {CLIENT_USER_AGENT}"))),
-            Some("CustomClient/1.0".to_string())
+            normalize_stored_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
+            "CustomClient/1.0"
         );
         assert_eq!(
-            public_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
+            public_user_agent(Some("CustomClient/1.0")),
             Some("CustomClient/1.0".to_string())
         );
     }

@@ -1,3 +1,4 @@
+import Body from "./dialog-body.svelte";
 import Close from "./dialog-close.svelte";
 import Content from "./dialog-content.svelte";
 import Description from "./dialog-description.svelte";
@@ -11,6 +12,7 @@ import Root from "./dialog.svelte";
 
 export {
 	Root,
+	Body,
 	Title,
 	Portal,
 	Footer,
@@ -21,6 +23,7 @@ export {
 	Description,
 	Close,
 	Root as Dialog,
+	Body as DialogBody,
 	Title as DialogTitle,
 	Portal as DialogPortal,
 	Footer as DialogFooter,

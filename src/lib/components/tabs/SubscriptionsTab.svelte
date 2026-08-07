@@ -575,7 +575,7 @@
         </Dialog.Description>
       </Dialog.Header>
 
-      <div class="form-fields">
+      <Dialog.Body class="grid gap-[15px]">
         <label class="form-field">
           <span class="form-label">名称 <span class="required">*</span></span>
           <Input bind:value={form.name} placeholder="例如：官方订阅" disabled={saving} />
@@ -670,19 +670,19 @@
           <span class="form-label">User-Agent</span>
           <Input
             bind:value={form.userAgent}
-            placeholder="自定义 UA 前缀（可选）"
+            placeholder="自定义 User-Agent（可选）"
             class="font-mono"
             disabled={saving}
           />
           <span class="form-hint">
-            留空时使用 ZNet-Sink/&lt;版本&gt;；填写后会在末尾自动追加 ZNet-Sink/&lt;版本&gt;。
+            留空时使用 ZNet-Sink/&lt;版本&gt;；填写后完全覆盖默认 User-Agent。
           </span>
         </label>
 
         {#if formError}
           <div class="form-error-box" role="alert">{formError}</div>
         {/if}
-      </div>
+      </Dialog.Body>
 
       <Dialog.Footer>
         <Button type="button" variant="outline" onclick={closeForm} disabled={saving}>取消</Button>
@@ -700,11 +700,13 @@
       <Dialog.Title>删除订阅</Dialog.Title>
       <Dialog.Description>关联的代理配置会被保留，删除不会中断当前内核配置。</Dialog.Description>
     </Dialog.Header>
-    {#if deleteTarget}
-      <div class="form-error-box" role="alert">
-        确认删除“{deleteTarget.name}”吗？此操作无法从应用内撤销。
-      </div>
-    {/if}
+    <Dialog.Body>
+      {#if deleteTarget}
+        <div class="form-error-box" role="alert">
+          确认删除“{deleteTarget.name}”吗？此操作无法从应用内撤销。
+        </div>
+      {/if}
+    </Dialog.Body>
     <Dialog.Footer>
       <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
       <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
@@ -795,8 +797,7 @@
   .row-action:disabled { opacity: 0.35; cursor: not-allowed; }
   .spin { animation: spin 0.8s linear infinite; }
 
-  .subscription-form { display: grid; gap: 20px; }
-  .form-fields { display: grid; gap: 15px; }
+  .subscription-form { display: grid; min-height: 0; max-height: calc(100dvh - 2rem); grid-template-rows: auto minmax(0, 1fr) auto; }
   .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .form-field { display: grid; gap: 6px; min-width: 0; }
   .form-label { color: var(--foreground); font-size: 12px; font-weight: 600; }

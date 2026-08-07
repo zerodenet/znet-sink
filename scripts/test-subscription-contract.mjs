@@ -13,7 +13,7 @@ assert.match(wrapper, /"auto" =>/);
 assert.match(wrapper, /"zero" => original::parse_subscription_content\(content, "zero-base64-json"\)/);
 assert.match(wrapper, /CLIENT_USER_AGENT/);
 assert.match(wrapper, /CLIENT_USER_AGENT_PREFIX/);
-assert.match(wrapper, /contains_client_identity/);
+assert.match(wrapper, /fn effective_user_agent/);
 assert.doesNotMatch(wrapper, /format\s*=\s*Some\("zero-json"/);
 
 assert.match(editor, /\{ value: 'auto', label: '自动检测' \}/);
@@ -22,6 +22,9 @@ assert.match(editor, /\{ value: 'clash', label: 'Clash' \}/);
 assert.doesNotMatch(editor, /value: 'zero-json'/);
 assert.doesNotMatch(editor, /DraggableModal/);
 assert.match(editor, /\$lib\/components\/ui\/dialog/);
-assert.match(editor, /末尾自动追加 ZNet-Sink/);
+assert.match(editor, /填写后完全覆盖默认 User-Agent/);
+assert.match(editor, /<Dialog\.Body class="grid gap-\[15px\]">/);
 
 console.log('subscription contract checks passed');
+
+assert.doesNotMatch(wrapper, /format!\("\{value\} \{CLIENT_USER_AGENT\}"\)/);
