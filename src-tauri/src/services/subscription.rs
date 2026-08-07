@@ -638,6 +638,7 @@ fn looks_like_zero_config(value: &Value) -> bool {
     KNOWN_KEYS.iter().any(|key| object.contains_key(*key))
 }
 
+#[warn(unused)]
 fn parse_zero_json_subscription_content(content: &str) -> AppResult<ParsedSubscriptionConfig> {
     let content: serde_json::Value = serde_json::from_str(content).map_err(|error| AppError {
         code: "invalid_argument",

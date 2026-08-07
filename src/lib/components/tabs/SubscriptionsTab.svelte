@@ -570,14 +570,11 @@
     >
       <Dialog.Header>
         <Dialog.Title>{editingId ? '编辑订阅' : '新增订阅'}</Dialog.Title>
-        <Dialog.Description>
-          自动检测会根据响应正文识别 Zero Base64 JSON 或 Clash；不会根据本地配置强制选择格式。
-        </Dialog.Description>
       </Dialog.Header>
 
       <Dialog.Body class="grid gap-[15px]">
         <label class="form-field">
-          <span class="form-label">名称 <span class="required">*</span></span>
+          <span class="form-label">订阅标题 <span class="required">*</span></span>
           <Input bind:value={form.name} placeholder="例如：官方订阅" disabled={saving} />
         </label>
 
@@ -604,13 +601,11 @@
                 {/each}
               </Select.Content>
             </Select.Root>
-            <span class="form-hint">Zero 仅接受 Base64 编码 JSON；Clash 同时兼容 YAML 与 Base64 YAML。</span>
           </label>
 
           <label class="form-field">
             <span class="form-label">目标内核</span>
             <Input value="Zero" disabled />
-            <span class="form-hint">订阅内容会统一转换为 Zero 配置。</span>
           </label>
         </div>
 
