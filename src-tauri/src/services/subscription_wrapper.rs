@@ -12,9 +12,13 @@ use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
 
 const CLIENT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION"));
+const CLIENT_USER_AGENT_PREFIX: &str = "znet-sink/";
 
 fn is_blank(value: Option<&str>) -> bool {
-    value.is_none_or(|value| value.trim().is_empty())
+    match value {
+        None => true,
+        Some(value) => value.trim().is_empty(),
+    }
 }
 
 fn is_zero_alias(value: &str) -> bool {
@@ -64,15 +68,18 @@ fn public_format(value: &str) -> String {
     }
 }
 
+fn contains_client_identity(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .any(|token| token.to_ascii_lowercase().starts_with(CLIENT_USER_AGENT_PREFIX))
+}
+
 fn effective_user_agent(value: Option<&str>) -> String {
     let value = value.unwrap_or_default().trim();
     if value.is_empty() {
         return CLIENT_USER_AGENT.to_string();
     }
-    if value
-        .to_ascii_lowercase()
-        .contains(&CLIENT_USER_AGENT.to_ascii_lowercase())
-    {
+    if contains_client_identity(value) {
         return value.to_string();
     }
     format!("{value} {CLIENT_USER_AGENT}")
@@ -80,16 +87,24 @@ fn effective_user_agent(value: Option<&str>) -> String {
 
 fn public_user_agent(value: Option<&str>) -> Option<String> {
     let value = value.unwrap_or_default().trim();
-    if value.is_empty() || value.eq_ignore_ascii_case(CLIENT_USER_AGENT) {
+    if value.is_empty() {
         return None;
     }
-    let suffix = format!(" {CLIENT_USER_AGENT}");
-    value
-        .strip_suffix(&suffix)
-        .map(str::trim)
-        .filter(|prefix| !prefix.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| Some(value.to_string()))
+
+    let mut tokens = value.split_whitespace().collect::<Vec<_>>();
+    if tokens
+        .last()
+        .is_some_and(|token| token.to_ascii_lowercase().starts_with(CLIENT_USER_AGENT_PREFIX))
+    {
+        tokens.pop();
+    }
+
+    let prefix = tokens.join(" ");
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
 }
 
 fn present_profile(mut profile: SubscriptionProfile) -> SubscriptionProfile {
@@ -177,13 +192,12 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
 }
 
 pub fn spawn_auto_sync_scheduler(app: AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Err(error) = migrate_profiles(state.inner()) {
-            crate::services::file_logger::line(&format!(
-                "subscription: failed to normalize stored profiles: {}",
-                error.message
-            ));
-        }
+    let state = app.state::<AppState>();
+    if let Err(error) = migrate_profiles(state.inner()) {
+        crate::services::file_logger::line(&format!(
+            "subscription: failed to normalize stored profiles: {}",
+            error.message
+        ));
     }
     original::spawn_auto_sync_scheduler(app);
 }
@@ -261,9 +275,17 @@ mod wrapper_tests {
             effective_user_agent(Some(CLIENT_USER_AGENT)),
             CLIENT_USER_AGENT
         );
+        assert_eq!(
+            effective_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
+            "CustomClient/1.0 ZNet-Sink/0.0.1"
+        );
         assert_eq!(public_user_agent(Some(CLIENT_USER_AGENT)), None);
         assert_eq!(
             public_user_agent(Some(&format!("CustomClient/1.0 {CLIENT_USER_AGENT}"))),
+            Some("CustomClient/1.0".to_string())
+        );
+        assert_eq!(
+            public_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
             Some("CustomClient/1.0".to_string())
         );
     }
