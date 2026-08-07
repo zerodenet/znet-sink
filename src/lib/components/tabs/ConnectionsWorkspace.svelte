@@ -52,6 +52,8 @@
   let historyLoading = $state(true);
   let historyError = $state<string | null>(null);
   let latestObservedHistoryKey = '';
+  let historyFilterSignature = '';
+  let historyRequestGeneration = 0;
 
   let selectedKey = $state<string | null>(null);
   let singleConfirmKey = $state<string | null>(null);
@@ -97,15 +99,25 @@
     liveView.find((connection) => connectionKey(connection) === singleConfirmKey) ?? null,
   );
 
-  const protocolOptions = $derived.by(() => [
-    ...new Set(currentSource.map((connection) => connection.protocol).filter(Boolean)),
-  ].sort());
-  const outboundOptions = $derived.by(() => [
-    ...new Set(currentSource.map((connection) => connection.outboundTag).filter((value): value is string => Boolean(value))),
-  ].sort());
-  const resultOptions = $derived.by(() => [
-    ...new Set(historyView.map((connection) => connection.outcome ?? connection.closeReason).filter((value): value is string => Boolean(value))),
-  ].sort());
+  const protocolOptions = $derived.by(() => {
+    const values = new Set(currentSource.map((connection) => connection.protocol).filter(Boolean));
+    if (protocolFilter !== 'all') values.add(protocolFilter);
+    return [...values].sort();
+  });
+  const outboundOptions = $derived.by(() => {
+    const values = new Set(currentSource
+      .map((connection) => connection.outboundTag)
+      .filter((value): value is string => Boolean(value)));
+    if (outboundFilter !== 'all') values.add(outboundFilter);
+    return [...values].sort();
+  });
+  const resultOptions = $derived.by(() => {
+    const values = new Set(historyView
+      .map((connection) => connection.outcome ?? connection.closeReason)
+      .filter((value): value is string => Boolean(value)));
+    if (resultFilter !== 'all') values.add(resultFilter);
+    return [...values].sort();
+  });
 
   function hasText(value: unknown): value is string {
     return typeof value === 'string' && value.trim().length > 0 && value !== '-';
@@ -162,6 +174,15 @@
     resultFilter = 'all';
   }
 
+  function resetHistoryPagination() {
+    historyRequestGeneration += 1;
+    historyPages = [];
+    historyPageBeforeIds = [undefined];
+    historyPageHasMore = [];
+    historyPageIndex = 0;
+    selectedKey = null;
+  }
+
   function togglePause() {
     if (livePaused) {
       livePaused = false;
@@ -179,16 +200,26 @@
       return;
     }
 
+    if (force && index === 0) {
+      resetHistoryPagination();
+    }
+    const generation = ++historyRequestGeneration;
+    const beforeId = historyPageBeforeIds[index];
     historyLoading = true;
     historyError = null;
     try {
       const result = await getGuiDebugFrames({
         frameType: HISTORY_SCOPE,
         limit: HISTORY_PAGE_SIZE,
-        beforeId: historyPageBeforeIds[index],
+        beforeId,
+        search: searchQuery.trim() || undefined,
+        protocol: protocolFilter === 'all' ? undefined : protocolFilter,
+        outbound: outboundFilter === 'all' ? undefined : outboundFilter,
+        outcome: resultFilter === 'all' ? undefined : resultFilter,
       });
-      const page = buildPersistedConnectionHistory(result.items, HISTORY_PAGE_SIZE);
+      if (generation !== historyRequestGeneration) return;
 
+      const page = buildPersistedConnectionHistory(result.items, HISTORY_PAGE_SIZE);
       const nextPages = [...historyPages];
       nextPages[index] = page;
       historyPages = nextPages;
@@ -202,9 +233,10 @@
       historyPageBeforeIds = nextBeforeIds;
       historyPageIndex = index;
     } catch (error) {
+      if (generation !== historyRequestGeneration) return;
       historyError = getAppErrorMessage(error, '读取连接记录失败');
     } finally {
-      historyLoading = false;
+      if (generation === historyRequestGeneration) historyLoading = false;
     }
   }
 
@@ -213,10 +245,7 @@
     clearingHistory = true;
     try {
       await invoke('gui_debug_clear', { scope: HISTORY_SCOPE });
-      historyPages = [];
-      historyPageBeforeIds = [undefined];
-      historyPageHasMore = [];
-      historyPageIndex = 0;
+      resetHistoryPagination();
       clearHistoryConfirm = false;
       await loadHistoryPage(0, true);
       showSuccessToast('连接记录已清空');
@@ -350,6 +379,24 @@
   function requestSingleTerminate(connection: DisplayConnection) {
     singleConfirmKey = connectionKey(connection);
   }
+
+  $effect(() => {
+    if (activeTab !== 'history') return;
+    const signature = JSON.stringify([
+      searchQuery.trim(),
+      protocolFilter,
+      outboundFilter,
+      resultFilter,
+    ]);
+    if (signature === historyFilterSignature) return;
+    historyFilterSignature = signature;
+
+    const timer = window.setTimeout(() => {
+      resetHistoryPagination();
+      void loadHistoryPage(0, true);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  });
 
   $effect(() => {
     const latest = coreEvents.connectionHistory[0];
