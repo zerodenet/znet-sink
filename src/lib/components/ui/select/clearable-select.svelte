@@ -2,10 +2,10 @@
   import { X } from '@lucide/svelte';
   import { cn } from '$lib/utils.js';
   import { Button } from '$lib/components/ui/button';
-  import * as ButtonGroup from '$lib/components/ui/button-group';
   import Root from './select.svelte';
   import Group from './select-group.svelte';
   import Trigger from './select-trigger.svelte';
+  import Value from './select-value.svelte';
   import Content from './select-content.svelte';
   import Item from './select-item.svelte';
 
@@ -35,26 +35,22 @@
     disabled?: boolean;
   }>();
 
-  const selectedLabel = $derived(
-    options.find((option) => option.value === value)?.label ?? value,
-  );
   const canClear = $derived(!disabled && value !== defaultValue);
-  const clearButtonSize = $derived(size === 'sm' ? 'icon-sm' : 'icon');
 
   function clear() {
     value = defaultValue;
   }
 </script>
 
-<ButtonGroup.Root class={cn('w-full', className)} aria-label={ariaLabel}>
+<div class={cn('flex items-center gap-1', className)} data-slot="clearable-select">
   <Root type="single" bind:value disabled={disabled}>
     <Trigger
       {size}
-      class="w-0 min-w-0 flex-1"
+      class="min-w-0 flex-1"
       aria-label={ariaLabel}
       disabled={disabled}
     >
-      <span class="truncate">{selectedLabel}</span>
+      <Value />
     </Trigger>
     <Content>
       <Group>
@@ -69,9 +65,9 @@
 
   {#if canClear}
     <Button
-      variant="outline"
-      size={clearButtonSize}
-      class="shrink-0"
+      variant="ghost"
+      size="icon-sm"
+      class="shrink-0 text-muted-foreground"
       title={clearLabel}
       aria-label={clearLabel}
       onclick={clear}
@@ -79,4 +75,4 @@
       <X class="size-3.5" />
     </Button>
   {/if}
-</ButtonGroup.Root>
+</div>
