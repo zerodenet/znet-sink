@@ -13,7 +13,7 @@
     "test:nodes-select": "node scripts/test-nodes-select-args.mjs",
     "test:notifications": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-notification-logging.mjs",
     "test:diagnostic-copy": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-diagnostic-copy.mjs",
-    "test:async-state": "node scripts/test-latest-request-gate.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-node-state-reconcile.mjs",
+    "test:async-state": "node scripts/test-latest-request-gate.mjs && node --experimental-strip-types --loader ./scripts/test-node-state-reconcile.mjs",
     "test:core-events": "node --experimental-strip-types scripts/test-core-event-lifecycle.mjs",
     "test:release-version": "node scripts/test-version-manifests.mjs",
     "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs",
@@ -64,7 +64,7 @@
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",
     "commitizen": "^4.3.1",
-    "cz-conventional-changelog": "^4.3.0",
+    "cz-conventional-changelog": "^3.3.0",
     "husky": "^9.1.7",
     "postcss": "^8.5.14",
     "shadcn-svelte": "^1.2.7",
@@ -73,6 +73,7 @@
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.2",
     "tailwindcss": "^4.3.0",
+    "tw-animate-css": "^1.4.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.13"
   }
