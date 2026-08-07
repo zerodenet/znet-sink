@@ -1,0 +1,27 @@
+name: Format subscription Rust
+
+on:
+  push:
+    branches:
+      - agent/fix-subscription-format-detection
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-subscription-format-detection
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - run: rm .github/workflows/format-subscription-rust.yml
+      - name: Commit formatting
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/services/subscription_wrapper.rs .github/workflows/format-subscription-rust.yml
+          git commit -m "style(subscriptions): format Rust sources"
+          git push origin HEAD:agent/fix-subscription-format-detection
