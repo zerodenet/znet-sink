@@ -233,7 +233,7 @@ function metadataIdentity(metadata: ConnectionWireMetadata): string {
   ].join(':');
 }
 
-export function metadataTimestamp(metadata: ConnectionWireMetadata): number {
+function metadataTimestamp(metadata: ConnectionWireMetadata): number {
   return metadata.eventOccurredAtUnixMs
     ?? metadata.capturedAtUnixMs
     ?? metadata.endedAtUnixMs
