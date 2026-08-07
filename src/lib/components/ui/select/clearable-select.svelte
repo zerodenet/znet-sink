@@ -39,6 +39,7 @@
     options.find((option) => option.value === value)?.label ?? value,
   );
   const canClear = $derived(!disabled && value !== defaultValue);
+  const clearButtonSize = $derived(size === 'sm' ? 'icon-sm' : 'icon');
 
   function clear() {
     value = defaultValue;
@@ -49,7 +50,7 @@
   <Root type="single" bind:value disabled={disabled}>
     <Trigger
       {size}
-      class="min-w-0 flex-1"
+      class="w-0 min-w-0 flex-1"
       aria-label={ariaLabel}
       disabled={disabled}
     >
@@ -69,7 +70,7 @@
   {#if canClear}
     <Button
       variant="outline"
-      size="icon-sm"
+      size={clearButtonSize}
       class="shrink-0"
       title={clearLabel}
       aria-label={clearLabel}
