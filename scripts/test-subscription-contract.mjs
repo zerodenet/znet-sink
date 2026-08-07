@@ -7,6 +7,8 @@ const editor = fs.readFileSync('src/lib/components/tabs/SubscriptionsTab.svelte'
 assert.match(wrapper, /"auto" =>/);
 assert.match(wrapper, /"zero" => original::parse_subscription_content\(content, "zero-base64-json"\)/);
 assert.match(wrapper, /CLIENT_USER_AGENT/);
+assert.match(wrapper, /CLIENT_USER_AGENT_PREFIX/);
+assert.match(wrapper, /contains_client_identity/);
 assert.doesNotMatch(wrapper, /format\s*=\s*Some\("zero-json"/);
 
 assert.match(editor, /\{ value: 'auto', label: '自动检测' \}/);
