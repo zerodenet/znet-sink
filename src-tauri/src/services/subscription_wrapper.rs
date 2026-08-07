@@ -1,42 +1,148 @@
 #[path = "subscription.rs"]
 mod original;
 
-pub use original::{parse_subscription_content, ParsedSubscriptionConfig, SyncAllOutcome};
+pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
 
+use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult};
 use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert};
 use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
 
-fn uses_implicit_user_agent(user_agent: Option<&str>) -> bool {
-    user_agent.is_none_or(|value| value.trim().is_empty())
+const CLIENT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION"));
+const CLIENT_USER_AGENT_PREFIX: &str = "znet-sink/";
+
+fn is_blank(value: Option<&str>) -> bool {
+    match value {
+        None => true,
+        Some(value) => value.trim().is_empty(),
+    }
 }
 
-fn should_prefer_native_zero(format: Option<&str>, user_agent: Option<&str>) -> bool {
-    let format = format.unwrap_or_default().trim();
-    (format.is_empty() || format.eq_ignore_ascii_case("auto"))
-        && uses_implicit_user_agent(user_agent)
+fn is_zero_alias(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "zero"
+            | "zero-json"
+            | "zero-base64-json"
+            | "base64-json"
+            | "znet-sink"
+            | "znet-sink-base64"
+    )
+}
+
+fn is_clash_alias(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "clash" | "clash-yaml" | "yaml" | "clash-base64-yaml" | "base64-yaml"
+    )
+}
+
+fn storage_format(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim().to_ascii_lowercase();
+    match value.as_str() {
+        "" | "auto" => "auto".to_string(),
+        value if is_zero_alias(value) => "zero-base64-json".to_string(),
+        "clash-base64-yaml" | "base64-yaml" => "clash-base64-yaml".to_string(),
+        value if is_clash_alias(value) => "clash-yaml".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn public_format(value: &str) -> String {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() || value == "auto" {
+        "auto".to_string()
+    } else if is_zero_alias(&value) {
+        "zero".to_string()
+    } else if is_clash_alias(&value) {
+        "clash".to_string()
+    } else {
+        value
+    }
+}
+
+fn is_default_user_agent(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.split_whitespace().count() == 1 && value.starts_with(CLIENT_USER_AGENT_PREFIX)
+}
+
+fn strip_legacy_appended_client_identity(value: &str) -> String {
+    let mut tokens = value.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() > 1
+        && tokens.last().is_some_and(|token| {
+            token
+                .to_ascii_lowercase()
+                .starts_with(CLIENT_USER_AGENT_PREFIX)
+        })
+    {
+        tokens.pop();
+    }
+    tokens.join(" ")
+}
+
+fn effective_user_agent(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() {
+        CLIENT_USER_AGENT.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn normalize_stored_user_agent(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() || is_default_user_agent(value) {
+        CLIENT_USER_AGENT.to_string()
+    } else {
+        strip_legacy_appended_client_identity(value)
+    }
+}
+
+fn public_user_agent(value: Option<&str>) -> Option<String> {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() || is_default_user_agent(value) {
+        None
+    } else {
+        Some(strip_legacy_appended_client_identity(value))
+    }
+}
+
+fn present_profile(mut profile: SubscriptionProfile) -> SubscriptionProfile {
+    profile.format = public_format(&profile.format);
+    profile.user_agent = public_user_agent(profile.user_agent.as_deref());
+    profile
 }
 
 fn normalize_upsert(mut input: SubscriptionUpsert) -> SubscriptionUpsert {
-    if should_prefer_native_zero(input.format.as_deref(), input.user_agent.as_deref()) {
-        input.format = Some("zero-json".to_string());
-    }
+    input.format = Some(storage_format(input.format.as_deref()));
+    input.user_agent = Some(effective_user_agent(input.user_agent.as_deref()));
     input
 }
 
-fn migrate_legacy_auto_profiles(state: &AppState) -> AppResult<()> {
+fn migrate_profiles(state: &AppState) -> AppResult<()> {
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
     let mut next = subscriptions.clone();
     let mut changed = false;
 
     for profile in &mut next {
-        if profile.format.trim().eq_ignore_ascii_case("auto")
-            && uses_implicit_user_agent(profile.user_agent.as_deref())
-        {
-            profile.format = "zero-json".to_string();
+        let legacy_forced_auto = profile.format.trim().eq_ignore_ascii_case("zero-json")
+            && is_blank(profile.user_agent.as_deref());
+        let next_format = if legacy_forced_auto {
+            "auto".to_string()
+        } else {
+            storage_format(Some(&profile.format))
+        };
+        let next_user_agent = normalize_stored_user_agent(profile.user_agent.as_deref());
+
+        if profile.format != next_format {
+            profile.format = next_format;
+            changed = true;
+        }
+        if profile.user_agent.as_deref() != Some(next_user_agent.as_str()) {
+            profile.user_agent = Some(next_user_agent);
             changed = true;
         }
     }
@@ -51,35 +157,35 @@ fn migrate_legacy_auto_profiles(state: &AppState) -> AppResult<()> {
 }
 
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<SubscriptionProfile>> {
-    migrate_legacy_auto_profiles(state.inner())?;
-    original::list(state)
+    migrate_profiles(state.inner())?;
+    original::list(state).map(|items| items.into_iter().map(present_profile).collect())
 }
 
 pub fn get(state: State<'_, AppState>, id: String) -> AppResult<SubscriptionProfile> {
-    migrate_legacy_auto_profiles(state.inner())?;
-    original::get(state, id)
+    migrate_profiles(state.inner())?;
+    original::get(state, id).map(present_profile)
 }
 
 pub fn upsert(
     state: State<'_, AppState>,
     input: SubscriptionUpsert,
 ) -> AppResult<SubscriptionProfile> {
-    migrate_legacy_auto_profiles(state.inner())?;
-    original::upsert(state, normalize_upsert(input))
+    migrate_profiles(state.inner())?;
+    original::upsert(state, normalize_upsert(input)).map(present_profile)
 }
 
 pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionProfile> {
     {
         let state = app_handle.state::<AppState>();
-        migrate_legacy_auto_profiles(state.inner())?;
+        migrate_profiles(state.inner())?;
     }
-    original::sync(app_handle, id).await
+    original::sync(app_handle, id).await.map(present_profile)
 }
 
 pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     {
         let state = app_handle.state::<AppState>();
-        migrate_legacy_auto_profiles(state.inner())?;
+        migrate_profiles(state.inner())?;
     }
     original::sync_all(app_handle).await
 }
@@ -89,63 +195,131 @@ pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
 }
 
 pub fn spawn_auto_sync_scheduler(app: AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Err(error) = migrate_legacy_auto_profiles(state.inner()) {
-            crate::services::file_logger::line(&format!(
-                "subscription: failed to migrate legacy auto format: {}",
-                error.message
-            ));
-        }
+    let state = app.state::<AppState>();
+    if let Err(error) = migrate_profiles(state.inner()) {
+        crate::services::file_logger::line(&format!(
+            "subscription: failed to normalize stored profiles: {}",
+            error.message
+        ));
     }
     original::spawn_auto_sync_scheduler(app);
 }
 
+pub fn parse_subscription_content(
+    content: &str,
+    format: &str,
+) -> AppResult<ParsedSubscriptionConfig> {
+    let format = public_format(format);
+    let mut parsed = match format.as_str() {
+        "zero" => original::parse_subscription_content(content, "zero-base64-json"),
+        "clash" => original::parse_subscription_content(content, "clash-yaml")
+            .or_else(|_| original::parse_subscription_content(content, "clash-base64-yaml")),
+        "auto" => {
+            if let Ok(value) = serde_json::from_str::<Value>(content.trim()) {
+                if looks_like_zero_config(&value) {
+                    return Err(AppError::invalid_argument(
+                        "明文 Zero JSON 订阅已不再支持，请使用 Base64 编码的 Zero JSON（格式：zero）",
+                    ));
+                }
+            }
+            original::parse_subscription_content(content, "auto")
+        }
+        other => original::parse_subscription_content(content, other),
+    }?;
+    parsed.format = if parsed.format.contains("clash") {
+        "clash".to_string()
+    } else {
+        "zero".to_string()
+    };
+    Ok(parsed)
+}
+
+fn looks_like_zero_config(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    [
+        "outbounds",
+        "outbound_groups",
+        "route",
+        "inbounds",
+        "dns",
+        "policy_groups",
+        "policies",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key))
+}
+
 #[cfg(test)]
 mod wrapper_tests {
-    use super::{parse_subscription_content, should_prefer_native_zero, uses_implicit_user_agent};
+    use super::*;
+    use base64::{engine::general_purpose, Engine as _};
 
     #[test]
-    fn implicit_auto_prefers_native_zero() {
-        assert!(should_prefer_native_zero(Some("auto"), None));
-        assert!(should_prefer_native_zero(Some(""), Some("  ")));
-        assert!(!should_prefer_native_zero(
-            Some("auto"),
-            Some("Custom-Client/1.0")
-        ));
-        assert!(!should_prefer_native_zero(Some("clash-yaml"), None));
+    fn source_formats_are_canonicalized_without_rewriting_auto() {
+        assert_eq!(storage_format(Some("auto")), "auto");
+        assert_eq!(storage_format(Some("zero")), "zero-base64-json");
+        assert_eq!(storage_format(Some("zero-json")), "zero-base64-json");
+        assert_eq!(storage_format(Some("clash")), "clash-yaml");
+        assert_eq!(public_format("zero-base64-json"), "zero");
+        assert_eq!(public_format("clash-base64-yaml"), "clash");
     }
 
     #[test]
-    fn blank_user_agent_is_implicit() {
-        assert!(uses_implicit_user_agent(None));
-        assert!(uses_implicit_user_agent(Some("  ")));
-        assert!(!uses_implicit_user_agent(Some("Clash.Meta")));
+    fn user_agent_defaults_when_blank_and_custom_values_override() {
+        assert_eq!(effective_user_agent(None), CLIENT_USER_AGENT);
+        assert_eq!(
+            effective_user_agent(Some("CustomClient/1.0")),
+            "CustomClient/1.0"
+        );
+        assert_eq!(public_user_agent(Some(CLIENT_USER_AGENT)), None);
+        assert_eq!(public_user_agent(Some("ZNet-Sink/0.0.1")), None);
+        assert_eq!(
+            normalize_stored_user_agent(Some("CustomClient/1.0 ZNet-Sink/0.0.1")),
+            "CustomClient/1.0"
+        );
+        assert_eq!(
+            public_user_agent(Some("CustomClient/1.0")),
+            Some("CustomClient/1.0".to_string())
+        );
     }
 
     #[test]
-    fn native_zero_preserves_mieru_protocol_fields() {
-        let parsed = parse_subscription_content(
-            r#"{
-                "outbounds": [{
-                    "tag": "mieru-node",
-                    "protocol": {
-                        "type": "mieru",
-                        "server": "node.example",
-                        "port": 443,
-                        "password": "test-password",
-                        "transport": "UDP"
-                    }
-                }]
-            }"#,
-            "zero-json",
-        )
-        .unwrap();
+    fn zero_requires_base64_and_returns_canonical_format() {
+        let raw = r#"{"outbounds":[{"tag":"direct","protocol":{"type":"direct"}}]}"#;
+        let error = parse_subscription_content(raw, "zero").unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
 
-        let protocol = &parsed.content["outbounds"][0]["protocol"];
-        assert_eq!(protocol["type"], "mieru");
-        assert_eq!(protocol["server"], "node.example");
-        assert_eq!(protocol["port"], 443);
-        assert_eq!(protocol["password"], "test-password");
-        assert_eq!(protocol["transport"], "UDP");
+        let encoded = general_purpose::STANDARD.encode(raw.as_bytes());
+        let parsed = parse_subscription_content(&encoded, "zero").unwrap();
+        assert_eq!(parsed.format, "zero");
+    }
+
+    #[test]
+    fn auto_rejects_plaintext_zero_but_detects_encoded_zero() {
+        let raw = r#"{"outbounds":[{"tag":"direct","protocol":{"type":"direct"}}]}"#;
+        let error = parse_subscription_content(raw, "auto").unwrap_err();
+        assert!(error.message.contains("明文 Zero JSON"));
+
+        let encoded = general_purpose::STANDARD.encode(raw.as_bytes());
+        let parsed = parse_subscription_content(&encoded, "auto").unwrap();
+        assert_eq!(parsed.format, "zero");
+    }
+
+    #[test]
+    fn clash_accepts_raw_and_base64_yaml_under_one_name() {
+        let yaml = "proxies:\n  - {name: x, type: ss, server: s, port: 1, password: p}\n";
+        assert_eq!(
+            parse_subscription_content(yaml, "clash").unwrap().format,
+            "clash"
+        );
+        let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
+        assert_eq!(
+            parse_subscription_content(&encoded, "clash")
+                .unwrap()
+                .format,
+            "clash"
+        );
     }
 }
