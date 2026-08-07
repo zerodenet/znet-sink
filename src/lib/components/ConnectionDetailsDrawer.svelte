@@ -451,7 +451,7 @@
   .dialog-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
   .dialog-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
   .dialog-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
-  .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 18px 24px; }
+  .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent; padding: 16px 18px 24px; }
   .dialog-content::-webkit-scrollbar { width: 9px; }
   .dialog-content::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }
   .dialog-content::-webkit-scrollbar-track { background: transparent; }
@@ -471,7 +471,10 @@
   .section-note, .diagnostics-intro p { margin: 9px 0 0; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.55; }
   .raw-block { position: relative; margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 40%, transparent); }
   .raw-block summary { padding: 9px 82px 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
-  .raw-block pre { max-height: 420px; overflow: auto; margin: 0; padding: 11px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .raw-block pre { max-height: 420px; overflow: auto; margin: 0; padding: 11px; border-top: 1px solid var(--border); scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .raw-block pre::-webkit-scrollbar { width: 9px; height: 9px; }
+  .raw-block pre::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }
+  .raw-block pre::-webkit-scrollbar-track { background: transparent; }
   .raw-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
   .dialog-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--background); }
   .dialog-footer > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
