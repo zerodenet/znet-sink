@@ -34,8 +34,8 @@ function connection(flowId, overrides = {}) {
     })],
   });
 
-  assert.equal(view.active.length, 0, 'a completion event must suppress a stale active snapshot');
-  assert.equal(view.recent.length, 1, 'the completed connection must remain in history');
+  assert.equal(view.active.length, 0, 'a completion event must suppress a stale bootstrap snapshot');
+  assert.equal(view.recent.length, 1, 'the completed connection must remain in client history');
   assert.equal(view.recent[0].origin, 'recent');
 }
 
@@ -58,13 +58,35 @@ function connection(flowId, overrides = {}) {
   });
 
   assert.equal(view.active.length, 1, 'a newer lifetime must remain active');
-  assert.equal(view.recent.length, 0, 'an old same-id record must not replace the active lifetime');
+  assert.equal(view.recent.length, 1, 'an older same-id lifetime must remain in history');
 }
 
 {
   const view = buildConnectionView({
     activeSnapshot: [],
-    recentSnapshot: [connection('kernel-history', {
+    recentSnapshot: [
+      connection('reused-history', {
+        state: 'completed',
+        startedAtUnixMs: 1_000,
+        endedAtUnixMs: 2_000,
+      }),
+      connection('reused-history', {
+        state: 'completed',
+        startedAtUnixMs: 3_000,
+        endedAtUnixMs: 4_000,
+      }),
+    ],
+    activeEvents: [],
+    recentEvents: [],
+  });
+
+  assert.equal(view.recent.length, 2, 'distinct completed lifetimes must not be collapsed by flow id');
+}
+
+{
+  const view = buildConnectionView({
+    activeSnapshot: [],
+    recentSnapshot: [connection('local-history', {
       state: 'completed',
       endedAtUnixMs: 5_000,
       bytesDown: 42,
@@ -73,7 +95,7 @@ function connection(flowId, overrides = {}) {
     recentEvents: [],
   });
 
-  assert.equal(view.recent.length, 1, 'recent_flows must hydrate history without GUI events');
+  assert.equal(view.recent.length, 1, 'local event history must hydrate completed connections');
   assert.equal(view.recent[0].bytesDown, 42);
 }
 
