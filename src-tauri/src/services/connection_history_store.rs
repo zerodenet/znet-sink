@@ -42,7 +42,12 @@ pub(crate) fn query_page(query: &DebugFrameQuery) -> AppResult<DebugFramePage> {
     let _guard = HISTORY_FILE_LOCK
         .lock()
         .expect("connection history file mutex poisoned");
-    query_page_from_path(&history_path()?, query)
+    let path = history_path()?;
+    // Apply the time/count/byte policy before every visible read as well as
+    // during append rotation. This ensures an idle client does not keep stale
+    // history indefinitely merely because fewer than 100 new records arrived.
+    rotate_path(&path)?;
+    query_page_from_path(&path, query)
 }
 
 pub(crate) fn clear() -> AppResult<()> {
@@ -161,6 +166,7 @@ fn rotate_path(path: &Path) -> AppResult<()> {
     let cutoff = now_unix_ms().saturating_sub(HISTORY_MAX_AGE_MS);
     let mut records: VecDeque<(String, usize)> = VecDeque::new();
     let mut retained_bytes = 0usize;
+    let mut changed = false;
 
     for line in reader.lines() {
         let line = line.map_err(|error| AppError {
@@ -169,9 +175,11 @@ fn rotate_path(path: &Path) -> AppResult<()> {
             details: Some(serde_json::json!({ "path": path.display().to_string() })),
         })?;
         let Ok(frame) = serde_json::from_str::<DebugFrame>(line.trim()) else {
+            changed = true;
             continue;
         };
         if frame.at_ms < cutoff || !is_completed_connection_frame(&frame) {
+            changed = true;
             continue;
         }
 
@@ -189,10 +197,15 @@ fn rotate_path(path: &Path) -> AppResult<()> {
         {
             if let Some((_, removed_bytes)) = records.pop_front() {
                 retained_bytes = retained_bytes.saturating_sub(removed_bytes);
+                changed = true;
             } else {
                 break;
             }
         }
+    }
+
+    if !changed {
+        return Ok(());
     }
 
     let mut content = String::with_capacity(retained_bytes);
