@@ -26,9 +26,12 @@ function connection(flowId, overrides = {}) {
       result: {
         active_flows: {
           items: [{
-            flow_id: 'active-1',
+            id: 101,
             target: { host: 'example.com', port: 443 },
-            timing: { started_at_unix_ms: 1_000 },
+            started_at_unix_ms: 1_000,
+            last_activity_at_unix_ms: 1_500,
+            throughput_up_bps: 120,
+            throughput_down_bps: 340,
             extra_kernel_field: 'preserved',
           }],
         },
@@ -37,13 +40,20 @@ function connection(flowId, overrides = {}) {
   };
   const index = buildConnectionWireIndex({ activeResponse });
   const enriched = attachConnectionWireMetadata(
-    connection('active-1', { startedAtUnixMs: 1_000 }),
+    connection('101', {
+      startedAtUnixMs: 1_000,
+      throughputUpBps: null,
+      throughputDownBps: null,
+    }),
     index,
   );
   const rawPayload = enriched.rawPayload;
 
   assert.equal(enriched.rawSource, 'active_flows');
   assert.equal(rawPayload.extra_kernel_field, 'preserved');
+  assert.equal(enriched.throughputUpBps, 120, 'numeric query ids must attach raw throughput');
+  assert.equal(enriched.throughputDownBps, 340);
+  assert.equal(enriched.lastActivityAtUnixMs, 1_500);
 }
 
 {
@@ -60,7 +70,18 @@ function connection(flowId, overrides = {}) {
       payload: {
         record: {
           flow_id: 'completed-1',
+          revision: 7,
           state: 'completed',
+          source: {
+            ip: '127.0.0.1',
+            port: 52_000,
+            process_name: 'browser.exe',
+          },
+          throughput: {
+            upload_bps: 12,
+            download_bps: 34,
+            sampled_at_unix_ms: 8_000,
+          },
           timing: {
             started_at_unix_ms: 2_000,
             ended_at_unix_ms: 8_000,
@@ -74,6 +95,8 @@ function connection(flowId, overrides = {}) {
   const enriched = attachConnectionWireMetadata(
     connection('completed-1', {
       state: 'completed',
+      source: null,
+      revision: null,
       startedAtUnixMs: 2_000,
       endedAtUnixMs: 8_000,
     }),
@@ -85,6 +108,12 @@ function connection(flowId, overrides = {}) {
   assert.equal(enriched.eventId, 'evt-12');
   assert.equal(enriched.eventSequence, 44);
   assert.equal(enriched.eventOccurredAtUnixMs, 8_000);
+  assert.equal(enriched.source, '127.0.0.1:52000');
+  assert.equal(enriched.processName, 'browser.exe');
+  assert.equal(enriched.revision, 7);
+  assert.equal(enriched.throughputUpBps, 12);
+  assert.equal(enriched.throughputDownBps, 34);
+  assert.equal(enriched.updatedAtUnixMs, 8_000);
   assert.deepEqual(enriched.rawEnvelope, eventFrame.payload);
 
   const repeated = mergeConnectionWireIndexes(index, index);
