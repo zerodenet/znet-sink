@@ -1,6 +1,10 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { DisplayConnection } from '$lib/services/connection-view';
-  import { AlertTriangle, X } from '@lucide/svelte';
+  import { copyTextToClipboard } from '$lib/services/clipboard';
+  import { success as showSuccessToast, warning as showWarningToast } from '$lib/services/toast.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { AlertTriangle, Check, Copy, X } from '@lucide/svelte';
 
   let {
     connection,
@@ -18,7 +22,9 @@
 
   let activeSection = $state<'details' | 'diagnostics'>('details');
   let activeConnectionIdentity = $state<string | null>(null);
+  let copiedRaw = $state<'payload' | 'envelope' | null>(null);
   let drawerElement = $state<HTMLDivElement>();
+  let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   function connectionIdentity(item: DisplayConnection): string {
     const lifetime = item.startedAtUnixMs
@@ -34,6 +40,7 @@
 
     activeConnectionIdentity = nextIdentity;
     activeSection = 'details';
+    copiedRaw = null;
     if (nextIdentity) queueMicrotask(() => drawerElement?.focus());
   });
 
@@ -99,6 +106,21 @@
     }
   }
 
+  async function copyRaw(kind: 'payload' | 'envelope', value: unknown) {
+    try {
+      await copyTextToClipboard(formatRaw(value));
+      copiedRaw = kind;
+      showSuccessToast(kind === 'payload' ? '原始记录已复制' : '完整事件报文已复制');
+      if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+      copyFeedbackTimer = setTimeout(() => {
+        copiedRaw = null;
+        copyFeedbackTimer = null;
+      }, 2_000);
+    } catch (error) {
+      showWarningToast(error instanceof Error ? error.message : '复制原始数据失败');
+    }
+  }
+
   function sourceLabel(item: DisplayConnection): string {
     if (hasText(item.source)) return item.source;
     if (hasText(item.processName)) return item.processName;
@@ -123,6 +145,10 @@
       default: return '未关联原始记录';
     }
   }
+
+  onDestroy(() => {
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+  });
 </script>
 
 {#if connection}
@@ -268,12 +294,46 @@
             </section>
 
             {#if connection.rawPayload !== undefined}
-              <details class="raw-block" open><summary>内核原始记录</summary><pre>{formatRaw(connection.rawPayload)}</pre></details>
+              <details class="raw-block" open>
+                <summary>内核原始记录</summary>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  class="absolute right-1.5 top-1 z-10 h-7 gap-1 px-2 text-[10px]"
+                  title="复制内核原始记录"
+                  aria-label="复制内核原始记录"
+                  onclick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void copyRaw('payload', connection.rawPayload);
+                  }}
+                >
+                  {#if copiedRaw === 'payload'}<Check class="size-3.5" />已复制{:else}<Copy class="size-3.5" />复制{/if}
+                </Button>
+                <pre>{formatRaw(connection.rawPayload)}</pre>
+              </details>
             {:else}
               <div class="raw-empty">没有关联到对应生命周期的原始内核记录。</div>
             {/if}
             {#if connection.rawEnvelope !== undefined}
-              <details class="raw-block"><summary>完整事件报文</summary><pre>{formatRaw(connection.rawEnvelope)}</pre></details>
+              <details class="raw-block">
+                <summary>完整事件报文</summary>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  class="absolute right-1.5 top-1 z-10 h-7 gap-1 px-2 text-[10px]"
+                  title="复制完整事件报文"
+                  aria-label="复制完整事件报文"
+                  onclick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void copyRaw('envelope', connection.rawEnvelope);
+                  }}
+                >
+                  {#if copiedRaw === 'envelope'}<Check class="size-3.5" />已复制{:else}<Copy class="size-3.5" />复制{/if}
+                </Button>
+                <pre>{formatRaw(connection.rawEnvelope)}</pre>
+              </details>
             {/if}
           </div>
         {/if}
@@ -327,8 +387,8 @@
   .property strong { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
   .property.failure strong, .property.failure span { color: var(--destructive); }
   .section-note, .diagnostics-intro p { margin: 9px 0 0; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.55; }
-  .raw-block { margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 40%, transparent); }
-  .raw-block summary { padding: 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
+  .raw-block { position: relative; margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 40%, transparent); }
+  .raw-block summary { padding: 9px 82px 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
   .raw-block pre { max-height: 420px; overflow: auto; margin: 0; padding: 11px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
   .raw-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
   .drawer-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--background); }
