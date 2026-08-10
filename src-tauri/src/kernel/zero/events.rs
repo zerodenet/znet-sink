@@ -192,7 +192,7 @@ fn parse_policy_selected(payload: &Value) -> Option<GuiPolicySelectedEvent> {
     Some(GuiPolicySelectedEvent {
         policy_tag: string_at(payload, &["policy_tag", "policyTag"])?,
         policy_kind: string_at(payload, &["policy_kind", "policyKind"]),
-        selected: string_at(payload, &["selected"] )?,
+        selected: string_at(payload, &["selected"])?,
         previous: string_at(payload, &["previous"]),
     })
 }
