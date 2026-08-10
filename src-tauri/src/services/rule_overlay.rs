@@ -31,7 +31,9 @@ pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Val
     };
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let mut config = compose_with(base, enabled, &profiles)?.config;
-    url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
+    if url_test::supports_tolerance(state) {
+        url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
+    }
     policy_selection::apply_saved_selections(state, base, &mut config)?;
     Ok(config)
 }
