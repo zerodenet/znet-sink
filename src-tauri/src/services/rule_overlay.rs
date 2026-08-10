@@ -15,18 +15,23 @@ use crate::models::rule_set::{
 };
 use crate::services::{
     app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
-    rule_set,
+    rule_set, url_test,
 };
 use crate::state::app_state::AppState;
 
 const COMMON_TAG_PREFIX: &str = "gui-common-";
 
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
-    let enabled = common::lock(state.app_config(), "app_config")?
-        .routing
-        .inject_common_rules;
+    let (enabled, tolerance_ms) = {
+        let app_config = common::lock(state.app_config(), "app_config")?;
+        (
+            app_config.routing.inject_common_rules,
+            app_config.url_test.tolerance_ms,
+        )
+    };
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let mut config = compose_with(base, enabled, &profiles)?.config;
+    url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
     policy_selection::apply_saved_selections(state, base, &mut config)?;
     Ok(config)
 }
