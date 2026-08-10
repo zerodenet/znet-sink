@@ -494,11 +494,25 @@
   let popoverElement = $state<HTMLDivElement | null>(null);
   let popoverPositionVersion = $state(0);
   function historyForNode(tag: string): DelayEntry[] {
-    return (nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).map((entry) => ({
-      delay: entry.reachable ? (entry.latencyMs ?? 0) : -1,
-      at: entry.observedAtUnixMs,
-      selectedTag: entry.selectedTag,
-    }));
+    return (nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).flatMap((entry) => {
+      if (entry.latencyMs != null) {
+        return [{
+          delay: entry.latencyMs,
+          at: entry.observedAtUnixMs,
+          selectedTag: entry.selectedTag,
+        }];
+      }
+      if (entry.reachable) {
+        // A reachable observation without a measured latency is incomplete,
+        // not a real 0 ms result. Skip it rather than fabricating a datapoint.
+        return [];
+      }
+      return [{
+        delay: -1,
+        at: entry.observedAtUnixMs,
+        selectedTag: entry.selectedTag,
+      }];
+    });
   }
   const popoverHistory = $derived.by<DelayEntry[]>(() =>
     popover.node ? historyForNode(popover.node.tag) : [],
