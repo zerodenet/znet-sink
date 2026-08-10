@@ -340,6 +340,7 @@ fn looks_like_zero_config(value: &Value) -> bool {
 #[cfg(test)]
 mod wrapper_tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn source_formats_are_canonicalized_without_rewriting_auto() {
