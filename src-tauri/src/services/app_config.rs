@@ -167,6 +167,12 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         }
     }
 
+    if let Some(url_test) = patch.url_test {
+        if let Some(tolerance_ms) = url_test.tolerance_ms {
+            config.url_test.tolerance_ms = tolerance_ms;
+        }
+    }
+
     replace(state.inner(), config.clone())?;
 
     eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed(),);

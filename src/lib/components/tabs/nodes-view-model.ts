@@ -132,6 +132,53 @@ export function collectGroupNodeTags(groups: PolicyGroup[], groupName: string): 
   return new Set(group?.outbounds.map((outbound) => outbound.tag) ?? []);
 }
 
+/**
+ * A nested policy group is rendered as one effective outbound card in its
+ * parent. Runtime parent-member metadata can lag behind the nested group's own
+ * selection after a scheduled/manual URLTest cycle, so derive that card's
+ * volatile probe state from the nested group's final selected leaf.
+ *
+ * The projection is deliberately presentation-only: identity, protocol and
+ * parent selection flags stay on the group card. Only latency/health/time are
+ * borrowed from the effective selected route. Missing fresh state clears the
+ * stale previous-member values instead of keeping them.
+ */
+export function projectNestedGroupNodes(
+  allNodes: ProxyNode[],
+  groups: PolicyGroup[],
+): ProxyNode[] {
+  const nodesByTag = new Map(allNodes.map((node) => [node.tag, node]));
+  const groupsByName = new Map(groups.map((group) => [group.name, group]));
+
+  const resolveEffectiveNode = (
+    tag: string,
+    visiting: Set<string>,
+  ): ProxyNode | undefined => {
+    if (visiting.has(tag)) return nodesByTag.get(tag);
+    const group = groupsByName.get(tag);
+    if (!group?.selected) return nodesByTag.get(tag);
+
+    visiting.add(tag);
+    const resolved = resolveEffectiveNode(group.selected, visiting)
+      ?? nodesByTag.get(group.selected);
+    visiting.delete(tag);
+    return resolved;
+  };
+
+  return allNodes.map((node) => {
+    if (!groupsByName.has(node.tag)) return node;
+    const effective = resolveEffectiveNode(node.tag, new Set<string>());
+    if (!effective || effective.tag === node.tag) return node;
+
+    return {
+      ...node,
+      delay: effective.delay,
+      lastProbeAt: effective.lastProbeAt,
+      alive: effective.alive,
+    };
+  });
+}
+
 export function filterNodes(options: {
   allNodes: ProxyNode[];
   groups: PolicyGroup[];
@@ -139,7 +186,8 @@ export function filterNodes(options: {
   selectedGroup: string | null;
 }): ProxyNode[] {
   const { allNodes, groups, query, selectedGroup } = options;
-  const nodes = allNodes.filter((node) => matchesSearch(node, query));
+  const projected = projectNestedGroupNodes(allNodes, groups);
+  const nodes = projected.filter((node) => matchesSearch(node, query));
   if (!selectedGroup) return nodes;
   const group = groups.find((item) => item.name === selectedGroup);
   if (!group) return nodes;
@@ -156,7 +204,8 @@ export function buildSections(options: {
   orphanSectionName?: string;
 }): NodeSection[] {
   const { allNodes, groups, query, orphanSectionName = '其他' } = options;
-  const filtered = allNodes.filter((node) => matchesSearch(node, query));
+  const projected = projectNestedGroupNodes(allNodes, groups);
+  const filtered = projected.filter((node) => matchesSearch(node, query));
   const assigned = new Set<string>();
   const sections: NodeSection[] = groups.flatMap((group) => {
     const byTag = new Map(filtered.map((node) => [node.tag, node]));

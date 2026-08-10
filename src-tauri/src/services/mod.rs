@@ -37,6 +37,7 @@ pub mod system_proxy;
 pub mod system_proxy_guard;
 pub(crate) mod text_encoding;
 pub mod traffic_sampler;
+pub mod url_test;
 
 #[cfg(test)]
 mod proxy_mode_tests;

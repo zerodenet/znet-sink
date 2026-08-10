@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub tun: AppTunConfig,
     #[serde(default)]
     pub routing: AppRoutingConfig,
+    #[serde(default)]
+    pub url_test: AppUrlTestConfig,
 }
 
 impl Default for AppConfig {
@@ -29,6 +31,7 @@ impl Default for AppConfig {
             local_proxy: AppLocalProxyConfig::default(),
             tun: AppTunConfig::default(),
             routing: AppRoutingConfig::default(),
+            url_test: AppUrlTestConfig::default(),
         }
     }
 }
@@ -161,6 +164,21 @@ impl Default for AppRoutingConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUrlTestConfig {
+    #[serde(default = "default_url_test_tolerance_ms")]
+    pub tolerance_ms: u64,
+}
+
+impl Default for AppUrlTestConfig {
+    fn default() -> Self {
+        Self {
+            tolerance_ms: default_url_test_tolerance_ms(),
+        }
+    }
+}
+
 impl Default for AppTunConfig {
     fn default() -> Self {
         Self {
@@ -192,6 +210,7 @@ pub struct AppConfigPatch {
     pub local_proxy: Option<AppLocalProxyConfigPatch>,
     pub tun: Option<AppTunConfigPatch>,
     pub routing: Option<AppRoutingConfigPatch>,
+    pub url_test: Option<AppUrlTestConfigPatch>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -250,6 +269,12 @@ pub struct AppRoutingConfigPatch {
     pub inject_common_rules: Option<bool>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUrlTestConfigPatch {
+    pub tolerance_ms: Option<u64>,
+}
+
 fn default_schema_version() -> String {
     "gui.app.v1".to_string()
 }
@@ -296,6 +321,10 @@ fn default_tun_tag() -> String {
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+pub fn default_url_test_tolerance_ms() -> u64 {
+    50
 }
 
 pub fn default_proxy_bypass() -> Vec<String> {
@@ -362,5 +391,23 @@ mod tests {
         .unwrap();
 
         assert!(!config.routing.inject_common_rules);
+    }
+
+    #[test]
+    fn urltest_tolerance_defaults_to_50ms_for_new_and_legacy_configs() {
+        assert_eq!(AppConfig::default().url_test.tolerance_ms, 50);
+
+        let legacy: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(legacy.url_test.tolerance_ms, 50);
+    }
+
+    #[test]
+    fn urltest_tolerance_preserves_explicit_zero() {
+        let config: AppConfig = serde_json::from_value(json!({
+            "urlTest": { "toleranceMs": 0 }
+        }))
+        .unwrap();
+
+        assert_eq!(config.url_test.tolerance_ms, 0);
     }
 }

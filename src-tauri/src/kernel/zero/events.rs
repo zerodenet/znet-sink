@@ -198,7 +198,16 @@ fn parse_policy_selected(payload: &Value) -> Option<GuiPolicySelectedEvent> {
 }
 
 fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeCompletedEvent> {
-    let selected = string_at(payload, &["selected"]);
+    // Zero v0.0.16-dev.3 keeps the compatibility `selected` field and also
+    // publishes the authoritative URLTest selection decision under
+    // `selection`. Prefer the compatibility field when present, but accept the
+    // nested final selection so the client can move to the dev.3 contract
+    // without losing older-core compatibility.
+    let selected = string_at(payload, &["selected"]).or_else(|| {
+        payload
+            .get("selection")
+            .and_then(|selection| string_at(selection, &["selected"]))
+    });
     let members = payload
         .get("members")
         .and_then(Value::as_array)
@@ -265,7 +274,9 @@ fn unknown_payload(message: &'static str, payload: &Value) -> GuiEventData {
 
 #[cfg(test)]
 mod tests {
-    use super::policy_probe_is_scheduled;
+    use serde_json::json;
+
+    use super::{parse_policy_probe_completed, policy_probe_is_scheduled};
 
     #[test]
     fn scheduled_trigger_compatibility_is_normalized_at_zero_boundary() {
@@ -274,5 +285,30 @@ mod tests {
         }
         assert!(!policy_probe_is_scheduled(Some("manual")));
         assert!(!policy_probe_is_scheduled(None));
+    }
+
+    #[test]
+    fn dev3_nested_selection_is_accepted_as_final_urltest_selection() {
+        let event = parse_policy_probe_completed(&json!({
+            "policy_tag": "Auto Select",
+            "trigger": "scheduled",
+            "selection": {
+                "previous_selected": "HK",
+                "selected": "US",
+                "best_candidate": "US",
+                "switched": true,
+                "reason": "better_beyond_tolerance"
+            },
+            "members": [
+                { "target_tag": "HK", "healthy": true, "latency_ms": 90 },
+                { "target_tag": "US", "healthy": true, "latency_ms": 50 }
+            ]
+        }))
+        .expect("dev.3 policy probe event should parse");
+
+        assert_eq!(event.selected.as_deref(), Some("US"));
+        assert_eq!(event.members.len(), 2);
+        assert!(!event.members[0].selected);
+        assert!(event.members[1].selected);
     }
 }

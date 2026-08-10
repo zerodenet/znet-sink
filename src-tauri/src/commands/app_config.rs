@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::models::core_process::CoreProcessState;
-use crate::services::{app_config, core_process, system_proxy_guard};
+use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -30,6 +30,8 @@ pub async fn app_config_update(
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let url_test_tolerance_changed =
+        old_config.url_test.tolerance_ms != new_config.url_test.tolerance_ms;
 
     if kernel_running {
         let needs_restart = old_config.core.executable_path != new_config.core.executable_path
@@ -96,6 +98,37 @@ pub async fn app_config_update(
                 }
                 return Err(AppError::internal(message));
             }
+        } else if url_test_tolerance_changed {
+            // URLTest tolerance is an effective-config preference: keep the
+            // stored subscription/profile source untouched and recompose the
+            // active configuration with the new default immediately.
+            if let Err(error) =
+                rule_overlay::reconcile_current_config_locked(app_handle.clone()).await
+            {
+                let storage_rollback = app_config::replace(state.inner(), old_config.clone())
+                    .err()
+                    .map(|rollback| rollback.message);
+                let runtime_rollback = rule_overlay::reconcile_current_config_locked(
+                    app_handle.clone(),
+                )
+                .await
+                .err()
+                .map(|rollback| rollback.message);
+
+                let mut message = format!(
+                    "failed to apply URLTest tolerance configuration: {}",
+                    error.message
+                );
+                if let Some(storage_rollback) = storage_rollback {
+                    message.push_str(&format!(
+                        "; configuration rollback failed: {storage_rollback}"
+                    ));
+                }
+                if let Some(runtime_rollback) = runtime_rollback {
+                    message.push_str(&format!("; runtime rollback failed: {runtime_rollback}"));
+                }
+                return Err(AppError::internal(message));
+            }
         }
     }
 
@@ -111,7 +144,10 @@ pub async fn app_config_update(
                 old_config.local_proxy.port,
                 &old_config.local_proxy.bypass,
             );
-            let _ = app_config::replace(state.inner(), old_config);
+            let _ = app_config::replace(state.inner(), old_config.clone());
+            if kernel_running && url_test_tolerance_changed {
+                let _ = rule_overlay::reconcile_current_config_locked(app_handle.clone()).await;
+            }
             return Err(error);
         }
     }

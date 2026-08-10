@@ -15,7 +15,7 @@ use crate::models::rule_set::{
 };
 use crate::services::{
     app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
-    rule_set,
+    rule_set, url_test,
 };
 use crate::state::app_state::AppState;
 
@@ -26,7 +26,30 @@ pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Val
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let mut config = compose_with(base, enabled, &profiles)?.config;
+    compose_effective_with(state, base, enabled, &profiles)
+}
+
+fn compose_effective_with(
+    state: &AppState,
+    base: &Value,
+    enabled: bool,
+    profiles: &[RuleSetProfile],
+) -> AppResult<Value> {
+    let config = compose_with(base, enabled, profiles)?.config;
+    finalize_effective_config(state, base, config)
+}
+
+fn finalize_effective_config(
+    state: &AppState,
+    base: &Value,
+    mut config: Value,
+) -> AppResult<Value> {
+    let tolerance_ms = common::lock(state.app_config(), "app_config")?
+        .url_test
+        .tolerance_ms;
+    if url_test::supports_tolerance(state) {
+        url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
+    }
     policy_selection::apply_saved_selections(state, base, &mut config)?;
     Ok(config)
 }
@@ -90,14 +113,19 @@ pub async fn set_enabled(
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let previous_effective = base
         .as_ref()
-        .map(|base| compose_with(base, previous.routing.inject_common_rules, &profiles))
-        .transpose()?
-        .map(|result| result.config);
+        .map(|base| {
+            compose_effective_with(
+                state.inner(),
+                base,
+                previous.routing.inject_common_rules,
+                &profiles,
+            )
+        })
+        .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_with(base, enabled, &profiles))
-        .transpose()?
-        .map(|result| result.config);
+        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles))
+        .transpose()?;
 
     apply_if_running(state.inner(), next_effective.clone()).await?;
     if let Err(error) = app_config::replace(state.inner(), next) {
@@ -153,14 +181,12 @@ pub async fn set_binding(
         .inject_common_rules;
     let old_effective = base
         .as_ref()
-        .map(|base| compose_with(base, inject_enabled, &previous))
-        .transpose()?
-        .map(|result| result.config);
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &previous))
+        .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_with(base, inject_enabled, &next))
-        .transpose()?
-        .map(|result| result.config);
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next))
+        .transpose()?;
     apply_if_running(state.inner(), next_effective).await?;
     if let Err(error) = domain_store::save_rule_sets(&next) {
         let _ = apply_if_running(state.inner(), old_effective.clone()).await;

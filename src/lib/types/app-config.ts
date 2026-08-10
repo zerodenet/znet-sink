@@ -8,6 +8,7 @@ export interface AppConfig {
   localProxy: AppLocalProxyConfig;
   tun: AppTunConfig;
   routing: AppRoutingConfig;
+  urlTest: AppUrlTestConfig;
 }
 
 export interface AppCoreConfig {
@@ -54,6 +55,10 @@ export interface AppRoutingConfig {
   injectCommonRules: boolean;
 }
 
+export interface AppUrlTestConfig {
+  toleranceMs: number;
+}
+
 // Patch types for partial updates
 
 export interface AppConfigPatch {
@@ -63,6 +68,7 @@ export interface AppConfigPatch {
   localProxy?: AppLocalProxyConfigPatch;
   tun?: AppTunConfigPatch;
   routing?: AppRoutingConfigPatch;
+  urlTest?: AppUrlTestConfigPatch;
 }
 
 export interface AppCoreConfigPatch {
@@ -107,4 +113,8 @@ export interface AppTunConfigPatch {
 
 export interface AppRoutingConfigPatch {
   injectCommonRules?: boolean;
+}
+
+export interface AppUrlTestConfigPatch {
+  toleranceMs?: number;
 }

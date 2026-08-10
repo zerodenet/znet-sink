@@ -6,6 +6,7 @@ import {
   getActiveNodeTag,
   normalizeSelectedGroup,
   planProbeTargets,
+  projectNestedGroupNodes,
   summarizeProbeProgress,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 import { flagCodeFromEmoji, parseNodeName } from '../src/lib/services/node-utils.ts';
@@ -150,6 +151,59 @@ const group = (name, tags, kind = 'selector', selected) => ({
     ['Proxy', ['HK']],
     ['其他', ['orphan']],
   ]);
+}
+
+{
+  const hk = { ...node('HK'), delay: 30, lastProbeAt: 1_000, alive: true };
+  const us = { ...node('US'), delay: 80, lastProbeAt: 2_000, alive: true };
+  const auto = { ...node('Auto', 'url_test'), delay: 30, lastProbeAt: 1_000, alive: true };
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['HK', 'US'], 'url_test', 'US'),
+  ];
+
+  const [projectedAuto] = filterNodes({
+    allNodes: [hk, us, auto],
+    groups,
+    query: '',
+    selectedGroup: 'Proxy',
+  });
+  assert.equal(projectedAuto.tag, 'Auto');
+  assert.equal(projectedAuto.protocol, 'url_test');
+  assert.equal(projectedAuto.delay, 80);
+  assert.equal(projectedAuto.lastProbeAt, 2_000);
+  assert.equal(projectedAuto.alive, true);
+}
+
+{
+  const hk = { ...node('HK'), delay: 30, lastProbeAt: 1_000, alive: true };
+  const us = { ...node('US'), delay: 0, lastProbeAt: undefined, alive: undefined };
+  const auto = { ...node('Auto', 'url_test'), delay: 30, lastProbeAt: 1_000, alive: true };
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['HK', 'US'], 'url_test', 'US'),
+  ];
+
+  const [projectedAuto] = projectNestedGroupNodes([hk, us, auto], groups)
+    .filter((item) => item.tag === 'Auto');
+  assert.equal(projectedAuto.delay, 0);
+  assert.equal(projectedAuto.lastProbeAt, undefined);
+  assert.equal(projectedAuto.alive, undefined);
+}
+
+{
+  const us = { ...node('US'), delay: 64, lastProbeAt: 3_000, alive: true };
+  const nested = { ...node('Nested', 'url_test'), delay: 40, lastProbeAt: 1_500, alive: true };
+  const auto = { ...node('Auto', 'url_test'), delay: 35, lastProbeAt: 1_000, alive: true };
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['Nested'], 'url_test', 'Nested'),
+    group('Nested', ['US'], 'url_test', 'US'),
+  ];
+
+  const projected = projectNestedGroupNodes([us, nested, auto], groups);
+  assert.equal(projected.find((item) => item.tag === 'Auto')?.delay, 64);
+  assert.equal(projected.find((item) => item.tag === 'Nested')?.delay, 64);
 }
 
 console.log('nodes-view-model: ok');

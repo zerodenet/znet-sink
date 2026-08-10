@@ -16,7 +16,7 @@ use crate::client_core::{
 use crate::errors::AppError;
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{commands, ZeroAdapter};
-use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyProbeCompletedEvent};
+use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyMember, GuiPolicyProbeCompletedEvent};
 use crate::models::logs::LogLevel;
 use crate::services::{common, core_config, logs};
 use crate::state::app_state::AppState;
@@ -457,6 +457,44 @@ fn record_policy_job_failure(
     }
 }
 
+fn policy_member_reachable(member: &GuiPolicyMember) -> bool {
+    member
+        .alive
+        .unwrap_or_else(|| member.delay_ms.is_some() && member.last_error.is_none())
+}
+
+/// Summarize a URLTest completion from the effective selected route rather than
+/// requiring every member to succeed. A partial member failure must not turn a
+/// healthy selected outbound with a real latency into a group-level timeout.
+fn policy_probe_summary(event: &GuiPolicyProbeCompletedEvent) -> (bool, Option<u64>, usize) {
+    let failed = event
+        .members
+        .iter()
+        .filter(|member| !policy_member_reachable(member))
+        .count();
+
+    if let Some(selected) = event
+        .selected
+        .as_deref()
+        .and_then(|selected| event.members.iter().find(|member| member.tag == selected))
+    {
+        return (
+            policy_member_reachable(selected),
+            selected.delay_ms,
+            failed,
+        );
+    }
+
+    let reachable = event.members.iter().any(policy_member_reachable);
+    let latency_ms = event
+        .members
+        .iter()
+        .filter(|member| policy_member_reachable(member))
+        .filter_map(|member| member.delay_ms)
+        .min();
+    (reachable, latency_ms, failed)
+}
+
 /// Reconcile a normalized Zero policy completion event into any matching
 /// manual policy job. Scheduled observations remain distinguishable and do
 /// not masquerade as completion of an overlapping manual request.
@@ -479,24 +517,7 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
     let observed_at_unix_ms = event
         .completed_at_unix_ms
         .unwrap_or_else(common::now_unix_ms);
-    let failed = event
-        .members
-        .iter()
-        .filter(|member| member.alive == Some(false) || member.last_error.is_some())
-        .count();
-    let reachable = failed == 0 && !event.members.is_empty();
-    let latency_ms = event
-        .selected
-        .as_deref()
-        .and_then(|selected| event.members.iter().find(|member| member.tag == selected))
-        .and_then(|member| member.delay_ms)
-        .or_else(|| {
-            event
-                .members
-                .iter()
-                .filter_map(|member| member.delay_ms)
-                .min()
-        });
+    let (reachable, latency_ms, failed) = policy_probe_summary(event);
     let message =
         (failed > 0).then(|| format!("{failed}/{} policy members failed", event.members.len()));
 
@@ -505,7 +526,7 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
             scope: current_scope.clone(),
             job_kind: observation_kind,
             target_tag: member.tag.clone(),
-            reachable: member.alive.unwrap_or(member.last_error.is_none()),
+            reachable: policy_member_reachable(member),
             latency_ms: member.delay_ms,
             message: member.last_error.clone(),
             source: observation_source,
@@ -659,7 +680,8 @@ fn default_ipc_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_outbound_probe_failure, policy_completion_is_fresh, policy_probe_timeout_ms,
+        normalize_outbound_probe_failure, policy_completion_is_fresh, policy_probe_summary,
+        policy_probe_timeout_ms,
     };
     use crate::client_core::{
         ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
@@ -761,5 +783,68 @@ mod tests {
             &event(None, None, None),
             &job(1_000)
         ));
+    }
+
+    #[test]
+    fn partial_failure_keeps_healthy_selected_member_latency() {
+        let mut completion = event(Some(1_000), Some(1_100), Some(1_050));
+        completion.members[0].delay_ms = Some(80);
+        completion.members.push(GuiPolicyMember {
+            tag: "node-b".to_string(),
+            kind: None,
+            selected: false,
+            alive: Some(false),
+            delay_ms: None,
+            last_checked_unix_ms: Some(1_050),
+            last_error: Some("timeout".to_string()),
+        });
+
+        let (reachable, latency_ms, failed) = policy_probe_summary(&completion);
+        assert!(reachable);
+        assert_eq!(latency_ms, Some(80));
+        assert_eq!(failed, 1);
+    }
+
+    #[test]
+    fn failed_selected_member_does_not_borrow_healthy_candidates_latency() {
+        let mut completion = event(Some(1_000), Some(1_100), Some(1_050));
+        completion.members[0].alive = Some(false);
+        completion.members[0].delay_ms = None;
+        completion.members[0].last_error = Some("timeout".to_string());
+        completion.members.push(GuiPolicyMember {
+            tag: "node-b".to_string(),
+            kind: None,
+            selected: false,
+            alive: Some(true),
+            delay_ms: Some(40),
+            last_checked_unix_ms: Some(1_050),
+            last_error: None,
+        });
+
+        let (reachable, latency_ms, failed) = policy_probe_summary(&completion);
+        assert!(!reachable);
+        assert_eq!(latency_ms, None);
+        assert_eq!(failed, 1);
+    }
+
+    #[test]
+    fn legacy_completion_without_selected_uses_best_healthy_latency() {
+        let mut completion = event(Some(1_000), Some(1_100), Some(1_050));
+        completion.selected = None;
+        completion.members[0].delay_ms = Some(80);
+        completion.members.push(GuiPolicyMember {
+            tag: "node-b".to_string(),
+            kind: None,
+            selected: false,
+            alive: Some(true),
+            delay_ms: Some(40),
+            last_checked_unix_ms: Some(1_050),
+            last_error: None,
+        });
+
+        let (reachable, latency_ms, failed) = policy_probe_summary(&completion);
+        assert!(reachable);
+        assert_eq!(latency_ms, Some(40));
+        assert_eq!(failed, 0);
     }
 }
