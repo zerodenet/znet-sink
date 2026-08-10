@@ -190,9 +190,9 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
 
 fn parse_policy_selected(payload: &Value) -> Option<GuiPolicySelectedEvent> {
     Some(GuiPolicySelectedEvent {
-        policy_tag: string_at(payload, &["policy_tag", "policyTag"])? ,
+        policy_tag: string_at(payload, &["policy_tag", "policyTag"])?,
         policy_kind: string_at(payload, &["policy_kind", "policyKind"]),
-        selected: string_at(payload, &["selected"])? ,
+        selected: string_at(payload, &["selected"] )?,
         previous: string_at(payload, &["previous"]),
     })
 }
@@ -220,7 +220,7 @@ fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeComplet
         .unwrap_or_default();
 
     Some(GuiPolicyProbeCompletedEvent {
-        policy_tag: string_at(payload, &["policy_tag", "policyTag"])? ,
+        policy_tag: string_at(payload, &["policy_tag", "policyTag"])?,
         trigger: string_at(payload, &["trigger"]),
         url: string_at(payload, &["url"]),
         started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
