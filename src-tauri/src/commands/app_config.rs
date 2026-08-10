@@ -144,7 +144,10 @@ pub async fn app_config_update(
                 old_config.local_proxy.port,
                 &old_config.local_proxy.bypass,
             );
-            let _ = app_config::replace(state.inner(), old_config);
+            let _ = app_config::replace(state.inner(), old_config.clone());
+            if kernel_running && url_test_tolerance_changed {
+                let _ = rule_overlay::reconcile_current_config_locked(app_handle.clone()).await;
+            }
             return Err(error);
         }
     }
