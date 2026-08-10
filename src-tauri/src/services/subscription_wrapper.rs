@@ -3,6 +3,7 @@ mod original;
 
 pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
 
+use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
@@ -226,12 +227,91 @@ pub fn parse_subscription_content(
         }
         other => original::parse_subscription_content(content, other),
     }?;
-    parsed.format = if parsed.format.contains("clash") {
+
+    let source_is_clash = parsed.format.contains("clash");
+    if source_is_clash {
+        apply_clash_urltest_tolerances(content, &mut parsed.content);
+    }
+    parsed.format = if source_is_clash {
         "clash".to_string()
     } else {
         "zero".to_string()
     };
     Ok(parsed)
+}
+
+fn apply_clash_urltest_tolerances(source_content: &str, converted: &mut Value) {
+    let Some(source) = parse_clash_source(source_content) else {
+        return;
+    };
+    let Some(source_groups) = source.get("proxy-groups").and_then(Value::as_array) else {
+        return;
+    };
+    let Some(converted_groups) = converted
+        .get_mut("outbound_groups")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+
+    for source_group in source_groups {
+        let Some(group) = source_group.as_object() else {
+            continue;
+        };
+        let is_url_test = group
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("url-test"));
+        if !is_url_test {
+            continue;
+        }
+        let Some(name) = group.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(tolerance_ms) = group.get("tolerance").and_then(value_as_u64) else {
+            continue;
+        };
+
+        if let Some(converted_group) = converted_groups.iter_mut().find(|candidate| {
+            candidate.get("tag").and_then(Value::as_str) == Some(name)
+                && candidate
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.eq_ignore_ascii_case("url_test"))
+        }) {
+            if let Some(object) = converted_group.as_object_mut() {
+                object
+                    .entry("tolerance_ms".to_string())
+                    .or_insert_with(|| Value::from(tolerance_ms));
+            }
+        }
+    }
+}
+
+fn parse_clash_source(content: &str) -> Option<Value> {
+    serde_yaml::from_str::<Value>(content).ok().or_else(|| {
+        let compact = content.split_whitespace().collect::<String>();
+        if compact.is_empty() {
+            return None;
+        }
+        let mut padded = compact;
+        let remainder = padded.len() % 4;
+        if remainder != 0 {
+            padded.extend(std::iter::repeat_n('=', 4 - remainder));
+        }
+        let decoded = general_purpose::STANDARD
+            .decode(&padded)
+            .or_else(|_| general_purpose::URL_SAFE.decode(&padded))
+            .ok()?;
+        let decoded = String::from_utf8(decoded).ok()?;
+        serde_yaml::from_str::<Value>(&decoded).ok()
+    })
+}
+
+fn value_as_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse().ok()))
 }
 
 fn looks_like_zero_config(value: &Value) -> bool {
@@ -254,7 +334,6 @@ fn looks_like_zero_config(value: &Value) -> bool {
 #[cfg(test)]
 mod wrapper_tests {
     use super::*;
-    use base64::{engine::general_purpose, Engine as _};
 
     #[test]
     fn source_formats_are_canonicalized_without_rewriting_auto() {
@@ -321,5 +400,26 @@ mod wrapper_tests {
                 .format,
             "clash"
         );
+    }
+
+    #[test]
+    fn clash_urltest_tolerance_is_preserved_for_raw_base64_and_auto_sources() {
+        let yaml = "\
+proxies:
+  - {name: HK, type: ss, server: s, port: 1, password: p}
+  - {name: JP, type: ss, server: s, port: 2, password: p}
+proxy-groups:
+  - {name: Auto, type: url-test, proxies: [HK, JP], url: http://x, interval: 300, tolerance: 75}
+";
+
+        let raw = parse_subscription_content(yaml, "clash").unwrap();
+        assert_eq!(raw.content["outbound_groups"][0]["tolerance_ms"], 75);
+
+        let encoded = general_purpose::STANDARD.encode(yaml.as_bytes());
+        let base64 = parse_subscription_content(&encoded, "clash").unwrap();
+        assert_eq!(base64.content["outbound_groups"][0]["tolerance_ms"], 75);
+
+        let auto = parse_subscription_content(&encoded, "auto").unwrap();
+        assert_eq!(auto.content["outbound_groups"][0]["tolerance_ms"], 75);
     }
 }
