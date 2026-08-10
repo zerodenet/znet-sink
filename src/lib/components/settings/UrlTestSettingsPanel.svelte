@@ -70,7 +70,7 @@
       <div class="config-row-label">
         <span class="label-text">URLTest 延迟容差</span>
         <span class="label-desc">
-          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；Zero 配置显式设置的 tolerance_ms 优先。
+          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；Zero 配置显式设置的 tolerance_ms 优先。需要 Zero v0.0.16-dev.3 或更高版本，旧内核不会注入该字段。
         </span>
       </div>
 
