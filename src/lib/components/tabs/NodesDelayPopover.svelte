@@ -1,6 +1,6 @@
 ﻿<script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
-  import { gradeDelay, formatProbeTime } from '$lib/services/node-utils';
+  import { gradeDelay, formatProbeTime, parseNodeName } from '$lib/services/node-utils';
   import { meanDelay, buildSparkline, sparklinePath } from '$lib/components/tabs/nodes-delay-sparkline.js';
 
   type DelayEntry = { delay: number; at: number; selectedTag?: string };
@@ -26,6 +26,11 @@
   const delayState = $derived(gradeDelay(currentDelay, currentAlive));
   const spark = $derived(buildSparkline(hist));
   const lastProbeLabel = $derived(formatProbeTime(currentProbeAt));
+  const averageDelay = $derived(meanDelay(hist));
+  const averageDelayLabel = $derived(averageDelay === '-' ? '—' : `${averageDelay}ms`);
+  const latestTarget = $derived(
+    latestEntry?.selectedTag ? parseNodeName(latestEntry.selectedTag) : undefined,
+  );
 
   // Reversed history for list view (newest first)
   const reversedHist = $derived([...hist].reverse());
@@ -99,6 +104,9 @@
   }
 
   const hoveredEntry = $derived(hoveredIndex !== null ? hist[hoveredIndex] : null);
+  const hoveredTarget = $derived(
+    hoveredEntry?.selectedTag ? parseNodeName(hoveredEntry.selectedTag) : undefined,
+  );
 </script>
 
 <div class="delay-portal-popover">
@@ -155,7 +163,22 @@
       </svg>
       {#if hoveredEntry}
         <span class="hover-tooltip">
-          {#if hoveredEntry.selectedTag}{hoveredEntry.selectedTag} · {/if}{formatHistoryTooltip(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
+          {#if hoveredTarget}
+            <span class="target-label">
+              {#if hoveredTarget.flagCode}
+                <span
+                  class="target-country-flag fi fi-{hoveredTarget.flagCode.toLowerCase()}"
+                  role="img"
+                  aria-label="国旗 {hoveredTarget.flagCode}"
+                ></span>
+              {:else if hoveredTarget.emoji}
+                <span class="target-emoji">{hoveredTarget.emoji}</span>
+              {/if}
+              <span>{hoveredTarget.cleanName}</span>
+            </span>
+            <span> · </span>
+          {/if}
+          {formatHistoryTooltip(hoveredEntry.at)} · {hoveredEntry.delay > 0 ? hoveredEntry.delay + 'ms' : '超时'}
         </span>
       {/if}
     </div>
@@ -165,7 +188,19 @@
         <div class="delay-list-item">
           <span class="delay-list-time" title={formatHistoryTooltip(entry.at)}>{formatHistoryTime(entry.at)}</span>
           {#if entry.selectedTag}
-            <span class="delay-list-target" title={entry.selectedTag}>{entry.selectedTag}</span>
+            {@const entryTarget = parseNodeName(entry.selectedTag)}
+            <span class="delay-list-target" title={entry.selectedTag}>
+              {#if entryTarget.flagCode}
+                <span
+                  class="target-country-flag fi fi-{entryTarget.flagCode.toLowerCase()}"
+                  role="img"
+                  aria-label="国旗 {entryTarget.flagCode}"
+                ></span>
+              {:else if entryTarget.emoji}
+                <span class="target-emoji">{entryTarget.emoji}</span>
+              {/if}
+              <span class="delay-list-target-name">{entryTarget.cleanName}</span>
+            </span>
           {/if}
           <span class="delay-list-bar-wrap">
             <span
@@ -182,11 +217,25 @@
   {/if}
 
   {#if latestEntry}
-    <span class="popover-stats">
-      最新 {latestEntry.delay > 0 ? latestEntry.delay + 'ms' : '超时'}
-      {#if latestEntry.selectedTag}· {latestEntry.selectedTag}{/if}
-      · 均 {meanDelay(hist)}ms
-    </span>
+    <div class="popover-stats">
+      <span class="popover-stats-summary">
+        最新 {latestEntry.delay > 0 ? latestEntry.delay + 'ms' : '超时'} · 均 {averageDelayLabel}
+      </span>
+      {#if latestTarget && latestEntry.selectedTag}
+        <span class="popover-stats-target" title={latestEntry.selectedTag}>
+          {#if latestTarget.flagCode}
+            <span
+              class="target-country-flag popover-target-flag fi fi-{latestTarget.flagCode.toLowerCase()}"
+              role="img"
+              aria-label="国旗 {latestTarget.flagCode}"
+            ></span>
+          {:else if latestTarget.emoji}
+            <span class="target-emoji">{latestTarget.emoji}</span>
+          {/if}
+          <span>{latestTarget.cleanName}</span>
+        </span>
+      {/if}
+    </div>
   {/if}
   {#if currentProbeAt}
     <span class="popover-time">测速: {lastProbeLabel}</span>
@@ -259,6 +308,7 @@
     position: absolute;
     top: -4px;
     right: 0;
+    max-width: 260px;
     font-size: 9px;
     font-family: var(--font-mono);
     color: var(--foreground);
@@ -268,6 +318,35 @@
     border: 1px solid var(--border);
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  .target-label,
+  .popover-stats-target,
+  .delay-list-target {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .target-country-flag {
+    display: inline-block;
+    width: 12px;
+    height: 9px;
+    margin-right: 3px;
+    border-radius: 1.5px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 82%, transparent);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .popover-target-flag {
+    width: 14px;
+    height: 10.5px;
+    margin-right: 4px;
+  }
+
+  .target-emoji {
+    margin-right: 2px;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   }
 
   .delay-list {
@@ -315,14 +394,19 @@
   }
 
   .delay-list-target {
-    width: 56px;
+    width: 72px;
     flex-shrink: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    min-width: 0;
     font-size: 9px;
     font-family: var(--font-mono);
     color: var(--foreground);
+  }
+
+  .delay-list-target-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .delay-list-bar {
@@ -341,10 +425,33 @@
   }
 
   .popover-stats {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--muted-foreground);
     font-variant-numeric: tabular-nums;
+  }
+
+  .popover-stats-summary {
+    white-space: nowrap;
+  }
+
+  .popover-stats-target {
+    min-width: 0;
+    color: var(--foreground);
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .popover-stats-target > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .popover-time {
