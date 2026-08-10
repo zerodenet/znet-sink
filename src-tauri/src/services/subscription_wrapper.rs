@@ -289,23 +289,29 @@ fn apply_clash_urltest_tolerances(source_content: &str, converted: &mut Value) {
 }
 
 fn parse_clash_source(content: &str) -> Option<Value> {
-    serde_yaml::from_str::<Value>(content).ok().or_else(|| {
-        let compact = content.split_whitespace().collect::<String>();
-        if compact.is_empty() {
-            return None;
+    if let Ok(value) = serde_yaml::from_str::<Value>(content) {
+        if value.is_object() {
+            return Some(value);
         }
-        let mut padded = compact;
-        let remainder = padded.len() % 4;
-        if remainder != 0 {
-            padded.extend(std::iter::repeat_n('=', 4 - remainder));
-        }
-        let decoded = general_purpose::STANDARD
-            .decode(&padded)
-            .or_else(|_| general_purpose::URL_SAFE.decode(&padded))
-            .ok()?;
-        let decoded = String::from_utf8(decoded).ok()?;
-        serde_yaml::from_str::<Value>(&decoded).ok()
-    })
+    }
+
+    let compact = content.split_whitespace().collect::<String>();
+    if compact.is_empty() {
+        return None;
+    }
+    let mut padded = compact;
+    let remainder = padded.len() % 4;
+    if remainder != 0 {
+        padded.extend(std::iter::repeat_n('=', 4 - remainder));
+    }
+    let decoded = general_purpose::STANDARD
+        .decode(&padded)
+        .or_else(|_| general_purpose::URL_SAFE.decode(&padded))
+        .ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    serde_yaml::from_str::<Value>(&decoded)
+        .ok()
+        .filter(Value::is_object)
 }
 
 fn value_as_u64(value: &Value) -> Option<u64> {
