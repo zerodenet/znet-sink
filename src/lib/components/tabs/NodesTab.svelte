@@ -490,9 +490,12 @@
     anchor: HTMLElement | null;
     node: ProxyNode | null;
   }
+  type PopoverPlacement = 'above' | 'below';
+  const POPOVER_MAX_INTERACTIVE_HEIGHT = 236;
   let popover = $state<PopoverState>({ visible: false, anchor: null, node: null });
   let popoverElement = $state<HTMLDivElement | null>(null);
   let popoverPositionVersion = $state(0);
+  let popoverPlacement = $state<PopoverPlacement | null>(null);
   function historyForNode(tag: string): DelayEntry[] {
     return (nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).flatMap((entry) => {
       if (entry.latencyMs != null) {
@@ -517,6 +520,23 @@
   const popoverHistory = $derived.by<DelayEntry[]>(() =>
     popover.node ? historyForNode(popover.node.tag) : [],
   );
+
+  function choosePopoverPlacement(anchor: HTMLElement): PopoverPlacement {
+    const r = anchor.getBoundingClientRect();
+    const gap = 6;
+    const edgePadding = 8;
+    const viewportHeight = window.innerHeight;
+    const spaceAbove = r.top - gap - edgePadding;
+    const spaceBelow = viewportHeight - r.bottom - gap - edgePadding;
+
+    // Choose against the largest interactive view, not the initial chart.
+    // The placement is then locked for this hover session so chart/list
+    // resizing cannot flip the popover across the anchor under the pointer.
+    if (spaceAbove >= POPOVER_MAX_INTERACTIVE_HEIGHT) return 'above';
+    if (spaceBelow >= POPOVER_MAX_INTERACTIVE_HEIGHT) return 'below';
+    return spaceAbove >= spaceBelow ? 'above' : 'below';
+  }
+
   function showPopover(e: MouseEvent, node: ProxyNode) {
     if (hideTimer) {
       clearTimeout(hideTimer);
@@ -524,13 +544,16 @@
     }
     const hist = historyForNode(node.tag);
     if (hist.length === 0) return;
-    popover = { visible: true, anchor: e.currentTarget as HTMLElement, node };
+    const anchor = e.currentTarget as HTMLElement;
+    popoverPlacement = choosePopoverPlacement(anchor);
+    popover = { visible: true, anchor, node };
   }
 
   function hidePopover(delay = 300) {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       popover = { visible: false, anchor: null, node: null };
+      popoverPlacement = null;
       hideTimer = null;
     }, delay);
   }
@@ -568,8 +591,6 @@
     const r = popover.anchor.getBoundingClientRect();
     const gap = 6;
     const edgePadding = 8;
-    // Use the rendered dimensions instead of an estimate. The chart and list
-    // views have different heights, so an estimate can choose the wrong side.
     const popoverHeight = popoverElement?.offsetHeight ?? 112;
     const popoverWidth = popoverElement?.offsetWidth ?? 220;
     const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
@@ -578,10 +599,8 @@
       edgePadding,
       Math.min(viewportWidth - popoverWidth - edgePadding, r.left + (r.width - popoverWidth) / 2),
     );
-    const spaceAbove = r.top - gap - edgePadding;
-    const spaceBelow = viewportHeight - r.bottom - gap - edgePadding;
-    const placeAbove = spaceAbove >= popoverHeight || spaceAbove >= spaceBelow;
-    const preferredTop = placeAbove ? r.top - gap - popoverHeight : r.bottom + gap;
+    const placement = popoverPlacement ?? (r.top >= viewportHeight - r.bottom ? 'above' : 'below');
+    const preferredTop = placement === 'above' ? r.top - gap - popoverHeight : r.bottom + gap;
     const top = Math.max(
       edgePadding,
       Math.min(viewportHeight - popoverHeight - edgePadding, preferredTop),
@@ -947,5 +966,4 @@
     }
   }
 </style>
-
 
