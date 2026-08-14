@@ -1,14 +1,20 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::core_process::CoreProcessStatus;
+use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
 use crate::services::core_process;
 use crate::state::app_state::AppState;
 
 /// Fast in-memory read — can stay sync.
 #[tauri::command]
 pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    core_process::status(state)
+    let mut status = core_process::status(state)?;
+    // PID identifies the currently managed child only. Never expose a stale
+    // identifier retained by an exited/failed transition as if it were live.
+    if status.state != CoreProcessState::Running {
+        status.pid = None;
+    }
+    Ok(status)
 }
 
 /// Spawns OS child process. Runs the blocking start routine on a background

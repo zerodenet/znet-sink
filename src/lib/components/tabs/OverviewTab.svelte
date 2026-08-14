@@ -1,15 +1,26 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
+  import { getAppErrorMessage } from '$lib/services/core';
+  import {
+    listProxyConfigs,
+    listSubscriptions,
+    setActiveProxyConfig,
+    syncSubscription,
+    type ProxyConfigProfile,
+    type SubscriptionProfile,
+  } from '$lib/services/config';
+  import { parseNodeName } from '$lib/services/node-utils';
+  import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
+  import * as toast from '$lib/services/toast.svelte';
   import TrafficChart from '$lib/components/TrafficChart.svelte';
   import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import TunStackStatus from '$lib/components/core/TunStackStatus.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
-  import {
-    selectPolicy,
-  } from '$lib/services/core';
+  import * as Select from '$lib/components/ui/select';
 
   function formatUptime(ms?: number): string {
     if (!ms) return '—';
@@ -27,18 +38,63 @@
     return '0 KB/s';
   }
 
+  function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
+    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
+    return `${Math.round(bytes)} B`;
+  }
+
+  function trafficShare(part: number, total: number): number {
+    // An empty session still needs a complete, stable ring. Start from an
+    // intentional 50/50 composition and let real cumulative bytes move the
+    // boundary once traffic exists.
+    if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return 50;
+    return Math.max(0, Math.min(100, (part / total) * 100));
+  }
+
+  function formatRelativeTime(timestamp?: number): string {
+    if (!timestamp) return '未同步';
+    const diffMs = Math.max(0, Date.now() - timestamp);
+    const minutes = Math.floor(diffMs / 60_000);
+    if (minutes < 1) return '刚刚同步';
+    if (minutes < 60) return `${minutes} 分钟前同步`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} 小时前同步`;
+    const days = Math.floor(hours / 24);
+    return `${days} 天前同步`;
+  }
+
+  function formatSubscriptionFormat(format: string): string {
+    if (!format || format === 'auto') return '自动检测';
+    if (format === 'zero') return 'Zero';
+    if (format === 'clash') return 'Clash';
+    return format;
+  }
+
+  function routeFinalOutbound(content?: unknown): string | null {
+    if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+    const route = (content as Record<string, unknown>).route;
+    if (!route || typeof route !== 'object' || Array.isArray(route)) return null;
+    const finalRoute = (route as Record<string, unknown>).final;
+    if (!finalRoute || typeof finalRoute !== 'object' || Array.isArray(finalRoute)) return null;
+    const outbound = (finalRoute as Record<string, unknown>).outbound;
+    return typeof outbound === 'string' && outbound.trim() ? outbound : null;
+  }
+
   let testExpanded = $state(false);
   let uptimeNowMs = $state(Date.now());
+  let subscriptions = $state<SubscriptionProfile[]>([]);
+  let proxyConfigs = $state<ProxyConfigProfile[]>([]);
+  let sourceLoading = $state(true);
+  let activatingSourceId = $state<string | null>(null);
 
   const PROXY_MODES = [
     { value: 'global', label: '全局' },
     { value: 'rule',   label: '规则' },
     { value: 'direct', label: '直连' },
   ] as const;
-
-  // ── Lite mode state ──
-  let nodeDropdownOpen = $state(false);
-  let nodeSwitching = $state<string | null>(null);
 
   const networkProbeResult = $derived(guiState.networkProbe);
   const networkProbeLoading = $derived(guiState.networkProbeLoading);
@@ -85,6 +141,21 @@
     return parts.length > 0 ? parts.join(' · ') : '未知地区';
   }
 
+  async function refreshLiteSource() {
+    sourceLoading = true;
+    const [subscriptionResult, configResult] = await Promise.allSettled([
+      listSubscriptions(),
+      listProxyConfigs(),
+    ]);
+    subscriptions = subscriptionResult.status === 'fulfilled' ? subscriptionResult.value : [];
+    proxyConfigs = configResult.status === 'fulfilled' ? configResult.value : [];
+    sourceLoading = false;
+  }
+
+  onMount(() => {
+    void refreshLiteSource();
+  });
+
   // Speed derived from history
   const currentDown = $derived(
     overviewData.speedHistory.length > 0
@@ -96,10 +167,17 @@
       ? overviewData.speedHistory[overviewData.speedHistory.length - 1].up
       : 0,
   );
+  const sessionTotalBytes = $derived(overviewData.proxySessionTotalBytes);
+  const sessionTotalLabel = $derived(formatBytes(sessionTotalBytes));
+  const sessionDownLabel = $derived(formatBytes(overviewData.proxySessionDownBytes));
+  const sessionUpLabel = $derived(formatBytes(overviewData.proxySessionUpBytes));
+  const sessionUpShare = $derived(trafficShare(overviewData.proxySessionUpBytes, sessionTotalBytes));
+  const sessionDownShare = $derived(100 - sessionUpShare);
+  const sessionRingStyle = $derived(
+    `--traffic-up-share: ${sessionUpShare.toFixed(3)}%; --traffic-down-share: ${sessionDownShare.toFixed(3)}%;`,
+  );
 
-  const isConnected = $derived(guiState.isConnected);
   const proxyEnabled = $derived(guiState.isSystemProxyEnabled);
-  const isCoreRunning = $derived(guiState.isProcessRunning);
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
@@ -109,82 +187,123 @@
     '等待网络检测结果',
   );
 
-  const powerLabel = $derived(
-    guiState.isConnecting ? '启用中' :
-    guiState.isDisconnecting ? '关闭中' :
-    proxyEnabled ? '服务中' :
-    isCoreRunning ? '开启系统代理' :
-    '开启服务'
+  const activeProxyConfig = $derived(proxyConfigs.find((profile) => profile.active) ?? null);
+  const activeSubscription = $derived.by(() => {
+    const activeId = activeProxyConfig?.id;
+    if (!activeId) return null;
+    return subscriptions.find((subscription) => subscription.targetProxyConfigId === activeId) ?? null;
+  });
+  const sourceOptions = $derived(
+    subscriptions.map((subscription) => ({ value: subscription.id, label: subscription.name })),
   );
 
-  // Current node for display — config nodes as primary source,
-  // runtime data (selected, delay, alive) from policy groups when connected.
-  const activeNodeName = $derived.by(() => {
-    for (const g of guiState.policyGroups) {
-      if (g.selected) return g.selected;
-    }
-    const cn = guiState.configNodes;
-    return cn.find((n) => !n.isSelector)?.tag ?? cn[0]?.tag ?? null;
-  });
+  async function activateSource(id: string) {
+    if (!id || activatingSourceId !== null || activeSubscription?.id === id) return;
+    const subscription = subscriptions.find((item) => item.id === id);
+    if (!subscription || !subscription.enabled) return;
 
-  // Flat node list for dropdown — config nodes as base, runtime data when connected
-  const dropdownGroups = $derived.by(() => {
-    const groups = guiState.policyGroups;
-    if (groups.length > 0) {
-      return groups.map((g) => ({
-        name: g.name,
-        selected: g.selected,
-        nodes: g.outbounds.map((o) => ({ tag: o.tag, type: o.type, delayMs: o.delayMs, alive: o.alive })),
-      }));
-    }
-    // Fall back to config nodes (no core required)
-    const selectorNodes = guiState.configNodes.filter((n) => n.isSelector);
-    const regularNodes = guiState.configNodes.filter((n) => !n.isSelector);
-    if (selectorNodes.length > 0) {
-      return selectorNodes.map((s) => ({
-        name: s.tag,
-        selected: null as string | null,
-        nodes: regularNodes.map((n) => ({ tag: n.tag, type: n.protocol })),
-      }));
-    }
-    if (regularNodes.length > 0) {
-      return [{
-        name: '节点',
-        selected: null as string | null,
-        nodes: regularNodes.map((n) => ({ tag: n.tag, type: n.protocol })),
-      }];
-    }
-    return [];
-  });
-
-  // Close dropdown on outside click
-  let dropdownRef: HTMLDivElement | undefined = $state();
-
-  function closeDropdown(e: MouseEvent) {
-    if (dropdownRef && !dropdownRef.contains(e.target as Node)) {
-      nodeDropdownOpen = false;
-    }
-  }
-
-  $effect(() => {
-    if (nodeDropdownOpen) {
-      document.addEventListener('click', closeDropdown, true);
-    } else {
-      document.removeEventListener('click', closeDropdown, true);
-    }
-    return () => document.removeEventListener('click', closeDropdown, true);
-  });
-
-  async function handleNodeSelect(groupName: string, tag: string) {
-    if (nodeSwitching) return;
-    if (!isCoreRunning) return;
-    nodeSwitching = tag;
+    activatingSourceId = id;
     try {
-      await selectPolicy(groupName, tag);
-    } catch { /* non-blocking */ }
-    nodeSwitching = null;
-    nodeDropdownOpen = false;
+      let current = subscription;
+      let targetId = current.targetProxyConfigId;
+      const hasUsableTarget = targetId
+        ? proxyConfigs.some((profile) => profile.id === targetId && profile.content != null)
+        : false;
+
+      // A never-synced source is still a one-action choice: sync it first,
+      // then activate the generated config. Existing cached configs do not
+      // require network access merely to become active again.
+      if (!hasUsableTarget) {
+        current = await syncSubscription(id);
+        targetId = current.targetProxyConfigId;
+      }
+      if (!targetId) {
+        throw new Error('订阅尚未生成可用配置');
+      }
+
+      await setActiveProxyConfig(targetId);
+      await Promise.allSettled([
+        refreshLiteSource(),
+        guiState.refreshAll(),
+      ]);
+      toast.success(`已切换到 ${current.name}`);
+    } catch (error) {
+      toast.error(getAppErrorMessage(error, '切换订阅失败'));
+    } finally {
+      activatingSourceId = null;
+    }
   }
+
+  // Compact mode names the effective leaf outbound, not the policy group that
+  // happens to own it. Runtime `selected` values are authoritative for nested
+  // selectors and URLTest groups, so follow them recursively and never infer a
+  // winner from latency. This stays aligned with the Nodes page's runtime model.
+  const activeNodeSummary = $derived.by(() => {
+    const groups = guiState.policyGroups;
+    const finalOutbound = routeFinalOutbound(activeProxyConfig?.content);
+    const rootTag = finalOutbound
+      ?? groups.find((group) => group.name.toLowerCase() === 'proxy')?.name
+      ?? groups.find((group) => group.selected)?.name
+      ?? null;
+    const resolved = resolveEffectiveNodeSelection(groups, rootTag);
+
+    if (resolved.leafTag) {
+      const parsed = parseNodeName(resolved.leafTag);
+      const parentKind = resolved.leafParentKind?.toLowerCase().replaceAll('-', '_');
+      const urlTestSelected = parentKind === 'url_test' || parentKind === 'urltest';
+      return {
+        name: parsed.cleanName || resolved.leafTag,
+        flagCode: parsed.flagCode,
+        emoji: parsed.flagCode ? undefined : parsed.emoji,
+        meta: resolved.groupPath.length > 0
+          ? `归属：${resolved.groupPath.join(' → ')}${urlTestSelected ? ' · URLTest 实时选择' : ''}`
+          : '当前配置直接出站',
+      };
+    }
+
+    if (resolved.unresolvedGroupTag) {
+      return {
+        name: resolved.cycleDetected ? '策略链异常' : '等待内核选择',
+        flagCode: undefined,
+        emoji: undefined,
+        meta: resolved.cycleDetected
+          ? `循环策略链：${resolved.groupPath.join(' → ')}`
+          : `策略组：${resolved.groupPath.join(' → ') || resolved.unresolvedGroupTag} · 暂无实时选中节点`,
+      };
+    }
+
+    const fallback = guiState.configNodes.find((node) => !node.isSelector) ?? guiState.configNodes[0];
+    const parsed = fallback ? parseNodeName(fallback.tag) : null;
+    return {
+      name: parsed?.cleanName || fallback?.tag || null,
+      flagCode: parsed?.flagCode,
+      emoji: parsed?.flagCode ? undefined : parsed?.emoji,
+      meta: fallback ? '当前配置直接出站' : '暂无可用节点',
+    };
+  });
+  const activeNodeName = $derived(activeNodeSummary.name);
+  const activeNodeFlagCode = $derived(activeNodeSummary.flagCode);
+  const activeNodeEmoji = $derived(activeNodeSummary.emoji);
+  const activeNodeMeta = $derived(activeNodeSummary.meta);
+
+  const sourceName = $derived.by(() => {
+    if (sourceLoading) return '正在加载…';
+    if (activeSubscription) return activeSubscription.name;
+    if (activeProxyConfig) return activeProxyConfig.name;
+    return subscriptions.length > 0 ? '选择订阅' : '添加订阅';
+  });
+  const sourceMeta = $derived.by(() => {
+    if (sourceLoading) return '正在读取当前配置来源';
+    if (activeSubscription) {
+      const nodeCount = activeSubscription.nodeCount != null ? `${activeSubscription.nodeCount} 个节点` : '节点数未知';
+      return `${formatSubscriptionFormat(activeSubscription.format)} · ${nodeCount} · ${formatRelativeTime(activeSubscription.lastSyncAtUnixMs)}`;
+    }
+    if (activeProxyConfig) {
+      return `${activeProxyConfig.format || 'Zero'} · 本地/专业配置`;
+    }
+    if (subscriptions.length > 0) return `${subscriptions.length} 个订阅 · 请选择当前使用来源`;
+    return '暂无订阅来源';
+  });
 
   $effect(() => {
     const startedAt = guiState.connection?.startedAtUnixMs;
@@ -208,7 +327,7 @@
   );
   const coreStateLabel = $derived(
     proxyEnabled ? '服务中' :
-    isCoreRunning ? '监听中' :
+    guiState.isProcessRunning ? '监听中' :
     guiState.isStartingCore ? '启动中' :
     guiState.connection?.processState === 'failed' ? '失败' : '已停止',
   );
@@ -268,11 +387,9 @@
       </div>
     </div>
 
-    <!-- Row 1: Status cards -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 flex-shrink-0">
       <CoreStatusCard />
 
-      <!-- Proxy mode -->
       <div class="overview-card flex flex-col gap-2 overflow-hidden" style="min-height: 96px;">
         <div class="flex items-center justify-between flex-shrink-0">
           <span class="card-label">代理模式</span>
@@ -294,10 +411,7 @@
             aria-label="选择代理模式"
           >
             {#each PROXY_MODES as mode}
-              <SegmentedControl.Item
-                value={mode.value}
-                style="flex: 1;"
-              >
+              <SegmentedControl.Item value={mode.value} style="flex: 1;">
                 {mode.label}
               </SegmentedControl.Item>
             {/each}
@@ -305,10 +419,8 @@
         </div>
       </div>
 
-      <!-- Kernel version -->
       <KernelVersionCard />
 
-      <!-- TUN / Stack status (v0.0.5+) -->
       {#if store.isFeatureVisible('tun') || store.isFeatureVisible('systemStack')}
         <TunStackStatus />
       {/if}
@@ -369,7 +481,6 @@
         </div>
     </div>
 
-    <!-- Row 2: Self-test -->
     <div class="overview-card flex-shrink-0">
       <button class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
         <span class="card-label">系统自测</span>
@@ -429,7 +540,6 @@
       {/if}
     </div>
 
-    <!-- Row 3: real-time traffic uses the full available width. -->
     <div class="traffic-panel">
       <div class="w-full h-full overflow-hidden">
         <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
@@ -441,99 +551,195 @@
 {:else}
   <!-- ============ LITE MODE ============ -->
   <div class="lite-root animate-fade-in">
-
-    <!-- Node selector: only show when config is active or nodes are loaded -->
-    {#if hasConfig || hasNodes}
-    <div class="lite-node-wrap" bind:this={dropdownRef}>
-      <button class="lite-node-trigger" onclick={() => nodeDropdownOpen = !nodeDropdownOpen}>
-        <svg width="13" height="13" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="lite-node-icon">
-          <circle cx="5" cy="5" r="3"/><line x1="5" y1="0" x2="5" y2="1.2"/><line x1="5" y1="8.8" x2="5" y2="10"/><line x1="0" y1="5" x2="1.2" y2="5"/><line x1="8.8" y1="5" x2="10" y2="5"/>
-        </svg>
-        <span class="lite-node-current">
-          {activeNodeName ?? '暂无节点'}
-        </span>
-        <svg class="lite-chevron" class:open={nodeDropdownOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="3 4.5 6 7.5 9 4.5"/></svg>
-      </button>
-
-      {#if nodeDropdownOpen}
-        <div class="lite-node-dropdown">
-          {#each dropdownGroups as group}
-            <div class="lite-ngroup">
-              <div class="lite-ngroup-label">{group.name}</div>
-              {#each group.nodes as node}
-                <button
-                  class="lite-nitem {group.selected === node.tag ? 'active' : ''}"
-                  onclick={() => handleNodeSelect(group.name, node.tag)}
-                  disabled={nodeSwitching !== null || !isCoreRunning}
-                >
-                  <span class="lite-nitem-dot {group.selected === node.tag ? 'on' : ''}"></span>
-                  <span class="lite-nitem-name">{node.tag}</span>
-                  <span class="lite-nitem-type">{node.type}</span>
-                  {#if nodeSwitching === node.tag}
-                    <span class="lite-nitem-spin">⟳</span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          {/each}
-          {#if dropdownGroups.length === 0 || (dropdownGroups.length === 1 && dropdownGroups[0].nodes.length === 0)}
-            <div class="lite-node-empty">暂无节点数据</div>
-          {/if}
-          <button class="lite-node-manage" onclick={() => { nodeDropdownOpen = false; store.activeTab = 'nodes'; }}>
-            管理节点 →
-          </button>
+    <div class="lite-main">
+      <div
+        class="lite-power-orbit"
+        class:on={proxyEnabled}
+        class:idle={!proxyEnabled}
+        class:unsupported={!guiState.supportsTrafficStats}
+      >
+        <div
+          class="lite-session-traffic lite-metric-help lite-metric-help-below"
+          data-tooltip={guiState.supportsTrafficStats ? `本次总流量 ${sessionTotalLabel}` : '本次总流量不可用'}
+        >
+          <span class="sr-only">本次总流量：</span>
+          <strong>{guiState.supportsTrafficStats ? sessionTotalLabel : '—'}</strong>
         </div>
+
+        <div
+          class="lite-traffic-ring"
+          class:flowing={proxyEnabled && (currentUp > 0.001 || currentDown > 0.001)}
+          style={sessionRingStyle}
+          aria-hidden="true"
+        ></div>
+
+        <div class="lite-traffic-totals">
+          <span
+            class="lite-total-up lite-metric-help"
+            data-tooltip={guiState.supportsTrafficStats ? `本次上传 ${sessionUpLabel}` : '本次上传不可用'}
+          >
+            <span class="sr-only">本次上传：</span>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 7 6 3 10 7"/></svg>
+            <span>{guiState.supportsTrafficStats ? sessionUpLabel : '—'}</span>
+          </span>
+          <span
+            class="lite-total-down lite-metric-help"
+            data-tooltip={guiState.supportsTrafficStats ? `本次下载 ${sessionDownLabel}` : '本次下载不可用'}
+          >
+            <span class="sr-only">本次下载：</span>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 5 6 9 10 5"/></svg>
+            <span>{guiState.supportsTrafficStats ? sessionDownLabel : '—'}</span>
+          </span>
+        </div>
+
+        <button
+          class="lite-power"
+          class:on={proxyEnabled}
+          class:connecting={isPowerBusy}
+          onclick={() => proxyEnabled ? guiState.disconnect() : guiState.connect()}
+          disabled={isPowerBusy}
+          aria-label={proxyEnabled ? '关闭代理' : '开启代理'}
+          title={proxyEnabled ? '关闭代理' : '开启代理'}
+        >
+          {#if isPowerBusy}
+            <span class="lite-power-spin">⟳</span>
+          {:else}
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+              <line x1="12" y1="2" x2="12" y2="12"/>
+            </svg>
+          {/if}
+        </button>
+
+        <div class="lite-live-rates">
+          <span
+            class="lite-live-up lite-metric-help"
+            data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${proxyEnabled ? formatSpeed(currentUp) : '0 KB/s'}` : '实时上传速率不可用'}
+          >
+            <span class="sr-only">实时上传速率：</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 7 6 3 10 7"/></svg>
+            <span>{guiState.supportsTrafficStats && proxyEnabled ? formatSpeed(currentUp) : guiState.supportsTrafficStats ? '0 KB/s' : '—'}</span>
+          </span>
+          <span
+            class="lite-live-down lite-metric-help"
+            data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${proxyEnabled ? formatSpeed(currentDown) : '0 KB/s'}` : '实时下载速率不可用'}
+          >
+            <span class="sr-only">实时下载速率：</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 5 6 9 10 5"/></svg>
+            <span>{guiState.supportsTrafficStats && proxyEnabled ? formatSpeed(currentDown) : guiState.supportsTrafficStats ? '0 KB/s' : '—'}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="lite-mode-block">
+      <span class="lite-section-label">代理模式</span>
+      <SegmentedControl.Root
+        value={guiState.proxyMode?.currentMode ?? ''}
+        onValueChange={(value) => {
+          if (value === 'global' || value === 'rule' || value === 'direct') {
+            void guiState.setProxyMode(value);
+          }
+        }}
+        disabled={guiState.isSwitchingMode || !guiState.proxyMode}
+        class="lite-proxy-segment"
+        aria-label="选择代理模式"
+      >
+        {#each PROXY_MODES as mode}
+          <SegmentedControl.Item value={mode.value} style="flex: 1;">
+            {mode.label}
+          </SegmentedControl.Item>
+        {/each}
+      </SegmentedControl.Root>
+    </div>
+
+    <div class="lite-entry-list">
+      <div class="lite-entry lite-source-entry">
+        <span class="lite-entry-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>
+          </svg>
+        </span>
+        <span class="lite-entry-summary">
+          <span class="lite-entry-label">配置来源</span>
+          <span class="lite-entry-current">{sourceName}</span>
+          <span class="lite-entry-meta">{sourceMeta}</span>
+        </span>
+        <span class="lite-source-controls">
+          {#if subscriptions.length > 0}
+            <Select.Root
+              type="single"
+              value={activeSubscription?.id ?? ''}
+              items={sourceOptions}
+              disabled={sourceLoading || activatingSourceId !== null}
+              onValueChange={(value) => {
+                if (typeof value === 'string' && value) void activateSource(value);
+              }}
+            >
+              <Select.Trigger class="lite-source-select" aria-label="切换配置来源">
+                <Select.Value />
+              </Select.Trigger>
+              <Select.Content>
+                {#each subscriptions as subscription}
+                  <Select.Item
+                    value={subscription.id}
+                    label={subscription.name}
+                    disabled={!subscription.enabled}
+                  >
+                    {subscription.name}{subscription.id === activeSubscription?.id ? ' · 当前' : ''}
+                  </Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          {/if}
+          <button
+            type="button"
+            class="lite-manage-source"
+            onclick={() => (store.activeTab = 'subscriptions')}
+          >
+            {subscriptions.length > 0 ? '管理' : '添加'}
+          </button>
+        </span>
+      </div>
+
+      {#if hasConfig || hasNodes}
+        <button
+          type="button"
+          class="lite-entry"
+          onclick={() => (store.activeTab = 'nodes')}
+          aria-label="打开节点页面"
+        >
+          <span class="lite-entry-icon" aria-hidden="true">
+            <svg width="13" height="13" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="5" cy="5" r="3"/><line x1="5" y1="0" x2="5" y2="1.2"/><line x1="5" y1="8.8" x2="5" y2="10"/><line x1="0" y1="5" x2="1.2" y2="5"/><line x1="8.8" y1="5" x2="10" y2="5"/>
+            </svg>
+          </span>
+          <span class="lite-entry-summary">
+            <span class="lite-entry-label">当前节点</span>
+            <span class="lite-entry-current lite-node-current">
+              {#if activeNodeFlagCode}
+                <span
+                  class="lite-node-country-flag fi fi-{activeNodeFlagCode.toLowerCase()}"
+                  role="img"
+                  title="国旗 {activeNodeFlagCode}"
+                  aria-label="国旗 {activeNodeFlagCode}"
+                ></span>
+              {:else if activeNodeEmoji}
+                <span class="lite-node-emoji">{activeNodeEmoji}</span>
+              {/if}
+              <span class="lite-node-name-text">{activeNodeName ?? '暂无节点'}</span>
+            </span>
+            <span class="lite-entry-meta">{activeNodeMeta}</span>
+          </span>
+          <span class="lite-entry-action">节点</span>
+          <svg class="lite-entry-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><polyline points="4.5 3 7.5 6 4.5 9"/></svg>
+        </button>
       {/if}
     </div>
-    {/if}
-
-    <!-- Main row: power button centered as the sole focus -->
-    <div class="lite-main">
-
-      <!-- Center: big power button -->
-      <button
-        class="lite-power"
-        class:on={proxyEnabled}
-        class:connecting={isPowerBusy}
-        onclick={() => isConnected ? guiState.disconnect() : guiState.connect()}
-        disabled={isPowerBusy || (!isConnected && !guiState.canConnect)}
-        aria-label={isConnected ? '关闭服务' : isCoreRunning ? '开启系统代理' : '开启服务'}
-      >
-        {#if isPowerBusy}
-          <span class="lite-power-spin">⟳</span>
-        {:else}
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
-            <line x1="12" y1="2" x2="12" y2="12"/>
-          </svg>
-        {/if}
-        <span class="lite-power-label">{powerLabel}</span>
-      </button>
-    </div>
-
-    <!-- Inline real-time speed (replaces the old stats column + speed bar) -->
-    <div class="lite-speed-inline">
-      <span class="lite-speed-down">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 5 6 9 10 5"/></svg>
-        {formatSpeed(currentDown)}
-      </span>
-      <span class="lite-speed-up">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 7 6 3 10 7"/></svg>
-        {formatSpeed(currentUp)}
-      </span>
-    </div>
-
-    <!-- Traffic chart -->
-    <div class="lite-chart">
-      <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
-    </div>
-
   </div>
 {/if}
 
 <style>
-  /* ─────────────── Shared (Pro) ─────────────── */
-
   .status-strip {
     display: flex;
     align-items: center;
@@ -715,9 +921,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .network-strip-isp {
-    opacity: 0.8;
-  }
+  .network-strip-isp { opacity: 0.8; }
   .network-strip-empty {
     color: var(--muted-foreground);
     min-width: 0;
@@ -751,19 +955,13 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
   }
-  .network-strip-trigger-icon {
-    flex-shrink: 0;
-  }
-  .network-strip-trigger-icon.spinning {
-    animation: network-trigger-spin 0.8s linear infinite;
-  }
+  .network-strip-trigger-icon { flex-shrink: 0; }
+  .network-strip-trigger-icon.spinning { animation: network-trigger-spin 0.8s linear infinite; }
   .network-strip-trigger:hover:not(:disabled) {
     background: var(--muted);
     border-color: rgba(0, 0, 0, 0.18);
   }
-  :global(.dark) .network-strip-trigger:hover:not(:disabled) {
-    border-color: rgba(255, 255, 255, 0.16);
-  }
+  :global(.dark) .network-strip-trigger:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.16); }
   .network-strip-trigger:focus-visible {
     outline: none;
     border-color: var(--ring);
@@ -787,239 +985,506 @@
     color: var(--muted-foreground);
     background: var(--muted);
   }
-  .network-status-badge.loading {
-    animation: network-pulse 1.5s ease-in-out infinite;
-  }
+  .network-status-badge.loading { animation: network-pulse 1.5s ease-in-out infinite; }
   @keyframes network-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
 
-  /* ─────────────── Lite mode ─────────────── */
+  @property --traffic-up-share {
+    syntax: '<percentage>';
+    inherits: false;
+    initial-value: 50%;
+  }
 
   .lite-root {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
+    padding: 2px 0 8px;
   }
 
-  /* ---- Node selector ---- */
-  .lite-node-wrap { position: relative; flex-shrink: 0; }
+  .lite-main {
+    min-height: 210px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
 
-  .lite-node-trigger {
-    width: 100%;
+  .lite-power-orbit {
+    position: relative;
+    width: 240px;
+    height: 184px;
     display: flex;
     align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: visible;
+  }
+
+  .lite-session-traffic {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    z-index: 4;
+    min-width: 88px;
+    height: 18px;
+    padding: 0 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translateX(-50%);
+    border-radius: 9px;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    transition: opacity 0.2s ease, color 0.2s ease;
+  }
+
+  .lite-session-traffic strong {
+    font-weight: 700;
+  }
+
+  .lite-power-orbit.idle .lite-session-traffic {
+    color: var(--muted-foreground);
+    opacity: 0.72;
+  }
+
+  .lite-power-orbit.unsupported .lite-session-traffic {
+    opacity: 0.45;
+  }
+
+  .lite-traffic-ring {
+    --traffic-up: #22C55E;
+    --traffic-down: #3B82F6;
+    --traffic-up-share: 50%;
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    z-index: 1;
+    width: 164px;
+    height: 164px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: conic-gradient(
+      from 180deg,
+      var(--traffic-up) 0 var(--traffic-up-share),
+      var(--traffic-down) var(--traffic-up-share) 100%
+    );
+    pointer-events: none;
+    opacity: 0.92;
+    transition: --traffic-up-share 0.38s ease, opacity 0.2s ease, filter 0.2s ease;
+  }
+
+  .lite-traffic-ring::after {
+    content: '';
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    background: var(--background);
+  }
+
+  :global(.dark) .lite-traffic-ring {
+    --traffic-up: #4ADE80;
+    --traffic-down: #60A5FA;
+  }
+
+  .lite-power-orbit.idle .lite-traffic-ring {
+    opacity: 0.38;
+  }
+
+  .lite-power-orbit.on .lite-traffic-ring {
+    opacity: 0.92;
+  }
+
+  .lite-power-orbit.unsupported .lite-traffic-ring {
+    background: var(--border);
+    opacity: 0.42;
+  }
+
+  .lite-traffic-ring.flowing {
+    animation: lite-ring-flow 1.15s ease-in-out infinite;
+  }
+
+  @keyframes lite-ring-flow {
+    0%, 100% { filter: drop-shadow(0 0 0 rgba(59, 130, 246, 0)); }
+    50% { filter: drop-shadow(0 0 2.5px rgba(59, 130, 246, 0.24)); }
+  }
+
+  .lite-power {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 96px;
+    height: 96px;
+    margin-top: 18px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border);
+    background: color-mix(in srgb, var(--muted) 82%, var(--card));
+    color: var(--muted-foreground);
+    cursor: pointer;
+    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.055), inset 0 0 0 1px color-mix(in srgb, var(--background) 55%, transparent);
+    transition: transform 0.18s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .lite-power:hover:not(:disabled) {
+    border-color: rgba(34, 197, 94, 0.46);
+    color: #16A34A;
+    box-shadow: 0 7px 22px rgba(0, 0, 0, 0.07), 0 0 18px rgba(34, 197, 94, 0.09);
+  }
+
+  .lite-power:active:not(:disabled) { transform: scale(0.96); }
+  .lite-power:disabled { opacity: 0.48; cursor: not-allowed; }
+
+  .lite-power.on {
+    border-color: rgba(34, 197, 94, 0.42);
+    background: rgba(34, 197, 94, 0.075);
+    color: #16A34A;
+    box-shadow: 0 6px 22px rgba(34, 197, 94, 0.08), inset 0 0 0 1px rgba(34, 197, 94, 0.05);
+  }
+
+  .lite-power.on:hover:not(:disabled) {
+    border-color: rgba(239, 68, 68, 0.45);
+    color: var(--destructive, #EF4444);
+    box-shadow: 0 6px 22px rgba(239, 68, 68, 0.08);
+  }
+
+  :global(.dark) .lite-power {
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+  }
+  :global(.dark) .lite-power.on { color: #4ADE80; border-color: rgba(74,222,128,0.38); }
+  :global(.dark) .lite-power.on:hover:not(:disabled) { color: #F87171; border-color: rgba(248,113,113,0.42); }
+
+  .lite-power.connecting {
+    border-color: rgba(245, 158, 11, 0.48);
+    color: #F59E0B;
+  }
+
+  .lite-power-spin { font-size: 23px; animation: spin 0.8s linear infinite; }
+
+  .lite-traffic-totals {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .lite-total-up,
+  .lite-total-down {
+    position: absolute;
+    top: 82px;
+    width: 76px;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9.5px;
+    font-weight: 650;
+    font-family: var(--font-mono, monospace);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0.84;
+    transition: opacity 0.2s ease, color 0.2s ease;
+  }
+
+  .lite-total-up {
+    left: 0;
+    justify-content: flex-end;
+    color: #22C55E;
+    text-align: right;
+  }
+
+  .lite-total-down {
+    right: 0;
+    justify-content: flex-start;
+    color: #3B82F6;
+    text-align: left;
+  }
+
+  :global(.dark) .lite-total-up { color: #4ADE80; }
+  :global(.dark) .lite-total-down { color: #60A5FA; }
+
+  .lite-power-orbit.idle .lite-total-up,
+  .lite-power-orbit.idle .lite-total-down {
+    color: var(--muted-foreground);
+    opacity: 0.54;
+  }
+
+  .lite-power-orbit.unsupported .lite-total-up,
+  .lite-power-orbit.unsupported .lite-total-down {
+    opacity: 0.38;
+  }
+
+  .lite-live-rates {
+    position: absolute;
+    top: 188px;
+    left: 50%;
+    width: 174px;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    column-gap: 14px;
+    pointer-events: none;
+    font-family: var(--font-mono, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+
+  .lite-live-up,
+  .lite-live-down {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    opacity: 0.72;
+  }
+
+  .lite-live-up { justify-content: flex-end; }
+  .lite-live-down { justify-content: flex-start; }
+
+  .lite-power-orbit.on .lite-live-up {
+    color: #22C55E;
+    opacity: 0.86;
+  }
+
+  .lite-power-orbit.on .lite-live-down {
+    color: #3B82F6;
+    opacity: 0.86;
+  }
+
+  :global(.dark) .lite-power-orbit.on .lite-live-up { color: #4ADE80; }
+  :global(.dark) .lite-power-orbit.on .lite-live-down { color: #60A5FA; }
+
+  .lite-power-orbit.unsupported .lite-live-up,
+  .lite-power-orbit.unsupported .lite-live-down {
+    opacity: 0.38;
+  }
+
+  .lite-metric-help {
+    pointer-events: auto;
+  }
+
+  .lite-metric-help::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 7px);
+    z-index: 20;
+    max-width: 190px;
+    padding: 5px 7px;
+    transform: translate(-50%, 2px);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.12);
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: 0;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s ease;
+  }
+
+  .lite-metric-help-below::after {
+    top: calc(100% + 7px);
+    bottom: auto;
+    transform: translate(-50%, -2px);
+  }
+
+  .lite-metric-help:hover::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, 0);
+  }
+
+  .lite-mode-block {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .lite-section-label {
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+  :global(.lite-proxy-segment) { width: 100%; }
+
+  .lite-entry-list {
+    display: flex;
+    flex-direction: column;
     gap: 8px;
+    flex-shrink: 0;
+  }
+  .lite-entry {
+    width: 100%;
+    min-height: 58px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
     padding: 9px 12px;
     border-radius: 9px;
     border: 1px solid var(--border);
     background: var(--card);
     color: var(--foreground);
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: border-color 0.13s ease, box-shadow 0.13s ease;
-  }
-  .lite-node-trigger:hover { border-color: var(--ring, rgba(99,102,241,0.3)); }
-
-  .lite-node-icon { color: var(--muted-foreground); flex-shrink: 0; }
-  .lite-node-current { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .lite-chevron { flex-shrink: 0; transition: transform 0.2s ease; opacity: 0.5; }
-  .lite-chevron.open { transform: rotate(180deg); }
-
-  .lite-node-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    max-height: 280px;
-    overflow-y: auto;
-    border-radius: 9px;
-    border: 1px solid var(--border);
-    background: var(--popover, var(--card));
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-    z-index: 40;
-    padding: 4px 0;
-  }
-  :global(.dark) .lite-node-dropdown { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
-
-  .lite-ngroup { padding: 2px 0; }
-  .lite-ngroup:not(:last-child) { border-bottom: 1px solid var(--border); }
-
-  .lite-ngroup-label {
-    padding: 6px 14px 2px;
-    font-size: 10.5px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted-foreground);
-    opacity: 0.6;
-  }
-
-  .lite-nitem {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 14px;
-    border: none;
-    background: transparent;
-    color: var(--foreground);
-    font-size: 12.5px;
-    font-weight: 500;
-    cursor: pointer;
     text-align: left;
-    transition: background 0.1s ease;
+    transition: border-color 0.13s ease, box-shadow 0.13s ease, background 0.13s ease;
   }
-  .lite-nitem:hover { background: var(--muted); }
-  .lite-nitem.active { background: rgba(99,102,241,0.06); }
-  .lite-nitem:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .lite-nitem-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--muted-foreground); opacity: 0.2; flex-shrink: 0;
-    transition: all 0.15s ease;
+  button.lite-entry { cursor: pointer; }
+  button.lite-entry:hover {
+    border-color: var(--ring, rgba(99,102,241,0.3));
+    background: color-mix(in srgb, var(--card) 94%, var(--muted));
   }
-  .lite-nitem-dot.on { background: #22C55E; opacity: 1; }
-
-  .lite-nitem-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .lite-nitem-type {
-    font-size: 10.5px;
-    font-weight: 600;
-    color: var(--muted-foreground);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    opacity: 0.6;
+  button.lite-entry:focus-visible {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 16%, transparent);
   }
-
-  .lite-nitem-spin {
-    font-size: 13px; color: var(--muted-foreground);
-    animation: spin 0.8s linear infinite; flex-shrink: 0;
-  }
-
-  .lite-node-empty {
-    padding: 20px 14px;
-    text-align: center;
-    font-size: 12px;
-    color: var(--muted-foreground);
-    opacity: 0.5;
-  }
-
-  .lite-node-manage {
-    display: block;
-    width: 100%;
-    padding: 8px 14px;
-    border: none;
-    background: transparent;
-    color: var(--primary);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    text-align: center;
-    border-top: 1px solid var(--border);
-    transition: background 0.1s ease;
-  }
-  .lite-node-manage:hover { background: var(--muted); }
-
-  /* ---- Main row ---- */
-  .lite-main {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    flex-shrink: 0;
-    padding: 4px 0;
-  }
-
-  /* Big power button */
-  .lite-power {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    width: 88px;
-    height: 88px;
-    border-radius: 50%;
-    border: 2.5px solid var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    flex-shrink: 0;
-  }
-  .lite-power:hover:not(:disabled) {
-    border-color: rgba(34, 197, 94, 0.5);
-    color: #16A34A;
-    box-shadow: 0 0 20px rgba(34, 197, 94, 0.12);
-  }
-  .lite-power:active:not(:disabled) { transform: scale(0.96); }
-  .lite-power:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .lite-power.on {
-    border-color: rgba(34, 197, 94, 0.5);
-    background: rgba(34, 197, 94, 0.08);
-    color: #16A34A;
-  }
-  .lite-power.on:hover:not(:disabled) {
-    border-color: rgba(239, 68, 68, 0.5);
-    color: var(--destructive, #EF4444);
-    box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
-  }
-  :global(.dark) .lite-power.on { color: #4ADE80; border-color: rgba(74,222,128,0.4); }
-  :global(.dark) .lite-power.on:hover:not(:disabled) { color: #EF4444; border-color: rgba(239,68,68,0.4); }
-
-  .lite-power.connecting {
-    border-color: rgba(245, 158, 11, 0.5);
-    color: #F59E0B;
-  }
-
-  .lite-power-spin { font-size: 22px; animation: spin 0.8s linear infinite; }
-
-  .lite-power-label {
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
-
-  /* ---- Inline speed ---- */
-  .lite-speed-inline {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 18px;
-    flex-shrink: 0;
-  }
-
-  .lite-speed-down,
-  .lite-speed-up {
+  .lite-entry-icon {
+    width: 30px;
+    height: 30px;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    justify-content: center;
+    border-radius: 7px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    flex-shrink: 0;
+  }
+  .lite-entry-summary {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .lite-entry-label {
+    font-size: 9.5px;
+    color: var(--muted-foreground);
+  }
+  .lite-entry-current {
     font-size: 12.5px;
-    font-weight: 700;
-    font-family: var(--font-mono, monospace);
-    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lite-node-current {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .lite-node-country-flag {
+    display: inline-block;
+    width: 16px;
+    height: 12px;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 82%, transparent);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .lite-node-emoji {
+    flex-shrink: 0;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  }
+  .lite-node-name-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lite-entry-meta {
+    font-size: 9.5px;
+    color: var(--muted-foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lite-entry-action {
+    font-size: 10.5px;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+  .lite-entry-chevron {
+    color: var(--muted-foreground);
+    opacity: 0.55;
+    flex-shrink: 0;
+  }
+  .lite-source-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  :global(.lite-source-select) {
+    width: 138px;
+    height: 28px;
+    font-size: 11px;
+  }
+  .lite-manage-source {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 10.5px;
+    cursor: pointer;
+  }
+  .lite-manage-source:hover {
+    background: var(--muted);
     color: var(--foreground);
   }
-  .lite-speed-down { color: #3B82F6; }
-  .lite-speed-up { color: #22C55E; }
-  :global(.dark) .lite-speed-down { color: #60A5FA; }
-  :global(.dark) .lite-speed-up { color: #4ADE80; }
 
-  /* ---- Chart ---- */
-  .lite-chart {
-    flex: 1;
-    min-height: 100px;
-    overflow: hidden;
+  @media (max-width: 620px) {
+    .lite-source-entry {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .lite-source-controls {
+      width: 100%;
+      padding-left: 39px;
+    }
+    :global(.lite-source-select) {
+      flex: 1;
+      width: auto;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lite-traffic-ring.flowing,
+    .lite-power-spin {
+      animation: none;
+    }
   }
 
   @keyframes spin {

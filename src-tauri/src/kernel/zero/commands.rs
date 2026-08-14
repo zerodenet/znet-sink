@@ -118,13 +118,42 @@ pub async fn probe_outbound(
 }
 
 /// Close an active flow.
+///
+/// Flow rows are event-driven, so a flow may naturally complete between the
+/// user's click and the `flows.close` command reaching Zero. For the GUI,
+/// "already absent" satisfies the requested end state and is therefore
+/// normalized to an idempotent success. Transport failures and every other
+/// core error remain real failures.
 pub async fn close_connection(
     flow_id: String,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiConnectionCloseResult> {
     let flow_id = normalize_non_empty(flow_id, "flowId")?;
-    let value = run_command("flows.close", json!({ "flow_id": flow_id }), options).await?;
-    Ok(parse_connection_close(&value, flow_id))
+    match run_command(
+        "flows.close",
+        json!({ "flow_id": flow_id.clone() }),
+        options,
+    )
+    .await
+    {
+        Ok(value) => Ok(parse_connection_close(&value, flow_id)),
+        Err(error) if is_flow_already_completed_error(&error) => Ok(GuiConnectionCloseResult {
+            flow_id,
+            closed: true,
+            message: Some("flow already completed".to_string()),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {
+    if error.code != "core_error" {
+        return false;
+    }
+    let message = error.message.to_ascii_lowercase();
+    message.contains("flow `")
+        && message.contains("not found")
+        && message.contains("already completed")
 }
 
 /// Hot-apply a full config without restarting the kernel.
@@ -272,9 +301,11 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_config_apply_accepted, policy_probe_command_accepted, probe_ipc_options,
-        trace_route_params, PROBE_IPC_TIMEOUT_MS,
+        ensure_config_apply_accepted, is_flow_already_completed_error,
+        policy_probe_command_accepted, probe_ipc_options, trace_route_params,
+        PROBE_IPC_TIMEOUT_MS,
     };
+    use crate::errors::AppError;
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
@@ -340,5 +371,27 @@ mod tests {
         })));
         assert!(policy_probe_command_accepted(&json!({ "accepted": true })));
         assert!(policy_probe_command_accepted(&json!({})));
+    }
+
+    #[test]
+    fn flow_close_treats_only_already_completed_core_error_as_idempotent() {
+        let already_completed = AppError::core_response(json!({
+            "error": {
+                "message": "flow `22397` not found or already completed"
+            }
+        }));
+        assert!(is_flow_already_completed_error(&already_completed));
+
+        let unrelated_not_found = AppError::core_response(json!({
+            "error": {
+                "message": "policy group not found"
+            }
+        }));
+        assert!(!is_flow_already_completed_error(&unrelated_not_found));
+
+        let transport_failure = AppError::internal(
+            "flow `22397` not found or already completed",
+        );
+        assert!(!is_flow_already_completed_error(&transport_failure));
     }
 }

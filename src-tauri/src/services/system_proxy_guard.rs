@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::data_dir;
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult};
 use crate::services::system_proxy;
 
 // ── Marker persistence ──
@@ -134,21 +134,79 @@ pub fn enable_with_guard(host: &str, port: u16) -> AppResult<()> {
 }
 
 pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) -> AppResult<()> {
+    let path = marker_path()?;
+
+    // A repeated enable while we still own the current system proxy must be
+    // idempotent with respect to the original backup. Re-capturing here would
+    // save our own local proxy as `previous`, so a later disable would restore
+    // 127.0.0.1:<port> instead of the user's real pre-ZNet settings.
+    if path.exists() {
+        match read_marker(&path) {
+            Ok(marker) => {
+                let status = system_proxy::status()?;
+                if status.enabled && status.host == marker.host && status.port == marker.port {
+                    if marker.host == host && marker.port == port && marker.bypass == bypass {
+                        return Ok(());
+                    }
+
+                    write_marker(host, port, marker.previous.clone(), bypass)?;
+                    if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
+                        let rollback = system_proxy::enable_with_bypass(
+                            &marker.host,
+                            marker.port,
+                            &marker.bypass,
+                        );
+                        let _ = write_marker(
+                            &marker.host,
+                            marker.port,
+                            marker.previous,
+                            &marker.bypass,
+                        );
+                        if let Err(rollback_error) = rollback {
+                            return Err(AppError::internal(format!(
+                                "failed to retarget guarded system proxy: {}; rollback also failed: {}",
+                                error.message, rollback_error.message
+                            )));
+                        }
+                        return Err(error);
+                    }
+                    return Ok(());
+                }
+
+                // The marker is stale because the user or another application
+                // changed the system proxy after our enable. We no longer own
+                // that OS state; discard the old marker and capture the current
+                // settings as the new backup before taking ownership again.
+                remove_marker_file(&path);
+            }
+            Err(error) => {
+                eprintln!(
+                    "[ZNet] proxy guard: existing marker corrupt ({error}), replacing it before enable"
+                );
+                remove_marker_file(&path);
+            }
+        }
+    }
+
     let backup = system_proxy::capture_backup()?;
     // Persist the backup BEFORE touching the system. If the app dies right
     // after this line, cleanup_on_startup still has the backup to restore.
-    write_marker(host, port, backup, bypass)?;
+    write_marker(host, port, backup.clone(), bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
-        // Enable failed — the proxy was never actually changed, so the
-        // marker we just wrote would be misleading. Roll it back so a
-        // later disable doesn't try to restore a state that never
-        // existed (harmless, but keeps the bookkeeping honest).
         eprintln!(
-            "[ZNet] proxy guard: enable failed after writing marker, rolling marker back: {:?}",
+            "[ZNet] proxy guard: enable failed after writing marker, restoring backup: {:?}",
             error
         );
-        if let Ok(path) = marker_path() {
-            remove_marker_file(&path);
+        match system_proxy::restore(&backup) {
+            Ok(_) => remove_marker_file(&path),
+            Err(restore_error) => {
+                // Keep the marker so a later disable/startup cleanup can retry
+                // the restoration instead of losing the only known-good backup.
+                return Err(AppError::internal(format!(
+                    "failed to enable system proxy: {}; restoring previous proxy also failed: {}",
+                    error.message, restore_error.message
+                )));
+            }
         }
         return Err(error);
     }
@@ -188,7 +246,15 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
 
     write_marker(host, port, marker.previous.clone(), &marker.bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, &marker.bypass) {
+        let rollback =
+            system_proxy::enable_with_bypass(&marker.host, marker.port, &marker.bypass);
         let _ = write_marker(&marker.host, marker.port, marker.previous, &marker.bypass);
+        if let Err(rollback_error) = rollback {
+            return Err(AppError::internal(format!(
+                "failed to retarget guarded system proxy: {}; rollback also failed: {}",
+                error.message, rollback_error.message
+            )));
+        }
         return Err(error);
     }
     Ok(())
@@ -221,12 +287,19 @@ pub fn disable_with_guard() -> AppResult<()> {
         "[ZNet] proxy guard: restoring user proxy (was set to {}:{})",
         marker.host, marker.port
     );
-    if let Err(e) = system_proxy::restore(&marker.previous) {
+    if let Err(restore_error) = system_proxy::restore(&marker.previous) {
         eprintln!(
             "[ZNet] proxy guard: failed to restore previous proxy: {:?}, falling back to disable",
-            e
+            restore_error
         );
-        let _ = system_proxy::disable();
+        if let Err(disable_error) = system_proxy::disable() {
+            // Do not delete the marker when both restoration paths fail. It is
+            // the only durable recovery point and a later retry may succeed.
+            return Err(AppError::internal(format!(
+                "failed to restore previous proxy: {}; fallback disable also failed: {}",
+                restore_error.message, disable_error.message
+            )));
+        }
     }
     remove_marker_file(&path);
     Ok(())

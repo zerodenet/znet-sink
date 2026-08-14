@@ -31,9 +31,8 @@
   // View state
   type ViewMode = 'list' | 'grid';
   const VIEW_MODE_KEY = 'znet-nodes-view-mode';
-  let viewMode = $state<ViewMode>(store.uiMode === 'lite' ? 'list' : 'grid');
+  let viewMode = $state<ViewMode>('grid');
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
-  let isLite = $derived(store.uiMode === 'lite');
   let searchQuery = $state('');
   let selectedGroup = $state<string | null>(null);
 
@@ -194,7 +193,7 @@
   }
 
   onMount(() => {
-    viewMode = isLite ? 'list' : loadViewMode();
+    viewMode = loadViewMode();
     void refreshNodeScreen('mount');
     void listen<ProbeJobSnapshot>('client-core:probe-job-updated', (event) => {
       handleProbeJobUpdate(event.payload);
@@ -627,7 +626,6 @@
       isCoreAvailable={isCoreAvailable}
       {searchQuery}
       {viewMode}
-      {isLite}
       probing={probingRequested}
       {probeProgress}
       canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && plannedProbeTargets.nodes.length > 0}
@@ -966,4 +964,3 @@
     }
   }
 </style>
-

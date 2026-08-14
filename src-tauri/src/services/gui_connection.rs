@@ -49,12 +49,9 @@ pub async fn connect(
     } else {
         let process = core_process::start(app_handle.clone(), state.clone())?;
         if process.state != CoreProcessState::Running {
-            return build_status(
-                state.inner(),
-                "failed",
-                Some("core process did not enter running state".to_string()),
-            )
-            .await;
+            return Err(AppError::internal(
+                "core process did not enter running state",
+            ));
         }
     }
 
@@ -62,22 +59,17 @@ pub async fn connect(
         Ok(health) => health,
         Err(error) => {
             cleanup_failed_connect(state.clone());
-            return build_status(
-                state.inner(),
-                "failed",
-                Some(format!("core readiness check failed: {}", error.message)),
-            )
-            .await;
+            return Err(AppError::internal(format!(
+                "core readiness check failed: {}",
+                error.message
+            )));
         }
     };
     if !health.healthy {
         cleanup_failed_connect(state.clone());
-        return build_status(
-            state.inner(),
-            "failed",
-            Some("core health check reported unhealthy".to_string()),
-        )
-        .await;
+        return Err(AppError::internal(
+            "core health check reported unhealthy",
+        ));
     }
 
     let (host, port) = local_proxy_endpoint(state.inner())?;
@@ -93,25 +85,18 @@ pub async fn connect(
     .map_err(|error| AppError::internal(format!("local proxy probe thread panicked: {error}")))?
     {
         cleanup_failed_connect(state.clone());
-        return build_status(
-            state.inner(),
-            "failed",
-            Some(format!(
-                "local proxy endpoint is not ready: {}",
-                error.message
-            )),
-        )
-        .await;
+        return Err(AppError::internal(format!(
+            "local proxy endpoint is not ready: {}",
+            error.message
+        )));
     }
 
     if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass) {
         cleanup_failed_connect(state.clone());
-        return build_status(
-            state.inner(),
-            "failed",
-            Some(format!("failed to enable system proxy: {}", error.message)),
-        )
-        .await;
+        return Err(AppError::internal(format!(
+            "failed to enable system proxy: {}",
+            error.message
+        )));
     }
 
     let status = build_status(state.inner(), "connected", None)
@@ -120,6 +105,16 @@ pub async fn connect(
             active_proxy_config_id,
             ..status
         })?;
+    if !status.connected {
+        cleanup_failed_connect(state.clone());
+        return Err(AppError::internal(
+            status
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "system proxy did not enter the managed connected state".to_string()),
+        ));
+    }
+
     network_probe::emit_host_network_changed(&app_handle, "system_proxy.enabled");
     Ok(status)
 }
@@ -128,24 +123,13 @@ pub async fn disconnect(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<GuiConnectionStatus> {
-    let proxy_result = system_proxy_guard::disable_with_guard();
-    let proxy_changed = proxy_result.is_ok();
+    // Disconnect is intentionally proxy-only. The managed kernel remains
+    // available so Lite can reconnect quickly; kernel lifecycle is not tied
+    // to the big proxy switch.
+    system_proxy_guard::disable_with_guard()?;
 
-    let error = proxy_result.err().map(|error| error.message);
-
-    let status = build_status(
-        state.inner(),
-        if error.is_some() {
-            "failed"
-        } else {
-            "disconnected"
-        },
-        error,
-    )
-    .await?;
-    if proxy_changed {
-        network_probe::emit_host_network_changed(&app_handle, "system_proxy.disabled");
-    }
+    let status = build_status(state.inner(), "disconnected", None).await?;
+    network_probe::emit_host_network_changed(&app_handle, "system_proxy.disabled");
     Ok(status)
 }
 
@@ -154,7 +138,15 @@ async fn build_status(
     stage: &'static str,
     error: Option<String>,
 ) -> AppResult<GuiConnectionStatus> {
-    let process = core_process::refresh_status(state)?;
+    let mut process = core_process::refresh_status(state)?;
+    // PID is the identity of the Child currently managed by this GUI, not a
+    // historical process identifier and not a health-probe result. A watchdog
+    // transition can briefly leave a stale pid in its internal status after
+    // the child is gone; never project that stale identity into GUI state.
+    if process.state != CoreProcessState::Running {
+        process.pid = None;
+    }
+
     let adapter = ZeroAdapter::new();
     let opts = default_ipc_opts(state);
     let health = adapter.readiness_health(opts).await.ok();
@@ -165,19 +157,28 @@ async fn build_status(
     let core_available = process.state == CoreProcessState::Running
         || health.as_ref().is_some_and(|health| health.healthy);
     let mut system_proxy = system_proxy::status().ok();
-    if !core_available
-        && system_proxy.as_ref().is_some_and(|proxy| {
-            proxy.enabled && proxy.host == local_proxy_host && proxy.port == local_proxy_port
-        })
-    {
+    let mut system_proxy_owned = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+
+    // If our guarded system proxy survives while the local core is no longer
+    // available, restore the user's previous proxy immediately. A raw OS proxy
+    // that the user configured independently is never treated as ours here.
+    if !core_available && system_proxy_owned {
         let _ = system_proxy_guard::disable_with_guard();
         system_proxy = system_proxy::status().ok();
+        system_proxy_owned = false;
     }
+
     let connected = core_available
         && health.as_ref().is_some_and(|health| health.healthy)
-        && system_proxy.as_ref().is_some_and(|proxy| {
-            proxy.enabled && proxy.host == local_proxy_host && proxy.port == local_proxy_port
-        });
+        && system_proxy_owned;
+
+    // GuiConnectionStatus describes the GUI-managed connection, not the raw
+    // Windows proxy registry. Keep host/port for diagnostics, but expose
+    // `enabled` as ownership by the crash-safe guard. Raw OS status remains
+    // available through the dedicated system_proxy_status command.
+    if let Some(proxy) = system_proxy.as_mut() {
+        proxy.enabled = system_proxy_owned;
+    }
 
     Ok(GuiConnectionStatus {
         connected,

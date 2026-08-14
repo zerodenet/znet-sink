@@ -182,7 +182,11 @@
     }
   }
 
-  function handleOverlayClick(event: MouseEvent) {
+  // Decide backdrop dismissal at the start of the pointer gesture. Dynamic
+  // modal content may resize/recenter between pointer-down and click; using a
+  // click handler can then misclassify an interaction that started inside the
+  // dialog as a backdrop click after the dialog moved under the pointer.
+  function handleOverlayPointerDown(event: PointerEvent) {
     if (event.target === event.currentTarget && !closeDisabled) {
       onClose();
     }
@@ -196,7 +200,7 @@
     class="dm-overlay"
     class:dm-overlay-fullscreen={fullscreen}
     role="presentation"
-    onclick={handleOverlayClick}
+    onpointerdown={handleOverlayPointerDown}
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div

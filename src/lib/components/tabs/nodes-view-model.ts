@@ -220,6 +220,76 @@ export function buildSections(options: {
   return sections;
 }
 
+export interface EffectiveNodeSelection {
+  /** Final non-policy outbound selected by the runtime chain. */
+  leafTag?: string;
+  /** Policy groups traversed from the configured root to the leaf. */
+  groupPath: string[];
+  /** Kind of the policy group that directly selected the leaf. */
+  leafParentKind?: string;
+  /** Group whose runtime selection is missing or cyclic. */
+  unresolvedGroupTag?: string;
+  cycleDetected: boolean;
+}
+
+/**
+ * Resolve a configured outbound through any number of nested policy groups.
+ *
+ * `selected` is runtime state for selector / URLTest / fallback-style groups;
+ * following that chain is the only truthful way for compact UI to name the
+ * actual leaf outbound. Never infer an automatic group's winner from latency.
+ */
+export function resolveEffectiveNodeSelection(
+  groups: PolicyGroup[],
+  rootTag: string | null | undefined,
+): EffectiveNodeSelection {
+  if (!rootTag) return { groupPath: [], cycleDetected: false };
+
+  const groupsByName = new Map(groups.map((group) => [group.name, group]));
+  const visiting = new Set<string>();
+  const groupPath: string[] = [];
+  let currentTag = rootTag;
+  let leafParentKind: string | undefined;
+
+  while (currentTag) {
+    const group = groupsByName.get(currentTag);
+    if (!group) {
+      return {
+        leafTag: currentTag,
+        groupPath,
+        leafParentKind,
+        cycleDetected: false,
+      };
+    }
+
+    if (visiting.has(currentTag)) {
+      return {
+        groupPath,
+        leafParentKind,
+        unresolvedGroupTag: currentTag,
+        cycleDetected: true,
+      };
+    }
+
+    visiting.add(currentTag);
+    groupPath.push(currentTag);
+    leafParentKind = group.kind;
+
+    if (!group.selected) {
+      return {
+        groupPath,
+        leafParentKind,
+        unresolvedGroupTag: currentTag,
+        cycleDetected: false,
+      };
+    }
+
+    currentTag = group.selected;
+  }
+
+  return { groupPath, leafParentKind, cycleDetected: false };
+}
+
 export function getActiveNodeTag(
   groups: PolicyGroup[],
   selectedGroup: string | null = null,

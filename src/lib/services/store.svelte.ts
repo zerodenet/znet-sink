@@ -11,7 +11,7 @@ import type { InteractionSurfaceItem } from '$lib/types/capability';
 export type UIMode = 'lite' | 'pro';
 export type SettingsSection = 'general' | 'core' | 'config' | 'about';
 
-const LITE_MODE_NAV = new Set(['overview', 'subscriptions', 'logs', 'settings']);
+const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'settings']);
 
 class AppStateStore {
   isInitialized = $state(false);
@@ -112,7 +112,7 @@ class AppStateStore {
   openSettings(section: SettingsSection = 'core') {
     this.isInitialized = true;
     this.activeTab = 'settings';
-    this.settingsSection = section;
+    this.settingsSection = this.uiMode === 'lite' && section === 'config' ? 'general' : section;
   }
 
   async switchUIMode(mode: UIMode) {
@@ -121,6 +121,7 @@ class AppStateStore {
     this.isSwitchingUiMode = true;
     const previousMode = this.uiMode;
     const previousTab = this.activeTab;
+    const previousSettingsSection = this.settingsSection;
     console.time('[ZNet] switchUIMode');
 
     // Optimistic update so the UI responds instantly.
@@ -133,6 +134,12 @@ class AppStateStore {
     // burst of now-restricted IPC commands while the mode switch is pending.
     if (mode === 'lite' && !LITE_MODE_NAV.has(this.activeTab)) {
       this.activeTab = 'overview';
+    }
+    // The live kernel config editor is Pro-only even though Settings itself is
+    // shared. Move to a safe section before the backend mode flips so the
+    // editor cannot issue a now-restricted core.config request during teardown.
+    if (mode === 'lite' && this.settingsSection === 'config') {
+      this.settingsSection = 'general';
     }
 
     try {
@@ -155,6 +162,7 @@ class AppStateStore {
       console.timeEnd('[ZNet] switchUIMode');
       this.uiMode = previousMode;
       this.activeTab = previousTab;
+      this.settingsSection = previousSettingsSection;
       if (browser) {
         localStorage.setItem('znet-ui-mode', previousMode);
       }

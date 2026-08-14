@@ -14,7 +14,6 @@
     isCoreAvailable: boolean;
     searchQuery: string;
     viewMode: ViewMode;
-    isLite: boolean;
     probing: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
@@ -30,7 +29,6 @@
     isCoreAvailable,
     searchQuery,
     viewMode,
-    isLite,
     probing,
     probeProgress,
     canProbeAll,
@@ -77,42 +75,40 @@
       />
     </div>
 
-    {#if !isLite}
-      <SegmentedControl.Root
-        value={viewMode}
-        onValueChange={(value) => onViewModeChange(value as ViewMode)}
-        aria-label="节点显示方式"
+    <SegmentedControl.Root
+      value={viewMode}
+      onValueChange={(value) => onViewModeChange(value as ViewMode)}
+      aria-label="节点显示方式"
+    >
+      <SegmentedControl.Item
+        value="list"
+        size="icon"
+        title={'列表视图'}
+        aria-label={'列表视图'}
       >
-        <SegmentedControl.Item
-          value="list"
-          size="icon"
-          title={'列表视图'}
-          aria-label={'列表视图'}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="8" y1="6" x2="21" y2="6"></line>
-            <line x1="8" y1="12" x2="21" y2="12"></line>
-            <line x1="8" y1="18" x2="21" y2="18"></line>
-            <line x1="3" y1="6" x2="3.01" y2="6"></line>
-            <line x1="3" y1="12" x2="3.01" y2="12"></line>
-            <line x1="3" y1="18" x2="3.01" y2="18"></line>
-          </svg>
-        </SegmentedControl.Item>
-        <SegmentedControl.Item
-          value="grid"
-          size="icon"
-          title={'网格视图'}
-          aria-label={'网格视图'}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <rect x="3" y="3" width="7" height="7"></rect>
-            <rect x="14" y="3" width="7" height="7"></rect>
-            <rect x="3" y="14" width="7" height="7"></rect>
-            <rect x="14" y="14" width="7" height="7"></rect>
-          </svg>
-        </SegmentedControl.Item>
-      </SegmentedControl.Root>
-    {/if}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="8" y1="6" x2="21" y2="6"></line>
+          <line x1="8" y1="12" x2="21" y2="12"></line>
+          <line x1="8" y1="18" x2="21" y2="18"></line>
+          <line x1="3" y1="6" x2="3.01" y2="6"></line>
+          <line x1="3" y1="12" x2="3.01" y2="12"></line>
+          <line x1="3" y1="18" x2="3.01" y2="18"></line>
+        </svg>
+      </SegmentedControl.Item>
+      <SegmentedControl.Item
+        value="grid"
+        size="icon"
+        title={'网格视图'}
+        aria-label={'网格视图'}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="3" y="3" width="7" height="7"></rect>
+          <rect x="14" y="3" width="7" height="7"></rect>
+          <rect x="3" y="14" width="7" height="7"></rect>
+          <rect x="14" y="14" width="7" height="7"></rect>
+        </svg>
+      </SegmentedControl.Item>
+    </SegmentedControl.Root>
 
     <button
       class="probe-all-btn"
