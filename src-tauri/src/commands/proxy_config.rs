@@ -2,6 +2,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::errors::AppResult;
 use crate::models::proxy_config::{ProxyConfigImport, ProxyConfigProfile, ProxyConfigUpsert};
+use crate::services::common::lock;
 use crate::services::{interaction_mode, proxy_config};
 use crate::state::app_state::AppState;
 
@@ -41,7 +42,22 @@ pub async fn proxy_config_set_active(
     id: String,
 ) -> AppResult<ProxyConfigProfile> {
     let state = app_handle.state::<AppState>();
-    interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
+
+    // Generic proxy-config activation remains Pro-only. Lite may activate
+    // only a target that currently belongs to an enabled subscription. This
+    // is the implementation detail behind the user-facing source selector;
+    // arbitrary local/imported profiles remain unavailable to Lite.
+    let subscription_authorized = {
+        let subscriptions = lock(state.subscriptions(), "subscription")?;
+        subscriptions.iter().any(|subscription| {
+            subscription.enabled
+                && subscription.target_proxy_config_id.as_deref() == Some(id.as_str())
+        })
+    };
+    if !subscription_authorized {
+        interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
+    }
+
     proxy_config::activate_runtime(app_handle.clone(), id).await
 }
 

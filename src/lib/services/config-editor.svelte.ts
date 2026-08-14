@@ -1,5 +1,4 @@
 import {
-  getCoreConfig,
   getCoreRuntime,
   getCoreStats,
   guiValidateConfig,
@@ -7,6 +6,13 @@ import {
   guiPlanApplyConfig,
   getGuiZeroCapabilities,
 } from '$lib/services/core';
+import { listProxyConfigs } from '$lib/services/config';
+import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
+import {
+  getConfigEditorErrorMessage,
+  normalizeConfigValidationError,
+  normalizeConfigValidationResponse,
+} from '$lib/services/config-validation';
 import { success, warning } from '$lib/services/toast.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import type { ConfigPlanApplyResult, ConfigImpactItem } from '$lib/types/gui-api';
@@ -33,7 +39,7 @@ export type { ConfigPlanApplyResult, ConfigImpactItem };
 
 export interface ConfigEditorState {
   phase: EditorPhase;
-  /** The authoritative config snapshot from the kernel (read-only reference). */
+  /** The active persisted Zero base config used as the editable reference. */
   sourceJson: string;
   /** The user's local draft (editable). */
   draftJson: string;
@@ -47,6 +53,12 @@ export interface ConfigEditorState {
   lastAppliedAt: number | null;
   /** Plan-apply impact result (null until planApply is called). */
   planResult: ConfigPlanApplyResult | null;
+}
+
+function editableConfig(content: unknown): Record<string, unknown> | null {
+  return typeof content === 'object' && content !== null && !Array.isArray(content)
+    ? content as Record<string, unknown>
+    : null;
 }
 
 // ── Service ──
@@ -64,6 +76,17 @@ class ConfigEditorService {
   supportsPlanApply = $state(false);
 
   private _sourceObj: Record<string, unknown> | null = null;
+  private _sourceProfileId: string | null = null;
+  private _sourceProfileUpdatedAt: number | null = null;
+
+  constructor() {
+    // Lite and Pro mutate the same persisted proxy-config collection. Keep the
+    // editor attached to that authoritative active profile instead of letting
+    // its singleton draft silently survive a profile switch in another mode.
+    proxyConfigSignal.onActiveChanged(() => {
+      void this.reconcileExternalSource();
+    });
+  }
 
   get snapshot(): ConfigEditorState {
     return {
@@ -78,7 +101,9 @@ class ConfigEditorService {
     };
   }
 
-  /** Load the current config from the kernel as the authoritative source.
+  /** Load the active persisted Zero config as the editable source.
+   *  `core_get_config` intentionally returns a read-only ConfigSnapshot and
+   *  must never be fed back into `config.validate` / `config.apply`.
    *  Also probes kernel capabilities to determine plan_apply support. */
   async load(): Promise<void> {
     this.phase = 'idle';
@@ -87,8 +112,8 @@ class ConfigEditorService {
     this.planResult = null;
 
     try {
-      const [configResult, capsResult] = await Promise.allSettled([
-        getCoreConfig(),
+      const [profilesResult, capsResult] = await Promise.allSettled([
+        listProxyConfigs(),
         getGuiZeroCapabilities(),
       ]);
 
@@ -99,22 +124,68 @@ class ConfigEditorService {
         this.supportsPlanApply = false;
       }
 
-      // Load config
-      const config = configResult.status === 'fulfilled' ? configResult.value : null;
-      if (!config) {
-        this.lastError = '内核不可用，无法加载配置';
+      if (profilesResult.status === 'rejected') {
+        this.lastError = getConfigEditorErrorMessage(profilesResult.reason, '无法读取活动配置');
         this.phase = 'error';
         return;
       }
 
+      const activeProfile = profilesResult.value.find((profile) => profile.active);
+      if (!activeProfile) {
+        this._sourceProfileId = null;
+        this._sourceProfileUpdatedAt = null;
+        this.lastError = '当前没有活动代理配置';
+        this.phase = 'error';
+        return;
+      }
+
+      const config = editableConfig(activeProfile.content);
+      if (!config) {
+        this._sourceProfileId = activeProfile.id;
+        this._sourceProfileUpdatedAt = activeProfile.updatedAtUnixMs;
+        this.lastError = '当前活动代理配置没有可编辑的 Zero JSON 内容';
+        this.phase = 'error';
+        return;
+      }
+
+      this._sourceProfileId = activeProfile.id;
+      this._sourceProfileUpdatedAt = activeProfile.updatedAtUnixMs;
       this._sourceObj = config;
       this.sourceJson = JSON.stringify(config, null, 2);
       this.draftJson = this.sourceJson;
       this.dirty = false;
       this.phase = 'loaded';
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
+      this.lastError = getConfigEditorErrorMessage(e, '无法读取活动配置');
       this.phase = 'error';
+    }
+  }
+
+  /**
+   * Reconcile this singleton editor after another surface mutates proxy
+   * profiles. Unrelated non-active profile edits preserve the current draft;
+   * an active id/content revision change reloads the authoritative source.
+   */
+  private async reconcileExternalSource(): Promise<void> {
+    if (this.phase === 'idle' && this._sourceProfileId === null) return;
+
+    try {
+      const profiles = await listProxyConfigs();
+      const activeProfile = profiles.find((profile) => profile.active) ?? null;
+      const activeId = activeProfile?.id ?? null;
+      const activeUpdatedAt = activeProfile?.updatedAtUnixMs ?? null;
+
+      if (
+        activeId === this._sourceProfileId
+        && activeUpdatedAt === this._sourceProfileUpdatedAt
+      ) {
+        return;
+      }
+
+      await this.load();
+    } catch {
+      // Keep the last known editor state on a transient reconciliation error.
+      // A later profile mutation or explicit refresh will retry the comparison.
     }
   }
 
@@ -151,7 +222,7 @@ class ConfigEditorService {
   }
 
   /** Validate the current draft against the kernel without applying. */
-  async validate(): Promise<boolean> {
+  async validate(notifySuccess = true): Promise<boolean> {
     const config = this.parseDraft();
     if (!config) {
       this.validationErrors = [{ message: 'JSON 格式无效，请检查语法' }];
@@ -163,42 +234,22 @@ class ConfigEditorService {
     this.lastError = null;
 
     try {
-      const result = await guiValidateConfig(config) as Record<string, unknown>;
+      const result = normalizeConfigValidationResponse(await guiValidateConfig(config));
 
-      // Kernel returns { ok: true, result: ... } or an error
-      if (result['ok'] === false) {
-        const error = result['error'] as Record<string, unknown> | undefined;
-        this.validationErrors = [{
-          fieldPath: error?.['field_path'] as string | undefined,
-          message: (error?.['message'] as string) ?? '内核校验失败',
-        }];
+      if (!result.valid) {
+        this.validationErrors = result.errors;
         this.phase = 'editing';
         return false;
       }
 
-      // Check if result contains validation issues
-      const validationResult = result['result'] ?? result;
-      if (typeof validationResult === 'object' && validationResult !== null) {
-        const vr = validationResult as Record<string, unknown>;
-        if (vr['valid'] === false) {
-          const errors = Array.isArray(vr['errors']) ? vr['errors'] : [];
-          this.validationErrors = errors.map((e: unknown) => {
-            const err = e as Record<string, unknown>;
-            return {
-              fieldPath: err['field_path'] as string | undefined,
-              message: (err['message'] as string) ?? String(e),
-            };
-          });
-          this.phase = 'editing';
-          return false;
-        }
-      }
-
       this.phase = 'editing'; // Still editing, just validated OK
+      if (notifySuccess) {
+        success('配置校验通过');
+      }
       return true;
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
-      this.validationErrors = [{ message: this.lastError }];
+      this.lastError = getConfigEditorErrorMessage(e, '内核校验失败');
+      this.validationErrors = normalizeConfigValidationError(e);
       this.phase = 'editing';
       return false;
     }
@@ -234,7 +285,7 @@ class ConfigEditorService {
       this.phase = 'planned';
       return true;
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
+      this.lastError = getConfigEditorErrorMessage(e, '配置预检失败');
       this.phase = 'editing';
       return false;
     }
@@ -256,13 +307,14 @@ class ConfigEditorService {
       return false;
     }
 
-    // Step 1: Validate
+    // Step 1: Validate. Applying has its own success notification, so avoid
+    // showing a second toast when this validation is only a prerequisite.
     this.phase = 'validating';
     try {
-      const valid = await this.validate();
+      const valid = await this.validate(false);
       if (!valid) return false;
     } catch (e) {
-      this.lastError = `校验失败: ${e instanceof Error ? e.message : String(e)}`;
+      this.lastError = `校验失败: ${getConfigEditorErrorMessage(e, '内核校验失败')}`;
       this.phase = 'error';
       return false;
     }
@@ -309,7 +361,9 @@ class ConfigEditorService {
 
       if (result['ok'] === false) {
         const error = result['error'] as Record<string, unknown> | undefined;
-        this.lastError = (error?.['message'] as string) ?? '内核应用配置失败';
+        this.lastError = typeof error?.['message'] === 'string'
+          ? error['message']
+          : '内核应用配置失败';
         this.phase = 'error';
         warning(`配置应用失败: ${this.lastError}`);
         return false;
@@ -319,35 +373,40 @@ class ConfigEditorService {
       this.phase = 'applied';
       success('配置已热加载到运行中的内核');
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
+      this.lastError = getConfigEditorErrorMessage(e, '内核应用配置失败');
       this.phase = 'error';
       warning(`配置应用失败: ${this.lastError}`);
       return false;
     }
 
-    // Reconcile — reload the authoritative config
+    // Reconcile against the persisted active base config that gui_apply_config
+    // updates after the kernel accepts the effective configuration.
     await this.reconcile();
     return true;
   }
 
-  /** Re-query config + runtime from the kernel after apply to verify state. */
+  /** Re-query the active base config plus runtime state after apply. */
   private async reconcile(): Promise<void> {
     try {
-      // Re-fetch config to get the authoritative snapshot
-      const [configResult] = await Promise.allSettled([
-        getCoreConfig(),
+      const [profilesResult] = await Promise.allSettled([
+        listProxyConfigs(),
         // Also refresh runtime and stats in parallel so the UI is up-to-date
         getCoreRuntime(),
         getCoreStats(),
       ]);
 
-      if (configResult.status === 'fulfilled') {
-        const config = configResult.value;
-        this._sourceObj = config;
-        this.sourceJson = JSON.stringify(config, null, 2);
-        this.draftJson = this.sourceJson;
-        this.dirty = false;
-        this.phase = 'loaded';
+      if (profilesResult.status === 'fulfilled') {
+        const activeProfile = profilesResult.value.find((profile) => profile.active);
+        const config = editableConfig(activeProfile?.content);
+        if (activeProfile && config) {
+          this._sourceProfileId = activeProfile.id;
+          this._sourceProfileUpdatedAt = activeProfile.updatedAtUnixMs;
+          this._sourceObj = config;
+          this.sourceJson = JSON.stringify(config, null, 2);
+          this.draftJson = this.sourceJson;
+          this.dirty = false;
+          this.phase = 'loaded';
+        }
       }
 
       // Refresh config-derived GUI state (node list, policy sidebar) so the
@@ -379,6 +438,8 @@ class ConfigEditorService {
     this.lastAppliedAt = null;
     this.planResult = null;
     this._sourceObj = null;
+    this._sourceProfileId = null;
+    this._sourceProfileUpdatedAt = null;
   }
 }
 

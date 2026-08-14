@@ -638,26 +638,6 @@ fn looks_like_zero_config(value: &Value) -> bool {
     KNOWN_KEYS.iter().any(|key| object.contains_key(*key))
 }
 
-#[warn(unused)]
-fn parse_zero_json_subscription_content(content: &str) -> AppResult<ParsedSubscriptionConfig> {
-    let content: serde_json::Value = serde_json::from_str(content).map_err(|error| AppError {
-        code: "invalid_argument",
-        message: format!("subscription JSON is invalid: {error}"),
-        details: None,
-    })?;
-    if !content.is_object() {
-        return Err(AppError::invalid_argument(
-            "subscription JSON must be an object",
-        ));
-    }
-
-    Ok(ParsedSubscriptionConfig {
-        content,
-        format: "zero-json".to_string(),
-        rule_providers: Vec::new(),
-    })
-}
-
 fn parse_base64_json_subscription_content(content: &str) -> AppResult<ParsedSubscriptionConfig> {
     let decoded = decode_base64(content)?;
     let decoded = String::from_utf8(decoded).map_err(|error| AppError {
@@ -2146,12 +2126,14 @@ rule-providers:
     }
 
     #[test]
-    fn auto_detect_accepts_raw_zero_json() {
-        let parsed =
+    fn auto_detect_rejects_raw_zero_json() {
+        let error =
             parse_subscription_content(r#"{"outbounds":[{"tag":"hk","type":"trojan"}]}"#, "auto")
-                .unwrap();
-        assert_eq!(parsed.format, "zero-json");
-        assert!(parsed.content.get("outbounds").is_some());
+                .unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        assert!(error
+            .message
+            .contains("plaintext Zero JSON subscriptions are not supported"));
     }
 
     #[test]

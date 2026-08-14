@@ -203,6 +203,17 @@ class OverviewDataStore {
   totalUpBytes = $state(0);
   totalDownBytes = $state(0);
 
+  // GUI proxy-session traffic. This intentionally follows system-proxy
+  // ownership rather than the Zero process lifetime: Lite disconnect keeps
+  // Zero running, but the next Lite connect must start a new 0-byte session.
+  proxySessionActive = $state(false);
+  proxySessionStartedAtUnixMs = $state<number | null>(null);
+  proxySessionUpBytes = $state(0);
+  proxySessionDownBytes = $state(0);
+  private _sessionLastTotalUp = 0;
+  private _sessionLastTotalDown = 0;
+  private _sessionHasBaseline = false;
+
   // Speed calculation baseline (delta-based, matching Rust build_traffic_snapshot)
   private _lastBytesUp = 0;
   private _lastBytesDown = 0;
@@ -210,6 +221,63 @@ class OverviewDataStore {
 
   get totalUpMB() { return this.totalUpBytes / 1_000_000; }
   get totalDownMB() { return this.totalDownBytes / 1_000_000; }
+  get proxySessionTotalBytes() { return this.proxySessionUpBytes + this.proxySessionDownBytes; }
+
+  beginProxySession() {
+    if (this.proxySessionActive) return;
+    this.proxySessionActive = true;
+    this.proxySessionStartedAtUnixMs = Date.now();
+    this.proxySessionUpBytes = 0;
+    this.proxySessionDownBytes = 0;
+    this._sessionLastTotalUp = this.totalUpBytes;
+    this._sessionLastTotalDown = this.totalDownBytes;
+    // If no real traffic sample has arrived yet, the default zero counters are
+    // not a valid baseline. Let the first real sample establish it without
+    // counting the kernel's pre-existing lifetime total into this GUI session.
+    this._sessionHasBaseline = this.isLive;
+  }
+
+  endProxySession() {
+    this.proxySessionActive = false;
+    this.proxySessionStartedAtUnixMs = null;
+    this._sessionHasBaseline = false;
+  }
+
+  cancelProxySession() {
+    this.proxySessionActive = false;
+    this.proxySessionStartedAtUnixMs = null;
+    this.proxySessionUpBytes = 0;
+    this.proxySessionDownBytes = 0;
+    this._sessionLastTotalUp = this.totalUpBytes;
+    this._sessionLastTotalDown = this.totalDownBytes;
+    this._sessionHasBaseline = false;
+  }
+
+  private applyProxySessionCounters(totalUp: number, totalDown: number) {
+    if (!this.proxySessionActive) return;
+
+    if (!this._sessionHasBaseline) {
+      this._sessionLastTotalUp = totalUp;
+      this._sessionLastTotalDown = totalDown;
+      this._sessionHasBaseline = true;
+      return;
+    }
+
+    // Core cumulative counters can reset if Zero restarts during one GUI proxy
+    // session. Treat a lower value as a new counter epoch and add the new value
+    // instead of losing traffic accumulated before the restart.
+    const upDelta = totalUp >= this._sessionLastTotalUp
+      ? totalUp - this._sessionLastTotalUp
+      : totalUp;
+    const downDelta = totalDown >= this._sessionLastTotalDown
+      ? totalDown - this._sessionLastTotalDown
+      : totalDown;
+
+    this.proxySessionUpBytes += Math.max(0, upDelta);
+    this.proxySessionDownBytes += Math.max(0, downDelta);
+    this._sessionLastTotalUp = totalUp;
+    this._sessionLastTotalDown = totalDown;
+  }
 
   /**
    * Apply a stats event.
@@ -265,6 +333,7 @@ class OverviewDataStore {
     this.activeConnections = connections;
     this.totalUpBytes = totalUp;
     this.totalDownBytes = totalDown;
+    this.applyProxySessionCounters(totalUp, totalDown);
   }
 
   applyRuntimeEvent(data: Record<string, unknown>) {

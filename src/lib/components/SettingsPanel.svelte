@@ -8,18 +8,18 @@
   let ActivePanel = $state<Component | null>(null);
   let panelLoadError = $state<string | null>(null);
 
-  $effect(() => {
-    if (store.activeTab === 'settings') {
-      activeSection = store.settingsSection;
-    }
-  });
-
-  const sections: Array<{ id: SettingsSection; label: string }> = [
+  const allSections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '通用' },
     { id: 'core',    label: '内核' },
     { id: 'config',  label: '配置' },
     { id: 'about',   label: '关于' }
   ];
+
+  const sections = $derived.by(() =>
+    store.uiMode === 'lite'
+      ? allSections.filter((section) => section.id !== 'config')
+      : allSections,
+  );
 
   const panelLoaders: Record<SettingsSection, () => Promise<{ default: Component }>> = {
     general: () => import('$lib/components/settings/GeneralSettingsPanel.svelte'),
@@ -29,7 +29,25 @@
   };
 
   $effect(() => {
+    if (store.activeTab === 'settings') {
+      activeSection = store.settingsSection;
+    }
+  });
+
+  // The live kernel config editor is backed by Pro-only core.config APIs.
+  // Never leave a Lite user on that section or mount its panel just to surface
+  // a mode-restricted IPC error as an apparent kernel failure.
+  $effect(() => {
+    if (store.uiMode === 'lite' && activeSection === 'config') {
+      activeSection = 'general';
+      store.settingsSection = 'general';
+    }
+  });
+
+  $effect(() => {
     const section = activeSection;
+    if (store.uiMode === 'lite' && section === 'config') return;
+
     ActivePanel = null;
     panelLoadError = null;
     void panelLoaders[section]()

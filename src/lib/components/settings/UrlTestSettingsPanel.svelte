@@ -83,7 +83,7 @@
             bind:value={tolerance}
             oninput={() => (saved = false)}
             disabled={saving}
-            class="tolerance-input"
+            class="w-24 font-mono"
             aria-label="URLTest 延迟容差"
           />
           <span class="unit">ms</span>
@@ -175,11 +175,6 @@
     flex-shrink: 0;
     align-items: center;
     gap: 6px;
-  }
-
-  .tolerance-input {
-    width: 96px;
-    font-family: var(--font-mono);
   }
 
   .unit {

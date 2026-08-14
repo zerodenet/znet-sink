@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { proxyConfigSignal } from './proxy-config-signal.svelte';
 import type {
   ProxyConfigProfile,
   ProxyConfigUpsert,
@@ -24,6 +25,11 @@ export type {
 // ── Proxy configs ──
 
 export async function listProxyConfigs(): Promise<ProxyConfigProfile[]> {
+  // Read the shared revision before the async boundary. When this function is
+  // called from a Svelte effect (ProfilesTab, config editor mount, etc.), the
+  // effect becomes dependent on successful proxy-config mutations no matter
+  // which interaction mode initiated them.
+  void proxyConfigSignal.revision;
   return invoke('proxy_config_list');
 }
 
@@ -32,19 +38,26 @@ export async function getProxyConfig(id: string): Promise<ProxyConfigProfile> {
 }
 
 export async function upsertProxyConfig(input: ProxyConfigUpsert): Promise<ProxyConfigProfile> {
-  return invoke('proxy_config_upsert', { input });
+  const profile = await invoke<ProxyConfigProfile>('proxy_config_upsert', { input });
+  proxyConfigSignal.markChanged(true);
+  return profile;
 }
 
 export async function importProxyConfig(input: ProxyConfigImport): Promise<ProxyConfigProfile> {
-  return invoke('proxy_config_import', { input });
+  const profile = await invoke<ProxyConfigProfile>('proxy_config_import', { input });
+  proxyConfigSignal.markChanged(true);
+  return profile;
 }
 
 export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfile> {
-  return invoke('proxy_config_set_active', { id });
+  const profile = await invoke<ProxyConfigProfile>('proxy_config_set_active', { id });
+  proxyConfigSignal.markChanged(true);
+  return profile;
 }
 
 export async function removeProxyConfig(id: string): Promise<void> {
-  return invoke('proxy_config_remove', { id });
+  await invoke('proxy_config_remove', { id });
+  proxyConfigSignal.markChanged(true);
 }
 
 // ── Subscriptions ──
@@ -62,11 +75,17 @@ export async function upsertSubscription(input: SubscriptionUpsert): Promise<Sub
 }
 
 export async function syncSubscription(id: string): Promise<SubscriptionProfile> {
-  return invoke('subscription_sync', { id });
+  const subscription = await invoke<SubscriptionProfile>('subscription_sync', { id });
+  // A sync can create/update the generated proxy profile and may hot-refresh
+  // the active target, so every config-backed surface must reconcile.
+  proxyConfigSignal.markChanged(true);
+  return subscription;
 }
 
 export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome> {
-  return invoke('subscription_sync_all');
+  const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
+  proxyConfigSignal.markChanged(true);
+  return outcome;
 }
 
 export async function removeSubscription(id: string): Promise<void> {

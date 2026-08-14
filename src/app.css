@@ -273,3 +273,21 @@ body {
 .dark .desk-card {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
 }
+
+/* Lite hero: keep cumulative upload/download values outside the 164px ring. */
+body .lite-root .lite-power-orbit {
+  width: 320px;
+}
+
+body .lite-root .lite-power-orbit .lite-total-up,
+body .lite-root .lite-power-orbit .lite-total-down {
+  width: 72px;
+}
+
+body .lite-root .lite-power-orbit .lite-total-up {
+  left: 0;
+}
+
+body .lite-root .lite-power-orbit .lite-total-down {
+  right: 0;
+}

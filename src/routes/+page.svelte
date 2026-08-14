@@ -4,6 +4,7 @@
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
+  import { overviewData } from '$lib/services/overview-data.svelte';
   import { initTheme, applyTheme } from '$lib/services/theme.svelte';
   import { updater } from '$lib/services/updater.svelte';
   import { fade, fly } from 'svelte/transition';
@@ -155,6 +156,20 @@
         updater.stopPeriodicChecks();
       });
     };
+  });
+
+  // A Lite traffic session follows ownership of the GUI-managed system proxy,
+  // not the Zero process lifetime. This effect lives at the app root so the
+  // session boundary remains correct even while the user browses another tab.
+  $effect(() => {
+    const proxyEnabled = guiState.isSystemProxyEnabled;
+    untrack(() => {
+      if (proxyEnabled) {
+        overviewData.beginProxySession();
+      } else if (overviewData.proxySessionActive) {
+        overviewData.endProxySession();
+      }
+    });
   });
 
   // Refresh runtime state when the core event stream signals a status change.

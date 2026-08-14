@@ -7,6 +7,7 @@ import {
   normalizeSelectedGroup,
   planProbeTargets,
   projectNestedGroupNodes,
+  resolveEffectiveNodeSelection,
   summarizeProbeProgress,
 } from '../src/lib/components/tabs/nodes-view-model.ts';
 import { flagCodeFromEmoji, parseNodeName } from '../src/lib/services/node-utils.ts';
@@ -139,6 +140,46 @@ const group = (name, tags, kind = 'selector', selected) => ({
   assert.deepEqual(filterNodes({ allNodes: [node('JP'), node('HK')], groups, query: '', selectedGroup: 'Proxy' }).map((item) => item.tag), ['HK', 'JP']);
   assert.equal(getActiveNodeTag(groups, 'Proxy'), 'JP');
   assert.equal(normalizeSelectedGroup('missing', groups), null);
+}
+
+{
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['Nested'], 'url_test', 'Nested'),
+    group('Nested', ['JP', 'US'], 'url_test', 'JP'),
+  ];
+  assert.deepEqual(resolveEffectiveNodeSelection(groups, 'Proxy'), {
+    leafTag: 'JP',
+    groupPath: ['Proxy', 'Auto', 'Nested'],
+    leafParentKind: 'url_test',
+    cycleDetected: false,
+  });
+}
+
+{
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['JP', 'US'], 'url_test'),
+  ];
+  assert.deepEqual(resolveEffectiveNodeSelection(groups, 'Proxy'), {
+    groupPath: ['Proxy', 'Auto'],
+    leafParentKind: 'url_test',
+    unresolvedGroupTag: 'Auto',
+    cycleDetected: false,
+  });
+}
+
+{
+  const groups = [
+    group('Proxy', ['Auto'], 'selector', 'Auto'),
+    group('Auto', ['Proxy'], 'url_test', 'Proxy'),
+  ];
+  assert.deepEqual(resolveEffectiveNodeSelection(groups, 'Proxy'), {
+    groupPath: ['Proxy', 'Auto'],
+    leafParentKind: 'url_test',
+    unresolvedGroupTag: 'Proxy',
+    cycleDetected: true,
+  });
 }
 
 {

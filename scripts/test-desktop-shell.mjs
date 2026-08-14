@@ -85,8 +85,15 @@ const segmentedItem = read('src/lib/components/AppSegmentedControl/Item.svelte')
 const appHeader = read('src/lib/components/AppHeader.svelte');
 const debugTab = read('src/lib/components/tabs/DebugTab.svelte');
 const coreConfigPanel = read('src/lib/components/settings/CoreConfigPanel.svelte');
+const settingsPanel = read('src/lib/components/SettingsPanel.svelte');
 const nodesGridCard = read('src/lib/components/tabs/NodesGridCard.svelte');
 const nodesGroupSidebar = read('src/lib/components/tabs/NodesGroupSidebar.svelte');
+const appStore = read('src/lib/services/store.svelte.ts');
+const overviewTab = read('src/lib/components/tabs/OverviewTab.svelte');
+const nodesTab = read('src/lib/components/tabs/NodesTab.svelte');
+const nodesToolbar = read('src/lib/components/tabs/NodesToolbar.svelte');
+const proxyConfigCommands = read('src-tauri/src/commands/proxy_config.rs');
+const configEditor = read('src/lib/services/config-editor.svelte.ts');
 const segmentedConsumers = [
   'src/lib/components/TitleBar.svelte',
   'src/lib/components/settings/AppConfigPanel.svelte',
@@ -146,6 +153,68 @@ assert.ok(
       !source.includes('filter-button'),
   ),
   'segmented control consumers should not retain page-level selected-state implementations',
+);
+assert.ok(
+  appStore.includes("'overview', 'nodes', 'subscriptions', 'logs', 'settings'"),
+  'Lite fallback navigation should expose the existing nodes page',
+);
+assert.ok(
+  settingsPanel.includes("store.uiMode === 'lite'") &&
+    settingsPanel.includes("section.id !== 'config'") &&
+    settingsPanel.includes("activeSection === 'config'") &&
+    appStore.includes("this.uiMode === 'lite' && section === 'config' ? 'general' : section") &&
+    appStore.includes("mode === 'lite' && this.settingsSection === 'config'"),
+  'Lite Settings must hide and never mount the Pro-only live kernel config editor',
+);
+assert.ok(
+  configEditor.includes("import { listProxyConfigs } from '$lib/services/config'") &&
+    configEditor.includes('profile.active') &&
+    configEditor.includes('activeProfile.content') &&
+    !configEditor.includes('getCoreConfig'),
+  'the Pro config editor must edit the active persisted Zero config, never the read-only core ConfigSnapshot',
+);
+assert.ok(
+  overviewTab.includes("store.activeTab = 'nodes'") &&
+    overviewTab.includes('当前节点') &&
+    overviewTab.includes('routeFinalOutbound(activeProxyConfig?.content)') &&
+    overviewTab.includes('parseNodeName(resolved.leafTag)') &&
+    overviewTab.includes('parsed.cleanName') &&
+    overviewTab.includes('fi fi-{activeNodeFlagCode.toLowerCase()}') &&
+    !overviewTab.includes('selectPolicy') &&
+    !overviewTab.includes('lite-node-dropdown') &&
+    !overviewTab.includes('dropdownGroups'),
+  'Lite Overview should resolve the effective leaf node, render its flag asset, and delegate management to NodesTab',
+);
+assert.ok(
+  overviewTab.includes("store.activeTab = 'subscriptions'") &&
+    overviewTab.includes('配置来源') &&
+    overviewTab.includes('listSubscriptions()') &&
+    overviewTab.includes('activateSource') &&
+    overviewTab.includes('syncSubscription(id)') &&
+    overviewTab.includes('setActiveProxyConfig(targetId)') &&
+    overviewTab.includes('<Select.Root') &&
+    overviewTab.includes('class="lite-proxy-segment"') &&
+    overviewTab.includes('class="lite-power-orbit"') &&
+    overviewTab.includes('class="lite-traffic-ring"') &&
+    overviewTab.includes('onclick={() => proxyEnabled ? guiState.disconnect() : guiState.connect()}') &&
+    !overviewTab.includes('class="lite-chart"'),
+  'Lite Overview should keep the graphical power surface, mode selector, and narrow subscription source chooser',
+);
+assert.ok(
+  proxyConfigCommands.includes('pub async fn proxy_config_set_active') &&
+    !proxyConfigCommands.includes('subscription_id: Option<String>') &&
+    proxyConfigCommands.includes('let subscription_authorized =') &&
+    proxyConfigCommands.includes('subscription.enabled') &&
+    proxyConfigCommands.includes('subscription.target_proxy_config_id.as_deref() == Some(id.as_str())') &&
+    proxyConfigCommands.includes('if !subscription_authorized') &&
+    proxyConfigCommands.includes('interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?'),
+  'Lite may activate only enabled subscription targets while the existing proxy activation IPC signature stays stable',
+);
+assert.ok(
+  !nodesTab.includes("store.uiMode === 'lite' ? 'list' : 'grid'") &&
+    !nodesTab.includes('isLite={') &&
+    !nodesToolbar.includes('isLite:'),
+  'NodesTab should keep the same view behavior and controls in Lite and Pro modes',
 );
 assert.ok(
   !/class="grid-card-wrap"[\s\S]{0,100}onmouseenter/.test(nodesGridCard) &&

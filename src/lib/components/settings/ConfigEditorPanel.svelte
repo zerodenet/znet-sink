@@ -120,7 +120,7 @@
     <div class="heading">
       <div class="title">内核配置编辑</div>
       <div class="desc">
-        编辑运行中内核的配置草稿。保存前自动校验，应用后自动对账。修改不会立即生效，直到点击「应用」。
+        编辑当前活动的 Zero 配置。保存前由运行中内核校验，应用后同步回活动配置并自动对账。
       </div>
     </div>
     <div class="actions">
@@ -374,7 +374,7 @@
     </div>
   {:else}
     <div class="empty-editor">
-      <span class="empty-text">点击刷新按钮加载内核当前配置</span>
+      <span class="empty-text">点击刷新按钮加载当前活动配置</span>
     </div>
   {/if}
 </div>
@@ -419,289 +419,215 @@
     flex-shrink: 0;
   }
 
-  /* Status bar */
   .status-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: var(--muted);
+    padding: 8px 10px;
     border: 1px solid var(--border);
-    flex-wrap: wrap;
+    border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .status-left {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .actions-bar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
   }
 
   .status-badge {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
+    padding: 2px 6px;
     border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    background: var(--muted);
   }
 
   .status-badge.ready {
-    background: rgba(34, 197, 94, 0.1);
-    color: #22C55E;
+    color: var(--primary);
   }
 
   .status-badge.editing {
-    background: rgba(59, 130, 246, 0.1);
-    color: #3B82F6;
+    color: var(--warning, #b45309);
+    background: color-mix(in srgb, var(--warning, #f59e0b) 10%, transparent);
   }
 
   .status-badge.loading {
-    background: rgba(234, 179, 8, 0.1);
-    color: #EAB308;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
   }
 
   .status-badge.success {
-    background: rgba(34, 197, 94, 0.1);
-    color: #22C55E;
-  }
-
-  .status-badge.planned {
-    background: rgba(59, 130, 246, 0.1);
-    color: #3B82F6;
+    color: var(--success, #16a34a);
+    background: color-mix(in srgb, var(--success, #22c55e) 10%, transparent);
   }
 
   .status-badge.error {
-    background: rgba(239, 68, 68, 0.1);
-    color: #EF4444;
+    color: var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  }
+
+  .status-badge.planned {
+    color: #7c3aed;
+    background: color-mix(in srgb, #7c3aed 10%, transparent);
   }
 
   .dirty-badge {
     font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 3px;
-    background: rgba(245, 158, 11, 0.1);
-    color: #F59E0B;
+    color: var(--warning, #b45309);
   }
 
   .applied-time {
-    font-size: 10px;
+    font-size: 9.5px;
     color: var(--muted-foreground);
-    font-family: var(--font-mono);
   }
 
-  .actions-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* Error panel */
   .error-panel {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 8px 10px;
-    border-radius: 6px;
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    background: rgba(239, 68, 68, 0.06);
+    gap: 5px;
+    padding: 9px 11px;
+    border: 1px solid color-mix(in srgb, var(--destructive) 25%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--destructive) 5%, transparent);
   }
 
   .error-title {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
+    gap: 5px;
+    font-size: 11px;
     font-weight: 600;
-    color: #EF4444;
+    color: var(--destructive);
   }
 
   .error-item {
     display: flex;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--foreground);
-    padding-left: 20px;
+    align-items: baseline;
+    gap: 7px;
+    padding-left: 19px;
+    font-size: 10.5px;
   }
 
   .error-field {
-    font-family: var(--font-mono);
-    color: #F59E0B;
-    flex-shrink: 0;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    color: var(--destructive);
+    opacity: 0.8;
+    white-space: nowrap;
   }
 
   .error-msg {
-    color: var(--muted-foreground);
-  }
-
-  /* Editor */
-  .editor-container {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    background: var(--card);
-    max-height: 480px;
-  }
-
-  .line-numbers {
-    display: flex;
-    flex-direction: column;
-    padding: 8px 6px 8px 8px;
-    background: var(--muted);
-    border-right: 1px solid var(--border);
-    user-select: none;
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-
-  .line-number {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 1.5;
-    color: var(--muted-foreground);
-    text-align: right;
-    min-width: 2em;
-    opacity: 0.5;
-  }
-
-  .editor-textarea {
-    flex: 1;
-    padding: 8px 10px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.5;
     color: var(--foreground);
-    background: transparent;
-    border: none;
-    outline: none;
-    resize: none;
-    min-height: 200px;
-    max-height: 480px;
-    tab-size: 2;
-    white-space: pre;
-    overflow: auto;
+    opacity: 0.8;
   }
 
-  .editor-textarea:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .empty-editor {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 40px;
-    border: 1px dashed var(--border);
-    border-radius: 6px;
-  }
-
-  .empty-text {
-    font-size: 12px;
-    color: var(--muted-foreground);
-  }
-
-  /* Plan-apply impact panel */
   .plan-panel {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
     padding: 10px 12px;
-    border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--card);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .plan-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 700;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
     color: var(--foreground);
+    padding-bottom: 2px;
   }
 
   .plan-section {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
   }
 
   .plan-section-title {
     display: flex;
     align-items: center;
-    gap: 5px;
-    font-size: 11px;
+    gap: 4px;
+    font-size: 10px;
     font-weight: 600;
-    padding: 3px 0;
+    padding: 2px 0;
   }
 
   .plan-section-title.hot {
-    color: #22C55E;
+    color: var(--success, #16a34a);
   }
 
   .plan-section-title.restart {
-    color: #F59E0B;
+    color: var(--warning, #b45309);
   }
 
   .plan-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 16px;
-    font-size: 10px;
-    font-weight: 700;
+    font-size: 9px;
     padding: 0 4px;
-    border-radius: 8px;
-    background: rgba(34, 197, 94, 0.15);
-    color: #22C55E;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--success, #22c55e) 12%, transparent);
   }
 
   .plan-count.restart {
-    background: rgba(245, 158, 11, 0.15);
-    color: #F59E0B;
+    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
   }
 
   .plan-item {
     display: flex;
     align-items: baseline;
-    gap: 6px;
-    font-size: 11px;
-    padding: 3px 0 3px 20px;
-    flex-wrap: wrap;
+    gap: 7px;
+    padding: 4px 7px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+  }
+
+  .plan-item.hot {
+    background: color-mix(in srgb, var(--success, #22c55e) 4%, transparent);
+  }
+
+  .plan-item.restart {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 4%, transparent);
   }
 
   .plan-item-section {
     font-weight: 600;
+    white-space: nowrap;
     color: var(--foreground);
-    flex-shrink: 0;
   }
 
   .plan-item-tags {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--muted-foreground);
-    background: var(--muted);
-    padding: 1px 4px;
-    border-radius: 3px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    color: var(--primary);
+    font-size: 9.5px;
   }
 
   .plan-item-detail {
     color: var(--muted-foreground);
-    font-size: 10px;
+    margin-left: auto;
+    text-align: right;
   }
 
   .plan-warnings {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding-top: 4px;
+    gap: 3px;
+    padding-top: 3px;
     border-top: 1px solid var(--border);
   }
 
@@ -710,26 +636,79 @@
     align-items: center;
     gap: 5px;
     font-size: 10px;
-    color: #F59E0B;
-    padding-left: 4px;
+    color: var(--warning, #b45309);
   }
 
   .plan-empty {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--muted-foreground);
-    text-align: center;
     padding: 4px 0;
   }
 
-  @media (max-width: 640px) {
-    .status-bar {
-      flex-direction: column;
-      align-items: flex-start;
-    }
+  .editor-container {
+    display: flex;
+    min-height: 360px;
+    max-height: calc(100vh - 320px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: var(--card);
+  }
 
-    .actions-bar {
-      width: 100%;
-      flex-wrap: wrap;
-    }
+  .line-numbers {
+    flex-shrink: 0;
+    width: 38px;
+    padding: 10px 7px;
+    text-align: right;
+    user-select: none;
+    overflow: hidden;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.55;
+    color: var(--muted-foreground);
+    opacity: 0.5;
+  }
+
+  .line-number {
+    height: calc(10.5px * 1.55);
+  }
+
+  .editor-textarea {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    border: none;
+    outline: none;
+    padding: 10px 12px;
+    margin: 0;
+    background: transparent;
+    color: var(--foreground);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.55;
+    tab-size: 2;
+    white-space: pre;
+    overflow: auto;
+  }
+
+  .editor-textarea:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+
+  .empty-editor {
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .empty-text {
+    font-size: 11px;
+    color: var(--muted-foreground);
   }
 </style>
