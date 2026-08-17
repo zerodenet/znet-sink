@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import type { ThemeMode } from './theme.svelte';
 import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from './core';
 import { guiState } from './gui-state.svelte';
+import { error as toastError } from './toast.svelte';
 import {
   completeOnboarding,
   isOnboardingRequired,
@@ -158,6 +159,16 @@ class AppStateStore {
     } catch (e) {
       console.error('[ZNet] switchUIMode failed:', e);
       console.timeEnd('[ZNet] switchUIMode');
+      const failure = e as {
+        code?: string;
+        message?: string;
+        details?: { error?: { code?: string } };
+      };
+      const insufficientPrivilege = failure?.code === 'insufficient_os_privilege'
+        || failure?.details?.error?.code === 'insufficient_os_privilege';
+      if (mode === 'lite' && insufficientPrivilege) {
+        toastError(`无法切换到简约模式：${failure.message ?? 'TUN 启动需要更高的系统权限。'}`);
+      }
       this.uiMode = previousMode;
       this.activeTab = previousTab;
       this.settingsSection = previousSettingsSection;
