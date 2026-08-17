@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { coreEvents } from './core-events.svelte';
 import { proxyConfigSignal } from './proxy-config-signal.svelte';
 import type {
   ProxyConfigProfile,
@@ -51,6 +52,18 @@ export async function importProxyConfig(input: ProxyConfigImport): Promise<Proxy
 
 export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_set_active', { id });
+
+  // Zero can replace the active engine/event source during config.apply while
+  // keeping the multiplexed IPC connection itself alive. In that case the old
+  // broadcast receiver never reports Closed, so ZNet-Sink would stay attached
+  // to the pre-switch event source and stop seeing new connection deltas until
+  // the app restarted. Rotate the GUI event generation explicitly after a
+  // successful profile switch. start() establishes an authoritative active-flow
+  // snapshot after registering the new receiver, so connections created during
+  // the handoff are recovered rather than lost.
+  await coreEvents.stop();
+  await coreEvents.start();
+
   proxyConfigSignal.markChanged(true);
   return profile;
 }

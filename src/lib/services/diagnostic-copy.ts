@@ -3,7 +3,7 @@ import type { LogEntry, LogLevel, LogSource } from '$lib/types/logs';
 
 export interface LogCopyContext {
   source: LogSource | 'all';
-  minLevel: LogLevel;
+  level: LogLevel | 'all';
   search?: string;
   hasMore: boolean;
   copiedAtUnixMs?: number;
@@ -47,7 +47,7 @@ export function serializeLogsForClipboard(
     schemaId: 'znet.clipboard.logs.v1',
     copiedAtUnixMs: context.copiedAtUnixMs ?? Date.now(),
     source: context.source,
-    minLevel: context.minLevel,
+    level: context.level,
     search: context.search,
     count: logs.length,
     partial: context.hasMore,

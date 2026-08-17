@@ -1,6 +1,7 @@
 use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
+use crate::kernel::connection;
 use crate::models::{core::CoreIpcOptions, gui_core::GuiEventSubscription};
 use crate::services::common::lock;
 use crate::services::{core_config, gui_events};
@@ -26,7 +27,16 @@ pub fn gui_events_start(
 
 #[tauri::command]
 pub fn gui_events_stop(state: State<'_, AppState>) -> u64 {
-    state.next_gui_event_generation()
+    // Advancing the GUI generation stops the current forwarder, but that alone
+    // does not create a new Zero subscription: `get_or_connect` intentionally
+    // reuses the still-alive multiplexed IPC connection whose initial
+    // `subscribe` frame belongs to the previous runtime/event source. Close the
+    // ZNet-Sink-owned multiplexed connection as part of the event-stream stop
+    // boundary so the next gui_events_start performs a fresh pipe connect and
+    // subscribe handshake. Other IPC callers recover through get_or_connect.
+    let generation = state.next_gui_event_generation();
+    connection::reset();
+    generation
 }
 
 fn resolve_options(
