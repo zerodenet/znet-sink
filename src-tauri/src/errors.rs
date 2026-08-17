@@ -5,6 +5,8 @@ use std::io;
 use crate::client_core::ClientCoreError;
 use crate::models::core::CoreEndpoint;
 
+const CORE_INSUFFICIENT_OS_PRIVILEGE: &str = "insufficient_os_privilege";
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppError {
@@ -91,16 +93,29 @@ impl AppError {
     }
 
     pub(crate) fn core_response(response: Value) -> Self {
-        let message = response
+        let core_code = response
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str);
+        let core_message = response
             .get("error")
             .and_then(|error| error.get("message"))
             .and_then(Value::as_str)
-            .unwrap_or("core rejected the IPC request")
-            .to_string();
+            .unwrap_or("core rejected the IPC request");
+
+        let (code, message) = match core_code {
+            Some(CORE_INSUFFICIENT_OS_PRIVILEGE) => (
+                CORE_INSUFFICIENT_OS_PRIVILEGE,
+                insufficient_os_privilege_message().to_string(),
+            ),
+            _ => ("core_error", core_message.to_string()),
+        };
 
         Self {
-            code: "core_error",
+            code,
             message,
+            // Preserve the complete Zero envelope, including its stable error
+            // code and platform-specific cause, for logs and diagnostics.
             details: Some(response),
         }
     }
@@ -138,4 +153,72 @@ impl AppError {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn insufficient_os_privilege_message() -> &'static str {
+    "TUN 需要管理员权限。请退出 ZNet-Sink，右键应用并选择“以管理员身份运行”，然后重新开启 TUN。"
+}
+
+#[cfg(target_os = "macos")]
+fn insufficient_os_privilege_message() -> &'static str {
+    "TUN 需要更高的系统网络权限。请以具备管理员权限的方式重新启动 ZNet-Sink，然后重新开启 TUN。"
+}
+
+#[cfg(target_os = "linux")]
+fn insufficient_os_privilege_message() -> &'static str {
+    "TUN 需要创建虚拟网卡和配置路由的系统权限。请以 root 运行，或为运行环境授予所需的网络 capabilities 后重试。"
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn insufficient_os_privilege_message() -> &'static str {
+    "TUN 启动被操作系统拒绝：当前进程缺少所需的网络权限。请使用具备相应权限的方式重新启动后重试。"
+}
+
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{AppError, CORE_INSUFFICIENT_OS_PRIVILEGE};
+
+    #[test]
+    fn promotes_core_os_privilege_error_and_preserves_diagnostics() {
+        let error = AppError::core_response(json!({
+            "ok": false,
+            "error": {
+                "code": "insufficient_os_privilege",
+                "message": "TUN startup requires elevated host operating-system network privileges",
+                "cause": "Windows TUN requires an elevated Administrator process"
+            }
+        }));
+
+        assert_eq!(error.code, CORE_INSUFFICIENT_OS_PRIVILEGE);
+        assert!(!error.message.is_empty());
+        assert_ne!(
+            error.message,
+            "TUN startup requires elevated host operating-system network privileges"
+        );
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.pointer("/error/code"))
+                .and_then(|value| value.as_str()),
+            Some(CORE_INSUFFICIENT_OS_PRIVILEGE)
+        );
+    }
+
+    #[test]
+    fn keeps_unclassified_core_errors_generic() {
+        let error = AppError::core_response(json!({
+            "ok": false,
+            "error": {
+                "code": "conflict",
+                "message": "runtime conflict"
+            }
+        }));
+
+        assert_eq!(error.code, "core_error");
+        assert_eq!(error.message, "runtime conflict");
+    }
+}
