@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mergeLogPage } from '../src/lib/services/log-page.ts';
 
 function entry(id, message) {
@@ -52,6 +53,22 @@ function entry(id, message) {
       { id: 3, message: 'refreshed value' },
       { id: 4, message: 'new' },
     ],
+  );
+}
+
+{
+  const panel = readFileSync(
+    new URL('../src/lib/components/core/LogPanel.svelte', import.meta.url),
+    'utf8',
+  );
+
+  assert.ok(
+    panel.includes("let selectedLevel = $state<LogLevel | 'all'>('all');")
+      && panel.includes("{ value: 'warn', label: '警告', title: '仅显示警告' }")
+      && panel.includes("{ value: 'trace', label: '跟踪', title: '仅显示跟踪' }")
+      && panel.includes("level: selectedLevel === 'all' ? undefined : selectedLevel")
+      && !panel.includes('minLevel: selectedLevel'),
+    'runtime log level controls must issue exact-level queries; the all option must be explicit',
   );
 }
 

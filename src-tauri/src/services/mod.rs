@@ -26,6 +26,7 @@ pub mod node_screen;
 pub mod policy_selection;
 pub mod probe;
 pub mod probe_history;
+pub(crate) mod profile_switch;
 #[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
 pub mod proxy_mode;

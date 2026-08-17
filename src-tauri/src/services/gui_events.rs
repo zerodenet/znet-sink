@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 use crate::errors::{AppError, AppResult};
@@ -14,7 +14,8 @@ use crate::kernel::zero::{events, queries};
 use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{
-    GuiConnectionListOptions, GuiEventPayload, GuiEventStatus, GuiEventSubscription,
+    GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload, GuiEventStatus,
+    GuiEventSubscription,
 };
 
 pub fn start(
@@ -62,6 +63,8 @@ pub fn start(
 
 const MIN_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+const EVENT_RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const ACTIVE_FLOW_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
 fn subscribe_and_forward_events(
     app: AppHandle,
@@ -95,10 +98,11 @@ fn subscribe_and_forward_events(
         let mut receiver = conn.subscribe_events();
         let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
         emit_status(&app, generation, "subscribed", None, snapshot);
+        let mut next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
 
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
-            match receiver.blocking_recv() {
+            let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
                     if let crate::models::gui_core::GuiEventData::PolicyProbeCompleted(probe) =
@@ -107,19 +111,43 @@ fn subscribe_and_forward_events(
                         crate::services::probe::record_policy_probe_completed(&app, probe);
                     }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
+                    false
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
                     // A lagged receiver has lost one or more flow deltas.
                     // Re-establish an authoritative baseline instead of
                     // silently leaving the live connection page stale.
                     let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
                     emit_status(&app, generation, "subscribed", None, snapshot);
-                    continue;
+                    next_active_flow_reconcile =
+                        Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+                    false
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
                     closed = true;
                     break;
                 }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => true,
+            };
+
+            if Instant::now() >= next_active_flow_reconcile {
+                // Flow pushes remain the low-latency path, but the active-flow
+                // query is the authoritative state. Reconcile it periodically
+                // so a dropped/quiet push stream cannot freeze the live page.
+                // The query also touches `get_or_connect`; if the shared reader
+                // died without closing this receiver, the dead manager is
+                // replaced and this receiver subsequently observes `Closed`.
+                if let Some(connections) = resync_active_connections(endpoint.clone(), timeout) {
+                    emit_connection_snapshot(&app, generation, connections);
+                }
+                next_active_flow_reconcile =
+                    Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+            }
+
+            // Drain bursts without adding latency or an artificial events/sec
+            // ceiling. Only back off when the local broadcast queue is empty.
+            if receiver_idle {
+                std::thread::sleep(EVENT_RECEIVER_POLL_INTERVAL);
             }
         }
 
@@ -177,6 +205,46 @@ fn resync_snapshot(app: &AppHandle, endpoint: CoreEndpoint, timeout: Duration) -
             "connections": connections.ok(),
         }))
     })
+}
+
+fn resync_active_connections(
+    endpoint: CoreEndpoint,
+    timeout: Duration,
+) -> Option<Vec<GuiConnection>> {
+    tauri::async_runtime::block_on(async move {
+        let options = Some(CoreIpcOptions {
+            socket: Some(endpoint.path),
+            timeout_ms: Some(timeout.as_millis() as u64),
+        });
+        queries::connections(
+            Some(GuiConnectionListOptions {
+                limit: Some(500),
+                inbound_tag: None,
+                principal_key: None,
+            }),
+            options,
+        )
+        .await
+        .ok()
+        .map(|connections| connections.items)
+    })
+}
+
+fn emit_connection_snapshot(app: &AppHandle, generation: u64, connections: Vec<GuiConnection>) {
+    emit_gui_event(
+        app,
+        GuiEventPayload {
+            generation,
+            event: GuiEvent {
+                event_type: "connection.snapshot".to_string(),
+                source_event_type: "gui.activeFlowsReconcile".to_string(),
+                event_id: None,
+                sequence: None,
+                occurred_at_unix_ms: Some(crate::services::common::now_unix_ms()),
+                payload: GuiEventData::Connections(connections),
+            },
+        },
+    );
 }
 
 /// Sleep for `total`, waking early if the subscription generation is

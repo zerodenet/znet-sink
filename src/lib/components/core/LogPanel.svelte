@@ -43,7 +43,7 @@
   let wrapMessages = $state(true);
   let hasMore = $state(false);
   let selectedSource = $state<LogSource | 'all'>('all');
-  let selectedLevel = $state<LogLevel>('info');
+  let selectedLevel = $state<LogLevel | 'all'>('all');
   let searchQuery = $state('');
   let expandedLogId = $state<number | null>(null);
   let unseenCount = $state(0);
@@ -68,12 +68,13 @@
     { value: 'core', label: '内核' },
   ];
 
-  const levels: Array<{ value: LogLevel; label: string; title: string }> = [
+  const levels: Array<{ value: LogLevel | 'all'; label: string; title: string }> = [
+    { value: 'all', label: '全部', title: '显示全部级别' },
     { value: 'error', label: '错误', title: '仅显示错误' },
-    { value: 'warn', label: '警告+', title: '显示警告和错误' },
-    { value: 'info', label: '信息+', title: '显示信息、警告和错误' },
-    { value: 'debug', label: '调试+', title: '显示调试及以上级别' },
-    { value: 'trace', label: '全部', title: '显示全部级别' },
+    { value: 'warn', label: '警告', title: '仅显示警告' },
+    { value: 'info', label: '信息', title: '仅显示信息' },
+    { value: 'debug', label: '调试', title: '仅显示调试' },
+    { value: 'trace', label: '跟踪', title: '仅显示跟踪' },
   ];
 
   const orderedLogs = $derived([...logs].reverse());
@@ -88,7 +89,7 @@
   function buildQuery(beforeId?: number): LogQuery {
     return {
       source: selectedSource === 'all' ? undefined : selectedSource,
-      minLevel: selectedLevel,
+      level: selectedLevel === 'all' ? undefined : selectedLevel,
       limit: PAGE_SIZE,
       beforeId,
     };
@@ -310,7 +311,7 @@
     if (visibleLogs.length === 0) return;
     const content = serializeLogsForClipboard(visibleLogs, {
       source: selectedSource,
-      minLevel: selectedLevel,
+      level: selectedLevel,
       search: searchQuery.trim() || undefined,
       hasMore,
     });
@@ -548,8 +549,8 @@
 
     <SegmentedControl.Root
       value={selectedLevel}
-      onValueChange={(value) => selectedLevel = value as LogLevel}
-      aria-label="最低日志级别"
+      onValueChange={(value) => selectedLevel = value as LogLevel | 'all'}
+      aria-label="日志级别"
     >
       {#each levels as level}
         <SegmentedControl.Item

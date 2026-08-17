@@ -55,6 +55,34 @@ async function testRootPageExclusivelyOwnsTheEventStream() {
   assert.equal(inactiveBranch.includes('coreEvents.stop()'), false);
 }
 
+async function testProfileSwitchRotatesTheRuntimeEventGeneration() {
+  const [configService, guiEventsCommand] = await Promise.all([
+    readFile(new URL('../src/lib/services/config.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/commands/gui_events.rs', import.meta.url), 'utf8'),
+  ]);
+  const switchStart = configService.indexOf('export async function setActiveProxyConfig');
+  const switchEnd = configService.indexOf('export async function removeProxyConfig', switchStart);
+  const switchBody = configService.slice(switchStart, switchEnd);
+
+  const activateIndex = switchBody.indexOf("invoke<ProxyConfigProfile>('proxy_config_set_active'");
+  const stopIndex = switchBody.indexOf('await coreEvents.stop()');
+  const startIndex = switchBody.indexOf('await coreEvents.start()');
+  const signalIndex = switchBody.indexOf('proxyConfigSignal.markChanged(true)');
+
+  assert.ok(configService.includes("import { coreEvents } from './core-events.svelte';"));
+  assert.ok(activateIndex >= 0);
+  assert.ok(stopIndex > activateIndex);
+  assert.ok(startIndex > stopIndex);
+  assert.ok(signalIndex > startIndex);
+
+  const stopCommandStart = guiEventsCommand.indexOf('pub fn gui_events_stop');
+  const stopCommandEnd = guiEventsCommand.indexOf('fn resolve_options', stopCommandStart);
+  const stopCommand = guiEventsCommand.slice(stopCommandStart, stopCommandEnd);
+  assert.ok(guiEventsCommand.includes('use crate::kernel::connection;'));
+  assert.ok(stopCommand.includes('state.next_gui_event_generation()'));
+  assert.ok(stopCommand.includes('connection::reset();'));
+}
+
 async function testCoreWarningsStayOutOfTransientNotifications() {
   const coreEvents = await readFile(
     new URL('../src/lib/services/core-events.svelte.ts', import.meta.url),
@@ -72,6 +100,7 @@ async function testCoreWarningsStayOutOfTransientNotifications() {
 await testLifecycleOperationsStayOrdered();
 await testRejectedOperationDoesNotPoisonQueue();
 await testRootPageExclusivelyOwnsTheEventStream();
+await testProfileSwitchRotatesTheRuntimeEventGeneration();
 await testCoreWarningsStayOutOfTransientNotifications();
 
 console.log('core event lifecycle tests passed');

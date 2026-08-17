@@ -26,13 +26,15 @@ assert.equal(copiedLog.fields.raw_line, longMessage);
 
 const copiedLogs = JSON.parse(serializeLogsForClipboard([log], {
   source: 'app',
-  minLevel: 'error',
+  level: 'error',
   search: 'copy-me',
   hasMore: true,
   copiedAtUnixMs: 123,
 }));
 assert.equal(copiedLogs.schemaId, 'znet.clipboard.logs.v1');
 assert.equal(copiedLogs.partial, true);
+assert.equal(copiedLogs.level, 'error');
+assert.equal(copiedLogs.minLevel, undefined);
 assert.equal(copiedLogs.search, 'copy-me');
 assert.equal(copiedLogs.items[0].message, longMessage);
 
