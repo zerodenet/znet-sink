@@ -96,20 +96,6 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         .enumerate()
         .map(|(index, group)| (group.tag.clone(), index))
         .collect();
-    let mut group_observed_at: HashMap<_, _> = merged_groups
-        .iter()
-        .map(|group| {
-            (
-                group.name.clone(),
-                group
-                    .outbounds
-                    .iter()
-                    .filter_map(|member| member.last_checked_unix_ms)
-                    .max()
-                    .unwrap_or_default(),
-            )
-        })
-        .collect();
 
     for job in state.list_client_probe_jobs(Some(profile_id.0.clone())) {
         if job.scope != client.scope {
@@ -131,18 +117,14 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
             observation.policy_tag.as_deref() == Some(observation.target_tag.as_str());
         if policy_summary {
             if let Some(group_index) = group_indexes.get(&observation.target_tag).copied() {
-                let current = group_observed_at
-                    .get(&observation.target_tag)
-                    .copied()
-                    .unwrap_or_default();
-                if observation.observed_at_unix_ms >= current {
+                // A successful Zero policy query is the authoritative live
+                // selection. Persisted probe observations are history/fallback
+                // only; letting an older summary overwrite a concrete runtime
+                // selection makes URLTest appear stuck after it switches.
+                if !runtime_available || groups[group_index].selected.is_none() {
                     if let Some(selected) = observation.selected_tag.clone() {
                         groups[group_index].selected = Some(selected);
                     }
-                    group_observed_at.insert(
-                        observation.target_tag.clone(),
-                        observation.observed_at_unix_ms,
-                    );
                 }
             }
         }
@@ -158,7 +140,14 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         else {
             continue;
         };
-        node.history.push(observation.clone());
+        // Older persisted member observations may carry the URLTest group's
+        // selected route. That field describes the policy summary, not the
+        // concrete leaf target, so never expose it through leaf-node history.
+        let mut history_observation = observation.clone();
+        if !policy_summary {
+            history_observation.selected_tag = None;
+        }
+        node.history.push(history_observation);
         if node
             .last_observed_at_unix_ms
             .is_some_and(|current| current > observation.observed_at_unix_ms)

@@ -532,7 +532,11 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
             source: observation_source,
             observed_at_unix_ms: member.last_checked_unix_ms.unwrap_or(observed_at_unix_ms),
             policy_tag: Some(event.policy_tag.clone()),
-            selected_tag: event.selected.clone(),
+            // The concrete member is already the observation target. The
+            // policy's selected route belongs only to the group summary; if it
+            // is copied here a leaf node's history is mislabeled as another
+            // target whenever URLTest changes its winner.
+            selected_tag: None,
         });
     }
 
