@@ -147,7 +147,10 @@ pub struct AppTunConfig {
     pub mask: String,
     #[serde(default)]
     pub secondary_addr: Option<String>,
-    #[serde(default = "default_tun_tag")]
+    #[serde(
+        default = "default_tun_tag",
+        deserialize_with = "deserialize_tun_tag"
+    )]
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
@@ -336,7 +339,22 @@ fn default_tun_mask() -> String {
 }
 
 fn default_tun_tag() -> String {
-    "proxy".to_string()
+    "znet-sink-tun".to_string()
+}
+
+fn deserialize_tun_tag<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let tag = String::deserialize(deserializer)?;
+    // `proxy` was the original ZNet-Sink default introduced with command-managed
+    // TUN. Treat only that exact legacy value as a migration sentinel so real
+    // user-defined inbound tags remain untouched.
+    if tag == "proxy" {
+        Ok(default_tun_tag())
+    } else {
+        Ok(tag)
+    }
 }
 
 fn default_tun_mtu() -> u16 {
@@ -435,8 +453,24 @@ mod tests {
     fn tun_defaults_are_backwards_compatible_and_keep_dns_hijack_opt_in() {
         let config: AppConfig = serde_json::from_value(json!({})).unwrap();
         assert_eq!(config.tun.mask, "255.255.255.0");
+        assert_eq!(config.tun.tag, "znet-sink-tun");
         assert!(config.tun.secondary_addr.is_none());
         assert!(config.tun.dual_stack);
         assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn legacy_proxy_tun_tag_migrates_without_overwriting_custom_tags() {
+        let legacy: AppConfig = serde_json::from_value(json!({
+            "tun": { "tag": "proxy" }
+        }))
+        .unwrap();
+        assert_eq!(legacy.tun.tag, "znet-sink-tun");
+
+        let custom: AppConfig = serde_json::from_value(json!({
+            "tun": { "tag": "custom-tun-in" }
+        }))
+        .unwrap();
+        assert_eq!(custom.tun.tag, "custom-tun-in");
     }
 }
