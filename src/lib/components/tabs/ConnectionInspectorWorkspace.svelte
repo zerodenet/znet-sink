@@ -52,6 +52,7 @@
 
   let livePaused = $state(false);
   let pausedSnapshot = $state<DisplayConnection[]>([]);
+  let pausedChangedFlowIds = $state<Set<string>>(new Set());
 
   let historyItems = $state<PersistedConnection[]>([]);
   let historyBeforeId = $state<number | undefined>(undefined);
@@ -104,10 +105,6 @@
       ?? connection.eventOccurredAtUnixMs
       ?? 0;
     return `${connection.origin}:${connection.flowId}:${lifetime}`;
-  }
-
-  function connectionStateSignature(connection: DisplayConnection): string {
-    return JSON.stringify(connection);
   }
 
   const selectedConnection = $derived(
@@ -187,26 +184,7 @@
       ? filteredConnections.slice(0, LIVE_RENDER_LIMIT)
       : filteredConnections,
   );
-  const pendingLiveChanges = $derived.by(() => {
-    if (!livePaused) return 0;
-
-    const pausedByFlow = new Map(
-      pausedSnapshot.map((connection) => [connection.flowId, connectionStateSignature(connection)]),
-    );
-    const liveByFlow = new Map(
-      liveView.map((connection) => [connection.flowId, connectionStateSignature(connection)]),
-    );
-    const changedFlowIds = new Set<string>();
-
-    for (const [flowId, signature] of pausedByFlow) {
-      if (liveByFlow.get(flowId) !== signature) changedFlowIds.add(flowId);
-    }
-    for (const [flowId, signature] of liveByFlow) {
-      if (pausedByFlow.get(flowId) !== signature) changedFlowIds.add(flowId);
-    }
-
-    return changedFlowIds.size;
-  });
+  const pendingLiveChanges = $derived(livePaused ? pausedChangedFlowIds.size : 0);
 
   function resetStructuredFilters() {
     protocolFilter = 'all';
@@ -241,9 +219,12 @@
     if (livePaused) {
       livePaused = false;
       pausedSnapshot = [];
+      pausedChangedFlowIds = new Set();
       return;
     }
     pausedSnapshot = liveView.map((connection) => ({ ...connection }));
+    pausedChangedFlowIds = new Set();
+    coreEvents.drainDeltas();
     livePaused = true;
   }
 
@@ -619,6 +600,22 @@
     latestObservedHistoryKey = key;
     historyPendingEvents += 1;
     if (!historyPaused && activeTab === 'history') scheduleHistoryHeadSync();
+  });
+
+  $effect(() => {
+    const deltaSeq = coreEvents.deltaSeq;
+    void deltaSeq;
+    const deltas = coreEvents.drainDeltas();
+    if (!livePaused || deltas.length === 0) return;
+
+    const nextChangedFlowIds = new Set(pausedChangedFlowIds);
+    for (const delta of deltas) {
+      if (delta.type === 'snapshot') continue;
+      nextChangedFlowIds.add(delta.connection.flowId);
+    }
+    if (nextChangedFlowIds.size !== pausedChangedFlowIds.size) {
+      pausedChangedFlowIds = nextChangedFlowIds;
+    }
   });
 
   $effect(() => {
