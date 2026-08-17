@@ -33,11 +33,16 @@ pub async fn enable_tun(
     tun: AppTunConfig,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiTunStatus> {
-    if let Ok(status) = tun_status(options.clone()).await {
-        if status.enabled {
-            return Ok(status);
-        }
+    // Capability/state is authoritative for whether the client should prepare
+    // platform dependencies. An unsupported or temporarily unreadable Zero
+    // must never cause a speculative Wintun download.
+    let status = tun_status(options.clone()).await?;
+    if status.enabled || !status.supported {
+        return Ok(status);
     }
+
+    #[cfg(windows)]
+    super::wintun_compat::ensure_for_current_runtime().await?;
 
     let params = build_tun_start_params(tun);
     let response = commands::run_command("tun.start", params, options.clone()).await?;
