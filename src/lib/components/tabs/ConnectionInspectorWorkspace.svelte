@@ -52,7 +52,7 @@
 
   let livePaused = $state(false);
   let pausedSnapshot = $state<DisplayConnection[]>([]);
-  let pausedAtTick = $state(0);
+  let pausedChangedFlowIds = $state<Set<string>>(new Set());
 
   let historyItems = $state<PersistedConnection[]>([]);
   let historyBeforeId = $state<number | undefined>(undefined);
@@ -184,9 +184,7 @@
       ? filteredConnections.slice(0, LIVE_RENDER_LIMIT)
       : filteredConnections,
   );
-  const pendingLiveEvents = $derived(
-    livePaused ? Math.max(0, coreEvents.connectionTick - pausedAtTick) : 0,
-  );
+  const pendingLiveChanges = $derived(livePaused ? pausedChangedFlowIds.size : 0);
 
   function resetStructuredFilters() {
     protocolFilter = 'all';
@@ -221,10 +219,12 @@
     if (livePaused) {
       livePaused = false;
       pausedSnapshot = [];
+      pausedChangedFlowIds = new Set();
       return;
     }
     pausedSnapshot = liveView.map((connection) => ({ ...connection }));
-    pausedAtTick = coreEvents.connectionTick;
+    pausedChangedFlowIds = new Set();
+    coreEvents.drainDeltas();
     livePaused = true;
   }
 
@@ -603,6 +603,22 @@
   });
 
   $effect(() => {
+    const deltaSeq = coreEvents.deltaSeq;
+    void deltaSeq;
+    const deltas = coreEvents.drainDeltas();
+    if (!livePaused || deltas.length === 0) return;
+
+    const nextChangedFlowIds = new Set(pausedChangedFlowIds);
+    for (const delta of deltas) {
+      if (delta.type === 'snapshot') continue;
+      nextChangedFlowIds.add(delta.connection.flowId);
+    }
+    if (nextChangedFlowIds.size !== pausedChangedFlowIds.size) {
+      pausedChangedFlowIds = nextChangedFlowIds;
+    }
+  });
+
+  $effect(() => {
     const currentIds = new Set(liveView.map((connection) => connection.flowId));
     const nextSuppressed = new Set([...suppressedActiveIds].filter((flowId) => currentIds.has(flowId)));
     if (nextSuppressed.size !== suppressedActiveIds.size) suppressedActiveIds = nextSuppressed;
@@ -813,9 +829,9 @@
   {#if livePaused && activeTab === 'live'}
     <div class="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[10.5px] text-muted-foreground" role="status">
       <Pause class="size-3.5" />
-      <span>列表显示已暂停，后台仍在接收连接事件。</span>
+      <span>列表显示已暂停，后台实时连接状态仍在更新。</span>
       <Badge variant="outline" class="ml-auto h-5 rounded-md px-1.5 text-[9.5px]">
-        {pendingLiveEvents > 0 ? `${pendingLiveEvents} 个新事件` : '暂无新事件'}
+        {pendingLiveChanges > 0 ? `${pendingLiveChanges} 个连接发生变化` : '暂无连接变化'}
       </Badge>
     </div>
   {:else if historyPaused && activeTab === 'history'}
@@ -845,7 +861,7 @@
   {:else if currentSource.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
       <strong class="text-xs font-semibold text-foreground">{activeTab === 'live' ? '暂无活动连接' : '暂无连接记录'}</strong>
-      <span class="text-[11px] text-muted-foreground">{activeTab === 'live' ? '连接事件到达后会自动显示' : '完成的连接会自动显示并保存在本地'}</span>
+      <span class="text-[11px] text-muted-foreground">{activeTab === 'live' ? '活动连接建立后会自动显示' : '完成的连接会自动显示并保存在本地'}</span>
     </div>
   {:else if filteredConnections.length === 0}
     <div class="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">

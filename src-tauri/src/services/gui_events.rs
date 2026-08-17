@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
@@ -17,6 +17,7 @@ use crate::models::gui_core::{
     GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload, GuiEventStatus,
     GuiEventSubscription,
 };
+use crate::state::app_state::AppState;
 
 pub fn start(
     app: AppHandle,
@@ -105,10 +106,23 @@ fn subscribe_and_forward_events(
             let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
-                    if let crate::models::gui_core::GuiEventData::PolicyProbeCompleted(probe) =
-                        &event.payload
-                    {
-                        crate::services::probe::record_policy_probe_completed(&app, probe);
+                    match &event.payload {
+                        GuiEventData::PolicyProbeCompleted(probe) => {
+                            crate::services::probe::record_policy_probe_completed(&app, probe);
+                        }
+                        GuiEventData::PolicySelected(_) => {
+                            // `policy.selected` is an authoritative runtime-state
+                            // invalidation even when no probe-completion payload is
+                            // present (notably on older Zero revisions). NodesTab
+                            // listens to this existing Client Core signal and then
+                            // re-queries the authoritative NodeScreen snapshot.
+                            let state = app.state::<AppState>();
+                            let _ = app.emit(
+                                crate::services::probe::CLIENT_CORE_UPDATED_EVENT,
+                                state.client_core_snapshot(),
+                            );
+                        }
+                        _ => {}
                     }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
                     false
