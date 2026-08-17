@@ -102,7 +102,7 @@ fn subscribe_and_forward_events(
 
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
-            match receiver.try_recv() {
+            let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
                     if let crate::models::gui_core::GuiEventData::PolicyProbeCompleted(probe) =
@@ -111,7 +111,7 @@ fn subscribe_and_forward_events(
                         crate::services::probe::record_policy_probe_completed(&app, probe);
                     }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
-                    continue;
+                    false
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
                     // A lagged receiver has lost one or more flow deltas.
@@ -121,14 +121,14 @@ fn subscribe_and_forward_events(
                     emit_status(&app, generation, "subscribed", None, snapshot);
                     next_active_flow_reconcile =
                         Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
-                    continue;
+                    false
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
                     closed = true;
                     break;
                 }
-                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
-            }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => true,
+            };
 
             if Instant::now() >= next_active_flow_reconcile {
                 // Flow pushes remain the low-latency path, but the active-flow
@@ -137,16 +137,18 @@ fn subscribe_and_forward_events(
                 // The query also touches `get_or_connect`; if the shared reader
                 // died without closing this receiver, the dead manager is
                 // replaced and this receiver subsequently observes `Closed`.
-                if let Some(connections) =
-                    resync_active_connections(endpoint.clone(), timeout)
-                {
+                if let Some(connections) = resync_active_connections(endpoint.clone(), timeout) {
                     emit_connection_snapshot(&app, generation, connections);
                 }
                 next_active_flow_reconcile =
                     Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
             }
 
-            std::thread::sleep(EVENT_RECEIVER_POLL_INTERVAL);
+            // Drain bursts without adding latency or an artificial events/sec
+            // ceiling. Only back off when the local broadcast queue is empty.
+            if receiver_idle {
+                std::thread::sleep(EVENT_RECEIVER_POLL_INTERVAL);
+            }
         }
 
         if active_generation.load(Ordering::SeqCst) != generation {
