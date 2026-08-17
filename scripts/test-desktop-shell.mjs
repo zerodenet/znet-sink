@@ -160,11 +160,12 @@ assert.ok(
 );
 assert.ok(
   settingsPanel.includes("store.uiMode === 'lite'") &&
-    settingsPanel.includes("section.id !== 'config'") &&
-    settingsPanel.includes("activeSection === 'config'") &&
-    appStore.includes("this.uiMode === 'lite' && section === 'config' ? 'general' : section") &&
-    appStore.includes("mode === 'lite' && this.settingsSection === 'config'"),
-  'Lite Settings must hide and never mount the Pro-only live kernel config editor',
+    settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'") &&
+    settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'") &&
+    appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])") &&
+    appStore.includes('PRO_ONLY_SETTINGS.has(section)') &&
+    appStore.includes('PRO_ONLY_SETTINGS.has(this.settingsSection)'),
+  'Lite Settings must hide and never mount Pro-only TUN and live kernel config editors',
 );
 assert.ok(
   configEditor.includes("import { listProxyConfigs } from '$lib/services/config'") &&

@@ -19,6 +19,7 @@ use crate::models::gui_core::{
     GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
     GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
+use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
 use crate::services::{
     core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
@@ -298,28 +299,28 @@ pub async fn gui_dns_status(state: State<'_, AppState>) -> AppResult<GuiFeatureS
 }
 
 #[tauri::command]
-pub async fn gui_tun_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
+pub async fn gui_tun_status(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let opts = default_opts(state.inner());
-    ZeroAdapter::new().tun_status(opts).await
+    zero::runtime::tun_status(Some(opts)).await
 }
 
 #[tauri::command]
 pub async fn gui_tun_enable(
     app_handle: AppHandle,
     state: State<'_, AppState>,
-) -> AppResult<GuiFeatureStatus> {
+) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
     let opts = default_opts(state.inner());
-    zero::commands::enable_tun(tun.name, tun.addr, tun.tag, tun.mtu, Some(opts)).await
+    zero::runtime::enable_tun(tun, Some(opts)).await
 }
 
 #[tauri::command]
-pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
+pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     let opts = default_opts(state.inner());
-    zero::commands::disable_tun(Some(opts)).await
+    zero::runtime::disable_tun(Some(opts)).await
 }
 
 #[tauri::command]
@@ -360,7 +361,7 @@ pub fn gui_proxy_nodes(state: State<'_, AppState>) -> AppResult<Vec<ConfigProxyN
 /// Return policy groups directly from the active proxy config file.
 /// Does NOT require the core to be running — this is static config data.
 /// The frontend uses this as the skeleton for the node page sidebar,
-/// with kernel runtime state (selected, delay, alive) layered on top.
+/// with kernel runtime state (selected, latency, alive) layered on top.
 #[tauri::command]
 pub fn gui_config_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<GuiPolicyGroup>> {
     let active = common::lock(state.proxy_configs(), "proxy_config")?

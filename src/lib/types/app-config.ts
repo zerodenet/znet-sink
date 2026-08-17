@@ -47,8 +47,12 @@ export interface AppLocalProxyConfig {
 export interface AppTunConfig {
   name?: string;
   addr: string;
+  mask: string;
+  secondaryAddr?: string;
   tag: string;
   mtu: number;
+  dualStack: boolean;
+  dnsHijack: boolean;
 }
 
 export interface AppRoutingConfig {
@@ -107,8 +111,12 @@ export interface AppLocalProxyConfigPatch {
 export interface AppTunConfigPatch {
   name?: string | null;
   addr?: string;
+  mask?: string;
+  secondaryAddr?: string | null;
   tag?: string;
   mtu?: number;
+  dualStack?: boolean;
+  dnsHijack?: boolean;
 }
 
 export interface AppRoutingConfigPatch {

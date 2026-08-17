@@ -7,9 +7,6 @@ import {
   restartCoreProcess,
   enableSystemProxy as enableSystemProxyCommand,
   disableSystemProxy as disableSystemProxyCommand,
-  getGuiTunStatus,
-  enableGuiTun,
-  disableGuiTun,
   getGuiProxyModeStatus,
   guiSetProxyMode,
   getGuiCoreOverview,
@@ -22,6 +19,7 @@ import {
   trayUpdateStatus,
 } from './core';
 import { getAppConfig } from './core';
+import { getGuiTunStatus, enableGuiTun, disableGuiTun } from './tun';
 import { error as toastError, success as toastSuccess, warning as toastWarning } from './toast.svelte';
 import { tracedOperation } from './telemetry';
 import { createLatestRequestGate } from './latest-request-gate.js';
@@ -37,7 +35,7 @@ import type {
   CoreOverview,
   PolicyGroup,
   ProxyMode,
-  GuiFeatureStatus,
+  GuiTunStatus,
 } from '$lib/types/gui-api';
 
 const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
@@ -48,19 +46,16 @@ class GuiStateStore {
   proxyMode = $state<ProxyModeStatus | null>(null);
   coreOverview = $state<CoreOverview | null>(null);
   policyGroups = $state<PolicyGroup[]>([]);
-  tunStatus = $state<GuiFeatureStatus | null>(null);
+  tunStatus = $state<GuiTunStatus | null>(null);
   configNodes = $state<ConfigProxyNode[]>([]);
   configPolicyGroups = $state<PolicyGroup[]>([]);
   networkProbe = $state<NetworkProbeResult | null>(null);
   networkProbeLoading = $state(false);
   networkProbeError = $state<string | null>(null);
 
-  // Whether the kernel supports live traffic stats (needs "query" or
-  // "runtime_snapshot" capability). When false, the traffic chart shows
-  // a downgrade hint instead of silently reading 0.
   supportsTrafficStats = $state(true);
 
-  isInitializing = $state(true); // true until first refreshAll completes
+  isInitializing = $state(true);
   isLoading = $state(false);
   isConnecting = $state(false);
   isDisconnecting = $state(false);
@@ -84,37 +79,50 @@ class GuiStateStore {
     this.isInitialized = true;
     this.isInitializing = true;
 
-    // Host-network detection is GUI-owned and starts independently of all
-    // kernel/config/runtime refresh work below.
     this.startPeriodicNetworkProbe();
     void this.probeNetwork();
     await this.refreshAll();
 
-    // `autoConnect` is a GUI startup preference. Only connect when the
-    // startup lifecycle has already made the kernel available; this keeps
-    // disabling auto-start from implicitly starting a kernel via guiConnect.
+    // The first authoritative snapshot is complete. UI action guards may now
+    // be evaluated normally, including the mode-specific auto-connect below.
+    this.isInitializing = false;
+
     try {
       const appConfig = await getAppConfig();
-      if (appConfig.core.autoConnect && this.connection?.coreAvailable && !this.isConnected) {
-        await this.connect();
-      } else if (appConfig.core.autoConnect && !this.connection?.coreAvailable) {
-        // Kernel startup is asynchronous in Tauri. Give it a chance to
-        // finish, then perform the same check once more.
-        setTimeout(async () => {
-          await this.refreshConnectionStatus();
-          if (this.connection?.coreAvailable && !this.isConnected) {
-            await this.connect();
-          }
-        }, 1200);
+      if (appConfig.core.autoConnect) {
+        await this.autoConnectForMode(appConfig.ui.uiMode === 'lite' ? 'lite' : 'pro');
       }
     } catch {
       // Configuration errors must not prevent the rest of the UI from loading.
     }
+  }
 
-    // Unlock kernel action buttons after the first full state snapshot.
-    // Until this point the UI may show stale pre-load state where buttons
-    // look clickable but the kernel is already running or starting.
-    this.isInitializing = false;
+  private async autoConnectForMode(mode: 'lite' | 'pro') {
+    if (!this.connection?.coreAvailable) {
+      // Kernel startup is asynchronous in Tauri. Give it one short retry, but
+      // never make autoConnect itself responsible for starting/stopping Zero.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await Promise.allSettled([this.refreshConnectionStatus(), this.refreshTunStatus()]);
+    }
+    if (!this.connection?.coreAvailable) return;
+
+    if (mode === 'lite') {
+      if (!this.isTunEnabled) await this.connect();
+      return;
+    }
+
+    if (this.connection.systemProxyEnabled === true) return;
+    this.isConnecting = true;
+    try {
+      this.connection = await tracedOperation('proxy', 'connection.auto_connect', () => guiConnect());
+      this.syncTrayStatus();
+      await this.refreshPolicyPanels();
+      await this.refreshSelfTest();
+    } catch {
+      await this.refreshConnectionStatus();
+    } finally {
+      this.isConnecting = false;
+    }
   }
 
   async refreshAll() {
@@ -131,7 +139,6 @@ class GuiStateStore {
     ]);
   }
 
-  /** Refresh connection-related runtime state when core status ticks change. */
   refreshOnTick(tick: number) {
     if (tick > 0 && tick !== this.lastStatusTick) {
       this.lastStatusTick = tick;
@@ -160,7 +167,8 @@ class GuiStateStore {
       this.connection = await getGuiConnectionStatus();
       this.syncTrayStatus();
     } catch {
-      this.connection = null;
+      // Preserve the last trusted ownership snapshot through a transient IPC
+      // failure instead of making PID/proxy state flicker.
     }
   }
 
@@ -188,8 +196,7 @@ class GuiStateStore {
         this.configNodes = nodes;
       }
     } catch {
-      // Keep the last known-good config snapshot during a config reload. A
-      // transient IPC failure must not make the node page look unconfigured.
+      // Keep the last known-good config snapshot during a config reload.
     }
   }
 
@@ -214,18 +221,9 @@ class GuiStateStore {
       }
     } catch (e: any) {
       console.warn('[gui-state] policy groups failed:', this.errorMessage(e));
-      // Runtime queries can briefly fail while config.apply reconciles the
-      // engine. Retain the last known-good groups instead of flashing empty.
     }
   }
 
-  /**
-   * Reconcile node state after the active profile changes.
-   *
-   * Invalidate every older request first, then load the config skeleton before
-   * querying runtime policy state. This prevents a late response from the
-   * previous profile from overwriting the newly activated profile.
-   */
   async refreshNodeStateAfterConfigChange() {
     this.configNodesRefreshGate.reset();
     this.configPolicyGroupsRefreshGate.reset();
@@ -236,18 +234,12 @@ class GuiStateStore {
       this.refreshConfigPolicyGroups(),
     ]);
 
-    // Drop runtime groups that cannot belong to the new config before the
-    // runtime query completes. Matching groups remain visible with their last
-    // known-good status, so this avoids both stale extra groups and UI flicker.
     this.policyGroups = retainConfiguredPolicyGroups(this.policyGroups, this.configPolicyGroups);
     await this.refreshPolicyGroups();
   }
 
   applyPolicyProbeCompleted(event: import('$lib/types/gui-api').PolicyProbeCompletedEvent) {
     const existing = this.policyGroups.find((group) => group.name === event.policyTag);
-    // A probe that began before a profile switch can complete after the new
-    // profile is active. Never resurrect a group that belongs to the old
-    // profile, and invalidate runtime queries that predate this event.
     if (!shouldApplyPolicyProbeEvent(this.configPolicyGroups, this.policyGroups, event.policyTag)) return;
     this.policyGroupsRefreshGate.reset();
     const previousMembers = new Map(existing?.outbounds.map((member) => [member.tag, member]) ?? []);
@@ -271,12 +263,12 @@ class GuiStateStore {
   async refreshTunStatus() {
     try {
       this.tunStatus = await getGuiTunStatus();
+      this.syncTrayStatus();
     } catch {
-      this.tunStatus = null;
+      // Keep the last trusted TUN state through a short kernel transition.
     }
   }
 
-  /** Probe kernel capabilities to determine feature support such as traffic stats. */
   async refreshCapabilities() {
     try {
       const caps = await getGuiZeroCapabilities();
@@ -292,11 +284,6 @@ class GuiStateStore {
     await Promise.allSettled([
       this.refreshConnectionStatus(),
       this.refreshCoreOverview(),
-      // configNodes is parsed from the active proxy config (no core
-      // required), but it must be re-read whenever the active config
-      // changes — which can happen after initialize() already ran.
-      // Without this the lite-mode node dropdown stays empty even after
-      // a config is activated post-startup.
       this.refreshConfigNodes(),
       this.refreshPolicyGroups(),
       this.refreshTunStatus(),
@@ -327,12 +314,8 @@ class GuiStateStore {
     return e?.message ?? e ?? '未知错误';
   }
 
-  /**
-   * Mirror the current connection/process state onto the system-tray icon
-   * so the tray stays in sync even when the window is hidden.
-   */
   private syncTrayStatus() {
-    void trayUpdateStatus(this.isProcessRunning, this.isConnected).catch(() => {});
+    void trayUpdateStatus(this.isProcessRunning, this.isCaptureEnabled).catch(() => {});
   }
 
   async probeNetwork() {
@@ -357,34 +340,84 @@ class GuiStateStore {
     }
   }
 
+  /** Compact-mode power lifecycle: Zero TUN on/off, Zero process stays alive. */
   async connect() {
+    if (!this.canConnect) return;
     this.isConnecting = true;
+    this.isSwitchingTun = true;
     try {
-      this.connection = await tracedOperation('proxy', 'connection.connect', () => guiConnect());
+      this.tunStatus = await tracedOperation('proxy', 'tun.enable', () => enableGuiTun());
       this.syncTrayStatus();
-      toastSuccess('系统代理已开启，服务已生效');
-      await this.refreshPolicyPanels();
+      toastSuccess('代理已开启');
+      await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {
       toastError(`连接失败: ${this.errorMessage(e)}`);
-      await this.refreshConnectionStatus();
+      await Promise.allSettled([this.refreshTunStatus(), this.refreshConnectionStatus()]);
     } finally {
+      this.isSwitchingTun = false;
       this.isConnecting = false;
     }
   }
 
   async disconnect() {
+    if (!this.canDisconnect) return;
     this.isDisconnecting = true;
+    this.isSwitchingTun = true;
     try {
-      this.connection = await tracedOperation('proxy', 'connection.disconnect', () => guiDisconnect());
+      this.tunStatus = await tracedOperation('proxy', 'tun.disable', () => disableGuiTun());
       this.syncTrayStatus();
-      toastSuccess('系统代理已关闭，内核保持运行');
+      toastSuccess('代理已关闭，内核保持运行');
       await this.refreshPolicyPanels();
     } catch (e: any) {
       toastError(`断开失败: ${this.errorMessage(e)}`);
-      await this.refreshConnectionStatus();
+      await this.refreshTunStatus();
+    } finally {
+      this.isSwitchingTun = false;
+      this.isDisconnecting = false;
+    }
+  }
+
+  async prepareLiteCapture() {
+    await Promise.allSettled([this.refreshConnectionStatus(), this.refreshTunStatus()]);
+    const systemProxyOwned = this.connection?.systemProxyEnabled === true;
+
+    if (this.isTunEnabled) {
+      if (systemProxyOwned) {
+        this.connection = await tracedOperation('proxy', 'lite.system_proxy.release', () => guiDisconnect());
+      }
+      this.syncTrayStatus();
+      return;
+    }
+
+    if (!systemProxyOwned) return;
+
+    this.isSwitchingTun = true;
+    this.isDisconnecting = true;
+    let tunStarted = false;
+    try {
+      this.tunStatus = await tracedOperation('proxy', 'lite.tun.handoff', () => enableGuiTun());
+      tunStarted = this.tunStatus.enabled;
+      if (!tunStarted) throw new Error('Zero 未确认 TUN 已启动');
+
+      // Only release the GUI-owned system proxy after TUN is confirmed. This
+      // keeps a working capture path until the replacement is actually ready.
+      this.connection = await tracedOperation('proxy', 'lite.system_proxy.release', () => guiDisconnect());
+      await this.refreshModeState();
+      this.syncTrayStatus();
+    } catch (error) {
+      if (tunStarted) {
+        try {
+          this.tunStatus = await disableGuiTun();
+        } catch {
+          // Preserve the handoff error; refresh below exposes rollback state.
+        }
+      }
+      await Promise.allSettled([this.refreshTunStatus(), this.refreshConnectionStatus()]);
+      throw error;
     } finally {
       this.isDisconnecting = false;
+      this.isSwitchingTun = false;
     }
   }
 
@@ -404,7 +437,6 @@ class GuiStateStore {
     }
   }
 
-  /** Restart the managed kernel by stopping it and starting it again immediately. */
   async restartCore() {
     if (!this.canRestartCore) return;
     this.isStoppingCore = true;
@@ -453,7 +485,7 @@ class GuiStateStore {
   }
 
   async toggleSystemProxy() {
-    if (this.isSystemProxyEnabled) {
+    if (this.connection?.systemProxyEnabled === true) {
       await this.disableSystemProxy();
     } else {
       await this.enableSystemProxy();
@@ -492,21 +524,14 @@ class GuiStateStore {
   }
 
   async toggleTun() {
-    if (this.isTunEnabled) {
-      await this.disableTun();
-    } else {
-      await this.enableTun();
-    }
+    if (this.isTunEnabled) await this.disableTun();
+    else await this.enableTun();
   }
 
   async setProxyMode(mode: ProxyMode) {
     this.isSwitchingMode = true;
     try {
-      // Prefer kernel hot-switch. The backend will only fall back to a
-      // restart when `mode.set` is unavailable or fails.
       this.proxyMode = await guiSetProxyMode(mode);
-      // Mode switches can still trigger a restart as a backend fallback, so
-      // refresh runtime state immediately instead of waiting for the next tick.
       await this.refreshModeState();
     } catch (e: any) {
       toastError(`切换代理模式失败: ${this.errorMessage(e)}`);
@@ -535,14 +560,18 @@ class GuiStateStore {
     this.networkProbeTimer = null;
   }
 
-  // Derived state
-
-  get isConnected(): boolean {
-    return this.connection?.state === 'connected';
+  get isCaptureEnabled(): boolean {
+    return this.isTunEnabled || this.connection?.systemProxyEnabled === true;
   }
 
+  /** Existing Lite views use this as their power state. */
+  get isConnected(): boolean {
+    return this.isTunEnabled;
+  }
+
+  /** Compatibility alias for the merged Lite overview/session boundary. */
   get isSystemProxyEnabled(): boolean {
-    return this.connection?.systemProxyEnabled === true;
+    return this.isTunEnabled;
   }
 
   get isTunEnabled(): boolean {
@@ -572,12 +601,13 @@ class GuiStateStore {
       && !missingProxyConfig
       && !this.isConnecting
       && !this.isDisconnecting
-      && !this.isConnected;
+      && !this.isSwitchingTun
+      && !this.isTunEnabled;
   }
 
   get canDisconnect(): boolean {
     if (this.isInitializing) return false;
-    return !this.isConnecting && !this.isDisconnecting && this.isConnected;
+    return !this.isConnecting && !this.isDisconnecting && !this.isSwitchingTun && this.isTunEnabled;
   }
 
   get canStartCore(): boolean {
@@ -600,11 +630,14 @@ class GuiStateStore {
       && !this.isSwitchingSystemProxy
       && !this.isConnecting
       && !this.isDisconnecting
-      && !this.isSystemProxyEnabled;
+      && this.connection?.systemProxyEnabled !== true;
   }
 
   get canDisableSystemProxy(): boolean {
-    return !this.isSwitchingSystemProxy && !this.isConnecting && !this.isDisconnecting && this.isSystemProxyEnabled;
+    return !this.isSwitchingSystemProxy
+      && !this.isConnecting
+      && !this.isDisconnecting
+      && this.connection?.systemProxyEnabled === true;
   }
 
   get canEnableTun(): boolean {

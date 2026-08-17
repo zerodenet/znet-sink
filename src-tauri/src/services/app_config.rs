@@ -146,6 +146,16 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             }
             config.tun.addr = addr;
         }
+        if let Some(mask) = tun.mask {
+            let mask = mask.trim().to_string();
+            if mask.is_empty() {
+                return Err(AppError::invalid_argument("tun.mask must not be empty"));
+            }
+            config.tun.mask = mask;
+        }
+        if let Some(secondary_addr) = tun.secondary_addr {
+            config.tun.secondary_addr = normalize_optional(secondary_addr);
+        }
         if let Some(tag) = tun.tag {
             let tag = tag.trim().to_string();
             if tag.is_empty() {
@@ -154,10 +164,16 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             config.tun.tag = tag;
         }
         if let Some(mtu) = tun.mtu {
-            if mtu == 0 {
-                return Err(AppError::invalid_argument("tun.mtu must be greater than 0"));
+            if mtu < 576 {
+                return Err(AppError::invalid_argument("tun.mtu must be at least 576"));
             }
             config.tun.mtu = mtu;
+        }
+        if let Some(dual_stack) = tun.dual_stack {
+            config.tun.dual_stack = dual_stack;
+        }
+        if let Some(dns_hijack) = tun.dns_hijack {
+            config.tun.dns_hijack = dns_hijack;
         }
     }
 

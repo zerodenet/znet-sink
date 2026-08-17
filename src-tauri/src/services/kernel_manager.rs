@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
@@ -25,11 +26,38 @@ const CHUNK_SIZE: usize = 8 * 1024;
 const PROGRESS_INTERVAL: u64 = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600); // 10 min for large archives
+const RUNTIME_MANIFEST_FILE: &str = ".znet-sink-zero-runtime.json";
 
 pub struct KernelInstallOutcome {
     pub result: KernelInstallResult,
     pub restart_core: bool,
     pub restore_system_proxy: bool,
+}
+
+struct KernelInstallWorkspace {
+    root: PathBuf,
+}
+
+impl KernelInstallWorkspace {
+    fn create() -> AppResult<Self> {
+        let parent = data_dir()?.join("kernel-install");
+        fs::create_dir_all(&parent)
+            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace: {e}")))?;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace id: {e}")))?
+            .as_nanos();
+        let root = parent.join(format!("{}-{nonce}", std::process::id()));
+        fs::create_dir(&root)
+            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace: {e}")))?;
+        Ok(Self { root })
+    }
+}
+
+impl Drop for KernelInstallWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
 }
 
 /// Build a blocking HTTP client for management traffic.
@@ -87,6 +115,7 @@ pub fn install_version(
     let dir = resolve_install_dir(install_dir)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
+    let workspace = KernelInstallWorkspace::create()?;
 
     // Log install attempt so user can trace in LogPanel
     {
@@ -105,7 +134,7 @@ pub fn install_version(
     } else {
         "zip"
     };
-    let temp_file = dir.join(format!("zero-download.{}", ext));
+    let temp_file = workspace.root.join(format!("zero-download.{ext}"));
 
     let client = build_http_client()?;
 
@@ -201,7 +230,6 @@ pub fn install_version(
     let hash_hex = format!("{:x}", hasher.finalize());
     let checksum_verified = if let Some(expected) = &expected_sha256 {
         if !hash_hex.eq_ignore_ascii_case(expected) {
-            let _ = fs::remove_file(&temp_file);
             return Err(AppError::internal(format!(
                 "SHA256 mismatch: expected {}, got {}",
                 expected, hash_hex
@@ -212,39 +240,61 @@ pub fn install_version(
         false
     };
 
-    // Write temp file
+    // Write the downloaded archive only inside ZNet-Sink's private install
+    // workspace. User-selected kernel directories never receive temporary
+    // files such as zero-download.zip or .staging.
     fs::write(&temp_file, &all_bytes)
         .map_err(|e| AppError::internal(format!("failed to write download: {e}")))?;
 
-    // Extract into a staging subdirectory first so we don't overwrite
-    // the running binary mid-extraction.  After successful extraction
-    // we move files into the target directory.
-    let staging = dir.join(".staging");
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)
+    let staging = workspace.root.join("staging");
+    fs::create_dir(&staging)
         .map_err(|e| AppError::internal(format!("failed to create staging dir: {e}")))?;
-
     extract_archive(&temp_file, &staging)?;
-
-    // Clean up temp file
-    let _ = fs::remove_file(&temp_file);
 
     let executable_name = if cfg!(windows) { "zero.exe" } else { "zero" };
 
     // The archive may contain the binary directly or nested inside a
     // subdirectory (e.g. zero-windows-x86_64/zero.exe).  Search for it.
     let staged_binary = find_file_recursive(&staging, executable_name).ok_or_else(|| {
-        let _ = fs::remove_dir_all(&staging);
         AppError::internal(format!(
             "extracted but could not find '{}' in staging directory",
             executable_name
         ))
     })?;
+    let staged_bundle_dir = staged_binary
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| staging.clone());
 
-    // Target path in the install directory
+    // Target path in the install directory.
     let executable_path = dir.join(executable_name);
-
     let state = app.state::<crate::state::app_state::AppState>();
+    let current_executable_path = {
+        let app_config = common::lock(state.app_config(), "app_config")?;
+        core_config::resolve_executable_path(&app_config.core)
+    };
+    let default_install_dir = data_dir()?.join("core");
+    let managed_default_dir = same_path(&dir, &default_install_dir);
+    let target_is_current_core = current_executable_path
+        .as_deref()
+        .is_some_and(|path| same_path(path, &executable_path));
+    let previous_managed_files = read_runtime_manifest(&dir)?;
+    let bundle_files = collect_runtime_bundle_files(&staged_bundle_dir, executable_name)?;
+
+    // Validate every same-name target before the currently working core is
+    // stopped. A dedicated ZNet-Sink target can replace its legacy binary and
+    // known Wintun companion; all other existing files must either be tracked
+    // by our manifest or byte-identical to the official bundle entry.
+    validate_runtime_bundle_targets(
+        &staged_bundle_dir,
+        &dir,
+        executable_name,
+        &bundle_files,
+        &previous_managed_files,
+        managed_default_dir,
+        target_is_current_core,
+    )?;
+
     let restart_core =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let restore_system_proxy =
@@ -287,8 +337,37 @@ pub fn install_version(
         })?;
     }
 
-    // Clean up staging directory
-    let _ = fs::remove_dir_all(&staging);
+    // Zero release archives are runtime bundles, not just executable
+    // containers. Preserve any files shipped adjacent to the binary (for
+    // example Windows `wintun.dll`) instead of deleting them with staging.
+    // The core release remains the authority for which companions exist and
+    // where they come from; ZNet-Sink only preserves the published bundle.
+    let companions = install_runtime_companions(
+        &staged_bundle_dir,
+        &dir,
+        executable_name,
+        &bundle_files,
+    )?;
+    if !companions.is_empty() {
+        let _ = crate::services::logs::append_entry(
+            state.inner(),
+            LogSource::App,
+            LogLevel::Info,
+            format!(
+                "kernel install: preserved runtime companions: {}",
+                companions.join(", ")
+            ),
+            None,
+        );
+    }
+
+    // Keep ownership records across downgrade/legacy bundles that may omit a
+    // previously installed companion. We do not delete absent companions
+    // implicitly; doing so could make an older Zero build unusable when its
+    // historical release archive omitted a required runtime file.
+    let mut next_managed_files = previous_managed_files;
+    next_managed_files.extend(bundle_files.iter().cloned());
+    write_runtime_manifest(&dir, &next_managed_files)?;
 
     if !executable_path.is_file() {
         return Err(AppError::internal(format!(
@@ -552,7 +631,6 @@ fn extract_archive(archive: &Path, dest: &Path) -> AppResult<()> {
     .map_err(|e| AppError::internal(format!("failed to extract: {e}")))?;
 
     if !status.success() {
-        let _ = fs::remove_file(archive);
         return Err(AppError::internal("failed to extract archive"));
     }
     Ok(())
@@ -572,6 +650,210 @@ fn find_file_recursive(dir: &Path, name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn collect_runtime_bundle_files(bundle_dir: &Path, executable_name: &str) -> AppResult<Vec<String>> {
+    let entries = fs::read_dir(bundle_dir)
+        .map_err(|e| AppError::internal(format!("failed to read kernel runtime bundle: {e}")))?;
+    let mut files = BTreeSet::new();
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime bundle: {e}")))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime file: {e}")))?;
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let file_name = entry
+            .file_name()
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| AppError::internal("kernel runtime bundle contains a non-UTF-8 file name"))?;
+        if file_name == RUNTIME_MANIFEST_FILE {
+            return Err(AppError::internal(format!(
+                "kernel runtime bundle uses reserved file name '{}'",
+                RUNTIME_MANIFEST_FILE
+            )));
+        }
+        files.insert(file_name);
+    }
+
+    if !files.contains(executable_name) {
+        return Err(AppError::internal(format!(
+            "kernel runtime bundle directory does not contain '{}'",
+            executable_name
+        )));
+    }
+
+    Ok(files.into_iter().collect())
+}
+
+fn read_runtime_manifest(install_dir: &Path) -> AppResult<BTreeSet<String>> {
+    let path = install_dir.join(RUNTIME_MANIFEST_FILE);
+    if !path.exists() {
+        return Ok(BTreeSet::new());
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime manifest: {e}")))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(AppError::internal(format!(
+            "kernel runtime manifest path is not a regular file: {}",
+            path.display()
+        )));
+    }
+
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| AppError::internal(format!("failed to read kernel runtime manifest: {e}")))?;
+    let files: Vec<String> = serde_json::from_str(&raw)
+        .map_err(|e| AppError::internal(format!("invalid kernel runtime manifest: {e}")))?;
+    let mut result = BTreeSet::new();
+    for file in files {
+        if !safe_runtime_file_name(&file) || file == RUNTIME_MANIFEST_FILE {
+            return Err(AppError::internal(format!(
+                "invalid file name in kernel runtime manifest: {file}"
+            )));
+        }
+        result.insert(file);
+    }
+    Ok(result)
+}
+
+fn write_runtime_manifest(install_dir: &Path, files: &BTreeSet<String>) -> AppResult<()> {
+    let path = install_dir.join(RUNTIME_MANIFEST_FILE);
+    let payload = serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>())
+        .map_err(|e| AppError::internal(format!("failed to serialize kernel runtime manifest: {e}")))?;
+    fs::write(&path, payload)
+        .map_err(|e| AppError::internal(format!("failed to write kernel runtime manifest: {e}")))?;
+    Ok(())
+}
+
+fn validate_runtime_bundle_targets(
+    bundle_dir: &Path,
+    install_dir: &Path,
+    executable_name: &str,
+    bundle_files: &[String],
+    previous_managed_files: &BTreeSet<String>,
+    managed_default_dir: bool,
+    target_is_current_core: bool,
+) -> AppResult<()> {
+    for file_name in bundle_files {
+        let target = install_dir.join(file_name);
+        if !target.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&target)
+            .map_err(|e| AppError::internal(format!("failed to inspect '{}': {e}", target.display())))?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(runtime_file_conflict(&target));
+        }
+
+        let source = bundle_dir.join(file_name);
+        if files_are_identical(&source, &target)? {
+            continue;
+        }
+
+        let tracked = previous_managed_files.contains(file_name);
+        let legacy_binary = file_name == executable_name && (managed_default_dir || target_is_current_core);
+        let legacy_companion = known_legacy_runtime_companion(file_name)
+            && (managed_default_dir || target_is_current_core);
+        if tracked || legacy_binary || legacy_companion {
+            continue;
+        }
+
+        return Err(runtime_file_conflict(&target));
+    }
+    Ok(())
+}
+
+fn runtime_file_conflict(target: &Path) -> AppError {
+    AppError::invalid_argument(format!(
+        "kernel install conflict: '{}' already exists and is not managed by ZNet-Sink; choose a dedicated install directory or rename/remove the conflicting file",
+        target.display()
+    ))
+}
+
+fn known_legacy_runtime_companion(file_name: &str) -> bool {
+    cfg!(windows) && file_name.eq_ignore_ascii_case("wintun.dll")
+}
+
+fn safe_runtime_file_name(file_name: &str) -> bool {
+    if file_name.is_empty() || file_name == "." || file_name == ".." {
+        return false;
+    }
+    !file_name.contains('/') && !file_name.contains('\\')
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn files_are_identical(left: &Path, right: &Path) -> AppResult<bool> {
+    let left_meta = fs::metadata(left)
+        .map_err(|e| AppError::internal(format!("failed to inspect '{}': {e}", left.display())))?;
+    let right_meta = fs::metadata(right)
+        .map_err(|e| AppError::internal(format!("failed to inspect '{}': {e}", right.display())))?;
+    if left_meta.len() != right_meta.len() {
+        return Ok(false);
+    }
+
+    let left_bytes = fs::read(left)
+        .map_err(|e| AppError::internal(format!("failed to read '{}': {e}", left.display())))?;
+    let right_bytes = fs::read(right)
+        .map_err(|e| AppError::internal(format!("failed to read '{}': {e}", right.display())))?;
+    Ok(left_bytes == right_bytes)
+}
+
+/// Copy files published next to the Zero binary into the managed install
+/// directory. The release archive is authoritative for runtime companions;
+/// ZNet-Sink does not independently download or synthesize them.
+fn install_runtime_companions(
+    bundle_dir: &Path,
+    install_dir: &Path,
+    executable_name: &str,
+    bundle_files: &[String],
+) -> AppResult<Vec<String>> {
+    let mut installed = Vec::new();
+
+    for file_name in bundle_files {
+        if file_name == executable_name {
+            continue;
+        }
+        let source = bundle_dir.join(file_name);
+        let target = install_dir.join(file_name);
+
+        if target.exists() && files_are_identical(&source, &target)? {
+            installed.push(file_name.clone());
+            continue;
+        }
+        if target.exists() {
+            remove_file_with_retry(&target, 5)?;
+        }
+        fs::copy(&source, &target).map_err(|e| {
+            AppError::internal(format!(
+                "failed to install kernel runtime companion '{}' to '{}': {e}",
+                source.display(),
+                target.display()
+            ))
+        })?;
+        installed.push(file_name.clone());
+    }
+
+    installed.sort();
+    Ok(installed)
 }
 
 /// Try to remove a file, retrying with short sleeps between attempts.
@@ -650,6 +932,23 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
 
+    fn temp_runtime_dirs(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let unique = format!(
+            "znet-kernel-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let bundle = root.join("bundle");
+        let install = root.join("install");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::create_dir_all(&install).unwrap();
+        (root, bundle, install)
+    }
+
     #[test]
     fn extracts_stable_and_prefixed_semver() {
         assert_eq!(extract_semver("zero v0.0.15"), Some("0.0.15".to_string()));
@@ -672,6 +971,108 @@ mod tests {
     fn rejects_network_addresses_as_versions() {
         assert_eq!(extract_semver("listening on 127.0.0.1:8080"), None);
         assert_eq!(extract_semver("control 0.0.0.0"), None);
+    }
+
+    #[test]
+    fn preserves_runtime_companions_from_the_binary_directory() {
+        let (root, bundle, install) = temp_runtime_dirs("bundle");
+        fs::write(bundle.join("zero.exe"), b"exe").unwrap();
+        fs::write(bundle.join("wintun.dll"), b"dll").unwrap();
+        fs::write(bundle.join("NOTICE.txt"), b"notice").unwrap();
+
+        let bundle_files = collect_runtime_bundle_files(&bundle, "zero.exe").unwrap();
+        let installed =
+            install_runtime_companions(&bundle, &install, "zero.exe", &bundle_files).unwrap();
+
+        assert_eq!(installed, vec!["NOTICE.txt".to_string(), "wintun.dll".to_string()]);
+        assert_eq!(fs::read(install.join("wintun.dll")).unwrap(), b"dll");
+        assert_eq!(fs::read(install.join("NOTICE.txt")).unwrap(), b"notice");
+        assert!(!install.join("zero.exe").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_unmanaged_same_name_runtime_conflicts_before_install() {
+        let (root, bundle, install) = temp_runtime_dirs("conflict");
+        fs::write(bundle.join("zero.exe"), b"new-exe").unwrap();
+        fs::write(bundle.join("NOTICE.txt"), b"official").unwrap();
+        fs::write(install.join("NOTICE.txt"), b"user-file").unwrap();
+
+        let bundle_files = collect_runtime_bundle_files(&bundle, "zero.exe").unwrap();
+        let error = validate_runtime_bundle_targets(
+            &bundle,
+            &install,
+            "zero.exe",
+            &bundle_files,
+            &BTreeSet::new(),
+            false,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.message.contains("kernel install conflict"));
+        assert_eq!(fs::read(install.join("NOTICE.txt")).unwrap(), b"user-file");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tracked_runtime_companion_can_be_replaced() {
+        let (root, bundle, install) = temp_runtime_dirs("tracked");
+        fs::write(bundle.join("zero.exe"), b"new-exe").unwrap();
+        fs::write(bundle.join("runtime.dat"), b"new-runtime").unwrap();
+        fs::write(install.join("runtime.dat"), b"old-runtime").unwrap();
+        let mut tracked = BTreeSet::new();
+        tracked.insert("runtime.dat".to_string());
+
+        let bundle_files = collect_runtime_bundle_files(&bundle, "zero.exe").unwrap();
+        validate_runtime_bundle_targets(
+            &bundle,
+            &install,
+            "zero.exe",
+            &bundle_files,
+            &tracked,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn identical_unmanaged_runtime_file_is_safe_to_adopt() {
+        let (root, bundle, install) = temp_runtime_dirs("identical");
+        fs::write(bundle.join("zero.exe"), b"new-exe").unwrap();
+        fs::write(bundle.join("NOTICE.txt"), b"same").unwrap();
+        fs::write(install.join("NOTICE.txt"), b"same").unwrap();
+
+        let bundle_files = collect_runtime_bundle_files(&bundle, "zero.exe").unwrap();
+        validate_runtime_bundle_targets(
+            &bundle,
+            &install,
+            "zero.exe",
+            &bundle_files,
+            &BTreeSet::new(),
+            false,
+            false,
+        )
+        .unwrap();
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_manifest_round_trips_managed_names() {
+        let (root, _bundle, install) = temp_runtime_dirs("manifest");
+        let files = BTreeSet::from([
+            "zero.exe".to_string(),
+            "wintun.dll".to_string(),
+            "NOTICE.txt".to_string(),
+        ]);
+        write_runtime_manifest(&install, &files).unwrap();
+        assert_eq!(read_runtime_manifest(&install).unwrap(), files);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

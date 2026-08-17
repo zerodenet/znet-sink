@@ -143,10 +143,18 @@ pub struct AppTunConfig {
     pub name: Option<String>,
     #[serde(default = "default_tun_addr")]
     pub addr: String,
+    #[serde(default = "default_tun_mask")]
+    pub mask: String,
+    #[serde(default)]
+    pub secondary_addr: Option<String>,
     #[serde(default = "default_tun_tag")]
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
+    #[serde(default = "default_true")]
+    pub dual_stack: bool,
+    #[serde(default)]
+    pub dns_hijack: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,8 +192,12 @@ impl Default for AppTunConfig {
         Self {
             name: None,
             addr: default_tun_addr(),
+            mask: default_tun_mask(),
+            secondary_addr: None,
             tag: default_tun_tag(),
             mtu: default_tun_mtu(),
+            dual_stack: true,
+            dns_hijack: false,
         }
     }
 }
@@ -259,8 +271,12 @@ pub struct AppLocalProxyConfigPatch {
 pub struct AppTunConfigPatch {
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
+    pub mask: Option<String>,
+    pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+    pub dual_stack: Option<bool>,
+    pub dns_hijack: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -313,6 +329,10 @@ fn default_local_proxy_port() -> u16 {
 
 fn default_tun_addr() -> String {
     "10.0.0.1/24".to_string()
+}
+
+fn default_tun_mask() -> String {
+    "255.255.255.0".to_string()
 }
 
 fn default_tun_tag() -> String {
@@ -409,5 +429,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.url_test.tolerance_ms, 0);
+    }
+
+    #[test]
+    fn tun_defaults_are_backwards_compatible_and_keep_dns_hijack_opt_in() {
+        let config: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(config.tun.mask, "255.255.255.0");
+        assert!(config.tun.secondary_addr.is_none());
+        assert!(config.tun.dual_stack);
+        assert!(!config.tun.dns_hijack);
     }
 }
