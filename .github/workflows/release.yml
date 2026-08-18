@@ -8,9 +8,50 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: znet-sink-release
+  cancel-in-progress: false
+
 jobs:
-  # ── Generate changelog from conventional commits ──
+  policy:
+    name: Validate release policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate managed tag and source branch
+        shell: bash
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            EXPECTED_BRANCH=main
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]{12}$ ]]; then
+            EXPECTED_BRANCH=main
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]{12}$ ]]; then
+            EXPECTED_BRANCH=develop
+          else
+            echo "::error::unsupported release tag $TAG; only dev, rc, and stable are allowed"
+            exit 1
+          fi
+
+          git fetch origin "+refs/heads/${EXPECTED_BRANCH}:refs/remotes/origin/${EXPECTED_BRANCH}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$EXPECTED_BRANCH"; then
+            echo "::error::$TAG must originate from $EXPECTED_BRANCH"
+            exit 1
+          fi
+
+          EXPECTED_COMMIT="chore(release): $VERSION"
+          ACTUAL_COMMIT=$(git show -s --format=%s "$GITHUB_SHA")
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "::error::release tag must point to '$EXPECTED_COMMIT', found '$ACTUAL_COMMIT'"
+            exit 1
+          fi
+
   changelog:
+    needs: policy
     runs-on: ubuntu-latest
     outputs:
       body: ${{ steps.generate.outputs.body }}
@@ -19,25 +60,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Generate release notes from conventional commits
         id: generate
         shell: bash
         run: |
-          # Find the previous tag so we only include commits from this release
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          mapfile -t TAGS < <(git tag --list)
+          PREV_TAG=$(node scripts/release-policy.mjs previous "$GITHUB_REF_NAME" "${TAGS[@]}")
           if [ -z "$PREV_TAG" ]; then
-            RANGE=""  # first release — include all commits
+            RANGE=""
           else
             RANGE="${PREV_TAG}..HEAD"
           fi
 
-          # Categorize conventional commits.  Supports the common types from
-          # commitlint-config-conventional.  Breaking changes are detected via
-          # both "BREAKING CHANGE" footer and the "!:" shorthand (feat!: …).
           categorize() {
             local type="$1" label="$2"
             local commits
-            # Match type: msg, type(scope): msg, and type!: msg (breaking)
             commits=$(git log --format="  - %s" ${RANGE} --grep="^${type}[!:(]" 2>/dev/null || true)
             if [ -n "$commits" ]; then
               echo "### ${label}"
@@ -46,19 +87,15 @@ jobs:
             fi
           }
 
-          # Breaking changes: "BREAKING CHANGE" footer or "type!:" prefix
           BREAKING=$(git log --format="  - %s" ${RANGE} --grep="BREAKING CHANGE\|!: " 2>/dev/null || true)
-
           {
-            echo "## $(echo "${{ github.ref_name }}" | sed 's/^v//')"
+            echo "## ${GITHUB_REF_NAME#v}"
             echo ""
-
             if [ -n "$BREAKING" ]; then
               echo "### ⚠ Breaking Changes"
               echo "$BREAKING"
               echo ""
             fi
-
             categorize "feat"     "🚀 Features"
             categorize "fix"      "🐛 Bug Fixes"
             categorize "perf"     "⚡ Performance"
@@ -72,39 +109,36 @@ jobs:
             categorize "build"    "📦 Dependencies"
           } > /tmp/release-notes.md
 
-          # Fallback: if nothing matched, include a simple summary
           if [ $(wc -l < /tmp/release-notes.md) -le 3 ]; then
-            echo "Full changelog: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.ref_name }}" >> /tmp/release-notes.md
+            if [ -n "$PREV_TAG" ]; then
+              echo "Full changelog: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${GITHUB_REF_NAME}" >> /tmp/release-notes.md
+            else
+              echo "Initial release notes for ${GITHUB_REF_NAME}." >> /tmp/release-notes.md
+            fi
           fi
 
           cat /tmp/release-notes.md
-
-          # Write the body as a job output (multiline)
           {
-            echo 'body<<EOF'
+            echo 'body<<EOF_NOTES'
             cat /tmp/release-notes.md
-            echo EOF
+            echo EOF_NOTES
           } >> "$GITHUB_OUTPUT"
 
-  # ── Build across platforms ──
   build:
     needs: changelog
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows: x86_64 only, NSIS exe + MSI
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform-key: windows-x86_64
-          # macOS: build both Intel + Apple Silicon on macos-latest (ARM)
           - os: macos-latest
             target: aarch64-apple-darwin
             platform-key: darwin-aarch64
           - os: macos-latest
             target: x86_64-apple-darwin
             platform-key: darwin-x86_64
-          # Linux: x86_64, deb + AppImage
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform-key: linux-x86_64
@@ -112,6 +146,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify updater signing key is configured
         env:
@@ -123,11 +159,6 @@ jobs:
             echo "::error::latest.json is generated and the published manifest"
             echo "::error::becomes an invalid {\"platforms\":{}} that breaks"
             echo "::error::update checks for every installed client."
-            echo "::error::"
-            echo "::error::Generate a key pair and configure the secret:"
-            echo "::error::  pnpm tauri signer generate -w ~/.tauri/znet-sink.key"
-            echo "::error::Then add the private key to repo Settings > Secrets"
-            echo "::error::> Actions as TAURI_SIGNING_PRIVATE_KEY."
             exit 1
           fi
         shell: bash
@@ -145,7 +176,8 @@ jobs:
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          node scripts/version-manifests.mjs check "$TAG_VERSION"
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          node scripts/version-manifests.mjs check "$TAG_VERSION" "$BUILD_NUMBER"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -164,45 +196,29 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Tauri updater signing key — stored in GitHub Repository Secrets.
-          # Generate via: pnpm tauri signer generate -w ~/.tauri/znet-sink.key
-          # Then add the private key content to repo Settings > Secrets > TAURI_SIGNING_PRIVATE_KEY
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # tauri signer keys are scrypt-encrypted even when generated
-          # "without password" (empty-password scrypt).  The bundler will
-          # not auto-use the empty password — without this env var it
-          # prompts interactively, which fails silently in CI and produces
-          # no .sig / no latest.json.  The password is empty by design.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'v__VERSION__'
           releaseBody: ${{ needs.changelog.outputs.body }}
-          # Keep the release hidden while matrix jobs merge their platform
-          # entries into latest.json. A final job validates and publishes it.
           releaseDraft: true
-          # Prerelease tags (vX.Y.Z-beta.N / -rc.N / -dev) publish as GitHub
-          # prereleases so they do NOT become "latest" and push to every
-          # updater client.  Stable tags (vX.Y.Z) stay regular releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # The app/updater keeps the full SemVer prerelease. Platform-native
-          # numeric versions are synchronized separately by update_version,
-          # so RC builds can produce MSI and signed macOS bundles as well.
           args: --target ${{ matrix.target }}
-
-  # latest.json is generated and uploaded automatically by tauri-action's
-  # uploadUpdaterJson (default enabled).  Across the matrix, each platform
-  # job downloads the existing latest.json from the release, merges its own
-  # platform entry, and re-uploads — so the final manifest carries every
-  # platform.  Do NOT add a manual find/merge job: tauri build only emits
-  # .sig files (not latest.json) to target/, and a manual merge would
-  # overwrite tauri-action's correct output with an empty placeholder.
 
   publish:
     name: Validate and publish release
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Download updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -232,3 +248,27 @@ jobs:
             args+=(--latest)
           fi
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+
+      - name: Cleanup promoted prereleases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          mapfile -t TAGS < <(git ls-remote --tags --refs origin | awk '{sub("refs/tags/", "", $2); print $2}')
+          mapfile -t CLEANUP_TAGS < <(node scripts/release-policy.mjs cleanup "$GITHUB_REF_NAME" "${TAGS[@]}")
+          if [ "${#CLEANUP_TAGS[@]}" -eq 0 ]; then
+            echo "No prerelease cleanup required."
+            exit 0
+          fi
+
+          for tag in "${CLEANUP_TAGS[@]}"; do
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::stable tag $tag was selected for cleanup; refusing"
+              exit 1
+            fi
+            echo "Cleaning promoted prerelease $tag"
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+            git push origin ":refs/tags/$tag"
+          done
