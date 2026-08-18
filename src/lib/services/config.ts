@@ -1,7 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { coreEvents } from './core-events.svelte';
 import { proxyConfigSignal } from './proxy-config-signal.svelte';
-import { prepareGuiTunForProfileSwitch, reconcileGuiTunRuntime } from './tun';
+import {
+  prepareGuiTunForProfileSwitch,
+  reconcileGuiTunRuntime,
+  restoreGuiTunAfterFailedProfileSwitch,
+} from './tun';
 import type {
   ProxyConfigProfile,
   ProxyConfigUpsert,
@@ -87,13 +91,13 @@ export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfi
     await reconcileTunAfterConfigMutation('profile activation');
     return profile;
   } catch (error) {
-    // If the target profile required config-managed TUN, the client may have
-    // stopped its command-managed TUN before config.apply. The active profile
-    // remains/rolls back to the previous source on failure, so replay its local
-    // desired state before returning the activation error.
-    if (transition.stoppedAppRuntime) {
-      await reconcileTunAfterConfigMutation('failed profile activation rollback');
-    }
+    // Restore the exact command-managed runtime that was stopped only to make
+    // room for a target profile's config-managed TUN. This also preserves the
+    // historical `enabled: undefined` migration state instead of treating it
+    // as an implicit OFF during rollback.
+    await restoreGuiTunAfterFailedProfileSwitch(transition).catch((restoreError) => {
+      console.warn('[config] failed to restore TUN after profile activation rollback', restoreError);
+    });
     throw error;
   }
 }
