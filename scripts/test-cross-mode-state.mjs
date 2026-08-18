@@ -11,6 +11,7 @@ const profilesTab = read('src/lib/components/tabs/ProfilesTab.svelte');
 const configEditor = read('src/lib/services/config-editor.svelte.ts');
 const guiConnection = read('src-tauri/src/services/gui_connection.rs');
 const coreProcessCommand = read('src-tauri/src/commands/core_process.rs');
+const appConfigCommand = read('src-tauri/src/commands/app_config.rs');
 const guiState = read('src/lib/services/gui-state.svelte.ts');
 const appStore = read('src/lib/services/store.svelte.ts');
 const settingsPanel = read('src/lib/components/SettingsPanel.svelte');
@@ -32,8 +33,10 @@ assert.ok(
     && configService.includes("invoke<ProxyConfigProfile>('proxy_config_set_active'")
     && configService.includes('proxyConfigSignal.markChanged(true)')
     && configService.includes("invoke<SubscriptionProfile>('subscription_sync'")
-    && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'"),
-  'successful profile activation and subscription sync must invalidate every config-backed surface',
+    && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
+    && configService.includes('prepareGuiTunForProfileSwitch(target.content)')
+    && configService.includes("reconcileTunAfterConfigMutation('profile activation')"),
+  'profile activation/subscription updates must invalidate config-backed surfaces and reconcile client-owned TUN around source changes',
 );
 
 assert.ok(
@@ -138,35 +141,35 @@ assert.ok(
 
 assert.ok(
   appConfigModel.includes('pub enabled: Option<bool>')
-    && ruleOverlay.includes('pub(crate) fn profile_defines_tun(base: &Value) -> bool')
-    && ruleOverlay.includes('tun.enabled != Some(true) || profile_defines_tun(base)')
-    && ruleOverlay.includes('runtime.insert("tun".to_string(), Value::Object(value));')
-    && ruleOverlay.includes('value.insert("auto_route".to_string(), json!(true));')
-    && ruleOverlay.includes('value.insert("strict_route".to_string(), json!(true));'),
-  'ZNet-Sink should persist a TUN desired state and inject runtime.tun only as an effective-config default when the source profile does not own it',
+    && !ruleOverlay.includes('apply_tun_default(')
+    && !ruleOverlay.includes('runtime.insert("tun".to_string()')
+    && !appConfigCommand.includes('tun_defaults_changed')
+    && !appConfigCommand.includes('tun_patch_requested'),
+  'persisted local TUN desired state must stay outside the effective Zero configuration and app-config updates must not trigger TUN config.apply',
 );
 
 assert.ok(
   tunService.includes("updateAppConfig({ tun: { enabled: true } })")
     && tunService.includes("updateAppConfig({ tun: { enabled: false } })")
-    && tunService.includes("profileManaged: true")
+    && tunService.includes("await invoke('gui_tun_enable')")
+    && tunService.includes("await invoke('gui_tun_disable')")
+    && tunService.includes('export async function reconcileGuiTunRuntime()')
+    && tunService.includes('export async function prepareGuiTunForProfileSwitch(content: unknown)')
     && tunService.includes('profileDesiredEnabled: runtime.tun !== null')
-    && tunService.includes("code: 'tun_managed_by_profile'")
-    && tunService.includes("if (current.enabled && !current.managedByConfig)")
-    && tunService.includes("await invoke('gui_tun_disable')"),
-  'GUI TUN actions should drive persisted effective config, respect explicit profile ownership including runtime.tun:null, and retain legacy command cleanup only for migration',
+    && tunService.includes("code: 'tun_managed_by_profile'"),
+  'GUI TUN actions must persist desired state while controlling app-owned TUN through tun.start/tun.stop and handing profile ownership off explicitly',
 );
 
 const dnsPreflight = tunService.indexOf('validateAppDnsHijackPrecondition(policy);');
-const legacyTunCleanup = tunService.indexOf("await invoke('gui_tun_disable');", dnsPreflight);
+const runtimeEnable = tunService.indexOf("await invoke('gui_tun_enable')", dnsPreflight);
 assert.ok(
   tunService.includes('function validateAppDnsHijackPrecondition(policy: TunPolicy): void')
     && tunService.includes('!policy.appConfig.tun.dnsHijack')
     && tunService.includes("server.type !== 'system'")
     && tunService.includes("code: 'invalid_argument'")
     && dnsPreflight >= 0
-    && legacyTunCleanup > dnsPreflight,
-  'app-owned DNS hijack must reject missing/system DNS before mutating a working legacy runtime or sending an invalid effective config to Core',
+    && runtimeEnable > dnsPreflight,
+  'app-owned DNS hijack must reject missing/system DNS before starting command-managed TUN',
 );
 
 assert.ok(
@@ -174,7 +177,15 @@ assert.ok(
     && tunRuntime.includes('super::wintun_compat::ensure_for_current_runtime().await?;')
     && tunRuntime.includes('commands::run_command("tun.start", params, options.clone()).await?')
     && tunRuntime.includes('commands::run_command("tun.stop", json!({}), options.clone()).await?'),
-  'capability-gated runtime preparation should be reusable without removing the direct tun.start/tun.stop compatibility surface',
+  'capability-gated runtime preparation must feed the primary app-owned tun.start/tun.stop lifecycle',
+);
+
+assert.ok(
+  coreProcessCommand.includes('restore_app_tun_after_core_transition')
+    && coreProcessCommand.includes('app_config.tun.enabled != Some(true)')
+    && coreProcessCommand.includes('active_profile_defines_tun(state)?')
+    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options)).await?'),
+  'managed Core start/restart must replay persisted app-owned TUN only when the active profile does not own runtime.tun',
 );
 
 assert.ok(
