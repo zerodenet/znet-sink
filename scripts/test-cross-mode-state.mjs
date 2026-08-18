@@ -138,6 +138,18 @@ assert.ok(
   'GUI TUN actions should drive persisted effective config, respect explicit profile ownership including runtime.tun:null, and retain legacy command cleanup only for migration',
 );
 
+const dnsPreflight = tunService.indexOf('validateAppDnsHijackPrecondition(policy);');
+const legacyTunCleanup = tunService.indexOf("await invoke('gui_tun_disable');", dnsPreflight);
+assert.ok(
+  tunService.includes('function validateAppDnsHijackPrecondition(policy: TunPolicy): void')
+    && tunService.includes('!policy.appConfig.tun.dnsHijack')
+    && tunService.includes("server.type !== 'system'")
+    && tunService.includes("code: 'invalid_argument'")
+    && dnsPreflight >= 0
+    && legacyTunCleanup > dnsPreflight,
+  'app-owned DNS hijack must reject missing/system DNS before mutating a working legacy runtime or sending an invalid effective config to Core',
+);
+
 assert.ok(
   tunRuntime.includes('pub async fn prepare_tun_enable(')
     && tunRuntime.includes('super::wintun_compat::ensure_for_current_runtime().await?;')
