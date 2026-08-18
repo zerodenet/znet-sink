@@ -29,20 +29,38 @@ pub async fn tun_status(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStat
     }
 }
 
-pub async fn enable_tun(
-    tun: AppTunConfig,
+/// Verify that the connected Zero can host TUN and prepare any client-managed
+/// compatibility dependency without starting a command-managed TUN instance.
+///
+/// GUI lifecycle code uses declarative `runtime.tun` through config.apply. The
+/// command surface remains available for direct/compatibility callers, but the
+/// dependency preparation must be reusable without creating competing runtime
+/// ownership.
+pub async fn prepare_tun_enable(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiTunStatus> {
     // Capability/state is authoritative for whether the client should prepare
     // platform dependencies. An unsupported or temporarily unreadable Zero
     // must never cause a speculative Wintun download.
-    let status = tun_status(options.clone()).await?;
+    let status = tun_status(options).await?;
     if status.enabled || !status.supported {
         return Ok(status);
     }
 
     #[cfg(windows)]
     super::wintun_compat::ensure_for_current_runtime().await?;
+
+    Ok(status)
+}
+
+pub async fn enable_tun(
+    tun: AppTunConfig,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<GuiTunStatus> {
+    let status = prepare_tun_enable(options.clone()).await?;
+    if status.enabled || !status.supported {
+        return Ok(status);
+    }
 
     let params = build_tun_start_params(tun);
     let response = commands::run_command("tun.start", params, options.clone()).await?;
@@ -190,6 +208,7 @@ mod tests {
     #[test]
     fn tun_start_uses_full_capture_policy_and_persisted_interface_values() {
         let tun = AppTunConfig {
+            enabled: Some(true),
             name: Some("CustomTun".to_string()),
             addr: "10.88.0.1/24".to_string(),
             mask: "255.255.255.0".to_string(),

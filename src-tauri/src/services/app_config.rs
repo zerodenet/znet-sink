@@ -136,6 +136,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
     }
 
     if let Some(tun) = patch.tun {
+        if let Some(enabled) = tun.enabled {
+            config.tun.enabled = Some(enabled);
+        }
         if let Some(name) = tun.name {
             config.tun.name = normalize_optional(name);
         }

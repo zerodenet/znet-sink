@@ -139,6 +139,10 @@ pub struct AppLocalProxyConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfig {
+    /// Explicit ZNet-Sink desired state. `None` preserves the historical
+    /// auto-connect behavior until the user first toggles TUN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default = "default_tun_addr")]
@@ -193,6 +197,7 @@ impl Default for AppUrlTestConfig {
 impl Default for AppTunConfig {
     fn default() -> Self {
         Self {
+            enabled: None,
             name: None,
             addr: default_tun_addr(),
             mask: default_tun_mask(),
@@ -272,6 +277,7 @@ pub struct AppLocalProxyConfigPatch {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfigPatch {
+    pub enabled: Option<bool>,
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
     pub mask: Option<String>,
@@ -452,11 +458,27 @@ mod tests {
     #[test]
     fn tun_defaults_are_backwards_compatible_and_keep_dns_hijack_opt_in() {
         let config: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(config.tun.enabled.is_none());
         assert_eq!(config.tun.mask, "255.255.255.0");
         assert_eq!(config.tun.tag, "znet-sink-tun");
         assert!(config.tun.secondary_addr.is_none());
         assert!(config.tun.dual_stack);
         assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn tun_desired_state_round_trips_when_explicit() {
+        let enabled: AppConfig = serde_json::from_value(json!({
+            "tun": { "enabled": true }
+        }))
+        .unwrap();
+        assert_eq!(enabled.tun.enabled, Some(true));
+
+        let disabled: AppConfig = serde_json::from_value(json!({
+            "tun": { "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(disabled.tun.enabled, Some(false));
     }
 
     #[test]
