@@ -170,8 +170,9 @@ export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {
  * owns runtime.tun. Core intentionally rejects configured TUN activation while
  * a command-managed TUN is still running, so the client owns this handoff.
  *
- * The persisted AppConfig desired state is not changed; if the profile switch
- * fails, reconcileGuiTunRuntime() can restore the previous app-owned runtime.
+ * The persisted AppConfig desired state is not changed. `stoppedAppRuntime`
+ * records the exact pre-switch runtime so a failed profile transition can put
+ * it back even for legacy configs that do not yet have an explicit desired bit.
  */
 export async function prepareGuiTunForProfileSwitch(content: unknown): Promise<TunProfileTransition> {
   const target = profileTunPolicy(content);
@@ -186,10 +187,30 @@ export async function prepareGuiTunForProfileSwitch(content: unknown): Promise<T
   return { stoppedAppRuntime: true };
 }
 
+/** Restore the exact app-owned runtime stopped only for a failed profile handoff. */
+export async function restoreGuiTunAfterFailedProfileSwitch(
+  transition: TunProfileTransition,
+): Promise<void> {
+  if (!transition.stoppedAppRuntime) return;
+
+  const policy = await resolveTunPolicy();
+  if (policy.profileManaged) return;
+
+  const current = await rawTunStatus();
+  if (current.enabled) return;
+  validateAppDnsHijackPrecondition(policy);
+  await ensureCoreReady();
+  await invoke('gui_tun_enable');
+}
+
 /**
  * Reconcile the current Core instance with the persisted local desired state.
  * Profile/static runtime.tun always wins; otherwise the local preference is
  * replayed through tun.start/tun.stop and never through config.apply.
+ *
+ * `enabled: undefined` is a migration state, not an implicit OFF. Until the
+ * user explicitly toggles TUN, preserve whatever command-managed state is
+ * already observed instead of mutating it during an unrelated config refresh.
  */
 export async function reconcileGuiTunRuntime(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
@@ -199,16 +220,20 @@ export async function reconcileGuiTunRuntime(): Promise<GuiManagedTunStatus> {
     return enrichTunStatus(current, policy);
   }
 
-  const desired = policy.appConfig.tun.enabled === true;
   if (current.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
+  }
+
+  const desired = policy.appConfig.tun.enabled;
+  if (desired === undefined) {
+    return enrichTunStatus(current, policy);
   }
 
   if (desired && !current.enabled) {
     validateAppDnsHijackPrecondition(policy);
     await ensureCoreReady();
     current = await invoke('gui_tun_enable');
-  } else if (!desired && current.enabled && !current.managedByConfig) {
+  } else if (!desired && current.enabled) {
     current = await invoke('gui_tun_disable');
   }
 
@@ -250,7 +275,9 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     return getGuiTunStatus();
   } catch (error) {
     // A failed explicit enable should not leave a new persisted ON intent that
-    // will be replayed on every subsequent Core generation.
+    // will be replayed on every subsequent Core generation. AppConfig's patch
+    // model cannot restore legacy undefined, so failure falls back to explicit
+    // OFF, which is safer than an unintended future auto-start.
     await updateAppConfig({ tun: { enabled: previousDesired } }).catch(() => undefined);
     throw error;
   }
