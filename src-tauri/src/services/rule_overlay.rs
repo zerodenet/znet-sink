@@ -8,7 +8,6 @@ use zero_rule::zrs::{verify, VerifyMode};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
-use crate::models::app_config::AppTunConfig;
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
@@ -45,63 +44,14 @@ fn finalize_effective_config(
     base: &Value,
     mut config: Value,
 ) -> AppResult<Value> {
-    let app_config = common::lock(state.app_config(), "app_config")?;
-    let tolerance_ms = app_config.url_test.tolerance_ms;
-    let tun = app_config.tun.clone();
-    drop(app_config);
-
+    let tolerance_ms = common::lock(state.app_config(), "app_config")?
+        .url_test
+        .tolerance_ms;
     if url_test::supports_tolerance(state) {
         url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
     }
-    apply_tun_default(base, &mut config, &tun)?;
     policy_selection::apply_saved_selections(state, base, &mut config)?;
     Ok(config)
-}
-
-/// Return whether the source profile explicitly owns the declarative TUN
-/// runtime. Presence is authoritative even when the value later fails Core
-/// validation; ZNet-Sink must never silently replace a profile's intent with
-/// its own defaults.
-pub(crate) fn profile_defines_tun(base: &Value) -> bool {
-    base.get("runtime")
-        .and_then(Value::as_object)
-        .is_some_and(|runtime| runtime.contains_key("tun"))
-}
-
-fn apply_tun_default(base: &Value, config: &mut Value, tun: &AppTunConfig) -> AppResult<()> {
-    if tun.enabled != Some(true) || profile_defines_tun(base) {
-        return Ok(());
-    }
-
-    let root = config
-        .as_object_mut()
-        .ok_or_else(|| AppError::invalid_argument("proxy config must be a JSON object"))?;
-    let runtime = object_field(root, "runtime")?;
-    // Keep any earlier effective-config owner authoritative as well. This is
-    // intentionally a default injection, never an overwrite.
-    if runtime.contains_key("tun") {
-        return Ok(());
-    }
-
-    let mut value = Map::new();
-    if let Some(name) = tun.name.as_ref() {
-        value.insert("name".to_string(), json!(name));
-    }
-    value.insert("addr".to_string(), json!(tun.addr));
-    value.insert("mask".to_string(), json!(tun.mask));
-    if tun.dual_stack {
-        if let Some(secondary_addr) = tun.secondary_addr.as_ref() {
-            value.insert("secondary_addr".to_string(), json!(secondary_addr));
-        }
-    }
-    value.insert("mtu".to_string(), json!(tun.mtu));
-    value.insert("tag".to_string(), json!(tun.tag));
-    value.insert("auto_route".to_string(), json!(true));
-    value.insert("dual_stack".to_string(), json!(tun.dual_stack));
-    value.insert("strict_route".to_string(), json!(true));
-    value.insert("dns_hijack".to_string(), json!(tun.dns_hijack));
-    runtime.insert("tun".to_string(), Value::Object(value));
-    Ok(())
 }
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
@@ -592,70 +542,6 @@ mod tests {
             updated_at_unix_ms: 0,
             last_sync_at_unix_ms: None,
             last_error: None,
-        }
-    }
-
-    #[test]
-    fn app_tun_default_is_injected_only_when_profile_omits_runtime_tun() {
-        let base = json!({"runtime": {}, "route": {"rules": []}});
-        let mut effective = base.clone();
-        let tun = AppTunConfig {
-            enabled: Some(true),
-            name: Some("ZeroTun".to_string()),
-            addr: "10.88.0.1/24".to_string(),
-            mask: "255.255.255.0".to_string(),
-            secondary_addr: Some("fd88::1/64".to_string()),
-            tag: "znet-sink-tun".to_string(),
-            mtu: 1400,
-            dual_stack: true,
-            dns_hijack: false,
-        };
-
-        apply_tun_default(&base, &mut effective, &tun).unwrap();
-
-        assert_eq!(effective["runtime"]["tun"]["name"], "ZeroTun");
-        assert_eq!(effective["runtime"]["tun"]["addr"], "10.88.0.1/24");
-        assert_eq!(effective["runtime"]["tun"]["secondary_addr"], "fd88::1/64");
-        assert_eq!(effective["runtime"]["tun"]["auto_route"], true);
-        assert_eq!(effective["runtime"]["tun"]["strict_route"], true);
-        assert_eq!(effective["runtime"]["tun"]["dns_hijack"], false);
-    }
-
-    #[test]
-    fn profile_runtime_tun_has_priority_over_app_defaults() {
-        let profile_tun = json!({
-            "addr": "10.99.0.1/24",
-            "tag": "profile-tun",
-            "auto_route": false
-        });
-        let base = json!({
-            "runtime": { "tun": profile_tun.clone() },
-            "route": { "rules": [] }
-        });
-        let mut effective = base.clone();
-        let tun = AppTunConfig {
-            enabled: Some(true),
-            addr: "10.88.0.1/24".to_string(),
-            ..AppTunConfig::default()
-        };
-
-        apply_tun_default(&base, &mut effective, &tun).unwrap();
-
-        assert_eq!(effective["runtime"]["tun"], profile_tun);
-        assert!(profile_defines_tun(&base));
-    }
-
-    #[test]
-    fn app_tun_default_stays_absent_until_explicitly_enabled() {
-        let base = json!({"runtime": {}, "route": {"rules": []}});
-        for desired in [None, Some(false)] {
-            let mut effective = base.clone();
-            let tun = AppTunConfig {
-                enabled: desired,
-                ..AppTunConfig::default()
-            };
-            apply_tun_default(&base, &mut effective, &tun).unwrap();
-            assert!(effective["runtime"].get("tun").is_none());
         }
     }
 

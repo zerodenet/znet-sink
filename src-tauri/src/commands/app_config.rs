@@ -1,12 +1,9 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::zero;
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::models::core_process::CoreProcessState;
-use crate::services::{
-    app_config, common, core_config, core_process, rule_overlay, system_proxy_guard,
-};
+use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -23,68 +20,24 @@ pub async fn app_config_update(
     let _operation = state.proxy_config_operation().lock().await;
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
-    let tun_patch_requested = patch.tun.is_some();
 
     // Apply the patch and persist.
     let new_config = app_config::update(state.clone(), patch)?;
 
     // Detect whether a restart-worthy field changed while the kernel is
-    // running. We check the kernel state *after* the config update so the
+    // running.  We check the kernel state *after* the config update so the
     // lock is released — `core_process::stop/start` acquire their own locks.
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
     let url_test_tolerance_changed =
         old_config.url_test.tolerance_ms != new_config.url_test.tolerance_ms;
-    let tun_defaults_changed = old_config.tun != new_config.tun;
-    let profile_owns_tun = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.as_ref())
-        .is_some_and(rule_overlay::profile_defines_tun);
 
     if kernel_running {
         let needs_restart = old_config.core.executable_path != new_config.core.executable_path
             || old_config.core.socket != new_config.core.socket
             || old_config.core.working_dir != new_config.core.working_dir
             || old_config.core.config_path != new_config.core.config_path;
-
-        // Declarative TUN still needs the same capability-gated Windows
-        // compatibility preparation as the legacy command surface. Do this
-        // only when the local default will actually own the effective TUN;
-        // profile/static runtime.tun always has higher priority.
-        if tun_patch_requested
-            && new_config.tun.enabled == Some(true)
-            && !profile_owns_tun
-            && !needs_restart
-        {
-            let opts = core_config::ipc_options_from_app_config(&new_config.core);
-            let prepared = zero::runtime::prepare_tun_enable(Some(opts)).await;
-            match prepared {
-                Ok(status) if status.supported => {}
-                Ok(_) => {
-                    let _ = app_config::replace(state.inner(), old_config.clone());
-                    return Err(AppError::invalid_argument(
-                        "the current Zero runtime does not support TUN",
-                    ));
-                }
-                Err(error) => {
-                    let storage_rollback = app_config::replace(state.inner(), old_config.clone())
-                        .err()
-                        .map(|rollback| rollback.message);
-                    let mut message = format!(
-                        "failed to prepare TUN runtime configuration: {}",
-                        error.message
-                    );
-                    if let Some(storage_rollback) = storage_rollback {
-                        message.push_str(&format!(
-                            "; configuration rollback failed: {storage_rollback}"
-                        ));
-                    }
-                    return Err(AppError::internal(message));
-                }
-            }
-        }
 
         if needs_restart {
             // Drop the stale multiplexed connection so the next request
@@ -145,10 +98,10 @@ pub async fn app_config_update(
                 }
                 return Err(AppError::internal(message));
             }
-        } else if url_test_tolerance_changed || tun_defaults_changed || tun_patch_requested {
-            // URLTest and TUN are client-owned effective-config preferences.
-            // The stored subscription/profile remains untouched; recomposition
-            // injects defaults only where the source profile omitted them.
+        } else if url_test_tolerance_changed {
+            // URLTest tolerance is an effective-config preference: keep the
+            // stored subscription/profile source untouched and recompose the
+            // active configuration with the new default immediately.
             if let Err(error) =
                 rule_overlay::reconcile_current_config_locked(app_handle.clone()).await
             {
@@ -163,7 +116,7 @@ pub async fn app_config_update(
                 .map(|rollback| rollback.message);
 
                 let mut message = format!(
-                    "failed to apply effective runtime configuration: {}",
+                    "failed to apply URLTest tolerance configuration: {}",
                     error.message
                 );
                 if let Some(storage_rollback) = storage_rollback {
@@ -192,9 +145,7 @@ pub async fn app_config_update(
                 &old_config.local_proxy.bypass,
             );
             let _ = app_config::replace(state.inner(), old_config.clone());
-            if kernel_running
-                && (url_test_tolerance_changed || tun_defaults_changed || tun_patch_requested)
-            {
+            if kernel_running && url_test_tolerance_changed {
                 let _ = rule_overlay::reconcile_current_config_locked(app_handle.clone()).await;
             }
             return Err(error);
