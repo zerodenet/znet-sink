@@ -134,22 +134,10 @@ function runtimeOwnershipError(): { code: string; message: string } {
   };
 }
 
-function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
-  if (policy.profileManaged || !policy.appConfig.tun.dnsHijack) return;
-
-  const content = policy.profile?.content;
-  const runtime = isObject(content) && isObject(content.runtime) ? content.runtime : undefined;
-  const dns = runtime && isObject(runtime.dns) ? runtime.dns : undefined;
-  const servers = dns && Array.isArray(dns.servers) ? dns.servers : [];
-  const hasOnlyNonSystemServers = servers.length > 0
-    && servers.every((server) => isObject(server) && server.type !== 'system');
-
-  if (hasOnlyNonSystemServers) return;
-
-  throw {
-    code: 'invalid_argument',
-    message: 'DNS 劫持已启用，但当前活动配置没有可用于 TUN 的非系统 DNS。请先在 Zero 配置的 runtime.dns.servers 中配置非 system DNS，或在“设置 → TUN”关闭 DNS 劫持。',
-  };
+function validateAppDnsHijackPrecondition(_policy: TunPolicy): void {
+  // App-owned DNS hijack is temporarily disabled for this release. The Rust
+  // tun.start builder forces dns_hijack=false so persisted values from older
+  // builds cannot block TUN startup before the client has a complete DNS UI.
 }
 
 export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {

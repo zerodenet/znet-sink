@@ -92,7 +92,12 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     params.insert("auto_route".to_string(), json!(true));
     params.insert("strict_route".to_string(), json!(true));
     params.insert("dual_stack".to_string(), json!(tun.dual_stack));
-    params.insert("dns_hijack".to_string(), json!(tun.dns_hijack));
+
+    // DNS hijack remains disabled for app-owned TUN until ZNet-Sink exposes a
+    // complete DNS configuration surface. Ignore persisted values from older
+    // builds so upgrading cannot make tun.start fail because runtime.dns is
+    // absent or still system-backed. Profile-owned runtime.tun is untouched.
+    params.insert("dns_hijack".to_string(), json!(false));
     Value::Object(params)
 }
 
@@ -209,7 +214,7 @@ mod tests {
         assert_eq!(params["auto_route"], true);
         assert_eq!(params["strict_route"], true);
         assert_eq!(params["dual_stack"], true);
-        assert_eq!(params["dns_hijack"], true);
+        assert_eq!(params["dns_hijack"], false);
     }
 
     #[test]
