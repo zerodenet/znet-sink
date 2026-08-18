@@ -142,6 +142,41 @@ export function resolveReleasePlan({ branch, input, tags = [], now = new Date(),
   };
 }
 
+function compareBuildIds(left, right) {
+  const a = BigInt(left ?? '0');
+  const b = BigInt(right ?? '0');
+  return a === b ? 0 : a > b ? 1 : -1;
+}
+
+export function validatePublishedRelease({ branch, tag, tags = [] }) {
+  const published = parseManagedTag(tag);
+  if (!published) fail(`published tag '${tag}' is not managed by the release policy`);
+  if (branch !== 'develop' && branch !== 'main') fail(`invalid release branch '${branch}'`);
+  if (published.channel === 'dev' && branch !== 'develop') fail(`dev release ${tag} must originate from develop`);
+  if (published.channel !== 'dev' && branch !== 'main') fail(`${published.channel} release ${tag} must originate from main`);
+
+  const otherTags = tags.filter((candidate) => candidate.replace(/^refs\/tags\//, '') !== published.tag);
+  const state = managedState(otherTags);
+  const sameBase = state.parsed.filter((item) => item.baseVersion === published.baseVersion);
+
+  if (state.latestStable && compareBaseVersions(published.baseVersion, state.latestStable) <= 0) {
+    fail(`release line ${published.baseVersion} is sealed by stable ${state.latestStable}`);
+  }
+  if (state.activeBase && state.activeBase !== published.baseVersion) {
+    fail(`active release line is ${state.activeBase}; cannot publish ${published.baseVersion}`);
+  }
+  if (published.channel === 'dev' && sameBase.some((item) => item.channel === 'rc')) {
+    fail(`release line ${published.baseVersion} already reached rc and cannot return to dev`);
+  }
+  if (published.channel === 'rc' && !sameBase.some((item) => item.channel === 'dev' || item.channel === 'rc')) {
+    fail(`rc ${published.baseVersion} requires an existing dev release`);
+  }
+  if (published.channel === 'stable' && !sameBase.some((item) => item.channel === 'rc')) {
+    fail(`stable ${published.baseVersion} requires an existing rc release`);
+  }
+  return published;
+}
+
 export function cleanupTagsForPublishedTag(publishedTag, tags) {
   const published = parseManagedTag(publishedTag);
   if (!published) fail(`published tag '${publishedTag}' is not managed by the release policy`);
@@ -174,18 +209,18 @@ export function selectPreviousReleaseTag(currentTag, tags) {
   const sameBase = parsed.filter((item) => item.baseVersion === current.baseVersion);
   if (current.channel === 'stable') {
     const rc = sameBase.filter((item) => item.channel === 'rc');
-    return rc.sort((a, b) => String(a.buildId).localeCompare(String(b.buildId))).at(-1)?.tag ?? null;
+    return rc.sort((a, b) => compareBuildIds(a.buildId, b.buildId)).at(-1)?.tag ?? null;
   }
   if (current.channel === 'rc') {
     const rc = sameBase.filter((item) => item.channel === 'rc');
-    const previousRc = rc.sort((a, b) => String(a.buildId).localeCompare(String(b.buildId))).at(-1);
+    const previousRc = rc.sort((a, b) => compareBuildIds(a.buildId, b.buildId)).at(-1);
     if (previousRc) return previousRc.tag;
     const stable = parsed.filter((item) => item.channel === 'stable');
     return stable.sort((a, b) => compareBaseVersions(a.baseVersion, b.baseVersion)).at(-1)?.tag ?? null;
   }
 
   const dev = sameBase.filter((item) => item.channel === 'dev');
-  const previousDev = dev.sort((a, b) => String(a.buildId).localeCompare(String(b.buildId))).at(-1);
+  const previousDev = dev.sort((a, b) => compareBuildIds(a.buildId, b.buildId)).at(-1);
   if (previousDev) return previousDev.tag;
   const stable = parsed.filter((item) => item.channel === 'stable');
   return stable.sort((a, b) => compareBaseVersions(a.baseVersion, b.baseVersion)).at(-1)?.tag ?? null;
@@ -220,13 +255,19 @@ function livePlan(input) {
 }
 
 function usage() {
-  console.log(`Usage:\n  node scripts/release-policy.mjs plan <X.Y.Z|X.Y.Z-rc>\n  node scripts/release-policy.mjs cleanup <published-tag> [tag ...]\n  node scripts/release-policy.mjs previous <current-tag> [tag ...]`);
+  console.log(`Usage:\n  node scripts/release-policy.mjs plan <X.Y.Z|X.Y.Z-rc>\n  node scripts/release-policy.mjs validate-published <branch> <tag> [tag ...]\n  node scripts/release-policy.mjs cleanup <published-tag> [tag ...]\n  node scripts/release-policy.mjs previous <current-tag> [tag ...]`);
 }
 
 function runCli() {
   const [command, value, ...rest] = process.argv.slice(2);
   if (command === 'plan' && value && rest.length === 0) {
     console.log(JSON.stringify(livePlan(value)));
+    return;
+  }
+  if (command === 'validate-published' && value && rest.length >= 1) {
+    const [tag, ...tags] = rest;
+    validatePublishedRelease({ branch: value, tag, tags });
+    console.log(tag);
     return;
   }
   if (command === 'cleanup' && value) {
