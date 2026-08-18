@@ -19,16 +19,28 @@ interface TunPolicy {
   appConfig: AppConfig;
   profile?: ProxyConfigProfile;
   profileManaged: boolean;
+  profileDesiredEnabled: boolean;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function profileDefinesTun(content: unknown): boolean {
-  if (!isObject(content)) return false;
+function profileTunPolicy(content: unknown): Pick<TunPolicy, 'profileManaged' | 'profileDesiredEnabled'> {
+  if (!isObject(content) || !isObject(content.runtime)) {
+    return { profileManaged: false, profileDesiredEnabled: false };
+  }
   const runtime = content.runtime;
-  return isObject(runtime) && Object.prototype.hasOwnProperty.call(runtime, 'tun');
+  if (!Object.prototype.hasOwnProperty.call(runtime, 'tun')) {
+    return { profileManaged: false, profileDesiredEnabled: false };
+  }
+  // `runtime.tun: null` is an explicit profile-owned disabled state. Any
+  // non-null value remains profile-owned and is left for Zero to validate;
+  // ZNet-Sink must not silently replace invalid source intent with defaults.
+  return {
+    profileManaged: true,
+    profileDesiredEnabled: runtime.tun !== null,
+  };
 }
 
 async function resolveTunPolicy(): Promise<TunPolicy> {
@@ -37,7 +49,7 @@ async function resolveTunPolicy(): Promise<TunPolicy> {
   return {
     appConfig,
     profile,
-    profileManaged: profileDefinesTun(profile?.content),
+    ...profileTunPolicy(profile?.content),
   };
 }
 
@@ -58,8 +70,9 @@ function enrichTunStatus(status: GuiTunStatus, policy: TunPolicy): GuiManagedTun
   }
 
   const desiredEnabled = policy.profileManaged
-    || policy.appConfig.tun.enabled === true
-    || (policy.appConfig.tun.enabled === undefined && status.enabled);
+    ? policy.profileDesiredEnabled
+    : policy.appConfig.tun.enabled === true
+      || (policy.appConfig.tun.enabled === undefined && status.enabled);
 
   return {
     ...status,
@@ -96,11 +109,12 @@ async function ensureCoreReady(): Promise<void> {
   throw new Error(message);
 }
 
-function profileManagedError(policy: TunPolicy): { code: string; message: string } {
+function profileManagedError(policy: TunPolicy, action: 'enable' | 'disable'): { code: string; message: string } {
   const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
+  const state = policy.profileDesiredEnabled ? '启用' : '关闭';
   return {
     code: 'tun_managed_by_profile',
-    message: `${name} 已显式定义 runtime.tun，该配置优先于 ZNet-Sink 的本地 TUN 缺省设置。请编辑或切换该配置后再关闭 TUN。`,
+    message: `${name} 已显式定义 runtime.tun（期望${state}），该配置优先于 ZNet-Sink 的本地 TUN 缺省设置。请编辑或切换该配置后再${action === 'enable' ? '开启' : '关闭'} TUN。`,
   };
 }
 
@@ -123,6 +137,9 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
   const current = await rawTunStatus();
 
   if (policy.profileManaged) {
+    if (!policy.profileDesiredEnabled) {
+      throw profileManagedError(policy, 'enable');
+    }
     const enriched = enrichTunStatus(current, policy);
     if (!current.enabled) {
       const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
@@ -150,7 +167,7 @@ export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   const current = await rawTunStatus();
 
   if (policy.profileManaged) {
-    throw profileManagedError(policy);
+    throw profileManagedError(policy, 'disable');
   }
 
   // Clean up a legacy/direct command-managed session first. Persisting false

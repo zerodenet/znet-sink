@@ -216,6 +216,7 @@
           max="65535"
           step="1"
           bind:value={mtu}
+          oninput={markDirty}
           disabled={locked}
           class="font-mono"
           aria-label="TUN MTU"
