@@ -16,6 +16,9 @@ const appStore = read('src/lib/services/store.svelte.ts');
 const settingsPanel = read('src/lib/components/SettingsPanel.svelte');
 const tunSettings = read('src/lib/components/settings/TunSettingsPanel.svelte');
 const tunRuntime = read('src-tauri/src/kernel/zero/runtime.rs');
+const tunService = read('src/lib/services/tun.ts');
+const ruleOverlay = read('src-tauri/src/services/rule_overlay.rs');
+const appConfigModel = read('src-tauri/src/models/app_config.rs');
 
 assert.ok(
   configSignal.includes('revision = $state(0)')
@@ -66,7 +69,7 @@ assert.ok(
     && guiState.includes("tracedOperation('proxy', 'tun.disable', () => disableGuiTun())")
     && guiState.includes('get isConnected(): boolean')
     && guiState.includes('return this.isTunEnabled;'),
-  'Lite power must map to Zero TUN lifecycle rather than the system-proxy lifecycle',
+  'Lite power must map to the client-managed Zero TUN lifecycle rather than the system-proxy lifecycle',
 );
 
 const initialSnapshot = guiState.indexOf('await this.refreshAll();');
@@ -87,7 +90,7 @@ assert.ok(
     && guiState.includes('if (!systemProxyOwned) return;')
     && guiState.includes('if (tunStarted)')
     && guiState.includes('this.tunStatus = await disableGuiTun();'),
-  'Pro -> Lite should start TUN before releasing an active GUI-owned system proxy, preserve an off session, and roll back TUN when handoff fails',
+  'Pro -> Lite should establish TUN before releasing an active GUI-owned system proxy and roll back a newly established local TUN on handoff failure',
 );
 
 assert.ok(
@@ -105,21 +108,50 @@ assert.ok(
     && tunSettings.includes('bind:value={addr}')
     && tunSettings.includes('bind:value={secondaryAddr}')
     && tunSettings.includes('bind:value={mtu}')
+    && tunSettings.includes('oninput={markDirty}')
     && tunSettings.includes('checked={dualStack}')
     && tunSettings.includes('checked={dnsHijack}')
+    && tunSettings.includes('已显式定义 <code>runtime.tun</code>')
     && !tunSettings.includes('autoRoute')
     && !tunSettings.includes('strictRoute'),
-  'Pro TUN settings should expose Zero interface/DNS preferences without presenting auto-route or strict-route as user options',
+  'Pro TUN settings should expose local defaults, preserve dirty state, and explain when the active profile owns runtime.tun',
 );
 
 assert.ok(
-  tunRuntime.includes('if (status.enabled)')
-    && tunRuntime.includes('if (!status.enabled)')
-    && tunRuntime.includes('params.insert("auto_route".to_string(), json!(true));')
-    && tunRuntime.includes('params.insert("strict_route".to_string(), json!(true));')
-    && tunRuntime.includes('params.insert("dual_stack".to_string(), json!(tun.dual_stack));')
-    && tunRuntime.includes('params.insert("dns_hijack".to_string(), json!(tun.dns_hijack));'),
-  'GUI TUN reconciliation should be idempotent and always request Zero automatic/strict routing while preserving configurable dual-stack and DNS-hijack values',
+  appConfigModel.includes('pub enabled: Option<bool>')
+    && ruleOverlay.includes('pub(crate) fn profile_defines_tun(base: &Value) -> bool')
+    && ruleOverlay.includes('tun.enabled != Some(true) || profile_defines_tun(base)')
+    && ruleOverlay.includes('runtime.insert("tun".to_string(), Value::Object(value));')
+    && ruleOverlay.includes('value.insert("auto_route".to_string(), json!(true));')
+    && ruleOverlay.includes('value.insert("strict_route".to_string(), json!(true));'),
+  'ZNet-Sink should persist a TUN desired state and inject runtime.tun only as an effective-config default when the source profile does not own it',
+);
+
+assert.ok(
+  tunService.includes("updateAppConfig({ tun: { enabled: true } })")
+    && tunService.includes("updateAppConfig({ tun: { enabled: false } })")
+    && tunService.includes("profileManaged: true")
+    && tunService.includes('profileDesiredEnabled: runtime.tun !== null')
+    && tunService.includes("code: 'tun_managed_by_profile'")
+    && tunService.includes("if (current.enabled && !current.managedByConfig)")
+    && tunService.includes("await invoke('gui_tun_disable')"),
+  'GUI TUN actions should drive persisted effective config, respect explicit profile ownership including runtime.tun:null, and retain legacy command cleanup only for migration',
+);
+
+assert.ok(
+  tunRuntime.includes('pub async fn prepare_tun_enable(')
+    && tunRuntime.includes('super::wintun_compat::ensure_for_current_runtime().await?;')
+    && tunRuntime.includes('commands::run_command("tun.start", params, options.clone()).await?')
+    && tunRuntime.includes('commands::run_command("tun.stop", json!({}), options.clone()).await?'),
+  'capability-gated runtime preparation should be reusable without removing the direct tun.start/tun.stop compatibility surface',
+);
+
+assert.ok(
+  guiState.includes('this.tunStatus = null;')
+    && guiState.includes("await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess())")
+    && guiState.indexOf('this.tunStatus = null;')
+      < guiState.indexOf("await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess())"),
+  'Core restart must invalidate the old TUN observation before rebuilding state from the new Core instance',
 );
 
 console.log('cross-mode-state: ok');
