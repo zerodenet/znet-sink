@@ -287,6 +287,24 @@ export interface GuiFeatureStatus {
   reason?: string;
 }
 
+export interface GuiTunStatus extends GuiFeatureStatus {
+  name?: string;
+  addr?: string;
+  addresses: string[];
+  mtu?: number;
+  tag?: string;
+  healthy: boolean;
+  autoRoute: boolean;
+  dualStack: boolean;
+  strictRoute: boolean;
+  dnsHijack: boolean;
+  egressInterface?: string;
+  egressInterfaceV4?: string;
+  egressInterfaceV6?: string;
+  lastError?: string;
+  managedByConfig: boolean;
+}
+
 export interface GuiPolicySelectionResult {
   policyTag: string;
   targetTag: string;

@@ -139,14 +139,29 @@ pub struct AppLocalProxyConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfig {
+    /// Explicit ZNet-Sink desired state. `None` preserves the historical
+    /// auto-connect behavior until the user first toggles TUN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default = "default_tun_addr")]
     pub addr: String,
-    #[serde(default = "default_tun_tag")]
+    #[serde(default = "default_tun_mask")]
+    pub mask: String,
+    #[serde(default)]
+    pub secondary_addr: Option<String>,
+    #[serde(
+        default = "default_tun_tag",
+        deserialize_with = "deserialize_tun_tag"
+    )]
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
+    #[serde(default = "default_true")]
+    pub dual_stack: bool,
+    #[serde(default)]
+    pub dns_hijack: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,10 +197,15 @@ impl Default for AppUrlTestConfig {
 impl Default for AppTunConfig {
     fn default() -> Self {
         Self {
+            enabled: None,
             name: None,
             addr: default_tun_addr(),
+            mask: default_tun_mask(),
+            secondary_addr: None,
             tag: default_tun_tag(),
             mtu: default_tun_mtu(),
+            dual_stack: true,
+            dns_hijack: false,
         }
     }
 }
@@ -257,10 +277,15 @@ pub struct AppLocalProxyConfigPatch {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfigPatch {
+    pub enabled: Option<bool>,
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
+    pub mask: Option<String>,
+    pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+    pub dual_stack: Option<bool>,
+    pub dns_hijack: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -315,8 +340,27 @@ fn default_tun_addr() -> String {
     "10.0.0.1/24".to_string()
 }
 
+fn default_tun_mask() -> String {
+    "255.255.255.0".to_string()
+}
+
 fn default_tun_tag() -> String {
-    "proxy".to_string()
+    "znet-sink-tun".to_string()
+}
+
+fn deserialize_tun_tag<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let tag = String::deserialize(deserializer)?;
+    // `proxy` was the original ZNet-Sink default introduced with command-managed
+    // TUN. Treat only that exact legacy value as a migration sentinel so real
+    // user-defined inbound tags remain untouched.
+    if tag == "proxy" {
+        Ok(default_tun_tag())
+    } else {
+        Ok(tag)
+    }
 }
 
 fn default_tun_mtu() -> u16 {
@@ -409,5 +453,46 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.url_test.tolerance_ms, 0);
+    }
+
+    #[test]
+    fn tun_defaults_are_backwards_compatible_and_keep_dns_hijack_opt_in() {
+        let config: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(config.tun.enabled.is_none());
+        assert_eq!(config.tun.mask, "255.255.255.0");
+        assert_eq!(config.tun.tag, "znet-sink-tun");
+        assert!(config.tun.secondary_addr.is_none());
+        assert!(config.tun.dual_stack);
+        assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn tun_desired_state_round_trips_when_explicit() {
+        let enabled: AppConfig = serde_json::from_value(json!({
+            "tun": { "enabled": true }
+        }))
+        .unwrap();
+        assert_eq!(enabled.tun.enabled, Some(true));
+
+        let disabled: AppConfig = serde_json::from_value(json!({
+            "tun": { "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(disabled.tun.enabled, Some(false));
+    }
+
+    #[test]
+    fn legacy_proxy_tun_tag_migrates_without_overwriting_custom_tags() {
+        let legacy: AppConfig = serde_json::from_value(json!({
+            "tun": { "tag": "proxy" }
+        }))
+        .unwrap();
+        assert_eq!(legacy.tun.tag, "znet-sink-tun");
+
+        let custom: AppConfig = serde_json::from_value(json!({
+            "tun": { "tag": "custom-tun-in" }
+        }))
+        .unwrap();
+        assert_eq!(custom.tun.tag, "custom-tun-in");
     }
 }

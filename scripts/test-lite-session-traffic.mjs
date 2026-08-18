@@ -8,6 +8,7 @@ function read(path) {
 const overviewData = read('src/lib/services/overview-data.svelte.ts');
 const page = read('src/routes/+page.svelte');
 const overview = read('src/lib/components/tabs/OverviewTab.svelte');
+const guiState = read('src/lib/services/gui-state.svelte.ts');
 
 assert.ok(
   overviewData.includes('proxySessionActive = $state(false)') &&
@@ -34,9 +35,11 @@ assert.ok(
 );
 assert.ok(
   page.includes('guiState.isSystemProxyEnabled') &&
+    guiState.includes('get isSystemProxyEnabled(): boolean') &&
+    guiState.includes('return this.isTunEnabled;') &&
     page.includes('overviewData.beginProxySession()') &&
     page.includes('overviewData.endProxySession()'),
-  'the session boundary should follow managed system-proxy ownership rather than the Zero process lifetime',
+  'the Lite session boundary should follow the TUN capture state rather than the long-lived Zero process',
 );
 assert.ok(
   overview.includes('class="lite-power-orbit"') &&

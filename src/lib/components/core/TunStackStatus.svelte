@@ -2,25 +2,30 @@
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { getGuiStackStatus } from '$lib/services/core';
   import type { GuiFeatureStatus } from '$lib/types/gui-api';
+  import type { GuiManagedTunStatus } from '$lib/types/tun';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
+  import { Switch } from '$lib/components/ui/switch';
 
   let stackStatus = $state<GuiFeatureStatus | null>(null);
   let mounted = $state(false);
 
+  const tunRuntime = $derived(guiState.tunStatus as GuiManagedTunStatus | null);
+
+  // The queried status belongs to the current Core instance and is
+  // authoritative. Event state is deliberately not allowed to outrank it,
+  // because an old event generation may still say "started" during restart.
   const tunLabel = $derived(
     !guiState.tunStatus ? '—' :
     guiState.isSwitchingTun ? '切换中' :
-    coreEvents.tunState === 'started' ? '活跃' :
-    coreEvents.tunState === 'error' ? '异常' :
-    guiState.tunStatus.enabled ? '已开启' :
+    guiState.tunStatus.enabled ? '活跃' :
+    guiState.tunStatus.lastError ? '异常' :
     guiState.tunStatus.supported ? '未开启' : '不支持'
   );
 
   const tunDotColor = $derived(
-    coreEvents.tunState === 'started' ? '#22C55E' :
-    coreEvents.tunState === 'error' ? '#EF4444' :
-    guiState.isTunEnabled ? '#22C55E' :
+    guiState.tunStatus?.enabled ? '#22C55E' :
+    guiState.tunStatus?.lastError ? '#EF4444' :
     guiState.tunStatus?.supported ? '#F59E0B' : 'var(--muted-foreground)'
   );
 
@@ -37,16 +42,28 @@
     stackStatus?.supported ? '#F59E0B' : 'var(--muted-foreground)'
   );
 
+  const runtimeSummary = $derived.by(() => {
+    if (!tunRuntime) return null;
+    const source = tunRuntime.configSource === 'profile'
+      ? `配置：${tunRuntime.configSourceName ?? '当前配置'}`
+      : tunRuntime.configSource === 'app'
+        ? '来源：ZNet-Sink 缺省'
+        : tunRuntime.configSource === 'runtime'
+          ? '来源：临时运行态'
+          : null;
+    const address = tunRuntime.enabled ? (tunRuntime.addresses?.[0] ?? tunRuntime.addr) : null;
+    const egress = tunRuntime.enabled
+      ? (tunRuntime.egressInterface ?? tunRuntime.egressInterfaceV4 ?? tunRuntime.egressInterfaceV6)
+      : null;
+    return [source, address, egress].filter(Boolean).join(' · ') || null;
+  });
+
   async function refresh() {
-    try {
-      const [, stack] = await Promise.all([
-        guiState.refreshTunStatus(),
-        getGuiStackStatus(),
-      ]);
-      stackStatus = stack;
-    } catch {
-      // Feature queries may fail if core is not running
-    }
+    const [, stackResult] = await Promise.allSettled([
+      guiState.refreshTunStatus(),
+      getGuiStackStatus(),
+    ]);
+    if (stackResult.status === 'fulfilled') stackStatus = stackResult.value;
   }
 
   $effect(() => {
@@ -56,7 +73,6 @@
     }
   });
 
-  // Refresh when core connects
   $effect(() => {
     const tick = coreEvents.statusTick;
     if (tick > 0) refresh();
@@ -69,32 +85,38 @@
   </div>
 
   <div class="feature-grid">
-    <!-- TUN status -->
     <div class="feature-row">
       <div class="feature-dot" style="background: {tunDotColor};"></div>
-      <span class="feature-name">TUN 网卡</span>
-      <span class="feature-value">{tunLabel}</span>
-      <button
-        class="feature-switch {guiState.isTunEnabled ? 'on' : ''}"
-        onclick={() => guiState.toggleTun()}
+      <div class="feature-copy">
+        <div class="feature-main">
+          <span class="feature-name">TUN 网卡</span>
+          <span class="feature-value">{tunLabel}</span>
+        </div>
+        {#if runtimeSummary}
+          <span class="feature-meta" title={runtimeSummary}>{runtimeSummary}</span>
+        {/if}
+      </div>
+      <Switch
+        checked={guiState.isTunEnabled}
+        onCheckedChange={() => guiState.toggleTun()}
         disabled={guiState.isTunEnabled ? !guiState.canDisableTun : !guiState.canEnableTun}
-        title={guiState.isTunEnabled ? '关闭 TUN' : '开启 TUN'}
         aria-label={guiState.isTunEnabled ? '关闭 TUN' : '开启 TUN'}
-      >
-        <span></span>
-      </button>
+      />
     </div>
 
-    <!-- Stack status -->
     <div class="feature-row">
       <div class="feature-dot" style="background: {stackDotColor};"></div>
-      <span class="feature-name">内核网络栈</span>
-      <span class="feature-value">{stackLabel}</span>
+      <div class="feature-copy">
+        <div class="feature-main">
+          <span class="feature-name">内核网络栈</span>
+          <span class="feature-value">{stackLabel}</span>
+        </div>
+      </div>
     </div>
   </div>
 
-  {#if coreEvents.tunState === 'error' && coreEvents.tunStateMessage}
-    <div class="feature-error">{coreEvents.tunStateMessage}</div>
+  {#if tunRuntime?.lastError}
+    <div class="feature-error" title={tunRuntime.lastError}>{tunRuntime.lastError}</div>
   {/if}
 </div>
 
@@ -121,102 +143,15 @@
   :global(.dark) .feature-card { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22); }
   :global(.dark) .feature-card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32); }
 
-  .feature-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-
-  .feature-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--muted-foreground);
-  }
-
-  .feature-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .feature-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .feature-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .feature-name {
-    font-size: 11.5px;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    min-width: 68px;
-  }
-
-  .feature-value {
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--foreground);
-    font-variant-numeric: tabular-nums;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .feature-switch {
-    width: 30px;
-    height: 17px;
-    border-radius: 9px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    position: relative;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
-    flex-shrink: 0;
-    padding: 0;
-  }
-
-  .feature-switch span {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: var(--muted-foreground);
-    opacity: 0.55;
-    transition: left 0.15s ease, background 0.15s ease, opacity 0.15s ease;
-  }
-
-  .feature-switch.on {
-    background: rgba(34, 197, 94, 0.16);
-    border-color: rgba(34, 197, 94, 0.42);
-  }
-
-  .feature-switch.on span {
-    left: 15px;
-    background: #22C55E;
-    opacity: 1;
-  }
-
-  .feature-switch:disabled {
-    cursor: not-allowed;
-    opacity: 0.42;
-  }
-
-  .feature-error {
-    font-size: 11px;
-    color: var(--destructive);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
+  .feature-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .feature-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+  .feature-grid { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .feature-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .feature-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .feature-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+  .feature-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .feature-name { min-width: 68px; color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; }
+  .feature-value { color: var(--foreground); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .feature-meta { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; opacity: .78; }
+  .feature-error { overflow: hidden; color: var(--destructive); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 </style>

@@ -1,6 +1,8 @@
 import { browser } from '$app/environment';
 import type { ThemeMode } from './theme.svelte';
 import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from './core';
+import { guiState } from './gui-state.svelte';
+import { error as toastError } from './toast.svelte';
 import {
   completeOnboarding,
   isOnboardingRequired,
@@ -9,9 +11,10 @@ import {
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
-export type SettingsSection = 'general' | 'core' | 'config' | 'about';
+export type SettingsSection = 'general' | 'core' | 'tun' | 'config' | 'about';
 
 const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'settings']);
+const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config']);
 
 class AppStateStore {
   isInitialized = $state(false);
@@ -50,7 +53,6 @@ class AppStateStore {
     if (savedTheme) this.selectedTheme = savedTheme;
   }
 
-  /** Load app config from Rust backend and merge it into store state. */
   async loadFromBackend() {
     try {
       const [config, surface] = await Promise.all([
@@ -83,7 +85,6 @@ class AppStateStore {
     }
   }
 
-  /** Persist theme to Rust backend and localStorage. */
   async persistTheme(theme: ThemeMode) {
     this.selectedTheme = theme;
     if (browser) {
@@ -112,7 +113,9 @@ class AppStateStore {
   openSettings(section: SettingsSection = 'core') {
     this.isInitialized = true;
     this.activeTab = 'settings';
-    this.settingsSection = this.uiMode === 'lite' && section === 'config' ? 'general' : section;
+    this.settingsSection = this.uiMode === 'lite' && PRO_ONLY_SETTINGS.has(section)
+      ? 'general'
+      : section;
   }
 
   async switchUIMode(mode: UIMode) {
@@ -124,33 +127,29 @@ class AppStateStore {
     const previousSettingsSection = this.settingsSection;
     console.time('[ZNet] switchUIMode');
 
-    // Optimistic update so the UI responds instantly.
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
     }
-    // Tear down Pro-only pages before the backend mode changes. Otherwise
-    // their reactive refreshes can race the permission change and dispatch a
-    // burst of now-restricted IPC commands while the mode switch is pending.
+
     if (mode === 'lite' && !LITE_MODE_NAV.has(this.activeTab)) {
       this.activeTab = 'overview';
     }
-    // The live kernel config editor is Pro-only even though Settings itself is
-    // shared. Move to a safe section before the backend mode flips so the
-    // editor cannot issue a now-restricted core.config request during teardown.
-    if (mode === 'lite' && this.settingsSection === 'config') {
+    if (mode === 'lite' && PRO_ONLY_SETTINGS.has(this.settingsSection)) {
       this.settingsSection = 'general';
     }
 
     try {
-      // The backend computes the interaction surface from its persisted mode.
-      // Persist first, otherwise a Pro -> Lite switch can race and retain a
-      // stale Pro-only active tab long enough to dispatch restricted commands.
+      // Entering Lite does not invent a new active session. It only migrates
+      // an already-active GUI system-proxy capture to TUN; an existing TUN is
+      // reused and an entirely-off session remains off.
+      if (mode === 'lite') {
+        await guiState.prepareLiteCapture();
+      }
+
       await this.persistUiMode(mode);
       await this.refreshInteractionSurface();
 
-      // If the active tab is no longer visible after the surface refresh,
-      // move the user back to a safe tab.
       const navItem = this.interactionSurface.navigation.get(this.activeTab);
       if (!navItem?.visible) {
         this.activeTab = 'overview';
@@ -160,11 +159,28 @@ class AppStateStore {
     } catch (e) {
       console.error('[ZNet] switchUIMode failed:', e);
       console.timeEnd('[ZNet] switchUIMode');
+      const failure = e as {
+        code?: string;
+        message?: string;
+        details?: { error?: { code?: string } };
+      };
+      const insufficientPrivilege = failure?.code === 'insufficient_os_privilege'
+        || failure?.details?.error?.code === 'insufficient_os_privilege';
+      if (mode === 'lite' && insufficientPrivilege) {
+        toastError(`无法切换到简约模式：${failure.message ?? 'TUN 启动需要更高的系统权限。'}`);
+      }
       this.uiMode = previousMode;
       this.activeTab = previousTab;
       this.settingsSection = previousSettingsSection;
       if (browser) {
         localStorage.setItem('znet-ui-mode', previousMode);
+      }
+      // If persistence succeeded but a later surface refresh failed, restore
+      // the backend mode as well instead of leaving frontend/backend split.
+      try {
+        await this.persistUiMode(previousMode);
+      } catch {
+        // Preserve the original mode-switch failure.
       }
     } finally {
       this.isSwitchingUiMode = false;
@@ -187,7 +203,6 @@ class AppStateStore {
   }
 
   private getFallbackNavVisible(key: string): boolean {
-    // When capability metadata is unavailable, keep the Lite mode tabs usable.
     return LITE_MODE_NAV.has(key);
   }
 
@@ -210,7 +225,6 @@ class AppStateStore {
   isFeatureVisible(key: string): boolean {
     const item = this.interactionSurface.features.get(key);
     if (item) return item.visible;
-    // Hide advanced features by default when capability metadata is missing.
     const liteModeFeatures = ['connections'];
     return liteModeFeatures.includes(key);
   }

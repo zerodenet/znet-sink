@@ -11,19 +11,21 @@
   const allSections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '通用' },
     { id: 'core',    label: '内核' },
+    { id: 'tun',     label: 'TUN' },
     { id: 'config',  label: '配置' },
     { id: 'about',   label: '关于' }
   ];
 
   const sections = $derived.by(() =>
     store.uiMode === 'lite'
-      ? allSections.filter((section) => section.id !== 'config')
+      ? allSections.filter((section) => section.id !== 'config' && section.id !== 'tun')
       : allSections,
   );
 
   const panelLoaders: Record<SettingsSection, () => Promise<{ default: Component }>> = {
     general: () => import('$lib/components/settings/GeneralSettingsPanel.svelte'),
     core: () => import('$lib/components/settings/CoreConfigPanel.svelte'),
+    tun: () => import('$lib/components/settings/TunSettingsPanel.svelte'),
     config: () => import('$lib/components/settings/ConfigEditorPanel.svelte'),
     about: () => import('$lib/components/settings/AboutPanel.svelte'),
   };
@@ -34,11 +36,11 @@
     }
   });
 
-  // The live kernel config editor is backed by Pro-only core.config APIs.
-  // Never leave a Lite user on that section or mount its panel just to surface
-  // a mode-restricted IPC error as an apparent kernel failure.
+  // TUN parameters and the live kernel config editor are Pro-only settings.
+  // Lite consumes the persisted TUN configuration without exposing another
+  // configuration surface.
   $effect(() => {
-    if (store.uiMode === 'lite' && activeSection === 'config') {
+    if (store.uiMode === 'lite' && (activeSection === 'config' || activeSection === 'tun')) {
       activeSection = 'general';
       store.settingsSection = 'general';
     }
@@ -46,7 +48,7 @@
 
   $effect(() => {
     const section = activeSection;
-    if (store.uiMode === 'lite' && section === 'config') return;
+    if (store.uiMode === 'lite' && (section === 'config' || section === 'tun')) return;
 
     ActivePanel = null;
     panelLoadError = null;
@@ -96,5 +98,4 @@
     text-align: center;
     overflow-wrap: anywhere;
   }
-
 </style>

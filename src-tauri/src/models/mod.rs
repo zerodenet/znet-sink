@@ -8,6 +8,7 @@ pub mod logs;
 pub mod proxy_config;
 pub mod rule_set;
 pub mod subscription;
+pub mod zero_runtime;
 
 pub mod debug;
 pub mod kernel_version;

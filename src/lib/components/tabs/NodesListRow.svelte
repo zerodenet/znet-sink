@@ -95,7 +95,7 @@
         >
           <span class="delay-pill" style="color: {delayState.color}; background: {delayState.bg};">
             {formatDelay(node.delay)}
-            {#if node.delay > 0}<span class="delay-unit">ms</span>{/if}
+            {#if node.delay > 0 && node.delay < 1000}<span class="delay-unit">ms</span>{/if}
             {#if delayState.grade && delayState.grade !== '—'}
               <span class="delay-grade">{delayState.grade}</span>
             {/if}
@@ -446,4 +446,3 @@
     to { transform: rotate(360deg); }
   }
 </style>
-
