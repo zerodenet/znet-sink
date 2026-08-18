@@ -5,6 +5,7 @@ import {
   parseRequestedVersion,
   resolveReleasePlan,
   selectPreviousReleaseTag,
+  validatePublishedRelease,
 } from './release-policy.mjs';
 
 const now = new Date('2026-08-18T10:36:00Z');
@@ -36,6 +37,27 @@ assert.equal(stable.releaseVersion, '0.0.17');
 assert.equal(stable.channel, 'stable');
 assert.throws(() => resolveReleasePlan({ branch: 'main', input: '0.0.18', tags: withRc, now, buildNumber: 103 }), /active release line/);
 
+assert.equal(
+  validatePublishedRelease({ branch: 'develop', tag: dev.tag, tags: [...stableTags, dev.tag] }).channel,
+  'dev',
+);
+assert.equal(
+  validatePublishedRelease({ branch: 'main', tag: rc.tag, tags: withRc }).channel,
+  'rc',
+);
+assert.equal(
+  validatePublishedRelease({ branch: 'main', tag: 'v0.0.17', tags: [...withRc, 'v0.0.17'] }).channel,
+  'stable',
+);
+assert.throws(
+  () => validatePublishedRelease({ branch: 'main', tag: 'v0.0.18', tags: [...withRc, 'v0.0.18'] }),
+  /active release line|requires an existing rc/,
+);
+assert.throws(
+  () => validatePublishedRelease({ branch: 'main', tag: 'v0.0.17-beta.1', tags: withRc }),
+  /not managed/,
+);
+
 const cleanupInput = [
   'v0.0.16',
   'v0.0.17-dev.202608181000',
@@ -59,5 +81,6 @@ assert.ok(!cleanupTagsForPublishedTag('v0.0.17', cleanupInput).includes('v0.0.17
 assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181100', cleanupInput), 'v0.0.17-rc.202608181036');
 assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181036', ['v0.0.16', 'v0.0.17-dev.202608181000']), 'v0.0.16');
 assert.equal(selectPreviousReleaseTag('v0.0.17', cleanupInput), 'v0.0.17-rc.202608181100');
+assert.equal(selectPreviousReleaseTag('v0.0.17-rc.10', ['v0.0.16', 'v0.0.17-rc.8', 'v0.0.17-rc.10']), 'v0.0.17-rc.8');
 
 console.log('release policy tests passed');
