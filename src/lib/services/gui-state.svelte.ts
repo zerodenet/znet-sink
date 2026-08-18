@@ -35,8 +35,8 @@ import type {
   CoreOverview,
   PolicyGroup,
   ProxyMode,
-  GuiTunStatus,
 } from '$lib/types/gui-api';
+import type { GuiManagedTunStatus } from '$lib/types/tun';
 
 const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
 
@@ -46,7 +46,7 @@ class GuiStateStore {
   proxyMode = $state<ProxyModeStatus | null>(null);
   coreOverview = $state<CoreOverview | null>(null);
   policyGroups = $state<PolicyGroup[]>([]);
-  tunStatus = $state<GuiTunStatus | null>(null);
+  tunStatus = $state<GuiManagedTunStatus | null>(null);
   configNodes = $state<ConfigProxyNode[]>([]);
   configPolicyGroups = $state<PolicyGroup[]>([]);
   networkProbe = $state<NetworkProbeResult | null>(null);
@@ -90,14 +90,17 @@ class GuiStateStore {
     try {
       const appConfig = await getAppConfig();
       if (appConfig.core.autoConnect) {
-        await this.autoConnectForMode(appConfig.ui.uiMode === 'lite' ? 'lite' : 'pro');
+        await this.autoConnectForMode(
+          appConfig.ui.uiMode === 'lite' ? 'lite' : 'pro',
+          appConfig.tun.enabled,
+        );
       }
     } catch {
       // Configuration errors must not prevent the rest of the UI from loading.
     }
   }
 
-  private async autoConnectForMode(mode: 'lite' | 'pro') {
+  private async autoConnectForMode(mode: 'lite' | 'pro', desiredTunEnabled?: boolean) {
     if (!this.connection?.coreAvailable) {
       // Kernel startup is asynchronous in Tauri. Give it one short retry, but
       // never make autoConnect itself responsible for starting/stopping Zero.
@@ -107,6 +110,10 @@ class GuiStateStore {
     if (!this.connection?.coreAvailable) return;
 
     if (mode === 'lite') {
+      // A profile-owned runtime.tun is already part of the effective config;
+      // never create a second ownership path. Explicit local OFF must also
+      // survive app/Core restarts instead of being overwritten by autoConnect.
+      if (this.tunStatus?.configSource === 'profile' || desiredTunEnabled === false) return;
       if (!this.isTunEnabled) await this.connect();
       return;
     }
@@ -440,6 +447,10 @@ class GuiStateStore {
   async restartCore() {
     if (!this.canRestartCore) return;
     this.isStoppingCore = true;
+    // Runtime observations belong to the old Core instance. Drop the TUN
+    // projection before the process generation changes, then rebuild it from
+    // the new Core after restart.
+    this.tunStatus = null;
     try {
       await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess());
       toastSuccess('内核已重启');
@@ -576,6 +587,10 @@ class GuiStateStore {
 
   get isTunEnabled(): boolean {
     return this.tunStatus?.enabled === true;
+  }
+
+  get isTunDesiredEnabled(): boolean {
+    return this.tunStatus?.desiredEnabled === true;
   }
 
   get isProcessRunning(): boolean {

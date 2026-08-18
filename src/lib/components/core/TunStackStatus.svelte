@@ -1,7 +1,8 @@
 <script lang="ts">
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { getGuiStackStatus } from '$lib/services/core';
-  import type { GuiFeatureStatus, GuiTunStatus } from '$lib/types/gui-api';
+  import type { GuiFeatureStatus } from '$lib/types/gui-api';
+  import type { GuiManagedTunStatus } from '$lib/types/tun';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { Switch } from '$lib/components/ui/switch';
@@ -9,21 +10,22 @@
   let stackStatus = $state<GuiFeatureStatus | null>(null);
   let mounted = $state(false);
 
-  const tunRuntime = $derived(guiState.tunStatus as GuiTunStatus | null);
+  const tunRuntime = $derived(guiState.tunStatus as GuiManagedTunStatus | null);
 
+  // The queried status belongs to the current Core instance and is
+  // authoritative. Event state is deliberately not allowed to outrank it,
+  // because an old event generation may still say "started" during restart.
   const tunLabel = $derived(
     !guiState.tunStatus ? '—' :
     guiState.isSwitchingTun ? '切换中' :
-    coreEvents.tunState === 'started' ? '活跃' :
-    coreEvents.tunState === 'error' ? '异常' :
-    guiState.tunStatus.enabled ? '已开启' :
+    guiState.tunStatus.enabled ? '活跃' :
+    guiState.tunStatus.lastError ? '异常' :
     guiState.tunStatus.supported ? '未开启' : '不支持'
   );
 
   const tunDotColor = $derived(
-    coreEvents.tunState === 'started' ? '#22C55E' :
-    coreEvents.tunState === 'error' ? '#EF4444' :
-    guiState.isTunEnabled ? '#22C55E' :
+    guiState.tunStatus?.enabled ? '#22C55E' :
+    guiState.tunStatus?.lastError ? '#EF4444' :
     guiState.tunStatus?.supported ? '#F59E0B' : 'var(--muted-foreground)'
   );
 
@@ -41,12 +43,19 @@
   );
 
   const runtimeSummary = $derived.by(() => {
-    if (!tunRuntime?.enabled) return null;
-    const address = tunRuntime.addresses?.[0] ?? tunRuntime.addr;
-    const egress = tunRuntime.egressInterface
-      ?? tunRuntime.egressInterfaceV4
-      ?? tunRuntime.egressInterfaceV6;
-    return [address, egress].filter(Boolean).join(' · ') || null;
+    if (!tunRuntime) return null;
+    const source = tunRuntime.configSource === 'profile'
+      ? `配置：${tunRuntime.configSourceName ?? '当前配置'}`
+      : tunRuntime.configSource === 'app'
+        ? '来源：ZNet-Sink 缺省'
+        : tunRuntime.configSource === 'runtime'
+          ? '来源：临时运行态'
+          : null;
+    const address = tunRuntime.enabled ? (tunRuntime.addresses?.[0] ?? tunRuntime.addr) : null;
+    const egress = tunRuntime.enabled
+      ? (tunRuntime.egressInterface ?? tunRuntime.egressInterfaceV4 ?? tunRuntime.egressInterfaceV6)
+      : null;
+    return [source, address, egress].filter(Boolean).join(' · ') || null;
   });
 
   async function refresh() {
@@ -108,8 +117,6 @@
 
   {#if tunRuntime?.lastError}
     <div class="feature-error" title={tunRuntime.lastError}>{tunRuntime.lastError}</div>
-  {:else if coreEvents.tunState === 'error' && coreEvents.tunStateMessage}
-    <div class="feature-error" title={coreEvents.tunStateMessage}>{coreEvents.tunStateMessage}</div>
   {/if}
 </div>
 

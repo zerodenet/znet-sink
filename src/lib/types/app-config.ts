@@ -45,6 +45,8 @@ export interface AppLocalProxyConfig {
 }
 
 export interface AppTunConfig {
+  /** Explicit local desired state. Undefined preserves legacy Lite auto-connect until first toggle. */
+  enabled?: boolean;
   name?: string;
   addr: string;
   mask: string;
@@ -109,6 +111,7 @@ export interface AppLocalProxyConfigPatch {
 }
 
 export interface AppTunConfigPatch {
+  enabled?: boolean;
   name?: string | null;
   addr?: string;
   mask?: string;

@@ -23,6 +23,7 @@ pub async fn app_config_update(
     let _operation = state.proxy_config_operation().lock().await;
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
+    let tun_patch_requested = patch.tun.is_some();
 
     // Apply the patch and persist.
     let new_config = app_config::update(state.clone(), patch)?;
@@ -47,7 +48,7 @@ pub async fn app_config_update(
         // compatibility preparation as the legacy command surface. Do this
         // before config.apply, but never create a competing command-managed
         // TUN instance.
-        if tun_defaults_changed && new_config.tun.enabled == Some(true) && !needs_restart {
+        if tun_patch_requested && new_config.tun.enabled == Some(true) && !needs_restart {
             let opts = core_config::ipc_options_from_app_config(&new_config.core);
             let prepared = zero::runtime::prepare_tun_enable(Some(opts)).await;
             match prepared {
@@ -135,7 +136,7 @@ pub async fn app_config_update(
                 }
                 return Err(AppError::internal(message));
             }
-        } else if url_test_tolerance_changed || tun_defaults_changed {
+        } else if url_test_tolerance_changed || tun_defaults_changed || tun_patch_requested {
             // URLTest and TUN are client-owned effective-config preferences.
             // The stored subscription/profile remains untouched; recomposition
             // injects defaults only where the source profile omitted them.
@@ -182,7 +183,9 @@ pub async fn app_config_update(
                 &old_config.local_proxy.bypass,
             );
             let _ = app_config::replace(state.inner(), old_config.clone());
-            if kernel_running && (url_test_tolerance_changed || tun_defaults_changed) {
+            if kernel_running
+                && (url_test_tolerance_changed || tun_defaults_changed || tun_patch_requested)
+            {
                 let _ = rule_overlay::reconcile_current_config_locked(app_handle.clone()).await;
             }
             return Err(error);

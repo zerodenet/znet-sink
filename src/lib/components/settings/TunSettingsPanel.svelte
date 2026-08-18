@@ -19,7 +19,11 @@
   let dualStack = $state(true);
   let dnsHijack = $state(false);
 
-  const locked = $derived(guiState.isTunEnabled || saving);
+  const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
+  const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
+  // Profile-owned TUN does not consume these local defaults, so they remain
+  // editable for the next profile that omits runtime.tun.
+  const locked = $derived((guiState.isTunEnabled && !profileManaged) || saving);
 
   function markDirty() {
     saved = false;
@@ -104,7 +108,11 @@
   });
 </script>
 
-{#if guiState.isTunEnabled}
+{#if profileManaged}
+  <div class="settings-notice" role="status">
+    {profileSourceName} 已显式定义 <code>runtime.tun</code>，当前运行时优先使用该配置。下方内容仅作为 ZNet-Sink 缺省值，在活动配置未定义 TUN 时生效。
+  </div>
+{:else if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
     TUN 正在运行。当前启动参数已锁定，关闭 TUN 后可修改。
   </div>
@@ -208,7 +216,6 @@
           max="65535"
           step="1"
           bind:value={mtu}
-          oninput={markDirty}
           disabled={locked}
           class="font-mono"
           aria-label="TUN MTU"
