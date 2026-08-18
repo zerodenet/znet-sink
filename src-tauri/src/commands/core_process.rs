@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
-use tracing::warn;
 
 use crate::errors::{AppError, AppResult};
 use crate::kernel::zero;
@@ -55,12 +54,10 @@ async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()
 
 async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str) {
     if let Err(error) = restore_app_tun_after_core_transition(state).await {
-        warn!(
-            transition,
-            code = %error.code,
-            error = %error.message,
-            "failed to restore persisted app-owned TUN after Core transition"
-        );
+        crate::services::file_logger::line(&format!(
+            "failed to restore persisted app-owned TUN after Core transition: transition={transition} code={} error={}",
+            error.code, error.message
+        ));
     }
 }
 
