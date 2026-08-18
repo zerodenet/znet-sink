@@ -57,7 +57,7 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
     if let Err(error) = restore_app_tun_after_core_transition(state).await {
         warn!(
             transition,
-            code = error.code,
+            code = %error.code,
             error = %error.message,
             "failed to restore persisted app-owned TUN after Core transition"
         );
