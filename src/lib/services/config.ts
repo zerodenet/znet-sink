@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { coreEvents } from './core-events.svelte';
 import { proxyConfigSignal } from './proxy-config-signal.svelte';
+import { prepareGuiTunForProfileSwitch, reconcileGuiTunRuntime } from './tun';
 import type {
   ProxyConfigProfile,
   ProxyConfigUpsert,
@@ -23,6 +24,18 @@ export type {
   RuleSetProfile,
 };
 
+function reconcileTunAfterConfigMutation(context: string): Promise<void> {
+  return reconcileGuiTunRuntime()
+    .then(() => undefined)
+    .catch((error) => {
+      // A profile mutation has already committed by the time this runs. Keep
+      // the configuration change authoritative and surface runtime divergence
+      // through the normal TUN observed/desired status instead of pretending
+      // the profile switch itself failed.
+      console.warn(`[config] TUN reconciliation after ${context} failed`, error);
+    });
+}
+
 // ── Proxy configs ──
 
 export async function listProxyConfigs(): Promise<ProxyConfigProfile[]> {
@@ -41,36 +54,54 @@ export async function getProxyConfig(id: string): Promise<ProxyConfigProfile> {
 export async function upsertProxyConfig(input: ProxyConfigUpsert): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_upsert', { input });
   proxyConfigSignal.markChanged(true);
+  await reconcileTunAfterConfigMutation('profile upsert');
   return profile;
 }
 
 export async function importProxyConfig(input: ProxyConfigImport): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_import', { input });
   proxyConfigSignal.markChanged(true);
+  await reconcileTunAfterConfigMutation('profile import');
   return profile;
 }
 
 export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfile> {
-  const profile = await invoke<ProxyConfigProfile>('proxy_config_set_active', { id });
+  const target = await getProxyConfig(id);
+  const transition = await prepareGuiTunForProfileSwitch(target.content);
 
-  // Zero can replace the active engine/event source during config.apply while
-  // keeping the multiplexed IPC connection itself alive. In that case the old
-  // broadcast receiver never reports Closed, so ZNet-Sink would stay attached
-  // to the pre-switch event source and stop seeing new connection deltas until
-  // the app restarted. Rotate the GUI event generation explicitly after a
-  // successful profile switch. start() establishes an authoritative active-flow
-  // snapshot after registering the new receiver, so connections created during
-  // the handoff are recovered rather than lost.
-  await coreEvents.stop();
-  await coreEvents.start();
+  try {
+    const profile = await invoke<ProxyConfigProfile>('proxy_config_set_active', { id });
 
-  proxyConfigSignal.markChanged(true);
-  return profile;
+    // Zero can replace the active engine/event source during config.apply while
+    // keeping the multiplexed IPC connection itself alive. In that case the old
+    // broadcast receiver never reports Closed, so ZNet-Sink would stay attached
+    // to the pre-switch event source and stop seeing new connection deltas until
+    // the app restarted. Rotate the GUI event generation explicitly after a
+    // successful profile switch. start() establishes an authoritative active-flow
+    // snapshot after registering the new receiver, so connections created during
+    // the handoff are recovered rather than lost.
+    await coreEvents.stop();
+    await coreEvents.start();
+
+    proxyConfigSignal.markChanged(true);
+    await reconcileTunAfterConfigMutation('profile activation');
+    return profile;
+  } catch (error) {
+    // If the target profile required config-managed TUN, the client may have
+    // stopped its command-managed TUN before config.apply. The active profile
+    // remains/rolls back to the previous source on failure, so replay its local
+    // desired state before returning the activation error.
+    if (transition.stoppedAppRuntime) {
+      await reconcileTunAfterConfigMutation('failed profile activation rollback');
+    }
+    throw error;
+  }
 }
 
 export async function removeProxyConfig(id: string): Promise<void> {
   await invoke('proxy_config_remove', { id });
   proxyConfigSignal.markChanged(true);
+  await reconcileTunAfterConfigMutation('profile removal');
 }
 
 // ── Subscriptions ──
@@ -92,17 +123,20 @@ export async function syncSubscription(id: string): Promise<SubscriptionProfile>
   // A sync can create/update the generated proxy profile and may hot-refresh
   // the active target, so every config-backed surface must reconcile.
   proxyConfigSignal.markChanged(true);
+  await reconcileTunAfterConfigMutation('subscription sync');
   return subscription;
 }
 
 export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome> {
   const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
   proxyConfigSignal.markChanged(true);
+  await reconcileTunAfterConfigMutation('subscription sync all');
   return outcome;
 }
 
 export async function removeSubscription(id: string): Promise<void> {
-  return invoke('subscription_remove', { id });
+  await invoke('subscription_remove', { id });
+  await reconcileTunAfterConfigMutation('subscription removal');
 }
 
 // ── Rule sets ──
