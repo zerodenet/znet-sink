@@ -118,6 +118,24 @@ function profileManagedError(policy: TunPolicy, action: 'enable' | 'disable'): {
   };
 }
 
+function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
+  if (policy.profileManaged || !policy.appConfig.tun.dnsHijack) return;
+
+  const content = policy.profile?.content;
+  const runtime = isObject(content) && isObject(content.runtime) ? content.runtime : undefined;
+  const dns = runtime && isObject(runtime.dns) ? runtime.dns : undefined;
+  const servers = dns && Array.isArray(dns.servers) ? dns.servers : [];
+  const hasOnlyNonSystemServers = servers.length > 0
+    && servers.every((server) => isObject(server) && server.type !== 'system');
+
+  if (hasOnlyNonSystemServers) return;
+
+  throw {
+    code: 'invalid_argument',
+    message: 'DNS 劫持已启用，但当前活动配置没有可用于 TUN 的非系统 DNS。请先在 Zero 配置的 runtime.dns.servers 中配置非 system DNS，或在“设置 → TUN”关闭 DNS 劫持。',
+  };
+}
+
 export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {
   const status = await rawTunStatus();
   try {
@@ -150,6 +168,12 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     }
     return enriched;
   }
+
+  // Validate source prerequisites before touching a working legacy runtime or
+  // persisting a new desired state. Core has stricter endpoint validation too,
+  // but missing/system DNS is a client-known composition error and should not
+  // reach config.apply as an internal failure.
+  validateAppDnsHijackPrecondition(policy);
 
   // Migrate a legacy command-managed session before making the persistent
   // effective config authoritative. The direct command remains compatibility
