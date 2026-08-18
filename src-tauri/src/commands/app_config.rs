@@ -5,7 +5,7 @@ use crate::kernel::zero;
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::models::core_process::CoreProcessState;
 use crate::services::{
-    app_config, core_config, core_process, rule_overlay, system_proxy_guard,
+    app_config, common, core_config, core_process, rule_overlay, system_proxy_guard,
 };
 use crate::state::app_state::AppState;
 
@@ -37,6 +37,11 @@ pub async fn app_config_update(
     let url_test_tolerance_changed =
         old_config.url_test.tolerance_ms != new_config.url_test.tolerance_ms;
     let tun_defaults_changed = old_config.tun != new_config.tun;
+    let profile_owns_tun = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.as_ref())
+        .is_some_and(rule_overlay::profile_defines_tun);
 
     if kernel_running {
         let needs_restart = old_config.core.executable_path != new_config.core.executable_path
@@ -46,9 +51,13 @@ pub async fn app_config_update(
 
         // Declarative TUN still needs the same capability-gated Windows
         // compatibility preparation as the legacy command surface. Do this
-        // before config.apply, but never create a competing command-managed
-        // TUN instance.
-        if tun_patch_requested && new_config.tun.enabled == Some(true) && !needs_restart {
+        // only when the local default will actually own the effective TUN;
+        // profile/static runtime.tun always has higher priority.
+        if tun_patch_requested
+            && new_config.tun.enabled == Some(true)
+            && !profile_owns_tun
+            && !needs_restart
+        {
             let opts = core_config::ipc_options_from_app_config(&new_config.core);
             let prepared = zero::runtime::prepare_tun_enable(Some(opts)).await;
             match prepared {
