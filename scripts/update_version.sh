@@ -1,176 +1,106 @@
 #!/usr/bin/env bash
-# Bump the release version, commit, tag, and push every configured remote.
+# Prepare and publish a release according to the branch-aware release policy.
 #
-# Usage:   ./scripts/update_version.sh <version> [--force]
-# Example: ./scripts/update_version.sh 0.1.0-rc.1
-#          ./scripts/update_version.sh 0.1.0 --force  # rebuild tag at HEAD
+# develop: ./scripts/update_version.sh 0.1.0    -> 0.1.0-dev.YYYYMMDDHHmm
+# main:    ./scripts/update_version.sh 0.1.0-rc -> 0.1.0-rc.YYYYMMDDHHmm
+# main:    ./scripts/update_version.sh 0.1.0    -> 0.1.0
 set -euo pipefail
 
-die() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
-
+die() { echo "ERROR: $*" >&2; exit 1; }
 usage() {
-  cat <<'EOF'
-Usage: update_version.sh <version> [--force]
+  cat <<'USAGE'
+Usage: update_version.sh <X.Y.Z|X.Y.Z-rc>
 
-Without --force, synchronizes the release version, commits it, creates an
-annotated tag, and pushes the branch and tag to every configured remote.
-Prerelease versions such as 0.1.0-rc.1 remain intact for the app and updater;
-the script also generates numeric MSI and macOS bundle versions.
+Version input never includes the Git tag 'v' prefix.
+- develop accepts X.Y.Z and automatically publishes X.Y.Z-dev.<UTC timestamp>.
+- main accepts X.Y.Z-rc for a release candidate or X.Y.Z for stable.
 
-With --force, an already-current version skips the bump/commit, rebuilds its
-annotated tag at the current HEAD, and force-updates that tag on every remote.
-Every release path requires a clean worktree.
-EOF
+Release history is forward-only: dev -> rc -> stable. Stable release lines are
+sealed permanently and stable tags are never rewritten or deleted.
+USAGE
 }
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
-  exit 0
-fi
-
-VERSION="${1:-}"
-if [ -z "$VERSION" ]; then
-  die "missing version argument; usage: $0 <version> [--force]"
-fi
-
-shift
-FORCE=false
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --force|-f) FORCE=true ;;
-    --help|-h) usage; exit 0 ;;
-    *) die "unknown argument '$1'; usage: $0 <version> [--force]" ;;
-  esac
-  shift
-done
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
+REQUESTED_VERSION="${1:-}"
+[ -n "$REQUESTED_VERSION" ] || die "missing version argument; usage: $0 <X.Y.Z|X.Y.Z-rc>"
+[ "$#" -eq 1 ] || die "unexpected arguments; usage: $0 <X.Y.Z|X.Y.Z-rc>"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-node scripts/version-manifests.mjs validate "$VERSION" >/dev/null
-
-CURRENT_VERSION=$(node -p "require('./package.json').version" 2>/dev/null) || \
-  die "could not determine current version from package.json"
-if [ -z "$CURRENT_VERSION" ]; then
-  die "could not determine current version from package.json"
-fi
-
-# Refuse to release from a partially synchronized or dirty tree. This prevents
-# unrelated local work from being swept into the generated release commit.
+CURRENT_VERSION=$(node -p "require('./package.json').version" 2>/dev/null) || die "could not determine current version"
 node scripts/version-manifests.mjs check "$CURRENT_VERSION" >/dev/null
-if [ -n "$(git status --porcelain)" ]; then
-  die "release requires a clean worktree"
-fi
+[ -z "$(git status --porcelain)" ] || die "release requires a clean worktree"
 
-BRANCH=$(git symbolic-ref --quiet --short HEAD) || \
-  die "release requires a named branch (detached HEAD is not supported)"
+PLAN_JSON=$(node scripts/release-policy.mjs plan "$REQUESTED_VERSION") || exit $?
+read_json() { node -e "const p=JSON.parse(process.argv[1]); process.stdout.write(String(p[process.argv[2]] ?? ''))" "$PLAN_JSON" "$1"; }
+VERSION=$(read_json releaseVersion)
+TAG=$(read_json tag)
+CHANNEL=$(read_json channel)
+BUILD_NUMBER=$(read_json buildNumber)
+BRANCH=$(read_json branch)
+
+[ "$CURRENT_VERSION" != "$VERSION" ] || die "release version $VERSION is already current; release tags are immutable"
+node scripts/version-manifests.mjs assert-newer "$VERSION" "$CURRENT_VERSION" >/dev/null
 
 REMOTES=$(git remote)
-if [ -z "$REMOTES" ]; then
-  die "no git remotes configured; cannot push"
-fi
-
-RETAG_ONLY=false
-if [ "$CURRENT_VERSION" = "$VERSION" ]; then
-  if [ "$FORCE" != true ]; then
-    die "version $VERSION is already current; use --force to rebuild and republish its tag"
+printf '%s\n' "$REMOTES" | grep -qx origin || die "release authority remote 'origin' is required"
+if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then die "tag $TAG already exists locally"; fi
+for remote in $REMOTES; do
+  if git ls-remote --exit-code --tags "$remote" "refs/tags/$TAG" >/dev/null 2>&1; then
+    die "tag $TAG already exists on remote $remote"
+  else
+    probe_status=$?
+    [ "$probe_status" -eq 2 ] || die "failed to check tag $TAG on remote $remote"
   fi
-  RETAG_ONLY=true
-  echo "Version $VERSION is already current; rebuilding its tag at HEAD"
-else
-  if [ "$FORCE" = true ]; then
-    die "--force only rebuilds the already-current version tag; omit it for a normal version bump"
-  fi
-  node scripts/version-manifests.mjs assert-newer "$VERSION" "$CURRENT_VERSION" >/dev/null
-  echo "Bumping $CURRENT_VERSION -> $VERSION"
-fi
+done
 
-TAG="v$VERSION"
-
-# A normal bump must never discover a conflicting tag after it has already
-# created the release commit. Probe local and remote tags before changing files.
-if [ "$FORCE" != true ]; then
-  if git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then
-    die "tag $TAG already exists locally"
-  fi
-  for remote in $REMOTES; do
-    if git ls-remote --exit-code --tags "$remote" "refs/tags/$TAG" >/dev/null 2>&1; then
-      die "tag $TAG already exists on remote $remote"
-    else
-      probe_status=$?
-      if [ "$probe_status" -ne 2 ]; then
-        die "failed to check tag $TAG on remote $remote"
-      fi
-    fi
-  done
-fi
-
-MANIFESTS=(
-  package.json
-  src-tauri/Cargo.toml
-  src-tauri/Cargo.lock
-  src-tauri/tauri.conf.json
-  src-tauri/Info.plist
-)
-
-ROLLBACK_MANIFESTS=false
+MANIFESTS=(package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json src-tauri/Info.plist)
+BASE_HEAD=$(git rev-parse HEAD)
+ROLLBACK_MANIFESTS=true
 rollback_on_error() {
   status=$?
   if [ "$status" -ne 0 ] && [ "$ROLLBACK_MANIFESTS" = true ]; then
-    echo "Release preparation failed; restoring version manifests" >&2
     git restore --staged --worktree -- "${MANIFESTS[@]}" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
 trap rollback_on_error EXIT
 
-if [ "$RETAG_ONLY" != true ]; then
-  ROLLBACK_MANIFESTS=true
-  node scripts/version-manifests.mjs set "$VERSION"
+printf 'Release plan: %s -> %s (%s, native build %s)\n' "$REQUESTED_VERSION" "$VERSION" "$CHANNEL" "$BUILD_NUMBER"
+node scripts/version-manifests.mjs set "$VERSION" "$BUILD_NUMBER"
+echo "Syncing src-tauri/Cargo.lock via cargo..."
+cargo check --manifest-path src-tauri/Cargo.toml -q
+node scripts/version-manifests.mjs check "$VERSION" "$BUILD_NUMBER"
+git diff --check
 
-  # Cargo owns Cargo.lock. Never replace version strings in the lockfile: a
-  # blanket replacement can corrupt third-party dependency versions.
-  echo "Syncing src-tauri/Cargo.lock via cargo..."
-  cargo check --manifest-path src-tauri/Cargo.toml -q
-  node scripts/version-manifests.mjs check "$VERSION"
-  git diff --check
+git add "${MANIFESTS[@]}"
+git diff --cached --quiet && die "version update produced no manifest changes"
+COMMIT_MSG="chore(release): $VERSION"
+git commit -m "$COMMIT_MSG"
+ROLLBACK_MANIFESTS=false
 
-  git add "${MANIFESTS[@]}"
-  if git diff --cached --quiet; then
-    die "version update produced no manifest changes"
-  fi
+git tag -a "$TAG" -m "$TAG"
 
-  COMMIT_MSG="chore(release): bump version to $VERSION"
-  echo ""
-  echo "Committing: $COMMIT_MSG"
-  git commit -m "$COMMIT_MSG"
-  ROLLBACK_MANIFESTS=false
+echo "Publishing $BRANCH and $TAG atomically to release authority origin..."
+if ! git push --atomic origin "$BRANCH" "refs/tags/$TAG:refs/tags/$TAG"; then
+  echo "Authority push failed; restoring the local pre-release state" >&2
+  git tag -d "$TAG" >/dev/null 2>&1 || true
+  git reset --hard "$BASE_HEAD" >/dev/null
+  die "failed to publish release to origin"
 fi
 
-if [ "$FORCE" = true ]; then
-  echo "Force-tagging current HEAD: $TAG"
-  git tag -fa "$TAG" -m "$TAG"
-else
-  echo "Tagging: $TAG"
-  git tag -a "$TAG" -m "$TAG"
-fi
-
-echo ""
+MIRROR_FAILURES=()
 for remote in $REMOTES; do
-  echo "Pushing $BRANCH -> $remote"
-  git push "$remote" "$BRANCH"
-
-  if [ "$FORCE" = true ]; then
-    echo "Force-pushing tag $TAG -> $remote"
-    git push --force "$remote" "refs/tags/$TAG:refs/tags/$TAG"
-  else
-    echo "Pushing tag $TAG -> $remote"
-    git push "$remote" "refs/tags/$TAG:refs/tags/$TAG"
+  [ "$remote" = origin ] && continue
+  echo "Mirroring $BRANCH and $TAG -> $remote"
+  if ! git push --atomic "$remote" "$BRANCH" "refs/tags/$TAG:refs/tags/$TAG"; then
+    MIRROR_FAILURES+=("$remote")
+    echo "WARNING: mirror $remote failed; origin remains the release authority" >&2
   fi
 done
 
-echo ""
-echo "Done; release $VERSION pushed to all remotes"
+echo "Done; release $VERSION submitted to origin"
+if [ "${#MIRROR_FAILURES[@]}" -gt 0 ]; then
+  echo "WARNING: mirror sync failed for: ${MIRROR_FAILURES[*]}" >&2
+fi
