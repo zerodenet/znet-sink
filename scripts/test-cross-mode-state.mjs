@@ -35,7 +35,8 @@ assert.ok(
     && configService.includes("invoke<SubscriptionProfile>('subscription_sync'")
     && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
     && configService.includes('prepareGuiTunForProfileSwitch(target.content)')
-    && configService.includes("reconcileTunAfterConfigMutation('profile activation')"),
+    && configService.includes("reconcileTunAfterConfigMutation('profile activation')")
+    && configService.includes('restoreGuiTunAfterFailedProfileSwitch(transition)'),
   'profile activation/subscription updates must invalidate config-backed surfaces and reconcile client-owned TUN around source changes',
 );
 
@@ -155,6 +156,8 @@ assert.ok(
     && tunService.includes("await invoke('gui_tun_disable')")
     && tunService.includes('export async function reconcileGuiTunRuntime()')
     && tunService.includes('export async function prepareGuiTunForProfileSwitch(content: unknown)')
+    && tunService.includes('restoreGuiTunAfterFailedProfileSwitch')
+    && tunService.includes('if (desired === undefined)')
     && tunService.includes('profileDesiredEnabled: runtime.tun !== null')
     && tunService.includes("code: 'tun_managed_by_profile'"),
   'GUI TUN actions must persist desired state while controlling app-owned TUN through tun.start/tun.stop and handing profile ownership off explicitly',
@@ -173,11 +176,12 @@ assert.ok(
 );
 
 assert.ok(
-  tunRuntime.includes('pub async fn prepare_tun_enable(')
+  !tunRuntime.includes('pub async fn prepare_tun_enable(')
+    && tunRuntime.includes('let status = tun_status(options.clone()).await?;')
     && tunRuntime.includes('super::wintun_compat::ensure_for_current_runtime().await?;')
     && tunRuntime.includes('commands::run_command("tun.start", params, options.clone()).await?')
     && tunRuntime.includes('commands::run_command("tun.stop", json!({}), options.clone()).await?'),
-  'capability-gated runtime preparation must feed the primary app-owned tun.start/tun.stop lifecycle',
+  'app-owned TUN must prepare capability/Wintun immediately on the direct tun.start/tun.stop command path, without a declarative-config shim',
 );
 
 assert.ok(
