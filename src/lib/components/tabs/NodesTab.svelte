@@ -161,7 +161,7 @@
       terminalJobIds: terminalProbeJobIds,
     }, job);
     directProbeJobs = next.directJobs;
-    terminalProbeJobIds = next.terminalProbeJobIds;
+    terminalProbeJobIds = next.terminalJobIds;
   }
 
   function probeScope(job: ProbeJobSnapshot): 'single' | 'batch' | 'policy' {
