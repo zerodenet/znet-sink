@@ -161,7 +161,7 @@
       terminalJobIds: terminalProbeJobIds,
     }, job);
     directProbeJobs = next.directJobs;
-    terminalProbeJobIds = next.terminalJobIds;
+    terminalProbeJobIds = next.terminalProbeJobIds;
   }
 
   function probeScope(job: ProbeJobSnapshot): 'single' | 'batch' | 'policy' {
@@ -412,18 +412,38 @@
     return 'proxy';
   }
 
+  function isUrlTestPolicyNode(node: ProxyNode): boolean {
+    const protocol = (node.protocol ?? '').toLowerCase().replaceAll('-', '_');
+    return protocol === 'url_test' || protocol === 'urltest';
+  }
+
   async function handleProbe(node: ProxyNode) {
+    const policyProbe = isUrlTestPolicyNode(node);
     if (!isCoreAvailable) {
-      recordProbeFailure({ message: '内核未就绪', scope: 'single', targetTag: node.tag });
+      recordProbeFailure({
+        message: '内核未就绪',
+        scope: policyProbe ? 'policy' : 'single',
+        policyTag: policyProbe ? node.tag : undefined,
+        targetTag: policyProbe ? undefined : node.tag,
+      });
       return;
     }
 
     try {
-      const job = await startProbeJob({ kind: 'outbound', targetTags: [node.tag], timeoutMs: 30_000 });
+      const job = await startProbeJob({
+        kind: policyProbe ? 'manual_policy' : 'outbound',
+        targetTags: [node.tag],
+        timeoutMs: 30_000,
+      });
       applyProbeJob(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      recordProbeFailure({ message, scope: 'single', targetTag: node.tag });
+      recordProbeFailure({
+        message,
+        scope: policyProbe ? 'policy' : 'single',
+        policyTag: policyProbe ? node.tag : undefined,
+        targetTag: policyProbe ? undefined : node.tag,
+      });
       reportActionError(message);
     }
   }
