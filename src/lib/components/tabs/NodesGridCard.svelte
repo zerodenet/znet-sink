@@ -95,7 +95,7 @@
           <span class="grid-spin">⟳</span>
         {:else}
           <span class="grid-delay" style="color: {delayState.color};">
-            {formatDelay(node.delay)}{#if node.delay > 0}<span class="grid-delay-unit">ms</span>{/if}
+            {formatDelay(node.delay)}{#if node.delay > 0 && node.delay < 1000}<span class="grid-delay-unit">ms</span>{/if}
             {#if delayState.grade && delayState.grade !== '—'}<span class="grid-delay-grade">{delayState.grade}</span>{/if}
           </span>
         {/if}
