@@ -18,7 +18,8 @@ const TUN_RESTORE_INTERVAL: Duration = Duration::from_millis(100);
 pub struct CoreProcessStatusResponse {
     #[serde(flatten)]
     pub status: CoreProcessStatus,
-    pub runtime_performance: RuntimePerformanceSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_performance: Option<RuntimePerformanceSnapshot>,
 }
 
 fn active_profile_defines_tun(state: &AppState) -> AppResult<bool> {
@@ -71,12 +72,19 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
     }
 }
 
-/// Fast in-memory process state read plus a lightweight OS-level resource sample.
-/// The existing status fields stay flattened so older frontend callers remain
-/// wire-compatible; new callers can consume `runtimePerformance`.
-#[tauri::command]
-pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessStatusResponse> {
-    let runtime_performance = runtime_performance::runtime_performance_snapshot(state.clone())?;
+/// Fast in-memory process state read. Resource metrics are opt-in so existing
+/// status polling stays as cheap as before; the overview requests them once
+/// per second while it is visible.
+#[tauri::command(rename_all = "camelCase")]
+pub fn core_process_status(
+    state: State<'_, AppState>,
+    include_performance: Option<bool>,
+) -> AppResult<CoreProcessStatusResponse> {
+    let runtime_performance = if include_performance.unwrap_or(false) {
+        Some(runtime_performance::runtime_performance_snapshot(state.clone())?)
+    } else {
+        None
+    };
     let mut status = core_process::status(state)?;
     // PID identifies the currently managed child only. Never expose a stale
     // identifier retained by an exited/failed transition as if it were live.
