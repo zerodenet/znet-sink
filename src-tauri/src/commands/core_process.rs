@@ -1,7 +1,9 @@
 use std::time::Duration;
 
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::commands::runtime_performance::{self, RuntimePerformanceSnapshot};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::zero;
 use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
@@ -10,6 +12,14 @@ use crate::state::app_state::AppState;
 
 const TUN_RESTORE_TIMEOUT: Duration = Duration::from_secs(8);
 const TUN_RESTORE_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreProcessStatusResponse {
+    #[serde(flatten)]
+    pub status: CoreProcessStatus,
+    pub runtime_performance: RuntimePerformanceSnapshot,
+}
 
 fn active_profile_defines_tun(state: &AppState) -> AppResult<bool> {
     Ok(common::lock(state.proxy_configs(), "proxy_config")?
@@ -61,16 +71,22 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
     }
 }
 
-/// Fast in-memory read — can stay sync.
+/// Fast in-memory process state read plus a lightweight OS-level resource sample.
+/// The existing status fields stay flattened so older frontend callers remain
+/// wire-compatible; new callers can consume `runtimePerformance`.
 #[tauri::command]
-pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessStatusResponse> {
+    let runtime_performance = runtime_performance::runtime_performance_snapshot(state.clone())?;
     let mut status = core_process::status(state)?;
     // PID identifies the currently managed child only. Never expose a stale
     // identifier retained by an exited/failed transition as if it were live.
     if status.state != CoreProcessState::Running {
         status.pid = None;
     }
-    Ok(status)
+    Ok(CoreProcessStatusResponse {
+        status,
+        runtime_performance,
+    })
 }
 
 /// Spawns OS child process. Runs the blocking start routine on a background
