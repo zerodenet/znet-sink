@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.16-rc.7"
+version = "0.0.16-rc.8"
 dependencies = [
  "base64 0.22.1",
  "dirs",
