@@ -65,11 +65,27 @@ assert.ok(
 );
 
 assert.ok(
-  guiState.includes("tracedOperation('proxy', 'tun.enable', () => enableGuiTun())")
+  guiState.includes("tracedOperation('proxy', 'lite.system_proxy.enable', () => guiConnect())")
+    && guiState.includes("tracedOperation('proxy', 'tun.enable', () => enableGuiTun())")
     && guiState.includes("tracedOperation('proxy', 'tun.disable', () => disableGuiTun())")
+    && guiState.includes("tracedOperation('proxy', 'lite.system_proxy.disable', () => guiDisconnect())")
     && guiState.includes('get isConnected(): boolean')
-    && guiState.includes('return this.isTunEnabled;'),
-  'Lite power must map to the client-managed Zero TUN lifecycle rather than the system-proxy lifecycle',
+    && guiState.includes('return this.isTunEnabled && this.connection?.systemProxyEnabled === true;')
+    && guiState.includes('get isSystemProxyEnabled(): boolean')
+    && guiState.includes('return this.connection?.systemProxyEnabled === true;'),
+  'Lite power must require both the GUI-owned system proxy and the client-managed Zero TUN while the public system-proxy state reflects actual OS proxy ownership',
+);
+
+const liteConnectProxy = guiState.indexOf("tracedOperation('proxy', 'lite.system_proxy.enable', () => guiConnect())");
+const liteConnectTun = guiState.indexOf("tracedOperation('proxy', 'tun.enable', () => enableGuiTun())", liteConnectProxy);
+const liteDisconnectTun = guiState.indexOf("tracedOperation('proxy', 'tun.disable', () => disableGuiTun())");
+const liteDisconnectProxy = guiState.indexOf("tracedOperation('proxy', 'lite.system_proxy.disable', () => guiDisconnect())", liteDisconnectTun);
+assert.ok(
+  liteConnectProxy >= 0
+    && liteConnectTun > liteConnectProxy
+    && liteDisconnectTun >= 0
+    && liteDisconnectProxy > liteDisconnectTun,
+  'Lite power-on should establish system proxy before TUN and power-off should stop TUN before releasing the system proxy',
 );
 
 const initialSnapshot = guiState.indexOf('await this.refreshAll();');
@@ -80,17 +96,20 @@ assert.ok(
   'Lite default auto-connect should run only after the first trusted snapshot and after UI action guards are unlocked',
 );
 
+const handoffSystemProxy = guiState.indexOf("tracedOperation('proxy', 'lite.system_proxy.handoff', () => guiConnect())");
 const handoffTun = guiState.indexOf("tracedOperation('proxy', 'lite.tun.handoff', () => enableGuiTun())");
-const handoffSystemProxyRelease = guiState.indexOf("tracedOperation('proxy', 'lite.system_proxy.release', () => guiDisconnect())", handoffTun);
 assert.ok(
   guiState.includes('async prepareLiteCapture()')
     && guiState.includes('const systemProxyOwned = this.connection?.systemProxyEnabled === true')
+    && guiState.includes('const tunEnabled = this.isTunEnabled')
+    && guiState.includes('if (!systemProxyOwned && !tunEnabled) return;')
+    && guiState.includes('if (systemProxyOwned && tunEnabled)')
+    && handoffSystemProxy >= 0
     && handoffTun >= 0
-    && handoffSystemProxyRelease > handoffTun
-    && guiState.includes('if (!systemProxyOwned) return;')
+    && !guiState.includes('lite.system_proxy.release')
     && guiState.includes('if (tunStarted)')
-    && guiState.includes('this.tunStatus = await disableGuiTun();'),
-  'Pro -> Lite should establish TUN before releasing an active GUI-owned system proxy and roll back a newly established local TUN on handoff failure',
+    && guiState.includes('if (systemProxyStarted)'),
+  'Pro -> Lite should preserve an existing capture path, reconcile the missing side, and never release a working system proxy merely because TUN is active',
 );
 
 assert.ok(
