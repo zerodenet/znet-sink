@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import {
+  cleanupTagsForPublishedTag,
+  formatReleaseTimestamp,
+  parseRequestedVersion,
+  resolveReleasePlan,
+  selectPreviousReleaseTag,
+} from './release-policy.mjs';
+
+const now = new Date('2026-08-18T10:36:00Z');
+assert.equal(formatReleaseTimestamp(now), '202608181036');
+assert.deepEqual(parseRequestedVersion('0.0.17'), { baseVersion: '0.0.17', requestedChannel: 'stable' });
+assert.deepEqual(parseRequestedVersion('0.0.17-rc'), { baseVersion: '0.0.17', requestedChannel: 'rc' });
+for (const invalid of ['v0.0.17', '0.0.17-dev', '0.0.17-beta', '0.0.17-preview', '0.0.17-rc.1']) {
+  assert.throws(() => parseRequestedVersion(invalid));
+}
+
+const stableTags = ['v0.0.15', 'v0.0.16'];
+const dev = resolveReleasePlan({ branch: 'develop', input: '0.0.17', tags: stableTags, now, buildNumber: 101 });
+assert.equal(dev.releaseVersion, '0.0.17-dev.202608181036');
+assert.equal(dev.tag, 'v0.0.17-dev.202608181036');
+assert.equal(dev.channel, 'dev');
+assert.equal(dev.buildNumber, 101);
+
+assert.throws(() => resolveReleasePlan({ branch: 'develop', input: '0.0.16', tags: stableTags, now, buildNumber: 101 }), /sealed/);
+assert.throws(() => resolveReleasePlan({ branch: 'main', input: '0.0.17-rc', tags: stableTags, now, buildNumber: 101 }), /requires an existing dev/);
+
+const withDev = [...stableTags, 'v0.0.17-dev.202608181036'];
+const rc = resolveReleasePlan({ branch: 'main', input: '0.0.17-rc', tags: withDev, now, buildNumber: 102 });
+assert.equal(rc.releaseVersion, '0.0.17-rc.202608181036');
+assert.throws(() => resolveReleasePlan({ branch: 'develop', input: '0.0.17', tags: [...withDev, rc.tag], now: new Date('2026-08-18T10:37:00Z'), buildNumber: 103 }), /cannot return to dev/);
+
+const withRc = [...withDev, rc.tag];
+const stable = resolveReleasePlan({ branch: 'main', input: '0.0.17', tags: withRc, now, buildNumber: 103 });
+assert.equal(stable.releaseVersion, '0.0.17');
+assert.equal(stable.channel, 'stable');
+assert.throws(() => resolveReleasePlan({ branch: 'main', input: '0.0.18', tags: withRc, now, buildNumber: 103 }), /active release line/);
+
+const cleanupInput = [
+  'v0.0.16',
+  'v0.0.17-dev.202608181000',
+  'v0.0.17-dev.202608181036',
+  'v0.0.17-rc.202608181036',
+  'v0.0.17-rc.202608181100',
+  'v0.0.17',
+];
+assert.deepEqual(
+  cleanupTagsForPublishedTag('v0.0.17-rc.202608181100', cleanupInput),
+  ['v0.0.17-dev.202608181000', 'v0.0.17-dev.202608181036', 'v0.0.17-rc.202608181036'],
+);
+assert.deepEqual(
+  cleanupTagsForPublishedTag('v0.0.17', cleanupInput),
+  ['v0.0.17-dev.202608181000', 'v0.0.17-dev.202608181036', 'v0.0.17-rc.202608181036', 'v0.0.17-rc.202608181100'],
+);
+assert.deepEqual(cleanupTagsForPublishedTag('v0.0.17-dev.202608181036', cleanupInput), []);
+assert.ok(!cleanupTagsForPublishedTag('v0.0.17', cleanupInput).includes('v0.0.16'));
+assert.ok(!cleanupTagsForPublishedTag('v0.0.17', cleanupInput).includes('v0.0.17'));
+
+assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181100', cleanupInput), 'v0.0.17-rc.202608181036');
+assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181036', ['v0.0.16', 'v0.0.17-dev.202608181000']), 'v0.0.16');
+assert.equal(selectPreviousReleaseTag('v0.0.17', cleanupInput), 'v0.0.17-rc.202608181100');
+
+console.log('release policy tests passed');
