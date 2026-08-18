@@ -134,10 +134,13 @@ assert.ok(
     && tunSettings.includes('oninput={markDirty}')
     && tunSettings.includes('checked={dualStack}')
     && tunSettings.includes('checked={dnsHijack}')
+    && tunSettings.includes('DNS 劫持（暂不可用）')
+    && tunSettings.includes('disabled={true}')
+    && tunSettings.includes('dnsHijack: false')
     && tunSettings.includes('已显式定义 <code>runtime.tun</code>')
     && !tunSettings.includes('autoRoute')
     && !tunSettings.includes('strictRoute'),
-  'Pro TUN settings should expose local defaults, preserve dirty state, and explain when the active profile owns runtime.tun',
+  'Pro TUN settings should expose local defaults while keeping incomplete app-owned DNS hijack visibly disabled for release',
 );
 
 assert.ok(
@@ -163,16 +166,12 @@ assert.ok(
   'GUI TUN actions must persist desired state while controlling app-owned TUN through tun.start/tun.stop and handing profile ownership off explicitly',
 );
 
-const dnsPreflight = tunService.indexOf('validateAppDnsHijackPrecondition(policy);');
-const runtimeEnable = tunService.indexOf("await invoke('gui_tun_enable')", dnsPreflight);
 assert.ok(
-  tunService.includes('function validateAppDnsHijackPrecondition(policy: TunPolicy): void')
-    && tunService.includes('!policy.appConfig.tun.dnsHijack')
-    && tunService.includes("server.type !== 'system'")
-    && tunService.includes("code: 'invalid_argument'")
-    && dnsPreflight >= 0
-    && runtimeEnable > dnsPreflight,
-  'app-owned DNS hijack must reject missing/system DNS before starting command-managed TUN',
+  tunService.includes('function validateAppDnsHijackPrecondition(_policy: TunPolicy): void')
+    && !tunService.includes("server.type !== 'system'")
+    && tunRuntime.includes('params.insert("dns_hijack".to_string(), json!(false));')
+    && tunRuntime.includes('assert_eq!(params["dns_hijack"], false);'),
+  'app-owned DNS hijack must stay disabled until ZNet-Sink exposes complete DNS configuration, including for stale persisted prerelease values',
 );
 
 assert.ok(
