@@ -7,12 +7,15 @@ type CoreProcessStatusWithPerformance = CoreProcessStatus & {
   runtimePerformance?: RuntimePerformanceSnapshot;
 };
 
-export async function getRuntimePerformanceSnapshot(): Promise<RuntimePerformanceSnapshot> {
+export async function getRuntimePerformanceSnapshot(
+  includeThreads = false,
+): Promise<RuntimePerformanceSnapshot> {
   const response = await invoke<CoreProcessStatusWithPerformance>('core_process_status', {
     includePerformance: true,
+    includePerformanceThreads: includeThreads,
   });
   if (!response.runtimePerformance) {
-    throw new Error('实时资源采样未返回数据');
+    throw new Error('资源占用读取未返回数据');
   }
   return response.runtimePerformance;
 }
