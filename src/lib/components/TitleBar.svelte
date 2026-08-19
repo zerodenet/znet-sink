@@ -8,6 +8,7 @@
   import KernelStatusPill from '$lib/components/core/KernelStatusPill.svelte';
   import { updater } from '$lib/services/updater.svelte';
   import { showTrafficBall } from '$lib/services/traffic-ball';
+  import { trafficBallPreference } from '$lib/services/traffic-ball-preference.svelte';
 
   let appWindow: ReturnType<typeof getCurrentWindow> | null = null;
   let appName = $state('ZNet Sink');
@@ -36,6 +37,7 @@
     try {
       const current = getCurrentWindow();
       void current.onCloseRequested((event) => {
+        if (!trafficBallPreference.enabled) return;
         event.preventDefault();
         void showTrafficBall(current);
       }).then((unlisten) => {
@@ -53,11 +55,23 @@
   });
 
   const handleMinimize = () => {
-    if (appWindow) void showTrafficBall(appWindow);
+    if (!appWindow) return;
+    if (trafficBallPreference.enabled) {
+      void showTrafficBall(appWindow);
+    } else {
+      void appWindow.minimize().catch(() => {});
+    }
   };
+
   const handleMaximize = () => appWindow?.toggleMaximize().catch(() => {});
+
   const handleClose = () => {
-    if (appWindow) void showTrafficBall(appWindow);
+    if (!appWindow) return;
+    if (trafficBallPreference.enabled) {
+      void showTrafficBall(appWindow);
+    } else {
+      void appWindow.close().catch(() => {});
+    }
   };
 </script>
 
@@ -148,8 +162,8 @@
     <button
       onclick={handleMinimize}
       class="titlebar-btn"
-      aria-label="最小化为流量悬浮球"
-      title="最小化为流量悬浮球"
+      aria-label={trafficBallPreference.enabled ? '最小化为流量悬浮球' : '最小化'}
+      title={trafficBallPreference.enabled ? '最小化为流量悬浮球' : '最小化'}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
         <rect x="0" y="5" width="10" height="1" rx="0.5"/>
@@ -168,8 +182,8 @@
     <button
       onclick={handleClose}
       class="titlebar-btn titlebar-btn-close"
-      aria-label="关闭为流量悬浮球"
-      title="关闭为流量悬浮球"
+      aria-label={trafficBallPreference.enabled ? '关闭为流量悬浮球' : '关闭'}
+      title={trafficBallPreference.enabled ? '关闭为流量悬浮球' : '关闭'}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
         <line x1="2" y1="2" x2="8" y2="8"/>
