@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
   import { restoreMainWindow } from '$lib/services/traffic-ball';
   import type { CoreEventStatus, GuiEventPayload } from '$lib/types/core';
 
@@ -90,6 +90,19 @@
     restore();
   }
 
+  async function reconcileWithMainWindow() {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const windows = await getAllWindows();
+      const main = windows.find((window) => window.label === 'main');
+      if (main && await main.isVisible()) {
+        await getCurrentWindow().hide();
+      }
+    } catch {
+      // The tray/main-window path is best effort; traffic sampling remains valid.
+    }
+  }
+
   onMount(() => {
     let unlistenTraffic: UnlistenFn | null = null;
     let unlistenStatus: UnlistenFn | null = null;
@@ -120,6 +133,7 @@
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
       }
+      void reconcileWithMainWindow();
     }, 1_000);
 
     return () => {
