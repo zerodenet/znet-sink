@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
   import { getGuiTrafficStats } from '$lib/services/core';
   import {
     destroyTrafficBall,
     restoreMainWindow,
     snapTrafficBallToEdge,
+    TRAFFIC_BALL_READY_EVENT,
   } from '$lib/services/traffic-ball';
   import type { CoreEventStatus } from '$lib/types/core';
 
@@ -72,8 +74,8 @@
   }
 
   function handleMouseDown(event: MouseEvent) {
-    // The second click of a double-click is reserved for restore, so only the
-    // first click starts native dragging.
+    // Reserve the second click for restore. The first click starts native
+    // dragging so the whole circular surface remains a usable drag target.
     if (event.button === 0 && event.detail === 1) {
       void getCurrentWindow().startDragging().catch(() => {});
     }
@@ -105,15 +107,23 @@
     let snapTimer: number | null = null;
     const ballWindow = getCurrentWindow();
 
-    // The backend traffic sampler emits this app-wide event every second.
-    // Listen to it directly instead of starting another core subscription.
+    // CSS transparency alone is not enough for a transparent WebView on all
+    // desktop backends. Make the WebView rendering layer explicitly RGBA
+    // transparent before the main window is hidden and this surface is shown.
+    void getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => {}).finally(() => {
+      if (mounted) void emit(TRAFFIC_BALL_READY_EVENT);
+    });
+
+    // The backend traffic sampler already emits this app-wide event once per
+    // second. The floating surface is only another consumer; it never starts
+    // a second core traffic polling loop.
     void listen<Record<string, unknown>>('traffic.sampled', (event) => applyTraffic(event.payload)).then((unlisten) => {
       if (mounted) unlistenTraffic = unlisten;
       else unlisten();
     });
 
-    // Seed the first frame from the already persisted sampler snapshot so the
-    // ball does not need two cumulative samples before showing a useful rate.
+    // Seed the first frame from the persisted sampler snapshot so the ball can
+    // show a useful speed immediately instead of waiting for two deltas.
     void getGuiTrafficStats().then((stats) => {
       if (!mounted || lastTrafficAt > 0) return;
       const now = Date.now();
@@ -145,9 +155,8 @@
       else unlisten();
     });
 
-    // Tray restore already focuses the main window. Observe that native window
-    // directly so we can persist the ball position and destroy this WebView
-    // immediately without a visibility polling loop.
+    // Tray restore focuses the main window. Observe that native window event
+    // so this temporary WebView can save its position and disappear at once.
     void getAllWindows().then(async (windows) => {
       const main = windows.find((window) => window.label === 'main');
       if (!main) return;
@@ -158,8 +167,9 @@
       else unlisten();
     }).catch(() => {});
 
-    // Native dragging can produce many move events. Only decide whether to
-    // snap after movement has settled, and only reposition if an edge is near.
+    // Native dragging can emit a dense stream of positions. Snap only after
+    // movement settles; snapTrafficBallToEdge resolves the monitor from the
+    // actual window centre and uses the physical outer size for edge math.
     void ballWindow.onMoved(({ payload: position }) => {
       if (snapTimer != null) window.clearTimeout(snapTimer);
       snapTimer = window.setTimeout(() => {
@@ -207,30 +217,33 @@
   aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口。`}
   title={`下载 ${formatFullRate(downloadBytesPerSecond)} · 上传 ${formatFullRate(uploadBytesPerSecond)}\n拖动移动 · 双击或右键恢复主窗口`}
 >
-  <span class="traffic-ball-glow" aria-hidden="true"></span>
-  <span class="traffic-ball-brand">
-    <span class="traffic-ball-dot"></span>
-    <span>ZNET</span>
-  </span>
+  <span class="traffic-ball-highlight" aria-hidden="true"></span>
+  <span class="traffic-ball-status" aria-hidden="true"></span>
+
   <span class="traffic-rate traffic-rate-down">
     <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 5 6 9 10 5" /></svg>
     <strong>{formatRate(downloadBytesPerSecond)}</strong>
   </span>
+  <span class="traffic-divider" aria-hidden="true"></span>
   <span class="traffic-rate traffic-rate-up">
     <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 7 6 3 10 7" /></svg>
     <strong>{formatRate(uploadBytesPerSecond)}</strong>
   </span>
-  <span class="traffic-ball-hint">双击恢复</span>
 </button>
 
 <style>
   :global(html),
-  :global(body) {
+  :global(body),
+  :global(body > div) {
     width: 100%;
     height: 100%;
     margin: 0;
     overflow: hidden;
     background: transparent !important;
+  }
+
+  :global(html),
+  :global(body) {
     user-select: none;
   }
 
@@ -242,79 +255,91 @@
   .traffic-ball {
     appearance: none;
     position: relative;
-    width: 104px;
-    height: 104px;
+    isolation: isolate;
+    width: 112px;
+    height: 112px;
     padding: 0;
-    border-radius: 999px;
+    border-radius: 50%;
+    clip-path: circle(50% at 50% 50%);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
+    gap: 5px;
     box-sizing: border-box;
     overflow: hidden;
     cursor: grab;
-    color: rgba(255, 255, 255, 0.94);
+    color: rgba(255, 255, 255, 0.96);
     background:
-      radial-gradient(circle at 36% 26%, rgba(255, 255, 255, 0.12), transparent 30%),
-      linear-gradient(145deg, rgba(19, 27, 42, 0.97), rgba(9, 14, 24, 0.98));
-    border: 1px solid rgba(148, 163, 184, 0.26);
+      radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.40), transparent 25%),
+      radial-gradient(circle at 77% 82%, rgba(165, 180, 252, 0.28), transparent 42%),
+      linear-gradient(150deg, #64748b 0%, #53677e 48%, #475569 100%);
+    border: 1px solid rgba(255, 255, 255, 0.30);
     box-shadow:
-      0 12px 30px rgba(0, 0, 0, 0.28),
-      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      inset 0 -18px 30px rgba(30, 41, 59, 0.16);
     font-family: var(--font-sans, system-ui, sans-serif);
     -webkit-font-smoothing: antialiased;
+    transition: filter 0.16s ease, background 0.2s ease;
+  }
+
+  .traffic-ball.live {
+    background:
+      radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.52), transparent 25%),
+      radial-gradient(circle at 77% 82%, rgba(165, 180, 252, 0.34), transparent 44%),
+      linear-gradient(150deg, #60a5fa 0%, #3b82f6 46%, #4f46e5 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.56),
+      inset 0 -18px 30px rgba(30, 64, 175, 0.18);
+  }
+
+  .traffic-ball:hover {
+    filter: brightness(1.055) saturate(1.04);
+  }
+
+  .traffic-ball:active {
+    cursor: grabbing;
+    filter: brightness(0.98);
   }
 
   .traffic-ball:focus-visible {
-    outline: 2px solid rgba(125, 211, 252, 0.82);
-    outline-offset: -4px;
+    outline: 2px solid rgba(224, 242, 254, 0.9);
+    outline-offset: -5px;
   }
 
-  .traffic-ball:active { cursor: grabbing; }
-
-  .traffic-ball-glow {
+  .traffic-ball-highlight {
     position: absolute;
     inset: 5px;
-    border-radius: inherit;
-    border: 1px solid rgba(96, 165, 250, 0.12);
+    z-index: -1;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     pointer-events: none;
   }
 
-  .traffic-ball.live .traffic-ball-glow {
-    box-shadow: inset 0 0 18px rgba(59, 130, 246, 0.08);
-  }
-
-  .traffic-ball-brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-bottom: 2px;
-    color: rgba(203, 213, 225, 0.72);
-    font-size: 8px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-  }
-
-  .traffic-ball-dot {
-    width: 5px;
-    height: 5px;
+  .traffic-ball-status {
+    position: absolute;
+    top: 18px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
-    background: rgba(148, 163, 184, 0.7);
-    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
+    background: rgba(226, 232, 240, 0.72);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.10);
   }
 
-  .traffic-ball.live .traffic-ball-dot {
-    background: #22c55e;
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+  .traffic-ball.live .traffic-ball-status {
+    background: #86efac;
+    box-shadow: 0 0 0 3px rgba(220, 252, 231, 0.18);
   }
 
   .traffic-rate {
     display: flex;
     align-items: center;
-    gap: 5px;
-    height: 21px;
+    justify-content: center;
+    gap: 6px;
+    height: 19px;
+    transform: translateY(3px);
     font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(30, 64, 175, 0.20);
   }
 
   .traffic-rate svg {
@@ -322,39 +347,45 @@
     height: 11px;
     fill: none;
     stroke: currentColor;
-    stroke-width: 1.7;
+    stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
+    flex-shrink: 0;
   }
 
   .traffic-rate strong {
-    min-width: 52px;
+    width: 57px;
+    text-align: left;
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 13px;
     line-height: 1;
-    font-weight: 700;
-    letter-spacing: -0.035em;
+    font-weight: 720;
+    letter-spacing: -0.045em;
   }
 
-  .traffic-rate-down { color: #7dd3fc; }
-  .traffic-rate-up { color: #86efac; }
+  .traffic-rate-down {
+    color: #f0f9ff;
+  }
 
-  .traffic-ball-hint {
-    margin-top: 2px;
-    color: rgba(148, 163, 184, 0.58);
-    font-size: 7px;
-    line-height: 1;
-    letter-spacing: 0.03em;
+  .traffic-rate-up {
+    color: #ecfdf5;
+  }
+
+  .traffic-divider {
+    width: 58px;
+    height: 1px;
+    transform: translateY(3px);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.24), transparent);
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .traffic-ball.live .traffic-ball-dot {
+    .traffic-ball.live .traffic-ball-status {
       animation: live-pulse 2s ease-in-out infinite;
     }
   }
 
   @keyframes live-pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
+    50% { opacity: 0.58; }
   }
 </style>
