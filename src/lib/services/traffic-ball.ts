@@ -1,6 +1,5 @@
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { emitTo, listen } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import {
   currentMonitor,
   getAllWindows,
@@ -16,7 +15,8 @@ const TRAFFIC_BALL_MARGIN_LOGICAL = 14;
 const TRAFFIC_BALL_SNAP_GAP_LOGICAL = 6;
 const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 48;
 const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
-export const TRAFFIC_BALL_READY_EVENT = 'traffic-ball:ready';
+export const TRAFFIC_BALL_SHOWN_EVENT = 'traffic-ball:shown';
+export const TRAFFIC_BALL_HIDDEN_EVENT = 'traffic-ball:hidden';
 
 type SavedPosition = { x: number; y: number };
 
@@ -83,68 +83,22 @@ async function resolveTrafficBallPosition(): Promise<PhysicalPosition> {
   return new PhysicalPosition(maxX, maxY);
 }
 
-async function createTrafficBall(): Promise<WebviewWindow> {
-  let ready = false;
-  let resolveReady: (() => void) | null = null;
-  const readyPromise = new Promise<void>((resolve) => {
-    resolveReady = resolve;
-  });
-  const unlistenReady = await listen(TRAFFIC_BALL_READY_EVENT, () => {
-    ready = true;
-    resolveReady?.();
-  });
-
-  const ball = new WebviewWindow(TRAFFIC_BALL_LABEL, {
-    url: '/traffic-ball',
-    width: TRAFFIC_BALL_SIZE_LOGICAL,
-    height: TRAFFIC_BALL_SIZE_LOGICAL,
-    decorations: false,
-    transparent: true,
-    backgroundColor: [0, 0, 0, 0],
-    visible: false,
-    resizable: false,
-    maximizable: false,
-    minimizable: false,
-    closable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    shadow: false,
-  });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      void ball.once('tauri://created', () => resolve());
-      void ball.once('tauri://error', (event) => reject(new Error(String(event.payload))));
-    });
-
-    // The WebView is transparent from creation time. The page repeats that
-    // setting after mount and emits ready only after its circular UI exists,
-    // so the main window never swaps to an uninitialised square surface.
-    if (!ready) {
-      await Promise.race([
-        readyPromise,
-        new Promise<void>((resolve) => window.setTimeout(resolve, 1_200)),
-      ]);
-    }
-  } finally {
-    unlistenReady();
-  }
-
-  return ball;
-}
-
 async function performShowTrafficBall(mainWindow: Window): Promise<void> {
   try {
     await ensurePositionListener();
+    const ball = await getWindowByLabel(TRAFFIC_BALL_LABEL);
+    if (!ball) {
+      throw new Error('predeclared traffic-ball window is unavailable');
+    }
+
     const position = await resolveTrafficBallPosition();
-    const existing = await getWindowByLabel(TRAFFIC_BALL_LABEL);
-    const ball = existing ?? await createTrafficBall();
     await ball.setPosition(position);
     await ball.show();
+    await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_SHOWN_EVENT);
     await mainWindow.hide();
   } catch {
-    // Preserve a usable fallback even if a platform refuses the floating
-    // WebView: restore the main window before falling back to taskbar minimize.
+    // Preserve a usable fallback if the predeclared floating window is not
+    // available on a platform: keep main usable and fall back to minimization.
     await mainWindow.show().catch(() => {});
     await mainWindow.minimize().catch(() => {});
   }
@@ -204,11 +158,12 @@ export async function snapTrafficBallToEdge(
   }
 }
 
-export async function destroyTrafficBall(): Promise<void> {
+export async function hideTrafficBall(): Promise<void> {
   const ball = await getWindowByLabel(TRAFFIC_BALL_LABEL);
   if (!ball) return;
   await rememberPosition(ball);
-  await ball.destroy().catch(() => {});
+  await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
+  await ball.hide().catch(() => {});
 }
 
 export async function restoreMainWindow(): Promise<void> {
@@ -220,5 +175,8 @@ export async function restoreMainWindow(): Promise<void> {
     await main.show();
     await main.setFocus().catch(() => {});
   }
-  await ball?.destroy().catch(() => {});
+  if (ball) {
+    await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
+    await ball.hide().catch(() => {});
+  }
 }
