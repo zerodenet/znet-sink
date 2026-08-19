@@ -77,9 +77,9 @@
     <Button variant="outline" size="sm" onclick={reloadApplication}>重新加载</Button>
   </div>
 {:else if ActiveComponent}
-  {#if tab === 'overview'}
-    <div class="overview-runtime-shell" class:lite={store.uiMode === 'lite'}>
-      <RuntimePerformance mode={store.uiMode} />
+  {#if tab === 'overview' && store.uiMode === 'lite'}
+    <div class="overview-runtime-shell">
+      <RuntimePerformance mode="lite" />
       <div class="overview-runtime-content">
         <ActiveComponent {...activeProps} />
       </div>
@@ -120,10 +120,6 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-  }
-
-  .overview-runtime-shell.lite {
     gap: 0;
   }
 
@@ -133,5 +129,4 @@
     min-height: 0;
     display: flex;
   }
-
 </style>
