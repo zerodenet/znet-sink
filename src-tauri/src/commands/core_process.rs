@@ -1,7 +1,9 @@
 use std::time::Duration;
 
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::commands::runtime_performance::{self, RuntimePerformanceSnapshot};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::zero;
 use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
@@ -10,6 +12,15 @@ use crate::state::app_state::AppState;
 
 const TUN_RESTORE_TIMEOUT: Duration = Duration::from_secs(8);
 const TUN_RESTORE_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreProcessStatusResponse {
+    #[serde(flatten)]
+    pub status: CoreProcessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_performance: Option<RuntimePerformanceSnapshot>,
+}
 
 fn active_profile_defines_tun(state: &AppState) -> AppResult<bool> {
     Ok(common::lock(state.proxy_configs(), "proxy_config")?
@@ -61,22 +72,37 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
     }
 }
 
-/// Fast in-memory read — can stay sync.
-#[tauri::command]
-pub fn core_process_status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+/// Fast in-memory process state read. Resource metrics are opt-in so existing
+/// status polling stays as cheap as before. The desktop monitor intentionally
+/// samples CPU time and RSS only; thread enumeration is not part of the runtime
+/// monitor because it adds platform-specific cost without useful product value.
+#[tauri::command(rename_all = "camelCase")]
+pub fn core_process_status(
+    state: State<'_, AppState>,
+    include_performance: Option<bool>,
+    // Kept as a compatibility argument for callers built against an earlier
+    // #20 revision. Thread sampling is intentionally ignored.
+    include_performance_threads: Option<bool>,
+) -> AppResult<CoreProcessStatusResponse> {
+    let _ = include_performance_threads;
+    let runtime_performance = if include_performance.unwrap_or(false) {
+        Some(runtime_performance::runtime_performance_snapshot(
+            state.clone(),
+            false,
+        )?)
+    } else {
+        None
+    };
     let mut status = core_process::status(state)?;
-    // PID identifies the currently managed child only. Never expose a stale
-    // identifier retained by an exited/failed transition as if it were live.
     if status.state != CoreProcessState::Running {
         status.pid = None;
     }
-    Ok(status)
+    Ok(CoreProcessStatusResponse {
+        status,
+        runtime_performance,
+    })
 }
 
-/// Spawns OS child process. Runs the blocking start routine on a background
-/// thread so the UI stays responsive — `core_process::start` does file IO,
-/// a kill-backoff sleep, and a port check that would otherwise stall the
-/// main thread and freeze the window.
 #[tauri::command]
 pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
@@ -93,11 +119,6 @@ pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessS
     Ok(status)
 }
 
-/// Restart the managed kernel: stop the current process and start a new one.
-/// Runs on a background thread because `stop` synchronously waits on the
-/// child (`child.wait()`) and joins the stderr pump — on the main thread
-/// that freeze is what previously left the window "not responding" until the
-/// OS killed the process.
 #[tauri::command]
 pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();

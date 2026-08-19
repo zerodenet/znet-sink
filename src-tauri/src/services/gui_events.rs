@@ -122,6 +122,18 @@ fn subscribe_and_forward_events(
                                 state.client_core_snapshot(),
                             );
                         }
+                        GuiEventData::TrafficStats(stats) => {
+                            // Zero already emits `stats.sampled` every second.
+                            // Reuse the normalized typed payload for tray rates,
+                            // traffic-ball updates and the one-off snapshot baseline
+                            // instead of issuing a second periodic stats query.
+                            crate::services::traffic_sampler::handle_stats_sample(
+                                &app,
+                                stats,
+                                event.occurred_at_unix_ms
+                                    .unwrap_or_else(crate::services::common::now_unix_ms),
+                            );
+                        }
                         _ => {}
                     }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
@@ -284,6 +296,9 @@ fn emit_status(
     error: Option<AppError>,
     response: Option<Value>,
 ) {
+    if status != "subscribed" {
+        crate::services::traffic_sampler::clear_runtime_traffic_state(app);
+    }
     emit_gui_event_status(
         app,
         GuiEventStatus {

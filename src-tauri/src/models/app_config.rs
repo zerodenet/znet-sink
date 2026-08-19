@@ -107,6 +107,8 @@ pub struct AppUiConfig {
     pub sidebar_collapsed: bool,
     #[serde(default)]
     pub hidden_menu_keys: Vec<String>,
+    #[serde(default = "default_true")]
+    pub traffic_ball_enabled: bool,
     #[serde(default)]
     pub default_route: Option<String>,
 }
@@ -118,6 +120,7 @@ impl Default for AppUiConfig {
             ui_mode: default_ui_mode(),
             sidebar_collapsed: false,
             hidden_menu_keys: vec!["debug".to_string()],
+            traffic_ball_enabled: true,
             default_route: None,
         }
     }
@@ -262,6 +265,7 @@ pub struct AppUiConfigPatch {
     pub ui_mode: Option<String>,
     pub sidebar_collapsed: Option<bool>,
     pub hidden_menu_keys: Option<Vec<String>>,
+    pub traffic_ball_enabled: Option<bool>,
     pub default_route: Option<Option<String>>,
 }
 
@@ -435,6 +439,20 @@ mod tests {
         .unwrap();
 
         assert!(!config.routing.inject_common_rules);
+    }
+
+    #[test]
+    fn traffic_ball_defaults_to_enabled_and_preserves_opt_out() {
+        assert!(AppConfig::default().ui.traffic_ball_enabled);
+
+        let legacy: AppConfig = serde_json::from_value(json!({ "ui": {} })).unwrap();
+        assert!(legacy.ui.traffic_ball_enabled);
+
+        let disabled: AppConfig = serde_json::from_value(json!({
+            "ui": { "trafficBallEnabled": false }
+        }))
+        .unwrap();
+        assert!(!disabled.ui.traffic_ball_enabled);
     }
 
     #[test]

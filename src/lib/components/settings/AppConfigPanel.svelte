@@ -3,6 +3,7 @@
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
+  import { trafficBallPreference } from '$lib/services/traffic-ball-preference.svelte';
   import type { AppConfig } from '$lib/types/app-config';
   import { Switch } from '$lib/components/ui/switch';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
@@ -10,6 +11,9 @@
   import { onDestroy } from 'svelte';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
   import { warning } from '$lib/services/toast.svelte';
+
+  type SettingsScope = 'general' | 'network' | 'logs';
+  let { scope = 'general' }: { scope?: SettingsScope } = $props();
 
   let config = $state<AppConfig | null>(null);
   let configLoading = $state(true);
@@ -24,6 +28,7 @@
   let proxyBypassDraft = $state('');
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
   let configRequestGeneration = 0;
+
   const DEFAULT_PROXY_BYPASS = [
     '<local>', 'localhost', '127.*', '[::1]', '10.*', '192.168.*',
     ...Array.from({ length: 16 }, (_, index) => `172.${index + 16}.*`),
@@ -69,9 +74,18 @@
       const updated = await updateAppConfig({ core: { [key]: !current } });
       config = updated;
     } catch (error) {
-      updateError = getAppErrorMessage(error, '更新启动设置失败');
+      updateError = getAppErrorMessage(error, '更新应用设置失败');
     } finally {
       loading = false;
+    }
+  }
+
+  async function toggleTrafficBall(enabled: boolean) {
+    updateError = null;
+    try {
+      await trafficBallPreference.setEnabled(enabled);
+    } catch (error) {
+      updateError = getAppErrorMessage(error, '更新流量悬浮球设置失败');
     }
   }
 
@@ -223,8 +237,11 @@
   ];
 
   $effect(() => {
-    refreshConfig();
-    loadLogPaths();
+    if (scope === 'logs') {
+      void loadLogPaths();
+    } else {
+      void refreshConfig();
+    }
   });
 
   onDestroy(() => {
@@ -232,312 +249,286 @@
   });
 </script>
 
-<div class="config-section">
-  <div class="config-section-title">外观</div>
+{#if scope === 'general'}
+  <div class="config-section">
+    <div class="config-section-title">界面与窗口</div>
 
-  <div class="config-row">
-    <div class="config-row-label">
-      <span class="label-text">主题</span>
-      <span class="label-desc">选择界面配色方案</span>
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">主题</span>
+        <span class="label-desc">选择界面配色方案。</span>
+      </div>
+      <SegmentedControl.Root
+        value={store.selectedTheme}
+        onValueChange={(value) => handleThemeChange(value as ThemeMode)}
+        class="config-segment"
+        aria-label="主题"
+      >
+        {#each THEMES as theme}
+          <SegmentedControl.Item value={theme.value}>
+            {theme.label}
+          </SegmentedControl.Item>
+        {/each}
+      </SegmentedControl.Root>
     </div>
-    <SegmentedControl.Root
-      value={store.selectedTheme}
-      onValueChange={(value) => handleThemeChange(value as ThemeMode)}
-      class="config-segment"
-      aria-label="主题"
-    >
-      {#each THEMES as theme}
-        <SegmentedControl.Item value={theme.value}>
-          {theme.label}
-        </SegmentedControl.Item>
-      {/each}
-    </SegmentedControl.Root>
-  </div>
 
-  <div class="config-row">
-    <div class="config-row-label">
-      <span class="label-text">界面模式</span>
-      <span class="label-desc">简约模式会收起高阶入口，专业模式展示完整控制面。</span>
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">界面模式</span>
+        <span class="label-desc">简约模式保留常用入口，专业模式展示完整控制面。</span>
+      </div>
+      <SegmentedControl.Root
+        value={store.uiMode}
+        onValueChange={(value) => {
+          if (value === 'lite' || value === 'pro') void store.switchUIMode(value);
+        }}
+        disabled={store.isSwitchingUiMode}
+        class="config-segment"
+        aria-label="界面模式"
+      >
+        <SegmentedControl.Item value="lite">简约</SegmentedControl.Item>
+        <SegmentedControl.Item value="pro">专业</SegmentedControl.Item>
+      </SegmentedControl.Root>
     </div>
-    <SegmentedControl.Root
-      value={store.uiMode}
-      onValueChange={(value) => {
-        if (value === 'lite' || value === 'pro') void store.switchUIMode(value);
-      }}
-      disabled={store.isSwitchingUiMode}
-      class="config-segment"
-      aria-label="界面模式"
-    >
-      <SegmentedControl.Item value="lite">简约</SegmentedControl.Item>
-      <SegmentedControl.Item value="pro">专业</SegmentedControl.Item>
-    </SegmentedControl.Root>
-  </div>
-</div>
 
-{#if configError || updateError}
-  <div class="settings-error" role="alert">
-    <span>{configError ?? updateError}</span>
-    {#if configError}
-      <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
-    {/if}
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">流量悬浮球</span>
+        <span class="label-desc">最小化或关闭主窗口时，以悬浮球继续展示实时上下行速率。</span>
+      </div>
+      <Switch
+        checked={trafficBallPreference.enabled}
+        onCheckedChange={(checked) => void toggleTrafficBall(checked)}
+        disabled={trafficBallPreference.loading || trafficBallPreference.saving}
+        aria-label="流量悬浮球"
+      />
+    </div>
   </div>
-{/if}
 
-{#if store.uiMode === 'pro'}
+  {#if configError || updateError || trafficBallPreference.error}
+    <div class="settings-error" role="alert">
+      <span>{configError ?? updateError ?? trafficBallPreference.error}</span>
+      {#if configError}
+        <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
+      {/if}
+    </div>
+  {/if}
+
+  {#if store.uiMode === 'pro'}
+    <div class="config-separator"></div>
+
+    <div class="config-section">
+      <div class="config-section-title">界面导航</div>
+
+      <div class="menu-panel">
+        <div class="menu-panel-head">
+          <div class="label-text">专业模式菜单</div>
+          <div class="label-desc">选择需要显示在主导航中的功能入口；设置入口始终保留。</div>
+        </div>
+
+        {#if configLoading}
+          <div class="config-loading">加载配置中...</div>
+        {:else if !config}
+          <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
+        {:else}
+          <div class="menu-button-row">
+            {#each menuTabs as tab}
+              <button
+                type="button"
+                class="menu-chip {isMenuVisible(tab.id) ? 'active' : ''}"
+                onclick={() => toggleMenuVisibility(tab.id)}
+                disabled={updatingMenuKey !== null || loading}
+                aria-pressed={isMenuVisible(tab.id)}
+              >
+                <span>{TAB_LABELS[tab.id] ?? tab.label}{tab.comingSoon ? '（敬请期待）' : ''}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <div class="config-separator"></div>
 
   <div class="config-section">
-    <div class="config-section-title">菜单</div>
+    <div class="config-section-title">启动与连接</div>
 
-    <div class="menu-panel">
-      <div class="menu-panel-head">
-        <div class="label-text">专业模式菜单显隐</div>
-        <div class="label-desc">设置固定展示，其他菜单点击选中表示显示，再点一次取消显示。</div>
+    {#if configLoading}
+      <div class="config-loading">加载配置中...</div>
+    {:else if !config}
+      <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
+    {:else}
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">启动应用时启动内核</span>
+          <span class="label-desc">打开 ZNet Sink 后自动启动当前配置的 Zero 内核。</span>
+        </div>
+        <Switch
+          checked={config.core.autoStart}
+          onCheckedChange={() => toggleCoreSetting('autoStart')}
+          disabled={loading}
+          aria-label="启动应用时启动内核"
+        />
       </div>
 
-      {#if configLoading}
-        <div class="config-loading">加载配置中...</div>
-      {:else if !config}
-        <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
-      {:else}
-        <div class="menu-button-row">
-          {#each menuTabs as tab}
-            <button
-              type="button"
-              class="menu-chip {isMenuVisible(tab.id) ? 'active' : ''}"
-              onclick={() => toggleMenuVisibility(tab.id)}
-              disabled={updatingMenuKey !== null || loading}
-              aria-pressed={isMenuVisible(tab.id)}
-            >
-              <span>{TAB_LABELS[tab.id] ?? tab.label}{tab.comingSoon ? '（敬请期待）' : ''}</span>
-            </button>
-          {/each}
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">内核就绪后自动连接</span>
+          <span class="label-desc">Zero 内核可用后，自动启用由 ZNet Sink 管理的系统代理。</span>
         </div>
+        <Switch
+          checked={config.core.autoConnect}
+          onCheckedChange={() => toggleCoreSetting('autoConnect')}
+          disabled={loading}
+          aria-label="内核就绪后自动连接"
+        />
+      </div>
+    {/if}
+  </div>
+
+  <div class="config-separator"></div>
+
+  <div class="config-section">
+    <div class="config-section-title">引导</div>
+
+    <div class="config-row">
+      <div class="config-row-label">
+        <span class="label-text">重新显示新手引导</span>
+        <span class="label-desc">下次进入应用时重新显示当前版本的引导，不会重置其他设置。</span>
+      </div>
+      <button class="reset-btn" onclick={() => store.resetOnboarding()}>
+        重新显示
+      </button>
+    </div>
+  </div>
+{:else if scope === 'network'}
+  {#if configError || updateError}
+    <div class="settings-error" role="alert">
+      <span>{configError ?? updateError}</span>
+      {#if configError}
+        <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
       {/if}
     </div>
+  {/if}
+
+  <div class="config-section">
+    <div class="config-section-title">系统代理</div>
+
+    {#if configLoading}
+      <div class="config-loading">加载配置中...</div>
+    {:else if !config}
+      <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
+    {:else}
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">退出时恢复系统代理</span>
+          <span class="label-desc">退出 ZNet Sink 时恢复应用接管前的系统代理设置。</span>
+        </div>
+        <Switch
+          checked={config.core.cleanupProxyOnExit}
+          onCheckedChange={() => toggleCoreSetting('cleanupProxyOnExit')}
+          disabled={loading}
+          aria-label="退出时恢复系统代理"
+        />
+      </div>
+
+      <div class="proxy-bypass-editor">
+        <div class="config-row-label">
+          <span class="label-text">本地地址绕过</span>
+          <span class="label-desc">每行一项。匹配的本机或局域网地址不会进入系统代理。</span>
+        </div>
+        <textarea
+          class="bypass-textarea"
+          bind:value={proxyBypassDraft}
+          disabled={loading}
+          rows="6"
+          spellcheck="false"
+          aria-label="本地地址绕过列表"
+        ></textarea>
+        <div class="bypass-actions">
+          <button
+            class="log-action-btn"
+            onclick={() => (proxyBypassDraft = DEFAULT_PROXY_BYPASS.join('\n'))}
+            disabled={loading}
+          >恢复默认</button>
+          <button class="log-action-btn primary" onclick={saveProxyBypass} disabled={loading}>保存</button>
+        </div>
+      </div>
+    {/if}
+  </div>
+{:else}
+  <div class="config-section">
+    <div class="config-section-title">日志与数据</div>
+
+    {#if logPathsError}
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text" style="color: var(--destructive);">{logPathsError}</span>
+        </div>
+        <button class="log-action-btn" onclick={loadLogPaths}>重试</button>
+      </div>
+    {:else if logPaths}
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">应用日志</span>
+          <span class="label-desc log-path">{logPaths.logFile}</span>
+        </div>
+        <div class="log-actions">
+          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.logFile, 'logFile')}> 
+            {copiedField === 'logFile' ? '已复制' : '复制'}
+          </button>
+          <button class="log-action-btn primary" onclick={() => revealLogFile(logPaths!.logFile)}>打开目录</button>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">内核日志</span>
+          <span class="label-desc log-path">{logPaths.coreLogFile}</span>
+        </div>
+        <div class="log-actions">
+          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.coreLogFile, 'coreLogFile')}> 
+            {copiedField === 'coreLogFile' ? '已复制' : '复制'}
+          </button>
+          <button class="log-action-btn primary" onclick={() => revealLogFile(logPaths!.coreLogFile)}>打开目录</button>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">日志目录</span>
+          <span class="label-desc log-path">{logPaths.logsDir}</span>
+        </div>
+        <div class="log-actions">
+          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.logsDir, 'logsDir')}> 
+            {copiedField === 'logsDir' ? '已复制' : '复制'}
+          </button>
+          <button class="log-action-btn primary" onclick={() => openDirectory(logPaths!.logsDir)}>打开</button>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-row-label">
+          <span class="label-text">数据目录</span>
+          <span class="label-desc log-path">{logPaths.dataDir}</span>
+        </div>
+        <div class="log-actions">
+          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.dataDir, 'dataDir')}> 
+            {copiedField === 'dataDir' ? '已复制' : '复制'}
+          </button>
+          <button class="log-action-btn primary" onclick={() => openDirectory(logPaths!.dataDir)}>打开</button>
+        </div>
+      </div>
+    {:else}
+      <div class="config-loading">加载路径中...</div>
+    {/if}
+
+    {#if pathActionError}
+      <div class="settings-error" role="alert">{pathActionError}</div>
+    {/if}
   </div>
 {/if}
-
-<div class="config-separator"></div>
-
-<div class="config-section">
-  <div class="config-section-title">启动设置</div>
-
-  {#if configLoading}
-    <div class="config-loading">加载配置中...</div>
-  {:else if !config}
-    <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
-  {:else}
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">应用启动时自动启动项目</span>
-        <span class="label-desc">打开应用时自动启动当前项目服务。</span>
-      </div>
-      <Switch
-        checked={config.core.autoStart}
-        onCheckedChange={() => toggleCoreSetting('autoStart')}
-        disabled={loading}
-        aria-label="应用启动时自动启动项目"
-      />
-    </div>
-
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">项目启动后自动连接</span>
-        <span class="label-desc">项目服务启动完成后自动开启系统代理。</span>
-      </div>
-      <Switch
-        checked={config.core.autoConnect}
-        onCheckedChange={() => toggleCoreSetting('autoConnect')}
-        disabled={loading}
-        aria-label="项目启动后自动连接"
-      />
-    </div>
-  {/if}
-</div>
-
-<div class="config-separator"></div>
-
-<div class="config-section">
-  <div class="config-section-title">系统代理</div>
-
-  {#if configLoading}
-    <div class="config-loading">加载配置中...</div>
-  {:else if !config}
-    <div class="config-loading error-copy">应用配置不可用，请先重试加载。</div>
-  {:else}
-
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">关闭应用时自动清理代理</span>
-        <span class="label-desc">退出应用时恢复应用启动前的系统代理配置。</span>
-      </div>
-      <Switch
-        checked={config.core.cleanupProxyOnExit}
-        onCheckedChange={() => toggleCoreSetting('cleanupProxyOnExit')}
-        disabled={loading}
-        aria-label="关闭应用时自动清理代理"
-      />
-    </div>
-
-    <div class="proxy-bypass-editor">
-      <div class="config-row-label">
-        <span class="label-text">本地地址绕过</span>
-        <span class="label-desc">每行一项。匹配的本机或局域网地址不会进入系统代理。</span>
-      </div>
-      <textarea
-        class="bypass-textarea"
-        bind:value={proxyBypassDraft}
-        disabled={loading}
-        rows="6"
-        spellcheck="false"
-        aria-label="本地地址绕过列表"
-      ></textarea>
-      <div class="bypass-actions">
-        <button
-          class="log-action-btn"
-          onclick={() => (proxyBypassDraft = DEFAULT_PROXY_BYPASS.join('\n'))}
-          disabled={loading}
-        >恢复默认</button>
-        <button class="log-action-btn primary" onclick={saveProxyBypass} disabled={loading}>保存</button>
-      </div>
-    </div>
-  {/if}
-</div>
-
-<div class="config-separator"></div>
-
-<div class="config-section">
-  <div class="config-section-title">日志</div>
-
-  {#if logPathsError}
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text" style="color: var(--destructive);">{logPathsError}</span>
-      </div>
-      <button class="log-action-btn" onclick={loadLogPaths}>重试</button>
-    </div>
-  {:else if logPaths}
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">运行日志文件</span>
-        <span class="label-desc log-path">{logPaths.logFile}</span>
-      </div>
-      <div class="log-actions">
-        <button
-          class="log-action-btn"
-          onclick={() => copyToClipboard(logPaths!.logFile, 'logFile')}
-          title="复制路径"
-        >
-          {copiedField === 'logFile' ? '已复制' : '复制'}
-        </button>
-        <button
-          class="log-action-btn primary"
-          onclick={() => revealLogFile(logPaths!.logFile)}
-          title="在文件夹中显示"
-        >
-          打开目录
-        </button>
-      </div>
-    </div>
-
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">日志目录</span>
-        <span class="label-text">内核日志文件</span>
-        <span class="label-desc log-path">{logPaths.coreLogFile}</span>
-      </div>
-      <div class="log-actions">
-        <button
-          class="log-action-btn core-log-btn"
-          onclick={() => copyToClipboard(logPaths!.coreLogFile, 'coreLogFile')}
-          title="复制路径"
-        >
-          {copiedField === 'coreLogFile' ? '已复制' : '复制'}
-        </button>
-        <button
-          class="log-action-btn primary"
-          onclick={() => revealLogFile(logPaths!.coreLogFile)}
-          title="在文件夹中显示"
-        >
-          打开目录
-        </button>
-      </div>
-    </div>
-
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">日志目录</span>
-        <span class="label-desc log-path">{logPaths.logsDir}</span>
-      </div>
-      <div class="log-actions">
-        <button
-          class="log-action-btn"
-          onclick={() => copyToClipboard(logPaths!.logsDir, 'logsDir')}
-          title="复制路径"
-        >
-          {copiedField === 'logsDir' ? '已复制' : '复制'}
-        </button>
-        <button
-          class="log-action-btn primary"
-          onclick={() => openDirectory(logPaths!.logsDir)}
-          title="打开文件夹"
-        >
-          打开
-        </button>
-      </div>
-    </div>
-
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">数据目录</span>
-        <span class="label-desc log-path">{logPaths.dataDir}</span>
-      </div>
-      <div class="log-actions">
-        <button
-          class="log-action-btn"
-          onclick={() => copyToClipboard(logPaths!.dataDir, 'dataDir')}
-          title="复制路径"
-        >
-          {copiedField === 'dataDir' ? '已复制' : '复制'}
-        </button>
-        <button
-          class="log-action-btn primary"
-          onclick={() => openDirectory(logPaths!.dataDir)}
-          title="打开文件夹"
-        >
-          打开
-        </button>
-      </div>
-    </div>
-  {:else}
-    <div class="config-row">
-      <div class="config-row-label">
-        <span class="label-text">加载中...</span>
-      </div>
-    </div>
-  {/if}
-
-  {#if pathActionError}
-    <div class="settings-error" role="alert">{pathActionError}</div>
-  {/if}
-</div>
-
-<div class="config-separator"></div>
-
-<div class="config-section">
-  <div class="config-section-title">其他</div>
-
-  <div class="config-row">
-    <div class="config-row-label">
-      <span class="label-text">重置引导</span>
-      <span class="label-desc">重新显示当前版本的新手引导，不会清除主题、模式或其他设置。</span>
-    </div>
-    <button class="reset-btn" onclick={() => store.resetOnboarding()}>
-      重置
-    </button>
-  </div>
-</div>
 
 <style>
   .config-section {
@@ -611,6 +602,7 @@
     font-size: 11.5px;
     color: var(--muted-foreground);
     opacity: 0.8;
+    line-height: 1.5;
   }
 
   :global(.config-segment) {
@@ -680,11 +672,11 @@
 
   .reset-btn {
     height: var(--control-height);
-    padding: 0 16px;
+    padding: 0 14px;
     border-radius: var(--control-radius);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    background: rgba(239, 68, 68, 0.06);
-    color: var(--destructive, #EF4444);
+    border: 1px solid var(--input);
+    background: var(--background);
+    color: var(--foreground);
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -693,7 +685,7 @@
   }
 
   .reset-btn:hover {
-    background: rgba(239, 68, 68, 0.12);
+    background: var(--muted);
   }
 
   .log-path {
@@ -771,10 +763,6 @@
 
   .log-action-btn.primary:hover {
     opacity: 0.9;
-  }
-
-  .config-row:has(.core-log-btn) .config-row-label > .label-text:first-child {
-    display: none;
   }
 
   @media (max-width: 760px) {

@@ -1,6 +1,10 @@
 <script lang="ts">
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
+  import { getRuntimePerformanceSnapshot } from '$lib/services/runtime-performance';
+  import type { RuntimePerformanceSnapshot } from '$lib/types/runtime-performance';
+
+  const RUNTIME_REFRESH_INTERVAL_MS = 2000;
 
   const c = $derived(guiState.connection);
 
@@ -16,6 +20,78 @@
       ? `${c.localProxyHost}:${c.localProxyPort}`
       : '已设置'
   );
+
+  let runtimeSnapshot = $state<RuntimePerformanceSnapshot | null>(null);
+  let runtimePending = false;
+
+  function formatCpu(value: number | null | undefined): string {
+    if (value == null) return '—';
+    if (value < 0.1) return '<0.1%';
+    return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
+  }
+
+  function formatMemory(bytes: number | null | undefined): string {
+    if (bytes == null) return '—';
+    const mib = bytes / 1024 / 1024;
+    if (mib >= 1024) return `${(mib / 1024).toFixed(2)} GB`;
+    return `${mib.toFixed(mib >= 100 ? 0 : 1)} MB`;
+  }
+
+  async function refreshRuntime(): Promise<void> {
+    if (
+      runtimePending
+      || store.uiMode !== 'pro'
+      || !isProcessRunning
+      || document.visibilityState === 'hidden'
+    ) return;
+
+    runtimePending = true;
+    try {
+      runtimeSnapshot = await getRuntimePerformanceSnapshot();
+    } catch {
+      runtimeSnapshot = null;
+    } finally {
+      runtimePending = false;
+    }
+  }
+
+  $effect(() => {
+    // Professional overview only needs Zero process resource data while the
+    // managed core is running. Do not keep a sampler alive in Lite mode,
+    // while the app is hidden, or for an external/unmanaged Zero process.
+    if (store.uiMode !== 'pro' || !isProcessRunning) {
+      runtimeSnapshot = null;
+      return;
+    }
+
+    let timer: number | null = null;
+
+    const stop = () => {
+      if (timer != null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (timer != null || document.visibilityState === 'hidden') return;
+      void refreshRuntime();
+      timer = window.setInterval(() => void refreshRuntime(), RUNTIME_REFRESH_INTERVAL_MS);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') stop();
+      else start();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    start();
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  });
+
+  const coreRuntime = $derived(runtimeSnapshot?.core ?? null);
 
   const stateLabel = $derived(
     guiState.isInitializing
@@ -88,7 +164,7 @@
 
 <div class="core-card">
   <div class="core-header">
-    <span class="core-label">{`内核状态`}</span>
+    <span class="core-label">内核状态</span>
     <div class="core-state">
       <span
         class="core-dot"
@@ -106,20 +182,30 @@
         <span class="meta-val">{isProcessRunning ? (c.processPid ?? '—') : '外部'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`系统代理`}</span>
+        <span class="meta-key">系统代理</span>
         <span class="meta-val" class:connected={isSystemProxyEnabled}>
           {c.systemProxyEnabled ? localProxyEndpoint : '未设置'}
         </span>
       </div>
+      {#if store.uiMode === 'pro'}
+        <div class="core-meta-row" title="Zero 进程 CPU 使用率，每 2 秒更新">
+          <span class="meta-key">CPU</span>
+          <span class="meta-val">{isProcessRunning ? formatCpu(coreRuntime?.cpuPercent) : '—'}</span>
+        </div>
+        <div class="core-meta-row" title="Zero 进程常驻内存，每 2 秒更新">
+          <span class="meta-key">内存</span>
+          <span class="meta-val">{isProcessRunning ? formatMemory(coreRuntime?.memoryBytes) : '—'}</span>
+        </div>
+      {/if}
     </div>
   {:else if c?.processExitReason && c?.processState === 'exited'}
     <div class="core-meta">
       <div class="core-meta-row">
-        <span class="meta-key">{`退出码`}</span>
+        <span class="meta-key">退出码</span>
         <span class="meta-val">{c.processExitCode ?? '—'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`原因`}</span>
+        <span class="meta-key">原因</span>
         <span class="meta-val" class:danger={isCrashed}>
           {isStopped ? '手动停止' : isCrashed ? '崩溃' : '自行退出'}
         </span>
@@ -142,7 +228,7 @@
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
     <button class="core-link" onclick={() => store.openSettings('core')}>
-      {`配置内核`}
+      配置内核
     </button>
   {/if}
 
@@ -234,7 +320,7 @@
   .core-meta {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1px 8px;
+    gap: 2px 8px;
     flex-shrink: 0;
   }
 
@@ -243,6 +329,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 4px;
+    min-width: 0;
     overflow: hidden;
   }
 

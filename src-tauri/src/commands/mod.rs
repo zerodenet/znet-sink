@@ -14,5 +14,6 @@ pub mod logs;
 pub mod proxy_config;
 pub mod proxy_mode;
 pub mod rule_set;
+pub mod runtime_performance;
 pub mod subscription;
 pub mod system_proxy;

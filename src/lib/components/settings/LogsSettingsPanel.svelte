@@ -2,4 +2,4 @@
   import AppConfigPanel from '$lib/components/settings/AppConfigPanel.svelte';
 </script>
 
-<AppConfigPanel scope="general" />
+<AppConfigPanel scope="logs" />
