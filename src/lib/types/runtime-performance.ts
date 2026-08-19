@@ -5,14 +5,12 @@ export interface RuntimeProcessMetrics {
   tracked: boolean;
   cpuPercent: number | null;
   memoryBytes: number | null;
-  threadCount: number | null;
 }
 
 export interface RuntimePerformanceSnapshot {
   sampledAtUnixMs: number;
   totalCpuPercent: number | null;
   totalMemoryBytes: number | null;
-  totalThreadCount: number | null;
   processCount: number;
   trackedProcessCount: number;
   partial: boolean;
