@@ -266,8 +266,8 @@
   :global(html),
   :global(body),
   :global(body > div) {
-    width: 100%;
-    height: 100%;
+    width: 100vw;
+    height: 100vh;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -288,8 +288,10 @@
     appearance: none;
     position: relative;
     isolation: isolate;
-    width: 100%;
-    height: 100%;
+    width: min(100vw, 100vh);
+    height: min(100vw, 100vh);
+    aspect-ratio: 1 / 1;
+    flex: 0 0 auto;
     min-width: 0;
     min-height: 0;
     padding: 0;
