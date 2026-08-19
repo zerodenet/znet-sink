@@ -11,8 +11,8 @@ import {
 
 const MAIN_WINDOW_LABEL = 'main';
 const TRAFFIC_BALL_LABEL = 'traffic-ball';
-const TRAFFIC_BALL_SIZE_LOGICAL = 112;
-const TRAFFIC_BALL_MARGIN_LOGICAL = 18;
+const TRAFFIC_BALL_SIZE_LOGICAL = 96;
+const TRAFFIC_BALL_MARGIN_LOGICAL = 14;
 const TRAFFIC_BALL_SNAP_GAP_LOGICAL = 6;
 const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 48;
 const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
@@ -100,6 +100,7 @@ async function createTrafficBall(): Promise<WebviewWindow> {
     height: TRAFFIC_BALL_SIZE_LOGICAL,
     decorations: false,
     transparent: true,
+    backgroundColor: [0, 0, 0, 0],
     visible: false,
     resizable: false,
     maximizable: false,
@@ -116,9 +117,9 @@ async function createTrafficBall(): Promise<WebviewWindow> {
       void ball.once('tauri://error', (event) => reject(new Error(String(event.payload))));
     });
 
-    // The page makes the WebView layer transparent before emitting ready.
-    // Keep the native window hidden until then so Windows never exposes the
-    // default WebView background as a square flash around the circle.
+    // The WebView is transparent from creation time. The page repeats that
+    // setting after mount and emits ready only after its circular UI exists,
+    // so the main window never swaps to an uninitialised square surface.
     if (!ready) {
       await Promise.race([
         readyPromise,
