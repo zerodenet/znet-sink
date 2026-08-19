@@ -9,11 +9,12 @@
   };
 
   const DISPLAY_HISTORY = 120;
+  const SCALE_HISTORY = 45;
   const CHART_WIDTH = 400;
   const CHART_HEIGHT = 120;
-  const PLOT_LEFT = 44;
+  const PLOT_LEFT = 6;
   const PLOT_RIGHT = 6;
-  const PLOT_TOP = 6;
+  const PLOT_TOP = 8;
   const PLOT_BOTTOM = 114;
   const PLOT_WIDTH = CHART_WIDTH - PLOT_LEFT - PLOT_RIGHT;
   const PLOT_HEIGHT = PLOT_BOTTOM - PLOT_TOP;
@@ -27,14 +28,19 @@
     return '0 KB/s';
   }
 
-  function formatAxisSpeed(speed: number): string {
-    if (speed >= 10) return `${speed.toFixed(0)}M`;
-    if (speed >= 1) return `${speed.toFixed(speed >= 5 ? 1 : 2)}M`;
+  function formatScaleSpeed(speed: number): string {
+    if (speed >= 10) return `${speed.toFixed(0)} MB/s`;
+    if (speed >= 1) return `${speed.toFixed(speed >= 5 ? 1 : 2)} MB/s`;
     const kb = speed * 1000;
-    if (kb >= 100) return `${kb.toFixed(0)}K`;
-    if (kb >= 10) return `${kb.toFixed(0)}K`;
-    if (kb >= 1) return `${kb.toFixed(1)}K`;
-    return speed <= 0 ? '0' : '<1K';
+    if (kb >= 100) return `${kb.toFixed(0)} KB/s`;
+    if (kb >= 10) return `${kb.toFixed(0)} KB/s`;
+    if (kb >= 1) return `${kb.toFixed(1)} KB/s`;
+    return speed <= 0 ? '0 KB/s' : '<1 KB/s';
+  }
+
+  function formatScaleLabel(scale: ChartScale): string {
+    if (scale.min <= 0) return `上限 ${formatScaleSpeed(scale.max)}`;
+    return `${formatScaleSpeed(scale.min)} – ${formatScaleSpeed(scale.max)}`;
   }
 
   function formatTraffic(mb: number): string {
@@ -53,7 +59,10 @@
   }
 
   function buildScale(points: TrafficPoint[]): ChartScale {
-    const values = points.flatMap((point) => [point.up, point.down])
+    const recent = points.slice(-SCALE_HISTORY);
+    const source = recent.length > 0 ? recent : points;
+    const values = source
+      .flatMap((point) => [point.up, point.down])
       .filter((value) => Number.isFinite(value) && value >= 0);
     const positive = values.filter((value) => value > 0);
     const peak = positive.length > 0 ? Math.max(...positive) : 0;
@@ -67,24 +76,23 @@
       };
     }
 
-    const upPeak = Math.max(0, ...points.map((point) => point.up));
-    const downPeak = Math.max(0, ...points.map((point) => point.down));
-    const smallerSeriesRatio = upPeak > 0 && downPeak > 0
-      ? Math.min(upPeak, downPeak) / Math.max(upPeak, downPeak)
-      : 1;
-    const minPositive = Math.min(...positive);
-    const steadyEnough = positive.length >= 15 && minPositive / peak >= 0.58;
-    const comparableSeries = smallerSeriesRatio >= 0.45;
+    // The chart is a trend surface, while the header carries the exact current
+    // upload/download values. Detect a steady dominant traffic band separately
+    // from the smaller direction so a quiet upload stream does not force a
+    // stable multi-MB/s download curve onto an unnecessarily large zero-based
+    // scale. The smaller series remains clamped to the visual baseline.
+    const dominantValues = source
+      .map((point) => Math.max(point.up, point.down))
+      .filter((value) => value > 0);
+    const dominantPeak = dominantValues.length > 0 ? Math.max(...dominantValues) : peak;
+    const dominantMin = dominantValues.length > 0 ? Math.min(...dominantValues) : 0;
+    const steadyEnough = dominantValues.length >= 15 && dominantMin / dominantPeak >= 0.72;
 
-    // When traffic is genuinely steady and both visible series are in the same
-    // magnitude, zoom around the live range instead of wasting most of the
-    // chart on an empty 0..peak baseline. If upload/download differ greatly,
-    // keep zero visible so the smaller series is never clipped away.
-    if (steadyEnough && comparableSeries) {
-      const observedRange = Math.max(peak - minPositive, peak * 0.08);
-      const padding = observedRange * 0.6;
-      const targetMin = Math.max(0, minPositive - padding);
-      const targetMax = peak + padding;
+    if (steadyEnough) {
+      const observedRange = Math.max(dominantPeak - dominantMin, dominantPeak * 0.06);
+      const padding = observedRange * 0.7;
+      const targetMin = Math.max(0, dominantMin - padding);
+      const targetMax = dominantPeak + padding;
       const step = niceStep((targetMax - targetMin) / TICK_COUNT);
       const min = Math.max(0, Math.floor(targetMin / step) * step);
       const max = Math.max(min + step * TICK_COUNT, Math.ceil(targetMax / step) * step);
@@ -139,6 +147,7 @@
 
   const displayHistory = $derived(history.slice(-DISPLAY_HISTORY));
   const scale = $derived(buildScale(displayHistory));
+  const scaleLabel = $derived(formatScaleLabel(scale));
   const downLine = $derived(linePath(displayHistory, 'down', scale));
   const upLine = $derived(linePath(displayHistory, 'up', scale));
   const downArea = $derived(areaPath(displayHistory, 'down', scale));
@@ -147,13 +156,17 @@
   const currentDown = $derived(history.length > 0 ? history[history.length - 1].down : 0);
   const currentUp = $derived(history.length > 0 ? history[history.length - 1].up : 0);
   const hasTraffic = $derived(displayHistory.some((sample) => sample.down >= 0.001 || sample.up >= 0.001));
+  const lastPointIndex = $derived(Math.max(0, displayHistory.length - 1));
+  const lastPointX = $derived(pointX(lastPointIndex, displayHistory.length));
+  const lastDownY = $derived(pointY(currentDown, scale));
+  const lastUpY = $derived(pointY(currentUp, scale));
 </script>
 
 <div class="chart-card">
   <div class="chart-header">
     <div class="chart-title">
       <span class="chart-title-text">实时速率</span>
-      <span class="chart-subtitle">最近 2 分钟</span>
+      <span class="chart-subtitle">最近 2 分钟 · {scaleLabel}</span>
     </div>
     <div class="chart-speeds">
       <div class="speed-item down">
@@ -188,7 +201,7 @@
 
   <div class="chart-body">
     <svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} class="chart-svg" preserveAspectRatio="none" aria-hidden="true">
-      {#each scale.ticks as tick}
+      {#each scale.ticks.slice(1, -1) as tick}
         {@const y = pointY(tick, scale)}
         <line
           x1={PLOT_LEFT}
@@ -198,12 +211,6 @@
           class="grid-line"
           vector-effect="non-scaling-stroke"
         />
-        <text
-          x={PLOT_LEFT - 6}
-          y={y + 3}
-          class="axis-label"
-          text-anchor="end"
-        >{formatAxisSpeed(tick)}</text>
       {/each}
 
       {#if displayHistory.length > 1}
@@ -222,16 +229,21 @@
           class="traffic-line up"
           vector-effect="non-scaling-stroke"
         />
+
+        {#if hasTraffic}
+          <circle cx={lastPointX} cy={lastDownY} r="2" class="traffic-point down" vector-effect="non-scaling-stroke" />
+          <circle cx={lastPointX} cy={lastUpY} r="2.2" class="traffic-point up" vector-effect="non-scaling-stroke" />
+        {/if}
       {/if}
 
       <defs>
         <linearGradient id="downGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="var(--traffic-down)" stop-opacity="0.34"/>
-          <stop offset="100%" stop-color="var(--traffic-down)" stop-opacity="0.015"/>
+          <stop offset="0%" stop-color="var(--traffic-down)" stop-opacity="0.24"/>
+          <stop offset="100%" stop-color="var(--traffic-down)" stop-opacity="0.01"/>
         </linearGradient>
         <linearGradient id="upGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="var(--traffic-up)" stop-opacity="0.32"/>
-          <stop offset="100%" stop-color="var(--traffic-up)" stop-opacity="0.015"/>
+          <stop offset="0%" stop-color="var(--traffic-up)" stop-opacity="0.24"/>
+          <stop offset="100%" stop-color="var(--traffic-up)" stop-opacity="0.01"/>
         </linearGradient>
       </defs>
     </svg>
@@ -246,8 +258,8 @@
 
 <style>
   .chart-card {
-    --traffic-down: #2563eb;
-    --traffic-up: #16a34a;
+    --traffic-down: #3b82f6;
+    --traffic-up: #22c55e;
     width: 100%;
     min-width: 0;
     height: 100%;
@@ -271,10 +283,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     flex-shrink: 0;
   }
 
   .chart-title {
+    min-width: 0;
     display: flex;
     align-items: baseline;
     gap: 6px;
@@ -287,16 +301,23 @@
     color: var(--muted-foreground);
   }
 
+  .chart-title-text { flex-shrink: 0; }
+
   .chart-subtitle {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-weight: 400;
     font-size: 10px;
-    opacity: 0.6;
+    opacity: 0.58;
   }
 
   .chart-speeds {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-shrink: 0;
   }
 
   .speed-item {
@@ -318,7 +339,7 @@
 
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+    50% { opacity: 0.35; }
   }
 
   .speed-val {
@@ -327,6 +348,10 @@
     font-family: var(--font-mono, monospace);
     font-variant-numeric: tabular-nums;
     color: var(--foreground);
+  }
+
+  .speed-item.up .speed-val {
+    color: color-mix(in srgb, var(--traffic-up) 86%, var(--foreground));
   }
 
   .speed-label {
@@ -377,8 +402,8 @@
     position: relative;
     overflow: hidden;
     min-height: 0;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--muted) 72%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--muted) 38%, transparent);
     color: var(--foreground);
   }
 
@@ -390,35 +415,37 @@
 
   .grid-line {
     stroke: currentColor;
-    stroke-opacity: 0.075;
+    stroke-opacity: 0.055;
     stroke-width: 1;
   }
 
-  .axis-label {
-    fill: var(--muted-foreground);
-    opacity: 0.66;
-    font-family: var(--font-mono, monospace);
-    font-size: 8px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .traffic-area {
+  .traffic-area,
+  .traffic-line,
+  .traffic-point {
     pointer-events: none;
   }
 
   .traffic-line {
-    stroke-width: 1.75;
+    stroke-width: 1.6;
     stroke-linecap: round;
     stroke-linejoin: round;
-    opacity: 0.96;
+    opacity: 0.94;
   }
 
   .traffic-line.down { stroke: var(--traffic-down); }
   .traffic-line.up {
     stroke: var(--traffic-up);
-    stroke-width: 2;
+    stroke-width: 2.05;
     opacity: 1;
   }
+
+  .traffic-point {
+    stroke: var(--card);
+    stroke-width: 1.2;
+  }
+
+  .traffic-point.down { fill: var(--traffic-down); }
+  .traffic-point.up { fill: var(--traffic-up); }
 
   .chart-empty {
     position: absolute;
@@ -430,5 +457,12 @@
     color: var(--muted-foreground);
     opacity: 0.4;
     pointer-events: none;
+  }
+
+  @media (max-width: 640px) {
+    .chart-title { gap: 4px; }
+    .chart-subtitle { display: none; }
+    .chart-speeds { gap: 7px; }
+    .speed-val { font-size: 10.5px; }
   }
 </style>
