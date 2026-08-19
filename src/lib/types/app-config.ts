@@ -34,6 +34,7 @@ export interface AppUiConfig {
   uiMode: string;       // "lite" | "pro"
   sidebarCollapsed: boolean;
   hiddenMenuKeys: string[];
+  trafficBallEnabled: boolean;
   defaultRoute?: string;
 }
 
@@ -100,6 +101,7 @@ export interface AppUiConfigPatch {
   uiMode?: string;
   sidebarCollapsed?: boolean;
   hiddenMenuKeys?: string[];
+  trafficBallEnabled?: boolean;
   defaultRoute?: string | null;
 }
 
