@@ -13,9 +13,10 @@ const MAIN_WINDOW_LABEL = 'main';
 const TRAFFIC_BALL_LABEL = 'traffic-ball';
 const TRAFFIC_BALL_SIZE_LOGICAL = 112;
 const TRAFFIC_BALL_MARGIN_LOGICAL = 18;
-const TRAFFIC_BALL_SNAP_MARGIN_LOGICAL = 10;
-const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 32;
+const TRAFFIC_BALL_SNAP_GAP_LOGICAL = 6;
+const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 48;
 const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
+export const TRAFFIC_BALL_READY_EVENT = 'traffic-ball:ready';
 
 type SavedPosition = { x: number; y: number };
 
@@ -82,6 +83,16 @@ async function resolveTrafficBallPosition(): Promise<PhysicalPosition> {
 }
 
 async function createTrafficBall(): Promise<WebviewWindow> {
+  let ready = false;
+  let resolveReady: (() => void) | null = null;
+  const readyPromise = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  const unlistenReady = await listen(TRAFFIC_BALL_READY_EVENT, () => {
+    ready = true;
+    resolveReady?.();
+  });
+
   const ball = new WebviewWindow(TRAFFIC_BALL_LABEL, {
     url: '/traffic-ball',
     width: TRAFFIC_BALL_SIZE_LOGICAL,
@@ -98,10 +109,25 @@ async function createTrafficBall(): Promise<WebviewWindow> {
     shadow: false,
   });
 
-  await new Promise<void>((resolve, reject) => {
-    void ball.once('tauri://created', () => resolve());
-    void ball.once('tauri://error', (event) => reject(new Error(String(event.payload))));
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      void ball.once('tauri://created', () => resolve());
+      void ball.once('tauri://error', (event) => reject(new Error(String(event.payload))));
+    });
+
+    // The page makes the WebView layer transparent before emitting ready.
+    // Keep the native window hidden until then so Windows never exposes the
+    // default WebView background as a square flash around the circle.
+    if (!ready) {
+      await Promise.race([
+        readyPromise,
+        new Promise<void>((resolve) => window.setTimeout(resolve, 1_200)),
+      ]);
+    }
+  } finally {
+    unlistenReady();
+  }
+
   return ball;
 }
 
@@ -115,8 +141,9 @@ export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): 
     await ball.show();
     await mainWindow.hide();
   } catch {
-    // Keep the window controls usable in browser/dev environments or if the
-    // dedicated surface could not be created by the platform.
+    // Preserve a usable fallback even if a platform refuses the floating
+    // WebView: restore the main window before falling back to taskbar minimize.
+    await mainWindow.show().catch(() => {});
     await mainWindow.minimize().catch(() => {});
   }
 }
@@ -126,28 +153,37 @@ export async function snapTrafficBallToEdge(
   position?: PhysicalPosition,
 ): Promise<void> {
   try {
-    const monitor = await currentMonitor();
+    const current = position ?? await ball.outerPosition();
+    const outerSize = await ball.outerSize();
+    const centerX = current.x + outerSize.width / 2;
+    const centerY = current.y + outerSize.height / 2;
+    const monitor = await monitorFromPoint(centerX, centerY).catch(() => null)
+      ?? await ball.currentMonitor();
     if (!monitor) return;
 
-    const current = position ?? await ball.outerPosition();
-    const size = Math.round(TRAFFIC_BALL_SIZE_LOGICAL * monitor.scaleFactor);
-    const margin = Math.round(TRAFFIC_BALL_SNAP_MARGIN_LOGICAL * monitor.scaleFactor);
-    const threshold = Math.round(TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL * monitor.scaleFactor);
+    const scale = monitor.scaleFactor;
+    const gap = Math.round(TRAFFIC_BALL_SNAP_GAP_LOGICAL * scale);
+    const threshold = Math.round(TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL * scale);
     const workArea = monitor.workArea;
-    const left = workArea.position.x + margin;
-    const right = Math.max(left, workArea.position.x + workArea.size.width - size - margin);
-    const top = workArea.position.y + margin;
-    const bottom = Math.max(top, workArea.position.y + workArea.size.height - size - margin);
-    const leftDistance = Math.abs(current.x - left);
-    const rightDistance = Math.abs(current.x - right);
+    const workLeft = workArea.position.x;
+    const workTop = workArea.position.y;
+    const workRight = workLeft + workArea.size.width;
+    const workBottom = workTop + workArea.size.height;
 
-    let targetX = current.x;
-    if (leftDistance <= threshold || rightDistance <= threshold) {
-      targetX = leftDistance <= rightDistance ? left : right;
-    } else {
-      return;
-    }
-    const targetY = Math.max(top, Math.min(bottom, current.y));
+    const leftGap = current.x - workLeft;
+    const rightGap = workRight - (current.x + outerSize.width);
+    const nearLeft = Math.abs(leftGap) <= threshold;
+    const nearRight = Math.abs(rightGap) <= threshold;
+    if (!nearLeft && !nearRight) return;
+
+    const leftX = workLeft + gap;
+    const rightX = workRight - outerSize.width - gap;
+    const targetX = nearLeft && nearRight
+      ? (Math.abs(leftGap) <= Math.abs(rightGap) ? leftX : rightX)
+      : nearLeft ? leftX : rightX;
+    const minY = workTop + gap;
+    const maxY = Math.max(minY, workBottom - outerSize.height - gap);
+    const targetY = Math.max(minY, Math.min(maxY, current.y));
 
     if (Math.abs(targetX - current.x) < 1 && Math.abs(targetY - current.y) < 1) return;
     await ball.setPosition(new PhysicalPosition(targetX, targetY));
