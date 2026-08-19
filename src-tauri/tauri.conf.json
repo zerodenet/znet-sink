@@ -22,6 +22,23 @@
         "visible": true,
         "resizable": true,
         "shadow": true
+      },
+      {
+        "label": "traffic-ball",
+        "title": "ZNet Sink Traffic",
+        "url": "/traffic-ball",
+        "width": 96,
+        "height": 96,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false
       }
     ],
     "security": {
