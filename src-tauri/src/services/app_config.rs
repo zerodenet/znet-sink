@@ -108,6 +108,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(hidden_menu_keys) = ui.hidden_menu_keys {
             config.ui.hidden_menu_keys = normalize_menu_keys(hidden_menu_keys);
         }
+        if let Some(traffic_ball_enabled) = ui.traffic_ball_enabled {
+            config.ui.traffic_ball_enabled = traffic_ball_enabled;
+        }
         if let Some(default_route) = ui.default_route {
             config.ui.default_route = normalize_optional(default_route);
         }
