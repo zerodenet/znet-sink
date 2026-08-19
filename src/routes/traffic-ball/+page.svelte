@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
   import {
-    destroyTrafficBallIfMainVisible,
+    destroyTrafficBall,
     restoreMainWindow,
   } from '$lib/services/traffic-ball';
   import type { CoreEventStatus, GuiEventPayload } from '$lib/types/core';
@@ -101,12 +101,15 @@
   }
 
   onMount(() => {
+    let mounted = true;
     let unlistenTraffic: UnlistenFn | null = null;
     let unlistenStatus: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    let unlistenMainFocus: UnlistenFn | null = null;
 
     void listen<GuiEventPayload>('gui:event', (event) => applyTraffic(event.payload)).then((unlisten) => {
-      unlistenTraffic = unlisten;
+      if (mounted) unlistenTraffic = unlisten;
+      else unlisten();
     });
     void listen<CoreEventStatus>('gui:event-status', (event) => {
       if (['offline', 'disconnected', 'error', 'stopped'].includes(event.payload.status)) {
@@ -115,29 +118,42 @@
         downloadBytesPerSecond = 0;
       }
     }).then((unlisten) => {
-      unlistenStatus = unlisten;
+      if (mounted) unlistenStatus = unlisten;
+      else unlisten();
     });
     void listen('core:process-exited', () => {
       live = false;
       uploadBytesPerSecond = 0;
       downloadBytesPerSecond = 0;
     }).then((unlisten) => {
-      unlistenExit = unlisten;
+      if (mounted) unlistenExit = unlisten;
+      else unlisten();
     });
+
+    void getAllWindows().then(async (windows) => {
+      const main = windows.find((window) => window.label === 'main');
+      if (!main) return;
+      const unlisten = await main.onFocusChanged(({ payload: focused }) => {
+        if (focused) void destroyTrafficBall();
+      });
+      if (mounted) unlistenMainFocus = unlisten;
+      else unlisten();
+    }).catch(() => {});
 
     const staleTimer = window.setInterval(() => {
       if (lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
       }
-      void destroyTrafficBallIfMainVisible();
     }, 1_000);
 
     return () => {
+      mounted = false;
       window.clearInterval(staleTimer);
       unlistenTraffic?.();
       unlistenStatus?.();
       unlistenExit?.();
+      unlistenMainFocus?.();
     };
   });
 </script>
