@@ -6,6 +6,8 @@
 
   let { mode }: { mode: 'pro' | 'lite' } = $props();
 
+  const REFRESH_INTERVAL_MS = 2000;
+
   let snapshot = $state<RuntimePerformanceSnapshot | null>(null);
   let refreshPending = false;
   let error = $state<string | null>(null);
@@ -53,7 +55,7 @@
     const start = () => {
       if (timer != null || document.visibilityState === 'hidden') return;
       void refresh();
-      timer = window.setInterval(() => void refresh(), 1000);
+      timer = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     };
     const stop = () => {
       if (timer != null) {
@@ -75,20 +77,13 @@
     };
   });
 
-  const processCountLabel = $derived.by(() => {
-    if (!snapshot) return '—';
-    return snapshot.partial
-      ? `${snapshot.trackedProcessCount}/${snapshot.processCount}`
-      : String(snapshot.processCount);
-  });
-
   const summaryTooltip = $derived.by(() => {
     if (error) return error;
-    if (!snapshot) return '正在读取 CPU、内存和线程使用情况';
-    const scope = snapshot.partial
-      ? `当前可读取 ${snapshot.trackedProcessCount}/${snapshot.processCount} 个相关进程`
-      : `当前 ${snapshot.processCount} 个相关进程均已统计`;
-    return `每秒更新 · CPU 按整机容量计算 · 内存为常驻内存 · ${scope}`;
+    if (!snapshot) return '正在读取 CPU 和内存使用情况';
+    if (snapshot.partial) {
+      return '每 2 秒更新 · 当前有相关进程无法读取，显示值仅包含可读取的 ZNet Sink / Zero 进程';
+    }
+    return '每 2 秒更新 · CPU 按整机容量计算 · 内存为常驻内存';
   });
 </script>
 
@@ -99,14 +94,12 @@
         <div class="runtime-title-row">
           <span class="runtime-title">资源占用</span>
           <span class="runtime-live-dot" class:error={Boolean(error)} aria-hidden="true"></span>
-          <span class="runtime-live-label">{error ? '读取异常' : '每秒更新'}</span>
+          <span class="runtime-live-label">{error ? '读取异常' : '2 秒更新'}</span>
         </div>
         <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU、内存和线程使用情况</p>
       </div>
       {#if snapshot?.partial}
-        <span class="runtime-badge" title="存在当前无法读取的相关进程">
-          已统计 {snapshot.trackedProcessCount}/{snapshot.processCount} 个进程
-        </span>
+        <span class="runtime-note">部分进程暂不可读取</span>
       {/if}
     </div>
 
@@ -122,10 +115,6 @@
       <div class="runtime-metric">
         <span class="runtime-metric-label">线程</span>
         <strong>{formatCount(snapshot?.totalThreadCount)}</strong>
-      </div>
-      <div class="runtime-metric">
-        <span class="runtime-metric-label">进程</span>
-        <strong>{processCountLabel}</strong>
       </div>
     </div>
 
@@ -160,14 +149,6 @@
         <span class="runtime-lite-metric">
           <small>内存</small>
           <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
-        </span>
-        <span class="runtime-lite-metric">
-          <small>线程</small>
-          <strong>{formatCount(snapshot?.totalThreadCount)}</strong>
-        </span>
-        <span class="runtime-lite-metric" aria-label={snapshot?.partial ? `已统计 ${snapshot.trackedProcessCount}/${snapshot.processCount} 个相关进程` : undefined}>
-          <small>进程</small>
-          <strong>{processCountLabel}</strong>
         </span>
       </div>
     {/if}
@@ -223,21 +204,18 @@
   }
 
   .runtime-live-label,
-  .runtime-badge {
+  .runtime-note {
     font-size: 9.5px;
     color: var(--muted-foreground);
   }
 
-  .runtime-badge {
-    padding: 2px 6px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--muted);
+  .runtime-note {
+    padding-top: 1px;
   }
 
   .runtime-summary {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
     margin-top: 10px;
   }
@@ -329,9 +307,9 @@
 
   .runtime-lite {
     width: min(100%, 720px);
-    min-height: 24px;
+    min-height: 22px;
     margin: 0 auto;
-    padding: 0 4px 1px;
+    padding: 0 4px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -357,7 +335,7 @@
     align-items: baseline;
     gap: 4px;
     min-width: 0;
-    padding: 0 10px;
+    padding: 0 12px;
     white-space: nowrap;
   }
 
@@ -376,18 +354,18 @@
     font-size: 9px;
     font-weight: 500;
     color: var(--muted-foreground);
-    opacity: 0.78;
+    opacity: 0.76;
   }
 
   .runtime-lite-metric strong {
-    max-width: 92px;
+    max-width: 100px;
     overflow: hidden;
     text-overflow: ellipsis;
     font-family: var(--font-mono, monospace);
     font-size: 10.5px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
-    color: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
+    color: color-mix(in srgb, var(--foreground) 76%, var(--muted-foreground));
   }
 
   .runtime-lite-state {
@@ -402,10 +380,8 @@
   }
 
   @media (max-width: 640px) {
-    .runtime-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .runtime-summary { grid-template-columns: 1fr; }
     .runtime-process-row { grid-template-columns: 1fr repeat(3, minmax(52px, auto)); }
-    .runtime-lite-metric { padding: 0 6px; gap: 3px; }
-    .runtime-lite-metric small { font-size: 8.5px; }
-    .runtime-lite-metric strong { max-width: 72px; font-size: 9.5px; }
+    .runtime-lite-metric { padding: 0 9px; gap: 3px; }
   }
 </style>
