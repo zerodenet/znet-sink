@@ -22,6 +22,7 @@ type SavedPosition = { x: number; y: number };
 
 let savedPosition: SavedPosition | null = null;
 let positionListenerInstalled = false;
+let showTransition: Promise<void> | null = null;
 
 async function getWindowByLabel(label: string): Promise<Window | null> {
   const windows = await getAllWindows();
@@ -131,7 +132,7 @@ async function createTrafficBall(): Promise<WebviewWindow> {
   return ball;
 }
 
-export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): Promise<void> {
+async function performShowTrafficBall(mainWindow: Window): Promise<void> {
   try {
     await ensurePositionListener();
     const position = await resolveTrafficBallPosition();
@@ -146,6 +147,15 @@ export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): 
     await mainWindow.show().catch(() => {});
     await mainWindow.minimize().catch(() => {});
   }
+}
+
+export function showTrafficBall(mainWindow: Window = getCurrentWindow()): Promise<void> {
+  if (showTransition) return showTransition;
+  const transition = performShowTrafficBall(mainWindow).finally(() => {
+    if (showTransition === transition) showTransition = null;
+  });
+  showTransition = transition;
+  return transition;
 }
 
 export async function snapTrafficBallToEdge(
