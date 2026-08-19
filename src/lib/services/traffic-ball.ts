@@ -1,5 +1,5 @@
 import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
-import { emitTo, listen } from '@tauri-apps/api/event';
+import { emit, emitTo, listen } from '@tauri-apps/api/event';
 import {
   currentMonitor,
   getAllWindows,
@@ -14,11 +14,16 @@ const TRAFFIC_BALL_SIZE_LOGICAL = 96;
 const TRAFFIC_BALL_MARGIN_LOGICAL = 14;
 const TRAFFIC_BALL_SNAP_GAP_LOGICAL = 6;
 const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 48;
+const TRAFFIC_BALL_CREATE_TIMEOUT_MS = 4_000;
 const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
+const TRAFFIC_BALL_CREATE_REQUEST_EVENT = 'traffic-ball:create-request';
+const TRAFFIC_BALL_READY_EVENT = 'traffic-ball:ready';
+const TRAFFIC_BALL_DESTROY_REQUEST_EVENT = 'traffic-ball:destroy-request';
 export const TRAFFIC_BALL_SHOWN_EVENT = 'traffic-ball:shown';
 export const TRAFFIC_BALL_HIDDEN_EVENT = 'traffic-ball:hidden';
 
 type SavedPosition = { x: number; y: number };
+type TrafficBallReady = { ok: boolean; error?: string };
 
 let savedPosition: SavedPosition | null = null;
 let positionListenerInstalled = false;
@@ -27,6 +32,52 @@ let showTransition: Promise<void> | null = null;
 async function getWindowByLabel(label: string): Promise<Window | null> {
   const windows = await getAllWindows();
   return windows.find((window) => window.label === label) ?? null;
+}
+
+async function requestTrafficBallWindow(): Promise<Window> {
+  const existing = await getWindowByLabel(TRAFFIC_BALL_LABEL);
+  if (existing) return existing;
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let unlisten: (() => void) | null = null;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unlisten?.();
+      reject(new Error('traffic-ball window creation timed out'));
+    }, TRAFFIC_BALL_CREATE_TIMEOUT_MS);
+
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      unlisten?.();
+      callback();
+    };
+
+    void listen<TrafficBallReady>(TRAFFIC_BALL_READY_EVENT, (event) => {
+      if (event.payload?.ok) settle(resolve);
+      else settle(() => reject(new Error(event.payload?.error ?? 'traffic-ball window creation failed')));
+    }).then((dispose) => {
+      if (settled) {
+        dispose();
+        return;
+      }
+      unlisten = dispose;
+      return emit(TRAFFIC_BALL_CREATE_REQUEST_EVENT);
+    }).catch((error) => {
+      settle(() => reject(error));
+    });
+  });
+
+  const created = await getWindowByLabel(TRAFFIC_BALL_LABEL);
+  if (!created) throw new Error('traffic-ball window was not registered after creation');
+  return created;
+}
+
+async function destroyTrafficBallWindow(): Promise<void> {
+  await emit(TRAFFIC_BALL_DESTROY_REQUEST_EVENT).catch(() => {});
 }
 
 async function ensurePositionListener(): Promise<void> {
@@ -86,15 +137,11 @@ async function resolveTrafficBallPosition(): Promise<PhysicalPosition> {
 async function performShowTrafficBall(mainWindow: Window): Promise<void> {
   try {
     await ensurePositionListener();
-    const ball = await getWindowByLabel(TRAFFIC_BALL_LABEL);
-    if (!ball) {
-      throw new Error('predeclared traffic-ball window is unavailable');
-    }
+    const ball = await requestTrafficBallWindow();
 
-    // Re-assert a square *inner* viewport before every show. The config already
-    // declares 96x96, but some desktop/window-manager paths can restore a
-    // different client size for an existing hidden transparent window. A
-    // circular CSS surface inside a non-square viewport becomes an ellipse.
+    // Re-assert a square inner viewport before every show. The window config
+    // declares 96x96, while this also protects against desktop/window-manager
+    // client-size restoration differences after native creation.
     await ball.setSize(new LogicalSize(TRAFFIC_BALL_SIZE_LOGICAL, TRAFFIC_BALL_SIZE_LOGICAL));
 
     const position = await resolveTrafficBallPosition();
@@ -103,8 +150,8 @@ async function performShowTrafficBall(mainWindow: Window): Promise<void> {
     await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_SHOWN_EVENT);
     await mainWindow.hide();
   } catch {
-    // Preserve a usable fallback if the predeclared floating window is not
-    // available on a platform: keep main usable and fall back to minimization.
+    // Preserve a usable fallback if the floating window cannot be created on
+    // a platform: keep main usable and fall back to normal minimization.
     await mainWindow.show().catch(() => {});
     await mainWindow.minimize().catch(() => {});
   }
@@ -170,6 +217,7 @@ export async function hideTrafficBall(): Promise<void> {
   await rememberPosition(ball);
   await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
   await ball.hide().catch(() => {});
+  await destroyTrafficBallWindow();
 }
 
 export async function restoreMainWindow(): Promise<void> {
@@ -184,5 +232,6 @@ export async function restoreMainWindow(): Promise<void> {
   if (ball) {
     await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
     await ball.hide().catch(() => {});
+    await destroyTrafficBallWindow();
   }
 }
