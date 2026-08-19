@@ -6,11 +6,13 @@
   import {
     destroyTrafficBall,
     restoreMainWindow,
+    snapTrafficBallToEdge,
   } from '$lib/services/traffic-ball';
   import type { CoreEventStatus } from '$lib/types/core';
 
   const MIN_RATE_INTERVAL_MS = 500;
   const STALE_AFTER_MS = 2_500;
+  const EDGE_SNAP_DEBOUNCE_MS = 180;
 
   let uploadBytesPerSecond = $state(0);
   let downloadBytesPerSecond = $state(0);
@@ -99,6 +101,9 @@
     let unlistenStatus: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
     let unlistenMainFocus: UnlistenFn | null = null;
+    let unlistenMoved: UnlistenFn | null = null;
+    let snapTimer: number | null = null;
+    const ballWindow = getCurrentWindow();
 
     // The backend traffic sampler emits this app-wide event every second.
     // Listen to it directly instead of starting another core subscription.
@@ -153,6 +158,19 @@
       else unlisten();
     }).catch(() => {});
 
+    // Native dragging can produce many move events. Only decide whether to
+    // snap after movement has settled, and only reposition if an edge is near.
+    void ballWindow.onMoved(({ payload: position }) => {
+      if (snapTimer != null) window.clearTimeout(snapTimer);
+      snapTimer = window.setTimeout(() => {
+        snapTimer = null;
+        void snapTrafficBallToEdge(ballWindow, position);
+      }, EDGE_SNAP_DEBOUNCE_MS);
+    }).then((unlisten) => {
+      if (mounted) unlistenMoved = unlisten;
+      else unlisten();
+    }).catch(() => {});
+
     const staleTimer = window.setInterval(() => {
       if (lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
         live = false;
@@ -164,10 +182,12 @@
     return () => {
       mounted = false;
       window.clearInterval(staleTimer);
+      if (snapTimer != null) window.clearTimeout(snapTimer);
       unlistenTraffic?.();
       unlistenStatus?.();
       unlistenExit?.();
       unlistenMainFocus?.();
+      unlistenMoved?.();
     };
   });
 </script>
