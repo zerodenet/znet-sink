@@ -6,6 +6,7 @@
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import KernelStatusPill from '$lib/components/core/KernelStatusPill.svelte';
   import { updater } from '$lib/services/updater.svelte';
+  import { showTrafficBall } from '$lib/services/traffic-ball';
 
   let appWindow: ReturnType<typeof getCurrentWindow> | null = null;
   let appName = $state('ZNet Sink');
@@ -28,7 +29,9 @@
     return () => { mounted = false; };
   });
 
-  const handleMinimize = () => appWindow?.minimize().catch(() => {});
+  const handleMinimize = () => {
+    if (appWindow) void showTrafficBall(appWindow);
+  };
   const handleMaximize = () => appWindow?.toggleMaximize().catch(() => {});
   const handleClose = () => appWindow?.close().catch(() => {});
 </script>
@@ -120,8 +123,8 @@
     <button
       onclick={handleMinimize}
       class="titlebar-btn"
-      aria-label="最小化"
-      title="最小化"
+      aria-label="最小化为流量悬浮球"
+      title="最小化为流量悬浮球"
     >
       <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
         <rect x="0" y="5" width="10" height="1" rx="0.5"/>
