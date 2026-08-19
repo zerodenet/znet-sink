@@ -28,6 +28,7 @@
     "core:window:allow-monitor-from-point",
     "core:window:allow-outer-position",
     "core:window:allow-set-position",
+    "core:window:allow-set-size",
     "core:window:allow-set-focus"
   ]
 }
