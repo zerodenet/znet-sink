@@ -40,7 +40,7 @@
     if (refreshPending || document.visibilityState === 'hidden') return;
     refreshPending = true;
     try {
-      snapshot = await getRuntimePerformanceSnapshot();
+      snapshot = await getRuntimePerformanceSnapshot(mode === 'pro');
       error = null;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : '资源占用读取失败';
