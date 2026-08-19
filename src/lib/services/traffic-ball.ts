@@ -1,4 +1,5 @@
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
+import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import {
   currentMonitor,
@@ -12,49 +13,52 @@ const MAIN_WINDOW_LABEL = 'main';
 const TRAFFIC_BALL_LABEL = 'traffic-ball';
 const TRAFFIC_BALL_SIZE_LOGICAL = 112;
 const TRAFFIC_BALL_MARGIN_LOGICAL = 18;
-const TRAFFIC_BALL_POSITION_KEY = 'znet-traffic-ball-position-v1';
+const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
 
 type SavedPosition = { x: number; y: number };
+
+let savedPosition: SavedPosition | null = null;
+let positionListenerInstalled = false;
 
 async function getWindowByLabel(label: string): Promise<Window | null> {
   const windows = await getAllWindows();
   return windows.find((window) => window.label === label) ?? null;
 }
 
-function readSavedPosition(): SavedPosition | null {
+async function ensurePositionListener(): Promise<void> {
+  if (positionListenerInstalled || getCurrentWindow().label !== MAIN_WINDOW_LABEL) return;
+  positionListenerInstalled = true;
   try {
-    const raw = localStorage.getItem(TRAFFIC_BALL_POSITION_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as Partial<SavedPosition>;
-    if (!Number.isFinite(value.x) || !Number.isFinite(value.y)) return null;
-    return { x: Number(value.x), y: Number(value.y) };
+    await listen<SavedPosition>(TRAFFIC_BALL_POSITION_EVENT, (event) => {
+      if (Number.isFinite(event.payload?.x) && Number.isFinite(event.payload?.y)) {
+        savedPosition = { x: event.payload.x, y: event.payload.y };
+      }
+    });
   } catch {
-    return null;
+    positionListenerInstalled = false;
   }
 }
 
 async function rememberPosition(ball: Window): Promise<void> {
   try {
     const position = await ball.outerPosition();
-    localStorage.setItem(
-      TRAFFIC_BALL_POSITION_KEY,
-      JSON.stringify({ x: position.x, y: position.y } satisfies SavedPosition),
-    );
+    await emitTo(MAIN_WINDOW_LABEL, TRAFFIC_BALL_POSITION_EVENT, {
+      x: position.x,
+      y: position.y,
+    } satisfies SavedPosition);
   } catch {
     // Position persistence is a convenience and must never block restore.
   }
 }
 
 async function resolveTrafficBallPosition(): Promise<PhysicalPosition> {
-  const saved = readSavedPosition();
-  const savedMonitor = saved
-    ? await monitorFromPoint(saved.x + TRAFFIC_BALL_SIZE_LOGICAL / 2, saved.y + TRAFFIC_BALL_SIZE_LOGICAL / 2)
-        .catch(() => null)
+  const savedMonitor = savedPosition
+    ? await monitorFromPoint(savedPosition.x + 1, savedPosition.y + 1).catch(() => null)
     : null;
   const monitor = savedMonitor ?? await currentMonitor();
 
   if (!monitor) {
-    return new PhysicalPosition(saved?.x ?? 24, saved?.y ?? 24);
+    return new PhysicalPosition(savedPosition?.x ?? 24, savedPosition?.y ?? 24);
   }
 
   const size = Math.round(TRAFFIC_BALL_SIZE_LOGICAL * monitor.scaleFactor);
@@ -65,10 +69,10 @@ async function resolveTrafficBallPosition(): Promise<PhysicalPosition> {
   const maxX = Math.max(minX, workArea.position.x + workArea.size.width - size - margin);
   const maxY = Math.max(minY, workArea.position.y + workArea.size.height - size - margin);
 
-  if (saved && savedMonitor) {
+  if (savedPosition && savedMonitor) {
     return new PhysicalPosition(
-      Math.max(minX, Math.min(maxX, saved.x)),
-      Math.max(minY, Math.min(maxY, saved.y)),
+      Math.max(minX, Math.min(maxX, savedPosition.x)),
+      Math.max(minY, Math.min(maxY, savedPosition.y)),
     );
   }
 
@@ -101,6 +105,7 @@ async function createTrafficBall(): Promise<WebviewWindow> {
 
 export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): Promise<void> {
   try {
+    await ensurePositionListener();
     const position = await resolveTrafficBallPosition();
     const existing = await getWindowByLabel(TRAFFIC_BALL_LABEL);
     const ball = existing ?? await createTrafficBall();
