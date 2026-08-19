@@ -15,6 +15,10 @@
   const MIN_RATE_INTERVAL_MS = 500;
   const STALE_AFTER_MS = 2_500;
   const EDGE_SNAP_DEBOUNCE_MS = 180;
+  const INNER_TOP = 4.5;
+  const INNER_BOTTOM = 91.5;
+  const MIN_LIQUID_FILL = 0.18;
+  const MAX_LIQUID_FILL = 0.72;
 
   let uploadBytesPerSecond = $state(0);
   let downloadBytesPerSecond = $state(0);
@@ -87,20 +91,49 @@
     live = true;
   }
 
+  function totalRate(): number {
+    return Math.max(0, uploadBytesPerSecond) + Math.max(0, downloadBytesPerSecond);
+  }
+
+  // The liquid is an activity indicator, not a bandwidth-capacity meter.
+  // A logarithmic scale keeps common desktop rates visually useful without
+  // making a brief high-speed transfer pin the surface to the top forever.
+  function trafficActivity(): number {
+    const bytesPerSecond = totalRate();
+    if (bytesPerSecond <= 0) return 0;
+    return Math.max(0, Math.min(1, (Math.log10(bytesPerSecond) - 3) / 5));
+  }
+
+  function liquidSurfaceY(): number {
+    const fill = MIN_LIQUID_FILL
+      + (MAX_LIQUID_FILL - MIN_LIQUID_FILL) * trafficActivity();
+    return INNER_BOTTOM - (INNER_BOTTOM - INNER_TOP) * fill;
+  }
+
+  function waveDuration(): number {
+    return 5.6 - 3.3 * trafficActivity();
+  }
+
   function formatRate(bytesPerSecond: number): string {
-    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 K/s';
-    if (bytesPerSecond >= 1_000_000_000) return `${(bytesPerSecond / 1_000_000_000).toFixed(1)} G/s`;
-    if (bytesPerSecond >= 1_000_000) {
-      return `${(bytesPerSecond / 1_000_000).toFixed(bytesPerSecond >= 10_000_000 ? 0 : 1)} M/s`;
+    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s';
+    if (bytesPerSecond >= 1_000_000_000) {
+      return `${(bytesPerSecond / 1_000_000_000).toFixed(bytesPerSecond >= 10_000_000_000 ? 0 : 1)} GB/s`;
     }
-    return `${Math.max(1, Math.round(bytesPerSecond / 1_000))} K/s`;
+    if (bytesPerSecond >= 1_000_000) {
+      return `${(bytesPerSecond / 1_000_000).toFixed(bytesPerSecond >= 10_000_000 ? 0 : 1)} MB/s`;
+    }
+    if (bytesPerSecond >= 1_000) {
+      return `${Math.max(1, Math.round(bytesPerSecond / 1_000))} KB/s`;
+    }
+    return `${Math.max(1, Math.round(bytesPerSecond))} B/s`;
   }
 
   function formatFullRate(bytesPerSecond: number): string {
     if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s';
     if (bytesPerSecond >= 1_000_000_000) return `${(bytesPerSecond / 1_000_000_000).toFixed(2)} GB/s`;
     if (bytesPerSecond >= 1_000_000) return `${(bytesPerSecond / 1_000_000).toFixed(2)} MB/s`;
-    return `${(bytesPerSecond / 1_000).toFixed(0)} KB/s`;
+    if (bytesPerSecond >= 1_000) return `${(bytesPerSecond / 1_000).toFixed(1)} KB/s`;
+    return `${Math.round(bytesPerSecond)} B/s`;
   }
 
   function handleMouseDown(event: MouseEvent) {
@@ -248,17 +281,72 @@
   aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口。`}
   title={`下载 ${formatFullRate(downloadBytesPerSecond)} · 上传 ${formatFullRate(uploadBytesPerSecond)}\n拖动移动 · 双击或右键恢复主窗口`}
 >
-  <span class="traffic-ball-highlight" aria-hidden="true"></span>
-  <span class="traffic-ball-status" aria-hidden="true"></span>
+  <svg
+    class="traffic-fluid"
+    viewBox="0 0 96 96"
+    aria-hidden="true"
+    style={`--liquid-y: ${liquidSurfaceY()}px; --wave-duration: ${waveDuration()}s; --wave-duration-back: ${waveDuration() * 1.24}s;`}
+  >
+    <defs>
+      <clipPath id="traffic-ball-liquid-clip">
+        <circle cx="48" cy="48" r="43.2" />
+      </clipPath>
+      <linearGradient id="traffic-ball-shell" x1="18" y1="11" x2="78" y2="87" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#b9d7f2" stop-opacity="0.88" />
+        <stop offset="0.45" stop-color="#6f91b6" stop-opacity="0.92" />
+        <stop offset="1" stop-color="#455c78" stop-opacity="0.95" />
+      </linearGradient>
+      <linearGradient id="traffic-ball-liquid-back" x1="22" y1="0" x2="77" y2="86" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.72" />
+        <stop offset="1" stop-color="#818cf8" stop-opacity="0.68" />
+      </linearGradient>
+      <linearGradient id="traffic-ball-liquid-front" x1="19" y1="2" x2="79" y2="89" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#38bdf8" stop-opacity="0.82" />
+        <stop offset="0.52" stop-color="#3b82f6" stop-opacity="0.86" />
+        <stop offset="1" stop-color="#6366f1" stop-opacity="0.88" />
+      </linearGradient>
+    </defs>
 
-  <span class="traffic-rate traffic-rate-down">
-    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 5 6 9 10 5" /></svg>
-    <strong>{formatRate(downloadBytesPerSecond)}</strong>
-  </span>
-  <span class="traffic-divider" aria-hidden="true"></span>
-  <span class="traffic-rate traffic-rate-up">
-    <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 7 6 3 10 7" /></svg>
-    <strong>{formatRate(uploadBytesPerSecond)}</strong>
+    <circle class="glass-shell" cx="48" cy="48" r="44" fill="url(#traffic-ball-shell)" />
+
+    <g clip-path="url(#traffic-ball-liquid-clip)">
+      <g class="liquid-layer">
+        <path
+          class="wave wave-back"
+          fill="url(#traffic-ball-liquid-back)"
+          d="M -96 1 Q -72 4 -48 1 T 0 1 T 48 1 T 96 1 T 144 1 T 192 1 V 100 H -96 Z"
+        />
+        <path
+          class="wave wave-front"
+          fill="url(#traffic-ball-liquid-front)"
+          d="M -96 0 Q -72 -4 -48 0 T 0 0 T 48 0 T 96 0 T 144 0 T 192 0 V 100 H -96 Z"
+        />
+      </g>
+
+      <ellipse
+        class="glass-reflection"
+        cx="33"
+        cy="25"
+        rx="16"
+        ry="7"
+        transform="rotate(-24 33 25)"
+      />
+    </g>
+
+    <circle class="inner-rim" cx="48" cy="48" r="42.6" />
+    <circle class="outer-rim" cx="48" cy="48" r="44" />
+  </svg>
+
+  <span class="traffic-readout">
+    <span class="traffic-rate traffic-rate-down">
+      <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 5 6 9 10 5" /></svg>
+      <strong>{formatRate(downloadBytesPerSecond)}</strong>
+    </span>
+    <span class="traffic-divider" aria-hidden="true"></span>
+    <span class="traffic-rate traffic-rate-up">
+      <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 7 6 3 10 7" /></svg>
+      <strong>{formatRate(uploadBytesPerSecond)}</strong>
+    </span>
   </span>
 </button>
 
@@ -296,92 +384,97 @@
     min-height: 0;
     padding: 0;
     margin: 0;
-    border-radius: 50%;
-    clip-path: circle(50% at 50% 50%);
+    border: 0;
+    outline: 0;
+    overflow: visible;
+    cursor: grab;
+    color: rgba(255, 255, 255, 0.98);
+    background: transparent;
+    font-family: var(--font-sans, system-ui, sans-serif);
+    -webkit-font-smoothing: antialiased;
+    transition: filter 0.16s ease, transform 0.16s ease;
+  }
+
+  .traffic-fluid {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .glass-shell {
+    transition: opacity 0.24s ease;
+  }
+
+  .liquid-layer {
+    transform: translateY(var(--liquid-y));
+    transform-box: view-box;
+    transform-origin: 0 0;
+    transition: transform 680ms cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease;
+  }
+
+  .wave {
+    transform-box: view-box;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+
+  .wave-back {
+    opacity: 0.68;
+  }
+
+  .wave-front {
+    opacity: 0.9;
+  }
+
+  .glass-reflection {
+    fill: rgba(255, 255, 255, 0.16);
+    pointer-events: none;
+  }
+
+  .inner-rim {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.10);
+    stroke-width: 0.7;
+    pointer-events: none;
+  }
+
+  .outer-rim {
+    fill: none;
+    stroke: rgba(225, 239, 255, 0.60);
+    stroke-width: 0.9;
+    pointer-events: none;
+  }
+
+  .traffic-readout {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 3px;
-    box-sizing: border-box;
-    overflow: hidden;
-    cursor: grab;
-    color: rgba(255, 255, 255, 0.97);
-    background:
-      radial-gradient(circle at 31% 18%, rgba(255, 255, 255, 0.34), transparent 26%),
-      radial-gradient(circle at 78% 83%, rgba(191, 219, 254, 0.24), transparent 43%),
-      linear-gradient(150deg, #718096 0%, #5f728b 50%, #55657a 100%);
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.40),
-      inset 0 -14px 24px rgba(30, 41, 59, 0.14);
-    font-family: var(--font-sans, system-ui, sans-serif);
-    -webkit-font-smoothing: antialiased;
-    transition: filter 0.16s ease, background 0.2s ease;
-  }
-
-  .traffic-ball.live {
-    background:
-      radial-gradient(circle at 31% 18%, rgba(255, 255, 255, 0.48), transparent 25%),
-      radial-gradient(circle at 78% 83%, rgba(199, 210, 254, 0.30), transparent 44%),
-      linear-gradient(150deg, #67b0f8 0%, #4389ee 47%, #5964df 100%);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.52),
-      inset 0 -14px 24px rgba(30, 64, 175, 0.16);
-  }
-
-  .traffic-ball:hover {
-    filter: brightness(1.045) saturate(1.03);
-  }
-
-  .traffic-ball:active {
-    cursor: grabbing;
-    filter: brightness(0.98);
-  }
-
-  .traffic-ball:focus-visible {
-    outline: 2px solid rgba(224, 242, 254, 0.9);
-    outline-offset: -4px;
-  }
-
-  .traffic-ball-highlight {
-    position: absolute;
-    inset: 4px;
-    z-index: -1;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.10);
     pointer-events: none;
-  }
-
-  .traffic-ball-status {
-    position: absolute;
-    top: 12px;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: rgba(226, 232, 240, 0.72);
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.10);
-  }
-
-  .traffic-ball.live .traffic-ball-status {
-    background: #86efac;
-    box-shadow: 0 0 0 2px rgba(220, 252, 231, 0.18);
+    transform: translateY(1px);
   }
 
   .traffic-rate {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    height: 17px;
-    transform: translateY(3px);
+    gap: 4px;
+    height: 16px;
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 1px 2px rgba(30, 64, 175, 0.18);
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.42);
   }
 
   .traffic-rate svg {
-    width: 10px;
-    height: 10px;
+    width: 9px;
+    height: 9px;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -391,39 +484,92 @@
   }
 
   .traffic-rate strong {
-    width: 50px;
+    width: 57px;
     text-align: left;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 12px;
+    font-size: 10.5px;
     line-height: 1;
-    font-weight: 700;
+    font-weight: 680;
     letter-spacing: -0.045em;
     white-space: nowrap;
   }
 
   .traffic-rate-down {
-    color: #f0f9ff;
+    color: #f5fbff;
   }
 
   .traffic-rate-up {
-    color: #ecfdf5;
+    color: #f0fdf9;
   }
 
   .traffic-divider {
-    width: 50px;
+    width: 40px;
     height: 1px;
-    transform: translateY(3px);
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.20), transparent);
+  }
+
+  .traffic-ball:not(.live) .glass-shell {
+    opacity: 0.76;
+  }
+
+  .traffic-ball:not(.live) .liquid-layer {
+    opacity: 0.24;
+  }
+
+  .traffic-ball:not(.live) .outer-rim {
+    stroke: rgba(226, 232, 240, 0.38);
+  }
+
+  .traffic-ball:hover {
+    filter: brightness(1.04) saturate(1.035);
+  }
+
+  .traffic-ball:active {
+    cursor: grabbing;
+    transform: scale(0.985);
+  }
+
+  .traffic-ball:focus-visible::after {
+    content: '';
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px rgba(224, 242, 254, 0.92);
+    pointer-events: none;
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .traffic-ball.live .traffic-ball-status {
-      animation: live-pulse 2s ease-in-out infinite;
+    .traffic-ball.live .wave-front {
+      animation: traffic-wave-forward var(--wave-duration) linear infinite;
+    }
+
+    .traffic-ball.live .wave-back {
+      animation: traffic-wave-back var(--wave-duration-back) linear infinite;
+    }
+
+    .traffic-ball.live .glass-reflection {
+      animation: glass-breathe 4.8s ease-in-out infinite;
     }
   }
 
-  @keyframes live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.58; }
+  @media (prefers-reduced-motion: reduce) {
+    .liquid-layer {
+      transition: none;
+    }
+  }
+
+  @keyframes traffic-wave-forward {
+    from { transform: translateX(0); }
+    to { transform: translateX(-96px); }
+  }
+
+  @keyframes traffic-wave-back {
+    from { transform: translateX(-96px); }
+    to { transform: translateX(0); }
+  }
+
+  @keyframes glass-breathe {
+    0%, 100% { opacity: 0.68; }
+    50% { opacity: 1; }
   }
 </style>
