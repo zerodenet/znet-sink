@@ -1,32 +1,29 @@
 //! Runtime traffic bridge and traffic-ball lifecycle hooks.
 //!
 //! Zero already emits `stats.sampled` once per second over the shared
-//! multiplexed IPC event stream. The GUI normalizes that event to
-//! `gui:event -> traffic.sampled`, so this module consumes the existing event
-//! instead of polling `stats` a second time.
+//! multiplexed IPC event stream. `gui_events` normalizes that event once and
+//! passes the typed `GuiTrafficStats` into this module, so there is no second
+//! kernel poll and no second JSON parse on the high-volume event path.
 //!
-//! The same stream drives the macOS / best-effort Linux tray rate and forwards
-//! the cumulative counters only to an active traffic-ball window. No sampling
-//! thread is created here.
+//! The same sample drives the macOS / best-effort Linux tray rate and is
+//! forwarded only to an active traffic-ball window.
 //!
-//! The traffic-ball WebView is also created lazily from the static Tauri window
-//! config. This keeps the normal application baseline to a single WebView; the
-//! transparent 96x96 WebView exists only while the floating ball is in use.
+//! The traffic-ball WebView is created lazily from the static Tauri window
+//! config. The normal application baseline therefore remains a single WebView;
+//! the transparent 96x96 WebView exists only while the floating ball is in use.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex, OnceLock,
 };
 
-use serde_json::{json, Value};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
 use crate::kernel::zero::{build_traffic_snapshot, TrafficSample};
 use crate::models::gui_core::GuiTrafficStats;
 use crate::state::app_state::AppState;
 
-const GUI_EVENT_NAME: &str = "gui:event";
-const GUI_EVENT_STATUS_NAME: &str = "gui:event-status";
 const CORE_PROCESS_EXITED_EVENT: &str = "core:process-exited";
 const TRAFFIC_SAMPLE_EVENT: &str = "traffic.sampled";
 
@@ -42,42 +39,11 @@ fn tray_baseline() -> &'static Mutex<Option<TrafficSample>> {
     TRAY_BASELINE.get_or_init(|| Mutex::new(None))
 }
 
-fn number_at(value: &Value, key: &str) -> u64 {
-    value.get(key).and_then(Value::as_u64).unwrap_or(0)
-}
-
-fn parse_traffic_event(payload: &str) -> Option<(GuiTrafficStats, u64)> {
-    let root: Value = serde_json::from_str(payload).ok()?;
-    let event = root.get("event")?;
-    if event.get("eventType").and_then(Value::as_str) != Some("traffic.sampled") {
-        return None;
-    }
-
-    let data = event.get("payload")?.get("data")?;
-    let bytes_up = data.get("bytesUp")?.as_u64()?;
-    let bytes_down = data.get("bytesDown")?.as_u64()?;
-    let sampled_at_unix_ms = event
-        .get("occurredAtUnixMs")
-        .and_then(Value::as_u64)
-        .unwrap_or_else(crate::services::common::now_unix_ms);
-
-    Some((
-        GuiTrafficStats {
-            active_sessions: number_at(data, "activeSessions"),
-            total_started: number_at(data, "totalStarted"),
-            completed_sessions: number_at(data, "completedSessions"),
-            failed_sessions: number_at(data, "failedSessions"),
-            blocked_sessions: number_at(data, "blockedSessions"),
-            direct_sessions: number_at(data, "directSessions"),
-            chained_sessions: number_at(data, "chainedSessions"),
-            bytes_up,
-            bytes_down,
-        },
-        sampled_at_unix_ms,
-    ))
-}
-
-fn handle_traffic_sample(app: &AppHandle, totals: GuiTrafficStats, sampled_at_unix_ms: u64) {
+pub(crate) fn handle_stats_sample(
+    app: &AppHandle,
+    totals: &GuiTrafficStats,
+    sampled_at_unix_ms: u64,
+) {
     let current = TrafficSample {
         stats: totals.clone(),
         sampled_at_unix_ms,
@@ -88,7 +54,7 @@ fn handle_traffic_sample(app: &AppHandle, totals: GuiTrafficStats, sampled_at_un
     let rate_snapshot = {
         let mut baseline = tray_baseline()
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(|error| error.into_inner());
         let snapshot = build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
         *baseline = Some(current.clone());
         snapshot
@@ -115,30 +81,20 @@ fn handle_traffic_sample(app: &AppHandle, totals: GuiTrafficStats, sampled_at_un
     // Only the traffic-ball needs the legacy flat event. Avoid broadcasting a
     // duplicate event to every window when the ball does not exist.
     if app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
-        let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_SAMPLE_EVENT, &totals);
+        let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_SAMPLE_EVENT, totals);
     }
 }
 
-fn clear_runtime_traffic_state(app: &AppHandle) {
+pub(crate) fn clear_runtime_traffic_state(app: &AppHandle) {
     *tray_baseline()
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        .unwrap_or_else(|error| error.into_inner()) = None;
 
     let state = app.state::<AppState>();
     if let Ok(mut sample) = state.traffic_sample().lock() {
         *sample = None;
     }
     clear_tray_rate_title(app);
-}
-
-fn handle_gui_status(app: &AppHandle, payload: &str) {
-    let Ok(value) = serde_json::from_str::<Value>(payload) else {
-        return;
-    };
-    let status = value.get("status").and_then(Value::as_str);
-    if status != Some("subscribed") {
-        clear_runtime_traffic_state(app);
-    }
 }
 
 fn create_traffic_ball_window(app: &AppHandle) -> Result<(), String> {
@@ -214,24 +170,12 @@ fn install_traffic_ball_lifecycle(app_handle: &AppHandle) {
     });
 }
 
-/// Install event-driven runtime traffic and traffic-ball lifecycle hooks.
+/// Install event-driven traffic-ball lifecycle hooks.
 ///
 /// Kept as `spawn` for the existing setup call, but this function does not
-/// spawn a polling loop.
+/// spawn a sampling loop.
 pub fn spawn(app_handle: AppHandle) {
     install_traffic_ball_lifecycle(&app_handle);
-
-    let stats_app = app_handle.clone();
-    app_handle.listen(GUI_EVENT_NAME, move |event| {
-        if let Some((totals, sampled_at_unix_ms)) = parse_traffic_event(event.payload()) {
-            handle_traffic_sample(&stats_app, totals, sampled_at_unix_ms);
-        }
-    });
-
-    let status_app = app_handle.clone();
-    app_handle.listen(GUI_EVENT_STATUS_NAME, move |event| {
-        handle_gui_status(&status_app, event.payload());
-    });
 
     let exit_app = app_handle.clone();
     app_handle.listen(CORE_PROCESS_EXITED_EVENT, move |_| {
@@ -286,7 +230,7 @@ fn clear_tray_rate_title(_app_handle: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_rate, parse_traffic_event};
+    use super::compact_rate;
 
     #[test]
     fn tray_rate_format_stays_compact_across_units() {
@@ -297,32 +241,5 @@ mod tests {
         assert_eq!(compact_rate(1_250_000), "1.2M");
         assert_eq!(compact_rate(84_000_000), "84M");
         assert_eq!(compact_rate(1_250_000_000), "1.2G");
-    }
-
-    #[test]
-    fn normalized_stats_event_is_reused_without_polling() {
-        let payload = serde_json::json!({
-            "generation": 1,
-            "event": {
-                "eventType": "traffic.sampled",
-                "occurredAtUnixMs": 1234,
-                "payload": {
-                    "kind": "trafficStats",
-                    "data": {
-                        "activeSessions": 3,
-                        "totalStarted": 8,
-                        "bytesUp": 1024,
-                        "bytesDown": 2048
-                    }
-                }
-            }
-        })
-        .to_string();
-
-        let (stats, sampled_at) = parse_traffic_event(&payload).expect("traffic event");
-        assert_eq!(sampled_at, 1234);
-        assert_eq!(stats.active_sessions, 3);
-        assert_eq!(stats.bytes_up, 1024);
-        assert_eq!(stats.bytes_down, 2048);
     }
 }
