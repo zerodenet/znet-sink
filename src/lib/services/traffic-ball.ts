@@ -57,7 +57,7 @@ async function requestTrafficBallWindow(): Promise<Window> {
     };
 
     void listen<TrafficBallReady>(TRAFFIC_BALL_READY_EVENT, (event) => {
-      if (event.payload?.ok) settle(resolve);
+      if (event.payload?.ok) settle(() => resolve());
       else settle(() => reject(new Error(event.payload?.error ?? 'traffic-ball window creation failed')));
     }).then((dispose) => {
       if (settled) {
