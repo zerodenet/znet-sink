@@ -25,10 +25,6 @@
     return `${mib.toFixed(mib >= 100 ? 0 : 1)} MB`;
   }
 
-  function formatCount(value: number | null | undefined): string {
-    return value == null ? '—' : String(value);
-  }
-
   function processMeta(process: RuntimeProcessMetrics): string {
     if (!process.tracked) {
       return process.pid == null ? '当前无法读取该进程' : `PID ${process.pid} · 当前无法读取`;
@@ -40,7 +36,7 @@
     if (refreshPending || document.visibilityState === 'hidden') return;
     refreshPending = true;
     try {
-      snapshot = await getRuntimePerformanceSnapshot(mode === 'pro');
+      snapshot = await getRuntimePerformanceSnapshot();
       error = null;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : '资源占用读取失败';
@@ -108,7 +104,7 @@
           <span class="runtime-live-dot" class:error={Boolean(error)} aria-hidden="true"></span>
           <span class="runtime-live-label">{error ? '读取异常' : '2 秒更新'}</span>
         </div>
-        <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU、内存和线程使用情况</p>
+        <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU 和内存使用情况</p>
       </div>
       {#if unreadableLabel}
         <span class="runtime-note">{unreadableLabel}</span>
@@ -124,10 +120,6 @@
         <span class="runtime-metric-label">内存</span>
         <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
       </div>
-      <div class="runtime-metric">
-        <span class="runtime-metric-label">线程</span>
-        <strong>{formatCount(snapshot?.totalThreadCount)}</strong>
-      </div>
     </div>
 
     {#if snapshot}
@@ -140,7 +132,6 @@
             </div>
             <span class="runtime-process-value"><small>CPU</small>{formatCpu(process.cpuPercent)}</span>
             <span class="runtime-process-value"><small>内存</small>{formatMemory(process.memoryBytes)}</span>
-            <span class="runtime-process-value"><small>线程</small>{formatCount(process.threadCount)}</span>
           </div>
         {/each}
       </div>
@@ -227,7 +218,7 @@
 
   .runtime-summary {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     margin-top: 10px;
   }
@@ -264,7 +255,7 @@
 
   .runtime-process-row {
     display: grid;
-    grid-template-columns: minmax(130px, 1.3fr) repeat(3, minmax(72px, 0.7fr));
+    grid-template-columns: minmax(130px, 1.3fr) repeat(2, minmax(72px, 0.7fr));
     align-items: center;
     gap: 8px;
     min-height: 38px;
@@ -393,7 +384,7 @@
 
   @media (max-width: 640px) {
     .runtime-summary { grid-template-columns: 1fr; }
-    .runtime-process-row { grid-template-columns: 1fr repeat(3, minmax(52px, auto)); }
+    .runtime-process-row { grid-template-columns: 1fr repeat(2, minmax(52px, auto)); }
     .runtime-lite-metric { padding: 0 9px; gap: 3px; }
   }
 </style>
