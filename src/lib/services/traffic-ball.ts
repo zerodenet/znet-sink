@@ -1,4 +1,4 @@
-import { PhysicalPosition } from '@tauri-apps/api/dpi';
+import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
 import { emitTo, listen } from '@tauri-apps/api/event';
 import {
   currentMonitor,
@@ -90,6 +90,12 @@ async function performShowTrafficBall(mainWindow: Window): Promise<void> {
     if (!ball) {
       throw new Error('predeclared traffic-ball window is unavailable');
     }
+
+    // Re-assert a square *inner* viewport before every show. The config already
+    // declares 96x96, but some desktop/window-manager paths can restore a
+    // different client size for an existing hidden transparent window. A
+    // circular CSS surface inside a non-square viewport becomes an ellipse.
+    await ball.setSize(new LogicalSize(TRAFFIC_BALL_SIZE_LOGICAL, TRAFFIC_BALL_SIZE_LOGICAL));
 
     const position = await resolveTrafficBallPosition();
     await ball.setPosition(position);
