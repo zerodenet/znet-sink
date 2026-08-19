@@ -29,7 +29,7 @@
 
   function processMeta(process: RuntimeProcessMetrics): string {
     if (!process.tracked) {
-      return process.pid == null ? '外部进程 · 未纳入采样' : `PID ${process.pid} · 暂不可读取`;
+      return process.pid == null ? '当前无法读取该进程' : `PID ${process.pid} · 当前无法读取`;
     }
     return process.pid == null ? 'PID 未知' : `PID ${process.pid}`;
   }
@@ -41,7 +41,7 @@
       snapshot = await getRuntimePerformanceSnapshot();
       error = null;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : '实时资源采样失败';
+      error = cause instanceof Error ? cause.message : '资源占用读取失败';
     } finally {
       refreshPending = false;
     }
@@ -75,49 +75,57 @@
     };
   });
 
-  const partialPrefix = $derived(snapshot?.partial ? '~' : '');
+  const processCountLabel = $derived.by(() => {
+    if (!snapshot) return '—';
+    return snapshot.partial
+      ? `${snapshot.trackedProcessCount}/${snapshot.processCount}`
+      : String(snapshot.processCount);
+  });
+
   const summaryTooltip = $derived.by(() => {
     if (error) return error;
-    if (!snapshot) return '正在建立实时资源采样';
+    if (!snapshot) return '正在读取 CPU、内存和线程使用情况';
     const scope = snapshot.partial
-      ? `已跟踪 ${snapshot.trackedProcessCount}/${snapshot.processCount} 个运行进程`
-      : `已跟踪全部 ${snapshot.processCount} 个运行进程`;
-    return `每 1 秒采样 · CPU 为整机容量占用 · 内存为 RSS 常驻集 · ${scope}`;
+      ? `当前可读取 ${snapshot.trackedProcessCount}/${snapshot.processCount} 个相关进程`
+      : `当前 ${snapshot.processCount} 个相关进程均已统计`;
+    return `每秒更新 · CPU 按整机容量计算 · 内存为常驻内存 · ${scope}`;
   });
 </script>
 
 {#if mode === 'pro'}
-  <section class="runtime-pro" aria-label="实时资源损耗" title={summaryTooltip}>
+  <section class="runtime-pro" aria-label="资源占用" title={summaryTooltip}>
     <div class="runtime-header">
       <div>
         <div class="runtime-title-row">
-          <span class="runtime-title">实时资源损耗</span>
+          <span class="runtime-title">资源占用</span>
           <span class="runtime-live-dot" class:error={Boolean(error)} aria-hidden="true"></span>
-          <span class="runtime-live-label">{error ? '采样异常' : '1s 实时'}</span>
+          <span class="runtime-live-label">{error ? '读取异常' : '每秒更新'}</span>
         </div>
-        <p class="runtime-subtitle">ZNet Sink GUI 与 Zero 内核的运行时资源占用</p>
+        <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU、内存和线程使用情况</p>
       </div>
       {#if snapshot?.partial}
-        <span class="runtime-badge" title="存在外部或暂不可读取的进程，合计值仅覆盖已跟踪部分">部分统计</span>
+        <span class="runtime-badge" title="存在当前无法读取的相关进程">
+          已统计 {snapshot.trackedProcessCount}/{snapshot.processCount} 个进程
+        </span>
       {/if}
     </div>
 
     <div class="runtime-summary">
       <div class="runtime-metric">
-        <span class="runtime-metric-label">CPU 占用</span>
-        <strong>{partialPrefix}{formatCpu(snapshot?.totalCpuPercent)}</strong>
+        <span class="runtime-metric-label">CPU</span>
+        <strong>{formatCpu(snapshot?.totalCpuPercent)}</strong>
       </div>
       <div class="runtime-metric">
-        <span class="runtime-metric-label">RSS 内存</span>
-        <strong>{partialPrefix}{formatMemory(snapshot?.totalMemoryBytes)}</strong>
+        <span class="runtime-metric-label">内存</span>
+        <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
       </div>
       <div class="runtime-metric">
         <span class="runtime-metric-label">线程</span>
-        <strong>{partialPrefix}{formatCount(snapshot?.totalThreadCount)}</strong>
+        <strong>{formatCount(snapshot?.totalThreadCount)}</strong>
       </div>
       <div class="runtime-metric">
         <span class="runtime-metric-label">进程</span>
-        <strong>{snapshot?.processCount ?? '—'}</strong>
+        <strong>{processCountLabel}</strong>
       </div>
     </div>
 
@@ -136,22 +144,33 @@
         {/each}
       </div>
     {:else}
-      <div class="runtime-placeholder">正在建立实时采样…</div>
+      <div class="runtime-placeholder">正在读取资源占用…</div>
     {/if}
   </section>
 {:else}
-  <div class="runtime-lite" title={summaryTooltip} aria-label="实时资源损耗">
-    <div class="runtime-lite-heading">
-      <span class="runtime-live-dot" class:error={Boolean(error)} aria-hidden="true"></span>
-      <span>实时资源</span>
-      {#if snapshot?.partial}<small>部分</small>{/if}
-    </div>
-    <div class="runtime-lite-metrics">
-      <span><small>CPU</small><strong>{partialPrefix}{formatCpu(snapshot?.totalCpuPercent)}</strong></span>
-      <span><small>内存</small><strong>{partialPrefix}{formatMemory(snapshot?.totalMemoryBytes)}</strong></span>
-      <span><small>线程</small><strong>{partialPrefix}{formatCount(snapshot?.totalThreadCount)}</strong></span>
-      <span><small>进程</small><strong>{snapshot?.processCount ?? '—'}</strong></span>
-    </div>
+  <div class="runtime-lite" aria-label={summaryTooltip}>
+    {#if error}
+      <span class="runtime-lite-state error">资源占用暂时无法读取</span>
+    {:else}
+      <div class="runtime-lite-metrics" class:loading={!snapshot}>
+        <span class="runtime-lite-metric">
+          <small>CPU</small>
+          <strong>{formatCpu(snapshot?.totalCpuPercent)}</strong>
+        </span>
+        <span class="runtime-lite-metric">
+          <small>内存</small>
+          <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
+        </span>
+        <span class="runtime-lite-metric">
+          <small>线程</small>
+          <strong>{formatCount(snapshot?.totalThreadCount)}</strong>
+        </span>
+        <span class="runtime-lite-metric" aria-label={snapshot?.partial ? `已统计 ${snapshot.trackedProcessCount}/${snapshot.processCount} 个相关进程` : undefined}>
+          <small>进程</small>
+          <strong>{processCountLabel}</strong>
+        </span>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -309,63 +328,84 @@
   }
 
   .runtime-lite {
-    width: min(100%, 500px);
+    width: min(100%, 720px);
+    min-height: 24px;
     margin: 0 auto;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--card) 92%, transparent);
-  }
-
-  .runtime-lite-heading {
+    padding: 0 4px 1px;
     display: flex;
     align-items: center;
-    gap: 5px;
-    margin-bottom: 6px;
-    font-size: 10px;
-    font-weight: 600;
+    justify-content: center;
+    flex-shrink: 0;
     color: var(--muted-foreground);
-  }
-
-  .runtime-lite-heading small {
-    margin-left: auto;
-    font-size: 9px;
-    font-weight: 500;
   }
 
   .runtime-lite-metrics {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-  }
-
-  .runtime-lite-metrics > span {
     display: flex;
-    min-width: 0;
-    flex-direction: column;
     align-items: center;
-    gap: 1px;
-  }
-
-  .runtime-lite-metrics small {
-    font-size: 8.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-lite-metrics strong {
+    justify-content: center;
     max-width: 100%;
+    min-width: 0;
+  }
+
+  .runtime-lite-metrics.loading {
+    opacity: 0.5;
+  }
+
+  .runtime-lite-metric {
+    position: relative;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+
+  .runtime-lite-metric:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 1px;
+    height: 10px;
+    transform: translateY(-50%);
+    background: color-mix(in srgb, var(--border) 72%, transparent);
+  }
+
+  .runtime-lite-metric small {
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    opacity: 0.78;
+  }
+
+  .runtime-lite-metric strong {
+    max-width: 92px;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
     font-family: var(--font-mono, monospace);
     font-size: 10.5px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
-    color: var(--foreground);
+    color: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
+  }
+
+  .runtime-lite-state {
+    font-size: 9.5px;
+    color: var(--muted-foreground);
+    opacity: 0.72;
+  }
+
+  .runtime-lite-state.error {
+    color: var(--destructive);
+    opacity: 0.78;
   }
 
   @media (max-width: 640px) {
     .runtime-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .runtime-process-row { grid-template-columns: 1fr repeat(3, minmax(52px, auto)); }
+    .runtime-lite-metric { padding: 0 6px; gap: 3px; }
+    .runtime-lite-metric small { font-size: 8.5px; }
+    .runtime-lite-metric strong { max-width: 72px; font-size: 9.5px; }
   }
 </style>
