@@ -26,6 +26,7 @@ use crate::state::app_state::AppState;
 /// Sampling cadence. ~1s keeps the overview chart smooth without flooding IPC.
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn compact_rate(bytes_per_second: u64) -> String {
     fn scaled(value: u64, unit: u64, suffix: char) -> String {
         let amount = value as f64 / unit as f64;
