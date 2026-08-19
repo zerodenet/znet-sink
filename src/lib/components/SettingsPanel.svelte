@@ -14,7 +14,7 @@
     { id: 'core',    label: '内核' },
     { id: 'tun',     label: 'TUN' },
     { id: 'config',  label: '配置' },
-    { id: 'logs',    label: '日志与数据' },
+    { id: 'logs',    label: '日志' },
     { id: 'about',   label: '关于' }
   ];
 
