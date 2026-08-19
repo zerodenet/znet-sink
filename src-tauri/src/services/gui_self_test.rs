@@ -27,7 +27,9 @@ pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapsh
 
     let mut checks = Vec::new();
     checks.push(check_active_proxy_config(active.as_ref()));
-    checks.push(check_active_proxy_content(active.as_ref()));
+    if active.is_some() {
+        checks.push(check_active_proxy_content(active.as_ref()));
+    }
     checks.push(check_core_config(&core_config));
     checks.push(check_local_proxy(&connection));
     checks.push(check_system_proxy(&connection));
@@ -82,9 +84,9 @@ fn check_active_proxy_config(
                 "format": profile.format,
             })),
         ),
-        None => warn(
+        None => fail(
             "activeProxyConfig",
-            "no active proxy config; kernel can run but service cannot be enabled until a config is imported or synced",
+            "未找到当前配置，请先导入或同步配置并设为当前配置",
             None,
         ),
     }
@@ -94,23 +96,23 @@ fn check_active_proxy_content(
     active: Option<&crate::models::proxy_config::ProxyConfigProfile>,
 ) -> GuiSelfTestCheck {
     let Some(profile) = active else {
-        return warn(
+        return fail(
             "activeProxyContent",
-            "active proxy config is missing; kernel will start with a minimal temporary config",
+            "未找到当前配置，请先导入或同步配置并设为当前配置",
             None,
         );
     };
     let Some(content) = profile.content.as_ref() else {
         return fail(
             "activeProxyContent",
-            "active proxy config does not contain JSON content",
+            "当前配置没有可用内容，请重新同步或导入配置",
             Some(json!({ "id": profile.id })),
         );
     };
     if !content.is_object() {
         return fail(
             "activeProxyContent",
-            "active proxy config content must be a JSON object",
+            "当前配置格式无效，请重新同步或导入配置",
             Some(json!({ "id": profile.id })),
         );
     }
@@ -348,20 +350,20 @@ mod tests {
     use crate::models::gui_core::GuiSelfTestCheckStatus;
 
     #[test]
-    fn missing_active_proxy_config_is_warning_not_blocker() {
+    fn missing_active_proxy_config_blocks_startup() {
         let check = check_active_proxy_config(None);
 
         assert_eq!(check.key, "activeProxyConfig");
-        assert_eq!(check.status, GuiSelfTestCheckStatus::Warn);
-        assert!(check.message.contains("kernel can run"));
+        assert_eq!(check.status, GuiSelfTestCheckStatus::Fail);
+        assert!(check.message.contains("当前配置"));
     }
 
     #[test]
-    fn missing_active_proxy_content_uses_minimal_temp_config_warning() {
+    fn missing_active_proxy_content_blocks_startup() {
         let check = check_active_proxy_content(None);
 
         assert_eq!(check.key, "activeProxyContent");
-        assert_eq!(check.status, GuiSelfTestCheckStatus::Warn);
-        assert!(check.message.contains("minimal temporary config"));
+        assert_eq!(check.status, GuiSelfTestCheckStatus::Fail);
+        assert!(check.message.contains("当前配置"));
     }
 }

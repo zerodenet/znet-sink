@@ -15,6 +15,9 @@
   const isCrashed = $derived(c?.processExitReason === 'crashed');
   const isStopped = $derived(c?.processExitReason === 'stopped');
   const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
+  const missingActiveConfig = $derived(
+    guiState.selfTest !== null && !guiState.selfTest.activeProxyConfigId,
+  );
   const localProxyEndpoint = $derived(
     c?.localProxyHost && c?.localProxyPort
       ? `${c.localProxyHost}:${c.localProxyPort}`
@@ -160,6 +163,14 @@
             ? '开启服务'
             : '配置不完整'
   );
+
+  function openBlockingIssueTarget() {
+    if (missingActiveConfig) {
+      store.activeTab = 'profiles';
+      return;
+    }
+    store.openSettings('core');
+  }
 </script>
 
 <div class="core-card">
@@ -227,8 +238,8 @@
       </svg>
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
-    <button class="core-link" onclick={() => store.openSettings('core')}>
-      配置内核
+    <button class="core-link" onclick={openBlockingIssueTarget}>
+      {missingActiveConfig ? '前往配置' : '配置内核'}
     </button>
   {/if}
 
