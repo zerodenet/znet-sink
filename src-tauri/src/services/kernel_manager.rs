@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{BufRead, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -93,7 +93,7 @@ pub fn list_available_versions() -> AppResult<KernelVersionList> {
     let platform_asset = platform_asset_name();
     let mut versions: Vec<KernelRelease> = releases_json
         .into_iter()
-        .filter_map(|release| parse_release(&client, &release, platform_asset))
+        .filter_map(|release| parse_release(&release, platform_asset))
         .collect();
 
     versions.sort_by(|a, b| {
@@ -137,6 +137,16 @@ pub fn install_version(
     let temp_file = workspace.root.join(format!("zero-download.{ext}"));
 
     let client = build_http_client()?;
+    // Version listing is metadata-only. Resolve the checksum lazily for the
+    // single release the user actually installs instead of issuing one extra
+    // network request per release while opening the version manager.
+    let expected_sha256 = match expected_sha256
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(value),
+        None => fetch_checksum_for_download(&client, &download_url, platform_asset_name())?,
+    };
 
     let _ = crate::services::logs::append_entry(
         &app.state::<crate::state::app_state::AppState>(),
@@ -495,7 +505,6 @@ fn extract_semver(raw: &str) -> Option<String> {
 }
 
 fn parse_release(
-    client: &reqwest::blocking::Client,
     release: &serde_json::Value,
     platform_asset: &'static str,
 ) -> Option<KernelRelease> {
@@ -525,8 +534,6 @@ fn parse_release(
 
     let release_notes_url = release["html_url"].as_str().map(|s| s.to_string());
 
-    let checksum_sha256 = fetch_checksums(client, assets, platform_asset);
-
     Some(KernelRelease {
         version,
         channel,
@@ -535,7 +542,9 @@ fn parse_release(
         asset_size_bytes,
         asset_download_url,
         release_notes_url,
-        checksum_sha256,
+        // Keep the wire shape compatible, but do not fetch checksums while
+        // listing releases. install_version resolves this lazily instead.
+        checksum_sha256: None,
     })
 }
 
@@ -573,29 +582,49 @@ fn platform_asset_name() -> &'static str {
     }
 }
 
-fn fetch_checksums(
+fn fetch_checksum_for_download(
     client: &reqwest::blocking::Client,
-    assets: &[serde_json::Value],
+    download_url: &str,
     platform_asset: &str,
-) -> Option<String> {
-    let checksums_url = assets.iter().find(|a| {
-        a["name"]
-            .as_str()
-            .map(|n| n == "checksums.txt")
-            .unwrap_or(false)
-    })?["browser_download_url"]
-        .as_str()?;
+) -> AppResult<Option<String>> {
+    let Some((release_root, _)) = download_url.rsplit_once('/') else {
+        return Ok(None);
+    };
+    let checksums_url = format!("{release_root}/checksums.txt");
 
-    let mut resp = client.get(checksums_url).send().ok()?;
+    let mut response = match client.get(&checksums_url).send() {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
     let mut body = String::new();
-    resp.read_to_string(&mut body).ok()?;
+    if response.read_to_string(&mut body).is_err() {
+        return Ok(None);
+    }
+    Ok(parse_checksum(&body, platform_asset))
+}
 
-    let reader = std::io::BufReader::new(body.as_bytes());
-    for line in reader.lines().map_while(Result::ok) {
-        let line = line.trim();
-        if line.contains(platform_asset) {
-            let hash = line.split_whitespace().next()?;
-            return Some(hash.to_string());
+fn parse_checksum(body: &str, platform_asset: &str) -> Option<String> {
+    for line in body.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(file_name) = fields.next() else {
+            continue;
+        };
+        let file_name = file_name.trim_start_matches('*');
+        if file_name == platform_asset
+            && hash.len() == 64
+            && hash.chars().all(|ch| ch.is_ascii_hexdigit())
+        {
+            return Some(hash.to_ascii_lowercase());
         }
     }
     None
@@ -971,6 +1000,19 @@ mod tests {
     fn rejects_network_addresses_as_versions() {
         assert_eq!(extract_semver("listening on 127.0.0.1:8080"), None);
         assert_eq!(extract_semver("control 0.0.0.0"), None);
+    }
+
+    #[test]
+    fn parses_checksum_for_exact_platform_asset() {
+        let hash = "a".repeat(64);
+        let other_hash = "b".repeat(64);
+        let body = format!(
+            "{other_hash}  zero-linux-x86_64.tar.gz\n{hash} *zero-darwin-aarch64.tar.gz\n"
+        );
+        assert_eq!(
+            parse_checksum(&body, "zero-darwin-aarch64.tar.gz"),
+            Some(hash)
+        );
     }
 
     #[test]

@@ -119,7 +119,6 @@ export interface CoreKernelInfo {
   sizeBytes?: number;
   modifiedAtUnixMs?: number;
   recommendedInstallDir?: string;
-  downloadUrl?: string;
   hasActiveConfig: boolean;
   warnings: string[];
 }
