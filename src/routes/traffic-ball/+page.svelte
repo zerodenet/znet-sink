@@ -279,7 +279,6 @@
   oncontextmenu={handleContextMenu}
   onkeydown={handleKeyDown}
   aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口。`}
-  title={`下载 ${formatFullRate(downloadBytesPerSecond)} · 上传 ${formatFullRate(uploadBytesPerSecond)}\n拖动移动 · 双击或右键恢复主窗口`}
 >
   <svg
     class="traffic-fluid"
@@ -347,6 +346,15 @@
       <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 7 6 3 10 7" /></svg>
       <strong>{formatRate(uploadBytesPerSecond)}</strong>
     </span>
+  </span>
+
+  <span class="traffic-hint" aria-hidden="true">
+    <span class="traffic-hint-primary">
+      <svg viewBox="0 0 14 14"><rect x="2.25" y="2.25" width="9.5" height="9.5" rx="2" /><path d="M5 7h4M7 5v4" /></svg>
+      <strong>双击打开</strong>
+    </span>
+    <span class="traffic-hint-divider"></span>
+    <span class="traffic-hint-secondary">拖动移动</span>
   </span>
 </button>
 
@@ -459,7 +467,9 @@
     justify-content: center;
     gap: 3px;
     pointer-events: none;
-    transform: translateY(1px);
+    opacity: 1;
+    transform: translateY(1px) scale(1);
+    transition: opacity 140ms ease, transform 180ms ease;
   }
 
   .traffic-rate {
@@ -508,6 +518,60 @@
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.20), transparent);
   }
 
+  .traffic-hint {
+    position: absolute;
+    inset: 11px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border-radius: 50%;
+    color: rgba(248, 252, 255, 0.98);
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.93);
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.46);
+    transition: opacity 140ms ease, transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .traffic-hint-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .traffic-hint-primary svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.25;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .traffic-hint-primary strong {
+    font-weight: 650;
+  }
+
+  .traffic-hint-divider {
+    width: 34px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  }
+
+  .traffic-hint-secondary {
+    font-size: 8.5px;
+    line-height: 1;
+    color: rgba(239, 246, 255, 0.76);
+    white-space: nowrap;
+  }
+
   .traffic-ball:not(.live) .glass-shell {
     opacity: 0.76;
   }
@@ -524,9 +588,34 @@
     filter: brightness(1.04) saturate(1.035);
   }
 
+  .traffic-ball:hover .traffic-readout,
+  .traffic-ball:focus-visible .traffic-readout {
+    opacity: 0.08;
+    transform: translateY(1px) scale(0.96);
+    transition-delay: 180ms;
+  }
+
+  .traffic-ball:hover .traffic-hint,
+  .traffic-ball:focus-visible .traffic-hint {
+    opacity: 1;
+    transform: scale(1);
+    transition-delay: 220ms;
+  }
+
   .traffic-ball:active {
     cursor: grabbing;
     transform: scale(0.985);
+  }
+
+  .traffic-ball:active .traffic-hint {
+    opacity: 0;
+    transform: scale(0.96);
+    transition-delay: 0ms;
+  }
+
+  .traffic-ball:active .traffic-readout {
+    opacity: 1;
+    transition-delay: 0ms;
   }
 
   .traffic-ball:focus-visible::after {
@@ -553,7 +642,9 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .liquid-layer {
+    .liquid-layer,
+    .traffic-readout,
+    .traffic-hint {
       transition: none;
     }
   }
