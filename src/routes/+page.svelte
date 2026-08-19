@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { store } from '$lib/services/store.svelte';
+  import { store, type SettingsSection } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
@@ -27,6 +27,9 @@
 
   const EVENT_STREAM_RETRY_MIN_MS = 500;
   const EVENT_STREAM_RETRY_MAX_MS = 5_000;
+  const SETTINGS_SECTIONS = new Set<SettingsSection>([
+    'general', 'network', 'core', 'tun', 'config', 'logs', 'about',
+  ]);
   const tabOrder = NAV_TABS.map((tab) => tab.id);
   let renderedTab = $state(store.activeTab);
   let tabDirection = $state<TabTransitionDirection>(1);
@@ -87,9 +90,10 @@
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
       const { tab, section } = event.payload;
       if (tab === 'settings') {
-        store.openSettings(
-          section === 'core' || section === 'config' || section === 'about' ? section : 'general',
-        );
+        const settingsSection = section && SETTINGS_SECTIONS.has(section as SettingsSection)
+          ? section as SettingsSection
+          : 'general';
+        store.openSettings(settingsSection);
       } else if (tab) {
         store.isInitialized = true;
         store.activeTab = tab;
