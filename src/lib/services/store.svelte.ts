@@ -239,7 +239,7 @@ class AppStateStore {
   }
 
   isNavOperable(key: string): boolean {
-    const item = this.interactionSurface.actions.get(key);
+    const item = this.interactionSurface.navigation.get(key);
     return item?.operable ?? true;
   }
 
