@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
 
   import { getRuntimePerformanceSnapshot } from '$lib/services/runtime-performance';
-  import type { RuntimePerformanceSnapshot, RuntimeProcessMetrics } from '$lib/types/runtime-performance';
+  import type { RuntimePerformanceSnapshot } from '$lib/types/runtime-performance';
 
   let { mode }: { mode: 'pro' | 'lite' } = $props();
 
@@ -25,15 +25,8 @@
     return `${mib.toFixed(mib >= 100 ? 0 : 1)} MB`;
   }
 
-  function processMeta(process: RuntimeProcessMetrics): string {
-    if (!process.tracked) {
-      return process.pid == null ? '当前无法读取该进程' : `PID ${process.pid} · 当前无法读取`;
-    }
-    return process.pid == null ? 'PID 未知' : `PID ${process.pid}`;
-  }
-
   async function refresh(): Promise<void> {
-    if (refreshPending || document.visibilityState === 'hidden') return;
+    if (mode !== 'lite' || refreshPending || document.visibilityState === 'hidden') return;
     refreshPending = true;
     try {
       snapshot = await getRuntimePerformanceSnapshot();
@@ -46,6 +39,8 @@
   }
 
   onMount(() => {
+    if (mode !== 'lite') return;
+
     let timer: number | null = null;
 
     const start = () => {
@@ -73,74 +68,21 @@
     };
   });
 
-  const unreadableProcesses = $derived.by(() => {
-    if (!snapshot) return [] as string[];
-    const labels: string[] = [];
-    if (!snapshot.gui.tracked) labels.push('ZNet Sink');
-    if (snapshot.core && !snapshot.core.tracked) labels.push('Zero');
-    return labels;
-  });
-
-  const unreadableLabel = $derived(
-    unreadableProcesses.length > 0 ? `${unreadableProcesses.join('、')} 暂不可读取` : '',
-  );
-
-  const summaryTooltip = $derived.by(() => {
+  const summaryLabel = $derived.by(() => {
     if (error) return error;
     if (!snapshot) return '正在读取 CPU 和内存使用情况';
-    if (unreadableProcesses.length > 0) {
-      return `每 2 秒更新 · ${unreadableProcesses.join('、')} 当前无法读取，显示值仅包含可读取进程`;
+    const unavailable: string[] = [];
+    if (!snapshot.gui.tracked) unavailable.push('ZNet Sink');
+    if (snapshot.core && !snapshot.core.tracked) unavailable.push('Zero');
+    if (unavailable.length > 0) {
+      return `${unavailable.join('、')} 当前无法读取；显示值仅包含可读取进程`;
     }
-    return '每 2 秒更新 · CPU 按整机容量计算 · 内存为常驻内存';
+    return 'ZNet Sink 与 Zero 的 CPU 和常驻内存；每 2 秒更新';
   });
 </script>
 
-{#if mode === 'pro'}
-  <section class="runtime-pro" aria-label="资源占用" title={summaryTooltip}>
-    <div class="runtime-header">
-      <div>
-        <div class="runtime-title-row">
-          <span class="runtime-title">资源占用</span>
-          <span class="runtime-live-dot" class:error={Boolean(error)} aria-hidden="true"></span>
-          <span class="runtime-live-label">{error ? '读取异常' : '2 秒更新'}</span>
-        </div>
-        <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU 和内存使用情况</p>
-      </div>
-      {#if unreadableLabel}
-        <span class="runtime-note">{unreadableLabel}</span>
-      {/if}
-    </div>
-
-    <div class="runtime-summary">
-      <div class="runtime-metric">
-        <span class="runtime-metric-label">CPU</span>
-        <strong>{formatCpu(snapshot?.totalCpuPercent)}</strong>
-      </div>
-      <div class="runtime-metric">
-        <span class="runtime-metric-label">内存</span>
-        <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
-      </div>
-    </div>
-
-    {#if snapshot}
-      <div class="runtime-processes">
-        {#each [snapshot.gui, ...(snapshot.core ? [snapshot.core] : [])] as process (process.role)}
-          <div class="runtime-process-row" class:untracked={!process.tracked}>
-            <div class="runtime-process-name">
-              <span>{process.label}</span>
-              <small>{processMeta(process)}</small>
-            </div>
-            <span class="runtime-process-value"><small>CPU</small>{formatCpu(process.cpuPercent)}</span>
-            <span class="runtime-process-value"><small>内存</small>{formatMemory(process.memoryBytes)}</span>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <div class="runtime-placeholder">正在读取资源占用…</div>
-    {/if}
-  </section>
-{:else}
-  <div class="runtime-lite" aria-label={summaryTooltip}>
+{#if mode === 'lite'}
+  <div class="runtime-lite" aria-label={summaryLabel}>
     {#if error}
       <span class="runtime-lite-state error">资源占用暂时无法读取</span>
     {:else}
@@ -159,155 +101,6 @@
 {/if}
 
 <style>
-  .runtime-pro {
-    flex-shrink: 0;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  }
-
-  .runtime-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .runtime-title-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .runtime-title {
-    font-size: 12px;
-    font-weight: 650;
-    color: var(--foreground);
-  }
-
-  .runtime-subtitle {
-    margin: 2px 0 0;
-    font-size: 10.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-live-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    background: var(--success, #22c55e);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--success, #22c55e) 14%, transparent);
-  }
-
-  .runtime-live-dot.error {
-    background: var(--destructive);
-    box-shadow: none;
-  }
-
-  .runtime-live-label,
-  .runtime-note {
-    font-size: 9.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-note {
-    padding-top: 1px;
-  }
-
-  .runtime-summary {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  .runtime-metric {
-    min-width: 0;
-    padding: 8px 9px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--muted) 55%, transparent);
-  }
-
-  .runtime-metric-label {
-    display: block;
-    margin-bottom: 2px;
-    font-size: 9.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-metric strong {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono, monospace);
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-    color: var(--foreground);
-  }
-
-  .runtime-processes {
-    margin-top: 8px;
-    border-top: 1px solid var(--border);
-  }
-
-  .runtime-process-row {
-    display: grid;
-    grid-template-columns: minmax(130px, 1.3fr) repeat(2, minmax(72px, 0.7fr));
-    align-items: center;
-    gap: 8px;
-    min-height: 38px;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
-  }
-
-  .runtime-process-row:last-child { border-bottom: 0; }
-  .runtime-process-row.untracked { opacity: 0.65; }
-
-  .runtime-process-name {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .runtime-process-name > span {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--foreground);
-  }
-
-  .runtime-process-name small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 9.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-process-value {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    min-width: 0;
-    font-family: var(--font-mono, monospace);
-    font-size: 10.5px;
-    font-variant-numeric: tabular-nums;
-    color: var(--foreground);
-  }
-
-  .runtime-process-value small {
-    font-family: inherit;
-    font-size: 8.5px;
-    color: var(--muted-foreground);
-  }
-
-  .runtime-placeholder {
-    padding: 10px 0 2px;
-    font-size: 10.5px;
-    color: var(--muted-foreground);
-  }
-
   .runtime-lite {
     width: min(100%, 720px);
     min-height: 22px;
@@ -383,8 +176,6 @@
   }
 
   @media (max-width: 640px) {
-    .runtime-summary { grid-template-columns: 1fr; }
-    .runtime-process-row { grid-template-columns: 1fr repeat(2, minmax(52px, auto)); }
     .runtime-lite-metric { padding: 0 9px; gap: 3px; }
   }
 </style>
