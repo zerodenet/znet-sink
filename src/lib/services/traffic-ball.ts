@@ -13,6 +13,8 @@ const MAIN_WINDOW_LABEL = 'main';
 const TRAFFIC_BALL_LABEL = 'traffic-ball';
 const TRAFFIC_BALL_SIZE_LOGICAL = 112;
 const TRAFFIC_BALL_MARGIN_LOGICAL = 18;
+const TRAFFIC_BALL_SNAP_MARGIN_LOGICAL = 10;
+const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 32;
 const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
 
 type SavedPosition = { x: number; y: number };
@@ -116,6 +118,42 @@ export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): 
     // Keep the window controls usable in browser/dev environments or if the
     // dedicated surface could not be created by the platform.
     await mainWindow.minimize().catch(() => {});
+  }
+}
+
+export async function snapTrafficBallToEdge(
+  ball: Window = getCurrentWindow(),
+  position?: PhysicalPosition,
+): Promise<void> {
+  try {
+    const monitor = await currentMonitor();
+    if (!monitor) return;
+
+    const current = position ?? await ball.outerPosition();
+    const size = Math.round(TRAFFIC_BALL_SIZE_LOGICAL * monitor.scaleFactor);
+    const margin = Math.round(TRAFFIC_BALL_SNAP_MARGIN_LOGICAL * monitor.scaleFactor);
+    const threshold = Math.round(TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL * monitor.scaleFactor);
+    const workArea = monitor.workArea;
+    const left = workArea.position.x + margin;
+    const right = Math.max(left, workArea.position.x + workArea.size.width - size - margin);
+    const top = workArea.position.y + margin;
+    const bottom = Math.max(top, workArea.position.y + workArea.size.height - size - margin);
+    const leftDistance = Math.abs(current.x - left);
+    const rightDistance = Math.abs(current.x - right);
+
+    let targetX = current.x;
+    if (leftDistance <= threshold || rightDistance <= threshold) {
+      targetX = leftDistance <= rightDistance ? left : right;
+    } else {
+      return;
+    }
+    const targetY = Math.max(top, Math.min(bottom, current.y));
+
+    if (Math.abs(targetX - current.x) < 1 && Math.abs(targetY - current.y) < 1) return;
+    await ball.setPosition(new PhysicalPosition(targetX, targetY));
+  } catch {
+    // Window managers vary in positioning support; dragging must remain usable
+    // even when edge snapping is unavailable.
   }
 }
 
