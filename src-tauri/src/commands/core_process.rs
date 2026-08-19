@@ -73,18 +73,22 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
 }
 
 /// Fast in-memory process state read. Resource metrics are opt-in so existing
-/// status polling stays as cheap as before. Lite requests CPU/RSS only; Pro
-/// may opt into the more expensive thread detail while Overview is visible.
+/// status polling stays as cheap as before. The desktop monitor intentionally
+/// samples CPU time and RSS only; thread enumeration is not part of the runtime
+/// monitor because it adds platform-specific cost without useful product value.
 #[tauri::command(rename_all = "camelCase")]
 pub fn core_process_status(
     state: State<'_, AppState>,
     include_performance: Option<bool>,
+    // Kept as a compatibility argument for callers built against an earlier
+    // #20 revision. Thread sampling is intentionally ignored.
     include_performance_threads: Option<bool>,
 ) -> AppResult<CoreProcessStatusResponse> {
+    let _ = include_performance_threads;
     let runtime_performance = if include_performance.unwrap_or(false) {
         Some(runtime_performance::runtime_performance_snapshot(
             state.clone(),
-            include_performance_threads.unwrap_or(false),
+            false,
         )?)
     } else {
         None
