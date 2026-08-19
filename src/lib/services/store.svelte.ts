@@ -11,7 +11,7 @@ import {
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
-export type SettingsSection = 'general' | 'core' | 'tun' | 'config' | 'about';
+export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'config' | 'logs' | 'about';
 
 const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'settings']);
 const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config']);
@@ -222,25 +222,22 @@ class AppStateStore {
     return item?.operable ?? true;
   }
 
-  isFeatureVisible(key: string): boolean {
+  isFeatureAvailable(key: string): boolean {
     const item = this.interactionSurface.features.get(key);
-    if (item) return item.visible;
-    const liteModeFeatures = ['connections'];
-    return liteModeFeatures.includes(key);
+    return item?.available ?? false;
   }
 
-  private async persistUiMode(mode: UIMode) {
+  async persistUiMode(mode: UIMode) {
     await updateAppConfig({ ui: { uiMode: mode } });
   }
 
   resetOnboarding() {
-    this.onboardingRequired = true;
-    this.isInitialized = false;
-    this.activeTab = 'overview';
-    this.settingsSection = 'general';
     if (browser) {
       resetOnboardingStorage(localStorage);
     }
+    this.onboardingRequired = true;
+    this.isInitialized = false;
+    this.activeTab = 'overview';
   }
 }
 
