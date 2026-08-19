@@ -103,33 +103,63 @@ pub fn kill_core_default() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
-pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    let has_active_proxy_config = lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .any(|profile| profile.active);
-    if has_active_proxy_config {
-        core_config::export_active(state.clone())?;
+fn require_active_proxy_config(state: &AppState) -> AppResult<()> {
+    let profiles = lock(state.proxy_configs(), "proxy_config")?;
+    let active = profiles.iter().find(|profile| profile.active).ok_or_else(|| AppError {
+        code: "active_profile_required",
+        message: "未找到当前配置，请先导入或同步配置并设为当前配置".to_string(),
+        details: Some(json!({ "reason": "missing_active_proxy_config" })),
+    })?;
+
+    let content = active.content.as_ref().ok_or_else(|| AppError {
+        code: "active_profile_invalid",
+        message: "当前配置没有可用内容，请重新同步或导入配置".to_string(),
+        details: Some(json!({ "proxyConfigId": active.id })),
+    })?;
+    if !content.is_object() {
+        return Err(AppError {
+            code: "active_profile_invalid",
+            message: "当前配置格式无效，请重新同步或导入配置".to_string(),
+            details: Some(json!({ "proxyConfigId": active.id })),
+        });
     }
+
+    Ok(())
+}
+
+pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+    // A managed Zero process is only meaningful when ZNet Sink has an active,
+    // usable proxy profile to export. Older builds generated a minimal stub
+    // config here; current Zero expects the real effective configuration, so
+    // reject the start before touching process state or spawning a child.
+    if let Err(error) = require_active_proxy_config(state.inner()) {
+        let _ = logs::append_entry(
+            state.inner(),
+            LogSource::App,
+            LogLevel::Info,
+            "core process start skipped: active proxy config is not ready".to_string(),
+            Some(json!({ "code": error.code, "details": error.details.clone() })),
+        );
+        return Err(error);
+    }
+
+    // Exporting the selected profile is the single source of the managed core
+    // config path. Never fall back to a stale app-config path from an older
+    // profile or to a synthetic temporary config.
+    core_config::export_active(state.clone())?;
 
     let config = { lock(state.app_config(), "app_config")?.core.clone() };
     let snapshot = core_config::snapshot_from_config(&config)?;
-
-    // When no config_path exists, generate a minimal temp config so the
-    // kernel can start with its control plane enabled. The kernel enters
-    // a "waiting for config" state, and the GUI shows appropriate status.
-    let snapshot = if snapshot.config_path.is_none() {
-        let temp_path = core_config::write_minimal_temp_config()?;
-        {
-            let mut app_config = lock(state.app_config(), "app_config")?;
-            app_config.core.config_path = Some(temp_path.to_string_lossy().to_string());
-            let config_path = crate::services::app_config_store::default_config_path()?;
-            crate::services::app_config_store::save(&config_path, &app_config)?;
-        }
-        let config = { lock(state.app_config(), "app_config")?.core.clone() };
-        core_config::snapshot_from_config(&config)?
-    } else {
-        snapshot
-    };
+    if snapshot.config_path.is_none() || snapshot.config_exists != Some(true) {
+        return Err(AppError {
+            code: "core_config_required",
+            message: "当前配置尚未生成可用的内核配置文件，请重新同步或导入配置".to_string(),
+            details: Some(json!({
+                "configPath": snapshot.config_path,
+                "configExists": snapshot.config_exists,
+            })),
+        });
+    }
 
     if let Err(error) = snapshot.validate_launchable() {
         let message = format!("failed to start core process: {error}");
