@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { getCurrentWebview } from '@tauri-apps/api/webview';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
   import { getGuiTrafficStats } from '$lib/services/core';
   import {
-    destroyTrafficBall,
+    hideTrafficBall,
     restoreMainWindow,
     snapTrafficBallToEdge,
-    TRAFFIC_BALL_READY_EVENT,
+    TRAFFIC_BALL_HIDDEN_EVENT,
+    TRAFFIC_BALL_SHOWN_EVENT,
   } from '$lib/services/traffic-ball';
   import type { CoreEventStatus } from '$lib/types/core';
 
@@ -19,6 +19,7 @@
   let uploadBytesPerSecond = $state(0);
   let downloadBytesPerSecond = $state(0);
   let live = $state(false);
+  let surfaceVisible = false;
   let lastBytesUp: number | null = null;
   let lastBytesDown: number | null = null;
   let lastSampleAt = 0;
@@ -34,8 +35,35 @@
     return null;
   }
 
+  function resetTraffic() {
+    uploadBytesPerSecond = 0;
+    downloadBytesPerSecond = 0;
+    live = false;
+    lastBytesUp = null;
+    lastBytesDown = null;
+    lastSampleAt = 0;
+    lastTrafficAt = 0;
+  }
+
+  async function seedTrafficSnapshot() {
+    try {
+      const stats = await getGuiTrafficStats();
+      if (!surfaceVisible) return;
+      const now = Date.now();
+      uploadBytesPerSecond = Math.max(0, stats.uploadBytesPerSec);
+      downloadBytesPerSecond = Math.max(0, stats.downloadBytesPerSec);
+      lastBytesUp = stats.totalUploadBytes;
+      lastBytesDown = stats.totalDownloadBytes;
+      lastSampleAt = now;
+      lastTrafficAt = now;
+      live = true;
+    } catch {
+      if (surfaceVisible) resetTraffic();
+    }
+  }
+
   function applyTraffic(data: unknown) {
-    if (document.visibilityState !== 'visible') return;
+    if (!surfaceVisible) return;
 
     const bytesUp = numberFrom(data, ['bytesUp', 'bytes_up', 'upload', 'tx']);
     const bytesDown = numberFrom(data, ['bytesDown', 'bytes_down', 'download', 'rx']);
@@ -99,6 +127,8 @@
 
   onMount(() => {
     let mounted = true;
+    let unlistenShown: UnlistenFn | null = null;
+    let unlistenHidden: UnlistenFn | null = null;
     let unlistenTraffic: UnlistenFn | null = null;
     let unlistenStatus: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
@@ -107,35 +137,40 @@
     let snapTimer: number | null = null;
     const ballWindow = getCurrentWindow();
 
-    // Creation already requests an alpha-zero WebView. Repeat the setting once
-    // the route is mounted so both creation-time and runtime rendering layers
-    // agree before the main window swaps to this surface.
-    void getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => {}).finally(() => {
-      if (mounted) void emit(TRAFFIC_BALL_READY_EVENT);
+    void listen(TRAFFIC_BALL_SHOWN_EVENT, () => {
+      surfaceVisible = true;
+      resetTraffic();
+      surfaceVisible = true;
+      void seedTrafficSnapshot();
+    }).then((unlisten) => {
+      if (mounted) unlistenShown = unlisten;
+      else unlisten();
     });
+
+    void listen(TRAFFIC_BALL_HIDDEN_EVENT, () => {
+      surfaceVisible = false;
+      resetTraffic();
+    }).then((unlisten) => {
+      if (mounted) unlistenHidden = unlisten;
+      else unlisten();
+    });
+
+    void ballWindow.isVisible().then((visible) => {
+      if (!mounted || !visible) return;
+      surfaceVisible = true;
+      void seedTrafficSnapshot();
+    }).catch(() => {});
 
     void listen<Record<string, unknown>>('traffic.sampled', (event) => applyTraffic(event.payload)).then((unlisten) => {
       if (mounted) unlistenTraffic = unlisten;
       else unlisten();
     });
 
-    void getGuiTrafficStats().then((stats) => {
-      if (!mounted || lastTrafficAt > 0) return;
-      const now = Date.now();
-      uploadBytesPerSecond = Math.max(0, stats.uploadBytesPerSec);
-      downloadBytesPerSecond = Math.max(0, stats.downloadBytesPerSec);
-      lastBytesUp = stats.totalUploadBytes;
-      lastBytesDown = stats.totalDownloadBytes;
-      lastSampleAt = now;
-      lastTrafficAt = now;
-      live = true;
-    }).catch(() => {});
-
     void listen<CoreEventStatus>('gui:event-status', (event) => {
       if (['offline', 'disconnected', 'error', 'stopped'].includes(event.payload.status)) {
-        live = false;
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
+        live = false;
       }
     }).then((unlisten) => {
       if (mounted) unlistenStatus = unlisten;
@@ -143,25 +178,28 @@
     });
 
     void listen('core:process-exited', () => {
-      live = false;
       uploadBytesPerSecond = 0;
       downloadBytesPerSecond = 0;
+      live = false;
     }).then((unlisten) => {
       if (mounted) unlistenExit = unlisten;
       else unlisten();
     });
 
+    // The main window remains the tray/menu authority. If it is restored by
+    // any native path, simply hide this already-created transparent surface.
     void getAllWindows().then(async (windows) => {
       const main = windows.find((window) => window.label === 'main');
       if (!main) return;
       const unlisten = await main.onFocusChanged(({ payload: focused }) => {
-        if (focused) void destroyTrafficBall();
+        if (focused) void hideTrafficBall();
       });
       if (mounted) unlistenMainFocus = unlisten;
       else unlisten();
     }).catch(() => {});
 
     void ballWindow.onMoved(({ payload: position }) => {
+      if (!surfaceVisible) return;
       if (snapTimer != null) window.clearTimeout(snapTimer);
       snapTimer = window.setTimeout(() => {
         snapTimer = null;
@@ -173,10 +211,10 @@
     }).catch(() => {});
 
     const staleTimer = window.setInterval(() => {
-      if (lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
-        live = false;
+      if (surfaceVisible && lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
+        live = false;
       }
     }, 1_000);
 
@@ -184,6 +222,8 @@
       mounted = false;
       window.clearInterval(staleTimer);
       if (snapTimer != null) window.clearTimeout(snapTimer);
+      unlistenShown?.();
+      unlistenHidden?.();
       unlistenTraffic?.();
       unlistenStatus?.();
       unlistenExit?.();
