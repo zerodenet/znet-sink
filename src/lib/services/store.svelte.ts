@@ -222,22 +222,25 @@ class AppStateStore {
     return item?.operable ?? true;
   }
 
-  isFeatureAvailable(key: string): boolean {
+  isFeatureVisible(key: string): boolean {
     const item = this.interactionSurface.features.get(key);
-    return item?.available ?? false;
+    if (item) return item.visible;
+    const liteModeFeatures = ['connections'];
+    return liteModeFeatures.includes(key);
   }
 
-  async persistUiMode(mode: UIMode) {
+  private async persistUiMode(mode: UIMode) {
     await updateAppConfig({ ui: { uiMode: mode } });
   }
 
   resetOnboarding() {
-    if (browser) {
-      resetOnboardingStorage(localStorage);
-    }
     this.onboardingRequired = true;
     this.isInitialized = false;
     this.activeTab = 'overview';
+    this.settingsSection = 'general';
+    if (browser) {
+      resetOnboardingStorage(localStorage);
+    }
   }
 }
 
