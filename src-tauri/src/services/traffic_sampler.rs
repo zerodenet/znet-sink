@@ -1,30 +1,243 @@
-//! Background traffic sampler.
+//! Runtime traffic bridge and traffic-ball lifecycle hooks.
 //!
-//! Queries the kernel for cumulative traffic stats every second and emits a
-//! `traffic.sampled` event so the overview chart updates live. Without this,
-//! the frontend has no way to see traffic move: the only feed for the
-//! overview is the `traffic.sampled` event, and the kernel itself does not
-//! push it (see TODO P5).
+//! Zero already emits `stats.sampled` once per second over the shared
+//! multiplexed IPC event stream. The GUI normalizes that event to
+//! `gui:event -> traffic.sampled`, so this module consumes the existing event
+//! instead of polling `stats` a second time.
 //!
-//! The same sample also drives the compact tray title on platforms that can
-//! render text next to a tray/status icon (macOS and best-effort Linux). This
-//! deliberately reuses the existing sampler instead of introducing another
-//! polling loop just for desktop chrome.
+//! The same stream drives the macOS / best-effort Linux tray rate and forwards
+//! the cumulative counters only to an active traffic-ball window. No sampling
+//! thread is created here.
 //!
-//! Stops as soon as the app begins shutting down ([`AppState::is_shutting_down`]).
+//! The traffic-ball WebView is also created lazily from the static Tauri window
+//! config. This keeps the normal application baseline to a single WebView; the
+//! transparent 96x96 WebView exists only while the floating ball is in use.
 
-use std::time::Duration;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, OnceLock,
+};
 
-use tauri::{AppHandle, Emitter, Manager};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 
-use crate::kernel::adapter::KernelAdapter;
-use crate::kernel::zero::{build_traffic_snapshot, TrafficSample, ZeroAdapter};
-use crate::models::core_process::CoreProcessState;
-use crate::services::{common, core_config, core_process};
+use crate::kernel::zero::{build_traffic_snapshot, TrafficSample};
+use crate::models::gui_core::GuiTrafficStats;
 use crate::state::app_state::AppState;
 
-/// Sampling cadence. ~1s keeps the overview chart smooth without flooding IPC.
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const GUI_EVENT_NAME: &str = "gui:event";
+const GUI_EVENT_STATUS_NAME: &str = "gui:event-status";
+const CORE_PROCESS_EXITED_EVENT: &str = "core:process-exited";
+const TRAFFIC_SAMPLE_EVENT: &str = "traffic.sampled";
+
+const TRAFFIC_BALL_LABEL: &str = "traffic-ball";
+const TRAFFIC_BALL_CREATE_REQUEST_EVENT: &str = "traffic-ball:create-request";
+const TRAFFIC_BALL_READY_EVENT: &str = "traffic-ball:ready";
+const TRAFFIC_BALL_DESTROY_REQUEST_EVENT: &str = "traffic-ball:destroy-request";
+
+static TRAY_BASELINE: OnceLock<Mutex<Option<TrafficSample>>> = OnceLock::new();
+static TRAFFIC_BALL_CREATING: AtomicBool = AtomicBool::new(false);
+
+fn tray_baseline() -> &'static Mutex<Option<TrafficSample>> {
+    TRAY_BASELINE.get_or_init(|| Mutex::new(None))
+}
+
+fn number_at(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn parse_traffic_event(payload: &str) -> Option<(GuiTrafficStats, u64)> {
+    let root: Value = serde_json::from_str(payload).ok()?;
+    let event = root.get("event")?;
+    if event.get("eventType").and_then(Value::as_str) != Some("traffic.sampled") {
+        return None;
+    }
+
+    let data = event.get("payload")?.get("data")?;
+    let bytes_up = data.get("bytesUp")?.as_u64()?;
+    let bytes_down = data.get("bytesDown")?.as_u64()?;
+    let sampled_at_unix_ms = event
+        .get("occurredAtUnixMs")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(crate::services::common::now_unix_ms);
+
+    Some((
+        GuiTrafficStats {
+            active_sessions: number_at(data, "activeSessions"),
+            total_started: number_at(data, "totalStarted"),
+            completed_sessions: number_at(data, "completedSessions"),
+            failed_sessions: number_at(data, "failedSessions"),
+            blocked_sessions: number_at(data, "blockedSessions"),
+            direct_sessions: number_at(data, "directSessions"),
+            chained_sessions: number_at(data, "chainedSessions"),
+            bytes_up,
+            bytes_down,
+        },
+        sampled_at_unix_ms,
+    ))
+}
+
+fn handle_traffic_sample(app: &AppHandle, totals: GuiTrafficStats, sampled_at_unix_ms: u64) {
+    let current = TrafficSample {
+        stats: totals.clone(),
+        sampled_at_unix_ms,
+    };
+
+    // Tray rate uses a private baseline so one-off GUI snapshot queries cannot
+    // disturb the menu-bar delta calculation.
+    let rate_snapshot = {
+        let mut baseline = tray_baseline()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snapshot = build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
+        *baseline = Some(current.clone());
+        snapshot
+    };
+
+    if rate_snapshot.stable {
+        update_tray_rate_title(
+            app,
+            rate_snapshot.rates.upload_bps,
+            rate_snapshot.rates.download_bps,
+        );
+    } else {
+        clear_tray_rate_title(app);
+    }
+
+    // Keep the existing one-off `gui_traffic_snapshot` seed path warm without
+    // adding another kernel query loop. A newly-created ball can therefore get
+    // a useful first-frame rate immediately.
+    let state = app.state::<AppState>();
+    if let Ok(mut sample) = state.traffic_sample().lock() {
+        *sample = Some(current);
+    }
+
+    // Only the traffic-ball needs the legacy flat event. Avoid broadcasting a
+    // duplicate event to every window when the ball does not exist.
+    if app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
+        let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_SAMPLE_EVENT, &totals);
+    }
+}
+
+fn clear_runtime_traffic_state(app: &AppHandle) {
+    *tray_baseline()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+
+    let state = app.state::<AppState>();
+    if let Ok(mut sample) = state.traffic_sample().lock() {
+        *sample = None;
+    }
+    clear_tray_rate_title(app);
+}
+
+fn handle_gui_status(app: &AppHandle, payload: &str) {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+    let status = value.get("status").and_then(Value::as_str);
+    if status != Some("subscribed") {
+        clear_runtime_traffic_state(app);
+    }
+}
+
+fn create_traffic_ball_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == TRAFFIC_BALL_LABEL)
+        .ok_or_else(|| "traffic-ball window config is unavailable".to_string())?;
+
+    tauri::WebviewWindowBuilder::from_config(app, config)
+        .map_err(|error| format!("failed to prepare traffic-ball window: {error}"))?
+        .build()
+        .map_err(|error| format!("failed to create traffic-ball window: {error}"))?;
+
+    Ok(())
+}
+
+fn emit_traffic_ball_ready(app: &AppHandle, result: Result<(), String>) {
+    let payload = match result {
+        Ok(()) => json!({ "ok": true }),
+        Err(error) => json!({ "ok": false, "error": error }),
+    };
+    let _ = app.emit_to("main", TRAFFIC_BALL_READY_EVENT, payload);
+}
+
+fn install_traffic_ball_lifecycle(app_handle: &AppHandle) {
+    let create_app = app_handle.clone();
+    app_handle.listen(TRAFFIC_BALL_CREATE_REQUEST_EVENT, move |_| {
+        if create_app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
+            emit_traffic_ball_ready(&create_app, Ok(()));
+            return;
+        }
+
+        // Multiple callers can wait on the same ready event. Only one native
+        // creation attempt is allowed at a time.
+        if TRAFFIC_BALL_CREATING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        // Tauri documents a WebView2 deadlock risk when creating a webview
+        // window directly inside a synchronous event handler on Windows. Keep
+        // creation on a dedicated thread and signal the main WebView when the
+        // configured window has been built.
+        let app = create_app.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("traffic-ball-create".to_string())
+            .spawn(move || {
+                let result = create_traffic_ball_window(&app);
+                TRAFFIC_BALL_CREATING.store(false, Ordering::Release);
+                emit_traffic_ball_ready(&app, result);
+            });
+
+        if let Err(error) = spawn_result {
+            TRAFFIC_BALL_CREATING.store(false, Ordering::Release);
+            emit_traffic_ball_ready(
+                &create_app,
+                Err(format!("failed to spawn traffic-ball creator: {error}")),
+            );
+        }
+    });
+
+    let destroy_app = app_handle.clone();
+    app_handle.listen(TRAFFIC_BALL_DESTROY_REQUEST_EVENT, move |_| {
+        if let Some(window) = destroy_app.get_webview_window(TRAFFIC_BALL_LABEL) {
+            let _ = window.destroy();
+        }
+    });
+}
+
+/// Install event-driven runtime traffic and traffic-ball lifecycle hooks.
+///
+/// Kept as `spawn` for the existing setup call, but this function does not
+/// spawn a polling loop.
+pub fn spawn(app_handle: AppHandle) {
+    install_traffic_ball_lifecycle(&app_handle);
+
+    let stats_app = app_handle.clone();
+    app_handle.listen(GUI_EVENT_NAME, move |event| {
+        if let Some((totals, sampled_at_unix_ms)) = parse_traffic_event(event.payload()) {
+            handle_traffic_sample(&stats_app, totals, sampled_at_unix_ms);
+        }
+    });
+
+    let status_app = app_handle.clone();
+    app_handle.listen(GUI_EVENT_STATUS_NAME, move |event| {
+        handle_gui_status(&status_app, event.payload());
+    });
+
+    let exit_app = app_handle.clone();
+    app_handle.listen(CORE_PROCESS_EXITED_EVENT, move |_| {
+        clear_runtime_traffic_state(&exit_app);
+    });
+}
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn compact_rate(bytes_per_second: u64) -> String {
@@ -71,96 +284,9 @@ fn clear_tray_rate_title(app_handle: &AppHandle) {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn clear_tray_rate_title(_app_handle: &AppHandle) {}
 
-/// Spawn the background traffic sampler thread. Runs until shutdown.
-pub fn spawn(app_handle: AppHandle) {
-    std::thread::spawn(move || {
-        let state = app_handle.state::<AppState>();
-        // Keep the tray rate baseline private to this sampler. Commands such
-        // as `gui_traffic_snapshot` also touch AppState's one-off baseline;
-        // sharing that baseline here would make the menu-bar rate depend on
-        // when a frontend request happened to run.
-        let mut previous_rate_sample: Option<TrafficSample> = None;
-
-        loop {
-            std::thread::sleep(SAMPLE_INTERVAL);
-            if state.is_shutting_down() {
-                clear_tray_rate_title(&app_handle);
-                return;
-            }
-
-            // Only sample while the kernel is actually running — otherwise
-            // this just errors (and logs) every second.
-            let running = matches!(
-                core_process::refresh_status(state.inner()),
-                Ok(status) if status.state == CoreProcessState::Running
-            );
-            if !running {
-                previous_rate_sample = None;
-                clear_tray_rate_title(&app_handle);
-                continue;
-            }
-
-            let opts = core_config::ipc_options_from_app_config(
-                &common::lock(state.app_config(), "app_config")
-                    .map(|c| c.core.clone())
-                    .unwrap_or_default(),
-            );
-            // traffic_stats is async; drive it from this dedicated thread.
-            // Safe to block_on: this loop runs on a `std::thread::spawn`
-            // thread, not a tokio worker, so there's no nested-runtime risk.
-            let totals = match tauri::async_runtime::block_on(async {
-                ZeroAdapter::new().traffic_stats(opts).await
-            }) {
-                Ok(t) => t,
-                Err(_) => {
-                    previous_rate_sample = None;
-                    clear_tray_rate_title(&app_handle);
-                    continue;
-                }
-            };
-
-            let sampled_at_unix_ms = common::now_unix_ms();
-            let rate_snapshot = build_traffic_snapshot(
-                totals.clone(),
-                previous_rate_sample.as_ref(),
-                sampled_at_unix_ms,
-            );
-            let current_sample = TrafficSample {
-                stats: totals.clone(),
-                sampled_at_unix_ms,
-            };
-            previous_rate_sample = Some(current_sample.clone());
-
-            if rate_snapshot.stable {
-                update_tray_rate_title(
-                    &app_handle,
-                    rate_snapshot.rates.upload_bps,
-                    rate_snapshot.rates.download_bps,
-                );
-            } else {
-                // The first sample has no baseline. Prefer the icon by itself
-                // for that first second instead of presenting a fake 0 K/s.
-                clear_tray_rate_title(&app_handle);
-            }
-
-            // Persist the sample so a one-off `gui_traffic_snapshot` command
-            // has a recent baseline available for its own response.
-            if let Ok(mut sample) = state.traffic_sample().lock() {
-                *sample = Some(current_sample);
-            }
-
-            // Emit cumulative stats. The serialized keys (bytesUp/bytesDown
-            // and bytes_up/bytes_down, plus activeSessions) are exactly what
-            // `overviewData.applyStatsEvent` reads off the `traffic.sampled`
-            // event.
-            let _ = app_handle.emit("traffic.sampled", &totals);
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use super::compact_rate;
+    use super::{compact_rate, parse_traffic_event};
 
     #[test]
     fn tray_rate_format_stays_compact_across_units() {
@@ -171,5 +297,32 @@ mod tests {
         assert_eq!(compact_rate(1_250_000), "1.2M");
         assert_eq!(compact_rate(84_000_000), "84M");
         assert_eq!(compact_rate(1_250_000_000), "1.2G");
+    }
+
+    #[test]
+    fn normalized_stats_event_is_reused_without_polling() {
+        let payload = serde_json::json!({
+            "generation": 1,
+            "event": {
+                "eventType": "traffic.sampled",
+                "occurredAtUnixMs": 1234,
+                "payload": {
+                    "kind": "trafficStats",
+                    "data": {
+                        "activeSessions": 3,
+                        "totalStarted": 8,
+                        "bytesUp": 1024,
+                        "bytesDown": 2048
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let (stats, sampled_at) = parse_traffic_event(&payload).expect("traffic event");
+        assert_eq!(sampled_at, 1234);
+        assert_eq!(stats.active_sessions, 3);
+        assert_eq!(stats.bytes_up, 1024);
+        assert_eq!(stats.bytes_down, 2048);
     }
 }
