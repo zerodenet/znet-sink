@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { store } from '$lib/services/store.svelte';
@@ -29,11 +30,35 @@
     return () => { mounted = false; };
   });
 
+  onMount(() => {
+    let mounted = true;
+    let unlistenClose: (() => void) | null = null;
+    try {
+      const current = getCurrentWindow();
+      void current.onCloseRequested((event) => {
+        event.preventDefault();
+        void showTrafficBall(current);
+      }).then((unlisten) => {
+        if (mounted) unlistenClose = unlisten;
+        else unlisten();
+      }).catch(() => {});
+    } catch {
+      // Browser preview has no native close event.
+    }
+
+    return () => {
+      mounted = false;
+      unlistenClose?.();
+    };
+  });
+
   const handleMinimize = () => {
     if (appWindow) void showTrafficBall(appWindow);
   };
   const handleMaximize = () => appWindow?.toggleMaximize().catch(() => {});
-  const handleClose = () => appWindow?.close().catch(() => {});
+  const handleClose = () => {
+    if (appWindow) void showTrafficBall(appWindow);
+  };
 </script>
 
 <!--
@@ -143,8 +168,8 @@
     <button
       onclick={handleClose}
       class="titlebar-btn titlebar-btn-close"
-      aria-label="关闭"
-      title="关闭"
+      aria-label="关闭为流量悬浮球"
+      title="关闭为流量悬浮球"
     >
       <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
         <line x1="2" y1="2" x2="8" y2="8"/>
