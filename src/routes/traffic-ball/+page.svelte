@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
-  import { restoreMainWindow } from '$lib/services/traffic-ball';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import {
+    destroyTrafficBallIfMainVisible,
+    restoreMainWindow,
+  } from '$lib/services/traffic-ball';
   import type { CoreEventStatus, GuiEventPayload } from '$lib/types/core';
 
   const MIN_RATE_INTERVAL_MS = 500;
@@ -90,16 +93,10 @@
     restore();
   }
 
-  async function reconcileWithMainWindow() {
-    if (document.visibilityState !== 'visible') return;
-    try {
-      const windows = await getAllWindows();
-      const main = windows.find((window) => window.label === 'main');
-      if (main && await main.isVisible()) {
-        await getCurrentWindow().hide();
-      }
-    } catch {
-      // The tray/main-window path is best effort; traffic sampling remains valid.
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      restore();
     }
   }
 
@@ -133,7 +130,7 @@
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
       }
-      void reconcileWithMainWindow();
+      void destroyTrafficBallIfMainVisible();
     }, 1_000);
 
     return () => {
@@ -149,32 +146,32 @@
   <title>ZNet Sink Traffic</title>
 </svelte:head>
 
-<div
+<button
+  type="button"
   class="traffic-ball"
   class:live
   onmousedown={handleMouseDown}
   ondblclick={restore}
   oncontextmenu={handleContextMenu}
-  role="button"
-  tabindex="0"
-  aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。双击恢复主窗口。`}
+  onkeydown={handleKeyDown}
+  aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口。`}
   title={`下载 ${formatFullRate(downloadBytesPerSecond)} · 上传 ${formatFullRate(uploadBytesPerSecond)}\n拖动移动 · 双击或右键恢复主窗口`}
 >
-  <div class="traffic-ball-glow" aria-hidden="true"></div>
-  <div class="traffic-ball-brand">
+  <span class="traffic-ball-glow" aria-hidden="true"></span>
+  <span class="traffic-ball-brand">
     <span class="traffic-ball-dot"></span>
     <span>ZNET</span>
-  </div>
-  <div class="traffic-rate traffic-rate-down">
+  </span>
+  <span class="traffic-rate traffic-rate-down">
     <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 5 6 9 10 5" /></svg>
     <strong>{formatRate(downloadBytesPerSecond)}</strong>
-  </div>
-  <div class="traffic-rate traffic-rate-up">
+  </span>
+  <span class="traffic-rate traffic-rate-up">
     <svg viewBox="0 0 12 12" aria-hidden="true"><polyline points="2 7 6 3 10 7" /></svg>
     <strong>{formatRate(uploadBytesPerSecond)}</strong>
-  </div>
+  </span>
   <span class="traffic-ball-hint">双击恢复</span>
-</div>
+</button>
 
 <style>
   :global(html),
@@ -193,9 +190,11 @@
   }
 
   .traffic-ball {
+    appearance: none;
     position: relative;
     width: 104px;
     height: 104px;
+    padding: 0;
     border-radius: 999px;
     display: flex;
     flex-direction: column;
@@ -215,6 +214,11 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.08);
     font-family: var(--font-sans, system-ui, sans-serif);
     -webkit-font-smoothing: antialiased;
+  }
+
+  .traffic-ball:focus-visible {
+    outline: 2px solid rgba(125, 211, 252, 0.82);
+    outline-offset: -4px;
   }
 
   .traffic-ball:active { cursor: grabbing; }
