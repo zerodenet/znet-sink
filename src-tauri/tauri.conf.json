@@ -38,7 +38,8 @@
         "closable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": false
+        "shadow": false,
+        "noRedirectionBitmap": true
       }
     ],
     "security": {
