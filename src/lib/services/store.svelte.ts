@@ -37,6 +37,7 @@ class AppStateStore {
     features: new Map(),
   });
   private onboardingRequired = true;
+  private uiModeGeneration = 0;
 
   constructor() {
     if (browser) {
@@ -122,11 +123,15 @@ class AppStateStore {
     if (this.isSwitchingUiMode || mode === this.uiMode) return;
 
     this.isSwitchingUiMode = true;
+    const generation = ++this.uiModeGeneration;
     const previousMode = this.uiMode;
     const previousTab = this.activeTab;
     const previousSettingsSection = this.settingsSection;
     console.time('[ZNet] switchUIMode');
 
+    // UI mode is a presentation preference. Apply it optimistically so a
+    // potentially slow macOS/Linux network handoff can never freeze the mode
+    // control or hold the WebView in the old layout.
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
@@ -140,25 +145,50 @@ class AppStateStore {
     }
 
     try {
-      // Entering Lite does not invent a new active session. It only migrates
-      // an already-active GUI system-proxy capture to TUN; an existing TUN is
-      // reused and an entirely-off session remains off.
-      if (mode === 'lite') {
-        await guiState.prepareLiteCapture();
-      }
-
+      // Only persistence is part of the mode-switch transaction. Network
+      // capture reconciliation is a separate runtime concern and runs after
+      // the UI mode has committed.
       await this.persistUiMode(mode);
-      await this.refreshInteractionSurface();
 
-      const navItem = this.interactionSurface.navigation.get(this.activeTab);
-      if (!navItem?.visible) {
-        this.activeTab = 'overview';
+      // Interaction surfaces are advisory UI metadata. Refresh them without
+      // keeping the segmented control disabled, and ignore a stale response if
+      // the user has already switched modes again.
+      void this.refreshInteractionSurface(mode);
+
+      // Entering Lite should preserve an existing capture session by filling
+      // its missing side (system proxy or TUN), but it must not make the mode
+      // switch wait for OS network changes. When no capture is active there is
+      // nothing to reconcile, so avoid every TUN/status round-trip entirely.
+      if (mode === 'lite' && guiState.isCaptureEnabled) {
+        void this.prepareLiteCaptureInBackground(generation);
       }
 
       console.timeEnd('[ZNet] switchUIMode');
     } catch (e) {
       console.error('[ZNet] switchUIMode failed:', e);
       console.timeEnd('[ZNet] switchUIMode');
+      this.uiMode = previousMode;
+      this.activeTab = previousTab;
+      this.settingsSection = previousSettingsSection;
+      if (browser) {
+        localStorage.setItem('znet-ui-mode', previousMode);
+      }
+    } finally {
+      if (generation === this.uiModeGeneration) {
+        this.isSwitchingUiMode = false;
+      }
+    }
+  }
+
+  private async prepareLiteCaptureInBackground(generation: number) {
+    try {
+      await guiState.prepareLiteCapture();
+    } catch (e) {
+      // Network handoff failure does not invalidate the user's UI preference.
+      // Suppress stale feedback if the user has already left Lite mode while
+      // an OS-level TUN operation was still completing.
+      if (generation !== this.uiModeGeneration || this.uiMode !== 'lite') return;
+
       const failure = e as {
         code?: string;
         message?: string;
@@ -166,36 +196,32 @@ class AppStateStore {
       };
       const insufficientPrivilege = failure?.code === 'insufficient_os_privilege'
         || failure?.details?.error?.code === 'insufficient_os_privilege';
-      if (mode === 'lite' && insufficientPrivilege) {
-        toastError(`无法切换到简约模式：${failure.message ?? 'TUN 启动需要更高的系统权限。'}`);
-      }
-      this.uiMode = previousMode;
-      this.activeTab = previousTab;
-      this.settingsSection = previousSettingsSection;
-      if (browser) {
-        localStorage.setItem('znet-ui-mode', previousMode);
-      }
-      // If persistence succeeded but a later surface refresh failed, restore
-      // the backend mode as well instead of leaving frontend/backend split.
-      try {
-        await this.persistUiMode(previousMode);
-      } catch {
-        // Preserve the original mode-switch failure.
-      }
-    } finally {
-      this.isSwitchingUiMode = false;
+      const message = failure?.message
+        ?? (insufficientPrivilege
+          ? 'TUN 启动需要更高的系统权限。'
+          : '当前代理状态未能自动调整。');
+      toastError(`已切换到简约模式，但自动接管未完成：${message}`);
     }
   }
 
-  async refreshInteractionSurface() {
+  async refreshInteractionSurface(expectedMode?: UIMode) {
     try {
       console.time('[ZNet] refreshInteractionSurface');
       const surface = await getGuiInteractionSurfaceSnapshot();
+      if (expectedMode && this.uiMode !== expectedMode) {
+        console.timeEnd('[ZNet] refreshInteractionSurface');
+        return;
+      }
       this.interactionSurface = {
         navigation: new Map(surface.navigation.map((item) => [item.key, item])),
         actions: new Map(surface.actions.map((item) => [item.key, item])),
         features: new Map(surface.features.map((item) => [item.key, item])),
       };
+
+      const navItem = this.interactionSurface.navigation.get(this.activeTab);
+      if (!navItem?.visible) {
+        this.activeTab = 'overview';
+      }
       console.timeEnd('[ZNet] refreshInteractionSurface');
     } catch (e) {
       console.warn('[ZNet] refreshInteractionSurface failed:', e);
@@ -213,7 +239,7 @@ class AppStateStore {
   }
 
   isNavOperable(key: string): boolean {
-    const item = this.interactionSurface.navigation.get(key);
+    const item = this.interactionSurface.actions.get(key);
     return item?.operable ?? true;
   }
 
