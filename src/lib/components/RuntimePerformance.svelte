@@ -77,11 +77,23 @@
     };
   });
 
+  const unreadableProcesses = $derived.by(() => {
+    if (!snapshot) return [] as string[];
+    const labels: string[] = [];
+    if (!snapshot.gui.tracked) labels.push('ZNet Sink');
+    if (snapshot.core && !snapshot.core.tracked) labels.push('Zero');
+    return labels;
+  });
+
+  const unreadableLabel = $derived(
+    unreadableProcesses.length > 0 ? `${unreadableProcesses.join('、')} 暂不可读取` : '',
+  );
+
   const summaryTooltip = $derived.by(() => {
     if (error) return error;
     if (!snapshot) return '正在读取 CPU 和内存使用情况';
-    if (snapshot.partial) {
-      return '每 2 秒更新 · 当前有相关进程无法读取，显示值仅包含可读取的 ZNet Sink / Zero 进程';
+    if (unreadableProcesses.length > 0) {
+      return `每 2 秒更新 · ${unreadableProcesses.join('、')} 当前无法读取，显示值仅包含可读取进程`;
     }
     return '每 2 秒更新 · CPU 按整机容量计算 · 内存为常驻内存';
   });
@@ -98,8 +110,8 @@
         </div>
         <p class="runtime-subtitle">ZNet Sink 与 Zero 的 CPU、内存和线程使用情况</p>
       </div>
-      {#if snapshot?.partial}
-        <span class="runtime-note">部分进程暂不可读取</span>
+      {#if unreadableLabel}
+        <span class="runtime-note">{unreadableLabel}</span>
       {/if}
     </div>
 
