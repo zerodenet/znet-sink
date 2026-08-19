@@ -19,7 +19,6 @@ pub struct RuntimeProcessMetrics {
     pub tracked: bool,
     pub cpu_percent: Option<f64>,
     pub memory_bytes: Option<u64>,
-    pub thread_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,7 +27,6 @@ pub struct RuntimePerformanceSnapshot {
     pub sampled_at_unix_ms: u64,
     pub total_cpu_percent: Option<f64>,
     pub total_memory_bytes: Option<u64>,
-    pub total_thread_count: Option<u32>,
     pub process_count: u32,
     pub tracked_process_count: u32,
     pub partial: bool,
@@ -40,7 +38,6 @@ pub struct RuntimePerformanceSnapshot {
 struct RawProcessSample {
     cpu_time_ns: Option<u64>,
     memory_bytes: Option<u64>,
-    thread_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,7 +96,6 @@ fn process_metrics(
             tracked: false,
             cpu_percent: None,
             memory_bytes: None,
-            thread_count: None,
         };
     };
 
@@ -126,7 +122,6 @@ fn process_metrics(
         tracked: raw.is_some(),
         cpu_percent,
         memory_bytes: raw.and_then(|sample| sample.memory_bytes),
-        thread_count: raw.and_then(|sample| sample.thread_count),
     }
 }
 
@@ -140,14 +135,9 @@ fn sum_u64(values: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     (!values.is_empty()).then(|| values.into_iter().sum())
 }
 
-fn sum_u32(values: impl IntoIterator<Item = Option<u32>>) -> Option<u32> {
-    let values = values.into_iter().flatten().collect::<Vec<_>>();
-    (!values.is_empty()).then(|| values.into_iter().sum())
-}
-
 pub fn runtime_performance_snapshot(
     state: State<'_, AppState>,
-    include_threads: bool,
+    _include_threads: bool,
 ) -> AppResult<RuntimePerformanceSnapshot> {
     let core_status = core_process::status(state)?;
     let core_running = core_status.state == CoreProcessState::Running;
@@ -161,7 +151,7 @@ pub fn runtime_performance_snapshot(
         }
     }
 
-    let raw_samples = platform::sample_many(&pids, include_threads);
+    let raw_samples = platform::sample_many(&pids);
     let sampled_at = Instant::now();
     let mut sampler = sampler()
         .lock()
@@ -207,16 +197,11 @@ pub fn runtime_performance_snapshot(
         gui.memory_bytes,
         core.as_ref().and_then(|metrics| metrics.memory_bytes),
     ]);
-    let total_thread_count = sum_u32([
-        gui.thread_count,
-        core.as_ref().and_then(|metrics| metrics.thread_count),
-    ]);
 
     Ok(RuntimePerformanceSnapshot {
         sampled_at_unix_ms: crate::services::common::now_unix_ms(),
         total_cpu_percent,
         total_memory_bytes,
-        total_thread_count,
         process_count,
         tracked_process_count,
         partial,
@@ -229,11 +214,7 @@ pub fn runtime_performance_snapshot(
 mod platform {
     use std::collections::HashMap;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32,
-        TH32CS_SNAPTHREAD,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
@@ -285,53 +266,13 @@ mod platform {
                 (filetime_value(kernel) + filetime_value(user)).saturating_mul(100)
             }),
             memory_bytes: memory_ok.then_some(memory.WorkingSetSize as u64),
-            thread_count: None,
         })
     }
 
-    pub fn sample_many(pids: &[u32], include_threads: bool) -> HashMap<u32, RawProcessSample> {
-        let mut samples = pids
-            .iter()
+    pub fn sample_many(pids: &[u32]) -> HashMap<u32, RawProcessSample> {
+        pids.iter()
             .filter_map(|pid| sample_process(*pid).map(|sample| (*pid, sample)))
-            .collect::<HashMap<_, _>>();
-
-        if !include_threads {
-            return samples;
-        }
-
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-        if snapshot == INVALID_HANDLE_VALUE {
-            return samples;
-        }
-
-        let mut counts = pids
-            .iter()
-            .copied()
-            .map(|pid| (pid, 0u32))
-            .collect::<HashMap<_, _>>();
-        let mut entry = unsafe { std::mem::zeroed::<THREADENTRY32>() };
-        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
-
-        if unsafe { Thread32First(snapshot, &mut entry) } != 0 {
-            loop {
-                if let Some(count) = counts.get_mut(&entry.th32OwnerProcessID) {
-                    *count += 1;
-                }
-                if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
-                    break;
-                }
-            }
-        }
-        unsafe {
-            CloseHandle(snapshot);
-        }
-
-        for (pid, count) in counts {
-            if let Some(sample) = samples.get_mut(&pid) {
-                sample.thread_count = Some(count);
-            }
-        }
-        samples
+            .collect()
     }
 }
 
@@ -369,44 +310,34 @@ mod platform {
         Some(((ticks as u128 * 1_000_000_000u128) / hz as u128) as u64)
     }
 
-    fn status_metrics(pid: u32, include_threads: bool) -> (Option<u64>, Option<u32>) {
-        let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
-            return (None, None);
-        };
-        let mut memory_bytes = None;
-        let mut thread_count = None;
-        for line in status.lines() {
-            if let Some(value) = line.strip_prefix("VmRSS:") {
-                memory_bytes = value
+    fn memory_bytes(pid: u32) -> Option<u64> {
+        let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|line| {
+            line.strip_prefix("VmRSS:").and_then(|value| {
+                value
                     .split_whitespace()
                     .next()
                     .and_then(|value| value.parse::<u64>().ok())
-                    .map(|kilobytes| kilobytes.saturating_mul(1024));
-            } else if include_threads {
-                if let Some(value) = line.strip_prefix("Threads:") {
-                    thread_count = value.trim().parse::<u32>().ok();
-                }
-            }
-        }
-        (memory_bytes, thread_count)
+                    .map(|kilobytes| kilobytes.saturating_mul(1024))
+            })
+        })
     }
 
-    fn sample_process(pid: u32, include_threads: bool) -> Option<RawProcessSample> {
+    fn sample_process(pid: u32) -> Option<RawProcessSample> {
         let cpu_time_ns = cpu_time_ns(pid);
-        let (memory_bytes, thread_count) = status_metrics(pid, include_threads);
-        if cpu_time_ns.is_none() && memory_bytes.is_none() && thread_count.is_none() {
+        let memory_bytes = memory_bytes(pid);
+        if cpu_time_ns.is_none() && memory_bytes.is_none() {
             return None;
         }
         Some(RawProcessSample {
             cpu_time_ns,
             memory_bytes,
-            thread_count,
         })
     }
 
-    pub fn sample_many(pids: &[u32], include_threads: bool) -> HashMap<u32, RawProcessSample> {
+    pub fn sample_many(pids: &[u32]) -> HashMap<u32, RawProcessSample> {
         pids.iter()
-            .filter_map(|pid| sample_process(*pid, include_threads).map(|sample| (*pid, sample)))
+            .filter_map(|pid| sample_process(*pid).map(|sample| (*pid, sample)))
             .collect()
     }
 }
@@ -484,7 +415,7 @@ mod platform {
         ((ticks as u128 * numer as u128) / denom as u128) as u64
     }
 
-    fn sample_process(pid: u32, include_threads: bool) -> Option<RawProcessSample> {
+    fn sample_process(pid: u32) -> Option<RawProcessSample> {
         let mut info = ProcTaskInfo::default();
         let size = std::mem::size_of::<ProcTaskInfo>();
         let read = unsafe {
@@ -505,15 +436,12 @@ mod platform {
                 info.pti_total_user.saturating_add(info.pti_total_system),
             )),
             memory_bytes: Some(info.pti_resident_size),
-            thread_count: include_threads
-                .then(|| (info.pti_threadnum >= 0).then_some(info.pti_threadnum as u32))
-                .flatten(),
         })
     }
 
-    pub fn sample_many(pids: &[u32], include_threads: bool) -> HashMap<u32, RawProcessSample> {
+    pub fn sample_many(pids: &[u32]) -> HashMap<u32, RawProcessSample> {
         pids.iter()
-            .filter_map(|pid| sample_process(*pid, include_threads).map(|sample| (*pid, sample)))
+            .filter_map(|pid| sample_process(*pid).map(|sample| (*pid, sample)))
             .collect()
     }
 }
@@ -524,7 +452,7 @@ mod platform {
 
     use super::RawProcessSample;
 
-    pub fn sample_many(_pids: &[u32], _include_threads: bool) -> HashMap<u32, RawProcessSample> {
+    pub fn sample_many(_pids: &[u32]) -> HashMap<u32, RawProcessSample> {
         HashMap::new()
     }
 }
