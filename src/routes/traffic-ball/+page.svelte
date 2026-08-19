@@ -62,7 +62,9 @@
   function formatRate(bytesPerSecond: number): string {
     if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 K/s';
     if (bytesPerSecond >= 1_000_000_000) return `${(bytesPerSecond / 1_000_000_000).toFixed(1)} G/s`;
-    if (bytesPerSecond >= 1_000_000) return `${(bytesPerSecond / 1_000_000).toFixed(bytesPerSecond >= 10_000_000 ? 0 : 1)} M/s`;
+    if (bytesPerSecond >= 1_000_000) {
+      return `${(bytesPerSecond / 1_000_000).toFixed(bytesPerSecond >= 10_000_000 ? 0 : 1)} M/s`;
+    }
     return `${Math.max(1, Math.round(bytesPerSecond / 1_000))} K/s`;
   }
 
@@ -74,8 +76,6 @@
   }
 
   function handleMouseDown(event: MouseEvent) {
-    // Reserve the second click for restore. The first click starts native
-    // dragging so the whole circular surface remains a usable drag target.
     if (event.button === 0 && event.detail === 1) {
       void getCurrentWindow().startDragging().catch(() => {});
     }
@@ -107,23 +107,18 @@
     let snapTimer: number | null = null;
     const ballWindow = getCurrentWindow();
 
-    // CSS transparency alone is not enough for a transparent WebView on all
-    // desktop backends. Make the WebView rendering layer explicitly RGBA
-    // transparent before the main window is hidden and this surface is shown.
+    // Creation already requests an alpha-zero WebView. Repeat the setting once
+    // the route is mounted so both creation-time and runtime rendering layers
+    // agree before the main window swaps to this surface.
     void getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => {}).finally(() => {
       if (mounted) void emit(TRAFFIC_BALL_READY_EVENT);
     });
 
-    // The backend traffic sampler already emits this app-wide event once per
-    // second. The floating surface is only another consumer; it never starts
-    // a second core traffic polling loop.
     void listen<Record<string, unknown>>('traffic.sampled', (event) => applyTraffic(event.payload)).then((unlisten) => {
       if (mounted) unlistenTraffic = unlisten;
       else unlisten();
     });
 
-    // Seed the first frame from the persisted sampler snapshot so the ball can
-    // show a useful speed immediately instead of waiting for two deltas.
     void getGuiTrafficStats().then((stats) => {
       if (!mounted || lastTrafficAt > 0) return;
       const now = Date.now();
@@ -146,6 +141,7 @@
       if (mounted) unlistenStatus = unlisten;
       else unlisten();
     });
+
     void listen('core:process-exited', () => {
       live = false;
       uploadBytesPerSecond = 0;
@@ -155,8 +151,6 @@
       else unlisten();
     });
 
-    // Tray restore focuses the main window. Observe that native window event
-    // so this temporary WebView can save its position and disappear at once.
     void getAllWindows().then(async (windows) => {
       const main = windows.find((window) => window.label === 'main');
       if (!main) return;
@@ -167,9 +161,6 @@
       else unlisten();
     }).catch(() => {});
 
-    // Native dragging can emit a dense stream of positions. Snap only after
-    // movement settles; snapTrafficBallToEdge resolves the monitor from the
-    // actual window centre and uses the physical outer size for edge math.
     void ballWindow.onMoved(({ payload: position }) => {
       if (snapTimer != null) window.clearTimeout(snapTimer);
       snapTimer = window.setTimeout(() => {
@@ -238,6 +229,7 @@
     width: 100%;
     height: 100%;
     margin: 0;
+    padding: 0;
     overflow: hidden;
     background: transparent !important;
   }
@@ -256,28 +248,31 @@
     appearance: none;
     position: relative;
     isolation: isolate;
-    width: 112px;
-    height: 112px;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
     padding: 0;
+    margin: 0;
     border-radius: 50%;
     clip-path: circle(50% at 50% 50%);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 3px;
     box-sizing: border-box;
     overflow: hidden;
     cursor: grab;
-    color: rgba(255, 255, 255, 0.96);
+    color: rgba(255, 255, 255, 0.97);
     background:
-      radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.40), transparent 25%),
-      radial-gradient(circle at 77% 82%, rgba(165, 180, 252, 0.28), transparent 42%),
-      linear-gradient(150deg, #64748b 0%, #53677e 48%, #475569 100%);
-    border: 1px solid rgba(255, 255, 255, 0.30);
+      radial-gradient(circle at 31% 18%, rgba(255, 255, 255, 0.34), transparent 26%),
+      radial-gradient(circle at 78% 83%, rgba(191, 219, 254, 0.24), transparent 43%),
+      linear-gradient(150deg, #718096 0%, #5f728b 50%, #55657a 100%);
+    border: 1px solid rgba(255, 255, 255, 0.28);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.42),
-      inset 0 -18px 30px rgba(30, 41, 59, 0.16);
+      inset 0 1px 0 rgba(255, 255, 255, 0.40),
+      inset 0 -14px 24px rgba(30, 41, 59, 0.14);
     font-family: var(--font-sans, system-ui, sans-serif);
     -webkit-font-smoothing: antialiased;
     transition: filter 0.16s ease, background 0.2s ease;
@@ -285,16 +280,16 @@
 
   .traffic-ball.live {
     background:
-      radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.52), transparent 25%),
-      radial-gradient(circle at 77% 82%, rgba(165, 180, 252, 0.34), transparent 44%),
-      linear-gradient(150deg, #60a5fa 0%, #3b82f6 46%, #4f46e5 100%);
+      radial-gradient(circle at 31% 18%, rgba(255, 255, 255, 0.48), transparent 25%),
+      radial-gradient(circle at 78% 83%, rgba(199, 210, 254, 0.30), transparent 44%),
+      linear-gradient(150deg, #67b0f8 0%, #4389ee 47%, #5964df 100%);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.56),
-      inset 0 -18px 30px rgba(30, 64, 175, 0.18);
+      inset 0 1px 0 rgba(255, 255, 255, 0.52),
+      inset 0 -14px 24px rgba(30, 64, 175, 0.16);
   }
 
   .traffic-ball:hover {
-    filter: brightness(1.055) saturate(1.04);
+    filter: brightness(1.045) saturate(1.03);
   }
 
   .traffic-ball:active {
@@ -304,47 +299,47 @@
 
   .traffic-ball:focus-visible {
     outline: 2px solid rgba(224, 242, 254, 0.9);
-    outline-offset: -5px;
+    outline-offset: -4px;
   }
 
   .traffic-ball-highlight {
     position: absolute;
-    inset: 5px;
+    inset: 4px;
     z-index: -1;
     border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     pointer-events: none;
   }
 
   .traffic-ball-status {
     position: absolute;
-    top: 18px;
-    width: 6px;
-    height: 6px;
+    top: 12px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: rgba(226, 232, 240, 0.72);
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.10);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.10);
   }
 
   .traffic-ball.live .traffic-ball-status {
     background: #86efac;
-    box-shadow: 0 0 0 3px rgba(220, 252, 231, 0.18);
+    box-shadow: 0 0 0 2px rgba(220, 252, 231, 0.18);
   }
 
   .traffic-rate {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    height: 19px;
+    gap: 5px;
+    height: 17px;
     transform: translateY(3px);
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 1px 2px rgba(30, 64, 175, 0.20);
+    text-shadow: 0 1px 2px rgba(30, 64, 175, 0.18);
   }
 
   .traffic-rate svg {
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -354,13 +349,14 @@
   }
 
   .traffic-rate strong {
-    width: 57px;
+    width: 50px;
     text-align: left;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1;
-    font-weight: 720;
+    font-weight: 700;
     letter-spacing: -0.045em;
+    white-space: nowrap;
   }
 
   .traffic-rate-down {
@@ -372,10 +368,10 @@
   }
 
   .traffic-divider {
-    width: 58px;
+    width: 50px;
     height: 1px;
     transform: translateY(3px);
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.24), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
   }
 
   @media (prefers-reduced-motion: no-preference) {
