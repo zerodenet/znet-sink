@@ -78,7 +78,7 @@
   </div>
 {:else if ActiveComponent}
   {#if tab === 'overview'}
-    <div class="overview-runtime-shell">
+    <div class="overview-runtime-shell" class:lite={store.uiMode === 'lite'}>
       <RuntimePerformance mode={store.uiMode} />
       <div class="overview-runtime-content">
         <ActiveComponent {...activeProps} />
@@ -121,6 +121,10 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .overview-runtime-shell.lite {
+    gap: 0;
   }
 
   .overview-runtime-content {
