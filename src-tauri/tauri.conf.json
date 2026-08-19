@@ -32,6 +32,7 @@
         "decorations": false,
         "transparent": true,
         "visible": false,
+        "create": false,
         "resizable": false,
         "maximizable": false,
         "minimizable": false,
