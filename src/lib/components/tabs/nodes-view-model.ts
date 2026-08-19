@@ -1,5 +1,6 @@
 import type { PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
+import { matchesNodeHealthFilter } from '$lib/components/tabs/nodes-display-preferences.svelte';
 
 export interface ProbeTargets {
   nodes: ProxyNode[];
@@ -187,7 +188,7 @@ export function filterNodes(options: {
 }): ProxyNode[] {
   const { allNodes, groups, query, selectedGroup } = options;
   const projected = projectNestedGroupNodes(allNodes, groups);
-  const nodes = projected.filter((node) => matchesSearch(node, query));
+  const nodes = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
   if (!selectedGroup) return nodes;
   const group = groups.find((item) => item.name === selectedGroup);
   if (!group) return nodes;
@@ -205,7 +206,7 @@ export function buildSections(options: {
 }): NodeSection[] {
   const { allNodes, groups, query, orphanSectionName = '其他' } = options;
   const projected = projectNestedGroupNodes(allNodes, groups);
-  const filtered = projected.filter((node) => matchesSearch(node, query));
+  const filtered = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
   const assigned = new Set<string>();
   const sections: NodeSection[] = groups.flatMap((group) => {
     const byTag = new Map(filtered.map((node) => [node.tag, node]));

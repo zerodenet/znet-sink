@@ -1,5 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { EyeOff } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Button } from '$lib/components/ui/button';
+  import { nodesDisplayPreferences } from '$lib/components/tabs/nodes-display-preferences.svelte';
 
   type ViewMode = 'list' | 'grid';
 
@@ -37,6 +41,12 @@
     onViewModeChange,
     onProbeAll,
   }: Props = $props();
+
+  const hideTimeout = $derived(nodesDisplayPreferences.hideTimeout);
+
+  onMount(() => {
+    nodesDisplayPreferences.load();
+  });
 </script>
 
 <div class="node-toolbar">
@@ -74,6 +84,18 @@
         class="search-input"
       />
     </div>
+
+    <Button
+      variant="outline"
+      size="sm"
+      aria-pressed={hideTimeout}
+      aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
+      title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
+      onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
+    >
+      <EyeOff class="h-3.5 w-3.5" />
+      <span>隐藏超时</span>
+    </Button>
 
     <SegmentedControl.Root
       value={viewMode}
