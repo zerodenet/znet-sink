@@ -73,21 +73,23 @@ async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str)
 }
 
 /// Fast in-memory process state read. Resource metrics are opt-in so existing
-/// status polling stays as cheap as before; the overview requests them once
-/// per second while it is visible.
+/// status polling stays as cheap as before. Lite requests CPU/RSS only; Pro
+/// may opt into the more expensive thread detail while Overview is visible.
 #[tauri::command(rename_all = "camelCase")]
 pub fn core_process_status(
     state: State<'_, AppState>,
     include_performance: Option<bool>,
+    include_performance_threads: Option<bool>,
 ) -> AppResult<CoreProcessStatusResponse> {
     let runtime_performance = if include_performance.unwrap_or(false) {
-        Some(runtime_performance::runtime_performance_snapshot(state.clone())?)
+        Some(runtime_performance::runtime_performance_snapshot(
+            state.clone(),
+            include_performance_threads.unwrap_or(false),
+        )?)
     } else {
         None
     };
     let mut status = core_process::status(state)?;
-    // PID identifies the currently managed child only. Never expose a stale
-    // identifier retained by an exited/failed transition as if it were live.
     if status.state != CoreProcessState::Running {
         status.pid = None;
     }
@@ -97,10 +99,6 @@ pub fn core_process_status(
     })
 }
 
-/// Spawns OS child process. Runs the blocking start routine on a background
-/// thread so the UI stays responsive — `core_process::start` does file IO,
-/// a kill-backoff sleep, and a port check that would otherwise stall the
-/// main thread and freeze the window.
 #[tauri::command]
 pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
@@ -117,11 +115,6 @@ pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessS
     Ok(status)
 }
 
-/// Restart the managed kernel: stop the current process and start a new one.
-/// Runs on a background thread because `stop` synchronously waits on the
-/// child (`child.wait()`) and joins the stderr pump — on the main thread
-/// that freeze is what previously left the window "not responding" until the
-/// OS killed the process.
 #[tauri::command]
 pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
