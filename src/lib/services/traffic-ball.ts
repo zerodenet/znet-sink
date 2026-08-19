@@ -119,11 +119,16 @@ export async function showTrafficBall(mainWindow: Window = getCurrentWindow()): 
   }
 }
 
+export async function destroyTrafficBall(): Promise<void> {
+  const ball = await getWindowByLabel(TRAFFIC_BALL_LABEL);
+  if (!ball) return;
+  await rememberPosition(ball);
+  await ball.destroy().catch(() => {});
+}
+
 export async function restoreMainWindow(): Promise<void> {
-  const [main, ball] = await Promise.all([
-    getWindowByLabel(MAIN_WINDOW_LABEL),
-    getWindowByLabel(TRAFFIC_BALL_LABEL),
-  ]);
+  const main = await getWindowByLabel(MAIN_WINDOW_LABEL);
+  const ball = await getWindowByLabel(TRAFFIC_BALL_LABEL);
 
   if (ball) await rememberPosition(ball);
   if (main) {
@@ -131,14 +136,4 @@ export async function restoreMainWindow(): Promise<void> {
     await main.setFocus().catch(() => {});
   }
   await ball?.destroy().catch(() => {});
-}
-
-export async function destroyTrafficBallIfMainVisible(): Promise<void> {
-  const [main, ball] = await Promise.all([
-    getWindowByLabel(MAIN_WINDOW_LABEL),
-    getWindowByLabel(TRAFFIC_BALL_LABEL),
-  ]);
-  if (!main || !ball || !(await main.isVisible())) return;
-  await rememberPosition(ball);
-  await ball.destroy().catch(() => {});
 }
