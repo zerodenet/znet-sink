@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
+  import { getGuiTrafficStats } from '$lib/services/core';
   import {
     destroyTrafficBall,
     restoreMainWindow,
   } from '$lib/services/traffic-ball';
-  import type { CoreEventStatus, GuiEventPayload } from '$lib/types/core';
+  import type { CoreEventStatus } from '$lib/types/core';
 
   const MIN_RATE_INTERVAL_MS = 500;
   const STALE_AFTER_MS = 2_500;
@@ -29,17 +30,9 @@
     return null;
   }
 
-  function eventData(payload: GuiEventPayload): unknown {
-    const eventPayload = payload.event?.payload;
-    if (!eventPayload || typeof eventPayload !== 'object') return eventPayload;
-    return 'data' in eventPayload ? eventPayload.data : eventPayload;
-  }
-
-  function applyTraffic(payload: GuiEventPayload) {
+  function applyTraffic(data: unknown) {
     if (document.visibilityState !== 'visible') return;
-    if (payload.event?.eventType !== 'traffic.sampled') return;
 
-    const data = eventData(payload);
     const bytesUp = numberFrom(data, ['bytesUp', 'bytes_up', 'upload', 'tx']);
     const bytesDown = numberFrom(data, ['bytesDown', 'bytes_down', 'download', 'rx']);
     if (bytesUp == null || bytesDown == null) return;
@@ -107,10 +100,27 @@
     let unlistenExit: UnlistenFn | null = null;
     let unlistenMainFocus: UnlistenFn | null = null;
 
-    void listen<GuiEventPayload>('gui:event', (event) => applyTraffic(event.payload)).then((unlisten) => {
+    // The backend traffic sampler emits this app-wide event every second.
+    // Listen to it directly instead of starting another core subscription.
+    void listen<Record<string, unknown>>('traffic.sampled', (event) => applyTraffic(event.payload)).then((unlisten) => {
       if (mounted) unlistenTraffic = unlisten;
       else unlisten();
     });
+
+    // Seed the first frame from the already persisted sampler snapshot so the
+    // ball does not need two cumulative samples before showing a useful rate.
+    void getGuiTrafficStats().then((stats) => {
+      if (!mounted || lastTrafficAt > 0) return;
+      const now = Date.now();
+      uploadBytesPerSecond = Math.max(0, stats.uploadBytesPerSec);
+      downloadBytesPerSecond = Math.max(0, stats.downloadBytesPerSec);
+      lastBytesUp = stats.totalUploadBytes;
+      lastBytesDown = stats.totalDownloadBytes;
+      lastSampleAt = now;
+      lastTrafficAt = now;
+      live = true;
+    }).catch(() => {});
+
     void listen<CoreEventStatus>('gui:event-status', (event) => {
       if (['offline', 'disconnected', 'error', 'stopped'].includes(event.payload.status)) {
         live = false;
@@ -130,6 +140,9 @@
       else unlisten();
     });
 
+    // Tray restore already focuses the main window. Observe that native window
+    // directly so we can persist the ball position and destroy this WebView
+    // immediately without a visibility polling loop.
     void getAllWindows().then(async (windows) => {
       const main = windows.find((window) => window.label === 'main');
       if (!main) return;
@@ -142,6 +155,7 @@
 
     const staleTimer = window.setInterval(() => {
       if (lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
+        live = false;
         uploadBytesPerSecond = 0;
         downloadBytesPerSecond = 0;
       }
