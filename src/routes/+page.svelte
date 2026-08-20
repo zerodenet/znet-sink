@@ -162,16 +162,16 @@
     };
   });
 
-  // A Lite traffic session follows ownership of the GUI-managed system proxy,
-  // not the Zero process lifetime. This effect lives at the app root so the
-  // session boundary remains correct even while the user browses another tab.
+  // One capture session spans both UI modes and either capture path. Enabling
+  // the second path, disabling only one path, or switching Lite/Pro must not
+  // reset totals while system proxy or TUN remains active.
   $effect(() => {
-    const proxyEnabled = guiState.isSystemProxyEnabled;
+    const captureEnabled = guiState.isCaptureEnabled;
     untrack(() => {
-      if (proxyEnabled) {
-        overviewData.beginProxySession();
-      } else if (overviewData.proxySessionActive) {
-        overviewData.endProxySession();
+      if (captureEnabled) {
+        overviewData.beginCaptureSession();
+      } else if (overviewData.captureSessionActive) {
+        overviewData.endCaptureSession();
       }
     });
   });
