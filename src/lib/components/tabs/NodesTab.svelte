@@ -12,6 +12,7 @@
   import NodesGroupSidebar from '$lib/components/tabs/NodesGroupSidebar.svelte';
   import NodesListRow from '$lib/components/tabs/NodesListRow.svelte';
   import NodesToolbar from '$lib/components/tabs/NodesToolbar.svelte';
+  import { isUrlTestGroup } from '$lib/components/tabs/nodes-display-preferences.svelte';
   import { error as toastError } from '$lib/services/toast.svelte';
   import {
     buildSections,
@@ -233,6 +234,11 @@
       }),
     })),
   );
+
+  const canSortByDelay = $derived.by(() => {
+    if (!selectedGroup) return groups.some((group) => isUrlTestGroup(group));
+    return isUrlTestGroup(groups.find((group) => group.name === selectedGroup));
+  });
 
   const allNodes = $derived.by<ProxyNode[]>(() => {
     return (nodeScreen?.nodes ?? []).map((node) => {
@@ -648,6 +654,7 @@
       {viewMode}
       probing={probingRequested}
       {probeProgress}
+      {canSortByDelay}
       canProbeAll={isCoreAvailable && !probingRequested && !probingAll && probingNodeIds.size === 0 && probingPolicyTags.size === 0 && plannedProbeTargets.nodes.length > 0}
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}

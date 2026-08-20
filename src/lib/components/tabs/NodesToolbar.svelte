@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { EyeOff } from '@lucide/svelte';
+  import { ArrowUpDown, EyeOff } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Button } from '$lib/components/ui/button';
   import { nodesDisplayPreferences } from '$lib/components/tabs/nodes-display-preferences.svelte';
@@ -21,6 +21,7 @@
     probing: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
+    canSortByDelay: boolean;
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
@@ -36,6 +37,7 @@
     probing,
     probeProgress,
     canProbeAll,
+    canSortByDelay,
     probeDisabledReason = null,
     onSearchQueryChange,
     onViewModeChange,
@@ -43,6 +45,7 @@
   }: Props = $props();
 
   const hideTimeout = $derived(nodesDisplayPreferences.hideTimeout);
+  const sortByDelay = $derived(nodesDisplayPreferences.sortByDelay);
 
   onMount(() => {
     nodesDisplayPreferences.load();
@@ -95,6 +98,19 @@
     >
       <EyeOff class="h-3.5 w-3.5" />
     </Button>
+
+    {#if canSortByDelay}
+      <Button
+        variant="outline"
+        size="sm"
+        aria-pressed={sortByDelay}
+        aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
+        title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
+        onclick={() => nodesDisplayPreferences.setSortByDelay(!sortByDelay)}
+      >
+        <ArrowUpDown class="h-3.5 w-3.5" />
+      </Button>
+    {/if}
 
     <SegmentedControl.Root
       value={viewMode}

@@ -49,7 +49,7 @@ class NodesDisplayPreferences {
 export const nodesDisplayPreferences = new NodesDisplayPreferences();
 
 export function isUrlTestGroup(group?: Pick<PolicyGroup, 'kind'>): boolean {
-  return group?.kind?.toLowerCase() === 'urltest';
+  return group?.kind?.toLowerCase().replace(/[-_]/g, '') === 'urltest';
 }
 
 export function isDelaySortEnabled(): boolean {
@@ -72,15 +72,16 @@ export function matchesNodeHealthFilter(node: ProxyNode): boolean {
 
 export function compareNodeDelay(a: ProxyNode, b: ProxyNode): number {
   const delayRank = (node: ProxyNode) => {
-    if (node.delay >= 0) return 0;
-    if (!node.lastProbeAt) return 1;
-    return 2;
+    const failed = node.delay < 0 || (node.alive === false && node.lastProbeAt !== undefined);
+    if (failed) return 2;
+    if (node.delay > 0) return 0;
+    return 1;
   };
 
   const rankDiff = delayRank(a) - delayRank(b);
   if (rankDiff !== 0) return rankDiff;
 
-  if (a.delay >= 0 && b.delay >= 0) {
+  if (delayRank(a) === 0) {
     return a.delay - b.delay;
   }
 

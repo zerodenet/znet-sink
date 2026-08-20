@@ -16,6 +16,9 @@ const {
   resolveEffectiveNodeSelection,
   summarizeProbeProgress,
 } = await import('../src/lib/components/tabs/nodes-view-model.ts');
+const { nodesDisplayPreferences } = await import(
+  '../src/lib/components/tabs/nodes-display-preferences.svelte.ts'
+);
 import { flagCodeFromEmoji, parseNodeName } from '../src/lib/services/node-utils.ts';
 
 const node = (tag, protocol = 'proxy') => ({
@@ -164,6 +167,14 @@ const group = (name, tags, kind = 'selector', selected) => ({
     groups,
     query: '',
     selectedGroup: 'Auto',
+  }).map((item) => item.tag), nodes.map((item) => item.tag));
+
+  nodesDisplayPreferences.setSortByDelay(true);
+  assert.deepEqual(filterNodes({
+    allNodes: nodes,
+    groups,
+    query: '',
+    selectedGroup: 'Auto',
   }).map((item) => item.tag), [
     'fast',
     'slow',
@@ -172,6 +183,7 @@ const group = (name, tags, kind = 'selector', selected) => ({
     'timeout',
     'failed',
   ]);
+  nodesDisplayPreferences.setSortByDelay(false);
 }
 
 {
@@ -184,6 +196,7 @@ const group = (name, tags, kind = 'selector', selected) => ({
     group('Manual', ['slow', 'fast'], 'selector'),
     group('Fallback', ['slow', 'fast'], 'fallback'),
   ];
+  nodesDisplayPreferences.setSortByDelay(true);
   const sections = buildSections({ allNodes: nodes, groups, query: '' });
 
   assert.deepEqual(sections[0].nodes.map((item) => item.tag), ['fast', 'slow']);
@@ -199,6 +212,7 @@ const group = (name, tags, kind = 'selector', selected) => ({
     query: '',
     selectedGroup: 'Fallback',
   }).map((item) => item.tag), ['slow', 'fast']);
+  nodesDisplayPreferences.setSortByDelay(false);
 }
 
 {

@@ -1,6 +1,11 @@
 import type { PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
-import { matchesNodeHealthFilter } from '$lib/components/tabs/nodes-display-preferences.svelte';
+import {
+  compareNodeDelay,
+  isDelaySortEnabled,
+  isUrlTestGroup,
+  matchesNodeHealthFilter,
+} from '$lib/components/tabs/nodes-display-preferences.svelte';
 
 export interface ProbeTargets {
   nodes: ProxyNode[];
@@ -133,35 +138,18 @@ export function collectGroupNodeTags(groups: PolicyGroup[], groupName: string): 
   return new Set(group?.outbounds.map((outbound) => outbound.tag) ?? []);
 }
 
-function isUrlTestGroup(group: PolicyGroup): boolean {
-  return group.kind?.toLowerCase().replace(/[-_]/g, '') === 'urltest';
-}
-
-function urlTestLatencyRank(node: ProxyNode): number {
-  const failed = node.delay < 0 || (node.alive === false && node.lastProbeAt !== undefined);
-  if (failed) return 2;
-  if (node.delay > 0) return 0;
-  return 1;
-}
-
 /**
- * URLTest groups present their successful observations from fastest to slowest.
- * Nodes without an observation retain their configured order between successful
- * and failed members, while timeout/failure observations remain at the end.
+ * Preserve configured order by default. When the user opts into latency order,
+ * URLTest groups present successful observations from fastest to slowest,
+ * followed by untested nodes and then timeout/failure observations.
  */
 function sortGroupNodes(group: PolicyGroup, nodes: ProxyNode[]): ProxyNode[] {
-  if (!isUrlTestGroup(group)) return nodes;
+  if (!isUrlTestGroup(group) || !isDelaySortEnabled()) return nodes;
 
   return nodes
     .map((node, index) => ({ node, index }))
     .sort((a, b) => {
-      const rankDiff = urlTestLatencyRank(a.node) - urlTestLatencyRank(b.node);
-      if (rankDiff !== 0) return rankDiff;
-      if (urlTestLatencyRank(a.node) === 0) {
-        const delayDiff = a.node.delay - b.node.delay;
-        if (delayDiff !== 0) return delayDiff;
-      }
-      return a.index - b.index;
+      return compareNodeDelay(a.node, b.node) || a.index - b.index;
     })
     .map(({ node }) => node);
 }
