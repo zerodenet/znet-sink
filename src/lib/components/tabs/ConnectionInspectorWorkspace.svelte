@@ -33,7 +33,6 @@
     Search,
     SlidersHorizontal,
     Trash2,
-    X,
   } from '@lucide/svelte';
 
   const HISTORY_SCOPE = 'connection-history';
@@ -190,10 +189,6 @@
     protocolFilter = 'all';
     outboundFilter = 'all';
     resultFilter = 'all';
-  }
-
-  function clearSearch() {
-    searchQuery = '';
   }
 
   function historySignature(): string {
@@ -672,23 +667,11 @@
       <Search class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         type="search"
-        class="h-[30px] pl-8 pr-8 text-xs"
+        class="h-[30px] pl-8 text-xs"
         aria-label="搜索连接"
         placeholder="搜索目标、进程、出口、规则或 ID"
         bind:value={searchQuery}
       />
-      {#if searchQuery}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          class="absolute right-0.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-          title="清除搜索"
-          aria-label="清除搜索"
-          onclick={clearSearch}
-        >
-          <X class="size-3.5" />
-        </Button>
-      {/if}
     </div>
 
     <Button

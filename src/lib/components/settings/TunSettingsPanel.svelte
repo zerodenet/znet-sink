@@ -13,7 +13,7 @@
 
   let name = $state('');
   let tag = $state('proxy');
-  let addr = $state('10.0.0.1/24');
+  let addr = $state('10.66.0.1/30');
   let secondaryAddr = $state('');
   let mtu = $state('1500');
   let dualStack = $state(true);
@@ -62,7 +62,7 @@
     error = null;
 
     if (!normalizedAddr || !normalizedAddr.includes('/')) {
-      error = 'TUN 地址必须使用 CIDR 格式，例如 10.0.0.1/24';
+      error = 'TUN 地址必须使用 CIDR 格式，例如 10.66.0.1/30';
       return;
     }
     if (!normalizedTag) {
@@ -182,7 +182,7 @@
           oninput={markDirty}
           disabled={locked}
           class="font-mono"
-          placeholder="10.0.0.1/24"
+          placeholder="10.66.0.1/30"
           spellcheck="false"
           aria-label="TUN 主地址"
         />

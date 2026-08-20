@@ -1,5 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { ArrowUpDown, EyeOff } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Button } from '$lib/components/ui/button';
+  import { nodesDisplayPreferences } from '$lib/components/tabs/nodes-display-preferences.svelte';
 
   type ViewMode = 'list' | 'grid';
 
@@ -17,6 +21,7 @@
     probing: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
+    canSortByDelay: boolean;
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
@@ -32,11 +37,19 @@
     probing,
     probeProgress,
     canProbeAll,
+    canSortByDelay,
     probeDisabledReason = null,
     onSearchQueryChange,
     onViewModeChange,
     onProbeAll,
   }: Props = $props();
+
+  const hideTimeout = $derived(nodesDisplayPreferences.hideTimeout);
+  const sortByDelay = $derived(nodesDisplayPreferences.sortByDelay);
+
+  onMount(() => {
+    nodesDisplayPreferences.load();
+  });
 </script>
 
 <div class="node-toolbar">
@@ -74,6 +87,30 @@
         class="search-input"
       />
     </div>
+
+    <Button
+      variant="outline"
+      size="icon-sm"
+      aria-pressed={hideTimeout}
+      aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
+      title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
+      onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
+    >
+      <EyeOff class="h-3.5 w-3.5" />
+    </Button>
+
+    {#if canSortByDelay}
+      <Button
+        variant="outline"
+        size="icon-sm"
+        aria-pressed={sortByDelay}
+        aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
+        title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
+        onclick={() => nodesDisplayPreferences.setSortByDelay(!sortByDelay)}
+      >
+        <ArrowUpDown class="h-3.5 w-3.5" />
+      </Button>
+    {/if}
 
     <SegmentedControl.Root
       value={viewMode}
