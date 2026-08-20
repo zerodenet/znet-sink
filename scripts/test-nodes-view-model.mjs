@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import {
+
+// The view model imports a Svelte rune-backed preference store. Unit tests run
+// the TypeScript module directly without the Svelte compiler, so provide the
+// identity behavior needed for its initial scalar state.
+globalThis.$state = (value) => value;
+
+const {
   buildSections,
   collectProbingPolicyNodeTags,
   filterNodes,
@@ -9,7 +15,7 @@ import {
   projectNestedGroupNodes,
   resolveEffectiveNodeSelection,
   summarizeProbeProgress,
-} from '../src/lib/components/tabs/nodes-view-model.ts';
+} = await import('../src/lib/components/tabs/nodes-view-model.ts');
 import { flagCodeFromEmoji, parseNodeName } from '../src/lib/services/node-utils.ts';
 
 const node = (tag, protocol = 'proxy') => ({
@@ -140,6 +146,59 @@ const group = (name, tags, kind = 'selector', selected) => ({
   assert.deepEqual(filterNodes({ allNodes: [node('JP'), node('HK')], groups, query: '', selectedGroup: 'Proxy' }).map((item) => item.tag), ['HK', 'JP']);
   assert.equal(getActiveNodeTag(groups, 'Proxy'), 'JP');
   assert.equal(normalizeSelectedGroup('missing', groups), null);
+}
+
+{
+  const nodes = [
+    { ...node('untested-a'), delay: 0 },
+    { ...node('slow'), delay: 120, lastProbeAt: 1_000, alive: true },
+    { ...node('timeout'), delay: -1, lastProbeAt: 1_000, alive: false },
+    { ...node('fast'), delay: 35, lastProbeAt: 1_000, alive: true },
+    { ...node('untested-b'), delay: 0 },
+    { ...node('failed'), delay: 0, lastProbeAt: 1_000, alive: false },
+  ];
+  const groups = [group('Auto', nodes.map((item) => item.tag), 'urltest')];
+
+  assert.deepEqual(filterNodes({
+    allNodes: nodes,
+    groups,
+    query: '',
+    selectedGroup: 'Auto',
+  }).map((item) => item.tag), [
+    'fast',
+    'slow',
+    'untested-a',
+    'untested-b',
+    'timeout',
+    'failed',
+  ]);
+}
+
+{
+  const nodes = [
+    { ...node('slow'), delay: 90, lastProbeAt: 1_000, alive: true },
+    { ...node('fast'), delay: 20, lastProbeAt: 1_000, alive: true },
+  ];
+  const groups = [
+    group('Auto', ['slow', 'fast'], 'url_test'),
+    group('Manual', ['slow', 'fast'], 'selector'),
+    group('Fallback', ['slow', 'fast'], 'fallback'),
+  ];
+  const sections = buildSections({ allNodes: nodes, groups, query: '' });
+
+  assert.deepEqual(sections[0].nodes.map((item) => item.tag), ['fast', 'slow']);
+  assert.deepEqual(filterNodes({
+    allNodes: nodes,
+    groups,
+    query: '',
+    selectedGroup: 'Manual',
+  }).map((item) => item.tag), ['slow', 'fast']);
+  assert.deepEqual(filterNodes({
+    allNodes: nodes,
+    groups,
+    query: '',
+    selectedGroup: 'Fallback',
+  }).map((item) => item.tag), ['slow', 'fast']);
 }
 
 {

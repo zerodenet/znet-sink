@@ -94,7 +94,6 @@
       onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
     >
       <EyeOff class="h-3.5 w-3.5" />
-      <span>隐藏超时</span>
     </Button>
 
     <SegmentedControl.Root

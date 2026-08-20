@@ -133,6 +133,39 @@ export function collectGroupNodeTags(groups: PolicyGroup[], groupName: string): 
   return new Set(group?.outbounds.map((outbound) => outbound.tag) ?? []);
 }
 
+function isUrlTestGroup(group: PolicyGroup): boolean {
+  return group.kind?.toLowerCase().replace(/[-_]/g, '') === 'urltest';
+}
+
+function urlTestLatencyRank(node: ProxyNode): number {
+  const failed = node.delay < 0 || (node.alive === false && node.lastProbeAt !== undefined);
+  if (failed) return 2;
+  if (node.delay > 0) return 0;
+  return 1;
+}
+
+/**
+ * URLTest groups present their successful observations from fastest to slowest.
+ * Nodes without an observation retain their configured order between successful
+ * and failed members, while timeout/failure observations remain at the end.
+ */
+function sortGroupNodes(group: PolicyGroup, nodes: ProxyNode[]): ProxyNode[] {
+  if (!isUrlTestGroup(group)) return nodes;
+
+  return nodes
+    .map((node, index) => ({ node, index }))
+    .sort((a, b) => {
+      const rankDiff = urlTestLatencyRank(a.node) - urlTestLatencyRank(b.node);
+      if (rankDiff !== 0) return rankDiff;
+      if (urlTestLatencyRank(a.node) === 0) {
+        const delayDiff = a.node.delay - b.node.delay;
+        if (delayDiff !== 0) return delayDiff;
+      }
+      return a.index - b.index;
+    })
+    .map(({ node }) => node);
+}
+
 /**
  * A nested policy group is rendered as one effective outbound card in its
  * parent. Runtime parent-member metadata can lag behind the nested group's own
@@ -193,9 +226,10 @@ export function filterNodes(options: {
   const group = groups.find((item) => item.name === selectedGroup);
   if (!group) return nodes;
   const byTag = new Map(nodes.map((node) => [node.tag, node]));
-  return group.outbounds
+  const groupNodes = group.outbounds
     .map((outbound) => byTag.get(outbound.tag))
     .filter((node): node is ProxyNode => node !== undefined);
+  return sortGroupNodes(group, groupNodes);
 }
 
 export function buildSections(options: {
@@ -214,7 +248,9 @@ export function buildSections(options: {
       .map((outbound) => byTag.get(outbound.tag))
       .filter((node): node is ProxyNode => node !== undefined && !assigned.has(node.id));
     for (const node of nodes) assigned.add(node.id);
-    return nodes.length > 0 ? [{ name: group.name, kind: group.kind, nodes }] : [];
+    return nodes.length > 0
+      ? [{ name: group.name, kind: group.kind, nodes: sortGroupNodes(group, nodes) }]
+      : [];
   });
   const orphan = filtered.filter((node) => !assigned.has(node.id));
   if (orphan.length > 0) sections.push({ name: orphanSectionName, nodes: orphan });
