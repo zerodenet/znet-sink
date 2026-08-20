@@ -46,6 +46,10 @@ export function isUrlTestGroup(group?: Pick<PolicyGroup, 'kind'>): boolean {
   return group?.kind?.toLowerCase() === 'urltest';
 }
 
+export function isDelaySortEnabled(): boolean {
+  return nodesDisplayPreferences.sortByDelay;
+}
+
 export function isHideableTimeoutNode(
   node: Pick<ProxyNode, 'delay' | 'alive' | 'lastProbeAt' | 'selected'>,
 ): boolean {
