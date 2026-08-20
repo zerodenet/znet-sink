@@ -291,3 +291,121 @@ body .lite-root .lite-power-orbit .lite-total-up {
 body .lite-root .lite-power-orbit .lite-total-down {
   right: 0;
 }
+
+/* ============================================
+   LONG VERSION LABELS — layout safety
+   ============================================ */
+
+/* Title bar identity must yield space before the mode switch or window controls. */
+body .titlebar-logo {
+  flex-shrink: 0;
+}
+
+body .titlebar-version.titlebar-version {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(190px, 28vw);
+  overflow: hidden;
+}
+
+body .titlebar-version > .text-muted-foreground {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Kernel version rows stay compact; long identifiers yield before metadata/actions. */
+body .version-list .version-row {
+  min-width: 0;
+}
+
+body .version-list .version-info {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+body .version-list .version-tag {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+body .version-list .version-info > [data-slot="badge"] {
+  flex-shrink: 0;
+}
+
+body .version-list .version-meta,
+body .version-list .version-actions {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Reveal the full identifier as an overlay without changing row height. */
+@media (hover: hover) and (pointer: fine) {
+  body .version-list .version-row:has(.version-tag:hover),
+  body .version-list .version-info:has(.version-tag:hover) {
+    overflow: visible;
+    position: relative;
+    z-index: 30;
+  }
+
+  body .version-list .version-tag:hover {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    z-index: 40;
+    width: max-content;
+    max-width: min(420px, calc(100vw - 72px));
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    transform: translateY(-50%);
+  }
+
+  .dark body .version-list .version-tag:hover,
+  body.dark .version-list .version-tag:hover {
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* About/update surfaces retain the full version without stretching their cards. */
+body .about-root .about-version-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .about-root .about-hero-text {
+  min-width: 0;
+}
+
+body .about-root .config-value.mono {
+  max-width: min(320px, 70%);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+body .update-banner .update-version,
+body .update-banner .update-current,
+body .about-root .update-banner-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
