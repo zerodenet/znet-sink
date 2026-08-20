@@ -21,7 +21,12 @@ class NodesDisplayPreferences {
     }
   }
 
+  ensureLoaded() {
+    this.load();
+  }
+
   setHideTimeout(value: boolean) {
+    this.ensureLoaded();
     this.hideTimeout = value;
     try {
       localStorage.setItem(HIDE_TIMEOUT_KEY, value ? '1' : '0');
@@ -31,6 +36,7 @@ class NodesDisplayPreferences {
   }
 
   setSortByDelay(value: boolean) {
+    this.ensureLoaded();
     this.sortByDelay = value;
     try {
       localStorage.setItem(SORT_DELAY_KEY, value ? '1' : '0');
@@ -47,6 +53,7 @@ export function isUrlTestGroup(group?: Pick<PolicyGroup, 'kind'>): boolean {
 }
 
 export function isDelaySortEnabled(): boolean {
+  nodesDisplayPreferences.ensureLoaded();
   return nodesDisplayPreferences.sortByDelay;
 }
 
@@ -59,6 +66,7 @@ export function isHideableTimeoutNode(
 }
 
 export function matchesNodeHealthFilter(node: ProxyNode): boolean {
+  nodesDisplayPreferences.ensureLoaded();
   return !nodesDisplayPreferences.hideTimeout || !isHideableTimeoutNode(node);
 }
 
