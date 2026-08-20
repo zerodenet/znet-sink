@@ -341,7 +341,7 @@ fn default_local_proxy_port() -> u16 {
 }
 
 fn default_tun_addr() -> String {
-    "198.18.0.1/30".to_string()
+    "10.66.0.1/30".to_string()
 }
 
 fn default_tun_mask() -> String {
@@ -474,10 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn tun_defaults_use_a_narrow_benchmark_subnet_and_keep_dns_hijack_opt_in() {
+    fn tun_defaults_use_a_narrow_subnet_and_keep_dns_hijack_opt_in() {
         let config: AppConfig = serde_json::from_value(json!({})).unwrap();
         assert!(config.tun.enabled.is_none());
-        assert_eq!(config.tun.addr, "198.18.0.1/30");
+        assert_eq!(config.tun.addr, "10.66.0.1/30");
         assert_eq!(config.tun.mask, "255.255.255.252");
         assert_eq!(config.tun.tag, "znet-sink-tun");
         assert!(config.tun.secondary_addr.is_none());
