@@ -1,3 +1,4 @@
+import type { PolicyGroup } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
 
 const HIDE_TIMEOUT_KEY = 'znet-nodes-hide-timeout';
@@ -40,6 +41,10 @@ class NodesDisplayPreferences {
 }
 
 export const nodesDisplayPreferences = new NodesDisplayPreferences();
+
+export function isUrlTestGroup(group?: Pick<PolicyGroup, 'kind'>): boolean {
+  return group?.kind?.toLowerCase() === 'urltest';
+}
 
 export function isHideableTimeoutNode(
   node: Pick<ProxyNode, 'delay' | 'alive' | 'lastProbeAt' | 'selected'>,
