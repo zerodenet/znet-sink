@@ -267,7 +267,7 @@ impl KernelAdapter for ZeroAdapter {
         // This trait method uses sensible defaults.
         commands::enable_tun(
             None,
-            "10.0.0.1".to_string(),
+            "198.18.0.1/30".to_string(),
             "tun-in".to_string(),
             1500,
             Some(options),
