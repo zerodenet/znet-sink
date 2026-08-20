@@ -90,7 +90,7 @@
 
     <Button
       variant="outline"
-      size="sm"
+      size="icon-sm"
       aria-pressed={hideTimeout}
       aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
       title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
@@ -102,7 +102,7 @@
     {#if canSortByDelay}
       <Button
         variant="outline"
-        size="sm"
+        size="icon-sm"
         aria-pressed={sortByDelay}
         aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
         title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
