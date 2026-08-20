@@ -52,3 +52,20 @@ export function isHideableTimeoutNode(
 export function matchesNodeHealthFilter(node: ProxyNode): boolean {
   return !nodesDisplayPreferences.hideTimeout || !isHideableTimeoutNode(node);
 }
+
+export function compareNodeDelay(a: ProxyNode, b: ProxyNode): number {
+  const delayRank = (node: ProxyNode) => {
+    if (node.delay >= 0) return 0;
+    if (!node.lastProbeAt) return 1;
+    return 2;
+  };
+
+  const rankDiff = delayRank(a) - delayRank(b);
+  if (rankDiff !== 0) return rankDiff;
+
+  if (a.delay >= 0 && b.delay >= 0) {
+    return a.delay - b.delay;
+  }
+
+  return 0;
+}
