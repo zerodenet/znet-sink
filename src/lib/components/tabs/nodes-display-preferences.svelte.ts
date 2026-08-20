@@ -1,9 +1,11 @@
 import type { ProxyNode } from '$lib/types/protocol';
 
 const HIDE_TIMEOUT_KEY = 'znet-nodes-hide-timeout';
+const SORT_DELAY_KEY = 'znet-nodes-sort-delay';
 
 class NodesDisplayPreferences {
   hideTimeout = $state(false);
+  sortByDelay = $state(false);
   private initialized = false;
 
   load() {
@@ -11,8 +13,10 @@ class NodesDisplayPreferences {
     this.initialized = true;
     try {
       this.hideTimeout = localStorage.getItem(HIDE_TIMEOUT_KEY) === '1';
+      this.sortByDelay = localStorage.getItem(SORT_DELAY_KEY) === '1';
     } catch {
       this.hideTimeout = false;
+      this.sortByDelay = false;
     }
   }
 
@@ -24,18 +28,19 @@ class NodesDisplayPreferences {
       // View preference persistence is best effort.
     }
   }
+
+  setSortByDelay(value: boolean) {
+    this.sortByDelay = value;
+    try {
+      localStorage.setItem(SORT_DELAY_KEY, value ? '1' : '0');
+    } catch {
+      // View preference persistence is best effort.
+    }
+  }
 }
 
 export const nodesDisplayPreferences = new NodesDisplayPreferences();
 
-/**
- * Hide only nodes with an actual failed observation:
- * - a negative delay is the explicit timeout sentinel;
- * - alive=false is only treated as failed after a probe observation exists.
- *
- * Untested nodes stay visible. A selected route also stays visible even when it
- * fails so the UI never conceals the route that is currently effective.
- */
 export function isHideableTimeoutNode(
   node: Pick<ProxyNode, 'delay' | 'alive' | 'lastProbeAt' | 'selected'>,
 ): boolean {
