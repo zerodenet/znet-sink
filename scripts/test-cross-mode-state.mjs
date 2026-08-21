@@ -118,11 +118,12 @@ assert.ok(
 
 assert.ok(
   appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
-    && appStore.includes("if (mode === 'lite')")
-    && appStore.includes('await guiState.prepareLiteCapture()')
+    && appStore.includes("if (mode === 'lite' && guiState.isCaptureEnabled)")
+    && appStore.includes('void this.prepareLiteCaptureInBackground(generation)')
+    && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
-  'TUN configuration must remain Pro-only while entering Lite reconciles the active capture path',
+  'TUN configuration and navigation must switch to Lite synchronously while capture reconciliation runs in the background',
 );
 
 assert.ok(
