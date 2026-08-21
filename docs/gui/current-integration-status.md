@@ -1,6 +1,6 @@
 # Current Integration Status
 
-Updated: 2026-06-21
+Updated: 2026-08-21
 
 ## Kernel Lifecycle
 
@@ -25,6 +25,15 @@ Updated: 2026-06-21
 - Proxy mode writes the kernel-native top-level `mode`.
 - Legacy `route.mode` is accepted only as an import/read fallback.
 - Runtime/control commands currently exposed through the adapter include `config.apply`, `config.validate`, `mode.set`, `diagnostics.dns_lookup`, `diagnostics.trace_route`, `diagnostics.probe_outbound`, `recent_flows`, `sinks`, and `diagnostics`. The current kernel contract does not expose `config.plan_apply`.
+
+## TUN / FakeIP Phase 1 Integration
+
+- TUN runtime status remains the source of truth for GUI presentation. New kernel-side egress routing and DNS binding capabilities should be consumed as status/diagnostic data rather than duplicated in GUI state.
+- The GUI integration path is prepared for read-only DNS and FakeIP diagnostics. Editing FakeIP pools or advanced TUN stack parameters is intentionally deferred until kernel contracts stabilize.
+- Phase 1 scope:
+  - TUN address/CIDR defaults follow kernel changes.
+  - TUN runtime status exposes interface, address, and routing related information when available.
+  - DNS/FakeIP diagnostics are integrated as read-only observability features.
 
 ## Events And Capabilities
 
