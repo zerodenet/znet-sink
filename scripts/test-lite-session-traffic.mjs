@@ -9,21 +9,22 @@ const overviewData = read('src/lib/services/overview-data.svelte.ts');
 const page = read('src/routes/+page.svelte');
 const overview = read('src/lib/components/tabs/OverviewTab.svelte');
 const guiState = read('src/lib/services/gui-state.svelte.ts');
+const runtimePerformance = read('src/lib/components/RuntimePerformance.svelte');
 
 assert.ok(
-  overviewData.includes('proxySessionActive = $state(false)') &&
-    overviewData.includes('proxySessionUpBytes = $state(0)') &&
-    overviewData.includes('proxySessionDownBytes = $state(0)') &&
-    overviewData.includes('get proxySessionTotalBytes()'),
-  'proxy-session traffic should be tracked separately from core lifetime totals',
+  overviewData.includes('captureSessionActive = $state(false)') &&
+    overviewData.includes('captureSessionUpBytes = $state(0)') &&
+    overviewData.includes('captureSessionDownBytes = $state(0)') &&
+    overviewData.includes('get captureSessionTotalBytes()'),
+  'capture-session traffic should be tracked separately from core lifetime totals',
 );
 assert.ok(
   overviewData.includes('this._sessionLastTotalUp = this.totalUpBytes') &&
     overviewData.includes('this._sessionLastTotalDown = this.totalDownBytes') &&
     overviewData.includes('this._sessionHasBaseline = this.isLive') &&
     overviewData.includes('if (!this._sessionHasBaseline)') &&
-    overviewData.includes('this.applyProxySessionCounters(totalUp, totalDown)'),
-  'a new proxy session should baseline against a real core counter and let the first real sample establish it when necessary',
+    overviewData.includes('this.applyCaptureSessionCounters(totalUp, totalDown)'),
+  'a new capture session should baseline against a real core counter and let the first real sample establish it when necessary',
 );
 assert.ok(
   overviewData.includes('totalUp >= this._sessionLastTotalUp') &&
@@ -34,12 +35,13 @@ assert.ok(
   'counter resets during a core restart should start a new counter epoch without resetting the GUI session total',
 );
 assert.ok(
-  page.includes('guiState.isSystemProxyEnabled') &&
-    guiState.includes('get isSystemProxyEnabled(): boolean') &&
-    guiState.includes('return this.isTunEnabled;') &&
-    page.includes('overviewData.beginProxySession()') &&
-    page.includes('overviewData.endProxySession()'),
-  'the Lite session boundary should follow the TUN capture state rather than the long-lived Zero process',
+  page.includes('const captureEnabled = guiState.isCaptureEnabled') &&
+    guiState.includes('get isCaptureEnabled(): boolean') &&
+    guiState.includes('return this.isTunEnabled || this.connection?.systemProxyEnabled === true;') &&
+    page.includes('overviewData.beginCaptureSession()') &&
+    page.includes('overviewData.endCaptureSession()') &&
+    !page.includes('const proxyEnabled = guiState.isSystemProxyEnabled'),
+  'one mode-neutral session should span system-proxy and TUN capture until both are disabled',
 );
 assert.ok(
   overview.includes('class="lite-power-orbit"') &&
@@ -53,7 +55,7 @@ assert.ok(
 );
 assert.ok(
   overview.includes('total <= 0) return 50') &&
-    overview.includes('trafficShare(overviewData.proxySessionUpBytes, sessionTotalBytes)') &&
+    overview.includes('trafficShare(overviewData.captureSessionUpBytes, sessionTotalBytes)') &&
     overview.includes('const sessionDownShare = $derived(100 - sessionUpShare)') &&
     !overview.includes('<svg class="lite-traffic-ring"') &&
     !overview.includes('stroke-dasharray={sessionUpDash}') &&
@@ -81,8 +83,8 @@ assert.ok(
   overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次总流量 ${sessionTotalLabel}`') &&
     overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次上传 ${sessionUpLabel}`') &&
     overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次下载 ${sessionDownLabel}`') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${proxyEnabled ? formatSpeed(currentUp)') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${proxyEnabled ? formatSpeed(currentDown)') &&
+    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${formatSpeed(currentUp)}`') &&
+    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${formatSpeed(currentDown)}`') &&
     overview.includes('<span class="sr-only">本次总流量：</span>') &&
     overview.includes('<span class="sr-only">本次上传：</span>') &&
     overview.includes('<span class="sr-only">本次下载：</span>') &&
@@ -99,9 +101,19 @@ assert.ok(
   'metric hover hints should remain individually hit-testable even when their layout container ignores pointer events',
 );
 assert.ok(
-  overview.includes('class:flowing={proxyEnabled && (currentUp > 0.001 || currentDown > 0.001)}') &&
+  overview.includes('class:flowing={currentUp > 0.001 || currentDown > 0.001}') &&
     overview.includes('@media (prefers-reduced-motion: reduce)'),
-  'real-time rates may drive restrained decorative activity without changing cumulative ring semantics',
+  'kernel real-time rates should drive the display without depending on either capture toggle',
+);
+assert.ok(
+  overview.includes('const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled)') &&
+    overview.includes('const captureEnabled = $derived(guiState.isCaptureEnabled)') &&
+    overview.includes('const liteConnected = $derived(guiState.isConnected)') &&
+    overview.includes("captureEnabled ? '服务中'") &&
+    overview.includes('class:on={liteConnected}') &&
+    overview.includes('onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}') &&
+    !overview.includes('supportsTrafficStats && proxyEnabled ? formatSpeed'),
+  'system-proxy status, any-capture activity, Lite combined power and kernel rates should keep distinct semantics',
 );
 assert.ok(
   !overview.includes('{#if proxyEnabled && guiState.supportsTrafficStats}') &&
@@ -110,9 +122,17 @@ assert.ok(
   'session traffic must not be conditionally inserted as a textual row that shifts the Lite layout',
 );
 assert.ok(
-  !overviewData.includes('proxySessionUpBytes += upRate') &&
-    !overviewData.includes('proxySessionDownBytes += downRate'),
+  !overviewData.includes('captureSessionUpBytes += upRate') &&
+    !overviewData.includes('captureSessionDownBytes += downRate'),
   'session totals must come from core byte counters, never by integrating displayed rates',
+);
+assert.ok(
+  runtimePerformance.includes('const coreRuntime = $derived(snapshot?.core ?? null)') &&
+    runtimePerformance.includes('formatCpu(coreRuntime?.cpuPercent)') &&
+    runtimePerformance.includes('formatMemory(coreRuntime?.memoryBytes)') &&
+    !runtimePerformance.includes('formatCpu(snapshot?.totalCpuPercent)') &&
+    !runtimePerformance.includes('formatMemory(snapshot?.totalMemoryBytes)'),
+  'Lite and Pro CPU/memory displays should both report the managed Zero process instead of mixing process boundaries',
 );
 
 console.log('lite-session-traffic: ok');

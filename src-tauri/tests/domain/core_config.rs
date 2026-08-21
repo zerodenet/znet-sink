@@ -69,7 +69,7 @@ fn core_inspection_exposes_read_only_public_info() {
     assert_eq!(info.kernel, "zero");
     assert!(!info.executable_exists);
     assert_eq!(info.executable_path.as_deref(), Some(missing.as_str()));
-    assert!(info.download_url.is_some());
+    assert!(info.recommended_install_dir.is_some());
     assert!(info
         .warnings
         .iter()

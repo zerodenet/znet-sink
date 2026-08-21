@@ -13,7 +13,7 @@
   let error = $state<string | null>(null);
 
   function formatCpu(value: number | null | undefined): string {
-    if (value == null) return snapshot ? '采样中' : '—';
+    if (value == null) return '—';
     if (value < 0.1) return '<0.1%';
     return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
   }
@@ -71,14 +71,15 @@
   const summaryLabel = $derived.by(() => {
     if (error) return error;
     if (!snapshot) return '正在读取 CPU 和内存使用情况';
-    const unavailable: string[] = [];
-    if (!snapshot.gui.tracked) unavailable.push('ZNet Sink');
-    if (snapshot.core && !snapshot.core.tracked) unavailable.push('Zero');
-    if (unavailable.length > 0) {
-      return `${unavailable.join('、')} 当前无法读取；显示值仅包含可读取进程`;
-    }
-    return 'ZNet Sink 与 Zero 的 CPU 和常驻内存；每 2 秒更新';
+    if (!snapshot.core) return 'Zero 内核未运行';
+    if (!snapshot.core.tracked) return 'Zero 进程资源占用当前无法读取';
+    return 'Zero 进程 CPU 和常驻内存；每 2 秒更新';
   });
+
+  // Keep the Lite overview on the same metric boundary as the Pro core card.
+  // Snapshot totals also include the GUI process and therefore cannot be
+  // compared with the Zero-only values shown in professional mode.
+  const coreRuntime = $derived(snapshot?.core ?? null);
 </script>
 
 {#if mode === 'lite'}
@@ -89,11 +90,11 @@
       <div class="runtime-lite-metrics" class:loading={!snapshot}>
         <span class="runtime-lite-metric">
           <small>CPU</small>
-          <strong>{formatCpu(snapshot?.totalCpuPercent)}</strong>
+          <strong>{formatCpu(coreRuntime?.cpuPercent)}</strong>
         </span>
         <span class="runtime-lite-metric">
           <small>内存</small>
-          <strong>{formatMemory(snapshot?.totalMemoryBytes)}</strong>
+          <strong>{formatMemory(coreRuntime?.memoryBytes)}</strong>
         </span>
       </div>
     {/if}

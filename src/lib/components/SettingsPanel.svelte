@@ -13,6 +13,7 @@
     { id: 'network', label: '网络' },
     { id: 'core',    label: '内核' },
     { id: 'tun',     label: 'TUN' },
+    { id: 'dns',     label: 'DNS' },
     { id: 'config',  label: '配置' },
     { id: 'logs',    label: '日志' },
     { id: 'about',   label: '关于' }
@@ -29,6 +30,7 @@
     network: () => import('$lib/components/settings/NetworkSettingsPanel.svelte'),
     core: () => import('$lib/components/settings/CoreConfigPanel.svelte'),
     tun: () => import('$lib/components/settings/TunSettingsPanel.svelte'),
+    dns: () => import('$lib/components/settings/DnsSettingsPanel.svelte'),
     config: () => import('$lib/components/settings/ConfigEditorPanel.svelte'),
     logs: () => import('$lib/components/settings/LogsSettingsPanel.svelte'),
     about: () => import('$lib/components/settings/AboutPanel.svelte'),

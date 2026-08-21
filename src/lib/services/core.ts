@@ -5,7 +5,7 @@ import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
 import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
-import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
+import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
@@ -409,8 +409,16 @@ export async function guiApplyConfig(config: Record<string, unknown>): Promise<u
   return invoke('gui_apply_config', { config });
 }
 
+export async function guiApplyDnsConfig(config: Record<string, unknown>): Promise<unknown> {
+  return invoke('gui_apply_dns_config', { config });
+}
+
 export async function guiValidateConfig(config: Record<string, unknown>): Promise<unknown> {
   return invoke('gui_validate_config', { config });
+}
+
+export async function guiValidateDnsConfig(config: Record<string, unknown>): Promise<unknown> {
+  return invoke('gui_validate_dns_config', { config });
 }
 
 /** Compatibility-only API. The current Zero IPC contract does not expose
@@ -558,6 +566,14 @@ export async function clearDebugFrames(): Promise<void> {
 
 export async function guiDnsLookup(hostname: string): Promise<DnsLookupResult> {
   return invoke<DnsLookupResult>('gui_dns_lookup', { hostname });
+}
+
+export async function guiDnsCache(domain?: string, limit?: number): Promise<DnsCacheResult> {
+  return invoke<DnsCacheResult>('gui_dns_cache', { domain, limit });
+}
+
+export async function guiFakeIpLookup(input: { domain?: string; ip?: string }): Promise<FakeIpLookupResult> {
+  return invoke<FakeIpLookupResult>('gui_fakeip_lookup', input);
 }
 
 export async function guiTraceRoute(

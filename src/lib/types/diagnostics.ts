@@ -19,6 +19,8 @@ export interface DnsRecord {
 /** Result of a `diagnostics.dns_lookup` command. */
 export interface DnsLookupResult {
   hostname?: string;
+  resolved_addresses?: string[];
+  count?: number;
   answers?: DnsRecord[];
   records?: DnsRecord[];
   results?: DnsRecord[];
@@ -28,6 +30,45 @@ export interface DnsLookupResult {
   resolver?: string;
   elapsedMs?: number;
   error?: string;
+  [key: string]: unknown;
+}
+
+export interface DnsCacheEntry {
+  domain: string;
+  addresses: string[];
+  ttl_seconds?: number;
+  [key: string]: unknown;
+}
+
+export interface DnsCacheResult {
+  enabled: boolean;
+  domain?: string;
+  hit?: boolean;
+  addresses?: string[];
+  ttl_seconds?: number;
+  entries?: DnsCacheEntry[];
+  count?: number;
+  [key: string]: unknown;
+}
+
+export interface FakeIpStats {
+  allocations: number;
+  expirations: number;
+  evictions: number;
+  exhaustions: number;
+  collisions: number;
+  reverse_misses: number;
+  live_mappings: number;
+  capacity: number;
+  [key: string]: unknown;
+}
+
+export interface FakeIpLookupResult {
+  enabled: boolean;
+  domain?: string;
+  ip?: string;
+  fake_ip?: string;
+  stats?: FakeIpStats;
   [key: string]: unknown;
 }
 

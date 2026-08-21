@@ -311,6 +311,9 @@
                   <div class="property"><span>进程</span><strong title={connection.processPath}>{connection.processName ?? connection.processPath ?? `PID ${connection.processId}`}</strong></div>
                 {/if}
                 <div class="property"><span>目标</span><strong title={connection.targetHost}>{connection.targetHost ?? connection.destination}</strong></div>
+                {#if hasText(connection.originalIp)}<div class="property"><span>原始目标 IP</span><strong>{connection.originalIp}</strong></div>{/if}
+                {#if hasText(connection.hostSource)}<div class="property"><span>域名来源</span><strong>{connection.hostSource}</strong></div>{/if}
+                {#if hasText(connection.fakeIpReverseStatus)}<div class="property"><span>Fake-IP 反查</span><strong>{connection.fakeIpReverseStatus}</strong></div>{/if}
                 {#if hasText(connection.targetIp)}<div class="property"><span>解析地址</span><strong>{connection.targetIp}</strong></div>{/if}
                 {#if hasText(connection.sniffedHost)}<div class="property"><span>嗅探域名</span><strong>{connection.sniffedHost}</strong></div>{/if}
                 {#if hasText(connection.remoteDestination)}<div class="property"><span>实际远端</span><strong>{connection.remoteDestination}</strong></div>{/if}
