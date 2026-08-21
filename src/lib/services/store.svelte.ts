@@ -233,6 +233,11 @@ class AppStateStore {
   }
 
   isNavVisible(key: string): boolean {
+    // Apply the local mode boundary synchronously. The cached interaction
+    // surface still describes the previous mode until its background refresh
+    // completes, which can take seconds when the core is busy.
+    if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;
+
     const item = this.interactionSurface.navigation.get(key);
     if (item) return item.visible;
     return this.getFallbackNavVisible(key);
