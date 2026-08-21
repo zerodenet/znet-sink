@@ -9,6 +9,7 @@ const overviewData = read('src/lib/services/overview-data.svelte.ts');
 const page = read('src/routes/+page.svelte');
 const overview = read('src/lib/components/tabs/OverviewTab.svelte');
 const guiState = read('src/lib/services/gui-state.svelte.ts');
+const runtimePerformance = read('src/lib/components/RuntimePerformance.svelte');
 
 assert.ok(
   overviewData.includes('captureSessionActive = $state(false)') &&
@@ -124,6 +125,14 @@ assert.ok(
   !overviewData.includes('captureSessionUpBytes += upRate') &&
     !overviewData.includes('captureSessionDownBytes += downRate'),
   'session totals must come from core byte counters, never by integrating displayed rates',
+);
+assert.ok(
+  runtimePerformance.includes('const coreRuntime = $derived(snapshot?.core ?? null)') &&
+    runtimePerformance.includes('formatCpu(coreRuntime?.cpuPercent)') &&
+    runtimePerformance.includes('formatMemory(coreRuntime?.memoryBytes)') &&
+    !runtimePerformance.includes('formatCpu(snapshot?.totalCpuPercent)') &&
+    !runtimePerformance.includes('formatMemory(snapshot?.totalMemoryBytes)'),
+  'Lite and Pro CPU/memory displays should both report the managed Zero process instead of mixing process boundaries',
 );
 
 console.log('lite-session-traffic: ok');
