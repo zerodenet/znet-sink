@@ -24,16 +24,16 @@ Updated: 2026-08-21
 
 - Proxy mode writes the kernel-native top-level `mode`.
 - Legacy `route.mode` is accepted only as an import/read fallback.
-- Runtime/control commands currently exposed through the adapter include `config.apply`, `config.validate`, `mode.set`, `diagnostics.dns_lookup`, `diagnostics.trace_route`, `diagnostics.probe_outbound`, `recent_flows`, `sinks`, and `diagnostics`. The current kernel contract does not expose `config.plan_apply`.
+- Runtime/control commands currently exposed through the adapter include `config.apply`, `config.validate`, `mode.set`, `diagnostics.dns_lookup`, `diagnostics.dns_cache`, `diagnostics.fakeip_lookup`, `diagnostics.trace_route`, `diagnostics.probe_outbound`, `recent_flows`, `sinks`, and `diagnostics`. The current kernel contract does not expose `config.plan_apply`.
 
-## TUN / FakeIP Phase 1 Integration
+## DNS / TUN / Fake-IP Integration
 
-- TUN runtime status remains the source of truth for GUI presentation. New kernel-side egress routing and DNS binding capabilities should be consumed as status/diagnostic data rather than duplicated in GUI state.
-- The GUI integration path is prepared for read-only DNS and FakeIP diagnostics. Editing FakeIP pools or advanced TUN stack parameters is intentionally deferred until kernel contracts stabilize.
-- Phase 1 scope:
-  - TUN address/CIDR defaults follow kernel changes.
-  - TUN runtime status exposes interface, address, and routing related information when available.
-  - DNS/FakeIP diagnostics are integrated as read-only observability features.
+- TUN runtime status and Zero's DNS/Fake-IP diagnostics remain authoritative for runtime behavior; the GUI only manages configuration and presents returned state.
+- A dedicated settings surface supports Disabled, Real DNS, and Fake-IP modes, named UDP/DoH/DoT/DoQ/system servers, cache settings, Fake-IP lifecycle settings, and ordered shared-condition DNS dispatch.
+- DNS changes are checked by the lossless client model and running kernel, then committed through the active-profile transaction with last-known-good rollback.
+- App-owned TUN passes `dns_hijack` only after an active profile contains a saved DNS configuration. Profile-owned `runtime.tun` remains authoritative when present.
+- Read-only diagnostics expose DNS cache entries, Fake-IP forward/reverse lookup, allocator counters, and the kernel-provided `original_ip`, `host_source`, and `fake_ip_reverse_status` flow fields.
+- Port-53 interception does not claim coverage of application-owned DoH/DoT/DoQ or hostnames hidden by ECH.
 
 ## Events And Capabilities
 
