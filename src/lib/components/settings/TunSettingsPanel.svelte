@@ -41,10 +41,7 @@
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
       dualStack = config.tun.dualStack;
-      // DNS hijack is intentionally unavailable until the client exposes the
-      // complete DNS configuration required by Zero. Do not surface a stale
-      // persisted value from earlier prerelease builds as an actionable state.
-      dnsHijack = false;
+      dnsHijack = config.tun.dnsHijack;
     } catch (cause) {
       error = getAppErrorMessage(cause, '加载 TUN 配置失败');
     } finally {
@@ -88,7 +85,7 @@
           secondaryAddr: normalizedSecondary || null,
           mtu: normalizedMtu,
           dualStack,
-          dnsHijack: false,
+          dnsHijack,
         },
       });
       name = config.tun.name ?? '';
@@ -97,7 +94,7 @@
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
       dualStack = config.tun.dualStack;
-      dnsHijack = false;
+      dnsHijack = config.tun.dnsHijack;
       saved = true;
     } catch (cause) {
       error = getAppErrorMessage(cause, '保存 TUN 配置失败');
@@ -255,13 +252,17 @@
 
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">DNS 劫持（暂不可用）</span>
-        <span class="label-desc">ZNet-Sink 尚未提供完整的 DNS 配置能力，当前版本固定关闭该功能；活动配置自行定义的 runtime.tun 不受此本地开关影响。</span>
+        <span class="label-text">DNS 劫持</span>
+        <span class="label-desc">接管 TUN 的 53 端口查询。启用前必须先保存有效的 DNS 配置；应用自带的 DoH/DoT/DoQ 与 ECH 不在此范围内。</span>
       </div>
       <Switch
         checked={dnsHijack}
-        disabled={true}
-        aria-label="TUN DNS 劫持（暂不可用）"
+        onCheckedChange={(checked) => {
+          dnsHijack = checked;
+          markDirty();
+        }}
+        disabled={locked}
+        aria-label="TUN DNS 劫持"
       />
     </div>
   {/if}

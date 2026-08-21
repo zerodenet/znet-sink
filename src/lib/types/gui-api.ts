@@ -337,6 +337,9 @@ export interface GuiConnectionItem {
   targetHost?: string;
   targetIp?: string;
   targetPort?: number;
+  originalIp?: string;
+  hostSource?: string;
+  fakeIpReverseStatus?: string;
   sniffedHost?: string;
   inboundTag?: string;
   inboundProtocol?: string;

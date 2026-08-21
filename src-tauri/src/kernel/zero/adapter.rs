@@ -233,6 +233,24 @@ impl KernelAdapter for ZeroAdapter {
         commands::dns_lookup(hostname, Some(options)).await
     }
 
+    async fn dns_cache(
+        &self,
+        domain: Option<String>,
+        limit: Option<usize>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value> {
+        commands::dns_cache(domain, limit, Some(options)).await
+    }
+
+    async fn fakeip_lookup(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value> {
+        commands::fakeip_lookup(domain, ip, Some(options)).await
+    }
+
     async fn trace_route(
         &self,
         target: String,
