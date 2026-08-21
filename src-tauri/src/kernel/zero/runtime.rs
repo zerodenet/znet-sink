@@ -194,6 +194,7 @@ mod tests {
     #[test]
     fn tun_start_uses_full_capture_policy_and_persisted_interface_values() {
         let tun = AppTunConfig {
+            enabled: Some(true),
             name: Some("CustomTun".to_string()),
             addr: "10.88.0.1/24".to_string(),
             mask: "255.255.255.0".to_string(),

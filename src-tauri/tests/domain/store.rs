@@ -78,7 +78,91 @@ fn domain_store_roundtrips_profiles() {
     assert_eq!(data.proxy_configs.len(), 1);
     assert_eq!(data.subscriptions.len(), 1);
     assert_eq!(data.rule_sets.len(), 1);
+    assert!(dir.join("znet-sink.db").is_file());
+    assert!(!dir.join("proxy-configs.json").exists());
+    assert!(!dir.join("subscriptions.json").exists());
+    assert!(dir.join("rule-sets.json").is_file());
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn domain_store_imports_legacy_relational_json_only_once() {
+    let dir = isolated_data_dir("domain-store-sqlite-migration");
+    std::fs::create_dir_all(&dir).unwrap();
+    let proxy = proxy_profile("proxy-config-legacy");
+    let subscription = subscription_profile(
+        "subscription-legacy",
+        "https://example.com/original",
+        Some(proxy.id.clone()),
+    );
+    std::fs::write(
+        dir.join("proxy-configs.json"),
+        serde_json::to_vec_pretty(&vec![proxy]).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("subscriptions.json"),
+        serde_json::to_vec_pretty(&vec![subscription]).unwrap(),
+    )
+    .unwrap();
+
+    let imported = domain_store::load_all_from_dir(&dir).unwrap();
+    assert_eq!(imported.proxy_configs.len(), 1);
+    assert_eq!(
+        imported.subscriptions[0].url,
+        "https://example.com/original"
+    );
+    assert_eq!(
+        imported.subscriptions[0].target_proxy_config_id.as_deref(),
+        Some("proxy-config-legacy")
+    );
+
+    let changed_legacy = subscription_profile(
+        "subscription-legacy",
+        "https://example.com/changed-after-migration",
+        Some("proxy-config-legacy".to_string()),
+    );
+    std::fs::write(
+        dir.join("subscriptions.json"),
+        serde_json::to_vec_pretty(&vec![changed_legacy]).unwrap(),
+    )
+    .unwrap();
+
+    let reloaded = domain_store::load_all_from_dir(&dir).unwrap();
+    assert_eq!(
+        reloaded.subscriptions[0].url,
+        "https://example.com/original"
+    );
+    assert!(dir.join("znet-sink.db").is_file());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn domain_store_rolls_back_invalid_subscription_relationship() {
+    let dir = isolated_data_dir("domain-store-sqlite-foreign-key");
+    let proxy = proxy_profile("proxy-config-1");
+    domain_store::save_proxy_configs_to_dir(&dir, &[proxy]).unwrap();
+    let valid = subscription_profile(
+        "subscription-1",
+        "https://example.com/valid",
+        Some("proxy-config-1".to_string()),
+    );
+    domain_store::save_subscriptions_to_dir(&dir, &[valid]).unwrap();
+
+    let invalid = subscription_profile(
+        "subscription-1",
+        "https://example.com/must-not-commit",
+        Some("missing-proxy-config".to_string()),
+    );
+    assert!(domain_store::save_subscriptions_to_dir(&dir, &[invalid]).is_err());
+
+    let reloaded = domain_store::load_all_from_dir(&dir).unwrap();
+    assert_eq!(reloaded.subscriptions[0].url, "https://example.com/valid");
+    assert_eq!(
+        reloaded.subscriptions[0].target_proxy_config_id.as_deref(),
+        Some("proxy-config-1")
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -116,4 +200,45 @@ fn isolated_data_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
+}
+
+fn proxy_profile(id: &str) -> ProxyConfigProfile {
+    ProxyConfigProfile {
+        id: id.to_string(),
+        name: "Local".to_string(),
+        kernel: "zero".to_string(),
+        format: "json".to_string(),
+        path: None,
+        content: Some(serde_json::json!({ "outbounds": [] })),
+        active: true,
+        updated_at_unix_ms: 1,
+        capabilities: ProxyConfigCapabilities::default(),
+    }
+}
+
+fn subscription_profile(
+    id: &str,
+    url: &str,
+    target_proxy_config_id: Option<String>,
+) -> SubscriptionProfile {
+    SubscriptionProfile {
+        id: id.to_string(),
+        name: "Remote".to_string(),
+        url: url.to_string(),
+        enabled: true,
+        kernel: "zero".to_string(),
+        format: "auto".to_string(),
+        target_proxy_config_id,
+        policy_selections: Default::default(),
+        update_interval_secs: None,
+        user_agent: None,
+        node_count: None,
+        upload_bytes: None,
+        download_bytes: None,
+        total_bytes: None,
+        expire_at_unix_ms: None,
+        updated_at_unix_ms: 1,
+        last_sync_at_unix_ms: None,
+        last_error: None,
+    }
 }

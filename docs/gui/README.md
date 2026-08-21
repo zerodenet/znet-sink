@@ -48,6 +48,7 @@ const config = await invoke('app_config_get');
 ## 文档索引
 
 - [应用配置](./app-config.md)
+- [本地存储边界](./storage.md)
 - [交互模式约束](./interaction-modes.md)
 - [能力快照](./capabilities.md)
 - [Zero 适配层接口](./zero-adapter.md)
