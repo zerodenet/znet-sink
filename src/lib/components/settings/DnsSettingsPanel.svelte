@@ -3,6 +3,7 @@
   import { AlertTriangle, ChevronDown, ChevronUp, Plus, RefreshCw, Save, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import * as Select from '$lib/components/ui/select';
   import { Switch } from '$lib/components/ui/switch';
   import {
     applyGlobalDnsSettings,
@@ -39,6 +40,13 @@
   const modeLabel = $derived(draft
     ? ({ disabled: '关闭', real: 'Real DNS', fake_ip: 'Fake-IP' }[draft.mode] ?? draft.mode)
     : '');
+  const serverTypeOptions: Array<{ value: DnsServerType; label: string }> = [
+    { value: 'udp', label: 'UDP' },
+    { value: 'doh', label: 'DoH' },
+    { value: 'dot', label: 'DoT' },
+    { value: 'doq', label: 'DoQ' },
+    { value: 'system', label: 'system' },
+  ];
 
   function touch() {
     if (draft) draft = JSON.parse(JSON.stringify(draft)) as DnsSettingsDraft;
@@ -88,6 +96,12 @@
     saved = false;
     savedPending = false;
     error = '';
+  }
+
+  function changeDefaultServer(value: string) {
+    if (!draft) return;
+    draft.dns.default_server = value;
+    touch();
   }
 
   function updateServer(name: string, patch: Partial<DnsServerConfig>) {
@@ -302,9 +316,20 @@
           <article class="server-card">
             <div class="server-top">
               <Input value={name} onblur={(event) => renameServer(name, event.currentTarget.value)} aria-label="服务器名称" />
-              <select value={server.type} onchange={(event) => changeServerType(name, event.currentTarget.value as DnsServerType)}>
-                <option value="udp">UDP</option><option value="doh">DoH</option><option value="dot">DoT</option><option value="doq">DoQ</option><option value="system">system</option>
-              </select>
+              <Select.Root
+                type="single"
+                value={server.type}
+                onValueChange={(value) => { if (value) changeServerType(name, value as DnsServerType); }}
+              >
+                <Select.Trigger aria-label={`${name} DNS 类型`}>
+                  {serverTypeOptions.find((option) => option.value === server.type)?.label ?? server.type}
+                </Select.Trigger>
+                <Select.Content>
+                  {#each serverTypeOptions as option}
+                    <Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
               <Button variant="ghost" size="icon-sm" onclick={() => removeServer(name)} aria-label={`删除 ${name}`}><Trash2 /></Button>
             </div>
             {#if server.type !== 'system'}
@@ -321,7 +346,21 @@
           </article>
         {/each}
       </div>
-      <label class="default-row"><span>默认服务器</span><select bind:value={draft.dns.default_server} onchange={touch}>{#each serverNames as name}<option value={name}>{name}</option>{/each}</select></label>
+      <div class="default-row">
+        <span>默认服务器</span>
+        <Select.Root
+          type="single"
+          value={draft.dns.default_server}
+          onValueChange={(value) => { if (value) changeDefaultServer(value); }}
+        >
+          <Select.Trigger aria-label="默认 DNS 服务器">{draft.dns.default_server}</Select.Trigger>
+          <Select.Content>
+            {#each serverNames as name}
+              <Select.Item value={name} label={name}>{name}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </div>
   </section>
 
   {#if nativeMode}
@@ -357,7 +396,18 @@
             <article class="dispatch-card">
               <div class="dispatch-order"><span>#{index + 1}</span><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, -1)} disabled={index === 0}><ChevronUp /></Button><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, 1)} disabled={index === draft.dns.dispatch.length - 1}><ChevronDown /></Button></div>
               <textarea class="condition" value={JSON.stringify(rule.condition, null, 2)} onblur={(event) => updateDispatchCondition(index, event.currentTarget.value)}></textarea>
-              <select bind:value={rule.server} onchange={touch}>{#each serverNames as name}<option value={name}>{name}</option>{/each}</select>
+              <Select.Root
+                type="single"
+                value={rule.server}
+                onValueChange={(value) => { if (value) { rule.server = value; touch(); } }}
+              >
+                <Select.Trigger aria-label={`第 ${index + 1} 条分流服务器`}>{rule.server}</Select.Trigger>
+                <Select.Content>
+                  {#each serverNames as name}
+                    <Select.Item value={name} label={name}>{name}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
               <Button variant="ghost" size="icon-sm" onclick={() => removeDispatch(index)} aria-label="删除分流规则"><Trash2 /></Button>
             </article>
           {/each}
@@ -374,7 +424,7 @@
 {/if}
 
 <style>
-  .panel-head,.section-head,.server-top,.dispatch-card,.row-section,.actions,.default-row{display:flex;align-items:center}.panel-head,.section-head,.row-section{justify-content:space-between}.panel-head{margin-bottom:12px}.panel-head h2{margin:0;font-size:16px}.panel-head p,.section-head p{margin:3px 0 0;color:var(--muted-foreground);font-size:11.5px}.config-mode{display:flex;gap:2px;margin-bottom:4px;padding:3px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 32%,transparent)}.config-mode button{flex:1;padding:7px 10px;border:0;border-radius:6px;background:transparent;color:var(--muted-foreground);font:inherit;font-size:11.5px}.config-mode button.active{background:var(--background);box-shadow:0 1px 2px rgba(0,0,0,.08);color:var(--foreground);font-weight:600}.section{padding:14px 0;border-top:1px solid var(--border)}.section-title{margin-bottom:8px;color:var(--muted-foreground);font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.mode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.mode-grid button{display:flex;min-height:72px;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--background);color:var(--foreground);text-align:left}.mode-grid button.active{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,transparent)}.mode-grid span,.row-section span,.system-note{color:var(--muted-foreground);font-size:11px;line-height:1.45}.disabled-note{margin:0 0 2px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 28%,transparent);color:var(--muted-foreground);font-size:11.5px;line-height:1.45}.row-section>div{display:flex;flex-direction:column;gap:2px}.server-list,.dispatch-list{display:flex;flex-direction:column;gap:8px}.server-card,.dispatch-card{padding:10px;border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--muted) 32%,transparent)}.server-top{gap:8px}.server-top :global(input){font-weight:600}.server-top :global(.input){flex:1}select,textarea{border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font:inherit}select{height:32px;padding:0 28px 0 9px}.field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}.field-grid label{display:flex;min-width:0;flex-direction:column;gap:5px}.field-grid label span,.default-row span{color:var(--muted-foreground);font-size:10.5px}.field-grid .wide{grid-column:1/-1}.field-grid textarea{min-height:76px;padding:8px;resize:vertical}.native-json{width:100%;min-height:320px;padding:10px;border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical}.default-row{justify-content:flex-end;gap:9px;margin-top:10px}.dispatch-card{gap:8px}.dispatch-order{display:flex;align-items:center;gap:2px}.dispatch-order span{width:28px;color:var(--muted-foreground);font-size:11px}.condition{min-height:74px;flex:1;padding:7px;font-family:ui-monospace,monospace;font-size:11px;resize:vertical}.empty,.state{padding:20px;color:var(--muted-foreground);font-size:12px;text-align:center}.load-error{display:flex;align-items:center;justify-content:center;gap:9px;min-height:120px;padding:20px;color:var(--destructive);font-size:12px;text-align:center}.load-error :global(svg){width:16px;flex:none}.load-error span{max-width:440px;overflow-wrap:anywhere}.boundary,.issues{display:flex;gap:7px;margin-top:12px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;color:var(--muted-foreground);font-size:11.5px}.boundary :global(svg){width:14px;flex:none}.issues{display:block}.issues.warning{border-color:rgba(245,158,11,.3);color:#b7791f}.issues.error{border-color:rgba(239,68,68,.3);color:var(--destructive)}.actions{justify-content:flex-end;margin-top:14px}@media(max-width:900px){.mode-grid{grid-template-columns:1fr}.field-grid{grid-template-columns:1fr}.field-grid .wide{grid-column:auto}.dispatch-card{align-items:stretch;flex-direction:column}}
+  .panel-head,.section-head,.server-top,.dispatch-card,.row-section,.actions,.default-row{display:flex;align-items:center}.panel-head,.section-head,.row-section{justify-content:space-between}.panel-head{margin-bottom:12px}.panel-head h2{margin:0;font-size:16px}.panel-head p,.section-head p{margin:3px 0 0;color:var(--muted-foreground);font-size:11.5px}.config-mode{display:flex;gap:2px;margin-bottom:4px;padding:3px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 32%,transparent)}.config-mode button{flex:1;padding:7px 10px;border:0;border-radius:6px;background:transparent;color:var(--muted-foreground);font:inherit;font-size:11.5px}.config-mode button.active{background:var(--background);box-shadow:0 1px 2px rgba(0,0,0,.08);color:var(--foreground);font-weight:600}.section{padding:14px 0;border-top:1px solid var(--border)}.section-title{margin-bottom:8px;color:var(--muted-foreground);font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.mode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.mode-grid button{display:flex;min-height:72px;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--background);color:var(--foreground);text-align:left}.mode-grid button.active{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,transparent)}.mode-grid span,.row-section span,.system-note{color:var(--muted-foreground);font-size:11px;line-height:1.45}.disabled-note{margin:0 0 2px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--muted) 28%,transparent);color:var(--muted-foreground);font-size:11.5px;line-height:1.45}.row-section>div{display:flex;flex-direction:column;gap:2px}.server-list,.dispatch-list{display:flex;flex-direction:column;gap:8px}.server-card,.dispatch-card{padding:10px;border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--muted) 32%,transparent)}.server-top{gap:8px}.server-top :global(input){font-weight:600}.server-top :global(.input){flex:1}.server-top :global([data-slot=select-trigger]){min-width:112px}.default-row :global([data-slot=select-trigger]){min-width:180px}.dispatch-card :global([data-slot=select-trigger]){min-width:150px}.field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:10px}.field-grid label{display:flex;min-width:0;flex-direction:column;gap:5px}.field-grid label span,.default-row span{color:var(--muted-foreground);font-size:10.5px}.field-grid .wide{grid-column:1/-1}.field-grid textarea{min-height:76px;padding:8px;resize:vertical}.native-json{width:100%;min-height:320px;padding:10px;border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical}.default-row{justify-content:flex-end;gap:9px;margin-top:10px}.dispatch-card{gap:8px}.dispatch-order{display:flex;align-items:center;gap:2px}.dispatch-order span{width:28px;color:var(--muted-foreground);font-size:11px}.condition{min-height:74px;flex:1;padding:7px;font-family:ui-monospace,monospace;font-size:11px;resize:vertical}.empty,.state{padding:20px;color:var(--muted-foreground);font-size:12px;text-align:center}.load-error{display:flex;align-items:center;justify-content:center;gap:9px;min-height:120px;padding:20px;color:var(--destructive);font-size:12px;text-align:center}.load-error :global(svg){width:16px;flex:none}.load-error span{max-width:440px;overflow-wrap:anywhere}.boundary,.issues{display:flex;gap:7px;margin-top:12px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;color:var(--muted-foreground);font-size:11.5px}.boundary :global(svg){width:14px;flex:none}.issues{display:block}.issues.warning{border-color:rgba(245,158,11,.3);color:#b7791f}.issues.error{border-color:rgba(239,68,68,.3);color:var(--destructive)}.actions{justify-content:flex-end;margin-top:14px}@media(max-width:900px){.mode-grid{grid-template-columns:1fr}.field-grid{grid-template-columns:1fr}.field-grid .wide{grid-column:auto}.dispatch-card{align-items:stretch;flex-direction:column}}
   .workflow-hint{margin:0 0 4px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:color-mix(in srgb,var(--primary) 5%,transparent);color:var(--muted-foreground);font-size:11.5px;line-height:1.45}.workflow-hint strong{color:var(--foreground)}
   .actions{position:sticky;bottom:0;z-index:2;padding:10px 0 2px;background:linear-gradient(to bottom,transparent 0,var(--card) 10px,var(--card) 100%)}
 </style>
