@@ -2,12 +2,11 @@ import {
   getAppConfig,
   guiApplyDnsConfig,
   guiValidateDnsConfig,
+  getGuiCoreHealth,
+  getGuiZeroCapabilities,
   updateAppConfig,
 } from '$lib/services/core';
-import { listProxyConfigs } from '$lib/services/config';
 import { normalizeConfigValidationResponse } from '$lib/services/config-validation';
-import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
-import { reconcileGuiTunRuntime } from '$lib/services/tun';
 import type {
   DnsConfig,
   DnsDraftIssue,
@@ -15,14 +14,25 @@ import type {
   DnsServerConfig,
   DnsServerType,
   DnsSettingsDraft,
+  DnsSettingsInput,
 } from '$lib/types/dns';
+
+export type DnsKernelCompatibility = {
+  status: 'supported' | 'unsupported' | 'unknown';
+  apiVersion?: string;
+  schemaVersion?: string;
+  engineVersion?: string;
+  detail?: string;
+};
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function clone<T>(value: T): T {
-  return structuredClone(value);
+  // Svelte 5 state values are Proxies. `structuredClone` rejects those
+  // proxies, which made the Fake-IP mode selector fail before save().
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function defaultPort(type: DnsServerType): number | undefined {
@@ -61,13 +71,13 @@ export function createDefaultDnsConfig(mode: Exclude<DnsMode, 'disabled'> = 'rea
   };
 }
 
-function parseDnsConfig(value: unknown): DnsConfig | null {
+export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (!isObject(value) || !isObject(value.servers) || typeof value.default_server !== 'string') {
     return null;
   }
-  const answer = isObject(value.answer) && value.answer.type === 'fake_ip'
-    ? value.answer
-    : isObject(value.answer) ? value.answer : { type: 'real' };
+  if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
+  if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
+  const answer = isObject(value.answer) ? value.answer : { type: 'real' };
   return {
     ...clone(value),
     servers: clone(value.servers) as Record<string, DnsServerConfig>,
@@ -82,23 +92,22 @@ export function readDnsSettings(
   appDnsHijack = false,
 ): DnsSettingsDraft {
   const root = isObject(content) ? content : {};
-  const runtime = isObject(root.runtime) ? root.runtime : {};
-  const dns = parseDnsConfig(runtime.dns);
-  const tun = isObject(runtime.tun) ? runtime.tun : null;
+  const enabled = root.enabled === true;
+  const dns = parseDnsConfig(root.config);
   if (!dns) {
     return {
-      mode: 'disabled',
+      mode: enabled ? 'real' : 'disabled',
       dns: createDefaultDnsConfig('real'),
-      dnsHijack: tun?.dns_hijack === true || appDnsHijack,
-      advanced: false,
+      dnsHijack: root.dnsHijack === true || appDnsHijack,
+      advanced: enabled,
     };
   }
   const mode: DnsMode = dns.answer.type === 'fake_ip' ? 'fake_ip' : 'real';
   return {
-    mode,
+    mode: enabled ? mode : 'disabled',
     dns,
-    dnsHijack: tun ? tun.dns_hijack === true : appDnsHijack,
-    advanced: dns.dispatch.length > 0 || Object.keys(dns.servers).length > 1,
+    dnsHijack: root.dnsHijack === true || appDnsHijack,
+    advanced: dns.dispatch.length > 0 || Object.keys(dns.servers).length > 1 || Boolean(dns.cache),
   };
 }
 
@@ -122,19 +131,17 @@ export function setDnsMode(draft: DnsSettingsDraft, mode: DnsMode): DnsSettingsD
 }
 
 export function projectDnsSettings(
-  source: Record<string, unknown>,
+  _source: DnsSettingsInput,
   draft: DnsSettingsDraft,
-): Record<string, unknown> {
-  const result = clone(source);
-  const runtime = isObject(result.runtime) ? result.runtime : {};
-  result.runtime = runtime;
-  if (draft.mode === 'disabled') delete runtime.dns;
-  else runtime.dns = clone(draft.dns);
-
-  if (isObject(runtime.tun)) {
-    runtime.tun.dns_hijack = draft.mode !== 'disabled' && draft.dnsHijack;
-  }
-  return result;
+): DnsSettingsInput {
+  return {
+    enabled: draft.mode !== 'disabled',
+    // Keep the edited object while disabled so a user can prepare DNS and
+    // routing policy before enabling it. The effective config still omits
+    // runtime.dns until enabled is true.
+    config: clone(draft.dns),
+    dnsHijack: draft.mode !== 'disabled' && draft.dnsHijack,
+  };
 }
 
 export function renameDnsServer(
@@ -217,51 +224,109 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
   return issues;
 }
 
-export async function loadActiveDnsSettings(): Promise<{
-  source: Record<string, unknown>;
-  profileName: string;
+export async function loadGlobalDnsSettings(): Promise<{
+  source: DnsSettingsInput;
   draft: DnsSettingsDraft;
 }> {
-  const [profiles, appConfig] = await Promise.all([listProxyConfigs(), getAppConfig()]);
-  const active = profiles.find((profile) => profile.active);
-  if (!active || !isObject(active.content)) throw new Error('当前没有可编辑的活动 Zero 配置');
+  const appConfig = await getAppConfig();
+  const source = {
+    enabled: appConfig.dns.enabled,
+    config: appConfig.dns.config,
+    dnsHijack: appConfig.dns.dnsHijack,
+  };
   return {
-    source: clone(active.content),
-    profileName: active.name,
-    draft: readDnsSettings(active.content, appConfig.tun.dnsHijack),
+    source,
+    draft: readDnsSettings(source),
   };
 }
 
-export async function applyActiveDnsSettings(
-  source: Record<string, unknown>,
+function normalizeCapability(value: string): string {
+  return value.toLowerCase().replace(/[._-]/g, '');
+}
+
+/**
+ * Negotiate DNS support with the running kernel. Older kernels may not expose
+ * capabilities at all, so absence of metadata is deliberately treated as
+ * unknown instead of blocking the editor.
+ */
+export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibility> {
+  const [capabilityResult, healthResult] = await Promise.allSettled([
+    getGuiZeroCapabilities(),
+    getGuiCoreHealth(),
+  ]);
+  const health = healthResult.status === 'fulfilled' ? healthResult.value : undefined;
+  if (capabilityResult.status === 'rejected') {
+    return {
+      status: 'unknown',
+      engineVersion: health?.engineVersion,
+      detail: '当前内核未提供能力查询接口，保存时会继续进行兼容校验。',
+    };
+  }
+
+  const capabilities = capabilityResult.value;
+  const apiVersion = capabilities.apiVersion;
+  const schemaVersion = capabilities.schemaVersion;
+  const engineVersion = health?.engineVersion;
+  if (!capabilities.available) {
+    return {
+      status: 'unknown',
+      apiVersion,
+      schemaVersion,
+      engineVersion,
+      detail: capabilities.error || '内核当前不可用，暂时无法确认 DNS 能力。',
+    };
+  }
+
+  const declared = [...capabilities.buildFeatures, ...capabilities.features]
+    .map(normalizeCapability);
+  const hasDns = declared.some((feature) =>
+    feature === 'dns' || feature.startsWith('dns') || feature.includes('fakeip'),
+  );
+  return {
+    status: hasDns ? 'supported' : capabilities.buildFeatures.length > 0 ? 'unsupported' : 'unknown',
+    apiVersion,
+    schemaVersion,
+    engineVersion,
+    detail: hasDns
+      ? undefined
+      : capabilities.buildFeatures.length > 0
+        ? '当前内核未声明 DNS/Fake-IP 能力。'
+        : '当前内核没有返回可识别的构建能力。',
+  };
+}
+
+/** Persist a draft for a kernel that cannot apply it yet. */
+export async function persistGlobalDnsSettings(
+  source: DnsSettingsInput,
   draft: DnsSettingsDraft,
-): Promise<Record<string, unknown>> {
+): Promise<DnsSettingsInput> {
+  const errors = validateDnsDraft(draft).filter((issue) => issue.severity === 'error');
+  if (errors.length) throw new Error(errors.map((issue) => issue.message).join('；'));
+  const next = projectDnsSettings(source, draft);
+  await updateAppConfig({
+    dns: {
+      enabled: next.enabled,
+      config: next.config ?? null,
+      dnsHijack: next.dnsHijack,
+    },
+  });
+  return next;
+}
+
+export async function applyGlobalDnsSettings(
+  source: DnsSettingsInput,
+  draft: DnsSettingsDraft,
+): Promise<DnsSettingsInput> {
   const errors = validateDnsDraft(draft).filter((issue) => issue.severity === 'error');
   if (errors.length) throw new Error(errors.map((issue) => issue.message).join('；'));
   const next = projectDnsSettings(source, draft);
   const validation = normalizeConfigValidationResponse(await guiValidateDnsConfig(next));
   if (!validation.valid) throw new Error(validation.errors.map((error) => error.message).join('；'));
-
-  const runtime = isObject(next.runtime) ? next.runtime : {};
-  const profileOwnsTun = Object.hasOwn(runtime, 'tun');
-  const appConfig = await getAppConfig();
-  const desiredHijack = draft.mode !== 'disabled' && draft.dnsHijack;
   const result = await guiApplyDnsConfig(next) as Record<string, unknown>;
   if (result?.ok === false) {
     const error = isObject(result.error) ? result.error.message : undefined;
     throw new Error(typeof error === 'string' ? error : '内核拒绝了 DNS 配置');
   }
 
-  try {
-    if (!profileOwnsTun && appConfig.tun.dnsHijack !== desiredHijack) {
-      await updateAppConfig({ tun: { dnsHijack: desiredHijack } });
-      await reconcileGuiTunRuntime();
-    }
-  } catch (error) {
-    await guiApplyDnsConfig(source).catch(() => undefined);
-    await updateAppConfig({ tun: { dnsHijack: appConfig.tun.dnsHijack } }).catch(() => undefined);
-    throw error;
-  }
-  proxyConfigSignal.markChanged(true);
   return next;
 }

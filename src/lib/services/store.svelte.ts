@@ -124,9 +124,6 @@ class AppStateStore {
 
     this.isSwitchingUiMode = true;
     const generation = ++this.uiModeGeneration;
-    const previousMode = this.uiMode;
-    const previousTab = this.activeTab;
-    const previousSettingsSection = this.settingsSection;
     console.time('[ZNet] switchUIMode');
 
     // UI mode is a presentation preference. Apply it optimistically so a
@@ -144,40 +141,39 @@ class AppStateStore {
       this.settingsSection = 'general';
     }
 
-    try {
-      // Only persistence is part of the mode-switch transaction. Network
-      // capture reconciliation is a separate runtime concern and runs after
-      // the UI mode has committed.
-      await this.persistUiMode(mode);
+    // Persist in the background. The presentation switch must not stay
+    // disabled while an IPC call or an older backend is slow/unavailable.
+    void this.persistUiMode(mode)
+      .then(() => {
+        if (generation !== this.uiModeGeneration || this.uiMode !== mode) return;
 
-      // Interaction surfaces are advisory UI metadata. Refresh them without
-      // keeping the segmented control disabled, and ignore a stale response if
-      // the user has already switched modes again.
-      void this.refreshInteractionSurface(mode);
+        // Interaction surfaces are advisory metadata; refresh them after the
+        // preference has been persisted and ignore stale responses.
+        void this.refreshInteractionSurface(mode);
 
-      // Entering Lite should preserve an existing capture session by filling
-      // its missing side (system proxy or TUN), but it must not make the mode
-      // switch wait for OS network changes. When no capture is active there is
-      // nothing to reconcile, so avoid every TUN/status round-trip entirely.
-      if (mode === 'lite' && guiState.isCaptureEnabled) {
-        void this.prepareLiteCaptureInBackground(generation);
-      }
+        // Entering Lite should preserve an existing capture session, but the
+        // OS-level handoff also remains outside the mode-switch interaction.
+        if (mode === 'lite' && guiState.isCaptureEnabled) {
+          void this.prepareLiteCaptureInBackground(generation);
+        }
+      })
+      .catch((e) => {
+        console.error('[ZNet] switchUIMode failed:', e);
+        // Keep the local choice usable even when persistence fails. The toast
+        // makes the durability issue visible without undoing the UI switch.
+        if (generation === this.uiModeGeneration && this.uiMode === mode) {
+          toastError(`已切换到${mode === 'lite' ? '简约' : '专业'}模式，但保存设置失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+      })
+      .finally(() => {
+        if (generation === this.uiModeGeneration) {
+          this.isSwitchingUiMode = false;
+        }
+        console.timeEnd('[ZNet] switchUIMode');
+      });
 
-      console.timeEnd('[ZNet] switchUIMode');
-    } catch (e) {
-      console.error('[ZNet] switchUIMode failed:', e);
-      console.timeEnd('[ZNet] switchUIMode');
-      this.uiMode = previousMode;
-      this.activeTab = previousTab;
-      this.settingsSection = previousSettingsSection;
-      if (browser) {
-        localStorage.setItem('znet-ui-mode', previousMode);
-      }
-    } finally {
-      if (generation === this.uiModeGeneration) {
-        this.isSwitchingUiMode = false;
-      }
-    }
+    // Make the control interactive again immediately after scheduling IPC.
+    this.isSwitchingUiMode = false;
   }
 
   private async prepareLiteCaptureInBackground(generation: number) {

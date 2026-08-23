@@ -108,12 +108,11 @@ pub async fn app_config_update(
                 let storage_rollback = app_config::replace(state.inner(), old_config.clone())
                     .err()
                     .map(|rollback| rollback.message);
-                let runtime_rollback = rule_overlay::reconcile_current_config_locked(
-                    app_handle.clone(),
-                )
-                .await
-                .err()
-                .map(|rollback| rollback.message);
+                let runtime_rollback =
+                    rule_overlay::reconcile_current_config_locked(app_handle.clone())
+                        .await
+                        .err()
+                        .map(|rollback| rollback.message);
 
                 let mut message = format!(
                     "failed to apply URLTest tolerance configuration: {}",

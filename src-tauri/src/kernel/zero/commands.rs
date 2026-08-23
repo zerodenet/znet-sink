@@ -349,8 +349,7 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 mod tests {
     use super::{
         ensure_config_apply_accepted, is_flow_already_completed_error,
-        policy_probe_command_accepted, probe_ipc_options, trace_route_params,
-        PROBE_IPC_TIMEOUT_MS,
+        policy_probe_command_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
     };
     use crate::errors::AppError;
     use crate::models::core::CoreIpcOptions;
@@ -436,9 +435,7 @@ mod tests {
         }));
         assert!(!is_flow_already_completed_error(&unrelated_not_found));
 
-        let transport_failure = AppError::internal(
-            "flow `22397` not found or already completed",
-        );
+        let transport_failure = AppError::internal("flow `22397` not found or already completed");
         assert!(!is_flow_already_completed_error(&transport_failure));
     }
 }

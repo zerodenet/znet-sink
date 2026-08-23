@@ -131,6 +131,12 @@ pub(crate) fn persist_profile_transition(
     previous: &[ProxyConfigProfile],
     next: Vec<ProxyConfigProfile>,
 ) -> AppResult<()> {
+    let mut next = next;
+    for profile in &mut next {
+        if let Some(content) = profile.content.as_mut() {
+            crate::services::rule_overlay::strip_profile_dns(content);
+        }
+    }
     let previous_active = previous.iter().find(|profile| profile.active);
     let next_active = next.iter().find(|profile| profile.active);
     let active_config_changed = match (previous_active, next_active) {

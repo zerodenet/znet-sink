@@ -30,8 +30,8 @@ fn explicitly_missing_zero_core_executable_is_reported() {
     #[cfg(unix)]
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert!(snapshot.endpoint.path.ends_with(".zero/control.sock"));
-        assert!(!snapshot
+        assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
+        assert!(snapshot
             .launch_args
             .contains(&"--control-socket".to_string()));
     }

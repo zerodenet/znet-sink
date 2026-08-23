@@ -246,8 +246,7 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
 
     write_marker(host, port, marker.previous.clone(), &marker.bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, &marker.bypass) {
-        let rollback =
-            system_proxy::enable_with_bypass(&marker.host, marker.port, &marker.bypass);
+        let rollback = system_proxy::enable_with_bypass(&marker.host, marker.port, &marker.bypass);
         let _ = write_marker(&marker.host, marker.port, marker.previous, &marker.bypass);
         if let Err(rollback_error) = rollback {
             return Err(AppError::internal(format!(

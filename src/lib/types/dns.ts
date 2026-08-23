@@ -50,6 +50,12 @@ export interface DnsSettingsDraft {
   advanced: boolean;
 }
 
+export interface DnsSettingsInput {
+  enabled: boolean;
+  config?: DnsConfig;
+  dnsHijack: boolean;
+}
+
 export interface DnsDraftIssue {
   field: string;
   message: string;

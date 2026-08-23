@@ -14,7 +14,9 @@ use crate::models::{
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
     logs::{LogLevel, LogSource},
 };
-use crate::services::{common::lock, core_config, local_proxy, logs, system_proxy_guard};
+use crate::services::{
+    app_config_store, common::lock, core_config, local_proxy, logs, system_proxy_guard,
+};
 use crate::state::app_state::AppState;
 
 pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
@@ -103,50 +105,36 @@ pub fn kill_core_default() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
-fn require_active_proxy_config(state: &AppState) -> AppResult<()> {
-    let profiles = lock(state.proxy_configs(), "proxy_config")?;
-    let active = profiles.iter().find(|profile| profile.active).ok_or_else(|| AppError {
-        code: "active_profile_required",
-        message: "未找到当前配置，请先导入或同步配置并设为当前配置".to_string(),
-        details: Some(json!({ "reason": "missing_active_proxy_config" })),
-    })?;
-
-    let content = active.content.as_ref().ok_or_else(|| AppError {
-        code: "active_profile_invalid",
-        message: "当前配置没有可用内容，请重新同步或导入配置".to_string(),
-        details: Some(json!({ "proxyConfigId": active.id })),
-    })?;
-    if !content.is_object() {
-        return Err(AppError {
-            code: "active_profile_invalid",
-            message: "当前配置格式无效，请重新同步或导入配置".to_string(),
-            details: Some(json!({ "proxyConfigId": active.id })),
-        });
-    }
-
-    Ok(())
-}
-
 pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    // A managed Zero process is only meaningful when ZNet Sink has an active,
-    // usable proxy profile to export. Older builds generated a minimal stub
-    // config here; current Zero expects the real effective configuration, so
-    // reject the start before touching process state or spawning a child.
-    if let Err(error) = require_active_proxy_config(state.inner()) {
+    // The kernel is a managed service, so it must also be startable before the
+    // user imports a proxy profile. In that state we launch a small, persistent
+    // control-plane config with no listeners or outbounds. System proxy enable
+    // and normal connection flows still require a usable active profile.
+    let has_active_profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .any(|profile| profile.active);
+    if has_active_profile {
+        // Exporting the selected profile is the single source of the managed
+        // core config path. Invalid active content still fails loudly here.
+        core_config::export_active(state.clone())?;
+    } else {
+        let path = core_config::write_minimal_temp_config()?;
+        let config_path = path.to_string_lossy().into_owned();
+        {
+            let mut app_config = lock(state.app_config(), "app_config")?;
+            app_config.core.config_path = Some(config_path.clone());
+            app_config_store::save(&app_config_store::default_config_path()?, &app_config)?;
+        }
+        // `logs::append_entry` reads app_config.logs.max_entries, so the
+        // config mutex must be released before recording this lifecycle log.
         let _ = logs::append_entry(
             state.inner(),
             LogSource::App,
             LogLevel::Info,
-            "core process start skipped: active proxy config is not ready".to_string(),
-            Some(json!({ "code": error.code, "details": error.details.clone() })),
+            "core process start: no active proxy config, using management-only config".to_string(),
+            Some(json!({ "configPath": config_path })),
         );
-        return Err(error);
     }
-
-    // Exporting the selected profile is the single source of the managed core
-    // config path. Never fall back to a stale app-config path from an older
-    // profile or to a synthetic temporary config.
-    core_config::export_active(state.clone())?;
 
     let config = { lock(state.app_config(), "app_config")?.core.clone() };
     let snapshot = core_config::snapshot_from_config(&config)?;

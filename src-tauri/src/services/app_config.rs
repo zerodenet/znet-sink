@@ -3,6 +3,8 @@ use tauri::State;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
+use crate::models::dns_config::ClientDnsConfig;
+use crate::models::proxy_config::ProxyConfigProfile;
 use crate::services::app_config_store;
 use crate::services::common::{lock, normalize_optional};
 use crate::state::app_state::AppState;
@@ -183,6 +185,29 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         }
     }
 
+    if let Some(dns) = patch.dns {
+        if let Some(enabled) = dns.enabled {
+            config.dns.enabled = enabled;
+        }
+        if let Some(dns_config) = dns.config {
+            if let Some(ref value) = dns_config {
+                value.validate_client_shape()?;
+            }
+            config.dns.config = dns_config;
+        }
+        if let Some(dns_hijack) = dns.dns_hijack {
+            config.dns.dns_hijack = dns_hijack;
+        }
+        if config.dns.enabled && config.dns.config.is_none() {
+            return Err(AppError::invalid_argument(
+                "dns.config is required when dns.enabled is true",
+            ));
+        }
+        if !config.dns.enabled {
+            config.dns.dns_hijack = false;
+        }
+    }
+
     if let Some(routing) = patch.routing {
         if let Some(inject_common_rules) = routing.inject_common_rules {
             config.routing.inject_common_rules = inject_common_rules;
@@ -233,6 +258,72 @@ pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
         entries.drain(0..remove_count);
     }
     Ok(())
+}
+
+/// Move the legacy profile-owned `runtime.dns` value into the global client
+/// DNS settings. The migration is idempotent and removes the old field from
+/// every profile once a valid global value exists.
+pub(crate) fn migrate_legacy_dns(
+    config: &mut AppConfig,
+    profiles: &mut [ProxyConfigProfile],
+) -> bool {
+    let mut changed = false;
+    let has_global_dns = config.dns.enabled || config.dns.config.is_some();
+
+    if !has_global_dns {
+        let candidate = profiles
+            .iter()
+            .find(|profile| profile.active)
+            .or_else(|| profiles.first());
+        if let Some(content) = candidate.and_then(|profile| profile.content.as_ref()) {
+            let legacy_dns: Option<ClientDnsConfig> = content
+                .get("runtime")
+                .and_then(|runtime| runtime.get("dns"))
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok());
+            if let Some(dns) = legacy_dns {
+                if dns.validate_client_shape().is_ok() {
+                    let dns_hijack = content
+                        .get("runtime")
+                        .and_then(|runtime| runtime.get("tun"))
+                        .and_then(|tun| tun.get("dns_hijack"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(config.tun.dns_hijack);
+                    config.dns.enabled = true;
+                    config.dns.config = Some(dns);
+                    config.dns.dns_hijack = dns_hijack;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if config.dns.enabled || config.dns.config.is_some() {
+        for profile in profiles {
+            let Some(content) = profile.content.as_mut() else {
+                continue;
+            };
+            let (removed_dns, remove_runtime) = content
+                .get_mut("runtime")
+                .and_then(|value| value.as_object_mut())
+                .map(|runtime| {
+                    let removed = runtime.remove("dns").is_some();
+                    (removed, removed && runtime.is_empty())
+                })
+                .unwrap_or((false, false));
+            if remove_runtime {
+                if let Some(root) = content.as_object_mut() {
+                    root.remove("runtime");
+                }
+            }
+            if removed_dns {
+                profile.updated_at_unix_ms = crate::services::common::now_unix_ms();
+                changed = true;
+            }
+        }
+    }
+
+    changed
 }
 
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {
@@ -300,8 +391,11 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_network_probe_urls, normalize_proxy_bypass};
+    use super::{migrate_legacy_dns, normalize_network_probe_urls, normalize_proxy_bypass};
     use crate::models::app_config::default_network_probe_urls;
+    use crate::models::app_config::AppConfig;
+    use crate::models::proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile};
+    use serde_json::json;
 
     #[test]
     fn network_probe_urls_trim_and_deduplicate() {
@@ -348,5 +442,39 @@ mod tests {
     fn proxy_bypass_entries_reject_platform_separators() {
         assert!(normalize_proxy_bypass(vec!["localhost;example.com".to_string()]).is_err());
         assert!(normalize_proxy_bypass(vec!["localhost\nexample.com".to_string()]).is_err());
+    }
+
+    #[test]
+    fn migrates_profile_dns_to_global_config_and_removes_legacy_field() {
+        let mut config = AppConfig::default();
+        let mut profiles = vec![ProxyConfigProfile {
+            id: "profile-1".to_string(),
+            name: "Current".to_string(),
+            kernel: "zero".to_string(),
+            format: "json".to_string(),
+            path: None,
+            content: Some(json!({
+                "runtime": {
+                    "dns": {
+                        "servers": { "global": { "type": "system" } },
+                        "default_server": "global",
+                        "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 60 }
+                    }
+                }
+            })),
+            active: true,
+            updated_at_unix_ms: 0,
+            capabilities: ProxyConfigCapabilities::default(),
+        }];
+
+        assert!(migrate_legacy_dns(&mut config, &mut profiles));
+        assert!(config.dns.enabled);
+        assert!(config.dns.config.is_some());
+        assert!(profiles[0]
+            .content
+            .as_ref()
+            .and_then(|content| content.get("runtime"))
+            .and_then(|runtime| runtime.get("dns"))
+            .is_none());
     }
 }

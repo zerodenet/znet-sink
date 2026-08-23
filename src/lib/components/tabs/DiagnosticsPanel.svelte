@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { Clipboard, LoaderCircle, Network, Search } from '@lucide/svelte';
+  import { Clipboard, LoaderCircle, Network, Search, Settings2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import * as Select from '$lib/components/ui/select';
   import { getAppErrorMessage, guiDnsCache, guiDnsLookup, guiFakeIpLookup, guiTraceRoute } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
+  import { store } from '$lib/services/store.svelte';
   import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
 
   // DNS lookup
@@ -191,15 +193,38 @@
   </section>
 
   <section class="diag-tool">
-    <div class="diag-head">
-      <span class="diag-title">Fake-IP 与 DNS 缓存</span>
-      <span class="diag-hint">只读查询映射、容量和生命周期计数；不会触发新分配</span>
+    <div class="diag-head-row">
+      <div class="diag-head">
+        <span class="diag-title">Fake-IP 与 DNS 缓存</span>
+        <span class="diag-hint">只读查询映射、容量和生命周期计数；不会触发新分配</span>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        class="fake-config-button"
+        onclick={() => store.openSettings('dns')}
+        title="管理内核 Fake-IP 配置"
+      >
+        <Settings2 />管理内核配置
+      </Button>
     </div>
     <div class="diag-form">
-      <select class="diag-select" bind:value={fakeDirection} disabled={fakeLoading}>
-        <option value="domain">域名 → Fake-IP</option>
-        <option value="ip">Fake-IP → 域名</option>
-      </select>
+      <Select.Root
+        type="single"
+        value={fakeDirection}
+        disabled={fakeLoading}
+        onValueChange={(value) => {
+          if (value === 'domain' || value === 'ip') fakeDirection = value;
+        }}
+      >
+        <Select.Trigger class="diag-select" aria-label="Fake-IP 查询方向">
+          {fakeDirection === 'domain' ? '域名 → Fake-IP' : 'Fake-IP → 域名'}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="domain" label="域名 → Fake-IP">域名 → Fake-IP</Select.Item>
+          <Select.Item value="ip" label="Fake-IP → 域名">Fake-IP → 域名</Select.Item>
+        </Select.Content>
+      </Select.Root>
       <Input class="diag-input" placeholder={fakeDirection === 'domain' ? 'open.bigmodel.cn' : '198.18.0.2'} bind:value={fakeQuery} onkeydown={(event) => event.key === 'Enter' && runFakeIp()} disabled={fakeLoading} />
       <Button size="sm" onclick={runFakeIp} disabled={fakeLoading || !fakeQuery.trim()}>
         {#if fakeLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}{fakeLoading ? '查询中…' : '查询'}
@@ -334,6 +359,17 @@
     gap: 2px;
   }
 
+  .diag-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  :global(.fake-config-button) {
+    flex: 0 0 auto;
+  }
+
   .diag-title {
     font-size: 13px;
     font-weight: 500;
@@ -353,14 +389,9 @@
     gap: 7px;
   }
 
-  .diag-select {
-    height: var(--control-height);
-    padding: 0 28px 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 11px;
+  :global(.diag-select) {
+    width: 156px;
+    flex: 0 0 156px;
   }
 
   .fake-summary {

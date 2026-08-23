@@ -8,6 +8,7 @@ use zero_rule::zrs::{verify, VerifyMode};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
+use crate::models::app_config::AppDnsConfig;
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
@@ -26,7 +27,19 @@ pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Val
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_effective_with(state, base, enabled, &profiles)
+    compose_effective_with(state, base, enabled, &profiles, None)
+}
+
+pub(crate) fn compose_effective_config_with_dns(
+    state: &AppState,
+    base: &Value,
+    dns: &AppDnsConfig,
+) -> AppResult<Value> {
+    let enabled = common::lock(state.app_config(), "app_config")?
+        .routing
+        .inject_common_rules;
+    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
+    compose_effective_with(state, base, enabled, &profiles, Some(dns))
 }
 
 fn compose_effective_with(
@@ -34,16 +47,19 @@ fn compose_effective_with(
     base: &Value,
     enabled: bool,
     profiles: &[RuleSetProfile],
+    dns_override: Option<&AppDnsConfig>,
 ) -> AppResult<Value> {
     let config = compose_with(base, enabled, profiles)?.config;
-    finalize_effective_config(state, base, config)
+    finalize_effective_config(state, base, config, dns_override)
 }
 
 fn finalize_effective_config(
     state: &AppState,
     base: &Value,
     mut config: Value,
+    dns_override: Option<&AppDnsConfig>,
 ) -> AppResult<Value> {
+    apply_global_dns(state, &mut config, dns_override)?;
     let tolerance_ms = common::lock(state.app_config(), "app_config")?
         .url_test
         .tolerance_ms;
@@ -52,6 +68,62 @@ fn finalize_effective_config(
     }
     policy_selection::apply_saved_selections(state, base, &mut config)?;
     Ok(config)
+}
+
+/// DNS/Fake-IP is a client-owned runtime concern rather than part of a proxy
+/// profile. Remove any legacy profile-owned value and inject the persisted
+/// global setting into the effective config sent to Zero.
+fn apply_global_dns(
+    state: &AppState,
+    config: &mut Value,
+    dns_override: Option<&AppDnsConfig>,
+) -> AppResult<()> {
+    let app_dns = match dns_override {
+        Some(dns) => dns.clone(),
+        None => common::lock(state.app_config(), "app_config")?.dns.clone(),
+    };
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("proxy config must be a JSON object"))?;
+    let runtime = root
+        .entry("runtime".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let runtime = runtime
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("runtime must be a JSON object"))?;
+    runtime.remove("dns");
+
+    if app_dns.enabled {
+        let dns = app_dns.config.ok_or_else(|| {
+            AppError::invalid_argument("global DNS is enabled without a DNS configuration")
+        })?;
+        runtime.insert(
+            "dns".to_string(),
+            serde_json::to_value(dns).map_err(|error| {
+                AppError::internal(format!("failed to serialize global DNS config: {error}"))
+            })?,
+        );
+    } else if runtime.is_empty() {
+        root.remove("runtime");
+    }
+    Ok(())
+}
+
+pub(crate) fn strip_profile_dns(config: &mut Value) {
+    let Some(root) = config.as_object_mut() else {
+        return;
+    };
+    let remove_runtime = root
+        .get_mut("runtime")
+        .and_then(Value::as_object_mut)
+        .map(|runtime| {
+            runtime.remove("dns");
+            runtime.is_empty()
+        })
+        .unwrap_or(false);
+    if remove_runtime {
+        root.remove("runtime");
+    }
 }
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
@@ -119,12 +191,13 @@ pub async fn set_enabled(
                 base,
                 previous.routing.inject_common_rules,
                 &profiles,
+                None,
             )
         })
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles))
+        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles, None))
         .transpose()?;
 
     apply_if_running(state.inner(), next_effective.clone()).await?;
@@ -181,11 +254,11 @@ pub async fn set_binding(
         .inject_common_rules;
     let old_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &previous))
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &previous, None))
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next))
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next, None))
         .transpose()?;
     apply_if_running(state.inner(), next_effective).await?;
     if let Err(error) = domain_store::save_rule_sets(&next) {
@@ -560,6 +633,37 @@ mod tests {
                 .injected_count,
             0
         );
+    }
+
+    #[test]
+    fn global_dns_is_injected_and_profile_dns_is_discarded() {
+        let mut app_config = AppConfig::default();
+        app_config.dns.enabled = true;
+        app_config.dns.config = Some(
+            serde_json::from_value(json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system",
+                "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 60 }
+            }))
+            .unwrap(),
+        );
+        let state =
+            AppState::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let base = json!({
+            "mode": {"type": "global", "outbound": "proxy"},
+            "runtime": {
+                "dns": {"servers": {"stale": {"type": "system"}}, "default_server": "stale"},
+                "tun": {"dns_hijack": true}
+            }
+        });
+
+        let effective = compose_effective_config(&state, &base).unwrap();
+        assert_eq!(effective["runtime"]["dns"]["default_server"], "system");
+        assert_eq!(effective["runtime"]["dns"]["answer"]["type"], "fake_ip");
+        assert_eq!(effective["runtime"]["tun"]["dns_hijack"], true);
+        assert!(effective["runtime"]["dns"]["servers"]
+            .get("stale")
+            .is_none());
     }
 
     fn verified_profile(

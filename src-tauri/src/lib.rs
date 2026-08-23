@@ -478,6 +478,7 @@ pub fn run() {
             gui_core_commands::gui_stack_status,
             gui_core_commands::gui_rule_status,
             gui_core_commands::gui_apply_config,
+            // DNS/Fake-IP is a client-global override applied to the effective Zero config.
             gui_core_commands::gui_apply_dns_config,
             gui_core_commands::gui_validate_config,
             gui_core_commands::gui_validate_dns_config,

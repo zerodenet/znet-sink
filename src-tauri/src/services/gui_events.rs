@@ -14,8 +14,8 @@ use crate::kernel::zero::{events, queries};
 use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{
-    GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload, GuiEventStatus,
-    GuiEventSubscription,
+    GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload,
+    GuiEventStatus, GuiEventSubscription,
 };
 use crate::state::app_state::AppState;
 
@@ -130,7 +130,8 @@ fn subscribe_and_forward_events(
                             crate::services::traffic_sampler::handle_stats_sample(
                                 &app,
                                 stats,
-                                event.occurred_at_unix_ms
+                                event
+                                    .occurred_at_unix_ms
                                     .unwrap_or_else(crate::services::common::now_unix_ms),
                             );
                         }
@@ -145,8 +146,7 @@ fn subscribe_and_forward_events(
                     // silently leaving the live connection page stale.
                     let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
                     emit_status(&app, generation, "subscribed", None, snapshot);
-                    next_active_flow_reconcile =
-                        Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+                    next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
                     false
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
@@ -166,8 +166,7 @@ fn subscribe_and_forward_events(
                 if let Some(connections) = resync_active_connections(endpoint.clone(), timeout) {
                     emit_connection_snapshot(&app, generation, connections);
                 }
-                next_active_flow_reconcile =
-                    Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+                next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
             }
 
             // Drain bursts without adding latency or an artificial events/sec

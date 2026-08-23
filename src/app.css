@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "flag-icons/css/flag-icons.min.css";
+@import "@fontsource-variable/inter/wght.css";
 
 @theme {
   --color-background: var(--background);
@@ -30,7 +31,7 @@
   --color-titlebar: var(--titlebar);
   --color-titlebar-border: var(--titlebar-border);
 
-  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei UI", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
 
   --radius-xs: 4px;

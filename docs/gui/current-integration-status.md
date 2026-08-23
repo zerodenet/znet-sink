@@ -29,9 +29,10 @@ Updated: 2026-08-21
 ## DNS / TUN / Fake-IP Integration
 
 - TUN runtime status and Zero's DNS/Fake-IP diagnostics remain authoritative for runtime behavior; the GUI only manages configuration and presents returned state.
-- A dedicated settings surface supports Disabled, Real DNS, and Fake-IP modes, named UDP/DoH/DoT/DoQ/system servers, cache settings, Fake-IP lifecycle settings, and ordered shared-condition DNS dispatch.
-- DNS changes are checked by the lossless client model and running kernel, then committed through the active-profile transaction with last-known-good rollback.
-- App-owned TUN passes `dns_hijack` only after an active profile contains a saved DNS configuration. Profile-owned `runtime.tun` remains authoritative when present.
+- A dedicated settings surface supports Disabled, Real DNS, and Fake-IP modes, named UDP/DoH/DoT/DoQ/system servers, cache settings, Fake-IP lifecycle settings, ordered shared-condition DNS dispatch, and a validated native `runtime.dns` JSON editor.
+- DNS/Fake-IP settings are owned by the client app, independent of proxy profiles. Legacy profile-owned `runtime.dns` is migrated once and removed; every effective Zero config receives the global setting at apply/export/profile-switch time.
+- DNS changes are checked by the lossless client model and running kernel, then committed with last-known-good rollback. A running kernel still needs an active proxy profile as the transport config to apply the global DNS setting.
+- App-owned TUN passes `dns_hijack` only when the global client DNS configuration is enabled. Profile-owned `runtime.tun` remains authoritative when present.
 - Read-only diagnostics expose DNS cache entries, Fake-IP forward/reverse lookup, allocator counters, and the kernel-provided `original_ip`, `host_source`, and `fake_ip_reverse_status` flow fields.
 - Port-53 interception does not claim coverage of application-owned DoH/DoT/DoQ or hostnames hidden by ECH.
 

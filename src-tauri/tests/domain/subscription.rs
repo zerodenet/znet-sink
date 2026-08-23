@@ -8,20 +8,19 @@ fn subscription_parser_accepts_zero_base64_json() {
     )
     .unwrap();
 
-    assert_eq!(parsed.format, "zero-base64-json");
+    assert_eq!(parsed.format, "zero");
     assert!(parsed.content.get("outbounds").is_some());
 }
 
 #[test]
-fn subscription_parser_accepts_raw_zero_json_in_auto_mode() {
-    // Many providers serve the Zero config as plain JSON instead of
-    // base64-wrapping it. Auto-detect should accept it.
-    let parsed =
+fn subscription_parser_rejects_raw_zero_json_in_auto_mode() {
+    // Plaintext Zero JSON is intentionally rejected at the subscription
+    // boundary; providers must use the Base64 Zero format.
+    let error =
         parse_subscription_content(r#"{"outbounds":[{"tag":"hk","type":"trojan"}]}"#, "auto")
-            .unwrap();
+            .unwrap_err();
 
-    assert_eq!(parsed.format, "zero-json");
-    assert!(parsed.content.get("outbounds").is_some());
+    assert_eq!(error.code, "invalid_argument");
 }
 
 #[test]
@@ -59,7 +58,7 @@ rules:
     )
     .unwrap();
 
-    assert_eq!(parsed.format, "clash-yaml-converted");
+    assert_eq!(parsed.format, "clash");
     assert_eq!(parsed.content["outbounds"][2]["tag"], "hk-1");
     assert_eq!(
         parsed.content["outbounds"][2]["protocol"]["type"],
@@ -94,7 +93,7 @@ fn subscription_parser_converts_base64_clash_yaml() {
 
     let parsed = parse_subscription_content(&encoded, "auto").unwrap();
 
-    assert_eq!(parsed.format, "clash-base64-yaml-converted");
+    assert_eq!(parsed.format, "clash");
     assert_eq!(parsed.content["outbounds"][2]["tag"], "hk-1");
     assert_eq!(
         parsed.content["outbounds"][2]["protocol"]["type"],

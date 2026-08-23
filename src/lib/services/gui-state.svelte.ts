@@ -684,8 +684,15 @@ class GuiStateStore {
 
   get canStartCore(): boolean {
     if (this.isInitializing) return false;
-    const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
-    return !selfTestBlocking
+    // A missing proxy profile must not prevent the user from starting the
+    // management-only kernel. System proxy/TUN actions keep their stricter
+    // profile guards; only launch-critical self-test failures block startup.
+    const launchBlocking = this.selfTest?.checks.some((check) =>
+      check.status === 'fail'
+      && check.key !== 'activeProxyConfig'
+      && check.key !== 'activeProxyContent'
+    ) ?? false;
+    return !launchBlocking
       && !this.isCoreBusy
       && !this.isConnecting
       && !this.isDisconnecting

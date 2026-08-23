@@ -297,6 +297,9 @@
     position: relative;
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: calc(100vw - 32px);
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--dialog-bg);
@@ -386,6 +389,8 @@
   .dm-body {
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
     overflow-y: auto;
     padding: 12px 14px;
     display: flex;

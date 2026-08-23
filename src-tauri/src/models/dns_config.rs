@@ -8,7 +8,7 @@ use crate::errors::{AppError, AppResult};
 
 /// Lossless client-side representation of Zero's runtime DNS contract.
 /// Additive fields from a newer kernel are retained instead of silently lost.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientDnsConfig {
     pub servers: BTreeMap<String, ClientDnsServer>,
     pub default_server: String,
@@ -22,7 +22,7 @@ pub struct ClientDnsConfig {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientDnsServer {
     #[serde(rename = "system")]
@@ -106,17 +106,23 @@ impl ClientDnsServer {
     pub fn requires_bootstrap(&self) -> bool {
         match self {
             Self::System { .. } => false,
-            Self::Udp { host, bootstrap, .. }
-            | Self::Doh { host, bootstrap, .. }
-            | Self::Dot { host, bootstrap, .. }
-            | Self::Doq { host, bootstrap, .. } => {
-                host.parse::<IpAddr>().is_err() && bootstrap.is_empty()
+            Self::Udp {
+                host, bootstrap, ..
             }
+            | Self::Doh {
+                host, bootstrap, ..
+            }
+            | Self::Dot {
+                host, bootstrap, ..
+            }
+            | Self::Doq {
+                host, bootstrap, ..
+            } => host.parse::<IpAddr>().is_err() && bootstrap.is_empty(),
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientDnsDispatch {
     /// The shared Zero routing condition; the client does not implement a
     /// second matcher and preserves nested/future condition variants.
@@ -126,7 +132,7 @@ pub struct ClientDnsDispatch {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientDnsCache {
     #[serde(default = "default_cache_entries")]
     pub max_entries: usize,
@@ -136,7 +142,7 @@ pub struct ClientDnsCache {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "type")]
 pub enum ClientDnsAnswer {
     #[default]

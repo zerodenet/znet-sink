@@ -478,11 +478,7 @@ fn policy_probe_summary(event: &GuiPolicyProbeCompletedEvent) -> (bool, Option<u
         .as_deref()
         .and_then(|selected| event.members.iter().find(|member| member.tag == selected))
     {
-        return (
-            policy_member_reachable(selected),
-            selected.delay_ms,
-            failed,
-        );
+        return (policy_member_reachable(selected), selected.delay_ms, failed);
     }
 
     let reachable = event.members.iter().any(policy_member_reachable);

@@ -136,10 +136,7 @@ function runtimeOwnershipError(): { code: string; message: string } {
 
 function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
   if (!policy.appConfig.tun.dnsHijack) return;
-  const content = policy.profile?.content;
-  const runtime = isObject(content) && isObject(content.runtime) ? content.runtime : null;
-  const dns = runtime && isObject(runtime.dns) ? runtime.dns : null;
-  if (!dns || !isObject(dns.servers) || Object.keys(dns.servers).length === 0) {
+  if (!policy.appConfig.dns.enabled || !policy.appConfig.dns.config) {
     throw {
       code: 'tun_dns_hijack_requires_dns',
       message: '开启 TUN DNS 劫持前，请先在 DNS 设置中启用并保存 Real DNS 或 Fake-IP。',

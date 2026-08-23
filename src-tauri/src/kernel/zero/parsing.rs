@@ -370,10 +370,7 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
         original_ip: target.and_then(|target| string_at(target, &["original_ip", "originalIp"])),
         host_source: target.and_then(|target| string_at(target, &["host_source", "hostSource"])),
         fake_ip_reverse_status: target.and_then(|target| {
-            string_at(
-                target,
-                &["fake_ip_reverse_status", "fakeIpReverseStatus"],
-            )
+            string_at(target, &["fake_ip_reverse_status", "fakeIpReverseStatus"])
         }),
         sniffed_host: target.and_then(|target| string_at(target, &["sniffed_host", "sniffedHost"])),
         inbound_tag: inbound

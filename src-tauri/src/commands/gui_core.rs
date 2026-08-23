@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::time::{Duration, Instant};
 use std::{
     fs,
@@ -13,7 +14,9 @@ use crate::client_core::{
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
+use crate::models::app_config::AppDnsConfig;
 use crate::models::core_process::CoreProcessState;
+use crate::models::dns_config::ClientDnsConfig;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
     GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
@@ -22,7 +25,8 @@ use crate::models::gui_core::{
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
 use crate::services::{
-    core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
+    app_config, core_config, core_process, diagnostic_storage, interaction_mode, probe,
+    proxy_config,
 };
 use crate::state::app_state::AppState;
 
@@ -391,16 +395,109 @@ pub async fn gui_apply_config(
     apply_config_transaction(state.inner(), config).await
 }
 
-/// Apply the dedicated DNS settings surface in either interaction mode. The
-/// request is still a full active-profile document so the same transaction,
-/// persistence and last-known-good rollback path is used as the JSON editor.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiDnsSettingsInput {
+    pub enabled: bool,
+    #[serde(default)]
+    pub config: Option<ClientDnsConfig>,
+    #[serde(default)]
+    pub dns_hijack: bool,
+}
+
+fn validate_dns_settings(input: &GuiDnsSettingsInput) -> AppResult<()> {
+    if input.enabled {
+        let config = input.config.as_ref().ok_or_else(|| {
+            AppError::invalid_argument("global DNS requires a configuration when enabled")
+        })?;
+        config.validate_client_shape()?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn gui_apply_dns_config(
     state: State<'_, AppState>,
-    config: serde_json::Value,
+    input: GuiDnsSettingsInput,
 ) -> AppResult<serde_json::Value> {
-    validate_client_dns_model(&config)?;
-    apply_config_transaction(state.inner(), config).await
+    validate_dns_settings(&input)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    let previous_app = common::lock(state.app_config(), "app_config")?.clone();
+    let mut next_app = previous_app.clone();
+    next_app.dns = AppDnsConfig {
+        enabled: input.enabled,
+        config: input.config.clone(),
+        dns_hijack: input.enabled && input.dns_hijack,
+    };
+    next_app.tun.dns_hijack = next_app.dns.dns_hijack;
+
+    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone());
+    let next_effective = active_content
+        .as_ref()
+        .map(|content| {
+            crate::services::rule_overlay::compose_effective_config_with_dns(
+                state.inner(),
+                content,
+                &next_app.dns,
+            )
+        })
+        .transpose()?;
+    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let result = if let Some(effective) = next_effective.clone().filter(|_| running) {
+        Some(
+            ZeroAdapter::new()
+                .apply_config(effective, default_opts(state.inner()))
+                .await?,
+        )
+    } else {
+        None
+    };
+
+    if let Err(error) = app_config::replace(state.inner(), next_app) {
+        if running {
+            if let Some(content) = active_content.as_ref() {
+                if let Ok(previous_effective) =
+                    crate::services::rule_overlay::compose_effective_config_with_dns(
+                        state.inner(),
+                        content,
+                        &previous_app.dns,
+                    )
+                {
+                    let _ = ZeroAdapter::new()
+                        .apply_config(previous_effective, default_opts(state.inner()))
+                        .await;
+                }
+            }
+        }
+        return Err(error);
+    }
+    if active_content.is_some() {
+        if let Err(error) = core_config::export_active(state.clone()) {
+            let _ = app_config::replace(state.inner(), previous_app.clone());
+            if let Some(content) = active_content.as_ref() {
+                if let Ok(previous_effective) =
+                    crate::services::rule_overlay::compose_effective_config_with_dns(
+                        state.inner(),
+                        content,
+                        &previous_app.dns,
+                    )
+                {
+                    if running {
+                        let _ = ZeroAdapter::new()
+                            .apply_config(previous_effective, default_opts(state.inner()))
+                            .await;
+                    }
+                }
+            }
+            return Err(error);
+        }
+    }
+    Ok(result.unwrap_or_else(
+        || serde_json::json!({ "ok": true, "applied": false, "reason": "no_active_proxy_profile" }),
+    ))
 }
 
 async fn apply_config_transaction(
@@ -418,17 +515,14 @@ async fn apply_config_transaction(
             )
         })?;
     let opts = default_opts(state);
-    let effective =
-        crate::services::rule_overlay::compose_effective_config(state, &config)?;
+    let effective = crate::services::rule_overlay::compose_effective_config(state, &config)?;
     let result = ZeroAdapter::new().apply_config(effective, opts).await?;
     // The kernel accepted the config — mirror it into the active profile so
     // that config-derived views (proxy nodes, policy groups) and the next
     // core-process start reflect the live configuration.
     if let Err(error) = proxy_config::update_active_content(state, config) {
-        let previous_effective = crate::services::rule_overlay::compose_effective_config(
-            state,
-            &previous_content,
-        )?;
+        let previous_effective =
+            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
         let _ = ZeroAdapter::new()
             .apply_config(previous_effective, default_opts(state))
             .await;
@@ -436,10 +530,8 @@ async fn apply_config_transaction(
     }
     if let Err(error) = proxy_config::retarget_managed_system_proxy(state) {
         let _ = proxy_config::update_active_content(state, previous_content.clone());
-        let previous_effective = crate::services::rule_overlay::compose_effective_config(
-            state,
-            &previous_content,
-        )?;
+        let previous_effective =
+            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
         let _ = ZeroAdapter::new()
             .apply_config(previous_effective, default_opts(state))
             .await;
@@ -465,28 +557,29 @@ pub async fn gui_validate_config(
 #[tauri::command]
 pub async fn gui_validate_dns_config(
     state: State<'_, AppState>,
-    config: serde_json::Value,
+    input: GuiDnsSettingsInput,
 ) -> AppResult<serde_json::Value> {
-    validate_client_dns_model(&config)?;
-    let effective =
-        crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
+    validate_dns_settings(&input)?;
+    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone());
+    let Some(content) = active_content else {
+        return Ok(serde_json::json!({ "valid": true, "errors": [] }));
+    };
+    let dns = AppDnsConfig {
+        enabled: input.enabled,
+        config: input.config,
+        dns_hijack: input.enabled && input.dns_hijack,
+    };
+    let effective = crate::services::rule_overlay::compose_effective_config_with_dns(
+        state.inner(),
+        &content,
+        &dns,
+    )?;
     ZeroAdapter::new()
         .validate_config(effective, default_opts(state.inner()))
         .await
-}
-
-fn validate_client_dns_model(config: &serde_json::Value) -> AppResult<()> {
-    let Some(dns) = config
-        .get("runtime")
-        .and_then(|runtime| runtime.get("dns"))
-    else {
-        return Ok(());
-    };
-    let model: crate::models::dns_config::ClientDnsConfig =
-        serde_json::from_value(dns.clone()).map_err(|error| {
-            AppError::invalid_argument(format!("invalid runtime.dns configuration: {error}"))
-        })?;
-    model.validate_client_shape()
 }
 
 /// Dry-run config apply — returns impact analysis without applying changes.

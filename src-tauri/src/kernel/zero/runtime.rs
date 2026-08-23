@@ -136,10 +136,7 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
         dual_stack: bool_at(value, &["dual_stack", "dualStack"]).unwrap_or(false),
         strict_route: bool_at(value, &["strict_route", "strictRoute"]).unwrap_or(false),
         dns_hijack: bool_at(value, &["dns_hijack", "dnsHijack"]).unwrap_or(false),
-        egress_interface: parsing::string_at(
-            value,
-            &["egress_interface", "egressInterface"],
-        ),
+        egress_interface: parsing::string_at(value, &["egress_interface", "egressInterface"]),
         egress_interface_v4: parsing::string_at(
             value,
             &["egress_interface_v4", "egressInterfaceV4"],
@@ -167,7 +164,8 @@ fn from_feature_status(status: GuiFeatureStatus) -> GuiTunStatus {
 }
 
 fn bool_at(value: &Value, keys: &[&str]) -> Option<bool> {
-    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_bool))
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_bool))
 }
 
 fn string_array_at(value: &Value, keys: &[&str]) -> Vec<String> {
