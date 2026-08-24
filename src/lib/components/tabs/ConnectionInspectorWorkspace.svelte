@@ -72,6 +72,7 @@
   let selectedKey = $state<string | null>(null);
   let singleConfirmKey = $state<string | null>(null);
   let closeAllConfirm = $state(false);
+  let closeAllSnapshotIds = $state<string[]>([]);
   let clearHistoryConfirm = $state(false);
   let terminatingIds = $state<Set<string>>(new Set());
   let closingAll = $state(false);
@@ -451,9 +452,10 @@
 
   async function closeAllConnections() {
     if (closingAll) return;
-    const ids = [...new Set(liveView.map((connection) => connection.flowId))];
+    const ids = [...closeAllSnapshotIds];
+    closeAllConfirm = false;
+    closeAllSnapshotIds = [];
     if (ids.length === 0) {
-      closeAllConfirm = false;
       return;
     }
 
@@ -473,7 +475,6 @@
 
       suppressedActiveIds = new Set([...suppressedActiveIds, ...closed]);
       pausedSnapshot = pausedSnapshot.filter((connection) => !closed.has(connection.flowId));
-      closeAllConfirm = false;
       if (failed > 0) {
         showWarningToast(`已关闭 ${closed.size} 条连接，${failed} 条失败`);
       } else {
@@ -482,6 +483,16 @@
     } finally {
       closingAll = false;
     }
+  }
+
+  function requestCloseAllConnections() {
+    closeAllSnapshotIds = [...new Set(liveView.map((connection) => connection.flowId))];
+    if (closeAllSnapshotIds.length > 0) closeAllConfirm = true;
+  }
+
+  function dismissCloseAllConnections() {
+    closeAllConfirm = false;
+    closeAllSnapshotIds = [];
   }
 
   function eventStatusLabel(): string {
@@ -734,7 +745,7 @@
                 disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
                 onclick={() => {
                   actionsOpen = false;
-                  closeAllConfirm = true;
+                  requestCloseAllConnections();
                 }}
               >
                 <CircleX data-icon="inline-start" class="size-3.5" />
@@ -963,12 +974,12 @@
 <ActionConfirmDialog
   open={closeAllConfirm}
   title="关闭当前全部连接？"
-  description={`将尝试关闭当前检测到的 ${liveView.length} 条活动连接。应用可能立即重新建立部分连接。`}
+  description={`将只关闭刚才检测到的 ${closeAllSnapshotIds.length} 条活动连接，新建立的连接不受本次操作影响。`}
   confirmLabel="关闭全部"
   busyLabel="关闭中…"
   busy={closingAll}
   destructive
-  onClose={() => closeAllConfirm = false}
+  onClose={dismissCloseAllConnections}
   onConfirm={closeAllConnections}
 />
 
