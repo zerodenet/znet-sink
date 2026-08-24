@@ -203,13 +203,13 @@ class OverviewDataStore {
   totalUpBytes = $state(0);
   totalDownBytes = $state(0);
 
-  // GUI proxy-session traffic. This intentionally follows system-proxy
-  // ownership rather than the Zero process lifetime: Lite disconnect keeps
-  // Zero running, but the next Lite connect must start a new 0-byte session.
-  proxySessionActive = $state(false);
-  proxySessionStartedAtUnixMs = $state<number | null>(null);
-  proxySessionUpBytes = $state(0);
-  proxySessionDownBytes = $state(0);
+  // Capture-session traffic is shared by Lite and Pro. The session starts when
+  // either system proxy or TUN becomes active and ends only after both stop.
+  // Its values are deltas of the authoritative Zero cumulative counters.
+  captureSessionActive = $state(false);
+  captureSessionStartedAtUnixMs = $state<number | null>(null);
+  captureSessionUpBytes = $state(0);
+  captureSessionDownBytes = $state(0);
   private _sessionLastTotalUp = 0;
   private _sessionLastTotalDown = 0;
   private _sessionHasBaseline = false;
@@ -221,14 +221,14 @@ class OverviewDataStore {
 
   get totalUpMB() { return this.totalUpBytes / 1_000_000; }
   get totalDownMB() { return this.totalDownBytes / 1_000_000; }
-  get proxySessionTotalBytes() { return this.proxySessionUpBytes + this.proxySessionDownBytes; }
+  get captureSessionTotalBytes() { return this.captureSessionUpBytes + this.captureSessionDownBytes; }
 
-  beginProxySession() {
-    if (this.proxySessionActive) return;
-    this.proxySessionActive = true;
-    this.proxySessionStartedAtUnixMs = Date.now();
-    this.proxySessionUpBytes = 0;
-    this.proxySessionDownBytes = 0;
+  beginCaptureSession() {
+    if (this.captureSessionActive) return;
+    this.captureSessionActive = true;
+    this.captureSessionStartedAtUnixMs = Date.now();
+    this.captureSessionUpBytes = 0;
+    this.captureSessionDownBytes = 0;
     this._sessionLastTotalUp = this.totalUpBytes;
     this._sessionLastTotalDown = this.totalDownBytes;
     // If no real traffic sample has arrived yet, the default zero counters are
@@ -237,24 +237,24 @@ class OverviewDataStore {
     this._sessionHasBaseline = this.isLive;
   }
 
-  endProxySession() {
-    this.proxySessionActive = false;
-    this.proxySessionStartedAtUnixMs = null;
+  endCaptureSession() {
+    this.captureSessionActive = false;
+    this.captureSessionStartedAtUnixMs = null;
     this._sessionHasBaseline = false;
   }
 
-  cancelProxySession() {
-    this.proxySessionActive = false;
-    this.proxySessionStartedAtUnixMs = null;
-    this.proxySessionUpBytes = 0;
-    this.proxySessionDownBytes = 0;
+  cancelCaptureSession() {
+    this.captureSessionActive = false;
+    this.captureSessionStartedAtUnixMs = null;
+    this.captureSessionUpBytes = 0;
+    this.captureSessionDownBytes = 0;
     this._sessionLastTotalUp = this.totalUpBytes;
     this._sessionLastTotalDown = this.totalDownBytes;
     this._sessionHasBaseline = false;
   }
 
-  private applyProxySessionCounters(totalUp: number, totalDown: number) {
-    if (!this.proxySessionActive) return;
+  private applyCaptureSessionCounters(totalUp: number, totalDown: number) {
+    if (!this.captureSessionActive) return;
 
     if (!this._sessionHasBaseline) {
       this._sessionLastTotalUp = totalUp;
@@ -273,8 +273,8 @@ class OverviewDataStore {
       ? totalDown - this._sessionLastTotalDown
       : totalDown;
 
-    this.proxySessionUpBytes += Math.max(0, upDelta);
-    this.proxySessionDownBytes += Math.max(0, downDelta);
+    this.captureSessionUpBytes += Math.max(0, upDelta);
+    this.captureSessionDownBytes += Math.max(0, downDelta);
     this._sessionLastTotalUp = totalUp;
     this._sessionLastTotalDown = totalDown;
   }
@@ -333,7 +333,7 @@ class OverviewDataStore {
     this.activeConnections = connections;
     this.totalUpBytes = totalUp;
     this.totalDownBytes = totalDown;
-    this.applyProxySessionCounters(totalUp, totalDown);
+    this.applyCaptureSessionCounters(totalUp, totalDown);
   }
 
   applyRuntimeEvent(data: Record<string, unknown>) {
