@@ -32,6 +32,7 @@ use crate::state::app_state::AppState;
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+const TUN_IPC_TIMEOUT_MS: u64 = 15_000;
 
 /// Return the revisioned authoritative client scope. This is the recovery
 /// point for future ordered node/probe updates and is intentionally a thin
@@ -108,6 +109,17 @@ fn default_opts(state: &AppState) -> crate::models::core::CoreIpcOptions {
             .map(|c| c.core.clone())
             .unwrap_or_default(),
     )
+}
+
+fn tun_opts(state: &AppState) -> crate::models::core::CoreIpcOptions {
+    let mut options = default_opts(state);
+    options.timeout_ms = Some(
+        options
+            .timeout_ms
+            .unwrap_or_default()
+            .max(TUN_IPC_TIMEOUT_MS),
+    );
+    options
 }
 
 #[tauri::command]
@@ -316,14 +328,14 @@ pub async fn gui_tun_enable(
     let _operation = state.proxy_config_operation().lock().await;
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
-    let opts = default_opts(state.inner());
+    let opts = tun_opts(state.inner());
     zero::runtime::enable_tun(tun, Some(opts)).await
 }
 
 #[tauri::command]
 pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    let opts = default_opts(state.inner());
+    let opts = tun_opts(state.inner());
     zero::runtime::disable_tun(Some(opts)).await
 }
 
@@ -1064,7 +1076,9 @@ fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_urls, sanitize_debug_record, sanitize_structured_record};
+    use super::{
+        redact_urls, sanitize_debug_record, sanitize_structured_record, TUN_IPC_TIMEOUT_MS,
+    };
 
     #[test]
     fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
@@ -1108,5 +1122,11 @@ mod tests {
         assert_eq!(record["payload"]["id"], "request-1");
         assert_eq!(record["payload"]["matched"], false);
         assert_eq!(record["payload"]["redacted"], true);
+    }
+
+    #[test]
+    fn tun_ipc_timeout_allows_slow_platform_route_setup() {
+        assert_eq!(TUN_IPC_TIMEOUT_MS, 15_000);
+        assert!(TUN_IPC_TIMEOUT_MS > crate::config::DEFAULT_IPC_TIMEOUT_MS);
     }
 }

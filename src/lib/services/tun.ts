@@ -136,7 +136,8 @@ function runtimeOwnershipError(): { code: string; message: string } {
 
 function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
   if (!policy.appConfig.tun.dnsHijack) return;
-  if (!policy.appConfig.dns.enabled || !policy.appConfig.dns.config) {
+  const dns = policy.appConfig.dns.config;
+  if (!policy.appConfig.dns.enabled || !dns || Object.keys(dns.servers).length === 0) {
     throw {
       code: 'tun_dns_hijack_requires_dns',
       message: '开启 TUN DNS 劫持前，请先在 DNS 设置中启用并保存 Real DNS 或 Fake-IP。',
@@ -266,6 +267,12 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     }
     return getGuiTunStatus();
   } catch (error) {
+    // tun.start can finish its platform route work after the IPC response
+    // deadline. Reconcile the authoritative runtime state before reporting a
+    // false failure or rolling the persisted desired state back to OFF.
+    const reconciled = await getGuiTunStatus().catch(() => null);
+    if (reconciled?.enabled) return reconciled;
+
     // A failed explicit enable should not leave a new persisted ON intent that
     // will be replayed on every subsequent Core generation. AppConfig's patch
     // model cannot restore legacy undefined, so failure falls back to explicit
@@ -287,7 +294,14 @@ export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   }
 
   if (current.enabled) {
-    await invoke('gui_tun_disable');
+    try {
+      await invoke('gui_tun_disable');
+    } catch (error) {
+      // As with enable, a late response is not a failed operation when Zero's
+      // subsequent status already confirms that TUN is stopped.
+      const reconciled = await getGuiTunStatus().catch(() => null);
+      if (reconciled?.enabled !== false) throw error;
+    }
   }
   await updateAppConfig({ tun: { enabled: false } });
   return getGuiTunStatus();

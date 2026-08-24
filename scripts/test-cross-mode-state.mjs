@@ -167,6 +167,13 @@ assert.ok(
 );
 
 assert.ok(
+  tunService.includes('const reconciled = await getGuiTunStatus().catch(() => null);')
+    && tunService.includes('if (reconciled?.enabled) return reconciled;')
+    && tunService.includes('if (reconciled?.enabled !== false) throw error;'),
+  'TUN commands must reconcile authoritative runtime state before treating a late IPC response as failure',
+);
+
+assert.ok(
   tunService.includes('function validateAppDnsHijackPrecondition(policy: TunPolicy): void')
     && tunService.includes("code: 'tun_dns_hijack_requires_dns'")
     && tunService.includes('Object.keys(dns.servers).length === 0')
