@@ -189,6 +189,11 @@ export interface TrafficStats {
   connectionCount: number;
 }
 
+export interface TrafficRateSample extends TrafficStats {
+  sampledAtUnixMs: number;
+  stable: boolean;
+}
+
 export interface ConfigProxyNode {
   tag: string;
   protocol: string;

@@ -25,7 +25,7 @@ use crate::models::gui_core::GuiTrafficStats;
 use crate::state::app_state::AppState;
 
 const CORE_PROCESS_EXITED_EVENT: &str = "core:process-exited";
-const TRAFFIC_SAMPLE_EVENT: &str = "traffic.sampled";
+const TRAFFIC_RATE_SAMPLE_EVENT: &str = "traffic:rate-sampled";
 
 const TRAFFIC_BALL_LABEL: &str = "traffic-ball";
 const TRAFFIC_BALL_CREATE_REQUEST_EVENT: &str = "traffic-ball:create-request";
@@ -79,10 +79,21 @@ pub(crate) fn handle_stats_sample(
         *sample = Some(current);
     }
 
-    // Only the traffic-ball needs the legacy flat event. Avoid broadcasting a
-    // duplicate event to every window when the ball does not exist.
+    // The overview and traffic ball must display the exact same rate sample.
+    // Compute it once in Rust and send the flattened result to the two UI
+    // surfaces instead of letting each WebView maintain its own delta clock.
+    let payload = json!({
+        "uploadBytesPerSec": rate_snapshot.rates.upload_bps,
+        "downloadBytesPerSec": rate_snapshot.rates.download_bps,
+        "totalUploadBytes": rate_snapshot.totals.bytes_up,
+        "totalDownloadBytes": rate_snapshot.totals.bytes_down,
+        "connectionCount": rate_snapshot.totals.active_sessions,
+        "sampledAtUnixMs": rate_snapshot.sampled_at_unix_ms,
+        "stable": rate_snapshot.stable,
+    });
+    let _ = app.emit_to("main", TRAFFIC_RATE_SAMPLE_EVENT, &payload);
     if app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
-        let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_SAMPLE_EVENT, totals);
+        let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_RATE_SAMPLE_EVENT, payload);
     }
 }
 

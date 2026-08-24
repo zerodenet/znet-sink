@@ -1,5 +1,6 @@
 import { getCorePolicies } from '$lib/services/core';
 import type { ProxyNode } from '$lib/types/protocol';
+import type { TrafficRateSample } from '$lib/types/gui-api';
 
 const MAX_HISTORY = 300; // 5 minutes at 1-second sampling
 const MIN_RATE_INTERVAL_MS = 500; // minimum interval for stable speed calculation
@@ -334,6 +335,21 @@ class OverviewDataStore {
     this.totalUpBytes = totalUp;
     this.totalDownBytes = totalDown;
     this.applyCaptureSessionCounters(totalUp, totalDown);
+  }
+
+  /** Apply the rate sample calculated once by the Rust traffic bridge. */
+  applyTrafficRateSample(sample: TrafficRateSample) {
+    this.isLive = sample.stable;
+    this.speedHistory.push({
+      up: Math.max(0, sample.uploadBytesPerSec) / 1_000_000,
+      down: Math.max(0, sample.downloadBytesPerSec) / 1_000_000,
+    });
+    if (this.speedHistory.length > MAX_HISTORY) this.speedHistory.shift();
+
+    this.activeConnections = Math.max(0, sample.connectionCount);
+    this.totalUpBytes = Math.max(0, sample.totalUploadBytes);
+    this.totalDownBytes = Math.max(0, sample.totalDownloadBytes);
+    this.applyCaptureSessionCounters(this.totalUpBytes, this.totalDownBytes);
   }
 
   applyRuntimeEvent(data: Record<string, unknown>) {
