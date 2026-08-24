@@ -103,6 +103,16 @@ fn subscribe_and_forward_events(
 
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
+            // This forwarder keeps the old connection (and therefore its
+            // broadcast sender) alive. The receiver cannot report `Closed`
+            // merely because the shared transport was retired by the watchdog
+            // or another failed IPC request. Observe transport liveness
+            // explicitly and move onto the replacement subscription.
+            if !conn.is_alive() {
+                closed = true;
+                break;
+            }
+
             let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
@@ -160,11 +170,24 @@ fn subscribe_and_forward_events(
                 // Flow pushes remain the low-latency path, but the active-flow
                 // query is the authoritative state. Reconcile it periodically
                 // so a dropped/quiet push stream cannot freeze the live page.
-                // The query also touches `get_or_connect`; if the shared reader
-                // died without closing this receiver, the dead manager is
-                // replaced and this receiver subsequently observes `Closed`.
-                if let Some(connections) = resync_active_connections(endpoint.clone(), timeout) {
-                    emit_connection_snapshot(&app, generation, connections);
+                match resync_active_connections(endpoint.clone(), timeout) {
+                    Ok(connections) => {
+                        emit_connection_snapshot(&app, generation, connections);
+                    }
+                    Err(error) if error.is_unavailable() => {
+                        // A read-only authoritative query timing out after the
+                        // event stream also went quiet is a transport failure,
+                        // not an application-level rejection. Retire it now so
+                        // recovery does not wait for the slower process
+                        // watchdog cadence.
+                        conn.retire();
+                        closed = true;
+                        break;
+                    }
+                    Err(_) => {
+                        // A supported kernel can still reject a particular
+                        // query. Keep event delivery alive in that case.
+                    }
                 }
                 next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
             }
@@ -235,7 +258,7 @@ fn resync_snapshot(app: &AppHandle, endpoint: CoreEndpoint, timeout: Duration) -
 fn resync_active_connections(
     endpoint: CoreEndpoint,
     timeout: Duration,
-) -> Option<Vec<GuiConnection>> {
+) -> AppResult<Vec<GuiConnection>> {
     tauri::async_runtime::block_on(async move {
         let options = Some(CoreIpcOptions {
             socket: Some(endpoint.path),
@@ -250,7 +273,6 @@ fn resync_active_connections(
             options,
         )
         .await
-        .ok()
         .map(|connections| connections.items)
     })
 }
