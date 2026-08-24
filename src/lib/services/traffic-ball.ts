@@ -10,7 +10,7 @@ import {
 
 const MAIN_WINDOW_LABEL = 'main';
 const TRAFFIC_BALL_LABEL = 'traffic-ball';
-const TRAFFIC_BALL_SIZE_LOGICAL = 64;
+const TRAFFIC_BALL_SIZE_LOGICAL = 128;
 const TRAFFIC_BALL_MARGIN_LOGICAL = 14;
 const TRAFFIC_BALL_SNAP_GAP_LOGICAL = 6;
 const TRAFFIC_BALL_SNAP_THRESHOLD_LOGICAL = 48;
@@ -140,7 +140,7 @@ async function performShowTrafficBall(mainWindow: Window): Promise<void> {
     const ball = await requestTrafficBallWindow();
 
     // Re-assert a square inner viewport before every show. The window config
-    // declares 96x96, while this also protects against desktop/window-manager
+    // declares 128x128, while this also protects against desktop/window-manager
     // client-size restoration differences after native creation.
     await ball.setSize(new LogicalSize(TRAFFIC_BALL_SIZE_LOGICAL, TRAFFIC_BALL_SIZE_LOGICAL));
 

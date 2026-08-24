@@ -465,12 +465,11 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    /* The surface was reduced from 96px to 64px. Keep overlays at the
-       original 2/3 design ratio instead of letting CSS pixels overflow. */
-    gap: 2px;
+    /* Keep the overlays proportional to the 128px native window. */
+    gap: 4px;
     pointer-events: none;
     opacity: 1;
-    transform: translateY(0.667px) scale(1);
+    transform: translateY(0) scale(1);
     transition: opacity 140ms ease, transform 180ms ease;
   }
 
@@ -478,15 +477,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 2.667px;
-    height: 10.667px;
+    gap: 5.334px;
+    height: 21.334px;
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 0.667px 1.333px rgba(15, 23, 42, 0.42);
+    text-shadow: 0 1.334px 2.666px rgba(15, 23, 42, 0.42);
   }
 
   .traffic-rate svg {
-    width: 6px;
-    height: 6px;
+    width: 12px;
+    height: 12px;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.8;
@@ -496,10 +495,10 @@
   }
 
   .traffic-rate strong {
-    width: 38px;
+    width: 76px;
     text-align: left;
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 7px;
+    font-size: 14px;
     line-height: 1;
     font-weight: 680;
     letter-spacing: -0.045em;
@@ -515,41 +514,41 @@
   }
 
   .traffic-divider {
-    width: 26.667px;
-    height: 1px;
+    width: 53.334px;
+    height: 2px;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.20), transparent);
   }
 
   .traffic-hint {
     position: absolute;
-    inset: 7.333px;
+    inset: 14.666px;
     z-index: 3;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3.333px;
+    gap: 6.666px;
     border-radius: 50%;
     color: rgba(248, 252, 255, 0.98);
     pointer-events: none;
     opacity: 0;
     transform: scale(0.93);
-    text-shadow: 0 0.667px 1.333px rgba(15, 23, 42, 0.46);
+    text-shadow: 0 1.334px 2.666px rgba(15, 23, 42, 0.46);
     transition: opacity 140ms ease, transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .traffic-hint-primary {
     display: inline-flex;
     align-items: center;
-    gap: 2.667px;
-    font-size: 6.667px;
+    gap: 5.334px;
+    font-size: 13.334px;
     line-height: 1;
     white-space: nowrap;
   }
 
   .traffic-hint-primary svg {
-    width: 6.667px;
-    height: 6.667px;
+    width: 13.334px;
+    height: 13.334px;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.25;
@@ -562,13 +561,13 @@
   }
 
   .traffic-hint-divider {
-    width: 22.667px;
-    height: 1px;
+    width: 45.334px;
+    height: 2px;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
   }
 
   .traffic-hint-secondary {
-    font-size: 5.667px;
+    font-size: 11.334px;
     line-height: 1;
     color: rgba(239, 246, 255, 0.76);
     white-space: nowrap;
@@ -593,7 +592,7 @@
   .traffic-ball:hover .traffic-readout,
   .traffic-ball:focus-visible .traffic-readout {
     opacity: 0.08;
-    transform: translateY(0.667px) scale(0.96);
+    transform: translateY(0) scale(0.96);
     transition-delay: 180ms;
   }
 
@@ -623,9 +622,9 @@
   .traffic-ball:focus-visible::after {
     content: '';
     position: absolute;
-    inset: 3.333px;
+    inset: 6.666px;
     border-radius: 50%;
-    box-shadow: inset 0 0 0 1px rgba(224, 242, 254, 0.92);
+    box-shadow: inset 0 0 0 2px rgba(224, 242, 254, 0.92);
     pointer-events: none;
   }
 

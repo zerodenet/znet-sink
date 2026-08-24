@@ -10,7 +10,7 @@
 //!
 //! The traffic-ball WebView is created lazily from the static Tauri window
 //! config. The normal application baseline therefore remains a single WebView;
-//! the transparent 96x96 WebView exists only while the floating ball is in use.
+//! the transparent 128x128 WebView exists only while the floating ball is in use.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
