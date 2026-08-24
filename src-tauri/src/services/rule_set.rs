@@ -36,6 +36,7 @@ const DEFAULT_USER_AGENT: &str = concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION")
 pub(crate) struct ManagedRuleSetSource {
     pub tag: String,
     pub url: String,
+    pub format: String,
     pub update_interval_secs: Option<u64>,
     pub user_agent: Option<String>,
 }
@@ -167,7 +168,7 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
                 ));
             };
             (
-                convert_source(&resource.content, &source.format, &name)?,
+                convert_source(resource_text(&resource)?, &source.format, &name)?,
                 resource.state,
                 true,
             )
@@ -242,7 +243,8 @@ async fn update_by_id(state: &AppState, id: String) -> AppResult<(RuleSetProfile
         match fetch_source(&source, Some(&profile.source_state)).await? {
             FetchOutcome::NotModified(source_state) => Ok::<_, AppError>((None, source_state)),
             FetchOutcome::Modified(resource) => {
-                let semantic_ir = convert_source(&resource.content, &source.format, &profile.name)?;
+                let semantic_ir =
+                    convert_source(resource_text(&resource)?, &source.format, &profile.name)?;
                 let artifact = build_zrs_artifact(&profile.id, &semantic_ir)?;
                 Ok((Some((semantic_ir, artifact)), resource.state))
             }
@@ -335,12 +337,12 @@ pub(crate) async fn sync_managed_subscription_sources(
         let id = managed_rule_set_id(&id_prefix, &managed.tag);
         let raw_source = RuleSetSource {
             url: managed.url,
-            format: "clash-classical-yaml".to_string(),
+            format: managed.format,
             update_interval_secs: managed.update_interval_secs,
             user_agent: managed.user_agent,
         };
         let previous = current.iter().find(|item| item.id == id);
-        let source = match normalize_source(raw_source.clone()) {
+        let source = match normalize_managed_source(raw_source.clone()) {
             Ok(source) => source,
             Err(error) => {
                 push_managed_source_failure(
@@ -361,7 +363,7 @@ pub(crate) async fn sync_managed_subscription_sources(
         };
         let same_source = previous
             .and_then(|item| item.source.as_ref())
-            .is_some_and(|old| old.url == source.url);
+            .is_some_and(|old| old.url == source.url && old.format == source.format);
         let previous_state = same_source
             .then(|| previous.map(|item| &item.source_state))
             .flatten();
@@ -369,11 +371,27 @@ pub(crate) async fn sync_managed_subscription_sources(
         let result = async {
             let values = match fetch_source(&source, previous_state).await? {
                 FetchOutcome::Modified(resource) => {
-                    let semantic_ir = convert_managed_clash_source(
-                        &resource.content,
-                        &format!("{subscription_name} / {}", managed.tag),
-                    )?;
-                    let artifact = build_zrs_artifact(&id, &semantic_ir)?;
+                    let display_name = format!("{subscription_name} / {}", managed.tag);
+                    let (semantic_ir, artifact) = if source.format == "zrs" {
+                        let metadata =
+                            verify(&resource.bytes, VerifyMode::FullChecksum).map_err(|error| {
+                                AppError::invalid_argument(format!(
+                                    "downloaded ZRS for '{}' is invalid: {error}",
+                                    managed.tag
+                                ))
+                            })?;
+                        let artifact =
+                            publish_zrs_in(&data_dir()?, &id, &resource.bytes, metadata)?;
+                        let semantic_ir = previous
+                            .map(|item| item.semantic_ir.clone())
+                            .unwrap_or_else(|| opaque_zrs_semantic_ir(&display_name));
+                        (semantic_ir, artifact)
+                    } else {
+                        let semantic_ir =
+                            convert_managed_clash_source(resource_text(&resource)?, &display_name)?;
+                        let artifact = build_zrs_artifact(&id, &semantic_ir)?;
+                        (semantic_ir, artifact)
+                    };
                     (semantic_ir, artifact, resource.state, Some(now), now)
                 }
                 FetchOutcome::NotModified(source_state) => {
@@ -493,11 +511,9 @@ fn push_managed_source_failure(
     profile.enabled = true;
     profile.managed_by_subscription_id = Some(subscription_id.to_string());
     profile.common_binding = None;
-    if profile
-        .source
-        .as_ref()
-        .is_none_or(|previous_source| previous_source.url != source.url)
-    {
+    if profile.source.as_ref().is_none_or(|previous_source| {
+        previous_source.url != source.url || previous_source.format != source.format
+    }) {
         profile.source_state = RuleSetSourceState::default();
     }
     profile.source = Some(source);
@@ -629,9 +645,49 @@ fn normalize_source(mut source: RuleSetSource) -> AppResult<RuleSetSource> {
     Ok(source)
 }
 
+fn normalize_managed_source(source: RuleSetSource) -> AppResult<RuleSetSource> {
+    if source.format.trim().eq_ignore_ascii_case("zrs") {
+        let mut source = source;
+        source.url = normalize_required(source.url, "source.url")?;
+        if !source.url.starts_with("https://") && !source.url.starts_with("http://") {
+            return Err(AppError::invalid_argument(
+                "source.url must use http:// or https://",
+            ));
+        }
+        source.format = "zrs".to_string();
+        source.update_interval_secs = match source.update_interval_secs {
+            None | Some(0) => None,
+            Some(seconds) if seconds < MIN_UPDATE_INTERVAL_SECS => {
+                return Err(AppError::invalid_argument(format!(
+                    "rule update interval must be at least {MIN_UPDATE_INTERVAL_SECS} seconds"
+                )))
+            }
+            value => value,
+        };
+        source.user_agent = normalize_optional(source.user_agent);
+        return Ok(source);
+    }
+    normalize_source(source)
+}
+
 struct FetchedResource {
-    content: String,
+    bytes: Vec<u8>,
     state: RuleSetSourceState,
+}
+
+fn resource_text(resource: &FetchedResource) -> AppResult<&str> {
+    std::str::from_utf8(&resource.bytes).map_err(|error| {
+        AppError::invalid_argument(format!("rule source is not valid UTF-8: {error}"))
+    })
+}
+
+fn opaque_zrs_semantic_ir(display_name: &str) -> Value {
+    json!({
+        "version": 1,
+        "name": display_name,
+        "rules": [],
+        "managedOpaqueZrs": true
+    })
 }
 
 enum FetchOutcome {
@@ -702,9 +758,6 @@ async fn fetch_source(
         }
         let content_bytes = bytes.len() as u64;
         let content_sha256 = format!("{:x}", Sha256::digest(&bytes));
-        let content = String::from_utf8(bytes).map_err(|error| {
-            AppError::invalid_argument(format!("rule source is not valid UTF-8: {error}"))
-        })?;
         let state = RuleSetSourceState {
             etag,
             last_modified,
@@ -715,7 +768,7 @@ async fn fetch_source(
         if previous.content_sha256.as_deref() == Some(content_sha256.as_str()) {
             return Ok(FetchOutcome::NotModified(state));
         }
-        Ok(FetchOutcome::Modified(FetchedResource { content, state }))
+        Ok(FetchOutcome::Modified(FetchedResource { bytes, state }))
     })
     .await
     .map_err(|error| AppError::internal(format!("rule download worker failed: {error}")))?
@@ -1373,6 +1426,45 @@ mod tests {
         verify(&published, VerifyMode::FullChecksum).unwrap();
         assert_eq!(&published[..4], b"ZRS!");
         assert!(!Path::new(&artifact.path).with_extension("tmp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn identical_zrs_from_distinct_owners_use_isolated_artifact_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "znet-rule-isolation-test-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let ir = canonical_ir(
+            json!({"version":1,"rules":[{"type":"domain_exact","value":"example.com"}]}),
+            "Shared content",
+        )
+        .unwrap();
+        let source = decode_json(&serde_json::to_vec(&ir).unwrap()).unwrap();
+        let (compiled, _) = RuleSetCompiler.compile(source).unwrap();
+        let bytes = encode(&compiled).unwrap();
+
+        let manual = publish_zrs_in(
+            &root,
+            "manual-asset",
+            &bytes,
+            verify(&bytes, VerifyMode::FullChecksum).unwrap(),
+        )
+        .unwrap();
+        let managed = publish_zrs_in(
+            &root,
+            "subscription-rule-subscription-1-ai",
+            &bytes,
+            verify(&bytes, VerifyMode::FullChecksum).unwrap(),
+        )
+        .unwrap();
+
+        assert_ne!(manual.path, managed.path);
+        assert_eq!(
+            fs::read(manual.path).unwrap(),
+            fs::read(managed.path).unwrap()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
