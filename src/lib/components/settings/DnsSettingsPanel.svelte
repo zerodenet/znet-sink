@@ -582,7 +582,7 @@
             <label><span>CIDR</span><Input bind:value={draft.dns.answer.cidr} oninput={touch} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
-            <label class="wide"><span>排除域名（每行一个）</span><textarea value={draft.dns.answer.exclude_domains.join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
+            <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
           </div>
         </section>
       {/if}

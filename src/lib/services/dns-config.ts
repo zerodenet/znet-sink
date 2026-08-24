@@ -77,13 +77,18 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
   }
   if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
   if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
-  const answer = isObject(value.answer) ? value.answer : { type: 'real' };
+  const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
+  if (answer.type === 'fake_ip') {
+    answer.exclude_domains = Array.isArray(answer.exclude_domains)
+      ? answer.exclude_domains.filter((domain): domain is string => typeof domain === 'string')
+      : [];
+  }
   return {
     ...clone(value),
     servers: clone(value.servers) as Record<string, DnsServerConfig>,
     default_server: value.default_server,
     dispatch: Array.isArray(value.dispatch) ? clone(value.dispatch) : [],
-    answer: clone(answer) as DnsConfig['answer'],
+    answer,
   } as DnsConfig;
 }
 

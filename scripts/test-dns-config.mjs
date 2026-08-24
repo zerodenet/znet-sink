@@ -12,6 +12,7 @@ assert.match(service, /export function setDnsMode\(draft: DnsSettingsDraft, mode
 assert.match(service, /rule\.server === oldName \? name : rule\.server/);
 assert.match(service, /guiValidateDnsConfig\(next\)/);
 assert.match(service, /const result = await guiApplyDnsConfig\(next\)/);
+assert.match(service, /answer\.exclude_domains = Array\.isArray\(answer\.exclude_domains\)/);
 
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
@@ -34,6 +35,7 @@ assert.match(panel, /switchDispatchEditorMode\('form'\)/);
 assert.match(panel, /switchDispatchEditorMode\('json'\)/);
 assert.match(panel, /const condition = \{ type: 'domain', values: \['example\.com'\] \}/);
 assert.doesNotMatch(panel, /updateDispatchCondition/);
+assert.match(panel, /\(draft\.dns\.answer\.exclude_domains \?\? \[\]\)\.join\('\\n'\)/);
 assert.match(runtime, /json!\(tun\.dns_hijack\)/);
 assert.match(parsing, /"original_ip", "originalIp"/);
 assert.match(parsing, /"fake_ip_reverse_status", "fakeIpReverseStatus"/);
