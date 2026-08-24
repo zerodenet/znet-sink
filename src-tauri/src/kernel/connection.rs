@@ -320,10 +320,20 @@ impl MultiplexedConnection {
         &self.inner.endpoint.path
     }
 
-    fn received_within(&self, window: Duration) -> bool {
+    pub(crate) fn received_within(&self, window: Duration) -> bool {
         let now = crate::services::common::now_unix_ms();
         let last = self.inner.last_received_at_ms.load(Ordering::Acquire);
         now.saturating_sub(last) <= window.as_millis() as u64
+    }
+
+    /// Whether another request is still legitimately waiting for a response.
+    ///
+    /// A long-running command such as `tun.start` can temporarily delay
+    /// otherwise cheap reads on kernels that serialize command handling. A
+    /// read timeout must not retire the shared transport while that command is
+    /// still inside its own response deadline.
+    pub(crate) fn has_pending_requests(&self) -> bool {
+        !recover_lock(&self.inner.pending).is_empty()
     }
 
     /// Retire this shared transport so the manager opens a fresh subscribed
@@ -578,7 +588,7 @@ pub async fn ensure_healthy(
     activity_window: Duration,
 ) -> AppResult<bool> {
     let conn = connect_for_health(endpoint.clone(), timeout).await?;
-    if conn.received_within(activity_window) {
+    if conn.received_within(activity_window) || conn.has_pending_requests() {
         return Ok(false);
     }
 

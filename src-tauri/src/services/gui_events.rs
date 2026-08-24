@@ -67,6 +67,13 @@ const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 const EVENT_RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const ACTIVE_FLOW_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
+fn should_retire_after_reconcile_failure(
+    has_pending_requests: bool,
+    received_recently: bool,
+) -> bool {
+    !has_pending_requests && !received_recently
+}
+
 fn subscribe_and_forward_events(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
@@ -175,14 +182,21 @@ fn subscribe_and_forward_events(
                         emit_connection_snapshot(&app, generation, connections);
                     }
                     Err(error) if error.is_unavailable() => {
-                        // A read-only authoritative query timing out after the
-                        // event stream also went quiet is a transport failure,
-                        // not an application-level rejection. Retire it now so
-                        // recovery does not wait for the slower process
-                        // watchdog cadence.
-                        conn.retire();
-                        closed = true;
-                        break;
+                        // A kernel may serialize a long command such as
+                        // `tun.start`, causing this cheap read to hit its own
+                        // shorter deadline. Never close the shared transport
+                        // while another request is still legitimately pending,
+                        // or while events/responses have arrived recently.
+                        let received_recently =
+                            conn.received_within(ACTIVE_FLOW_RECONCILE_INTERVAL + timeout);
+                        if should_retire_after_reconcile_failure(
+                            conn.has_pending_requests(),
+                            received_recently,
+                        ) {
+                            conn.retire();
+                            closed = true;
+                            break;
+                        }
                     }
                     Err(_) => {
                         // A supported kernel can still reject a particular
@@ -329,4 +343,17 @@ fn emit_status(
             response,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_retire_after_reconcile_failure;
+
+    #[test]
+    fn reconcile_timeout_never_retires_a_busy_or_recent_connection() {
+        assert!(!should_retire_after_reconcile_failure(true, false));
+        assert!(!should_retire_after_reconcile_failure(false, true));
+        assert!(!should_retire_after_reconcile_failure(true, true));
+        assert!(should_retire_after_reconcile_failure(false, false));
+    }
 }

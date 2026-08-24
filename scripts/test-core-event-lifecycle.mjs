@@ -107,8 +107,11 @@ async function testRetiredIpcConnectionsRotateEventSubscriptions() {
   assert.ok(connection.includes('pub(crate) fn retire(&self)'));
   assert.ok(guiEvents.includes('if !conn.is_alive()'));
   assert.ok(guiEvents.includes('conn.retire();'));
+  assert.ok(guiEvents.includes('conn.has_pending_requests()'));
+  assert.ok(guiEvents.includes('conn.received_within('));
   assert.ok(coreEvents.includes('if !conn.is_alive()'));
   assert.equal(coreEvents.includes('receiver.blocking_recv()'), false);
+  assert.ok(connection.includes('conn.received_within(activity_window) || conn.has_pending_requests()'));
 }
 
 await testLifecycleOperationsStayOrdered();

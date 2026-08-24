@@ -167,9 +167,10 @@ assert.ok(
 );
 
 assert.ok(
-  tunService.includes('const reconciled = await getGuiTunStatus().catch(() => null);')
-    && tunService.includes('if (reconciled?.enabled) return reconciled;')
-    && tunService.includes('if (reconciled?.enabled !== false) throw error;'),
+  tunService.includes('async function waitForTunStateAfterTransientIpcError(')
+    && tunService.includes("code === 'timeout' || code === 'connection_closed' || code === 'core_unavailable'")
+    && tunService.includes('const reconciled = await waitForTunStateAfterTransientIpcError(true, error);')
+    && tunService.includes('const reconciled = await waitForTunStateAfterTransientIpcError(false, error);'),
   'TUN commands must reconcile authoritative runtime state before treating a late IPC response as failure',
 );
 

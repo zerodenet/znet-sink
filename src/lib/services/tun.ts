@@ -13,6 +13,8 @@ import type { GuiManagedTunStatus, TunConfigSource } from '$lib/types/tun';
 
 const CORE_READY_TIMEOUT_MS = 8_000;
 const CORE_READY_INTERVAL_MS = 100;
+const TUN_STATE_RECONCILE_TIMEOUT_MS = 15_000;
+const TUN_STATE_RECONCILE_INTERVAL_MS = 250;
 
 interface TunPolicy {
   appConfig: AppConfig;
@@ -93,6 +95,34 @@ function enrichTunStatus(status: GuiTunStatus, policy: TunPolicy): GuiManagedTun
 
 async function rawTunStatus(): Promise<GuiTunStatus> {
   return invoke('gui_tun_status');
+}
+
+function isTransientCoreIpcError(error: unknown): boolean {
+  const code = isObject(error) && typeof error.code === 'string' ? error.code : '';
+  if (code === 'timeout' || code === 'connection_closed' || code === 'core_unavailable') {
+    return true;
+  }
+  const message = isObject(error) && typeof error.message === 'string'
+    ? error.message
+    : String(error ?? '');
+  return message.includes('core IPC request timed out')
+    || message.includes('core IPC connection closed');
+}
+
+async function waitForTunStateAfterTransientIpcError(
+  expectedEnabled: boolean,
+  error: unknown,
+): Promise<GuiManagedTunStatus | null> {
+  const deadline = Date.now() + (
+    isTransientCoreIpcError(error) ? TUN_STATE_RECONCILE_TIMEOUT_MS : 0
+  );
+
+  do {
+    const status = await getGuiTunStatus().catch(() => null);
+    if (status?.enabled === expectedEnabled) return status;
+    if (Date.now() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, TUN_STATE_RECONCILE_INTERVAL_MS));
+  } while (true);
 }
 
 async function ensureCoreReady(): Promise<void> {
@@ -270,8 +300,8 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     // tun.start can finish its platform route work after the IPC response
     // deadline. Reconcile the authoritative runtime state before reporting a
     // false failure or rolling the persisted desired state back to OFF.
-    const reconciled = await getGuiTunStatus().catch(() => null);
-    if (reconciled?.enabled) return reconciled;
+    const reconciled = await waitForTunStateAfterTransientIpcError(true, error);
+    if (reconciled) return reconciled;
 
     // A failed explicit enable should not leave a new persisted ON intent that
     // will be replayed on every subsequent Core generation. AppConfig's patch
@@ -299,8 +329,8 @@ export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
     } catch (error) {
       // As with enable, a late response is not a failed operation when Zero's
       // subsequent status already confirms that TUN is stopped.
-      const reconciled = await getGuiTunStatus().catch(() => null);
-      if (reconciled?.enabled !== false) throw error;
+      const reconciled = await waitForTunStateAfterTransientIpcError(false, error);
+      if (!reconciled) throw error;
     }
   }
   await updateAppConfig({ tun: { enabled: false } });
