@@ -105,6 +105,66 @@ pub fn kill_core_default() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
+/// Gracefully tear down app-owned network capture before the GUI exits.
+///
+/// The shutdown event loop calls this while Tauri state and the async runtime
+/// are still alive. TUN is stopped first, then the managed child (or the
+/// matching external kernel) is stopped through the normal service path,
+/// which also restores the guarded system proxy.
+pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
+    let state = app_handle.state::<AppState>();
+    state
+        .shutting_down_handle()
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let _operation = state.proxy_config_operation().lock().await;
+    let mut options = state
+        .app_config()
+        .lock()
+        .map(|config| core_config::ipc_options_from_app_config(&config.core))
+        .unwrap_or_default();
+    options.timeout_ms = Some(options.timeout_ms.unwrap_or_default().max(3_000));
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        crate::kernel::zero::runtime::disable_tun(Some(options)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => crate::services::file_logger::line("shutdown: TUN stopped"),
+        Ok(Err(error)) => crate::services::file_logger::line(&format!(
+            "shutdown: TUN stop was unavailable; continuing with core stop: {}",
+            error.message
+        )),
+        Err(_) => crate::services::file_logger::line(
+            "shutdown: TUN stop timed out; continuing with core stop",
+        ),
+    }
+
+    let stop_app = app_handle.clone();
+    let stop_result = tauri::async_runtime::spawn_blocking(move || {
+        let stop_state = stop_app.state::<AppState>();
+        stop(stop_app.clone(), stop_state)
+    })
+    .await;
+    match stop_result {
+        Ok(Ok(_)) => crate::services::file_logger::line("shutdown: managed core stopped"),
+        Ok(Err(error)) => {
+            crate::services::file_logger::line(&format!(
+                "shutdown: managed core stop failed; using process fallback: {}",
+                error.message
+            ));
+            kill_core_default();
+        }
+        Err(error) => {
+            crate::services::file_logger::line(&format!(
+                "shutdown: managed core stop task failed; using process fallback: {error}"
+            ));
+            kill_core_default();
+        }
+    }
+}
+
 pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     // The kernel is a managed service, so it must also be startable before the
     // user imports a proxy profile. In that state we launch a small, persistent
