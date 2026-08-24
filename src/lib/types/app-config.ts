@@ -1,5 +1,7 @@
 // Mirror of Rust models::app_config
 
+import type { DnsConfig } from './dns';
+
 export interface AppConfig {
   schemaVersion: string;
   core: AppCoreConfig;
@@ -7,6 +9,7 @@ export interface AppConfig {
   ui: AppUiConfig;
   localProxy: AppLocalProxyConfig;
   tun: AppTunConfig;
+  dns: AppDnsConfig;
   routing: AppRoutingConfig;
   urlTest: AppUrlTestConfig;
 }
@@ -58,6 +61,12 @@ export interface AppTunConfig {
   dnsHijack: boolean;
 }
 
+export interface AppDnsConfig {
+  enabled: boolean;
+  config?: DnsConfig;
+  dnsHijack: boolean;
+}
+
 export interface AppRoutingConfig {
   injectCommonRules: boolean;
 }
@@ -74,6 +83,7 @@ export interface AppConfigPatch {
   ui?: AppUiConfigPatch;
   localProxy?: AppLocalProxyConfigPatch;
   tun?: AppTunConfigPatch;
+  dns?: AppDnsConfigPatch;
   routing?: AppRoutingConfigPatch;
   urlTest?: AppUrlTestConfigPatch;
 }
@@ -121,6 +131,12 @@ export interface AppTunConfigPatch {
   tag?: string;
   mtu?: number;
   dualStack?: boolean;
+  dnsHijack?: boolean;
+}
+
+export interface AppDnsConfigPatch {
+  enabled?: boolean;
+  config?: DnsConfig | null;
   dnsHijack?: boolean;
 }
 

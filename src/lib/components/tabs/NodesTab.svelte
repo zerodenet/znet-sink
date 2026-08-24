@@ -684,7 +684,7 @@
               当前配置不包含节点。请在“配置”页导入一份包含 outbounds 的代理配置。
             {/if}
           </span>
-          <button class="empty-clear" onclick={() => (store.activeTab = 'profiles')}>前往配置页</button>
+          <button class="empty-clear" onclick={() => (store.activeTab = 'profiles')}>前往代理配置页</button>
         {:else}
           <span class="empty-text">暂无节点数据</span>
         {/if}

@@ -239,7 +239,7 @@
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
     <button class="core-link" onclick={openBlockingIssueTarget}>
-      {missingActiveConfig ? '前往配置' : '配置内核'}
+      {missingActiveConfig ? '前往代理配置' : '配置内核'}
     </button>
   {/if}
 

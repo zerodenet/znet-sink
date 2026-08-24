@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { UnlistenFn } from '@tauri-apps/api/event';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
   import { AlertTriangle, Download, FolderOpen, RefreshCcw, Save, X } from '@lucide/svelte';
@@ -28,7 +29,6 @@
     KernelInstallResult,
   } from '$lib/types/kernel-version';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
-  import * as Tabs from '$lib/components/AppTabs';
   import { success, warning } from '$lib/services/toast.svelte';
 
   const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/core/releases/latest';
@@ -217,11 +217,12 @@
     downloadProgress = null;
     installResult = null;
 
-    const unlisten = await onDownloadProgress((progress) => {
-      downloadProgress = progress;
-    });
+    let unlisten: UnlistenFn | null = null;
 
     try {
+      unlisten = await onDownloadProgress((progress) => {
+        downloadProgress = progress;
+      });
       const result = await installKernelVersion(
         release.version,
         release.assetDownloadUrl,
@@ -240,7 +241,7 @@
     } catch (error) {
       warning(error instanceof Error ? error.message : '安装失败');
     } finally {
-      unlisten();
+      unlisten?.();
       installBusy = false;
       installingVersion = null;
     }
@@ -447,26 +448,24 @@
     </Button>
   {/snippet}
 
-  <Tabs.Root
-    value={activeChannel}
-    onValueChange={(value) => {
-      activeChannel = value as ReleaseChannel;
-      installResult = null;
-      downloadProgress = null;
-    }}
-    class="kernel-channel-root"
-  >
-    <Tabs.List class="channel-tabs" aria-label="内核发布渠道">
+  <div class="channel-tabs" role="tablist" aria-label="内核发布渠道">
       {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
-        <Tabs.Trigger
-          value={ch}
+        <button
           class="channel-tab"
+          class:active={activeChannel === ch}
+          role="tab"
+          aria-selected={activeChannel === ch}
           disabled={installBusy}
+          onclick={() => {
+            activeChannel = ch;
+            installResult = null;
+            downloadProgress = null;
+          }}
         >
           {CHANNEL_LABELS[ch]}
-        </Tabs.Trigger>
+        </button>
       {/each}
-    </Tabs.List>
+  </div>
 
     {#if installResult?.success}
       <div class="install-success">
@@ -542,8 +541,6 @@
         {/each}
       </div>
     {/if}
-  </Tabs.Root>
-
   {#snippet footer()}
     <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
       {installResult?.success ? '关闭' : '取消'}
@@ -790,18 +787,40 @@
 
   /* Modal content styles (layout provided by DraggableModal) */
 
-  :global(.kernel-channel-root) {
-    width: 100%;
+  .channel-tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--muted);
+    border-radius: 8px;
+    padding: 3px;
   }
 
-  :global(.channel-tabs) {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    width: 100%;
+  .channel-tab {
+    flex: 1;
+    padding: 6px 0;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
 
-  :global(.channel-tab) {
-    width: 100%;
+  .channel-tab:hover:not(:disabled) {
+    color: var(--foreground);
+  }
+
+  .channel-tab.active {
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  .channel-tab:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Version list */
@@ -818,6 +837,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
     padding: 8px 10px;
     border-radius: 6px;
     transition: background 0.12s ease;
@@ -836,10 +856,16 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 100px;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .version-tag {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 600;
@@ -847,13 +873,18 @@
   }
 
   .version-meta {
-    flex: 1;
+    flex: 0 1 auto;
     display: flex;
     gap: 10px;
     min-width: 0;
+    overflow: hidden;
   }
 
   .version-date {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 11px;
     color: var(--muted-foreground);
   }
@@ -919,6 +950,9 @@
     display: flex;
     align-items: flex-start;
     gap: 10px;
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
     padding: 12px;
     border-radius: 8px;
     background: rgba(34, 197, 94, 0.06);
@@ -929,7 +963,15 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    min-width: 0;
+    overflow: hidden;
     font-size: 13px;
+  }
+
+  .install-success-text > :global(.text-xs) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   /* Link button */

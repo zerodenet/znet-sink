@@ -30,8 +30,8 @@ fn explicitly_missing_zero_core_executable_is_reported() {
     #[cfg(unix)]
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert!(snapshot.endpoint.path.ends_with(".zero/control.sock"));
-        assert!(!snapshot
+        assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
+        assert!(snapshot
             .launch_args
             .contains(&"--control-socket".to_string()));
     }
@@ -69,7 +69,7 @@ fn core_inspection_exposes_read_only_public_info() {
     assert_eq!(info.kernel, "zero");
     assert!(!info.executable_exists);
     assert_eq!(info.executable_path.as_deref(), Some(missing.as_str()));
-    assert!(info.download_url.is_some());
+    assert!(info.recommended_install_dir.is_some());
     assert!(info
         .warnings
         .iter()

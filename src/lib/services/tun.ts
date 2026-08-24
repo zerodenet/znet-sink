@@ -134,10 +134,14 @@ function runtimeOwnershipError(): { code: string; message: string } {
   };
 }
 
-function validateAppDnsHijackPrecondition(_policy: TunPolicy): void {
-  // App-owned DNS hijack is temporarily disabled for this release. The Rust
-  // tun.start builder forces dns_hijack=false so persisted values from older
-  // builds cannot block TUN startup before the client has a complete DNS UI.
+function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
+  if (!policy.appConfig.tun.dnsHijack) return;
+  if (!policy.appConfig.dns.enabled || !policy.appConfig.dns.config) {
+    throw {
+      code: 'tun_dns_hijack_requires_dns',
+      message: '开启 TUN DNS 劫持前，请先在 DNS 设置中启用并保存 Real DNS 或 Fake-IP。',
+    };
+  }
 }
 
 export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {

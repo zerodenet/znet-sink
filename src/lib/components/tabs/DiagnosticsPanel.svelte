@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { Clipboard, LoaderCircle, Network, Search } from '@lucide/svelte';
+  import { Clipboard, LoaderCircle, Network, Search, Settings2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import { getAppErrorMessage, guiDnsLookup, guiTraceRoute } from '$lib/services/core';
+  import * as Select from '$lib/components/ui/select';
+  import { getAppErrorMessage, guiDnsCache, guiDnsLookup, guiFakeIpLookup, guiTraceRoute } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
-  import type { DnsLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
+  import { store } from '$lib/services/store.svelte';
+  import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
 
   // DNS lookup
   let dnsHost = $state('');
@@ -13,6 +15,13 @@
   let dnsResult = $state<DnsLookupResult | null>(null);
   let dnsError = $state<string | null>(null);
   let dnsCopyFeedback = $state<string | null>(null);
+
+  let fakeQuery = $state('');
+  let fakeDirection = $state<'domain' | 'ip'>('domain');
+  let fakeLoading = $state(false);
+  let fakeResult = $state<FakeIpLookupResult | null>(null);
+  let cacheResult = $state<DnsCacheResult | null>(null);
+  let fakeError = $state<string | null>(null);
 
   // Route trace
   let traceTarget = $state('');
@@ -54,6 +63,23 @@
       traceError = getAppErrorMessage(e, '路由追踪失败');
     } finally {
       traceLoading = false;
+    }
+  }
+
+  async function runFakeIp() {
+    const query = fakeQuery.trim();
+    if (!query || fakeLoading) return;
+    fakeLoading = true;
+    fakeError = null;
+    try {
+      [fakeResult, cacheResult] = await Promise.all([
+        guiFakeIpLookup(fakeDirection === 'domain' ? { domain: query } : { ip: query }),
+        guiDnsCache(undefined, 50),
+      ]);
+    } catch (e) {
+      fakeError = getAppErrorMessage(e, 'Fake-IP 诊断失败');
+    } finally {
+      fakeLoading = false;
     }
   }
 
@@ -151,12 +177,81 @@
               </div>
             {/each}
           </div>
+        {:else if dnsResult.resolved_addresses?.length}
+          <div class="dns-list">
+            {#each dnsResult.resolved_addresses as address}
+              <div class="dns-rec"><span class="dns-type">IP</span><span class="dns-name">{dnsResult.hostname ?? dnsHost}</span><span class="dns-value">{address}</span></div>
+            {/each}
+          </div>
         {:else if dnsResult.error}
           <div class="diag-error">{dnsResult.error}</div>
         {:else}
           <pre class="diag-json">{JSON.stringify(dnsResult, null, 2)}</pre>
         {/if}
       </div>
+    {/if}
+  </section>
+
+  <section class="diag-tool">
+    <div class="diag-head-row">
+      <div class="diag-head">
+        <span class="diag-title">Fake-IP 与 DNS 缓存</span>
+        <span class="diag-hint">只读查询映射、容量和生命周期计数；不会触发新分配</span>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        class="fake-config-button"
+        onclick={() => store.openSettings('dns')}
+        title="管理内核 Fake-IP 配置"
+      >
+        <Settings2 />管理内核配置
+      </Button>
+    </div>
+    <div class="diag-form">
+      <Select.Root
+        type="single"
+        value={fakeDirection}
+        disabled={fakeLoading}
+        onValueChange={(value) => {
+          if (value === 'domain' || value === 'ip') fakeDirection = value;
+        }}
+      >
+        <Select.Trigger class="diag-select" aria-label="Fake-IP 查询方向">
+          {fakeDirection === 'domain' ? '域名 → Fake-IP' : 'Fake-IP → 域名'}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="domain" label="域名 → Fake-IP">域名 → Fake-IP</Select.Item>
+          <Select.Item value="ip" label="Fake-IP → 域名">Fake-IP → 域名</Select.Item>
+        </Select.Content>
+      </Select.Root>
+      <Input class="diag-input" placeholder={fakeDirection === 'domain' ? 'open.bigmodel.cn' : '198.18.0.2'} bind:value={fakeQuery} onkeydown={(event) => event.key === 'Enter' && runFakeIp()} disabled={fakeLoading} />
+      <Button size="sm" onclick={runFakeIp} disabled={fakeLoading || !fakeQuery.trim()}>
+        {#if fakeLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}{fakeLoading ? '查询中…' : '查询'}
+      </Button>
+    </div>
+    {#if fakeError}<div class="diag-error">{fakeError}</div>{/if}
+    {#if fakeResult}
+      <div class="fake-summary">
+        <div><span>状态</span><strong>{fakeResult.enabled ? '已启用' : '未启用'}</strong></div>
+        <div><span>查询</span><strong>{fakeResult.domain ?? fakeResult.ip ?? fakeQuery}</strong></div>
+        <div><span>结果</span><strong>{fakeResult.fake_ip ?? fakeResult.domain ?? '未命中'}</strong></div>
+        {#if fakeResult.stats}
+          <div><span>Live / Capacity</span><strong>{fakeResult.stats.live_mappings} / {fakeResult.stats.capacity}</strong></div>
+          <div><span>分配 / 过期 / 驱逐</span><strong>{fakeResult.stats.allocations} / {fakeResult.stats.expirations} / {fakeResult.stats.evictions}</strong></div>
+          <div><span>耗尽 / 冲突 / Reverse miss</span><strong>{fakeResult.stats.exhaustions} / {fakeResult.stats.collisions} / {fakeResult.stats.reverse_misses}</strong></div>
+        {/if}
+      </div>
+    {/if}
+    {#if cacheResult}
+      <div class="diag-meta"><span>DNS cache {cacheResult.enabled ? 'enabled' : 'disabled'}</span><span>{cacheResult.count ?? cacheResult.entries?.length ?? 0} entries</span></div>
+      {#if cacheResult.entries?.length}
+        <div class="dns-list">
+          {#each cacheResult.entries as entry}
+            <div class="dns-rec"><span class="dns-type">CACHE</span><span class="dns-name">{entry.domain}</span><span class="dns-value">{entry.addresses.join(', ')}</span>{#if entry.ttl_seconds != null}<span class="dns-ttl">ttl {entry.ttl_seconds}</span>{/if}</div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </section>
 
@@ -264,6 +359,17 @@
     gap: 2px;
   }
 
+  .diag-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  :global(.fake-config-button) {
+    flex: 0 0 auto;
+  }
+
   .diag-title {
     font-size: 13px;
     font-weight: 500;
@@ -282,6 +388,30 @@
     flex-wrap: wrap;
     gap: 7px;
   }
+
+  :global(.diag-select) {
+    width: 156px;
+    flex: 0 0 156px;
+  }
+
+  .fake-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .fake-summary > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+  }
+
+  .fake-summary span { color: var(--muted-foreground); font-size: 10px; }
+  .fake-summary strong { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px; }
 
   :global(.diag-input) {
     height: var(--control-height);

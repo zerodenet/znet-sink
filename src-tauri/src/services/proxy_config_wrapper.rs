@@ -50,9 +50,7 @@ fn is_managed_local_inbound(inbound: &Value) -> bool {
     inbound
         .get("tag")
         .and_then(Value::as_str)
-        .is_some_and(|tag| {
-            matches!(tag.trim(), MANAGED_MIXED_TAG | LEGACY_MANAGED_MIXED_TAG)
-        })
+        .is_some_and(|tag| matches!(tag.trim(), MANAGED_MIXED_TAG | LEGACY_MANAGED_MIXED_TAG))
 }
 
 fn local_inbound_is_usable(inbound: &Value) -> bool {
@@ -99,9 +97,9 @@ fn ensure_subscription_local_inbound(
     host: &str,
     port: u16,
 ) -> AppResult<bool> {
-    let object = content.as_object_mut().ok_or_else(|| {
-        AppError::invalid_argument("subscription must produce a JSON object")
-    })?;
+    let object = content
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("subscription must produce a JSON object"))?;
     if !object.contains_key("inbounds") {
         object.insert("inbounds".to_string(), Value::Array(Vec::new()));
     }
@@ -207,9 +205,7 @@ pub async fn upsert_runtime(
 
 #[cfg(test)]
 mod wrapper_tests {
-    use super::{
-        ensure_subscription_local_inbound, resolve_managed_endpoint, MANAGED_MIXED_TAG,
-    };
+    use super::{ensure_subscription_local_inbound, resolve_managed_endpoint, MANAGED_MIXED_TAG};
     use crate::models::app_config::AppLocalProxyConfig;
     use serde_json::json;
 

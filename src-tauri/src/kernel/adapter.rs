@@ -137,6 +137,22 @@ pub trait KernelAdapter {
     /// DNS lookup diagnostic.
     async fn dns_lookup(&self, hostname: String, options: CoreIpcOptions) -> AppResult<Value>;
 
+    /// Inspect the runtime DNS cache without mutating it.
+    async fn dns_cache(
+        &self,
+        domain: Option<String>,
+        limit: Option<usize>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value>;
+
+    /// Inspect a Fake-IP mapping and allocator counters without allocating.
+    async fn fakeip_lookup(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value>;
+
     /// Route trace diagnostic.
     async fn trace_route(
         &self,

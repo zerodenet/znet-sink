@@ -55,7 +55,8 @@ pub(crate) fn handle_stats_sample(
         let mut baseline = tray_baseline()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let snapshot = build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
+        let snapshot =
+            build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
         *baseline = Some(current.clone());
         snapshot
     };
@@ -195,11 +196,11 @@ fn compact_rate(bytes_per_second: u64) -> String {
     }
 
     match bytes_per_second {
-        0 => "0K".to_string(),
-        1..=999 => "<1K".to_string(),
-        value if value < 1_000_000 => scaled(value, 1_000, 'K'),
-        value if value < 1_000_000_000 => scaled(value, 1_000_000, 'M'),
-        value => scaled(value, 1_000_000_000, 'G'),
+        0 => "0K/s".to_string(),
+        1..=999 => "<1K/s".to_string(),
+        value if value < 1_000_000 => format!("{}/s", scaled(value, 1_000, 'K')),
+        value if value < 1_000_000_000 => format!("{}/s", scaled(value, 1_000_000, 'M')),
+        value => format!("{}/s", scaled(value, 1_000_000_000, 'G')),
     }
 }
 
@@ -207,7 +208,7 @@ fn compact_rate(bytes_per_second: u64) -> String {
 fn update_tray_rate_title(app_handle: &AppHandle, upload_bps: u64, download_bps: u64) {
     if let Some(tray) = app_handle.tray_by_id("main-tray") {
         let title = format!(
-            "↓{} ↑{}",
+            "↓ {}  ↑ {}",
             compact_rate(download_bps),
             compact_rate(upload_bps)
         );
@@ -221,7 +222,9 @@ fn update_tray_rate_title(_app_handle: &AppHandle, _upload_bps: u64, _download_b
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn clear_tray_rate_title(app_handle: &AppHandle) {
     if let Some(tray) = app_handle.tray_by_id("main-tray") {
-        let _ = tray.set_title(None::<String>);
+        // tray-icon's macOS backend does not clear the native button title
+        // when passed None, so use an explicit empty title instead.
+        let _ = tray.set_title(Some(""));
     }
 }
 
@@ -234,12 +237,12 @@ mod tests {
 
     #[test]
     fn tray_rate_format_stays_compact_across_units() {
-        assert_eq!(compact_rate(0), "0K");
-        assert_eq!(compact_rate(512), "<1K");
-        assert_eq!(compact_rate(1_000), "1.0K");
-        assert_eq!(compact_rate(84_200), "84K");
-        assert_eq!(compact_rate(1_250_000), "1.2M");
-        assert_eq!(compact_rate(84_000_000), "84M");
-        assert_eq!(compact_rate(1_250_000_000), "1.2G");
+        assert_eq!(compact_rate(0), "0K/s");
+        assert_eq!(compact_rate(512), "<1K/s");
+        assert_eq!(compact_rate(1_000), "1.0K/s");
+        assert_eq!(compact_rate(84_200), "84K/s");
+        assert_eq!(compact_rate(1_250_000), "1.2M/s");
+        assert_eq!(compact_rate(84_000_000), "84M/s");
+        assert_eq!(compact_rate(1_250_000_000), "1.2G/s");
     }
 }

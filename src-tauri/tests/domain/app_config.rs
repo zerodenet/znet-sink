@@ -20,6 +20,16 @@ fn default_app_config_is_gui_schema() {
 }
 
 #[test]
+fn missing_auto_start_in_legacy_config_defaults_to_managed_kernel() {
+    let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+    value["core"].as_object_mut().unwrap().remove("autoStart");
+
+    let config: AppConfig = serde_json::from_value(value).unwrap();
+
+    assert!(config.core.auto_start);
+}
+
+#[test]
 fn hidden_menu_keys_are_normalized() {
     let keys = normalize_menu_keys(vec![
         " core ".to_string(),

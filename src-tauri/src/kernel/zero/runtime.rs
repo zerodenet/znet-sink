@@ -93,11 +93,10 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     params.insert("strict_route".to_string(), json!(true));
     params.insert("dual_stack".to_string(), json!(tun.dual_stack));
 
-    // DNS hijack remains disabled for app-owned TUN until ZNet-Sink exposes a
-    // complete DNS configuration surface. Ignore persisted values from older
-    // builds so upgrading cannot make tun.start fail because runtime.dns is
-    // absent or still system-backed. Profile-owned runtime.tun is untouched.
-    params.insert("dns_hijack".to_string(), json!(false));
+    // DNS hijack is only user-selectable after the DNS configuration surface
+    // has validated and persisted runtime.dns. The frontend guards the
+    // precondition and Zero remains the final authority at tun.start.
+    params.insert("dns_hijack".to_string(), json!(tun.dns_hijack));
     Value::Object(params)
 }
 
@@ -137,10 +136,7 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
         dual_stack: bool_at(value, &["dual_stack", "dualStack"]).unwrap_or(false),
         strict_route: bool_at(value, &["strict_route", "strictRoute"]).unwrap_or(false),
         dns_hijack: bool_at(value, &["dns_hijack", "dnsHijack"]).unwrap_or(false),
-        egress_interface: parsing::string_at(
-            value,
-            &["egress_interface", "egressInterface"],
-        ),
+        egress_interface: parsing::string_at(value, &["egress_interface", "egressInterface"]),
         egress_interface_v4: parsing::string_at(
             value,
             &["egress_interface_v4", "egressInterfaceV4"],
@@ -168,7 +164,8 @@ fn from_feature_status(status: GuiFeatureStatus) -> GuiTunStatus {
 }
 
 fn bool_at(value: &Value, keys: &[&str]) -> Option<bool> {
-    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_bool))
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_bool))
 }
 
 fn string_array_at(value: &Value, keys: &[&str]) -> Vec<String> {
@@ -195,6 +192,7 @@ mod tests {
     #[test]
     fn tun_start_uses_full_capture_policy_and_persisted_interface_values() {
         let tun = AppTunConfig {
+            enabled: Some(true),
             name: Some("CustomTun".to_string()),
             addr: "10.88.0.1/24".to_string(),
             mask: "255.255.255.0".to_string(),
@@ -214,7 +212,7 @@ mod tests {
         assert_eq!(params["auto_route"], true);
         assert_eq!(params["strict_route"], true);
         assert_eq!(params["dual_stack"], true);
-        assert_eq!(params["dns_hijack"], false);
+        assert_eq!(params["dns_hijack"], true);
     }
 
     #[test]

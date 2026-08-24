@@ -176,7 +176,7 @@ export async function snapTrafficBallToEdge(
     const centerX = current.x + outerSize.width / 2;
     const centerY = current.y + outerSize.height / 2;
     const monitor = await monitorFromPoint(centerX, centerY).catch(() => null)
-      ?? await ball.currentMonitor();
+      ?? await currentMonitor();
     if (!monitor) return;
 
     const scale = monitor.scaleFactor;

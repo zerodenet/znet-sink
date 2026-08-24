@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::time::{Duration, Instant};
 use std::{
     fs,
@@ -13,7 +14,9 @@ use crate::client_core::{
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
+use crate::models::app_config::AppDnsConfig;
 use crate::models::core_process::CoreProcessState;
+use crate::models::dns_config::ClientDnsConfig;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
     GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
@@ -22,7 +25,8 @@ use crate::models::gui_core::{
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
 use crate::services::{
-    core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
+    app_config, core_config, core_process, diagnostic_storage, interaction_mode, probe,
+    proxy_config,
 };
 use crate::state::app_state::AppState;
 
@@ -388,6 +392,118 @@ pub async fn gui_apply_config(
     config: serde_json::Value,
 ) -> AppResult<serde_json::Value> {
     interaction_mode::require_pro_mode(state.inner(), "apply_config")?;
+    apply_config_transaction(state.inner(), config).await
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiDnsSettingsInput {
+    pub enabled: bool,
+    #[serde(default)]
+    pub config: Option<ClientDnsConfig>,
+    #[serde(default)]
+    pub dns_hijack: bool,
+}
+
+fn validate_dns_settings(input: &GuiDnsSettingsInput) -> AppResult<()> {
+    if input.enabled {
+        let config = input.config.as_ref().ok_or_else(|| {
+            AppError::invalid_argument("global DNS requires a configuration when enabled")
+        })?;
+        config.validate_client_shape()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gui_apply_dns_config(
+    state: State<'_, AppState>,
+    input: GuiDnsSettingsInput,
+) -> AppResult<serde_json::Value> {
+    validate_dns_settings(&input)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    let previous_app = common::lock(state.app_config(), "app_config")?.clone();
+    let mut next_app = previous_app.clone();
+    next_app.dns = AppDnsConfig {
+        enabled: input.enabled,
+        config: input.config.clone(),
+        dns_hijack: input.enabled && input.dns_hijack,
+    };
+    next_app.tun.dns_hijack = next_app.dns.dns_hijack;
+
+    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone());
+    let next_effective = active_content
+        .as_ref()
+        .map(|content| {
+            crate::services::rule_overlay::compose_effective_config_with_dns(
+                state.inner(),
+                content,
+                &next_app.dns,
+            )
+        })
+        .transpose()?;
+    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let result = if let Some(effective) = next_effective.clone().filter(|_| running) {
+        Some(
+            ZeroAdapter::new()
+                .apply_config(effective, default_opts(state.inner()))
+                .await?,
+        )
+    } else {
+        None
+    };
+
+    if let Err(error) = app_config::replace(state.inner(), next_app) {
+        if running {
+            if let Some(content) = active_content.as_ref() {
+                if let Ok(previous_effective) =
+                    crate::services::rule_overlay::compose_effective_config_with_dns(
+                        state.inner(),
+                        content,
+                        &previous_app.dns,
+                    )
+                {
+                    let _ = ZeroAdapter::new()
+                        .apply_config(previous_effective, default_opts(state.inner()))
+                        .await;
+                }
+            }
+        }
+        return Err(error);
+    }
+    if active_content.is_some() {
+        if let Err(error) = core_config::export_active(state.clone()) {
+            let _ = app_config::replace(state.inner(), previous_app.clone());
+            if let Some(content) = active_content.as_ref() {
+                if let Ok(previous_effective) =
+                    crate::services::rule_overlay::compose_effective_config_with_dns(
+                        state.inner(),
+                        content,
+                        &previous_app.dns,
+                    )
+                {
+                    if running {
+                        let _ = ZeroAdapter::new()
+                            .apply_config(previous_effective, default_opts(state.inner()))
+                            .await;
+                    }
+                }
+            }
+            return Err(error);
+        }
+    }
+    Ok(result.unwrap_or_else(
+        || serde_json::json!({ "ok": true, "applied": false, "reason": "no_active_proxy_profile" }),
+    ))
+}
+
+async fn apply_config_transaction(
+    state: &AppState,
+    config: serde_json::Value,
+) -> AppResult<serde_json::Value> {
     let _operation = state.proxy_config_operation().lock().await;
     let previous_content = common::lock(state.proxy_configs(), "proxy_config")?
         .iter()
@@ -398,33 +514,28 @@ pub async fn gui_apply_config(
                 "an active proxy config with parsed content is required before applying changes",
             )
         })?;
-    let opts = default_opts(state.inner());
-    let effective =
-        crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
+    let opts = default_opts(state);
+    let effective = crate::services::rule_overlay::compose_effective_config(state, &config)?;
     let result = ZeroAdapter::new().apply_config(effective, opts).await?;
     // The kernel accepted the config — mirror it into the active profile so
     // that config-derived views (proxy nodes, policy groups) and the next
     // core-process start reflect the live configuration.
-    if let Err(error) = proxy_config::update_active_content(state.inner(), config) {
-        let previous_effective = crate::services::rule_overlay::compose_effective_config(
-            state.inner(),
-            &previous_content,
-        )?;
+    if let Err(error) = proxy_config::update_active_content(state, config) {
+        let previous_effective =
+            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
         let _ = ZeroAdapter::new()
-            .apply_config(previous_effective, default_opts(state.inner()))
+            .apply_config(previous_effective, default_opts(state))
             .await;
         return Err(error);
     }
-    if let Err(error) = proxy_config::retarget_managed_system_proxy(state.inner()) {
-        let _ = proxy_config::update_active_content(state.inner(), previous_content.clone());
-        let previous_effective = crate::services::rule_overlay::compose_effective_config(
-            state.inner(),
-            &previous_content,
-        )?;
+    if let Err(error) = proxy_config::retarget_managed_system_proxy(state) {
+        let _ = proxy_config::update_active_content(state, previous_content.clone());
+        let previous_effective =
+            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
         let _ = ZeroAdapter::new()
-            .apply_config(previous_effective, default_opts(state.inner()))
+            .apply_config(previous_effective, default_opts(state))
             .await;
-        let _ = proxy_config::retarget_managed_system_proxy(state.inner());
+        let _ = proxy_config::retarget_managed_system_proxy(state);
         return Err(error);
     }
     Ok(result)
@@ -441,6 +552,34 @@ pub async fn gui_validate_config(
     let effective =
         crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
     ZeroAdapter::new().validate_config(effective, opts).await
+}
+
+#[tauri::command]
+pub async fn gui_validate_dns_config(
+    state: State<'_, AppState>,
+    input: GuiDnsSettingsInput,
+) -> AppResult<serde_json::Value> {
+    validate_dns_settings(&input)?;
+    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .and_then(|profile| profile.content.clone());
+    let Some(content) = active_content else {
+        return Ok(serde_json::json!({ "valid": true, "errors": [] }));
+    };
+    let dns = AppDnsConfig {
+        enabled: input.enabled,
+        config: input.config,
+        dns_hijack: input.enabled && input.dns_hijack,
+    };
+    let effective = crate::services::rule_overlay::compose_effective_config_with_dns(
+        state.inner(),
+        &content,
+        &dns,
+    )?;
+    ZeroAdapter::new()
+        .validate_config(effective, default_opts(state.inner()))
+        .await
 }
 
 /// Dry-run config apply — returns impact analysis without applying changes.
@@ -481,6 +620,30 @@ pub async fn gui_dns_lookup(
     interaction_mode::require_pro_mode(state.inner(), "dns_lookup")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().dns_lookup(hostname, opts).await
+}
+
+#[tauri::command]
+pub async fn gui_dns_cache(
+    state: State<'_, AppState>,
+    domain: Option<String>,
+    limit: Option<usize>,
+) -> AppResult<serde_json::Value> {
+    interaction_mode::require_pro_mode(state.inner(), "dns_cache")?;
+    ZeroAdapter::new()
+        .dns_cache(domain, limit, default_opts(state.inner()))
+        .await
+}
+
+#[tauri::command]
+pub async fn gui_fakeip_lookup(
+    state: State<'_, AppState>,
+    domain: Option<String>,
+    ip: Option<String>,
+) -> AppResult<serde_json::Value> {
+    interaction_mode::require_pro_mode(state.inner(), "fakeip_lookup")?;
+    ZeroAdapter::new()
+        .fakeip_lookup(domain, ip, default_opts(state.inner()))
+        .await
 }
 
 /// Route trace diagnostic.

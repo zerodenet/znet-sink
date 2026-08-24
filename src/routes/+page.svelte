@@ -28,7 +28,7 @@
   const EVENT_STREAM_RETRY_MIN_MS = 500;
   const EVENT_STREAM_RETRY_MAX_MS = 5_000;
   const SETTINGS_SECTIONS = new Set<SettingsSection>([
-    'general', 'network', 'core', 'tun', 'config', 'logs', 'about',
+    'general', 'network', 'core', 'tun', 'dns', 'config', 'logs', 'about',
   ]);
   const tabOrder = NAV_TABS.map((tab) => tab.id);
   let renderedTab = $state(store.activeTab);

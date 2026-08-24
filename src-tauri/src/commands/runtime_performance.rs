@@ -110,9 +110,7 @@ fn process_metrics(
                     sampled_at,
                 },
             );
-            previous.and_then(|previous| {
-                normalized_cpu_percent(previous, cpu_time_ns, sampled_at)
-            })
+            previous.and_then(|previous| normalized_cpu_percent(previous, cpu_time_ns, sampled_at))
         });
 
     RuntimeProcessMetrics {
@@ -229,13 +227,7 @@ mod platform {
     }
 
     fn sample_process(pid: u32) -> Option<RawProcessSample> {
-        let handle = unsafe {
-            OpenProcess(
-                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                0,
-                pid,
-            )
-        };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid) };
         if handle.is_null() {
             return None;
         }
@@ -244,9 +236,9 @@ mod platform {
         let mut exit = unsafe { std::mem::zeroed::<FILETIME>() };
         let mut kernel = unsafe { std::mem::zeroed::<FILETIME>() };
         let mut user = unsafe { std::mem::zeroed::<FILETIME>() };
-        let times_ok = unsafe {
-            GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user)
-        } != 0;
+        let times_ok =
+            unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) }
+                != 0;
 
         let mut memory = unsafe { std::mem::zeroed::<PROCESS_MEMORY_COUNTERS>() };
         memory.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
@@ -262,9 +254,8 @@ mod platform {
         }
 
         Some(RawProcessSample {
-            cpu_time_ns: times_ok.then(|| {
-                (filetime_value(kernel) + filetime_value(user)).saturating_mul(100)
-            }),
+            cpu_time_ns: times_ok
+                .then(|| (filetime_value(kernel) + filetime_value(user)).saturating_mul(100)),
             memory_bytes: memory_ok.then_some(memory.WorkingSetSize as u64),
         })
     }
@@ -295,7 +286,11 @@ mod platform {
         static VALUE: OnceLock<u64> = OnceLock::new();
         *VALUE.get_or_init(|| {
             let value = unsafe { sysconf(SC_CLK_TCK) };
-            if value > 0 { value as u64 } else { 100 }
+            if value > 0 {
+                value as u64
+            } else {
+                100
+            }
         })
     }
 

@@ -115,7 +115,9 @@ fn repair_managed_runtime(executable: &Path, install_dir: &Path) -> AppResult<()
     fs::write(&archive_path, archive)
         .map_err(|error| AppError::internal(format!("failed to stage Wintun archive: {error}")))?;
     fs::create_dir(&extract_dir).map_err(|error| {
-        AppError::internal(format!("failed to create Wintun extraction directory: {error}"))
+        AppError::internal(format!(
+            "failed to create Wintun extraction directory: {error}"
+        ))
     })?;
     expand_archive(&archive_path, &extract_dir)?;
 
@@ -236,10 +238,14 @@ fn expand_archive(archive: &Path, destination: &Path) -> AppResult<()> {
         ])
         .status()
         .map_err(|error| {
-            AppError::internal(format!("failed to launch Wintun archive extraction: {error}"))
+            AppError::internal(format!(
+                "failed to launch Wintun archive extraction: {error}"
+            ))
         })?;
     if !status.success() {
-        return Err(AppError::internal("failed to extract pinned Wintun archive"));
+        return Err(AppError::internal(
+            "failed to extract pinned Wintun archive",
+        ));
     }
     Ok(())
 }
@@ -270,7 +276,9 @@ fn read_runtime_manifest(install_dir: &Path) -> AppResult<BTreeSet<String>> {
     }
     ensure_regular_file(&path, "Zero runtime ownership manifest")?;
     let raw = fs::read_to_string(&path).map_err(|error| {
-        AppError::internal(format!("failed to read Zero runtime ownership manifest: {error}"))
+        AppError::internal(format!(
+            "failed to read Zero runtime ownership manifest: {error}"
+        ))
     })?;
     let files: Vec<String> = serde_json::from_str(&raw).map_err(|error| {
         AppError::internal(format!("invalid Zero runtime ownership manifest: {error}"))
@@ -281,18 +289,24 @@ fn read_runtime_manifest(install_dir: &Path) -> AppResult<BTreeSet<String>> {
 #[cfg(windows)]
 fn write_runtime_manifest(install_dir: &Path, files: &BTreeSet<String>) -> AppResult<()> {
     let path = install_dir.join(RUNTIME_MANIFEST_FILE);
-    let payload = serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>()).map_err(|error| {
-        AppError::internal(format!("failed to serialize Zero runtime ownership manifest: {error}"))
-    })?;
+    let payload =
+        serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>()).map_err(|error| {
+            AppError::internal(format!(
+                "failed to serialize Zero runtime ownership manifest: {error}"
+            ))
+        })?;
     fs::write(&path, payload).map_err(|error| {
-        AppError::internal(format!("failed to write Zero runtime ownership manifest: {error}"))
+        AppError::internal(format!(
+            "failed to write Zero runtime ownership manifest: {error}"
+        ))
     })
 }
 
 #[cfg(windows)]
 fn files_are_identical(left: &Path, right: &Path) -> AppResult<bool> {
-    let left_bytes = fs::read(left)
-        .map_err(|error| AppError::internal(format!("failed to read '{}': {error}", left.display())))?;
+    let left_bytes = fs::read(left).map_err(|error| {
+        AppError::internal(format!("failed to read '{}': {error}", left.display()))
+    })?;
     let right_bytes = fs::read(right).map_err(|error| {
         AppError::internal(format!("failed to read '{}': {error}", right.display()))
     })?;
@@ -321,10 +335,8 @@ impl WintunWorkspace {
                 AppError::internal(format!("failed to create Wintun workspace id: {error}"))
             })?
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "znet-sink-wintun-{}-{nonce}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("znet-sink-wintun-{}-{nonce}", std::process::id()));
         fs::create_dir(&root).map_err(|error| {
             AppError::internal(format!("failed to create Wintun workspace: {error}"))
         })?;

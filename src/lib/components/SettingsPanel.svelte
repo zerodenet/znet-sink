@@ -11,17 +11,30 @@
   const allSections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: '应用' },
     { id: 'network', label: '网络' },
-    { id: 'core',    label: '内核' },
-    { id: 'tun',     label: 'TUN' },
-    { id: 'config',  label: '配置' },
     { id: 'logs',    label: '日志' },
-    { id: 'about',   label: '关于' }
+    { id: 'core',    label: '内核运行' },
+    { id: 'dns',     label: 'DNS / Fake-IP' },
+    { id: 'tun',     label: 'TUN 接管' },
+    { id: 'config',  label: '高级配置' },
+    { id: 'about',   label: '关于' },
   ];
 
+  const sectionGroups: Record<SettingsSection, string> = {
+    general: '客户端',
+    network: '客户端',
+    logs: '客户端',
+    core: 'Zero 内核',
+    dns: 'Zero 内核',
+    tun: 'Zero 内核',
+    config: 'Zero 内核',
+    about: '其他',
+  };
+
   const sections = $derived.by(() =>
-    store.uiMode === 'lite'
+    (store.uiMode === 'lite'
       ? allSections.filter((section) => section.id !== 'config' && section.id !== 'tun')
-      : allSections,
+      : allSections
+    ).map((section) => ({ ...section, group: sectionGroups[section.id] })),
   );
 
   const panelLoaders: Record<SettingsSection, () => Promise<{ default: Component }>> = {
@@ -29,6 +42,7 @@
     network: () => import('$lib/components/settings/NetworkSettingsPanel.svelte'),
     core: () => import('$lib/components/settings/CoreConfigPanel.svelte'),
     tun: () => import('$lib/components/settings/TunSettingsPanel.svelte'),
+    dns: () => import('$lib/components/settings/DnsSettingsPanel.svelte'),
     config: () => import('$lib/components/settings/ConfigEditorPanel.svelte'),
     logs: () => import('$lib/components/settings/LogsSettingsPanel.svelte'),
     about: () => import('$lib/components/settings/AboutPanel.svelte'),

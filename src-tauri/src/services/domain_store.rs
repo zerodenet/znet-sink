@@ -1,8 +1,8 @@
-use serde::{de::DeserializeOwned, Serialize};
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-use super::data_dir;
+use super::{app_database, data_dir};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     proxy_config::ProxyConfigProfile, rule_set::RuleSetProfile, subscription::SubscriptionProfile,
@@ -24,9 +24,10 @@ pub(crate) fn load_all() -> AppResult<DomainStoreData> {
 }
 
 pub fn load_all_from_dir(dir: &Path) -> AppResult<DomainStoreData> {
+    let relational = app_database::load_domain_data(dir)?;
     Ok(DomainStoreData {
-        proxy_configs: load_vec(&dir.join(PROXY_CONFIGS_FILE))?,
-        subscriptions: load_vec(&dir.join(SUBSCRIPTIONS_FILE))?,
+        proxy_configs: relational.proxy_configs,
+        subscriptions: relational.subscriptions,
         rule_sets: load_rule_sets(&dir.join(RULE_SETS_FILE))?,
     })
 }
@@ -103,10 +104,6 @@ fn load_rule_sets(path: &Path) -> AppResult<Vec<RuleSetProfile>> {
     })
 }
 
-pub(crate) fn save_proxy_configs(items: &[ProxyConfigProfile]) -> AppResult<()> {
-    save_proxy_configs_to_dir(&data_dir()?, items)
-}
-
 pub(crate) fn save_subscriptions(items: &[SubscriptionProfile]) -> AppResult<()> {
     save_subscriptions_to_dir(&data_dir()?, items)
 }
@@ -116,20 +113,35 @@ pub(crate) fn save_rule_sets(items: &[RuleSetProfile]) -> AppResult<()> {
 }
 
 pub fn save_proxy_configs_to_dir(dir: &Path, items: &[ProxyConfigProfile]) -> AppResult<()> {
-    save_vec(&dir.join(PROXY_CONFIGS_FILE), items)
+    app_database::save_proxy_configs(dir, items)
 }
 
 pub fn save_subscriptions_to_dir(dir: &Path, items: &[SubscriptionProfile]) -> AppResult<()> {
-    save_vec(&dir.join(SUBSCRIPTIONS_FILE), items)
+    app_database::save_subscriptions(dir, items)
 }
 
 pub fn save_rule_sets_to_dir(dir: &Path, items: &[RuleSetProfile]) -> AppResult<()> {
     save_vec(&dir.join(RULE_SETS_FILE), items)
 }
 
-fn load_vec<T>(path: &Path) -> AppResult<Vec<T>>
+pub(crate) fn save_relational_data(
+    proxy_configs: &[ProxyConfigProfile],
+    subscriptions: &[SubscriptionProfile],
+) -> AppResult<()> {
+    app_database::save_domain_data(&data_dir()?, proxy_configs, subscriptions)
+}
+
+pub(crate) fn legacy_proxy_configs_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(PROXY_CONFIGS_FILE)
+}
+
+pub(crate) fn legacy_subscriptions_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(SUBSCRIPTIONS_FILE)
+}
+
+pub(crate) fn load_legacy_vec<T>(path: &Path) -> AppResult<Vec<T>>
 where
-    T: DeserializeOwned,
+    T: for<'de> Deserialize<'de>,
 {
     if !path.exists() {
         return Ok(Vec::new());
@@ -150,7 +162,7 @@ where
 
 fn save_vec<T>(path: &Path, items: &[T]) -> AppResult<()>
 where
-    T: Serialize,
+    T: serde::Serialize,
 {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| AppError {

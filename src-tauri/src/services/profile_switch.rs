@@ -47,11 +47,7 @@ pub(crate) async fn capture(
     Ok(Some((options, boundary)))
 }
 
-pub(crate) async fn reconcile(
-    state: &AppState,
-    options: CoreIpcOptions,
-    boundary: FlowBoundary,
-) {
+pub(crate) async fn reconcile(state: &AppState, options: CoreIpcOptions, boundary: FlowBoundary) {
     if boundary.flow_ids.is_empty() {
         return;
     }
@@ -83,7 +79,9 @@ pub(crate) async fn reconcile(
     let total = boundary.flow_ids.len();
     let mut failed = Vec::new();
     for flow_id in boundary.flow_ids {
-        if let Err(error) = zero_commands::close_connection(flow_id.clone(), Some(options.clone())).await {
+        if let Err(error) =
+            zero_commands::close_connection(flow_id.clone(), Some(options.clone())).await
+        {
             failed.push(json!({
                 "flowId": flow_id,
                 "code": error.code,

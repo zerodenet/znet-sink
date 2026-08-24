@@ -19,7 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -27,6 +27,7 @@ serde_yaml = "0.9"
 semver = "1"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "stream", "system-proxy"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
 tokio = { version = "1", features = ["sync", "time"] }
 sha2 = "0.10"
 windows-sys = { version = "0.61", features = [

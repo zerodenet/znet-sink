@@ -31,7 +31,8 @@ pub struct CoreKernelInfo {
     pub modified_at_unix_ms: Option<u64>,
     pub recommended_install_dir: Option<String>,
     /// Whether an active proxy config exists (checked at call time).
-    /// Used by the frontend to gate the "Start Kernel" button.
+    /// Connection and system-proxy actions require this; kernel management
+    /// itself can still start a management-only runtime without one.
     pub has_active_config: bool,
     pub warnings: Vec<String>,
 }
