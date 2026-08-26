@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { LogicalSize } from '@tauri-apps/api/dpi';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window';
   import { getGuiTrafficStats } from '$lib/services/core';
   import {
@@ -9,21 +8,17 @@
     restoreMainWindow,
     snapTrafficBallToEdge,
     clampTrafficBallSize,
+    stepTrafficBallSize,
+    TRAFFIC_BALL_MAX_SIZE_LOGICAL,
+    TRAFFIC_BALL_MIN_SIZE_LOGICAL,
     TRAFFIC_BALL_HIDDEN_EVENT,
-    TRAFFIC_BALL_SIZE_EVENT,
     TRAFFIC_BALL_SHOWN_EVENT,
   } from '$lib/services/traffic-ball';
   import type { CoreEventStatus } from '$lib/types/core';
   import type { TrafficRateSample } from '$lib/types/gui-api';
 
-  type ResizeDirection =
-    | 'East' | 'North' | 'NorthEast' | 'NorthWest'
-    | 'South' | 'SouthEast' | 'SouthWest' | 'West';
-
   const STALE_AFTER_MS = 2_500;
   const EDGE_SNAP_DEBOUNCE_MS = 180;
-  const SIZE_PERSIST_DEBOUNCE_MS = 120;
-  const RESIZE_EDGE_PX = 10;
   const INNER_TOP = 4.5;
   const INNER_BOTTOM = 91.5;
   const MIN_LIQUID_FILL = 0.18;
@@ -34,7 +29,8 @@
   let live = $state(false);
   let surfaceVisible = false;
   let lastTrafficAt = 0;
-  let resizeDirection = $state<ResizeDirection | null>(null);
+  let logicalSize = $state(128);
+  let changingSize = $state(false);
 
   function resetTraffic() {
     uploadBytesPerSecond = 0;
@@ -110,40 +106,25 @@
     return `${Math.round(bytesPerSecond)} B/s`;
   }
 
-  function resizeDirectionAt(event: MouseEvent): ResizeDirection | null {
-    const left = event.clientX <= RESIZE_EDGE_PX;
-    const right = event.clientX >= window.innerWidth - RESIZE_EDGE_PX;
-    const top = event.clientY <= RESIZE_EDGE_PX;
-    const bottom = event.clientY >= window.innerHeight - RESIZE_EDGE_PX;
-    if (top && left) return 'NorthWest';
-    if (top && right) return 'NorthEast';
-    if (bottom && left) return 'SouthWest';
-    if (bottom && right) return 'SouthEast';
-    if (left) return 'West';
-    if (right) return 'East';
-    if (top) return 'North';
-    if (bottom) return 'South';
-    return null;
-  }
-
-  function resizeCursor(direction: ResizeDirection | null): string {
-    if (direction === 'North' || direction === 'South') return 'ns-resize';
-    if (direction === 'East' || direction === 'West') return 'ew-resize';
-    if (direction === 'NorthEast' || direction === 'SouthWest') return 'nesw-resize';
-    if (direction === 'NorthWest' || direction === 'SouthEast') return 'nwse-resize';
-    return 'grab';
-  }
-
-  function handleMouseMove(event: MouseEvent) {
-    resizeDirection = resizeDirectionAt(event);
-  }
-
   function handleMouseDown(event: MouseEvent) {
-    if (event.button === 0 && event.detail === 1) {
-      const direction = resizeDirectionAt(event);
-      if (direction) void getCurrentWindow().startResizeDragging(direction).catch(() => {});
-      else void getCurrentWindow().startDragging().catch(() => {});
+    if (event.button !== 0 || event.detail !== 1) return;
+    if ((event.target as Element).closest('.traffic-size-button')) return;
+    void getCurrentWindow().startDragging().catch(() => {});
+  }
+
+  async function resize(direction: -1 | 1) {
+    if (changingSize) return;
+    changingSize = true;
+    try {
+      logicalSize = await stepTrafficBallSize(direction, getCurrentWindow());
+    } finally {
+      changingSize = false;
     }
+  }
+
+  function handleDoubleClick(event: MouseEvent) {
+    if ((event.target as Element).closest('.traffic-size-button')) return;
+    restore();
   }
 
   function restore() {
@@ -171,11 +152,7 @@
     let unlistenExit: UnlistenFn | null = null;
     let unlistenMainFocus: UnlistenFn | null = null;
     let unlistenMoved: UnlistenFn | null = null;
-    let unlistenResized: UnlistenFn | null = null;
     let snapTimer: number | null = null;
-    let sizeTimer: number | null = null;
-    let logicalSize = 128;
-    let normalizingSize = false;
     const ballWindow = getCurrentWindow();
 
     // The WebView is created only for this surface. Treat it as active before
@@ -262,32 +239,6 @@
       logicalSize = clampTrafficBallSize(Math.min(size.width, size.height) / scale);
     }).catch(() => {});
 
-    void ballWindow.onResized(async ({ payload: size }) => {
-      if (normalizingSize) return;
-      const scale = await ballWindow.scaleFactor().catch(() => 1);
-      const width = size.width / scale;
-      const height = size.height / scale;
-      const widthDelta = Math.abs(width - logicalSize);
-      const heightDelta = Math.abs(height - logicalSize);
-      const target = clampTrafficBallSize(widthDelta >= heightDelta ? width : height);
-
-      logicalSize = target;
-      if (Math.abs(width - target) > 0.75 || Math.abs(height - target) > 0.75) {
-        normalizingSize = true;
-        await ballWindow.setSize(new LogicalSize(target, target)).catch(() => {});
-        normalizingSize = false;
-      }
-
-      if (sizeTimer != null) window.clearTimeout(sizeTimer);
-      sizeTimer = window.setTimeout(() => {
-        sizeTimer = null;
-        void emitTo('main', TRAFFIC_BALL_SIZE_EVENT, { size: target }).catch(() => {});
-      }, SIZE_PERSIST_DEBOUNCE_MS);
-    }).then((unlisten) => {
-      if (mounted) unlistenResized = unlisten;
-      else unlisten();
-    }).catch(() => {});
-
     const staleTimer = window.setInterval(() => {
       if (surfaceVisible && lastTrafficAt > 0 && Date.now() - lastTrafficAt > STALE_AFTER_MS) {
         uploadBytesPerSecond = 0;
@@ -300,7 +251,6 @@
       mounted = false;
       window.clearInterval(staleTimer);
       if (snapTimer != null) window.clearTimeout(snapTimer);
-      if (sizeTimer != null) window.clearTimeout(sizeTimer);
       unlistenShown?.();
       unlistenHidden?.();
       unlistenTraffic?.();
@@ -308,7 +258,6 @@
       unlistenExit?.();
       unlistenMainFocus?.();
       unlistenMoved?.();
-      unlistenResized?.();
     };
   });
 </script>
@@ -317,18 +266,16 @@
   <title>ZNet Sink Traffic</title>
 </svelte:head>
 
-<button
-  type="button"
+<div
   class="traffic-ball"
   class:live
+  role="button"
+  tabindex="0"
   onmousedown={handleMouseDown}
-  onmousemove={handleMouseMove}
-  onmouseleave={() => resizeDirection = null}
-  ondblclick={restore}
+  ondblclick={handleDoubleClick}
   oncontextmenu={handleContextMenu}
   onkeydown={handleKeyDown}
-  style={`cursor: ${resizeCursor(resizeDirection)};`}
-  aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口。`}
+  aria-label={`实时流量，下载 ${formatFullRate(downloadBytesPerSecond)}，上传 ${formatFullRate(uploadBytesPerSecond)}。拖动可移动，双击恢复主窗口，悬浮后可调整大小。`}
 >
   <svg
     class="traffic-fluid"
@@ -398,16 +345,34 @@
     </span>
   </span>
 
-  <span class="resize-affordance" aria-hidden="true"></span>
-  <span class="traffic-hint" aria-hidden="true">
-    <span class="traffic-hint-primary">
-      <svg viewBox="0 0 14 14"><rect x="2.25" y="2.25" width="9.5" height="9.5" rx="2" /><path d="M5 7h4M7 5v4" /></svg>
+  <span class="traffic-hint">
+    <span class="traffic-hint-copy">
       <strong>双击打开</strong>
+      <span>拖动移动</span>
     </span>
-    <span class="traffic-hint-divider"></span>
-    <span class="traffic-hint-secondary">拖动移动</span>
+    <span class="traffic-size-controls">
+      <button
+        type="button"
+        class="traffic-size-button"
+        aria-label="缩小流量球"
+        title="缩小"
+        disabled={changingSize || logicalSize <= TRAFFIC_BALL_MIN_SIZE_LOGICAL}
+        onmousedown={(event) => event.stopPropagation()}
+        onclick={(event) => { event.stopPropagation(); void resize(-1); }}
+      >−</button>
+      <span class="traffic-size-value" aria-live="polite">{logicalSize}</span>
+      <button
+        type="button"
+        class="traffic-size-button"
+        aria-label="放大流量球"
+        title="放大"
+        disabled={changingSize || logicalSize >= TRAFFIC_BALL_MAX_SIZE_LOGICAL}
+        onmousedown={(event) => event.stopPropagation()}
+        onclick={(event) => { event.stopPropagation(); void resize(1); }}
+      >+</button>
+    </span>
   </span>
-</button>
+</div>
 
 <style>
   :global(html),
@@ -571,13 +536,13 @@
 
   .traffic-hint {
     position: absolute;
-    inset: 11.458vmin;
+    inset: 8.333vmin;
     z-index: 3;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5.208vmin;
+    gap: 4.167vmin;
     border-radius: 50%;
     color: rgba(248, 252, 255, 0.98);
     pointer-events: none;
@@ -587,40 +552,81 @@
     transition: opacity 140ms ease, transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .traffic-hint-primary {
-    display: inline-flex;
+  .traffic-hint-copy {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 4.167vmin;
-    font-size: 10.417vmin;
+    justify-content: center;
+    gap: 2.083vmin;
+    text-align: center;
     line-height: 1;
     white-space: nowrap;
   }
 
-  .traffic-hint-primary svg {
-    width: 10.417vmin;
-    height: 10.417vmin;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.25;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .traffic-hint-primary strong {
+  .traffic-hint-copy strong {
+    width: 100%;
+    font-size: clamp(7px, 10.417vmin, 21px);
     font-weight: 650;
+    text-align: center;
   }
 
-  .traffic-hint-divider {
-    width: 35.417vmin;
-    height: 1.5625vmin;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  .traffic-hint-copy > span {
+    width: 100%;
+    font-size: clamp(6px, 7.8125vmin, 16px);
+    color: rgba(239, 246, 255, 0.78);
+    text-align: center;
   }
 
-  .traffic-hint-secondary {
-    font-size: 8.854vmin;
+  .traffic-size-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(2px, 3.125vmin, 8px);
+    pointer-events: auto;
+  }
+
+  .traffic-size-button {
+    appearance: none;
+    width: clamp(16px, 17.188vmin, 38px);
+    height: clamp(16px, 17.188vmin, 38px);
+    display: grid;
+    place-items: center;
+    padding: 0 0 1px;
+    border: 1px solid rgba(226, 242, 255, 0.48);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.98);
+    background: rgba(15, 23, 42, 0.28);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.22);
+    font: 600 clamp(11px, 13.281vmin, 28px) / 1 var(--font-sans, system-ui, sans-serif);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
+  }
+
+  .traffic-size-button:hover:not(:disabled),
+  .traffic-size-button:focus-visible {
+    border-color: rgba(255, 255, 255, 0.86);
+    background: rgba(37, 99, 235, 0.44);
+    outline: none;
+  }
+
+  .traffic-size-button:active:not(:disabled) {
+    transform: scale(0.9);
+  }
+
+  .traffic-size-button:disabled {
+    cursor: default;
+    opacity: 0.34;
+  }
+
+  .traffic-size-value {
+    width: clamp(17px, 19.531vmin, 44px);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: clamp(6px, 7.8125vmin, 16px);
     line-height: 1;
-    color: rgba(239, 246, 255, 0.76);
-    white-space: nowrap;
+    color: rgba(248, 252, 255, 0.9);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
 
   .traffic-ball:not(.live) .glass-shell {
@@ -653,18 +659,18 @@
     transition-delay: 220ms;
   }
 
-  .traffic-ball:active {
+  .traffic-ball:active:not(:has(.traffic-size-button:active)) {
     cursor: grabbing;
     transform: scale(0.985);
   }
 
-  .traffic-ball:active .traffic-hint {
+  .traffic-ball:active:not(:has(.traffic-size-button:active)) .traffic-hint {
     opacity: 0;
     transform: scale(0.96);
     transition-delay: 0ms;
   }
 
-  .traffic-ball:active .traffic-readout {
+  .traffic-ball:active:not(:has(.traffic-size-button:active)) .traffic-readout {
     opacity: 1;
     transition-delay: 0ms;
   }
@@ -676,21 +682,6 @@
     border-radius: 50%;
     box-shadow: inset 0 0 0 1.5625vmin rgba(224, 242, 254, 0.92);
     pointer-events: none;
-  }
-
-  .resize-affordance {
-    position: absolute;
-    inset: 2.5vmin;
-    z-index: 4;
-    border-radius: 50%;
-    border: 1px dashed rgba(226, 242, 255, 0.46);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 140ms ease;
-  }
-
-  .traffic-ball:hover .resize-affordance {
-    opacity: 0.72;
   }
 
   @media (prefers-reduced-motion: no-preference) {

@@ -20,18 +20,25 @@ assert.deepEqual(
     maxWidth: trafficBallWindow?.maxWidth,
     maxHeight: trafficBallWindow?.maxHeight,
   },
-  { resizable: true, minWidth: 64, minHeight: 64, maxWidth: 256, maxHeight: 256 },
-  'the floating traffic ball should expose a bounded native resize surface',
+  { resizable: false, minWidth: 64, minHeight: 64, maxWidth: 256, maxHeight: 256 },
+  'the floating traffic ball should use bounded in-surface size controls instead of native edge resizing',
 );
 assert.ok(
-  trafficBallPage.includes('startResizeDragging(direction)')
-    && trafficBallPage.includes('ballWindow.onResized(')
-    && trafficBallPage.includes('new LogicalSize(target, target)')
+  trafficBallPage.includes('stepTrafficBallSize(direction, getCurrentWindow())')
+    && trafficBallPage.includes('class="traffic-size-button"')
+    && !trafficBallPage.includes('startResizeDragging(')
+    && !trafficBallPage.includes('ballWindow.onResized(')
     && trafficBallPage.includes('surfaceVisible = true;')
     && trafficBallService.includes('TRAFFIC_BALL_MIN_SIZE_LOGICAL = 64')
     && trafficBallService.includes('TRAFFIC_BALL_MAX_SIZE_LOGICAL = 256')
     && trafficBallService.includes('TRAFFIC_BALL_SIZE_STORAGE_KEY'),
   'traffic-ball resizing should stay square, persist the selected size, and avoid the first-show listener race',
+);
+assert.ok(
+  !trafficBallService.includes('traffic-ball:destroy-request')
+    && !trafficSampler.includes('.destroy()')
+    && trafficBallService.includes('await ball.hide().catch(() => {});'),
+  'the lazily-created traffic-ball WebView should be hidden and reused without an ACL-gated destroy race',
 );
 assert.ok(
   trafficSampler.includes('TRAFFIC_RATE_SAMPLE_EVENT')

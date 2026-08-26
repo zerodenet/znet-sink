@@ -9,8 +9,8 @@
 //! forwarded only to an active traffic-ball window.
 //!
 //! The traffic-ball WebView is created lazily from the static Tauri window
-//! config. The normal application baseline therefore remains a single WebView;
-//! the transparent 128x128 WebView exists only while the floating ball is in use.
+//! config, then hidden and reused. Reusing the surface avoids racing a later
+//! show request against asynchronous WebView destruction.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -30,7 +30,6 @@ const TRAFFIC_RATE_SAMPLE_EVENT: &str = "traffic:rate-sampled";
 const TRAFFIC_BALL_LABEL: &str = "traffic-ball";
 const TRAFFIC_BALL_CREATE_REQUEST_EVENT: &str = "traffic-ball:create-request";
 const TRAFFIC_BALL_READY_EVENT: &str = "traffic-ball:ready";
-const TRAFFIC_BALL_DESTROY_REQUEST_EVENT: &str = "traffic-ball:destroy-request";
 
 static TRAY_BASELINE: OnceLock<Mutex<Option<TrafficSample>>> = OnceLock::new();
 static TRAFFIC_BALL_CREATING: AtomicBool = AtomicBool::new(false);
@@ -171,13 +170,6 @@ fn install_traffic_ball_lifecycle(app_handle: &AppHandle) {
                 &create_app,
                 Err(format!("failed to spawn traffic-ball creator: {error}")),
             );
-        }
-    });
-
-    let destroy_app = app_handle.clone();
-    app_handle.listen(TRAFFIC_BALL_DESTROY_REQUEST_EVENT, move |_| {
-        if let Some(window) = destroy_app.get_webview_window(TRAFFIC_BALL_LABEL) {
-            let _ = window.destroy();
         }
     });
 }

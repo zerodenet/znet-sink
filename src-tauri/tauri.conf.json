@@ -37,7 +37,7 @@
         "transparent": true,
         "visible": false,
         "create": false,
-        "resizable": true,
+        "resizable": false,
         "maximizable": false,
         "minimizable": false,
         "closable": false,

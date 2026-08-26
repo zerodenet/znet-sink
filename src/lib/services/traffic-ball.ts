@@ -22,9 +22,9 @@ const TRAFFIC_BALL_POSITION_EVENT = 'traffic-ball:position';
 export const TRAFFIC_BALL_SIZE_EVENT = 'traffic-ball:size';
 const TRAFFIC_BALL_CREATE_REQUEST_EVENT = 'traffic-ball:create-request';
 const TRAFFIC_BALL_READY_EVENT = 'traffic-ball:ready';
-const TRAFFIC_BALL_DESTROY_REQUEST_EVENT = 'traffic-ball:destroy-request';
 export const TRAFFIC_BALL_SHOWN_EVENT = 'traffic-ball:shown';
 export const TRAFFIC_BALL_HIDDEN_EVENT = 'traffic-ball:hidden';
+const TRAFFIC_BALL_SIZE_STEPS = [64, 96, 128, 160, 192, 224, 256] as const;
 
 type SavedPosition = { x: number; y: number };
 type SavedSize = { size: number };
@@ -98,10 +98,6 @@ async function requestTrafficBallWindow(): Promise<Window> {
   return created;
 }
 
-async function destroyTrafficBallWindow(): Promise<void> {
-  await emit(TRAFFIC_BALL_DESTROY_REQUEST_EVENT).catch(() => {});
-}
-
 async function ensurePositionListener(): Promise<void> {
   if (positionListenerInstalled || getCurrentWindow().label !== MAIN_WINDOW_LABEL) return;
   positionListenerInstalled = true;
@@ -139,6 +135,26 @@ async function rememberSize(ball: Window): Promise<void> {
   } catch {
     // Size persistence is best-effort, just like position persistence.
   }
+}
+
+export async function stepTrafficBallSize(
+  direction: -1 | 1,
+  ball: Window = getCurrentWindow(),
+): Promise<number> {
+  const [physicalSize, scale] = await Promise.all([ball.innerSize(), ball.scaleFactor()]);
+  const current = clampTrafficBallSize(
+    Math.min(physicalSize.width, physicalSize.height) / scale,
+  );
+  const target = direction < 0
+    ? [...TRAFFIC_BALL_SIZE_STEPS].reverse().find((size) => size < current) ?? TRAFFIC_BALL_MIN_SIZE_LOGICAL
+    : TRAFFIC_BALL_SIZE_STEPS.find((size) => size > current) ?? TRAFFIC_BALL_MAX_SIZE_LOGICAL;
+
+  await ball.setSize(new LogicalSize(target, target));
+  persistSavedSize(target);
+  await emitTo(MAIN_WINDOW_LABEL, TRAFFIC_BALL_SIZE_EVENT, { size: target } satisfies SavedSize)
+    .catch(() => {});
+  await snapTrafficBallToEdge(ball);
+  return target;
 }
 
 async function rememberPosition(ball: Window): Promise<void> {
@@ -197,7 +213,8 @@ async function performShowTrafficBall(mainWindow: Window): Promise<void> {
     await ball.show();
     await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_SHOWN_EVENT);
     await mainWindow.hide();
-  } catch {
+  } catch (error) {
+    console.error('failed to show traffic ball', error);
     // Preserve a usable fallback if the floating window cannot be created on
     // a platform: keep main usable and fall back to normal minimization.
     await mainWindow.show().catch(() => {});
@@ -266,7 +283,6 @@ export async function hideTrafficBall(): Promise<void> {
   await rememberSize(ball);
   await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
   await ball.hide().catch(() => {});
-  await destroyTrafficBallWindow();
 }
 
 export async function restoreMainWindow(): Promise<void> {
@@ -284,6 +300,5 @@ export async function restoreMainWindow(): Promise<void> {
   if (ball) {
     await emitTo(TRAFFIC_BALL_LABEL, TRAFFIC_BALL_HIDDEN_EVENT).catch(() => {});
     await ball.hide().catch(() => {});
-    await destroyTrafficBallWindow();
   }
 }
