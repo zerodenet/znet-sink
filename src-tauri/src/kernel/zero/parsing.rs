@@ -9,9 +9,11 @@ use serde_json::Value;
 use crate::errors::{AppError, AppResult};
 use crate::models::gui_core::{
     GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
-    GuiConnectionCloseResult, GuiConnectionList, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability, GuiTargetProbeResult,
-    GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
+    GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
+    GuiConnectionSocketBinding, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember,
+    GuiPolicySelectionResult, GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats,
+    GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -301,6 +303,9 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
     let route = nested_value(value, &["route"]);
     let result = nested_value(value, &["result"]);
     let failure = result.and_then(|result| nested_value(result, &["failure"]));
+    let network_context = path
+        .and_then(|path| path.get("network").or_else(|| path.get("networkContext")))
+        .and_then(parse_connection_network_context);
     let remote = path
         .and_then(|path| nested_value(path, &["remote"]))
         .or_else(|| failure.and_then(|failure| nested_value(failure, &["remote"])));
@@ -381,7 +386,12 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
             .and_then(|outbound| string_at(outbound, &["tag", "protocol"]))
             .or_else(|| string_at(value, &["outbound_tag", "outboundTag"])),
         outbound_protocol: outbound.and_then(|outbound| string_at(outbound, &["protocol", "type"])),
-        remote_destination: endpoint_display(remote_host.as_deref(), remote_port),
+        remote_destination: endpoint_display(remote_host.as_deref(), remote_port).or_else(|| {
+            network_context
+                .as_ref()
+                .and_then(|network| network.remote_address.clone())
+        }),
+        network_context,
         policy_tag: nested_value(value, &["policy"])
             .and_then(|policy| string_at(policy, &["tag", "policy_tag", "policyTag"]))
             .or_else(|| route.and_then(|route| string_at(route, &["target"])))
@@ -456,6 +466,95 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
         ),
         duration_ms: u64_at(timing, &["duration_ms", "durationMs"]),
     })
+}
+
+fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetworkContext> {
+    value.as_object()?;
+    let resolved_candidates = value
+        .get("resolved_candidates")
+        .or_else(|| value.get("resolvedCandidates"))
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(parse_network_address).collect())
+        .unwrap_or_default();
+    let selected_interface = value
+        .get("selected_interface")
+        .or_else(|| value.get("selectedInterface"))
+        .and_then(parse_network_interface);
+    let egress = value.get("egress").and_then(|egress| {
+        egress.as_object()?;
+        Some(GuiConnectionEgressContext {
+            generation: u64_at(egress, &["generation"]),
+            address_family: string_at(egress, &["address_family", "addressFamily"]),
+            tun_active: bool_at(egress, &["tun_active", "tunActive"]),
+            configured_interface: egress
+                .get("configured_interface")
+                .or_else(|| egress.get("configuredInterface"))
+                .and_then(parse_network_interface),
+            unavailable_reason: string_at(egress, &["unavailable_reason", "unavailableReason"]),
+        })
+    });
+    let route_lookup = value
+        .get("route_lookup")
+        .or_else(|| value.get("routeLookup"))
+        .and_then(|lookup| {
+            lookup.as_object()?;
+            Some(GuiConnectionRouteLookup {
+                status: string_at(lookup, &["status"]),
+                source_address: string_at(lookup, &["source_address", "sourceAddress"]),
+                error: string_at(lookup, &["error"]),
+            })
+        });
+    let socket_binding = value
+        .get("socket_binding")
+        .or_else(|| value.get("socketBinding"))
+        .and_then(|binding| {
+            binding.as_object()?;
+            Some(GuiConnectionSocketBinding {
+                mode: string_at(binding, &["mode"]),
+                reason: string_at(binding, &["reason"]),
+                interface_bound: bool_at(binding, &["interface_bound", "interfaceBound"]),
+            })
+        });
+
+    let context = GuiConnectionNetworkContext {
+        local_address: value
+            .get("local_address")
+            .or_else(|| value.get("localAddress"))
+            .and_then(parse_network_address),
+        remote_address: value
+            .get("remote_address")
+            .or_else(|| value.get("remoteAddress"))
+            .and_then(parse_network_address),
+        resolved_candidates,
+        selected_interface,
+        egress,
+        route_lookup,
+        socket_binding,
+        connect_stage: string_at(value, &["connect_stage", "connectStage"]),
+    };
+
+    let populated = context.local_address.is_some()
+        || context.remote_address.is_some()
+        || !context.resolved_candidates.is_empty()
+        || context.selected_interface.is_some()
+        || context.egress.is_some()
+        || context.route_lookup.is_some()
+        || context.socket_binding.is_some()
+        || context.connect_stage.is_some();
+    populated.then_some(context)
+}
+
+fn parse_network_interface(value: &Value) -> Option<GuiConnectionNetworkInterface> {
+    Some(GuiConnectionNetworkInterface {
+        name: string_at(value, &["name"])?,
+        index: u64_at(value, &["index"]),
+    })
+}
+
+fn parse_network_address(value: &Value) -> Option<String> {
+    let host = string_at(value, &["host", "address", "ip", "value"]);
+    let port = u64_at(value, &["port"]);
+    endpoint_display(host.as_deref(), port)
 }
 
 fn endpoint_display(host: Option<&str>, port: Option<u64>) -> Option<String> {

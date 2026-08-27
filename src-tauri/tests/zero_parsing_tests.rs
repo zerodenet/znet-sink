@@ -351,6 +351,32 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
             "path": {
                 "outbound": { "tag": "US-Lite", "protocol": "vmess" },
                 "remote": { "host": "8.163.113.57", "port": 443 },
+                "network": {
+                    "local_address": { "host": "192.168.50.10", "port": 52864 },
+                    "remote_address": { "host": "17.57.147.6", "port": 5223 },
+                    "resolved_candidates": [
+                        { "host": "17.57.147.6", "port": 5223 },
+                        { "host": "17.57.147.7", "port": 5223 }
+                    ],
+                    "selected_interface": { "name": "Ethernet", "index": 12 },
+                    "egress": {
+                        "generation": 9,
+                        "address_family": "ipv4",
+                        "tun_active": true,
+                        "configured_interface": { "name": "Ethernet", "index": 12 },
+                        "unavailable_reason": "route lease unavailable"
+                    },
+                    "route_lookup": {
+                        "status": "resolved",
+                        "source_address": "192.168.50.10"
+                    },
+                    "socket_binding": {
+                        "mode": "system",
+                        "reason": "tun_egress_unavailable",
+                        "interface_bound": false
+                    },
+                    "connect_stage": "select_egress"
+                },
                 "relay_chain": [
                     { "tag": "entry", "protocol": "shadowsocks" },
                     { "tag": "US-Lite", "protocol": "vmess" }
@@ -398,6 +424,39 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
     assert_eq!(conn.selection_chain, vec!["Proxy", "US-Lite"]);
     assert_eq!(conn.relay_chain, vec!["entry", "US-Lite"]);
     assert_eq!(conn.remote_destination.as_deref(), Some("8.163.113.57:443"));
+    let network = conn.network_context.expect("network context");
+    assert_eq!(
+        network.local_address.as_deref(),
+        Some("192.168.50.10:52864")
+    );
+    assert_eq!(network.remote_address.as_deref(), Some("17.57.147.6:5223"));
+    assert_eq!(network.resolved_candidates.len(), 2);
+    assert_eq!(
+        network
+            .selected_interface
+            .as_ref()
+            .map(|item| item.name.as_str()),
+        Some("Ethernet")
+    );
+    assert_eq!(
+        network.egress.as_ref().and_then(|item| item.tun_active),
+        Some(true)
+    );
+    assert_eq!(
+        network
+            .egress
+            .as_ref()
+            .and_then(|item| item.unavailable_reason.as_deref()),
+        Some("route lease unavailable")
+    );
+    assert_eq!(
+        network
+            .socket_binding
+            .as_ref()
+            .and_then(|item| item.interface_bound),
+        Some(false)
+    );
+    assert_eq!(network.connect_stage.as_deref(), Some("select_egress"));
     assert_eq!(conn.failure_stage.as_deref(), Some("relay"));
     assert_eq!(conn.failure_code.as_deref(), Some("io"));
     assert_eq!(conn.bytes_up, 12294);
@@ -413,6 +472,17 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
             "flow_id": "flow-1",
             "network": "tcp",
             "target": { "host": "example.com", "port": 443 },
+            "path": {
+                "network": {
+                    "egress": {
+                        "generation": 4,
+                        "address_family": "ipv4",
+                        "tun_active": false,
+                        "unavailable_reason": "tun inactive"
+                    },
+                    "connect_stage": "select_egress"
+                }
+            },
             "traffic": { "bytes_up": 10, "bytes_down": 20 }
         }
     }));
@@ -423,6 +493,14 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
     assert_eq!(
         wire["payload"]["data"]["destination"],
         json!("example.com:443")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["connectStage"],
+        json!("select_egress")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["egress"]["tunActive"],
+        json!(false)
     );
 
     let GuiEventData::Connection(connection) = event.payload else {

@@ -3,10 +3,10 @@ import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime 
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
+import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
-import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
-import type { TrafficRateSample } from '$lib/types/gui-api';
+import type { GuiConnectionItem, PolicyProbeCompletedEvent, TrafficRateSample } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
@@ -525,6 +525,7 @@ class CoreEventsService {
       outboundTag: typeof o['outboundTag'] === 'string' ? o['outboundTag'] : undefined,
       outboundProtocol: typeof o['outboundProtocol'] === 'string' ? o['outboundProtocol'] : undefined,
       remoteDestination: typeof o['remoteDestination'] === 'string' ? o['remoteDestination'] : undefined,
+      networkContext: parseConnectionNetworkContext(o['networkContext']),
       policyTag: typeof o['policyTag'] === 'string' ? o['policyTag'] : undefined,
       routeMode: typeof o['routeMode'] === 'string' ? o['routeMode'] : undefined,
       routeAction: typeof o['routeAction'] === 'string' ? o['routeAction'] : undefined,

@@ -262,6 +262,52 @@ pub struct GuiConnectionList {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuiConnectionNetworkInterface {
+    pub name: String,
+    pub index: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionEgressContext {
+    pub generation: Option<u64>,
+    pub address_family: Option<String>,
+    pub tun_active: Option<bool>,
+    pub configured_interface: Option<GuiConnectionNetworkInterface>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionRouteLookup {
+    pub status: Option<String>,
+    pub source_address: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionSocketBinding {
+    pub mode: Option<String>,
+    pub reason: Option<String>,
+    pub interface_bound: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionNetworkContext {
+    pub local_address: Option<String>,
+    pub remote_address: Option<String>,
+    pub resolved_candidates: Vec<String>,
+    pub selected_interface: Option<GuiConnectionNetworkInterface>,
+    pub egress: Option<GuiConnectionEgressContext>,
+    pub route_lookup: Option<GuiConnectionRouteLookup>,
+    pub socket_binding: Option<GuiConnectionSocketBinding>,
+    pub connect_stage: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuiConnection {
     pub flow_id: String,
     pub revision: Option<u64>,
@@ -286,6 +332,7 @@ pub struct GuiConnection {
     pub outbound_tag: Option<String>,
     pub outbound_protocol: Option<String>,
     pub remote_destination: Option<String>,
+    pub network_context: Option<GuiConnectionNetworkContext>,
     pub policy_tag: Option<String>,
     pub route_mode: Option<String>,
     pub route_action: Option<String>,

@@ -1,4 +1,5 @@
 import type { ConnectionWireMetadata } from '$lib/services/connection-wire';
+import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 import type { DebugFrame } from '$lib/types/debug';
 import type { GuiConnectionItem } from '$lib/types/gui-api';
 
@@ -59,6 +60,7 @@ function parseCompletedRecord(raw: Record<string, unknown>): GuiConnectionItem |
   const source = objectValue(raw['source']) ?? {};
   const route = objectValue(raw['route']) ?? {};
   const path = objectValue(raw['path']) ?? {};
+  const networkContext = parseConnectionNetworkContext(path['network'] ?? path['networkContext']);
   const outbound = objectValue(path['outbound']) ?? objectValue(raw['outbound']) ?? {};
   const remote = objectValue(path['remote']) ?? {};
   const traffic = objectValue(raw['traffic']) ?? raw;
@@ -97,7 +99,8 @@ function parseCompletedRecord(raw: Record<string, unknown>): GuiConnectionItem |
     outboundProtocol: text(outbound, ['protocol']),
     remoteDestination: text(remote, ['host'])
       ? endpoint(text(remote, ['host']) as string, number(remote, ['port']))
-      : undefined,
+      : networkContext?.remoteAddress,
+    networkContext,
     policyTag: text(raw, ['policy_tag', 'policyTag']),
     routeMode: text(route, ['mode']),
     routeAction: text(route, ['action']),

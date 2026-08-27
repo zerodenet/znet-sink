@@ -1,5 +1,6 @@
 import type { DebugFrame } from '$lib/types/debug';
 import type { GuiConnectionItem } from '$lib/types/gui-api';
+import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 
 export type ConnectionWireSource = 'event' | 'active_flows' | 'recent_flows';
 
@@ -97,6 +98,10 @@ function hydrateConnectionFromRaw(
   if (!raw) return normalized;
 
   const source = objectValue(raw['source']);
+  const path = objectValue(raw['path']);
+  const networkContext = parseConnectionNetworkContext(
+    path?.['network'] ?? path?.['networkContext'],
+  );
   const throughput = objectValue(raw['throughput']) ?? raw;
   const timing = objectValue(raw['timing']) ?? raw;
   const target = objectValue(raw['target']) ?? raw;
@@ -131,6 +136,11 @@ function hydrateConnectionFromRaw(
     processPath: firstText(
       normalized.processPath,
       stringValue(source ?? raw, ['process_path', 'processPath']),
+    ),
+    networkContext: normalized.networkContext ?? networkContext,
+    remoteDestination: firstText(
+      normalized.remoteDestination,
+      networkContext?.remoteAddress,
     ),
     throughputUpBps: firstNumber(
       normalized.throughputUpBps,
