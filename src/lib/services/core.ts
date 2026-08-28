@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiFakeIpClearInput, GuiFakeIpClearResult, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
 import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
@@ -575,6 +575,10 @@ export async function guiDnsCache(domain?: string, limit?: number): Promise<DnsC
 
 export async function guiFakeIpLookup(input: { domain?: string; ip?: string }): Promise<FakeIpLookupResult> {
   return invoke<FakeIpLookupResult>('gui_fakeip_lookup', input);
+}
+
+export async function guiClearFakeIp(input?: GuiFakeIpClearInput): Promise<GuiFakeIpClearResult> {
+  return invoke<GuiFakeIpClearResult>('gui_clear_fake_ip', { input });
 }
 
 export async function guiTraceRoute(

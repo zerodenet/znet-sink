@@ -496,6 +496,7 @@ pub fn run() {
             gui_core_commands::gui_dns_lookup,
             gui_core_commands::gui_dns_cache,
             gui_core_commands::gui_fakeip_lookup,
+            gui_core_commands::gui_clear_fake_ip,
             gui_core_commands::gui_trace_route,
             gui_core_commands::gui_recent_connections,
             gui_core_commands::gui_sinks,

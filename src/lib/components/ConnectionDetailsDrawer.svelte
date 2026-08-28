@@ -197,6 +197,16 @@
     }
   }
 
+  function interfaceLabel(value?: { name: string; index?: number }): string {
+    if (!value) return '未提供';
+    return isNumber(value.index) ? `${value.name} · #${value.index}` : value.name;
+  }
+
+  function booleanLabel(value: boolean | undefined, positive: string, negative: string): string {
+    if (value === undefined) return '未提供';
+    return value ? positive : negative;
+  }
+
   function rawSourceLabel(source?: string): string {
     switch (source) {
       case 'event': return '事件流';
@@ -332,6 +342,36 @@
                 {#if connection.relayChain.length > 0}<div class="property wide"><span>中继链</span><strong>{connection.relayChain.join(' → ')}</strong></div>{/if}
               </div>
             </section>
+
+            {#if connection.networkContext}
+              <section class="detail-section">
+                <h3>网络出口</h3>
+                <div class="property-grid">
+                  {#if hasText(connection.networkContext.connectStage)}<div class="property"><span>连接阶段</span><strong>{connection.networkContext.connectStage}</strong></div>{/if}
+                  {#if hasText(connection.networkContext.localAddress)}<div class="property"><span>本地地址</span><strong>{connection.networkContext.localAddress}</strong></div>{/if}
+                  {#if hasText(connection.networkContext.remoteAddress)}<div class="property"><span>远端地址</span><strong>{connection.networkContext.remoteAddress}</strong></div>{/if}
+                  {#if connection.networkContext.resolvedCandidates.length > 0}<div class="property wide"><span>解析候选</span><strong>{connection.networkContext.resolvedCandidates.join(' · ')}</strong></div>{/if}
+                  {#if connection.networkContext.egress}
+                    {#if hasText(connection.networkContext.egress.addressFamily)}<div class="property"><span>地址族</span><strong>{connection.networkContext.egress.addressFamily}</strong></div>{/if}
+                    {#if connection.networkContext.egress.tunActive !== undefined}<div class="property"><span>TUN 出口</span><strong>{booleanLabel(connection.networkContext.egress.tunActive, '已启用', '未启用')}</strong></div>{/if}
+                    {#if isNumber(connection.networkContext.egress.generation)}<div class="property"><span>出口代次</span><strong>{connection.networkContext.egress.generation}</strong></div>{/if}
+                    {#if connection.networkContext.egress.configuredInterface}<div class="property"><span>配置接口</span><strong>{interfaceLabel(connection.networkContext.egress.configuredInterface)}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.egress.unavailableReason)}<div class="property wide failure"><span>出口不可用原因</span><strong>{connection.networkContext.egress.unavailableReason}</strong></div>{/if}
+                  {/if}
+                  {#if connection.networkContext.selectedInterface}<div class="property"><span>选中接口</span><strong>{interfaceLabel(connection.networkContext.selectedInterface)}</strong></div>{/if}
+                  {#if connection.networkContext.routeLookup}
+                    {#if hasText(connection.networkContext.routeLookup.status)}<div class="property"><span>路由查询</span><strong>{connection.networkContext.routeLookup.status}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.routeLookup.sourceAddress)}<div class="property"><span>路由源地址</span><strong>{connection.networkContext.routeLookup.sourceAddress}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.routeLookup.error)}<div class="property wide failure"><span>路由查询错误</span><strong>{connection.networkContext.routeLookup.error}</strong></div>{/if}
+                  {/if}
+                  {#if connection.networkContext.socketBinding}
+                    {#if hasText(connection.networkContext.socketBinding.mode)}<div class="property"><span>Socket 绑定模式</span><strong>{connection.networkContext.socketBinding.mode}</strong></div>{/if}
+                    {#if connection.networkContext.socketBinding.interfaceBound !== undefined}<div class="property"><span>接口绑定</span><strong>{booleanLabel(connection.networkContext.socketBinding.interfaceBound, '已绑定', '未绑定')}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.socketBinding.reason)}<div class="property wide"><span>绑定原因</span><strong>{connection.networkContext.socketBinding.reason}</strong></div>{/if}
+                  {/if}
+                </div>
+              </section>
+            {/if}
 
             <section class="detail-section">
               <h3>时间</h3>

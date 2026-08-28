@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { Clipboard, LoaderCircle, Network, Search, Settings2 } from '@lucide/svelte';
+  import { Clipboard, LoaderCircle, Network, Search, Settings2, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import * as Select from '$lib/components/ui/select';
-  import { getAppErrorMessage, guiDnsCache, guiDnsLookup, guiFakeIpLookup, guiTraceRoute } from '$lib/services/core';
+  import { getAppErrorMessage, guiClearFakeIp, guiDnsCache, guiDnsLookup, guiFakeIpLookup, guiTraceRoute } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
   import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult, DnsRecord, TraceHop } from '$lib/types/diagnostics';
@@ -19,8 +19,10 @@
   let fakeQuery = $state('');
   let fakeDirection = $state<'domain' | 'ip'>('domain');
   let fakeLoading = $state(false);
+  let fakeClearLoading = $state(false);
   let fakeResult = $state<FakeIpLookupResult | null>(null);
   let cacheResult = $state<DnsCacheResult | null>(null);
+  let fakeMessage = $state<string | null>(null);
   let fakeError = $state<string | null>(null);
 
   // Route trace
@@ -71,6 +73,7 @@
     if (!query || fakeLoading) return;
     fakeLoading = true;
     fakeError = null;
+    fakeMessage = null;
     try {
       [fakeResult, cacheResult] = await Promise.all([
         guiFakeIpLookup(fakeDirection === 'domain' ? { domain: query } : { ip: query }),
@@ -80,6 +83,40 @@
       fakeError = getAppErrorMessage(e, 'Fake-IP 诊断失败');
     } finally {
       fakeLoading = false;
+    }
+  }
+
+  async function clearFakeIp(scope: 'selected' | 'all') {
+    if (fakeClearLoading || fakeLoading) return;
+    const query = fakeQuery.trim();
+    if (scope === 'selected' && !query) {
+      fakeError = '请先填写要删除的域名或 Fake-IP';
+      return;
+    }
+    if (scope === 'all' && !confirm('确认清空全部 Fake-IP 映射？\n\n应用可能仍缓存旧的虚拟地址，受影响连接需要重新解析 DNS。')) {
+      return;
+    }
+
+    fakeClearLoading = true;
+    fakeError = null;
+    fakeMessage = null;
+    try {
+      const result = await guiClearFakeIp(
+        scope === 'all'
+          ? undefined
+          : fakeDirection === 'domain'
+            ? { domain: query }
+            : { ip: query },
+      );
+      fakeMessage = result.enabled
+        ? `已删除 ${result.removedMappings} 个映射（${result.removedAddresses} 个地址），剩余 ${result.liveMappings} 个`
+        : '当前配置未启用 Fake-IP，没有可清理的映射';
+      fakeResult = null;
+      cacheResult = await guiDnsCache(undefined, 50);
+    } catch (e) {
+      fakeError = getAppErrorMessage(e, '清理 Fake-IP 缓存失败');
+    } finally {
+      fakeClearLoading = false;
     }
   }
 
@@ -196,7 +233,7 @@
     <div class="diag-head-row">
       <div class="diag-head">
         <span class="diag-title">Fake-IP 与 DNS 缓存</span>
-        <span class="diag-hint">只读查询映射、容量和生命周期计数；不会触发新分配</span>
+        <span class="diag-hint">查询映射与运行计数，也可删除指定映射或清空全部缓存</span>
       </div>
       <Button
         variant="outline"
@@ -212,7 +249,7 @@
       <Select.Root
         type="single"
         value={fakeDirection}
-        disabled={fakeLoading}
+        disabled={fakeLoading || fakeClearLoading}
         onValueChange={(value) => {
           if (value === 'domain' || value === 'ip') fakeDirection = value;
         }}
@@ -225,12 +262,19 @@
           <Select.Item value="ip" label="Fake-IP → 域名">Fake-IP → 域名</Select.Item>
         </Select.Content>
       </Select.Root>
-      <Input class="diag-input" placeholder={fakeDirection === 'domain' ? 'open.bigmodel.cn' : '198.18.0.2'} bind:value={fakeQuery} onkeydown={(event) => event.key === 'Enter' && runFakeIp()} disabled={fakeLoading} />
-      <Button size="sm" onclick={runFakeIp} disabled={fakeLoading || !fakeQuery.trim()}>
+      <Input class="diag-input" placeholder={fakeDirection === 'domain' ? 'open.bigmodel.cn' : '198.18.0.2'} bind:value={fakeQuery} onkeydown={(event) => event.key === 'Enter' && runFakeIp()} disabled={fakeLoading || fakeClearLoading} />
+      <Button size="sm" onclick={runFakeIp} disabled={fakeLoading || fakeClearLoading || !fakeQuery.trim()}>
         {#if fakeLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}{fakeLoading ? '查询中…' : '查询'}
+      </Button>
+      <Button variant="outline" size="sm" onclick={() => clearFakeIp('selected')} disabled={fakeLoading || fakeClearLoading || !fakeQuery.trim()}>
+        {#if fakeClearLoading}<LoaderCircle class="animate-spin" />{:else}<Trash2 />{/if}删除当前映射
+      </Button>
+      <Button variant="destructive" size="sm" onclick={() => clearFakeIp('all')} disabled={fakeLoading || fakeClearLoading}>
+        {#if fakeClearLoading}<LoaderCircle class="animate-spin" />{:else}<Trash2 />{/if}清空全部
       </Button>
     </div>
     {#if fakeError}<div class="diag-error">{fakeError}</div>{/if}
+    {#if fakeMessage}<div class="diag-success" role="status">{fakeMessage}</div>{/if}
     {#if fakeResult}
       <div class="fake-summary">
         <div><span>状态</span><strong>{fakeResult.enabled ? '已启用' : '未启用'}</strong></div>
@@ -447,6 +491,14 @@
     font-family: var(--font-mono);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .diag-success {
+    padding: 5px 7px;
+    border-radius: 4px;
+    background: rgba(34, 197, 94, 0.08);
+    color: var(--success);
+    font-size: 11px;
   }
 
   .diag-result {

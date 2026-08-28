@@ -77,6 +77,18 @@ function connection(flowId, overrides = {}) {
             port: 52_000,
             process_name: 'browser.exe',
           },
+          path: {
+            network: {
+              remote_address: { host: '203.0.113.8', port: 443 },
+              egress: {
+                generation: 3,
+                address_family: 'ipv4',
+                tun_active: false,
+                unavailable_reason: 'tun inactive',
+              },
+              connect_stage: 'select_egress',
+            },
+          },
           throughput: {
             upload_bps: 12,
             download_bps: 34,
@@ -111,6 +123,9 @@ function connection(flowId, overrides = {}) {
   assert.equal(enriched.source, '127.0.0.1:52000');
   assert.equal(enriched.processName, 'browser.exe');
   assert.equal(enriched.revision, 7);
+  assert.equal(enriched.remoteDestination, '203.0.113.8:443');
+  assert.equal(enriched.networkContext.connectStage, 'select_egress');
+  assert.equal(enriched.networkContext.egress.tunActive, false);
   assert.equal(enriched.throughputUpBps, 12);
   assert.equal(enriched.throughputDownBps, 34);
   assert.equal(enriched.updatedAtUnixMs, 8_000);
