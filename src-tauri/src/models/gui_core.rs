@@ -399,6 +399,27 @@ pub struct GuiFeatureStatus {
     pub reason: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiFakeIpClearInput {
+    pub domain: Option<String>,
+    pub ip: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiFakeIpClearResult {
+    pub core_instance_id: Option<String>,
+    pub config_revision: Option<u64>,
+    pub enabled: bool,
+    pub scope: String,
+    pub domain: Option<String>,
+    pub ip: Option<String>,
+    pub removed_mappings: u64,
+    pub removed_addresses: u64,
+    pub live_mappings: u64,
+}
+
 /// A single impact item from `config.plan_apply` — one section of config
 /// that will be affected by the proposed change.
 #[derive(Clone, Debug, Serialize)]

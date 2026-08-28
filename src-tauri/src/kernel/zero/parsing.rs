@@ -11,9 +11,9 @@ use crate::models::gui_core::{
     GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
     GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
     GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
-    GuiConnectionSocketBinding, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember,
-    GuiPolicySelectionResult, GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats,
-    GuiZeroCapabilities,
+    GuiConnectionSocketBinding, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
+    GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability,
+    GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -572,6 +572,21 @@ pub fn parse_connection_close(value: &Value, flow_id: String) -> GuiConnectionCl
         flow_id: string_at(value, &["flow_id", "flowId"]).unwrap_or(flow_id),
         closed: bool_at(value, &["closed"]).unwrap_or(true),
         message: string_at(value, &["message"]),
+    }
+}
+
+pub fn parse_fake_ip_clear(value: &Value) -> GuiFakeIpClearResult {
+    let result = nested_value(value, &["result"]).unwrap_or(value);
+    GuiFakeIpClearResult {
+        core_instance_id: string_at(result, &["core_instance_id", "coreInstanceId"]),
+        config_revision: u64_at(result, &["config_revision", "configRevision"]),
+        enabled: bool_at(result, &["enabled"]).unwrap_or(false),
+        scope: string_at(result, &["scope"]).unwrap_or_else(|| "all".to_string()),
+        domain: string_at(result, &["domain"]),
+        ip: string_at(result, &["ip"]),
+        removed_mappings: u64_at(result, &["removed_mappings", "removedMappings"]).unwrap_or(0),
+        removed_addresses: u64_at(result, &["removed_addresses", "removedAddresses"]).unwrap_or(0),
+        live_mappings: u64_at(result, &["live_mappings", "liveMappings"]).unwrap_or(0),
     }
 }
 

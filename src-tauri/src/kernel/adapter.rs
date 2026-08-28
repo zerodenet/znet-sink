@@ -11,8 +11,9 @@ use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
+    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats,
+    GuiZeroCapabilities,
 };
 
 use serde_json::Value;
@@ -152,6 +153,14 @@ pub trait KernelAdapter {
         ip: Option<String>,
         options: CoreIpcOptions,
     ) -> AppResult<Value>;
+
+    /// Clear all Fake-IP mappings or one mapping selected by domain/address.
+    async fn clear_fake_ip(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<GuiFakeIpClearResult>;
 
     /// Route trace diagnostic.
     async fn trace_route(

@@ -19,8 +19,9 @@ use crate::models::core_process::CoreProcessState;
 use crate::models::dns_config::ClientDnsConfig;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFakeIpClearInput,
+    GuiFakeIpClearResult, GuiFeatureStatus, GuiPolicyGroup, GuiPolicySelectionResult,
+    GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
@@ -655,6 +656,20 @@ pub async fn gui_fakeip_lookup(
     interaction_mode::require_pro_mode(state.inner(), "fakeip_lookup")?;
     ZeroAdapter::new()
         .fakeip_lookup(domain, ip, default_opts(state.inner()))
+        .await
+}
+
+/// Clear all Fake-IP mappings or one mapping selected by domain/address.
+#[tauri::command]
+pub async fn gui_clear_fake_ip(
+    state: State<'_, AppState>,
+    input: Option<GuiFakeIpClearInput>,
+) -> AppResult<GuiFakeIpClearResult> {
+    interaction_mode::require_pro_mode(state.inner(), "fake_ip_clear")?;
+    let input = input.unwrap_or_default();
+    let opts = default_opts(state.inner());
+    ZeroAdapter::new()
+        .clear_fake_ip(input.domain, input.ip, opts)
         .await
 }
 

@@ -292,6 +292,23 @@ export interface GuiFeatureStatus {
   reason?: string;
 }
 
+export interface GuiFakeIpClearInput {
+  domain?: string;
+  ip?: string;
+}
+
+export interface GuiFakeIpClearResult {
+  coreInstanceId?: string;
+  configRevision?: number;
+  enabled: boolean;
+  scope: 'all' | 'domain' | 'ip';
+  domain?: string;
+  ip?: string;
+  removedMappings: number;
+  removedAddresses: number;
+  liveMappings: number;
+}
+
 export interface GuiTunStatus extends GuiFeatureStatus {
   name?: string;
   addr?: string;
@@ -450,3 +467,4 @@ export interface ConfigPlanApplyResult {
   /** Validation errors (present when `valid` is false). */
   errors: string[];
 }
+

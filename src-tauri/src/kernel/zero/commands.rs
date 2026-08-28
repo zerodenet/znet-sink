@@ -9,12 +9,13 @@ use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult,
+    GuiConnectionCloseResult, GuiFakeIpClearResult, GuiFeatureStatus, GuiPolicySelectionResult,
+    GuiTargetProbeResult,
 };
 
 use super::parsing::{
-    normalize_non_empty, normalize_optional, parse_connection_close, parse_feature_runtime_status,
-    parse_policy_selection, parse_target_probe, unwrap_call_result,
+    normalize_non_empty, normalize_optional, parse_connection_close, parse_fake_ip_clear,
+    parse_feature_runtime_status, parse_policy_selection, parse_target_probe, unwrap_call_result,
 };
 
 /// Outbound diagnostics can legitimately queue behind other probes in the
@@ -255,6 +256,36 @@ fn diagnostic_command_result(value: Value) -> AppResult<Value> {
     Ok(value.get("result").cloned().unwrap_or(value))
 }
 
+/// Clear all Fake-IP mappings or one mapping selected by domain/address.
+pub async fn clear_fake_ip(
+    domain: Option<String>,
+    ip: Option<String>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<GuiFakeIpClearResult> {
+    let params = fake_ip_clear_params(domain, ip)?;
+    let value = run_command("fakeip.clear", params, options).await?;
+    Ok(parse_fake_ip_clear(&value))
+}
+
+fn fake_ip_clear_params(domain: Option<String>, ip: Option<String>) -> AppResult<Value> {
+    let domain = normalize_optional(domain);
+    let ip = normalize_optional(ip);
+    if domain.is_some() && ip.is_some() {
+        return Err(crate::errors::AppError::invalid_argument(
+            "fake-IP clear accepts at most one of domain or ip",
+        ));
+    }
+
+    let mut params = Map::new();
+    if let Some(domain) = domain {
+        params.insert("domain".to_string(), json!(domain));
+    }
+    if let Some(ip) = ip {
+        params.insert("ip".to_string(), json!(ip));
+    }
+    Ok(Value::Object(params))
+}
+
 /// Route trace diagnostic.
 pub async fn trace_route(
     target: String,
@@ -348,10 +379,11 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_config_apply_accepted, is_flow_already_completed_error,
+        ensure_config_apply_accepted, fake_ip_clear_params, is_flow_already_completed_error,
         policy_probe_command_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
     };
     use crate::errors::AppError;
+    use crate::kernel::zero::parsing::parse_fake_ip_clear;
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
@@ -371,6 +403,48 @@ mod tests {
                 "inbound_tag": "mixed-in"
             })
         );
+    }
+
+    #[test]
+    fn fake_ip_clear_params_support_full_and_targeted_management() {
+        assert_eq!(
+            fake_ip_clear_params(None, None).expect("clear all params"),
+            json!({})
+        );
+        assert_eq!(
+            fake_ip_clear_params(Some(" example.com ".to_string()), None).expect("domain params"),
+            json!({ "domain": "example.com" })
+        );
+        assert!(fake_ip_clear_params(
+            Some("example.com".to_string()),
+            Some("198.18.0.1".to_string())
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fake_ip_clear_response_is_normalized_for_the_gui() {
+        let result = parse_fake_ip_clear(&json!({
+            "accepted": true,
+            "result": {
+                "core_instance_id": "core-1",
+                "config_revision": 7,
+                "enabled": true,
+                "scope": "domain",
+                "domain": "example.com",
+                "removed_mappings": 1,
+                "removed_addresses": 2,
+                "live_mappings": 3
+            }
+        }));
+
+        assert_eq!(result.core_instance_id.as_deref(), Some("core-1"));
+        assert_eq!(result.config_revision, Some(7));
+        assert_eq!(result.scope, "domain");
+        assert_eq!(result.domain.as_deref(), Some("example.com"));
+        assert_eq!(result.removed_mappings, 1);
+        assert_eq!(result.removed_addresses, 2);
+        assert_eq!(result.live_mappings, 3);
     }
 
     #[test]
