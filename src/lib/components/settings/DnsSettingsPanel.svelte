@@ -10,17 +10,19 @@
     applyGlobalDnsSettings,
     createDnsServer,
     getDnsKernelCompatibility,
+    getDnsAddressFamilyPolicy,
     loadGlobalDnsSettings,
     parseDnsConfig,
     persistGlobalDnsSettings,
     readDnsSettings,
     renameDnsServer,
+    setDnsAddressFamilyPolicy,
     setDnsMode,
     validateDnsDraft,
   } from '$lib/services/dns-config';
   import { getAppErrorMessage } from '$lib/services/core';
   import type { DnsKernelCompatibility } from '$lib/services/dns-config';
-  import type { DnsDispatchConfig, DnsMode, DnsServerConfig, DnsServerType, DnsSettingsDraft, DnsSettingsInput } from '$lib/types/dns';
+  import type { DnsAddressFamilyPolicy, DnsDispatchConfig, DnsMode, DnsServerConfig, DnsServerType, DnsSettingsDraft, DnsSettingsInput } from '$lib/types/dns';
 
   let loading = $state(true);
   let saving = $state(false);
@@ -53,6 +55,7 @@
   const errors = $derived(issues.filter((issue) => issue.severity === 'error'));
   const warnings = $derived(issues.filter((issue) => issue.severity === 'warning'));
   const serverNames = $derived(draft ? Object.keys(draft.dns.servers) : []);
+  const addressFamilyPolicy = $derived(draft ? getDnsAddressFamilyPolicy(draft.dns) : 'prefer_ipv4');
   const modeDescription = $derived(draft
     ? ({
         disabled: '暂不注入 DNS 配置，保留当前编辑内容供下次启用。',
@@ -67,6 +70,35 @@
     { value: 'doq', label: 'DoQ' },
     { value: 'system', label: 'system' },
   ];
+  const addressFamilyOptions: Array<{
+    value: DnsAddressFamilyPolicy;
+    label: string;
+    description: string;
+  }> = [
+    {
+      value: 'prefer_ipv4',
+      label: '双栈 · IPv4 优先',
+      description: '保留 IPv4/IPv6；TUN direct 的物理 IPv6 出口不可用时，以可信域名回退 IPv4。',
+    },
+    {
+      value: 'prefer_ipv6',
+      label: '双栈 · IPv6 优先',
+      description: '优先使用原生 IPv6；仅在物理 IPv6 出口明确不可用时，以可信域名回退 IPv4。',
+    },
+    {
+      value: 'ipv4_only',
+      label: '仅 IPv4',
+      description: '禁用 IPv6 DNS 结果，适合没有可用 IPv6 网络的兼容场景。',
+    },
+    {
+      value: 'ipv6_only',
+      label: '仅 IPv6',
+      description: '只使用 IPv6 DNS 结果，并明确禁止自动回退 IPv4。',
+    },
+  ];
+  const addressFamilyDescription = $derived(
+    addressFamilyOptions.find((option) => option.value === addressFamilyPolicy)?.description ?? '',
+  );
   const dispatchConditionOptions = [
     { value: 'domain', label: '域名', placeholder: 'example.com' },
     { value: 'domain_keyword', label: '域名关键字', placeholder: 'internal' },
@@ -254,6 +286,14 @@
   function changeDefaultServer(value: string) {
     if (!draft) return;
     draft.dns.default_server = value;
+    touch();
+  }
+
+  function changeAddressFamilyPolicy(value: string) {
+    if (!draft) return;
+    const option = addressFamilyOptions.find((candidate) => candidate.value === value);
+    if (!option) return;
+    draft.dns = setDnsAddressFamilyPolicy(draft.dns, option.value);
     touch();
   }
 
@@ -524,6 +564,27 @@
       <Switch checked={draft.dnsHijack} onCheckedChange={(checked) => { if (draft) { draft.dnsHijack = checked; touch(); } }} aria-label="DNS 劫持" />
     </section>
   {/if}
+
+  <section class="section row-section">
+    <div>
+      <strong>IPv6 兼容策略</strong>
+      <span>{addressFamilyDescription}</span>
+    </div>
+    <Select.Root
+      type="single"
+      value={addressFamilyPolicy}
+      onValueChange={(value) => { if (value) changeAddressFamilyPolicy(value); }}
+    >
+      <Select.Trigger aria-label="IPv6 兼容策略">
+        {addressFamilyOptions.find((option) => option.value === addressFamilyPolicy)?.label ?? addressFamilyPolicy}
+      </Select.Trigger>
+      <Select.Content>
+        {#each addressFamilyOptions as option}
+          <Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+        {/each}
+      </Select.Content>
+    </Select.Root>
+  </section>
 
   <section class="section">
       <div class="section-head">
@@ -964,6 +1025,10 @@
     color: var(--muted-foreground);
     font-size: 11px;
     line-height: 1.45;
+  }
+
+  .row-section :global([data-slot=select-trigger]) {
+    min-width: 190px;
   }
 
   .server-list,

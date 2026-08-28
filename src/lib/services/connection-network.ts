@@ -1,4 +1,5 @@
 import type {
+  GuiConnectionAddressFamilyFallback,
   GuiConnectionEgressContext,
   GuiConnectionNetworkContext,
   GuiConnectionNetworkInterface,
@@ -20,10 +21,15 @@ export function parseConnectionNetworkContext(
   const egress = egressValue(raw['egress']);
   const routeLookup = routeLookupValue(field(raw, ['route_lookup', 'routeLookup']));
   const socketBinding = socketBindingValue(field(raw, ['socket_binding', 'socketBinding']));
+  const addressFamilyFallback = addressFamilyFallbackValue(
+    field(raw, ['address_family_fallback', 'addressFamilyFallback']),
+  );
   const context: GuiConnectionNetworkContext = {
     localAddress: endpointValue(field(raw, ['local_address', 'localAddress'])),
     remoteAddress: endpointValue(field(raw, ['remote_address', 'remoteAddress'])),
     resolvedCandidates,
+    addressFamilyPolicy: text(raw, ['address_family_policy', 'addressFamilyPolicy']),
+    addressFamilyFallback,
     selectedInterface,
     egress,
     routeLookup,
@@ -34,12 +40,36 @@ export function parseConnectionNetworkContext(
   return context.localAddress
     || context.remoteAddress
     || context.resolvedCandidates.length > 0
+    || context.addressFamilyPolicy
+    || context.addressFamilyFallback
     || context.selectedInterface
     || context.egress
     || context.routeLookup
     || context.socketBinding
     || context.connectStage
     ? context
+    : undefined;
+}
+
+function addressFamilyFallbackValue(value: unknown): GuiConnectionAddressFamilyFallback | undefined {
+  const raw = objectValue(value);
+  if (!raw) return undefined;
+  const fallback: GuiConnectionAddressFamilyFallback = {
+    from: text(raw, ['from']),
+    to: text(raw, ['to']),
+    reason: text(raw, ['reason']),
+    triggerEgressGeneration: number(raw, [
+      'trigger_egress_generation',
+      'triggerEgressGeneration',
+    ]),
+    unavailableReason: text(raw, ['unavailable_reason', 'unavailableReason']),
+  };
+  return fallback.from
+    || fallback.to
+    || fallback.reason
+    || fallback.triggerEgressGeneration !== undefined
+    || fallback.unavailableReason
+    ? fallback
     : undefined;
 }
 

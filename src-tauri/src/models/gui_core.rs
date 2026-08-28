@@ -295,10 +295,22 @@ pub struct GuiConnectionSocketBinding {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuiConnectionAddressFamilyFallback {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub reason: Option<String>,
+    pub trigger_egress_generation: Option<u64>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuiConnectionNetworkContext {
     pub local_address: Option<String>,
     pub remote_address: Option<String>,
     pub resolved_candidates: Vec<String>,
+    pub address_family_policy: Option<String>,
+    pub address_family_fallback: Option<GuiConnectionAddressFamilyFallback>,
     pub selected_interface: Option<GuiConnectionNetworkInterface>,
     pub egress: Option<GuiConnectionEgressContext>,
     pub route_lookup: Option<GuiConnectionRouteLookup>,

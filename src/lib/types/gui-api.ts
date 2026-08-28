@@ -369,10 +369,20 @@ export interface GuiConnectionSocketBinding {
   interfaceBound?: boolean;
 }
 
+export interface GuiConnectionAddressFamilyFallback {
+  from?: string;
+  to?: string;
+  reason?: string;
+  triggerEgressGeneration?: number;
+  unavailableReason?: string;
+}
+
 export interface GuiConnectionNetworkContext {
   localAddress?: string;
   remoteAddress?: string;
   resolvedCandidates: string[];
+  addressFamilyPolicy?: string;
+  addressFamilyFallback?: GuiConnectionAddressFamilyFallback;
   selectedInterface?: GuiConnectionNetworkInterface;
   egress?: GuiConnectionEgressContext;
   routeLookup?: GuiConnectionRouteLookup;

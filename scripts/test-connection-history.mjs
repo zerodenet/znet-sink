@@ -42,6 +42,14 @@ const completed = {
               { host: '203.0.113.8', port: 443 },
               { host: '203.0.113.9', port: 443 },
             ],
+            address_family_policy: 'prefer_ipv4',
+            address_family_fallback: {
+              from: 'ipv6',
+              to: 'ipv4',
+              reason: 'tun_ipv6_egress_unavailable',
+              trigger_egress_generation: 7,
+              unavailable_reason: 'physical IPv6 route unavailable',
+            },
             selected_interface: { name: 'Ethernet', index: 12 },
             egress: {
               generation: 7,
@@ -108,6 +116,18 @@ assert.deepEqual(history[0].networkContext.resolvedCandidates, [
   '203.0.113.8:443',
   '203.0.113.9:443',
 ]);
+assert.equal(history[0].networkContext.addressFamilyPolicy, 'prefer_ipv4');
+assert.equal(history[0].networkContext.addressFamilyFallback.from, 'ipv6');
+assert.equal(history[0].networkContext.addressFamilyFallback.to, 'ipv4');
+assert.equal(
+  history[0].networkContext.addressFamilyFallback.reason,
+  'tun_ipv6_egress_unavailable',
+);
+assert.equal(history[0].networkContext.addressFamilyFallback.triggerEgressGeneration, 7);
+assert.equal(
+  history[0].networkContext.addressFamilyFallback.unavailableReason,
+  'physical IPv6 route unavailable',
+);
 assert.equal(history[0].networkContext.socketBinding.interfaceBound, false);
 assert.equal(history[0].eventSequence, 9);
 assert.deepEqual(history[0].rawEnvelope, completed.payload);

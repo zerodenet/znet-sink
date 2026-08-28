@@ -1,5 +1,6 @@
 export type DnsMode = 'disabled' | 'real' | 'fake_ip';
 export type DnsServerType = 'system' | 'udp' | 'doh' | 'dot' | 'doq';
+export type DnsAddressFamilyPolicy = 'ipv4_only' | 'ipv6_only' | 'prefer_ipv4' | 'prefer_ipv6';
 
 export interface DnsServerConfig {
   type: DnsServerType;
@@ -23,6 +24,11 @@ export interface DnsCacheConfig {
   [key: string]: unknown;
 }
 
+export interface DnsPolicyConfig {
+  address_family?: DnsAddressFamilyPolicy;
+  [key: string]: unknown;
+}
+
 export type DnsAnswerConfig =
   | { type: 'real'; [key: string]: unknown }
   | {
@@ -40,6 +46,7 @@ export interface DnsConfig {
   dispatch: DnsDispatchConfig[];
   cache?: DnsCacheConfig;
   answer: DnsAnswerConfig;
+  policy?: DnsPolicyConfig;
   [key: string]: unknown;
 }
 

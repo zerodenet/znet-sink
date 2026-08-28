@@ -13,6 +13,10 @@ assert.match(service, /rule\.server === oldName \? name : rule\.server/);
 assert.match(service, /guiValidateDnsConfig\(next\)/);
 assert.match(service, /const result = await guiApplyDnsConfig\(next\)/);
 assert.match(service, /answer\.exclude_domains = Array\.isArray\(answer\.exclude_domains\)/);
+assert.match(service, /policy: \{ address_family: 'prefer_ipv4' \}/);
+assert.match(service, /export function getDnsAddressFamilyPolicy\(dns: DnsConfig\)/);
+assert.match(service, /export function setDnsAddressFamilyPolicy\(/);
+assert.match(service, /field: 'policy\.address_family'/);
 
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
@@ -21,6 +25,10 @@ assert.match(panel, /First-match-wins/);
 assert.match(panel, /DoH \/ DoT \/ DoQ/);
 assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
 assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
+assert.match(panel, /aria-label="IPv6 兼容策略"/);
+for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
+  assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
+}
 assert.match(panel, /<Dialog\.Title>\{editingServerName \? '编辑 DNS 服务器' : '新增 DNS 服务器'\}<\/Dialog\.Title>/);
 assert.match(panel, /<Dialog\.Title>编辑 Zero 原生 DNS JSON<\/Dialog\.Title>/);
 assert.match(panel, /应用到表单/);
