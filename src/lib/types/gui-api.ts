@@ -309,6 +309,14 @@ export interface GuiFakeIpClearResult {
   liveMappings: number;
 }
 
+export type TunFamilyEgressAvailability = 'unknown' | 'available' | 'unavailable';
+
+export interface GuiTunFamilyEgress {
+  availability: TunFamilyEgressAvailability;
+  interface?: string;
+  reason?: string;
+}
+
 export interface GuiTunStatus extends GuiFeatureStatus {
   name?: string;
   addr?: string;
@@ -323,6 +331,11 @@ export interface GuiTunStatus extends GuiFeatureStatus {
   egressInterface?: string;
   egressInterfaceV4?: string;
   egressInterfaceV6?: string;
+  ipv4Egress: GuiTunFamilyEgress;
+  ipv6Egress: GuiTunFamilyEgress;
+  networkGeneration: number;
+  addressFamilyPolicy?: string;
+  ipv6ToIpv4Fallbacks: number;
   lastError?: string;
   managedByConfig: boolean;
 }

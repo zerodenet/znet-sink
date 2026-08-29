@@ -58,6 +58,41 @@
     return [source, address, egress].filter(Boolean).join(' · ') || null;
   });
 
+  function egressLabel(family: 'IPv4' | 'IPv6', egress: GuiManagedTunStatus['ipv4Egress']): string {
+    const state = egress.availability === 'available'
+      ? '可用'
+      : egress.availability === 'unavailable'
+        ? '不可用'
+        : '检测中';
+    const detail = egress.interface ?? egressReason(egress.reason);
+    return `${family} ${state}${detail ? `（${detail}）` : ''}`;
+  }
+
+  function egressReason(reason?: string): string | null {
+    if (!reason) return null;
+    const labels: Record<string, string> = {
+      no_default_route: '无默认路由',
+      no_usable_address: '无可用地址',
+      interface_down: '接口未连接',
+      route_lookup_failed: '路由探测失败',
+    };
+    return labels[reason] ?? reason;
+  }
+
+  const tunDiagnostics = $derived.by(() => {
+    if (!tunRuntime?.enabled) return [];
+    const values = [
+      egressLabel('IPv4', tunRuntime.ipv4Egress),
+      egressLabel('IPv6', tunRuntime.ipv6Egress),
+      tunRuntime.addressFamilyPolicy ? `策略 ${tunRuntime.addressFamilyPolicy}` : null,
+      `Gen ${tunRuntime.networkGeneration}`,
+      tunRuntime.ipv6ToIpv4Fallbacks > 0
+        ? `IPv6→IPv4 回退 ${tunRuntime.ipv6ToIpv4Fallbacks} 次`
+        : null,
+    ];
+    return values.filter((value): value is string => Boolean(value));
+  });
+
   async function refresh() {
     const [, stackResult] = await Promise.allSettled([
       guiState.refreshTunStatus(),
@@ -103,6 +138,14 @@
         aria-label={guiState.isTunEnabled ? '关闭 TUN' : '开启 TUN'}
       />
     </div>
+
+    {#if tunDiagnostics.length > 0}
+      <div class="tun-diagnostics" aria-label="TUN 出口诊断">
+        {#each tunDiagnostics as diagnostic}
+          <span class="diagnostic-chip" title={diagnostic}>{diagnostic}</span>
+        {/each}
+      </div>
+    {/if}
 
     <div class="feature-row">
       <div class="feature-dot" style="background: {stackDotColor};"></div>
@@ -153,5 +196,7 @@
   .feature-name { min-width: 68px; color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; }
   .feature-value { color: var(--foreground); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .feature-meta { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; opacity: .78; }
+  .tun-diagnostics { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 14px; }
+  .diagnostic-chip { max-width: 100%; overflow: hidden; padding: 2px 5px; color: var(--muted-foreground); background: color-mix(in srgb, var(--muted) 70%, transparent); border-radius: 4px; font-size: 9.5px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
   .feature-error { overflow: hidden; color: var(--destructive); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 </style>
