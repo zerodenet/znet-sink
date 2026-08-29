@@ -9,11 +9,11 @@ use serde_json::Value;
 use crate::errors::{AppError, AppResult};
 use crate::models::gui_core::{
     GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
-    GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
-    GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
-    GuiConnectionSocketBinding, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability,
-    GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionAddressFamilyFallback, GuiConnectionCloseResult, GuiConnectionEgressContext,
+    GuiConnectionList, GuiConnectionNetworkContext, GuiConnectionNetworkInterface,
+    GuiConnectionRouteLookup, GuiConnectionSocketBinding, GuiCoreHealth, GuiFakeIpClearResult,
+    GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult,
+    GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -515,6 +515,31 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
                 interface_bound: bool_at(binding, &["interface_bound", "interfaceBound"]),
             })
         });
+    let address_family_fallback = value
+        .get("address_family_fallback")
+        .or_else(|| value.get("addressFamilyFallback"))
+        .and_then(|fallback| {
+            fallback.as_object()?;
+            let fallback = GuiConnectionAddressFamilyFallback {
+                from: string_at(fallback, &["from"]),
+                to: string_at(fallback, &["to"]),
+                reason: string_at(fallback, &["reason"]),
+                trigger_egress_generation: u64_at(
+                    fallback,
+                    &["trigger_egress_generation", "triggerEgressGeneration"],
+                ),
+                unavailable_reason: string_at(
+                    fallback,
+                    &["unavailable_reason", "unavailableReason"],
+                ),
+            };
+            let populated = fallback.from.is_some()
+                || fallback.to.is_some()
+                || fallback.reason.is_some()
+                || fallback.trigger_egress_generation.is_some()
+                || fallback.unavailable_reason.is_some();
+            populated.then_some(fallback)
+        });
 
     let context = GuiConnectionNetworkContext {
         local_address: value
@@ -526,6 +551,8 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
             .or_else(|| value.get("remoteAddress"))
             .and_then(parse_network_address),
         resolved_candidates,
+        address_family_policy: string_at(value, &["address_family_policy", "addressFamilyPolicy"]),
+        address_family_fallback,
         selected_interface,
         egress,
         route_lookup,
@@ -536,6 +563,8 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
     let populated = context.local_address.is_some()
         || context.remote_address.is_some()
         || !context.resolved_candidates.is_empty()
+        || context.address_family_policy.is_some()
+        || context.address_family_fallback.is_some()
         || context.selected_interface.is_some()
         || context.egress.is_some()
         || context.route_lookup.is_some()

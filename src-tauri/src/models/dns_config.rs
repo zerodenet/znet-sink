@@ -18,8 +18,28 @@ pub struct ClientDnsConfig {
     pub cache: Option<ClientDnsCache>,
     #[serde(default)]
     pub answer: ClientDnsAnswer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ClientDnsPolicy>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientDnsPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_family: Option<ClientDnsAddressFamilyPolicy>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientDnsAddressFamilyPolicy {
+    Ipv4Only,
+    Ipv6Only,
+    #[default]
+    PreferIpv4,
+    PreferIpv6,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,6 +317,7 @@ mod tests {
             ],
             "cache": { "max_entries": 1024, "future_cache_option": "keep" },
             "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 86400 },
+            "policy": { "address_family": "prefer_ipv6", "future_policy_option": true },
             "future_dns_option": { "keep": true }
         });
         let model: ClientDnsConfig = serde_json::from_value(source.clone()).unwrap();
@@ -326,5 +347,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(model.bootstrap_warnings().len(), 1);
+    }
+
+    #[test]
+    fn dns_contract_rejects_unknown_address_family_policy() {
+        let result = serde_json::from_value::<ClientDnsConfig>(json!({
+            "servers": { "system": { "type": "system" } },
+            "default_server": "system",
+            "policy": { "address_family": "automatic_magic" }
+        }));
+        assert!(result.is_err());
     }
 }

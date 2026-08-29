@@ -145,9 +145,56 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
             value,
             &["egress_interface_v6", "egressInterfaceV6"],
         ),
+        ipv4_egress: parse_tun_family_egress(
+            value,
+            &["ipv4_egress", "ipv4Egress"],
+            &["egress_interface_v4", "egressInterfaceV4"],
+        ),
+        ipv6_egress: parse_tun_family_egress(
+            value,
+            &["ipv6_egress", "ipv6Egress"],
+            &["egress_interface_v6", "egressInterfaceV6"],
+        ),
+        network_generation: parsing::u64_at(value, &["network_generation", "networkGeneration"])
+            .unwrap_or(0),
+        address_family_policy: parsing::string_at(
+            value,
+            &["address_family_policy", "addressFamilyPolicy"],
+        ),
+        ipv6_to_ipv4_fallbacks: parsing::u64_at(
+            value,
+            &["ipv6_to_ipv4_fallbacks", "ipv6ToIpv4Fallbacks"],
+        )
+        .unwrap_or(0),
         last_error,
         managed_by_config: bool_at(value, &["managed_by_config", "managedByConfig"])
             .unwrap_or(false),
+    }
+}
+
+fn parse_tun_family_egress(
+    value: &Value,
+    keys: &[&str],
+    legacy_interface_keys: &[&str],
+) -> crate::models::zero_runtime::GuiTunFamilyEgress {
+    let family = keys.iter().find_map(|key| value.get(*key));
+    let interface = family
+        .and_then(|family| parsing::string_at(family, &["interface"]))
+        .or_else(|| parsing::string_at(value, legacy_interface_keys));
+    let reason = family.and_then(|family| parsing::string_at(family, &["reason"]));
+    let availability = family
+        .and_then(|family| parsing::string_at(family, &["availability", "state"]))
+        .unwrap_or_else(|| {
+            if interface.is_some() {
+                "available".to_string()
+            } else {
+                "unknown".to_string()
+            }
+        });
+    crate::models::zero_runtime::GuiTunFamilyEgress {
+        availability,
+        interface,
+        reason,
     }
 }
 
@@ -245,6 +292,17 @@ mod tests {
                 "dns_hijack": false,
                 "egress_interface_v4": "Ethernet",
                 "egress_interface_v6": "Ethernet",
+                "ipv4_egress": {
+                    "availability": "available",
+                    "interface": "Ethernet"
+                },
+                "ipv6_egress": {
+                    "availability": "unavailable",
+                    "reason": "no_default_route"
+                },
+                "network_generation": 7,
+                "address_family_policy": "prefer_ipv4",
+                "ipv6_to_ipv4_fallbacks": 2,
                 "managed_by_config": false
             }),
             None,
@@ -258,5 +316,15 @@ mod tests {
         assert!(status.strict_route);
         assert!(!status.dns_hijack);
         assert_eq!(status.egress_interface_v4.as_deref(), Some("Ethernet"));
+        assert_eq!(status.ipv4_egress.availability, "available");
+        assert_eq!(status.ipv4_egress.interface.as_deref(), Some("Ethernet"));
+        assert_eq!(status.ipv6_egress.availability, "unavailable");
+        assert_eq!(
+            status.ipv6_egress.reason.as_deref(),
+            Some("no_default_route")
+        );
+        assert_eq!(status.network_generation, 7);
+        assert_eq!(status.address_family_policy.as_deref(), Some("prefer_ipv4"));
+        assert_eq!(status.ipv6_to_ipv4_fallbacks, 2);
     }
 }

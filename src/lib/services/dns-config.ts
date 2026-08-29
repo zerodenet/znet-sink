@@ -8,6 +8,7 @@ import {
 } from '$lib/services/core';
 import { normalizeConfigValidationResponse } from '$lib/services/config-validation';
 import type {
+  DnsAddressFamilyPolicy,
   DnsConfig,
   DnsDraftIssue,
   DnsMode,
@@ -24,6 +25,13 @@ export type DnsKernelCompatibility = {
   engineVersion?: string;
   detail?: string;
 };
+
+const DNS_ADDRESS_FAMILY_POLICIES: readonly DnsAddressFamilyPolicy[] = [
+  'ipv4_only',
+  'ipv6_only',
+  'prefer_ipv4',
+  'prefer_ipv6',
+];
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -60,6 +68,7 @@ export function createDefaultDnsConfig(mode: Exclude<DnsMode, 'disabled'> = 'rea
     default_server: 'global',
     dispatch: [],
     cache: { max_entries: 1024 },
+    policy: { address_family: 'prefer_ipv4' },
     answer: mode === 'fake_ip'
       ? {
           type: 'fake_ip',
@@ -77,6 +86,7 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
   }
   if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
   if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
+  if (Object.hasOwn(value, 'policy') && !isObject(value.policy)) return null;
   const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
   if (answer.type === 'fake_ip') {
     answer.exclude_domains = Array.isArray(answer.exclude_domains)
@@ -89,7 +99,28 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
     default_server: value.default_server,
     dispatch: Array.isArray(value.dispatch) ? clone(value.dispatch) : [],
     answer,
+    policy: isObject(value.policy) ? clone(value.policy) : undefined,
   } as DnsConfig;
+}
+
+export function getDnsAddressFamilyPolicy(dns: DnsConfig): DnsAddressFamilyPolicy {
+  const value = dns.policy?.address_family;
+  return DNS_ADDRESS_FAMILY_POLICIES.includes(value as DnsAddressFamilyPolicy)
+    ? value as DnsAddressFamilyPolicy
+    : 'prefer_ipv4';
+}
+
+export function setDnsAddressFamilyPolicy(
+  dns: DnsConfig,
+  addressFamily: DnsAddressFamilyPolicy,
+): DnsConfig {
+  if (!DNS_ADDRESS_FAMILY_POLICIES.includes(addressFamily)) return clone(dns);
+  const next = clone(dns);
+  next.policy = {
+    ...next.policy,
+    address_family: addressFamily,
+  };
+  return next;
 }
 
 export function readDnsSettings(
@@ -181,6 +212,15 @@ function isIpAddress(value: string): boolean {
 export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
   if (draft.mode === 'disabled') return [];
   const issues: DnsDraftIssue[] = [];
+  const addressFamily = draft.dns.policy?.address_family;
+  if (addressFamily !== undefined
+    && !DNS_ADDRESS_FAMILY_POLICIES.includes(addressFamily as DnsAddressFamilyPolicy)) {
+    issues.push({
+      field: 'policy.address_family',
+      message: '地址族策略必须是受支持的 IPv4/IPv6 模式',
+      severity: 'error',
+    });
+  }
   const names = Object.keys(draft.dns.servers);
   if (names.length === 0) {
     issues.push({ field: 'servers', message: '至少需要一个 DNS 服务器', severity: 'error' });

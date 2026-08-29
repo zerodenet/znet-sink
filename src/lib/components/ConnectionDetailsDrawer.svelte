@@ -207,6 +207,22 @@
     return value ? positive : negative;
   }
 
+  function addressFamilyPolicyLabel(policy?: string): string {
+    switch (policy) {
+      case 'prefer_ipv4': return '双栈 · IPv4 优先';
+      case 'prefer_ipv6': return '双栈 · IPv6 优先';
+      case 'ipv4_only': return '仅 IPv4';
+      case 'ipv6_only': return '仅 IPv6';
+      default: return policy ?? '未提供';
+    }
+  }
+
+  function addressFamilyFallbackReasonLabel(reason?: string): string {
+    return reason === 'tun_ipv6_egress_unavailable'
+      ? 'TUN 物理 IPv6 出口不可用'
+      : reason ?? '未提供';
+  }
+
   function rawSourceLabel(source?: string): string {
     switch (source) {
       case 'event': return '事件流';
@@ -351,6 +367,14 @@
                   {#if hasText(connection.networkContext.localAddress)}<div class="property"><span>本地地址</span><strong>{connection.networkContext.localAddress}</strong></div>{/if}
                   {#if hasText(connection.networkContext.remoteAddress)}<div class="property"><span>远端地址</span><strong>{connection.networkContext.remoteAddress}</strong></div>{/if}
                   {#if connection.networkContext.resolvedCandidates.length > 0}<div class="property wide"><span>解析候选</span><strong>{connection.networkContext.resolvedCandidates.join(' · ')}</strong></div>{/if}
+                  {#if hasText(connection.networkContext.addressFamilyPolicy)}<div class="property"><span>地址族策略</span><strong>{addressFamilyPolicyLabel(connection.networkContext.addressFamilyPolicy)}</strong></div>{/if}
+                  {#if connection.networkContext.addressFamilyFallback}
+                    {@const fallback = connection.networkContext.addressFamilyFallback}
+                    {#if hasText(fallback.from) || hasText(fallback.to)}<div class="property"><span>地址族回退</span><strong>{fallback.from?.toUpperCase() ?? '?'} → {fallback.to?.toUpperCase() ?? '?'}</strong></div>{/if}
+                    {#if hasText(fallback.reason)}<div class="property wide"><span>回退原因</span><strong>{addressFamilyFallbackReasonLabel(fallback.reason)}</strong></div>{/if}
+                    {#if isNumber(fallback.triggerEgressGeneration)}<div class="property"><span>触发出口代次</span><strong>{fallback.triggerEgressGeneration}</strong></div>{/if}
+                    {#if hasText(fallback.unavailableReason)}<div class="property wide failure"><span>回退时出口状态</span><strong>{fallback.unavailableReason}</strong></div>{/if}
+                  {/if}
                   {#if connection.networkContext.egress}
                     {#if hasText(connection.networkContext.egress.addressFamily)}<div class="property"><span>地址族</span><strong>{connection.networkContext.egress.addressFamily}</strong></div>{/if}
                     {#if connection.networkContext.egress.tunActive !== undefined}<div class="property"><span>TUN 出口</span><strong>{booleanLabel(connection.networkContext.egress.tunActive, '已启用', '未启用')}</strong></div>{/if}

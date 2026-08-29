@@ -358,6 +358,14 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
                         { "host": "17.57.147.6", "port": 5223 },
                         { "host": "17.57.147.7", "port": 5223 }
                     ],
+                    "address_family_policy": "prefer_ipv4",
+                    "address_family_fallback": {
+                        "from": "ipv6",
+                        "to": "ipv4",
+                        "reason": "tun_ipv6_egress_unavailable",
+                        "trigger_egress_generation": 9,
+                        "unavailable_reason": "physical IPv6 route unavailable"
+                    },
                     "selected_interface": { "name": "Ethernet", "index": 12 },
                     "egress": {
                         "generation": 9,
@@ -432,6 +440,25 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
     assert_eq!(network.remote_address.as_deref(), Some("17.57.147.6:5223"));
     assert_eq!(network.resolved_candidates.len(), 2);
     assert_eq!(
+        network.address_family_policy.as_deref(),
+        Some("prefer_ipv4")
+    );
+    let fallback = network
+        .address_family_fallback
+        .as_ref()
+        .expect("address family fallback");
+    assert_eq!(fallback.from.as_deref(), Some("ipv6"));
+    assert_eq!(fallback.to.as_deref(), Some("ipv4"));
+    assert_eq!(
+        fallback.reason.as_deref(),
+        Some("tun_ipv6_egress_unavailable")
+    );
+    assert_eq!(fallback.trigger_egress_generation, Some(9));
+    assert_eq!(
+        fallback.unavailable_reason.as_deref(),
+        Some("physical IPv6 route unavailable")
+    );
+    assert_eq!(
         network
             .selected_interface
             .as_ref()
@@ -474,6 +501,13 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
             "target": { "host": "example.com", "port": 443 },
             "path": {
                 "network": {
+                    "address_family_policy": "prefer_ipv6",
+                    "address_family_fallback": {
+                        "from": "ipv6",
+                        "to": "ipv4",
+                        "reason": "tun_ipv6_egress_unavailable",
+                        "trigger_egress_generation": 4
+                    },
                     "egress": {
                         "generation": 4,
                         "address_family": "ipv4",
@@ -501,6 +535,15 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
     assert_eq!(
         wire["payload"]["data"]["networkContext"]["egress"]["tunActive"],
         json!(false)
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["addressFamilyPolicy"],
+        json!("prefer_ipv6")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["addressFamilyFallback"]
+            ["triggerEgressGeneration"],
+        json!(4)
     );
 
     let GuiEventData::Connection(connection) = event.payload else {
