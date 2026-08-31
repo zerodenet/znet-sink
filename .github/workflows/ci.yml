@@ -109,6 +109,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zero-core
+
       - name: Install protoc for Zero
         uses: ./zero-core/.github/actions/setup-protoc
         with:
@@ -143,5 +147,69 @@ jobs:
             if ($LASTEXITCODE -eq 0) {
               throw "Zero $env:ZERO_CONTRACT_SHA accepted invalid client fixture $file"
             }
+          }
+
+      - name: Hot-apply, persist, and restart DNS configurations
+        shell: pwsh
+        run: |
+          $zero = Join-Path $PWD "zero-core/target/release/zero.exe"
+          $pipe = "\\.\pipe\znet-zero-dns-contract-$PID"
+          $initial = Join-Path $env:DNS_CONTRACT_DIR "disabled-no-tun.json"
+          $sequence = @(
+            "real-system-no-tun.json",
+            "real-doh-no-tun.json",
+            "real-doq-no-tun.json",
+            "fake-ip-no-tun.json"
+          )
+
+          function Wait-ZeroReady([string]$executable, [string]$socket) {
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              & $executable status --json --socket $socket 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                return
+              }
+              Start-Sleep -Seconds 1
+            }
+            throw "Zero did not become ready on $socket"
+          }
+
+          function Stop-Zero([System.Diagnostics.Process]$process) {
+            if ($null -ne $process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+              $process.WaitForExit()
+            }
+          }
+
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $zero -ArgumentList @(
+              "run", "--control-socket", $pipe, $initial
+            ) -PassThru -WindowStyle Hidden
+            Wait-ZeroReady $zero $pipe
+            foreach ($file in $sequence) {
+              $candidate = Join-Path $env:DNS_CONTRACT_DIR $file
+              & $zero reload $candidate --socket $pipe
+              if ($LASTEXITCODE -ne 0) {
+                throw "Zero $env:ZERO_CONTRACT_SHA rejected hot apply for $file"
+              }
+            }
+          } finally {
+            Stop-Zero $process
+          }
+
+          $expectedPath = Join-Path $env:DNS_CONTRACT_DIR $sequence[-1]
+          $persisted = Get-Content $initial -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+          $expected = Get-Content $expectedPath -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+          if ($persisted -ne $expected) {
+            throw "Zero did not persist the last hot-applied client DNS configuration"
+          }
+
+          try {
+            $process = Start-Process -FilePath $zero -ArgumentList @(
+              "run", "--control-socket", $pipe, $initial
+            ) -PassThru -WindowStyle Hidden
+            Wait-ZeroReady $zero $pipe
+          } finally {
+            Stop-Zero $process
           }
 
