@@ -80,3 +80,68 @@ jobs:
 
       - name: Run client core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1
+
+  windows-zero-dns-contract:
+    name: Windows Zero DNS contract
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out current Zero develop
+        uses: actions/checkout@v4
+        with:
+          repository: zerodenet/core
+          ref: develop
+          path: zero-core
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install client dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc for Zero
+        uses: ./zero-core/.github/actions/setup-protoc
+        with:
+          version: "35.0"
+
+      - name: Generate client-owned DNS contract fixtures
+        shell: pwsh
+        run: |
+          $contractDir = Join-Path $env:RUNNER_TEMP "znet-zero-dns-contract"
+          node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs ./scripts/generate-dns-contract-fixtures.mjs $contractDir
+          "DNS_CONTRACT_DIR=$contractDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ZERO_CONTRACT_SHA=$(git -C zero-core rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Zero
+        run: cargo build --manifest-path zero-core/Cargo.toml --release --locked -j 2
+
+      - name: Validate every client DNS mode against Zero
+        shell: pwsh
+        run: |
+          $zero = Join-Path $PWD "zero-core/target/release/zero.exe"
+          $manifest = Get-Content (Join-Path $env:DNS_CONTRACT_DIR "manifest.json") -Raw | ConvertFrom-Json
+          foreach ($file in $manifest.valid) {
+            $path = Join-Path $env:DNS_CONTRACT_DIR $file
+            & $zero validate $path
+            if ($LASTEXITCODE -ne 0) {
+              throw "Zero $env:ZERO_CONTRACT_SHA rejected valid client fixture $file"
+            }
+          }
+          foreach ($file in $manifest.invalid) {
+            $path = Join-Path $env:DNS_CONTRACT_DIR $file
+            & $zero validate $path
+            if ($LASTEXITCODE -eq 0) {
+              throw "Zero $env:ZERO_CONTRACT_SHA accepted invalid client fixture $file"
+            }
+          }
+
