@@ -99,17 +99,31 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
   if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
   if (Object.hasOwn(value, 'policy') && !isObject(value.policy)) return null;
+  if (Object.hasOwn(value, 'reverse_mapping') && !isObject(value.reverse_mapping)) return null;
   const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
   if (answer.type === 'fake_ip') {
     answer.exclude_domains = Array.isArray(answer.exclude_domains)
       ? answer.exclude_domains.filter((domain): domain is string => typeof domain === 'string')
       : [];
   }
+  const reverseMapping = isObject(value.reverse_mapping)
+    ? {
+        ...clone(value.reverse_mapping),
+        max_entries: typeof value.reverse_mapping.max_entries === 'number' ? value.reverse_mapping.max_entries : 1024,
+        max_domains_per_address: typeof value.reverse_mapping.max_domains_per_address === 'number'
+          ? value.reverse_mapping.max_domains_per_address
+          : 8,
+        max_ttl_seconds: typeof value.reverse_mapping.max_ttl_seconds === 'number'
+          ? value.reverse_mapping.max_ttl_seconds
+          : 300,
+      }
+    : undefined;
   return {
     ...clone(value),
     servers: clone(value.servers) as Record<string, DnsServerConfig>,
     default_server: value.default_server,
     dispatch: Array.isArray(value.dispatch) ? clone(value.dispatch) : [],
+    reverse_mapping: reverseMapping,
     answer,
     policy: isObject(value.policy) ? clone(value.policy) : undefined,
   } as DnsConfig;
@@ -403,6 +417,27 @@ export function validateDnsDraft(
       message: '当前内核不能在 TUN DNS 劫持时自动排除 system DNS；请升级内核、关闭劫持或改用显式网络 DNS',
       severity: 'error',
     });
+  }
+  if (draft.dns.cache) {
+    if (!Number.isInteger(draft.dns.cache.max_entries) || draft.dns.cache.max_entries < 1) {
+      issues.push({ field: 'cache.max_entries', message: '缓存容量必须是大于 0 的整数', severity: 'error' });
+    }
+    if (draft.dns.cache.max_ttl_seconds !== undefined
+      && (!Number.isInteger(draft.dns.cache.max_ttl_seconds) || draft.dns.cache.max_ttl_seconds < 1)) {
+      issues.push({ field: 'cache.max_ttl_seconds', message: '最大 TTL 必须是大于 0 的整数', severity: 'error' });
+    }
+  }
+  if (draft.dns.reverse_mapping) {
+    const reverse = draft.dns.reverse_mapping;
+    if (!Number.isInteger(reverse.max_entries) || reverse.max_entries < 1) {
+      issues.push({ field: 'reverse_mapping.max_entries', message: '真实地址映射容量必须是大于 0 的整数', severity: 'error' });
+    }
+    if (!Number.isInteger(reverse.max_domains_per_address) || reverse.max_domains_per_address < 2) {
+      issues.push({ field: 'reverse_mapping.max_domains_per_address', message: '每个地址至少保留 2 个候选域名，才能识别共享地址歧义', severity: 'error' });
+    }
+    if (!Number.isInteger(reverse.max_ttl_seconds) || reverse.max_ttl_seconds < 1) {
+      issues.push({ field: 'reverse_mapping.max_ttl_seconds', message: '映射 TTL 必须是大于 0 的整数', severity: 'error' });
+    }
   }
   if (draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip') {
     if (!draft.dns.answer.cidr.includes('/')) {

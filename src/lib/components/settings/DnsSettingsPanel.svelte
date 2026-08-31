@@ -164,6 +164,7 @@
   const unsetSelection = '__znet_unset__';
   type PolicyServerField = 'node_server' | 'direct_server';
   type PolicyFallbackField = 'fallback_servers' | 'node_fallback_servers' | 'direct_fallback_servers';
+  type ReverseMappingField = 'max_entries' | 'max_domains_per_address' | 'max_ttl_seconds';
 
   function cloneDnsValue<T>(value: T): T {
     return JSON.parse(JSON.stringify(value)) as T;
@@ -516,6 +517,24 @@
     const policy = ensurePolicy();
     if (!policy) return;
     policy.reject_address_cidrs = value.split('\n').map((item) => item.trim()).filter(Boolean);
+    touch();
+  }
+
+  function toggleReverseMapping(enabled: boolean) {
+    if (!draft) return;
+    draft.dns.reverse_mapping = enabled
+      ? draft.dns.reverse_mapping ?? {
+          max_entries: 1024,
+          max_domains_per_address: 8,
+          max_ttl_seconds: 300,
+        }
+      : undefined;
+    touch();
+  }
+
+  function changeReverseMapping(field: ReverseMappingField, value: string) {
+    if (!draft?.dns.reverse_mapping) return;
+    draft.dns.reverse_mapping[field] = Number(value);
     touch();
   }
 
@@ -1041,6 +1060,20 @@
           <label><span>最大缓存条目</span><Input type="number" value={draft.dns.cache?.max_entries ?? 1024} oninput={(event) => { if (draft) { draft.dns.cache = { ...draft.dns.cache, max_entries: Number(event.currentTarget.value) }; touch(); } }} /></label>
           <label><span>最大 TTL（秒，可选）</span><Input type="number" value={draft.dns.cache?.max_ttl_seconds ?? ''} oninput={(event) => { if (draft?.dns.cache) { draft.dns.cache.max_ttl_seconds = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
         </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div><div class="section-title">真实地址映射</div><p>记录 Real DNS 返回的 IP 与候选域名，帮助透明连接恢复逻辑目标；共享 IP 会保留歧义而不会强行猜测。</p></div>
+          <Switch checked={Boolean(draft.dns.reverse_mapping)} onCheckedChange={toggleReverseMapping} aria-label="真实地址映射" />
+        </div>
+        {#if draft.dns.reverse_mapping}
+          <div class="field-grid reverse-grid">
+            <label><span>最大地址数</span><Input type="number" min="1" value={draft.dns.reverse_mapping.max_entries} oninput={(event) => changeReverseMapping('max_entries', event.currentTarget.value)} /></label>
+            <label><span>每个地址的候选域名数</span><Input type="number" min="2" value={draft.dns.reverse_mapping.max_domains_per_address} oninput={(event) => changeReverseMapping('max_domains_per_address', event.currentTarget.value)} /></label>
+            <label><span>最长保留时间（秒）</span><Input type="number" min="1" value={draft.dns.reverse_mapping.max_ttl_seconds} oninput={(event) => changeReverseMapping('max_ttl_seconds', event.currentTarget.value)} /></label>
+          </div>
+        {/if}
       </section>
 
       {#if draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip'}
@@ -1738,6 +1771,10 @@
     margin-top: 10px;
   }
 
+  .reverse-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .field-grid label,
   .dialog-field-grid label {
     display: flex;
@@ -2153,7 +2190,8 @@
     .field-grid,
     .dialog-field-grid,
     .dispatch-condition-form,
-    .policy-role-grid {
+    .policy-role-grid,
+    .reverse-grid {
       grid-template-columns: 1fr;
     }
 

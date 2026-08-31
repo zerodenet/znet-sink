@@ -16,6 +16,8 @@ pub struct ClientDnsConfig {
     pub dispatch: Vec<ClientDnsDispatch>,
     #[serde(default)]
     pub cache: Option<ClientDnsCache>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse_mapping: Option<ClientDnsReverseMapping>,
     #[serde(default)]
     pub answer: ClientDnsAnswer,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +188,18 @@ pub struct ClientDnsCache {
     pub extra: BTreeMap<String, Value>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientDnsReverseMapping {
+    #[serde(default = "default_reverse_mapping_entries")]
+    pub max_entries: usize,
+    #[serde(default = "default_reverse_mapping_domains_per_address")]
+    pub max_domains_per_address: usize,
+    #[serde(default = "default_reverse_mapping_ttl")]
+    pub max_ttl_seconds: u64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "type")]
 pub enum ClientDnsAnswer {
@@ -308,6 +322,15 @@ const fn default_dot_port() -> u16 {
 const fn default_cache_entries() -> usize {
     256
 }
+const fn default_reverse_mapping_entries() -> usize {
+    1024
+}
+const fn default_reverse_mapping_domains_per_address() -> usize {
+    8
+}
+const fn default_reverse_mapping_ttl() -> u64 {
+    300
+}
 const fn default_fake_ip_ttl() -> u64 {
     86_400
 }
@@ -341,6 +364,12 @@ mod tests {
                 { "condition": { "domain_keyword": ["internal"] }, "server": "system" }
             ],
             "cache": { "max_entries": 1024, "future_cache_option": "keep" },
+            "reverse_mapping": {
+                "max_entries": 1024,
+                "max_domains_per_address": 8,
+                "max_ttl_seconds": 300,
+                "future_reverse_option": true
+            },
             "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 86400 },
             "policy": {
                 "timeout_ms": 4000,

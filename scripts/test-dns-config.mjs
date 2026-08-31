@@ -33,6 +33,7 @@ assert.match(service, /policy\.fallback_servers/);
 assert.match(service, /policy\.server_timeout_ms/);
 assert.match(service, /节点解析服务器 .* 不能再通过 detour 转发/);
 assert.match(service, /DoQ 暂不支持通过出站转发/);
+assert.match(service, /reverse_mapping\.max_domains_per_address/);
 assert.match(service, /context\.ruleSetTags && !context\.ruleSetTags\.has\(tag\)/);
 assert.match(service, /tunDnsSystemAuto\.state === 'unsupported'/);
 assert.match(service, /dnsFakeIpDualStack\.state === 'unsupported'/);
@@ -53,6 +54,8 @@ assert.match(panel, /通用回退链/);
 assert.match(panel, /单独超时/);
 assert.match(panel, /getConfigProxyNodes/);
 assert.match(panel, /getConfigPolicyGroups/);
+assert.match(panel, /aria-label="真实地址映射"/);
+assert.match(panel, /changeReverseMapping\('max_domains_per_address'/);
 for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
   assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
 }

@@ -25,6 +25,13 @@ export interface DnsCacheConfig {
   [key: string]: unknown;
 }
 
+export interface DnsReverseMappingConfig {
+  max_entries: number;
+  max_domains_per_address: number;
+  max_ttl_seconds: number;
+  [key: string]: unknown;
+}
+
 export interface DnsPolicyConfig {
   timeout_ms?: number;
   server_timeout_ms?: Record<string, number>;
@@ -55,6 +62,7 @@ export interface DnsConfig {
   default_server: string;
   dispatch: DnsDispatchConfig[];
   cache?: DnsCacheConfig;
+  reverse_mapping?: DnsReverseMappingConfig;
   answer: DnsAnswerConfig;
   policy?: DnsPolicyConfig;
   [key: string]: unknown;
