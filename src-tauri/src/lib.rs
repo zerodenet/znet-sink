@@ -491,6 +491,7 @@ pub fn run() {
             gui_core_commands::gui_apply_dns_config,
             gui_core_commands::gui_validate_config,
             gui_core_commands::gui_validate_dns_config,
+            gui_core_commands::gui_inspect_dns_effective_config,
             gui_core_commands::gui_set_mode,
             gui_core_commands::gui_probe_policy,
             gui_core_commands::gui_dns_lookup,

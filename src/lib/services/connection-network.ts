@@ -1,5 +1,6 @@
 import type {
   GuiConnectionAddressFamilyFallback,
+  GuiConnectionAttempt,
   GuiConnectionEgressContext,
   GuiConnectionNetworkContext,
   GuiConnectionNetworkInterface,
@@ -15,6 +16,8 @@ export function parseConnectionNetworkContext(
 
   const resolvedCandidates = arrayValue(raw, ['resolved_candidates', 'resolvedCandidates'])
     .flatMap((candidate) => endpointValue(candidate) ?? []);
+  const connectionAttempts = arrayValue(raw, ['connection_attempts', 'connectionAttempts'])
+    .flatMap((attempt) => connectionAttemptValue(attempt) ?? []);
   const selectedInterface = interfaceValue(
     field(raw, ['selected_interface', 'selectedInterface']),
   );
@@ -28,6 +31,7 @@ export function parseConnectionNetworkContext(
     localAddress: endpointValue(field(raw, ['local_address', 'localAddress'])),
     remoteAddress: endpointValue(field(raw, ['remote_address', 'remoteAddress'])),
     resolvedCandidates,
+    connectionAttempts,
     addressFamilyPolicy: text(raw, ['address_family_policy', 'addressFamilyPolicy']),
     addressFamilyFallback,
     selectedInterface,
@@ -40,6 +44,7 @@ export function parseConnectionNetworkContext(
   return context.localAddress
     || context.remoteAddress
     || context.resolvedCandidates.length > 0
+    || context.connectionAttempts.length > 0
     || context.addressFamilyPolicy
     || context.addressFamilyFallback
     || context.selectedInterface
@@ -49,6 +54,23 @@ export function parseConnectionNetworkContext(
     || context.connectStage
     ? context
     : undefined;
+}
+
+function connectionAttemptValue(value: unknown): GuiConnectionAttempt | undefined {
+  const raw = objectValue(value);
+  if (!raw) return undefined;
+  const remoteAddress = endpointValue(field(raw, ['remote_address', 'remoteAddress']));
+  if (!remoteAddress) return undefined;
+  return {
+    remoteAddress,
+    localAddress: endpointValue(field(raw, ['local_address', 'localAddress'])),
+    stage: text(raw, ['stage']) ?? '',
+    outcome: text(raw, ['outcome']) ?? '',
+    interfaceBound: boolean(raw, ['interface_bound', 'interfaceBound']) ?? false,
+    errorKind: text(raw, ['error_kind', 'errorKind']),
+    osError: number(raw, ['os_error', 'osError']),
+    error: text(raw, ['error']),
+  };
 }
 
 function addressFamilyFallbackValue(value: unknown): GuiConnectionAddressFamilyFallback | undefined {

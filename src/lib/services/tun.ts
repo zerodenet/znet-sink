@@ -3,6 +3,7 @@ import {
   getAppConfig,
   getGuiConnectionStatus,
   getGuiCoreHealth,
+  getGuiZeroCapabilities,
   startCoreProcess,
   updateAppConfig,
 } from './core';
@@ -10,6 +11,10 @@ import type { AppConfig } from '$lib/types/app-config';
 import type { ProxyConfigProfile } from '$lib/types/domain';
 import type { GuiTunStatus } from '$lib/types/gui-api';
 import type { GuiManagedTunStatus, TunConfigSource } from '$lib/types/tun';
+import {
+  projectClientKernelFeatures,
+  type ClientKernelFeatures,
+} from '$lib/services/kernel-capabilities';
 
 const CORE_READY_TIMEOUT_MS = 8_000;
 const CORE_READY_INTERVAL_MS = 100;
@@ -21,6 +26,13 @@ interface TunPolicy {
   profile?: ProxyConfigProfile;
   profileManaged: boolean;
   profileDesiredEnabled: boolean;
+}
+
+export interface TunDnsHijackReadiness {
+  state: 'ready' | 'blocked' | 'unknown';
+  code?: string;
+  message: string;
+  features?: ClientKernelFeatures;
 }
 
 export interface TunProfileTransition {
@@ -164,13 +176,72 @@ function runtimeOwnershipError(): { code: string; message: string } {
   };
 }
 
-function validateAppDnsHijackPrecondition(policy: TunPolicy): void {
-  if (!policy.appConfig.tun.dnsHijack) return;
-  const dns = policy.appConfig.dns.config;
-  if (!policy.appConfig.dns.enabled || !dns || Object.keys(dns.servers).length === 0) {
-    throw {
+export function evaluateTunDnsHijackReadiness(
+  dns: AppConfig['dns'],
+  features?: ClientKernelFeatures,
+): TunDnsHijackReadiness {
+  if (!dns.enabled || !dns.config || Object.keys(dns.config.servers).length === 0) {
+    return {
+      state: 'blocked',
       code: 'tun_dns_hijack_requires_dns',
       message: '开启 TUN DNS 劫持前，请先在 DNS 设置中启用并保存 Real DNS 或 Fake-IP。',
+      features,
+    };
+  }
+  if (features?.tunDnsHijack.state === 'unsupported') {
+    return {
+      state: 'blocked',
+      code: 'feature_disabled',
+      message: '当前内核未声明 TUN DNS 劫持能力，请升级内核或关闭 DNS 劫持。',
+      features,
+    };
+  }
+  const usesSystemDns = Object.values(dns.config.servers).some((server) => server.type === 'system');
+  if (usesSystemDns && features?.tunDnsSystemAuto.state === 'unsupported') {
+    return {
+      state: 'blocked',
+      code: 'tun_dns_system_auto_unsupported',
+      message: '当前内核不能为 TUN 自动排除 system DNS。请升级内核、关闭 DNS 劫持或改用显式网络 DNS。',
+      features,
+    };
+  }
+  if (!features || features.tunDnsHijack.state === 'unknown'
+    || (usesSystemDns && features.tunDnsSystemAuto.state === 'unknown')) {
+    return {
+      state: 'unknown',
+      message: '当前内核的 TUN DNS 能力未知，启动时将继续由内核进行最终校验。',
+      features,
+    };
+  }
+  return {
+    state: 'ready',
+    message: usesSystemDns
+      ? 'system DNS 将由内核自动发现真实上游并排除 TUN 自捕获。'
+      : '当前 DNS 后端可用于 TUN DNS 劫持。',
+    features,
+  };
+}
+
+export async function inspectTunDnsHijackReadiness(
+  dns?: AppConfig['dns'],
+): Promise<TunDnsHijackReadiness> {
+  const [appConfig, capabilities] = await Promise.all([
+    dns ? Promise.resolve(null) : getAppConfig(),
+    getGuiZeroCapabilities().catch(() => null),
+  ]);
+  return evaluateTunDnsHijackReadiness(
+    dns ?? appConfig!.dns,
+    projectClientKernelFeatures(capabilities),
+  );
+}
+
+async function validateAppDnsHijackPrecondition(policy: TunPolicy): Promise<void> {
+  if (!policy.appConfig.tun.dnsHijack) return;
+  const readiness = await inspectTunDnsHijackReadiness(policy.appConfig.dns);
+  if (readiness.state === 'blocked') {
+    throw {
+      code: readiness.code,
+      message: readiness.message,
     };
   }
 }
@@ -221,7 +292,7 @@ export async function restoreGuiTunAfterFailedProfileSwitch(
 
   const current = await rawTunStatus();
   if (current.enabled) return;
-  validateAppDnsHijackPrecondition(policy);
+  await validateAppDnsHijackPrecondition(policy);
   await ensureCoreReady();
   await invoke('gui_tun_enable');
 }
@@ -253,7 +324,7 @@ export async function reconcileGuiTunRuntime(): Promise<GuiManagedTunStatus> {
   }
 
   if (desired && !current.enabled) {
-    validateAppDnsHijackPrecondition(policy);
+    await validateAppDnsHijackPrecondition(policy);
     await ensureCoreReady();
     current = await invoke('gui_tun_enable');
   } else if (!desired && current.enabled) {
@@ -283,7 +354,7 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     return enriched;
   }
 
-  validateAppDnsHijackPrecondition(policy);
+  await validateAppDnsHijackPrecondition(policy);
   if (current.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
   }

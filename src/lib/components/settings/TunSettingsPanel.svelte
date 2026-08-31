@@ -3,13 +3,20 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
-  import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
+  import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
+  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
+  import { store } from '$lib/services/store.svelte';
+  import {
+    inspectTunDnsHijackReadiness,
+    type TunDnsHijackReadiness,
+  } from '$lib/services/tun';
 
   let loading = $state(true);
   let saving = $state(false);
   let saved = $state(false);
   let error = $state<string | null>(null);
+  let errorCode = $state<string | undefined>(undefined);
 
   let name = $state('');
   let tag = $state('proxy');
@@ -18,16 +25,20 @@
   let mtu = $state('1500');
   let dualStack = $state(true);
   let dnsHijack = $state(false);
+  let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
 
   const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
   const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
   // Profile-owned TUN does not consume these local defaults, so they remain
   // editable for the next profile that omits runtime.tun.
   const locked = $derived((guiState.isTunEnabled && !profileManaged) || saving);
+  const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
+  const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
 
   function markDirty() {
     saved = false;
     error = null;
+    errorCode = undefined;
   }
 
   async function load() {
@@ -42,8 +53,11 @@
       mtu = String(config.tun.mtu);
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
+      dnsReadiness = await inspectTunDnsHijackReadiness(config.dns);
     } catch (cause) {
-      error = getAppErrorMessage(cause, '加载 TUN 配置失败');
+      const info = getAppErrorInfo(cause, '加载 TUN 配置失败');
+      errorCode = info.code;
+      error = getAppErrorMessage(cause, info.message);
     } finally {
       loading = false;
     }
@@ -57,6 +71,7 @@
 
     saved = false;
     error = null;
+    errorCode = undefined;
 
     if (!normalizedAddr || !normalizedAddr.includes('/')) {
       error = 'TUN 地址必须使用 CIDR 格式，例如 10.66.0.1/30';
@@ -72,6 +87,16 @@
     }
     if (normalizedSecondary && !normalizedSecondary.includes('/')) {
       error = '第二地址必须使用 CIDR 格式';
+      return;
+    }
+    if (dualStack && dualStackUnsupported) {
+      errorCode = 'feature_disabled';
+      error = '当前内核未声明 TUN 双栈接管能力，请关闭双栈或升级内核';
+      return;
+    }
+    if (dnsHijack && dnsReadiness?.state === 'blocked') {
+      errorCode = dnsReadiness.code;
+      error = dnsReadiness.message;
       return;
     }
 
@@ -97,7 +122,9 @@
       dnsHijack = config.tun.dnsHijack;
       saved = true;
     } catch (cause) {
-      error = getAppErrorMessage(cause, '保存 TUN 配置失败');
+      const info = getAppErrorInfo(cause, '保存 TUN 配置失败');
+      errorCode = info.code;
+      error = getAppErrorMessage(cause, info.message);
     } finally {
       saving = false;
     }
@@ -245,7 +272,7 @@
           dualStack = checked;
           markDirty();
         }}
-        disabled={locked}
+        disabled={locked || dualStackUnsupported}
         aria-label="TUN 双栈接管"
       />
     </div>
@@ -261,10 +288,19 @@
           dnsHijack = checked;
           markDirty();
         }}
-        disabled={locked}
+        disabled={locked || dnsHijackUnsupported}
         aria-label="TUN DNS 劫持"
       />
     </div>
+    {#if dnsHijack && dnsReadiness}
+      <div class:readiness-error={dnsReadiness.state === 'blocked'} class="readiness-note" role="status">
+        <span>{dnsReadiness.message}</span>
+        {#if dnsReadiness.state === 'blocked'}
+          <Button variant="outline" size="sm" onclick={() => store.openSettings('dns')}>前往 DNS 设置</Button>
+          <Button variant="ghost" size="sm" onclick={() => store.openSettings('core')}>检查内核版本</Button>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -277,7 +313,10 @@
 {/if}
 
 {#if error}
-  <div class="settings-error" role="alert">{error}</div>
+  <div class="settings-error" role="alert">
+    <span>{error}</span>
+    <ErrorRecoveryActions code={errorCode} context="tun" onretry={load} />
+  </div>
 {/if}
 
 <style>
@@ -367,6 +406,21 @@
     line-height: 1.45;
   }
 
+  .readiness-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--muted-foreground);
+    font-size: 11px;
+  }
+
+  .readiness-note span { flex: 1; }
+  .readiness-note.readiness-error { border-color: rgba(239, 68, 68, .3); color: var(--destructive); }
+
   .settings-actions {
     display: flex;
     justify-content: flex-end;
@@ -382,6 +436,8 @@
     color: var(--destructive);
     font-size: 11.5px;
   }
+
+  .settings-error span { display: block; margin-bottom: 8px; }
 
   @media (max-width: 900px) {
     .config-row {

@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { effectiveConfigDiff } from '../src/lib/services/config-diff.ts';
+import { projectClientKernelFeatures } from '../src/lib/services/kernel-capabilities.ts';
 
 const service = readFileSync('src/lib/services/dns-config.ts', 'utf8');
 const panel = readFileSync('src/lib/components/settings/DnsSettingsPanel.svelte', 'utf8');
 const runtime = readFileSync('src-tauri/src/kernel/zero/runtime.rs', 'utf8');
 const parsing = readFileSync('src-tauri/src/kernel/zero/parsing.rs', 'utf8');
+const guiCore = readFileSync('src-tauri/src/commands/gui_core.rs', 'utf8');
+const tunPanel = readFileSync('src/lib/components/settings/TunSettingsPanel.svelte', 'utf8');
+const recoveryActions = readFileSync('src/lib/components/core/ErrorRecoveryActions.svelte', 'utf8');
+const configService = readFileSync('src/lib/services/config.ts', 'utf8');
 
 assert.match(service, /enabled: draft\.mode !== 'disabled'/);
 assert.match(service, /config: clone\(draft\.dns\)/);
@@ -20,6 +26,9 @@ assert.match(service, /ipv6_cidr: previous\?\.ipv6_cidr/);
 assert.match(service, /export function getDnsAddressFamilyPolicy\(dns: DnsConfig\)/);
 assert.match(service, /export function setDnsAddressFamilyPolicy\(/);
 assert.match(service, /field: 'policy\.address_family'/);
+assert.match(service, /context\.ruleSetTags && !context\.ruleSetTags\.has\(tag\)/);
+assert.match(service, /tunDnsSystemAuto\.state === 'unsupported'/);
+assert.match(service, /dnsFakeIpDualStack\.state === 'unsupported'/);
 
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
@@ -54,9 +63,44 @@ assert.match(panel, /draft\.dns\.answer\.ipv6_cidr/);
 assert.match(panel, /基础配置/);
 assert.match(panel, /客户端覆盖/);
 assert.match(panel, /最终有效配置/);
+assert.match(panel, /查看最终配置/);
+assert.match(panel, /guiInspectDnsEffectiveConfig/);
+assert.match(panel, /ruleSetSignal\.onChanged/);
+assert.match(service, /已不存在或未进入最终有效配置/);
+assert.match(panel, /ErrorRecoveryActions/);
 assert.match(panel, /\(draft\.dns\.answer\.exclude_domains \?\? \[\]\)\.join\('\\n'\)/);
+assert.match(tunPanel, /inspectTunDnsHijackReadiness/);
+assert.match(tunPanel, /features\?\.tunDualStack\.state === 'unsupported'/);
+assert.match(recoveryActions, /guiExportDiagnostics/);
+assert.match(guiCore, /pub fn gui_inspect_dns_effective_config/);
+assert.match(guiCore, /compose_effective_config_with_dns/);
+assert.match(configService, /ruleSetSignal\.markChanged\(\)/);
 assert.match(runtime, /json!\(tun\.dns_hijack\)/);
 assert.match(parsing, /"original_ip", "originalIp"/);
 assert.match(parsing, /"fake_ip_reverse_status", "fakeIpReverseStatus"/);
+assert.match(parsing, /"connection_attempts"/);
+assert.match(parsing, /"retired_addresses"/);
+
+const features = projectClientKernelFeatures({
+  available: true,
+  features: ['tun_dns_system_auto', 'dns_split_dispatch'],
+  buildFeatures: [],
+  contracts: { capabilities: { minimumSupported: 1, current: 1 } },
+});
+assert.equal(features.tunDnsSystemAuto.state, 'supported');
+assert.equal(features.dnsSplitDispatch.state, 'supported');
+assert.equal(features.dnsFakeIpDualStack.state, 'unsupported');
+
+const diff = effectiveConfigDiff(
+  { runtime: { dns: { enabled: false } } },
+  { runtime: { dns: { enabled: true } } },
+  [{ id: 'dns', label: '全局 DNS 覆盖', enabled: true, paths: ['runtime.dns'] }],
+);
+assert.deepEqual(diff, [{
+  path: 'runtime.dns.enabled',
+  source: '全局 DNS 覆盖',
+  before: false,
+  after: true,
+}]);
 
 console.log('dns-config: ok');

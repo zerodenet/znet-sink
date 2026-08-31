@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { AlertTriangle, Braces, ChevronDown, ChevronUp, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Braces, ChevronDown, ChevronUp, FileDiff, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
   import * as Dialog from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
   import * as Select from '$lib/components/ui/select';
@@ -22,7 +23,16 @@
     validateDnsDraft,
   } from '$lib/services/dns-config';
   import { getEffectiveRuleSetOptions, listProxyConfigs } from '$lib/services/config';
-  import { getAppErrorMessage } from '$lib/services/core';
+  import {
+    getAppErrorInfo,
+    getAppErrorMessage,
+    guiInspectDnsEffectiveConfig,
+    type DnsEffectiveConfigInspection,
+  } from '$lib/services/core';
+  import { compactConfigValue, effectiveConfigDiff } from '$lib/services/config-diff';
+  import { featureStateLabel } from '$lib/services/kernel-capabilities';
+  import { ruleSetSignal } from '$lib/services/rule-set-signal.svelte';
+  import { store } from '$lib/services/store.svelte';
   import type { DnsKernelCompatibility } from '$lib/services/dns-config';
   import type { DnsAddressFamilyPolicy, DnsDispatchConfig, DnsMode, DnsServerConfig, DnsServerType, DnsSettingsDraft, DnsSettingsInput } from '$lib/types/dns';
   import type { EffectiveRuleSetOption } from '$lib/types/domain';
@@ -30,6 +40,7 @@
   let loading = $state(true);
   let saving = $state(false);
   let error = $state('');
+  let errorCode = $state<string | undefined>(undefined);
   let saved = $state(false);
   let savedPending = $state(false);
   let source = $state<DnsSettingsInput | null>(null);
@@ -55,10 +66,34 @@
   let compatibility = $state<DnsKernelCompatibility>({ status: 'unknown' });
   let ruleSetOptions = $state<EffectiveRuleSetOption[]>([]);
   let activeProfileName = $state('当前无活动代理配置');
+  let effectiveDialogOpen = $state(false);
+  let effectiveLoading = $state(false);
+  let effectiveError = $state('');
+  let effectiveInspection = $state<DnsEffectiveConfigInspection | null>(null);
 
-  const issues = $derived(draft ? validateDnsDraft(draft) : []);
+  const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
+  const issues = $derived(draft ? validateDnsDraft(draft, {
+    ruleSetTags,
+    features: compatibility.features,
+  }) : []);
   const errors = $derived(issues.filter((issue) => issue.severity === 'error'));
   const warnings = $derived(issues.filter((issue) => issue.severity === 'warning'));
+  const danglingRuleTags = $derived(draft ? draft.dns.dispatch.flatMap((rule) => {
+    const condition = rule.condition;
+    const rawTag = condition.type === 'rule_set' ? condition.tag : condition.rule_set;
+    const tag = typeof rawTag === 'string' ? rawTag.trim() : '';
+    return tag && !ruleSetTags.has(tag) ? [tag] : [];
+  }).filter((tag, index, items) => items.indexOf(tag) === index) : []);
+  const effectiveDiff = $derived(effectiveInspection
+    ? effectiveConfigDiff(
+        effectiveInspection.baseConfig,
+        effectiveInspection.effectiveConfig,
+        effectiveInspection.sources,
+      )
+    : []);
+  const usesSystemDns = $derived(draft
+    ? Object.values(draft.dns.servers).some((server) => server.type === 'system')
+    : false);
   const serverNames = $derived(draft ? Object.keys(draft.dns.servers) : []);
   const addressFamilyPolicy = $derived(draft ? getDnsAddressFamilyPolicy(draft.dns) : 'prefer_ipv4');
   const modeDescription = $derived(draft
@@ -162,7 +197,7 @@
     condition.type = dispatchConditionType;
     if (dispatchConditionType === 'rule_set') {
       const tag = dispatchConditionTagDraft.trim();
-      if (!tag) throw new Error('请输入规则集标签');
+      if (!tag || !ruleSetTags.has(tag)) throw new Error('请选择最终有效配置中的规则集');
       condition.tag = tag;
       return condition;
     }
@@ -230,6 +265,7 @@
     saved = false;
     savedPending = false;
     error = '';
+    errorCode = undefined;
     nativeError = '';
   }
 
@@ -242,6 +278,7 @@
     syncNativeJson();
     jsonDialogOpen = true;
     error = '';
+    errorCode = undefined;
   }
 
   function closeJsonEditor() {
@@ -279,6 +316,7 @@
   async function load() {
     loading = true;
     error = '';
+    errorCode = undefined;
     try {
       const [result, kernelCompatibility, effectiveRuleSets, proxyConfigs] = await Promise.all([
         loadGlobalDnsSettings(),
@@ -297,7 +335,9 @@
       saved = false;
       savedPending = false;
     } catch (cause) {
-      error = getAppErrorMessage(cause, '加载 DNS 配置失败');
+      const info = getAppErrorInfo(cause, '加载 DNS 配置失败');
+      errorCode = info.code;
+      error = getAppErrorMessage(cause, info.message);
     } finally {
       loading = false;
     }
@@ -317,12 +357,48 @@
     touch();
   }
 
-  function resetToSystemDefault() {
+  async function refreshRuleSetReferences() {
+    try {
+      ruleSetOptions = await getEffectiveRuleSetOptions();
+    } catch {
+      // Keep the last known options visible; save still performs kernel validation.
+    }
+  }
+
+  function resetToAutomaticDefault() {
     if (!draft) return;
     const resetMode = draft.mode === 'fake_ip' ? 'fake_ip' : 'real';
     draft.dns = createDefaultDnsConfig(resetMode);
-    if (draft.mode === 'fake_ip') draft.dnsHijack = true;
+    if (draft.mode === 'fake_ip') {
+      draft.dnsHijack = compatibility.features?.tunDnsSystemAuto.state !== 'unsupported';
+    }
     touch();
+  }
+
+  function disableDnsHijackForCompatibility() {
+    if (!draft) return;
+    draft.dnsHijack = false;
+    touch();
+  }
+
+  async function openEffectiveConfig() {
+    if (!draft) return;
+    effectiveDialogOpen = true;
+    effectiveLoading = true;
+    effectiveError = '';
+    effectiveInspection = null;
+    try {
+      const input = JSON.parse(JSON.stringify({
+        enabled: draft.mode !== 'disabled',
+        config: draft.dns,
+        dnsHijack: draft.mode !== 'disabled' && draft.dnsHijack,
+      })) as DnsSettingsInput;
+      effectiveInspection = await guiInspectDnsEffectiveConfig(input);
+    } catch (cause) {
+      effectiveError = getAppErrorMessage(cause, '生成最终有效配置失败');
+    } finally {
+      effectiveLoading = false;
+    }
   }
 
   function changeAddressFamilyPolicy(value: string) {
@@ -512,6 +588,7 @@
     saved = false;
     savedPending = false;
     error = '';
+    errorCode = undefined;
     nativeError = '';
     try {
       const nextDraft = draft;
@@ -526,13 +603,18 @@
       nativeJson = JSON.stringify(nextDraft.dns, null, 2);
       saved = true;
     } catch (cause) {
-      error = getAppErrorMessage(cause, '保存 DNS 配置失败，已保留上次可用配置');
+      const info = getAppErrorInfo(cause, '保存 DNS 配置失败，已保留上次可用配置');
+      errorCode = info.code;
+      error = getAppErrorMessage(cause, info.message);
     } finally {
       saving = false;
     }
   }
 
-  onMount(() => void load());
+  onMount(() => {
+    void load();
+    return ruleSetSignal.onChanged(() => void refreshRuleSetReferences());
+  });
 </script>
 
 <div class="panel-head">
@@ -541,8 +623,11 @@
     <p>客户端覆盖，不写回代理配置；应用时注入 Zero 有效配置并由内核校验</p>
   </div>
   <div class="head-actions">
-    <Button variant="outline" size="sm" onclick={resetToSystemDefault} disabled={loading || saving || !draft}>
-      <RotateCcw />恢复 system 默认
+    <Button variant="outline" size="sm" onclick={resetToAutomaticDefault} disabled={loading || saving || !draft}>
+      <RotateCcw />恢复自动默认
+    </Button>
+    <Button variant="outline" size="sm" onclick={openEffectiveConfig} disabled={loading || saving || !draft}>
+      <FileDiff />查看最终配置
     </Button>
     <Button variant="outline" size="sm" onclick={openJsonEditor} disabled={loading || saving || !draft}>
       <Braces />编辑 JSON
@@ -559,7 +644,7 @@
   <div class="load-error" role="alert">
     <AlertTriangle />
     <span>{error}</span>
-    <Button variant="outline" size="sm" onclick={load}>重试</Button>
+    <ErrorRecoveryActions code={errorCode} context="dns" onretry={load} />
   </div>
 {:else if draft}
   <p class="workflow-hint">配置流程：选择基础模式 → 编辑 DNS、Fake-IP 和分流策略 → 点击底部“保存并应用”。高级用户可从右上角打开 Zero 原生 JSON。</p>
@@ -571,6 +656,15 @@
     <span class="lineage-arrow">→</span>
     <div><strong>最终有效配置</strong><span>{ruleSetOptions.length} 个规则集 · 交给 Zero 校验</span></div>
   </div>
+
+  {#if compatibility.features}
+    <div class="capability-strip" aria-label="DNS 精确能力">
+      <span class:supported={compatibility.features.tunDnsHijack.state === 'supported'}>DNS 劫持：{featureStateLabel(compatibility.features.tunDnsHijack)}</span>
+      <span class:supported={compatibility.features.tunDnsSystemAuto.state === 'supported'}>system 自动排除：{featureStateLabel(compatibility.features.tunDnsSystemAuto)}</span>
+      <span class:supported={compatibility.features.dnsSplitDispatch.state === 'supported'}>DNS 分流：{featureStateLabel(compatibility.features.dnsSplitDispatch)}</span>
+      <span class:supported={compatibility.features.dnsFakeIpDualStack.state === 'supported'}>双栈 Fake-IP：{featureStateLabel(compatibility.features.dnsFakeIpDualStack)}</span>
+    </div>
+  {/if}
 
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
     <div class="issues warning" role="status">
@@ -608,8 +702,28 @@
   {:else}
     <section class="section row-section">
       <div><strong>DNS 劫持</strong><span>Fake-IP 基础模式会自动开启；Real DNS 可按需开启。</span></div>
-      <Switch checked={draft.dnsHijack} onCheckedChange={(checked) => { if (draft) { draft.dnsHijack = checked; touch(); } }} aria-label="DNS 劫持" />
+      <Switch checked={draft.dnsHijack} onCheckedChange={(checked) => { if (draft) { draft.dnsHijack = checked; touch(); } }} disabled={compatibility.features?.tunDnsHijack.state === 'unsupported'} aria-label="DNS 劫持" />
     </section>
+  {/if}
+
+  {#if draft.dnsHijack && usesSystemDns && compatibility.features?.tunDnsSystemAuto.state === 'unsupported'}
+    <div class="issues error" role="alert">
+      <div>当前内核无法在 TUN DNS 劫持时自动排除 system DNS，保存已被阻止。</div>
+      <div class="inline-actions">
+        <Button variant="outline" size="sm" onclick={disableDnsHijackForCompatibility}>关闭 DNS 劫持</Button>
+        <Button variant="outline" size="sm" onclick={() => store.openSettings('core')}>升级内核</Button>
+      </div>
+    </div>
+  {/if}
+
+  {#if danglingRuleTags.length > 0}
+    <div class="issues error" role="alert">
+      <div>以下 DNS 分流引用已失效：{danglingRuleTags.join('、')}。请选择现有规则集或删除对应分流。</div>
+      <div class="inline-actions">
+        <Button variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')}>管理规则集</Button>
+        <Button variant="ghost" size="sm" onclick={load}>刷新引用</Button>
+      </div>
+    </div>
   {/if}
 
   <section class="section row-section">
@@ -620,6 +734,7 @@
     <Select.Root
       type="single"
       value={addressFamilyPolicy}
+      disabled={compatibility.features?.dnsAddressFamilyPolicy.state === 'unsupported'}
       onValueChange={(value) => { if (value) changeAddressFamilyPolicy(value); }}
     >
       <Select.Trigger aria-label="DNS 应答地址族策略">
@@ -688,7 +803,7 @@
           <div class="section-title">Fake-IP</div>
           <div class="field-grid">
             <label><span>IPv4 CIDR</span><Input bind:value={draft.dns.answer.cidr} oninput={touch} /></label>
-            <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
+            <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" disabled={compatibility.features?.dnsFakeIpDualStack.state === 'unsupported'} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
             <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
@@ -697,7 +812,7 @@
       {/if}
 
       <section class="section">
-        <div class="section-head"><div><div class="section-title">有序 DNS 分流</div><p>First-match-wins。条件直接使用 Zero 共享规则模型，客户端不另做匹配。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch}><Plus />新增</Button></div>
+        <div class="section-head"><div><div class="section-title">有序 DNS 分流</div><p>First-match-wins。条件直接使用 Zero 共享规则模型，客户端不另做匹配。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
         <div class="dispatch-list">
           {#each draft.dns.dispatch as rule, index (index)}
             <article class="dispatch-card">
@@ -721,7 +836,12 @@
   {/if}
   {#if warnings.length}<div class="issues warning">{#each warnings as issue}<div>{issue.message}</div>{/each}</div>{/if}
   {#if errors.length}<div class="issues error">{#each errors as issue}<div>{issue.field}：{issue.message}</div>{/each}</div>{/if}
-  {#if error}<div class="issues error" role="alert">{error}</div>{/if}
+  {#if error}
+    <div class="issues error" role="alert">
+      <div>{error}</div>
+      <ErrorRecoveryActions code={errorCode} context="dns" onretry={save} />
+    </div>
+  {/if}
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存并应用' : '保存并应用'}</Button></div>
 {/if}
 
@@ -877,9 +997,14 @@
                     </Select.Content>
                   </Select.Root>
                   <small>显示基础配置、订阅和公共规则覆盖组合后的真实 tag；无需手工推导。</small>
+                  {#if dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
+                    <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
+                  {/if}
                 {:else}
-                  <Input bind:value={dispatchConditionTagDraft} placeholder="当前没有可选择的有效规则集" />
-                  <small>未发现活动配置中的规则集，仍可为稍后生效的配置手动填写 tag。</small>
+                  <div class="empty-reference">
+                    <span>当前最终有效配置中没有可选择的规则集。</span>
+                    <Button type="button" variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')}>前往规则页</Button>
+                  </div>
                 {/if}
               </label>
             {:else}
@@ -922,6 +1047,55 @@
         <Button type="submit">{editingDispatchIndex === null ? '添加分流' : '保存修改'}</Button>
       </Dialog.Footer>
     </form>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={effectiveDialogOpen}>
+  <Dialog.Content class="sm:max-w-[1000px]">
+    <Dialog.Header>
+      <Dialog.Title>最终有效配置解释</Dialog.Title>
+      <Dialog.Description>只读预览，不会保存或应用；用于核对基础配置经过客户端覆盖后实际交给 Zero 的内容。</Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Body class="effective-dialog-body">
+      {#if effectiveLoading}
+        <div class="state">正在组合有效配置…</div>
+      {:else if effectiveError}
+        <div class="dialog-error" role="alert">{effectiveError}</div>
+      {:else if effectiveInspection?.reason === 'no_active_proxy_profile'}
+        <div class="state">当前没有活动代理配置，因此暂时无法生成最终有效配置。</div>
+      {:else if effectiveInspection}
+        <div class="effective-meta">
+          <span>基础：{effectiveInspection.activeProfileName ?? '未知配置'}</span>
+          {#each effectiveInspection.sources as configSource (configSource.id)}
+            <span class:source-enabled={configSource.enabled}>{configSource.label}：{configSource.enabled ? '生效' : '未启用'}{configSource.count !== undefined ? ` · ${configSource.count}` : ''}</span>
+          {/each}
+        </div>
+        <section class="diff-section">
+          <div class="section-title">字段差异（{effectiveDiff.length}）</div>
+          {#if effectiveDiff.length > 0}
+            <div class="diff-list">
+              {#each effectiveDiff as item (item.path)}
+                <div class="diff-item">
+                  <div><code>{item.path}</code><span>{item.source}</span></div>
+                  <small title={compactConfigValue(item.before)}>基础：{compactConfigValue(item.before)}</small>
+                  <small title={compactConfigValue(item.after)}>最终：{compactConfigValue(item.after)}</small>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="state compact">客户端覆盖没有改变当前基础配置。</div>
+          {/if}
+        </section>
+        <div class="config-preview-grid">
+          <section><strong>基础配置</strong><pre>{JSON.stringify(effectiveInspection.baseConfig, null, 2)}</pre></section>
+          <section><strong>最终有效配置</strong><pre>{JSON.stringify(effectiveInspection.effectiveConfig, null, 2)}</pre></section>
+        </div>
+      {/if}
+    </Dialog.Body>
+    <Dialog.Footer>
+      <Button type="button" variant="outline" onclick={() => (effectiveDialogOpen = false)}>关闭</Button>
+      <Button type="button" onclick={openEffectiveConfig} disabled={effectiveLoading}><RefreshCw />重新生成</Button>
+    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 
@@ -1035,6 +1209,56 @@
     color: var(--muted-foreground);
     font-size: 10px;
   }
+
+  .capability-strip,
+  .effective-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .capability-strip span,
+  .effective-meta span {
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+
+  .capability-strip span.supported,
+  .effective-meta span.source-enabled {
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+    color: var(--primary);
+  }
+
+  .inline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+
+  .reference-warning,
+  .empty-reference {
+    margin-top: 7px;
+    padding: 8px 9px;
+    border: 1px solid rgba(239, 68, 68, .3);
+    border-radius: 7px;
+    color: var(--destructive);
+    font-size: 11px;
+  }
+
+  .empty-reference { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted-foreground); border-color: var(--border); }
+
+  .diff-section { display: flex; flex-direction: column; gap: 7px; }
+  .diff-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 7px; }
+  .diff-item { min-width: 0; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--muted) 22%, transparent); }
+  .diff-item > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+  .diff-item code { overflow-wrap: anywhere; color: var(--foreground); font-size: 10.5px; }
+  .diff-item span { flex: none; color: var(--primary); font-size: 9.5px; }
+  .diff-item small { display: block; overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .config-preview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+  .config-preview-grid section { min-width: 0; }
+  .config-preview-grid strong { display: block; margin-bottom: 5px; font-size: 11px; }
+  .config-preview-grid pre { max-height: 360px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--muted) 30%, transparent); font-size: 9.5px; line-height: 1.45; white-space: pre; }
+  .state.compact { min-height: 0; padding: 10px; }
 
   .lineage-arrow {
     font-size: 14px !important;
@@ -1326,11 +1550,14 @@
 
   :global(.server-dialog-body),
   :global(.dispatch-dialog-body),
+  :global(.effective-dialog-body),
   :global(.json-dialog-body) {
     display: flex;
     flex-direction: column;
     gap: 14px;
   }
+
+  :global(.effective-dialog-body) { max-height: min(72vh, 760px); overflow: auto; }
 
   .dialog-field-grid + .dialog-field-grid {
     padding-top: 2px;
@@ -1522,6 +1749,8 @@
     .lineage-arrow {
       display: none;
     }
+
+    .config-preview-grid { grid-template-columns: 1fr; }
     .mode-section {
       align-items: stretch;
       flex-direction: column;

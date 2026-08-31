@@ -175,9 +175,11 @@ assert.ok(
 );
 
 assert.ok(
-  tunService.includes('function validateAppDnsHijackPrecondition(policy: TunPolicy): void')
+  tunService.includes('async function validateAppDnsHijackPrecondition(policy: TunPolicy): Promise<void>')
+    && tunService.includes('const readiness = await inspectTunDnsHijackReadiness(policy.appConfig.dns);')
+    && tunService.includes("features?.tunDnsSystemAuto.state === 'unsupported'")
     && tunService.includes("code: 'tun_dns_hijack_requires_dns'")
-    && tunService.includes('Object.keys(dns.servers).length === 0')
+    && tunService.includes('Object.keys(dns.config.servers).length === 0')
     && tunRuntime.includes('params.insert("dns_hijack".to_string(), json!(tun.dns_hijack));')
     && tunRuntime.includes('assert_eq!(params["dns_hijack"], true);'),
   'app-owned DNS hijack must require a saved DNS profile and pass the explicit value to tun.start',

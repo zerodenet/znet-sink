@@ -7,6 +7,10 @@ import {
   updateAppConfig,
 } from '$lib/services/core';
 import { normalizeConfigValidationResponse } from '$lib/services/config-validation';
+import {
+  projectClientKernelFeatures,
+  type ClientKernelFeatures,
+} from '$lib/services/kernel-capabilities';
 import type {
   DnsAddressFamilyPolicy,
   DnsConfig,
@@ -25,7 +29,13 @@ export type DnsKernelCompatibility = {
   engineVersion?: string;
   detail?: string;
   limitations?: string[];
+  features?: ClientKernelFeatures;
 };
+
+export interface DnsValidationContext {
+  ruleSetTags?: ReadonlySet<string>;
+  features?: ClientKernelFeatures;
+}
 
 const DNS_ADDRESS_FAMILY_POLICIES: readonly DnsAddressFamilyPolicy[] = [
   'ipv4_only',
@@ -212,7 +222,10 @@ function isIpAddress(value: string): boolean {
     || /^[0-9a-f:]+$/i.test(value);
 }
 
-export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
+export function validateDnsDraft(
+  draft: DnsSettingsDraft,
+  context: DnsValidationContext = {},
+): DnsDraftIssue[] {
   if (draft.mode === 'disabled') return [];
   const issues: DnsDraftIssue[] = [];
   const addressFamily = draft.dns.policy?.address_family;
@@ -256,8 +269,41 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
     }
     if (!isObject(rule.condition)) {
       issues.push({ field: `dispatch.${index}.condition`, message: '分流条件必须是 JSON 对象', severity: 'error' });
+    } else if (rule.condition.type === 'rule_set' || typeof rule.condition.rule_set === 'string') {
+      const rawTag = rule.condition.type === 'rule_set'
+        ? rule.condition.tag
+        : rule.condition.rule_set;
+      const tag = typeof rawTag === 'string' ? rawTag.trim() : '';
+      if (!tag) {
+        issues.push({ field: `dispatch.${index}.condition.tag`, message: '请选择有效规则集', severity: 'error' });
+      } else if (context.ruleSetTags && !context.ruleSetTags.has(tag)) {
+        issues.push({
+          field: `dispatch.${index}.condition.tag`,
+          message: `规则集 ${tag} 已不存在或未进入最终有效配置`,
+          severity: 'error',
+        });
+      }
     }
   });
+  if (draft.dns.dispatch.length > 0 && context.features?.dnsSplitDispatch.state === 'unsupported') {
+    issues.push({ field: 'dispatch', message: '当前内核不支持 DNS 分流', severity: 'error' });
+  }
+  if (draft.dns.policy?.address_family
+    && context.features?.dnsAddressFamilyPolicy.state === 'unsupported') {
+    issues.push({ field: 'policy.address_family', message: '当前内核不支持 DNS 地址族策略', severity: 'error' });
+  }
+  if (draft.dnsHijack && context.features?.tunDnsHijack.state === 'unsupported') {
+    issues.push({ field: 'dnsHijack', message: '当前内核不支持 TUN DNS 劫持', severity: 'error' });
+  }
+  const usesSystemDns = Object.values(draft.dns.servers).some((server) => server.type === 'system');
+  if (draft.dnsHijack && usesSystemDns
+    && context.features?.tunDnsSystemAuto.state === 'unsupported') {
+    issues.push({
+      field: 'dnsHijack',
+      message: '当前内核不能在 TUN DNS 劫持时自动排除 system DNS；请升级内核、关闭劫持或改用显式网络 DNS',
+      severity: 'error',
+    });
+  }
   if (draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip') {
     if (!draft.dns.answer.cidr.includes('/')) {
       issues.push({ field: 'answer.cidr', message: 'Fake-IP 地址池必须使用 CIDR', severity: 'error' });
@@ -265,6 +311,10 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
     if (draft.dns.answer.ipv6_cidr !== undefined
       && (!draft.dns.answer.ipv6_cidr.includes('/') || !draft.dns.answer.ipv6_cidr.includes(':'))) {
       issues.push({ field: 'answer.ipv6_cidr', message: 'FakeIPv6 地址池必须使用 IPv6 CIDR', severity: 'error' });
+    }
+    if (draft.dns.answer.ipv6_cidr
+      && context.features?.dnsFakeIpDualStack.state === 'unsupported') {
+      issues.push({ field: 'answer.ipv6_cidr', message: '当前内核不支持双栈 Fake-IP', severity: 'error' });
     }
     if (draft.dns.answer.ttl_seconds < 1) {
       issues.push({ field: 'answer.ttl_seconds', message: 'TTL 必须大于 0', severity: 'error' });
@@ -322,6 +372,7 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
   const limitations = capabilities.globalLimitations.filter((limitation) =>
     limitation.startsWith('dns_') || limitation.startsWith('tun_dns_'),
   );
+  const features = projectClientKernelFeatures(capabilities);
   if (!capabilities.available) {
     return {
       status: 'unknown',
@@ -329,6 +380,7 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
       schemaVersion,
       engineVersion,
       limitations,
+      features,
       detail: capabilities.error || '内核当前不可用，暂时无法确认 DNS 能力。',
     };
   }
@@ -341,6 +393,7 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
       schemaVersion,
       engineVersion,
       limitations,
+      features,
       detail: '内核未发布稳定能力契约版本，将按旧版兼容路径在保存时校验。',
     };
   }
@@ -351,6 +404,7 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
       schemaVersion,
       engineVersion,
       limitations,
+      features,
       detail: `内核能力契约 v${capabilityContract.minimumSupported}–v${capabilityContract.current} 与客户端支持的 V1 不相交。`,
     };
   }
@@ -369,6 +423,7 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
     schemaVersion,
     engineVersion,
     limitations,
+    features,
     detail: hasDns
       ? undefined
       : capabilities.buildFeatures.length > 0

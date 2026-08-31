@@ -80,6 +80,21 @@ function connection(flowId, overrides = {}) {
           path: {
             network: {
               remote_address: { host: '203.0.113.8', port: 443 },
+              connection_attempts: [{
+                remote_address: { host: '2001:db8::8', port: 443 },
+                stage: 'connect',
+                outcome: 'failed',
+                interface_bound: true,
+                error_kind: 'network_unreachable',
+                os_error: 10051,
+                error: 'network is unreachable',
+              }, {
+                remote_address: { host: '203.0.113.8', port: 443 },
+                local_address: { host: '192.168.1.10', port: 52_000 },
+                stage: 'connect',
+                outcome: 'connected',
+                interface_bound: false,
+              }],
               address_family_policy: 'prefer_ipv6',
               address_family_fallback: {
                 from: 'ipv6',
@@ -136,6 +151,11 @@ function connection(flowId, overrides = {}) {
   assert.equal(enriched.networkContext.addressFamilyFallback.to, 'ipv4');
   assert.equal(enriched.networkContext.addressFamilyFallback.triggerEgressGeneration, 3);
   assert.equal(enriched.networkContext.egress.tunActive, false);
+  assert.equal(enriched.networkContext.connectionAttempts.length, 2);
+  assert.equal(enriched.networkContext.connectionAttempts[0].remoteAddress, '[2001:db8::8]:443');
+  assert.equal(enriched.networkContext.connectionAttempts[0].errorKind, 'network_unreachable');
+  assert.equal(enriched.networkContext.connectionAttempts[0].osError, 10051);
+  assert.equal(enriched.networkContext.connectionAttempts[1].outcome, 'connected');
   assert.equal(enriched.throughputUpBps, 12);
   assert.equal(enriched.throughputDownBps, 34);
   assert.equal(enriched.updatedAtUnixMs, 8_000);

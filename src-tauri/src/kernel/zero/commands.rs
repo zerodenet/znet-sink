@@ -437,7 +437,8 @@ mod tests {
                 "domain": "example.com",
                 "removed_mappings": 1,
                 "removed_addresses": 2,
-                "live_mappings": 3
+                "live_mappings": 3,
+                "retired_addresses": 4
             }
         }));
 
@@ -448,6 +449,7 @@ mod tests {
         assert_eq!(result.removed_mappings, 1);
         assert_eq!(result.removed_addresses, 2);
         assert_eq!(result.live_mappings, 3);
+        assert_eq!(result.retired_addresses, 4);
     }
 
     #[test]

@@ -109,7 +109,7 @@
             : { ip: query },
       );
       fakeMessage = result.enabled
-        ? `已删除 ${result.removedMappings} 个映射（${result.removedAddresses} 个地址），剩余 ${result.liveMappings} 个`
+        ? `已删除 ${result.removedMappings} 个映射（${result.removedAddresses} 个地址），剩余 ${result.liveMappings} 个，隔离地址 ${result.retiredAddresses} 个`
         : '当前配置未启用 Fake-IP，没有可清理的映射';
       fakeResult = null;
       cacheResult = await guiDnsCache(undefined, 50);
@@ -225,6 +225,18 @@
         {:else}
           <pre class="diag-json">{JSON.stringify(dnsResult, null, 2)}</pre>
         {/if}
+        {#if dnsResult.attempts?.length}
+          <div class="dns-attempts">
+            <strong>DNS 后端尝试 · {dnsResult.query_role ?? 'default'}</strong>
+            {#each dnsResult.attempts as attempt, index}
+              <div class:failed={attempt.success === false}>
+                <span>#{index + 1} {attempt.server_tag ?? 'unknown'} · {attempt.transport ?? '?'}</span>
+                <small>{attempt.server_endpoints?.join(' · ') || '无具体端点'}{attempt.outbound ? ` · outbound ${attempt.outbound}` : ''}</small>
+                <small>{attempt.success ? '成功' : attempt.failure_reason || '失败'}</small>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   </section>
@@ -281,7 +293,7 @@
         <div><span>查询</span><strong>{fakeResult.domain ?? fakeResult.ip ?? fakeQuery}</strong></div>
         <div><span>结果</span><strong>{fakeResult.fake_ip ?? fakeResult.domain ?? '未命中'}</strong></div>
         {#if fakeResult.stats}
-          <div><span>Live / Capacity</span><strong>{fakeResult.stats.live_mappings} / {fakeResult.stats.capacity}</strong></div>
+          <div><span>Live / Retired / Capacity</span><strong>{fakeResult.stats.live_mappings} / {fakeResult.stats.retired_addresses ?? 0} / {fakeResult.stats.capacity}</strong></div>
           <div><span>分配 / 过期 / 驱逐</span><strong>{fakeResult.stats.allocations} / {fakeResult.stats.expirations} / {fakeResult.stats.evictions}</strong></div>
           <div><span>耗尽 / 冲突 / Reverse miss</span><strong>{fakeResult.stats.exhaustions} / {fakeResult.stats.collisions} / {fakeResult.stats.reverse_misses}</strong></div>
         {/if}
@@ -538,6 +550,14 @@
     border-radius: 4px;
     overflow: hidden;
   }
+
+  .dns-attempts { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
+  .dns-attempts > strong { font-size: 10.5px; }
+  .dns-attempts > div { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--muted) 20%, transparent); }
+  .dns-attempts > div.failed { border-color: rgba(239, 68, 68, .28); }
+  .dns-attempts span, .dns-attempts small { display: block; overflow-wrap: anywhere; }
+  .dns-attempts span { font-family: var(--font-mono); font-size: 10.5px; }
+  .dns-attempts small { margin-top: 2px; color: var(--muted-foreground); font-size: 9.5px; }
 
   .dns-rec {
     display: flex;

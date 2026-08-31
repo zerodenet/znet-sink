@@ -333,6 +333,7 @@ export interface GuiFakeIpClearResult {
   removedMappings: number;
   removedAddresses: number;
   liveMappings: number;
+  retiredAddresses: number;
 }
 
 export type TunFamilyEgressAvailability = 'unknown' | 'available' | 'unavailable';
@@ -416,10 +417,22 @@ export interface GuiConnectionAddressFamilyFallback {
   unavailableReason?: string;
 }
 
+export interface GuiConnectionAttempt {
+  remoteAddress: string;
+  localAddress?: string;
+  stage: string;
+  outcome: string;
+  interfaceBound: boolean;
+  errorKind?: string;
+  osError?: number;
+  error?: string;
+}
+
 export interface GuiConnectionNetworkContext {
   localAddress?: string;
   remoteAddress?: string;
   resolvedCandidates: string[];
+  connectionAttempts: GuiConnectionAttempt[];
   addressFamilyPolicy?: string;
   addressFamilyFallback?: GuiConnectionAddressFamilyFallback;
   selectedInterface?: GuiConnectionNetworkInterface;

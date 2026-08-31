@@ -502,6 +502,39 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(parse_network_address).collect())
         .unwrap_or_default();
+    let connection_attempts = value
+        .get("connection_attempts")
+        .or_else(|| value.get("connectionAttempts"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|attempt| {
+                    let remote_address = attempt
+                        .get("remote_address")
+                        .or_else(|| attempt.get("remoteAddress"))
+                        .and_then(parse_network_address)?;
+                    Some(crate::models::gui_core::GuiConnectionAttempt {
+                        remote_address,
+                        local_address: attempt
+                            .get("local_address")
+                            .or_else(|| attempt.get("localAddress"))
+                            .and_then(parse_network_address),
+                        stage: string_at(attempt, &["stage"]).unwrap_or_default(),
+                        outcome: string_at(attempt, &["outcome"]).unwrap_or_default(),
+                        interface_bound: bool_at(attempt, &["interface_bound", "interfaceBound"])
+                            .unwrap_or(false),
+                        error_kind: string_at(attempt, &["error_kind", "errorKind"]),
+                        os_error: attempt
+                            .get("os_error")
+                            .or_else(|| attempt.get("osError"))
+                            .and_then(Value::as_i64),
+                        error: string_at(attempt, &["error"]),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let selected_interface = value
         .get("selected_interface")
         .or_else(|| value.get("selectedInterface"))
@@ -577,6 +610,7 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
             .or_else(|| value.get("remoteAddress"))
             .and_then(parse_network_address),
         resolved_candidates,
+        connection_attempts,
         address_family_policy: string_at(value, &["address_family_policy", "addressFamilyPolicy"]),
         address_family_fallback,
         selected_interface,
@@ -589,6 +623,7 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
     let populated = context.local_address.is_some()
         || context.remote_address.is_some()
         || !context.resolved_candidates.is_empty()
+        || !context.connection_attempts.is_empty()
         || context.address_family_policy.is_some()
         || context.address_family_fallback.is_some()
         || context.selected_interface.is_some()
@@ -642,6 +677,7 @@ pub fn parse_fake_ip_clear(value: &Value) -> GuiFakeIpClearResult {
         removed_mappings: u64_at(result, &["removed_mappings", "removedMappings"]).unwrap_or(0),
         removed_addresses: u64_at(result, &["removed_addresses", "removedAddresses"]).unwrap_or(0),
         live_mappings: u64_at(result, &["live_mappings", "liveMappings"]).unwrap_or(0),
+        retired_addresses: u64_at(result, &["retired_addresses", "retiredAddresses"]).unwrap_or(0),
     }
 }
 

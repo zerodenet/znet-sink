@@ -367,6 +367,19 @@
                   {#if hasText(connection.networkContext.localAddress)}<div class="property"><span>本地地址</span><strong>{connection.networkContext.localAddress}</strong></div>{/if}
                   {#if hasText(connection.networkContext.remoteAddress)}<div class="property"><span>远端地址</span><strong>{connection.networkContext.remoteAddress}</strong></div>{/if}
                   {#if connection.networkContext.resolvedCandidates.length > 0}<div class="property wide"><span>解析候选</span><strong>{connection.networkContext.resolvedCandidates.join(' · ')}</strong></div>{/if}
+                  {#if connection.networkContext.connectionAttempts.length > 0}
+                    <div class="property wide">
+                      <span>逐候选拨号</span>
+                      <div class="attempt-list">
+                        {#each connection.networkContext.connectionAttempts as attempt, index}
+                          <div class:failed={attempt.outcome !== 'connected' && attempt.outcome !== 'success'}>
+                            <strong>#{index + 1} {attempt.remoteAddress} · {attempt.outcome || attempt.stage}</strong>
+                            <small>{attempt.stage}{attempt.interfaceBound ? ' · 已绑定出口接口' : ''}{attempt.errorKind ? ` · ${attempt.errorKind}` : ''}{attempt.osError !== undefined ? ` · OS ${attempt.osError}` : ''}{attempt.error ? ` · ${attempt.error}` : ''}</small>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
                   {#if hasText(connection.networkContext.addressFamilyPolicy)}<div class="property"><span>地址族策略</span><strong>{addressFamilyPolicyLabel(connection.networkContext.addressFamilyPolicy)}</strong></div>{/if}
                   {#if connection.networkContext.addressFamilyFallback}
                     {@const fallback = connection.networkContext.addressFamilyFallback}
@@ -535,6 +548,11 @@
   .property span { color: var(--muted-foreground); font-size: 10.5px; }
   .property strong { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
   .property.failure strong, .property.failure span { color: var(--destructive); }
+  .attempt-list { display: flex; flex-direction: column; gap: 4px; }
+  .attempt-list > div { padding: 6px 7px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--muted) 22%, transparent); }
+  .attempt-list > div.failed { border-color: rgba(239, 68, 68, .25); }
+  .attempt-list strong, .attempt-list small { display: block; }
+  .attempt-list small { margin-top: 2px; overflow-wrap: anywhere; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 9.5px; }
   .section-note, .diagnostics-intro p { margin: 9px 0 0; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.55; }
   .raw-block { position: relative; margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 40%, transparent); }
   .raw-block summary { padding: 9px 82px 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }

@@ -340,10 +340,24 @@ pub struct GuiConnectionAddressFamilyFallback {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuiConnectionAttempt {
+    pub remote_address: String,
+    pub local_address: Option<String>,
+    pub stage: String,
+    pub outcome: String,
+    pub interface_bound: bool,
+    pub error_kind: Option<String>,
+    pub os_error: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuiConnectionNetworkContext {
     pub local_address: Option<String>,
     pub remote_address: Option<String>,
     pub resolved_candidates: Vec<String>,
+    pub connection_attempts: Vec<GuiConnectionAttempt>,
     pub address_family_policy: Option<String>,
     pub address_family_fallback: Option<GuiConnectionAddressFamilyFallback>,
     pub selected_interface: Option<GuiConnectionNetworkInterface>,
@@ -465,6 +479,7 @@ pub struct GuiFakeIpClearResult {
     pub removed_mappings: u64,
     pub removed_addresses: u64,
     pub live_mappings: u64,
+    pub retired_addresses: u64,
 }
 
 /// A single impact item from `config.plan_apply` — one section of config

@@ -42,6 +42,21 @@ const completed = {
               { host: '203.0.113.8', port: 443 },
               { host: '203.0.113.9', port: 443 },
             ],
+            connection_attempts: [{
+              remote_address: { host: '2001:db8::8', port: 443 },
+              stage: 'connect',
+              outcome: 'failed',
+              interface_bound: true,
+              error_kind: 'network_unreachable',
+              os_error: 10051,
+              error: 'network is unreachable',
+            }, {
+              remote_address: { host: '203.0.113.8', port: 443 },
+              local_address: { host: '192.168.1.10', port: 52_000 },
+              stage: 'connect',
+              outcome: 'connected',
+              interface_bound: false,
+            }],
             address_family_policy: 'prefer_ipv4',
             address_family_fallback: {
               from: 'ipv6',
@@ -116,6 +131,11 @@ assert.deepEqual(history[0].networkContext.resolvedCandidates, [
   '203.0.113.8:443',
   '203.0.113.9:443',
 ]);
+assert.equal(history[0].networkContext.connectionAttempts.length, 2);
+assert.equal(history[0].networkContext.connectionAttempts[0].remoteAddress, '[2001:db8::8]:443');
+assert.equal(history[0].networkContext.connectionAttempts[0].errorKind, 'network_unreachable');
+assert.equal(history[0].networkContext.connectionAttempts[0].osError, 10051);
+assert.equal(history[0].networkContext.connectionAttempts[1].outcome, 'connected');
 assert.equal(history[0].networkContext.addressFamilyPolicy, 'prefer_ipv4');
 assert.equal(history[0].networkContext.addressFamilyFallback.from, 'ipv6');
 assert.equal(history[0].networkContext.addressFamilyFallback.to, 'ipv4');

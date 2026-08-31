@@ -595,6 +595,67 @@ pub async fn gui_validate_dns_config(
         .await
 }
 
+/// Inspect the exact base and client-composed configuration without applying it.
+/// This is intentionally local: it explains what ZNet-Sink will send to Zero
+/// and never mutates the active profile or runtime.
+#[tauri::command]
+pub fn gui_inspect_dns_effective_config(
+    state: State<'_, AppState>,
+    input: GuiDnsSettingsInput,
+) -> AppResult<serde_json::Value> {
+    validate_dns_settings(&input)?;
+    let active = common::lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .map(|profile| (profile.name.clone(), profile.content.clone()));
+    let Some((profile_name, Some(base))) = active else {
+        return Ok(serde_json::json!({
+            "activeProfileName": null,
+            "baseConfig": null,
+            "effectiveConfig": null,
+            "sources": [],
+            "reason": "no_active_proxy_profile"
+        }));
+    };
+    let dns = AppDnsConfig {
+        enabled: input.enabled,
+        config: input.config,
+        dns_hijack: input.enabled && input.dns_hijack,
+    };
+    let effective = crate::services::rule_overlay::compose_effective_config_with_dns(
+        state.inner(),
+        &base,
+        &dns,
+    )?;
+    let common_rules = crate::services::rule_overlay::status(state.inner())?;
+    let mut sources = vec![serde_json::json!({
+        "id": "global_dns",
+        "label": "全局 DNS",
+        "paths": ["runtime.dns"],
+        "enabled": dns.enabled
+    })];
+    sources.push(serde_json::json!({
+        "id": "tun_dns_hijack",
+        "label": "TUN DNS 劫持启动参数",
+        "paths": ["client.tun.dns_hijack"],
+        "enabled": dns.dns_hijack
+    }));
+    sources.push(serde_json::json!({
+        "id": "common_rules",
+        "label": "公共规则覆盖",
+        "paths": ["route.rule_sets", "route.rules"],
+        "enabled": common_rules.effective,
+        "count": common_rules.injected_count
+    }));
+    Ok(serde_json::json!({
+        "activeProfileName": profile_name,
+        "baseConfig": base,
+        "effectiveConfig": effective,
+        "sources": sources,
+        "reason": null
+    }))
+}
+
 /// Dry-run config apply — returns impact analysis without applying changes.
 ///
 /// Sends `config.plan_apply` to the kernel, which returns a structured

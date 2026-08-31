@@ -403,6 +403,24 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
                         { "host": "17.57.147.6", "port": 5223 },
                         { "host": "17.57.147.7", "port": 5223 }
                     ],
+                    "connection_attempts": [
+                        {
+                            "remote_address": { "host": "17.57.147.6", "port": 5223 },
+                            "local_address": { "host": "192.168.50.10", "port": 52864 },
+                            "stage": "connect",
+                            "outcome": "failed",
+                            "interface_bound": true,
+                            "error_kind": "connection_refused",
+                            "os_error": 10061,
+                            "error": "connection refused"
+                        },
+                        {
+                            "remote_address": { "host": "17.57.147.7", "port": 5223 },
+                            "stage": "connect",
+                            "outcome": "connected",
+                            "interface_bound": true
+                        }
+                    ],
                     "address_family_policy": "prefer_ipv4",
                     "address_family_fallback": {
                         "from": "ipv6",
@@ -484,6 +502,13 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
     );
     assert_eq!(network.remote_address.as_deref(), Some("17.57.147.6:5223"));
     assert_eq!(network.resolved_candidates.len(), 2);
+    assert_eq!(network.connection_attempts.len(), 2);
+    assert_eq!(network.connection_attempts[0].outcome, "failed");
+    assert_eq!(network.connection_attempts[0].os_error, Some(10061));
+    assert_eq!(
+        network.connection_attempts[1].remote_address,
+        "17.57.147.7:5223"
+    );
     assert_eq!(
         network.address_family_policy.as_deref(),
         Some("prefer_ipv4")
