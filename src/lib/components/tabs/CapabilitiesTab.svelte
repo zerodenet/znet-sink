@@ -3,7 +3,7 @@
   import { Button } from '$lib/components/ui/button';
   import { getAppErrorMessage, getGuiCapabilitiesSnapshot, getGuiZeroCapabilities } from '$lib/services/core';
   import type { GuiCapabilitySnapshot } from '$lib/types/capability';
-  import type { GuiZeroCapabilities } from '$lib/types/gui-api';
+  import type { GuiCapabilityState, GuiZeroCapabilities } from '$lib/types/gui-api';
 
   let snapshot = $state<GuiCapabilitySnapshot | null>(null);
   let kernelCaps = $state<GuiZeroCapabilities | null>(null);
@@ -11,6 +11,14 @@
   let loadError = $state<string | null>(null);
   let partialError = $state<string | null>(null);
   let refreshGeneration = 0;
+  const contractRows = $derived(kernelCaps?.contracts
+    ? [
+        { label: '能力', range: kernelCaps.contracts.capabilities },
+        { label: '控制 API', range: kernelCaps.contracts.controlApi },
+        { label: '配置', range: kernelCaps.contracts.configSchema },
+        { label: '错误码', range: kernelCaps.contracts.errorCodes },
+      ]
+    : []);
 
   async function refresh() {
     const generation = ++refreshGeneration;
@@ -36,6 +44,7 @@
       case 'supported': return 'bg-green-500';
       case 'partial': return 'bg-yellow-500';
       case 'experimental': return 'bg-orange-500';
+      case 'unsupported': return 'bg-red-500';
       default: return 'bg-muted';
     }
   }
@@ -45,8 +54,14 @@
       case 'supported': return '支持';
       case 'partial': return '部分';
       case 'experimental': return '实验';
+      case 'unsupported': return '不支持';
       default: return status;
     }
+  }
+
+  function capabilityStateTitle(state: GuiCapabilityState): string {
+    const detail = [statusLabel(state.level), ...state.notes].filter(Boolean);
+    return detail.join(' · ');
   }
 
   $effect(() => {
@@ -111,11 +126,11 @@
                         {statusLabel(proto.status)}
                       </span>
                     </td>
-                    <td class="py-1 px-1 text-center">{proto.inboundTcp ? '✓' : '—'}</td>
-                    <td class="py-1 px-1 text-center">{proto.inboundUdp ? '✓' : '—'}</td>
-                    <td class="py-1 px-1 text-center">{proto.outboundTcp ? '✓' : '—'}</td>
-                    <td class="py-1 px-1 text-center">{proto.outboundUdp ? '✓' : '—'}</td>
-                    <td class="py-1 px-1 text-center">{proto.mux ? '✓' : '—'}</td>
+                    <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.inboundTcpState)}>{proto.inboundTcp ? '✓' : '—'}</td>
+                    <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.inboundUdpState)}>{proto.inboundUdp ? '✓' : '—'}</td>
+                    <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.outboundTcpState)}>{proto.outboundTcp ? '✓' : '—'}</td>
+                    <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.outboundUdpState)}>{proto.outboundUdp ? '✓' : '—'}</td>
+                    <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.muxState)}>{proto.mux ? '✓' : '—'}</td>
                     <td class="py-1 pl-2 text-muted-foreground">
                       {#if proto.limitations.length > 0}
                         {proto.limitations.join(', ')}
@@ -129,6 +144,44 @@
             </table>
           </div>
         </div>
+      {/if}
+
+      {#if kernelCaps?.contracts}
+        <div>
+          <h4 class="text-xs font-medium text-foreground mb-2">稳定契约</h4>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {#each contractRows as contract (contract.label)}
+              <div class="bg-muted/30 border border-card-border rounded-lg p-2">
+                <div class="text-[10px] text-muted-foreground">{contract.label}</div>
+                <div class="text-xs font-mono text-foreground">v{contract.range.current} <span class="text-[9px] text-muted-foreground">最低 v{contract.range.minimumSupported}</span></div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else if kernelCaps?.available}
+        <div class="capability-warning" role="status">当前内核未发布稳定契约版本，客户端会使用保守的旧版兼容路径。</div>
+      {/if}
+
+      {#if kernelCaps && kernelCaps.globalLimitations.length > 0}
+        <div>
+          <h4 class="text-xs font-medium text-foreground mb-2">全局限制</h4>
+          <div class="flex flex-wrap gap-1.5">
+            {#each kernelCaps.globalLimitations as limitation (limitation)}
+              <span class="px-2 py-0.5 rounded-md bg-yellow-500/10 text-[10px] text-yellow-700 dark:text-yellow-300 font-mono">{limitation}</span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if kernelCaps && kernelCaps.errorCodes.length > 0}
+        <details class="bg-muted/20 border border-card-border rounded-lg p-2">
+          <summary class="text-xs font-medium text-foreground cursor-pointer">稳定错误码目录（{kernelCaps.errorCodes.length}）</summary>
+          <div class="flex flex-wrap gap-1.5 mt-2">
+            {#each kernelCaps.errorCodes as code (code)}
+              <span class="px-2 py-0.5 rounded-md bg-muted/50 text-[10px] text-foreground font-mono">{code}</span>
+            {/each}
+          </div>
+        </details>
       {/if}
 
       <!-- 内核构建特性 -->

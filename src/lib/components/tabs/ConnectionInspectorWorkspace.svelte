@@ -113,6 +113,13 @@
   const singleConfirmConnection = $derived(
     liveView.find((connection) => connectionKey(connection) === singleConfirmKey) ?? null,
   );
+  const closeAction = $derived(store.interactionSurface.actions.get('core.flow.close'));
+  const canCloseConnections = $derived(closeAction?.operable ?? true);
+  const closeUnavailableReason = $derived.by(() => {
+    if (canCloseConnections) return undefined;
+    if (closeAction?.reason === 'hidden in lite mode') return '连接终止仅在专业模式下可用。';
+    return '当前内核未声明连接终止能力；请更新内核后刷新能力信息。';
+  });
 
   const protocolOptions = $derived.by(() => {
     const values = new Set(currentSource.map((connection) => connection.protocol).filter(Boolean));
@@ -633,6 +640,7 @@
   onMount(() => {
     historyFilterSignature = historySignature();
     void loadHistory(true);
+    void store.refreshInteractionSurface();
     const clock = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
@@ -742,7 +750,8 @@
                 size="sm"
                 class="w-full justify-start text-destructive hover:text-destructive"
                 role="menuitem"
-                disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
+                disabled={liveView.length === 0 || closingAll || !canCloseConnections}
+                title={canCloseConnections ? '关闭当前全部活动连接' : closeUnavailableReason}
                 onclick={() => {
                   actionsOpen = false;
                   requestCloseAllConnections();
@@ -772,6 +781,12 @@
       </div>
     </div>
   </div>
+
+  {#if activeTab === 'live' && !canCloseConnections}
+    <div class="border-b border-border bg-amber-500/5 px-3 py-2 text-[10.5px] text-amber-700 dark:text-amber-400" role="status">
+      {closeUnavailableReason}
+    </div>
+  {/if}
 
   {#if filtersOpen}
     <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
@@ -871,7 +886,7 @@
         >
           <button
             type="button"
-            class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-12 text-left text-foreground outline-none focus-visible:bg-muted/50"
+            class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-20 text-left text-foreground outline-none focus-visible:bg-muted/50"
             aria-label={`查看连接 ${connection.destination}`}
             onclick={() => openDetails(connection)}
           >
@@ -911,17 +926,18 @@
             </div>
           </button>
 
-          {#if connection.origin === 'active' && store.isActionOperable('core.flow.close')}
+          {#if connection.origin === 'active'}
             <Button
-              variant="ghost"
-              size="icon-sm"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
-              disabled={terminatingIds.has(connection.flowId)}
-              title="终止连接"
+              variant="outline"
+              size="xs"
+              class="absolute right-2 top-1/2 h-7 -translate-y-1/2 gap-1 px-2 text-[10px] text-muted-foreground opacity-75 transition-colors hover:border-destructive/40 hover:text-destructive focus-visible:opacity-100 disabled:opacity-45"
+              disabled={!canCloseConnections || terminatingIds.has(connection.flowId)}
+              title={canCloseConnections ? '终止连接' : closeUnavailableReason}
               aria-label={`终止连接 ${connection.destination}`}
               onclick={() => requestSingleTerminate(connection)}
             >
               <CircleX class="size-3.5" />
+              终止
             </Button>
           {/if}
         </article>
@@ -948,7 +964,8 @@
 
   <ConnectionDetailsDrawer
     connection={selectedConnection}
-    canTerminate={selectedConnection?.origin === 'active' && store.isActionOperable('core.flow.close')}
+    canTerminate={selectedConnection?.origin === 'active' && canCloseConnections}
+    terminateUnavailableReason={closeUnavailableReason}
     terminating={selectedConnection ? terminatingIds.has(selectedConnection.flowId) : false}
     onclose={() => selectedKey = null}
     onrequestterminate={requestSingleTerminate}

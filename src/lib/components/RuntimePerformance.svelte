@@ -71,7 +71,7 @@
   const summaryLabel = $derived.by(() => {
     if (error) return error;
     if (!snapshot) return '正在读取 CPU 和内存使用情况';
-    if (!snapshot.core) return 'Zero 内核未运行';
+    if (!snapshot.core) return '内核未运行';
     if (!snapshot.core.tracked) return 'Zero 进程资源占用当前无法读取';
     return 'Zero 进程 CPU 和常驻内存；每 2 秒更新';
   });

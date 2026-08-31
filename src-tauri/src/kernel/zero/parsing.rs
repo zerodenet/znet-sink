@@ -8,10 +8,11 @@ use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::gui_core::{
-    GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
-    GuiConnectionAddressFamilyFallback, GuiConnectionCloseResult, GuiConnectionEgressContext,
-    GuiConnectionList, GuiConnectionNetworkContext, GuiConnectionNetworkInterface,
-    GuiConnectionRouteLookup, GuiConnectionSocketBinding, GuiCoreHealth, GuiFakeIpClearResult,
+    GuiApiContractVersions, GuiCapabilityEndpoint, GuiCapabilityState, GuiConfigImpactItem,
+    GuiConfigPlanApplyResult, GuiConnection, GuiConnectionAddressFamilyFallback,
+    GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
+    GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
+    GuiConnectionSocketBinding, GuiContractVersionRange, GuiCoreHealth, GuiFakeIpClearResult,
     GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult,
     GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
@@ -115,6 +116,9 @@ pub fn parse_capabilities(value: &Value, error: Option<String>) -> GuiZeroCapabi
         available: error.is_none(),
         api_version: string_at(value, &["api_id", "api_version", "apiVersion"]),
         schema_version: string_at(value, &["schema_id", "schema_version", "schemaVersion"]),
+        contracts: parse_contract_versions(value),
+        error_codes: string_array_at(value, &["error_codes", "errorCodes"]),
+        global_limitations: string_array_at(value, &["global_limitations", "globalLimitations"]),
         features: string_array_at(value, &["features"]),
         permissions: string_array_at(value, &["permissions"]),
         adapters: endpoint_array_at(value, "adapters"),
@@ -122,6 +126,28 @@ pub fn parse_capabilities(value: &Value, error: Option<String>) -> GuiZeroCapabi
         protocols: protocol_array_at(value, "protocols"),
         build_features: string_array_at(value, &["build_features", "buildFeatures"]),
         error,
+    }
+}
+
+fn parse_contract_versions(value: &Value) -> Option<GuiApiContractVersions> {
+    let contracts = value.get("contracts")?;
+    Some(GuiApiContractVersions {
+        capabilities: parse_contract_version_range(contracts, &["capabilities"]),
+        control_api: parse_contract_version_range(contracts, &["control_api", "controlApi"]),
+        config_schema: parse_contract_version_range(contracts, &["config_schema", "configSchema"]),
+        error_codes: parse_contract_version_range(contracts, &["error_codes", "errorCodes"]),
+    })
+}
+
+fn parse_contract_version_range(value: &Value, keys: &[&str]) -> GuiContractVersionRange {
+    let range = keys.iter().find_map(|key| value.get(*key));
+    GuiContractVersionRange {
+        current: range
+            .and_then(|range| u64_at(range, &["current"]))
+            .unwrap_or(0),
+        minimum_supported: range
+            .and_then(|range| u64_at(range, &["minimum_supported", "minimumSupported"]))
+            .unwrap_or(0),
     }
 }
 
@@ -476,6 +502,39 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(parse_network_address).collect())
         .unwrap_or_default();
+    let connection_attempts = value
+        .get("connection_attempts")
+        .or_else(|| value.get("connectionAttempts"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|attempt| {
+                    let remote_address = attempt
+                        .get("remote_address")
+                        .or_else(|| attempt.get("remoteAddress"))
+                        .and_then(parse_network_address)?;
+                    Some(crate::models::gui_core::GuiConnectionAttempt {
+                        remote_address,
+                        local_address: attempt
+                            .get("local_address")
+                            .or_else(|| attempt.get("localAddress"))
+                            .and_then(parse_network_address),
+                        stage: string_at(attempt, &["stage"]).unwrap_or_default(),
+                        outcome: string_at(attempt, &["outcome"]).unwrap_or_default(),
+                        interface_bound: bool_at(attempt, &["interface_bound", "interfaceBound"])
+                            .unwrap_or(false),
+                        error_kind: string_at(attempt, &["error_kind", "errorKind"]),
+                        os_error: attempt
+                            .get("os_error")
+                            .or_else(|| attempt.get("osError"))
+                            .and_then(Value::as_i64),
+                        error: string_at(attempt, &["error"]),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let selected_interface = value
         .get("selected_interface")
         .or_else(|| value.get("selectedInterface"))
@@ -551,6 +610,7 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
             .or_else(|| value.get("remoteAddress"))
             .and_then(parse_network_address),
         resolved_candidates,
+        connection_attempts,
         address_family_policy: string_at(value, &["address_family_policy", "addressFamilyPolicy"]),
         address_family_fallback,
         selected_interface,
@@ -563,6 +623,7 @@ fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetwor
     let populated = context.local_address.is_some()
         || context.remote_address.is_some()
         || !context.resolved_candidates.is_empty()
+        || !context.connection_attempts.is_empty()
         || context.address_family_policy.is_some()
         || context.address_family_fallback.is_some()
         || context.selected_interface.is_some()
@@ -616,6 +677,7 @@ pub fn parse_fake_ip_clear(value: &Value) -> GuiFakeIpClearResult {
         removed_mappings: u64_at(result, &["removed_mappings", "removedMappings"]).unwrap_or(0),
         removed_addresses: u64_at(result, &["removed_addresses", "removedAddresses"]).unwrap_or(0),
         live_mappings: u64_at(result, &["live_mappings", "liveMappings"]).unwrap_or(0),
+        retired_addresses: u64_at(result, &["retired_addresses", "retiredAddresses"]).unwrap_or(0),
     }
 }
 
@@ -826,21 +888,79 @@ fn protocol_array_at(value: &Value, key: &str) -> Vec<GuiProtocolCapability> {
             items
                 .iter()
                 .filter_map(|item| {
+                    let inbound_tcp_state = protocol_capability_state(
+                        item,
+                        &["inbound", "tcp"],
+                        &["inbound_tcp", "inboundTcp"],
+                    );
+                    let inbound_udp_state = protocol_capability_state(
+                        item,
+                        &["inbound", "udp"],
+                        &["inbound_udp", "inboundUdp"],
+                    );
+                    let outbound_tcp_state = protocol_capability_state(
+                        item,
+                        &["outbound", "tcp"],
+                        &["outbound_tcp", "outboundTcp"],
+                    );
+                    let outbound_udp_state = protocol_capability_state(
+                        item,
+                        &["outbound", "udp"],
+                        &["outbound_udp", "outboundUdp"],
+                    );
+                    let mux_state = protocol_capability_state(item, &["mux"], &["mux"]);
                     Some(GuiProtocolCapability {
                         name: string_at(item, &["name", "protocol"])?,
                         status: string_at(item, &["status"])
                             .unwrap_or_else(|| "supported".to_string()),
-                        inbound_tcp: bool_at(item, &["inbound_tcp", "inboundTcp"]).unwrap_or(false),
-                        inbound_udp: bool_at(item, &["inbound_udp", "inboundUdp"]).unwrap_or(false),
-                        outbound_tcp: bool_at(item, &["outbound_tcp", "outboundTcp"])
-                            .unwrap_or(false),
-                        outbound_udp: bool_at(item, &["outbound_udp", "outboundUdp"])
-                            .unwrap_or(false),
-                        mux: bool_at(item, &["mux"]).unwrap_or(false),
+                        inbound_tcp: inbound_tcp_state.supported,
+                        inbound_udp: inbound_udp_state.supported,
+                        outbound_tcp: outbound_tcp_state.supported,
+                        outbound_udp: outbound_udp_state.supported,
+                        mux: mux_state.supported,
+                        inbound_tcp_state,
+                        inbound_udp_state,
+                        outbound_tcp_state,
+                        outbound_udp_state,
+                        mux_state,
                         limitations: string_array_at(item, &["limitations"]),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn protocol_capability_state(
+    item: &Value,
+    nested_path: &[&str],
+    legacy_keys: &[&str],
+) -> GuiCapabilityState {
+    if let Some(state) = nested_value(item, nested_path).filter(|value| value.is_object()) {
+        let supported = bool_at(state, &["supported"]).unwrap_or(false);
+        return GuiCapabilityState {
+            supported,
+            level: string_at(state, &["level"]).unwrap_or_else(|| {
+                if supported {
+                    "supported"
+                } else {
+                    "unsupported"
+                }
+                .to_string()
+            }),
+            notes: string_array_at(state, &["notes"]),
+        };
+    }
+
+    let supported = bool_at(item, legacy_keys).unwrap_or(false);
+    GuiCapabilityState {
+        supported,
+        level: if supported {
+            "supported"
+        } else {
+            "unsupported"
+        }
+        .to_string(),
+        notes: Vec::new(),
+    }
 }

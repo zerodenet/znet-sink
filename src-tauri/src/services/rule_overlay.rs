@@ -12,7 +12,8 @@ use crate::models::app_config::AppDnsConfig;
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
-    CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, RuleSetProfile,
+    CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
+    RuleSetProfile,
 };
 use crate::services::{
     app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
@@ -167,6 +168,60 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
             reason: Some(error.message),
         }),
     }
+}
+
+pub fn effective_rule_set_options(state: &AppState) -> AppResult<Vec<EffectiveRuleSetOption>> {
+    let Some(config) = current_effective_config(state)? else {
+        return Ok(Vec::new());
+    };
+    let profiles = common::lock(state.rule_sets(), "rule_set")?;
+    let definitions = config
+        .pointer("/route/rule_sets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut options = definitions
+        .into_iter()
+        .filter_map(|definition| {
+            let tag = definition.get("tag")?.as_str()?.trim();
+            if tag.is_empty() || !seen.insert(tag.to_string()) {
+                return None;
+            }
+            let path = definition.get("path").and_then(Value::as_str);
+            let profile = profiles.iter().find(|profile| {
+                common_tag(&profile.id) == tag
+                    || path.is_some_and(|path| {
+                        profile
+                            .artifact
+                            .as_ref()
+                            .is_some_and(|artifact| artifact.path == path)
+                    })
+            });
+            let (name, source) = profile.map_or_else(
+                || (tag.to_string(), "profile".to_string()),
+                |profile| {
+                    let source = if profile.managed_by_subscription_id.is_some() {
+                        "subscription"
+                    } else if profile.built_in {
+                        "builtin"
+                    } else if profile.source.is_some() {
+                        "remote"
+                    } else {
+                        "local"
+                    };
+                    (profile.name.clone(), source.to_string())
+                },
+            );
+            Some(EffectiveRuleSetOption {
+                tag: tag.to_string(),
+                name,
+                source,
+            })
+        })
+        .collect::<Vec<_>>();
+    options.sort_by(|left, right| left.name.cmp(&right.name).then(left.tag.cmp(&right.tag)));
+    Ok(options)
 }
 
 pub async fn set_enabled(
@@ -773,6 +828,52 @@ mod tests {
             effective["route"]["rules"][0]["condition"]["tag"],
             common_tag("new-default")
         );
+        let options = effective_rule_set_options(&state).unwrap();
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].tag, expected_tag);
+        assert_eq!(options[0].name, "new-default");
+        assert_eq!(options[0].source, "local");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn effective_options_keep_subscription_assets_read_only_but_selectable_by_real_tag() {
+        let (mut profile, path) = verified_profile("managed", 0, CommonRuleAction::Direct);
+        profile.name = "Airport / AI-Suite".into();
+        profile.managed_by_subscription_id = Some("subscription-1".into());
+        profile.common_binding = None;
+        let base = json!({
+            "mode":{"type":"rule"},
+            "route":{
+                "rule_sets":[{"tag":"AI-Suite","type":"file","path":path,"format":"zrs"}],
+                "rules":[],
+                "final":{"type":"direct"}
+            }
+        });
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".into(),
+                name: "Active".into(),
+                kernel: "zero".into(),
+                format: "zero-json".into(),
+                path: None,
+                content: Some(base),
+                active: true,
+                updated_at_unix_ms: 0,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            vec![profile],
+            Vec::new(),
+        );
+
+        let options = effective_rule_set_options(&state).unwrap();
+
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].tag, "AI-Suite");
+        assert_eq!(options[0].name, "Airport / AI-Suite");
+        assert_eq!(options[0].source, "subscription");
         let _ = fs::remove_file(path);
     }
 

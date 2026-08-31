@@ -260,7 +260,11 @@
         disabled={isSystemProxyEnabled ? !guiState.canDisableSystemProxy : !guiState.canEnableSystemProxy}
         class="core-action"
         class:active={isSystemProxyEnabled}
-        title={!isSystemProxyEnabled && !guiState.canEnableSystemProxy && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
+        title={isSystemProxyEnabled
+          ? '关闭系统代理只撤销系统流量入口，不会停止内核或终止已有连接'
+          : !guiState.canEnableSystemProxy && guiState.blockingIssues.length
+            ? guiState.blockingIssues.join('; ')
+            : '开启由 ZNet Sink 管理的系统代理'}
       >
         {proxyActionLabel}
       </button>

@@ -2,8 +2,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::errors::AppResult;
 use crate::models::rule_set::{
-    CommonRuleBindingInput, CommonRuleInjectionStatus, RuleSetKernelPayload, RuleSetProfile,
-    RuleSetSyncAllOutcome, RuleSetUpsert,
+    CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
+    RuleSetKernelPayload, RuleSetProfile, RuleSetSyncAllOutcome, RuleSetUpsert,
 };
 use crate::services::{interaction_mode, rule_overlay, rule_set};
 use crate::state::app_state::AppState;
@@ -90,4 +90,12 @@ pub fn rule_set_kernel_payloads(
 ) -> AppResult<Vec<RuleSetKernelPayload>> {
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     rule_set::kernel_payloads(state)
+}
+
+#[tauri::command]
+pub fn rule_set_effective_options(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<EffectiveRuleSetOption>> {
+    interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
+    rule_overlay::effective_rule_set_options(state.inner())
 }

@@ -9,6 +9,7 @@ export interface DnsServerConfig {
   path?: string;
   bootstrap?: string[];
   server_name?: string;
+  detour?: string;
   [key: string]: unknown;
 }
 
@@ -24,7 +25,22 @@ export interface DnsCacheConfig {
   [key: string]: unknown;
 }
 
+export interface DnsReverseMappingConfig {
+  max_entries: number;
+  max_domains_per_address: number;
+  max_ttl_seconds: number;
+  [key: string]: unknown;
+}
+
 export interface DnsPolicyConfig {
+  timeout_ms?: number;
+  server_timeout_ms?: Record<string, number>;
+  fallback_servers?: string[];
+  node_server?: string;
+  node_fallback_servers?: string[];
+  direct_server?: string;
+  direct_fallback_servers?: string[];
+  reject_address_cidrs?: string[];
   address_family?: DnsAddressFamilyPolicy;
   [key: string]: unknown;
 }
@@ -34,6 +50,7 @@ export type DnsAnswerConfig =
   | {
       type: 'fake_ip';
       cidr: string;
+      ipv6_cidr?: string;
       ttl_seconds: number;
       max_entries?: number;
       exclude_domains: string[];
@@ -45,6 +62,7 @@ export interface DnsConfig {
   default_server: string;
   dispatch: DnsDispatchConfig[];
   cache?: DnsCacheConfig;
+  reverse_mapping?: DnsReverseMappingConfig;
   answer: DnsAnswerConfig;
   policy?: DnsPolicyConfig;
   [key: string]: unknown;

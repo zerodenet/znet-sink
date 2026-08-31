@@ -29,7 +29,20 @@ export interface DnsLookupResult {
   server?: string;
   resolver?: string;
   elapsedMs?: number;
+  query_role?: string;
+  attempts?: DnsBackendAttempt[];
   error?: string;
+  [key: string]: unknown;
+}
+
+export interface DnsBackendAttempt {
+  role?: string;
+  server_tag?: string;
+  transport?: string;
+  server_endpoints?: string[];
+  outbound?: string;
+  success?: boolean;
+  failure_reason?: string;
   [key: string]: unknown;
 }
 
@@ -59,6 +72,7 @@ export interface FakeIpStats {
   collisions: number;
   reverse_misses: number;
   live_mappings: number;
+  retired_addresses: number;
   capacity: number;
   [key: string]: unknown;
 }

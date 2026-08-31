@@ -7,6 +7,10 @@ import {
   updateAppConfig,
 } from '$lib/services/core';
 import { normalizeConfigValidationResponse } from '$lib/services/config-validation';
+import {
+  projectClientKernelFeatures,
+  type ClientKernelFeatures,
+} from '$lib/services/kernel-capabilities';
 import type {
   DnsAddressFamilyPolicy,
   DnsConfig,
@@ -24,7 +28,26 @@ export type DnsKernelCompatibility = {
   schemaVersion?: string;
   engineVersion?: string;
   detail?: string;
+  limitations?: string[];
+  features?: ClientKernelFeatures;
 };
+
+export interface DnsValidationContext {
+  ruleSetTags?: ReadonlySet<string>;
+  routeTargetTags?: ReadonlySet<string>;
+  features?: ClientKernelFeatures;
+}
+
+export interface DnsAutomaticDefaults {
+  features?: ClientKernelFeatures;
+  addressFamily?: DnsAddressFamilyPolicy;
+}
+
+const DEFAULT_REVERSE_MAPPING = {
+  max_entries: 1024,
+  max_domains_per_address: 8,
+  max_ttl_seconds: 300,
+} as const;
 
 const DNS_ADDRESS_FAMILY_POLICIES: readonly DnsAddressFamilyPolicy[] = [
   'ipv4_only',
@@ -50,7 +73,7 @@ function defaultPort(type: DnsServerType): number | undefined {
   return 853;
 }
 
-export function createDnsServer(type: DnsServerType = 'doh'): DnsServerConfig {
+export function createDnsServer(type: DnsServerType = 'system'): DnsServerConfig {
   if (type === 'system') return { type };
   const server: DnsServerConfig = {
     type,
@@ -62,17 +85,33 @@ export function createDnsServer(type: DnsServerType = 'doh'): DnsServerConfig {
   return server;
 }
 
-export function createDefaultDnsConfig(mode: Exclude<DnsMode, 'disabled'> = 'real'): DnsConfig {
+export function recommendedDnsAddressFamily(
+  ipv4Availability: 'unknown' | 'available' | 'unavailable',
+  ipv6Availability: 'unknown' | 'available' | 'unavailable',
+): DnsAddressFamilyPolicy {
+  if (ipv4Availability === 'available' && ipv6Availability === 'unavailable') return 'ipv4_only';
+  if (ipv4Availability === 'unavailable' && ipv6Availability === 'available') return 'ipv6_only';
+  return 'prefer_ipv4';
+}
+
+export function createDefaultDnsConfig(
+  mode: Exclude<DnsMode, 'disabled'> = 'real',
+  defaults: DnsAutomaticDefaults = {},
+): DnsConfig {
+  const supportsFakeIpv6 = defaults.features?.dnsFakeIpDualStack.state === 'supported';
+  const supportsReverseMapping = defaults.features?.dnsRealReverseMapping.state === 'supported';
   return {
-    servers: { global: createDnsServer('doh') },
-    default_server: 'global',
+    servers: { system: createDnsServer('system') },
+    default_server: 'system',
     dispatch: [],
     cache: { max_entries: 1024 },
-    policy: { address_family: 'prefer_ipv4' },
+    reverse_mapping: supportsReverseMapping ? { ...DEFAULT_REVERSE_MAPPING } : undefined,
+    policy: { address_family: defaults.addressFamily ?? 'prefer_ipv4' },
     answer: mode === 'fake_ip'
       ? {
           type: 'fake_ip',
           cidr: '198.18.0.0/15',
+          ...(supportsFakeIpv6 ? { ipv6_cidr: 'fd00::/96' } : {}),
           ttl_seconds: 86_400,
           exclude_domains: [],
         }
@@ -87,17 +126,31 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
   if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
   if (Object.hasOwn(value, 'policy') && !isObject(value.policy)) return null;
+  if (Object.hasOwn(value, 'reverse_mapping') && !isObject(value.reverse_mapping)) return null;
   const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
   if (answer.type === 'fake_ip') {
     answer.exclude_domains = Array.isArray(answer.exclude_domains)
       ? answer.exclude_domains.filter((domain): domain is string => typeof domain === 'string')
       : [];
   }
+  const reverseMapping = isObject(value.reverse_mapping)
+    ? {
+        ...clone(value.reverse_mapping),
+        max_entries: typeof value.reverse_mapping.max_entries === 'number' ? value.reverse_mapping.max_entries : 1024,
+        max_domains_per_address: typeof value.reverse_mapping.max_domains_per_address === 'number'
+          ? value.reverse_mapping.max_domains_per_address
+          : 8,
+        max_ttl_seconds: typeof value.reverse_mapping.max_ttl_seconds === 'number'
+          ? value.reverse_mapping.max_ttl_seconds
+          : 300,
+      }
+    : undefined;
   return {
     ...clone(value),
     servers: clone(value.servers) as Record<string, DnsServerConfig>,
     default_server: value.default_server,
     dispatch: Array.isArray(value.dispatch) ? clone(value.dispatch) : [],
+    reverse_mapping: reverseMapping,
     answer,
     policy: isObject(value.policy) ? clone(value.policy) : undefined,
   } as DnsConfig;
@@ -147,19 +200,33 @@ export function readDnsSettings(
   };
 }
 
-export function setDnsMode(draft: DnsSettingsDraft, mode: DnsMode): DnsSettingsDraft {
+export function setDnsMode(
+  draft: DnsSettingsDraft,
+  mode: DnsMode,
+  defaults: DnsAutomaticDefaults = {},
+): DnsSettingsDraft {
   const next = clone(draft);
   next.mode = mode;
+  if (defaults.addressFamily) {
+    next.dns = setDnsAddressFamilyPolicy(next.dns, defaults.addressFamily);
+  }
   if (mode === 'real') next.dns.answer = { type: 'real' };
   if (mode === 'fake_ip') {
     const previous = next.dns.answer.type === 'fake_ip' ? next.dns.answer : undefined;
     next.dns.answer = {
+      ...previous,
       type: 'fake_ip',
       cidr: previous?.cidr ?? '198.18.0.0/15',
+      ipv6_cidr: previous?.ipv6_cidr
+        ?? (defaults.features?.dnsFakeIpDualStack.state === 'supported' ? 'fd00::/96' : undefined),
       ttl_seconds: previous?.ttl_seconds ?? 86_400,
       max_entries: previous?.max_entries,
       exclude_domains: previous?.exclude_domains ?? [],
     };
+    if (!next.dns.reverse_mapping
+      && defaults.features?.dnsRealReverseMapping.state === 'supported') {
+      next.dns.reverse_mapping = { ...DEFAULT_REVERSE_MAPPING };
+    }
     next.dnsHijack = true;
   }
   if (mode === 'disabled') next.dnsHijack = false;
@@ -201,6 +268,20 @@ export function renameDnsServer(
     ...rule,
     server: rule.server === oldName ? name : rule.server,
   }));
+  if (next.policy) {
+    const renameReference = (value: string | undefined) => value === oldName ? name : value;
+    const renameReferences = (values: string[] | undefined) => values?.map((value) => value === oldName ? name : value);
+    next.policy.node_server = renameReference(next.policy.node_server);
+    next.policy.direct_server = renameReference(next.policy.direct_server);
+    next.policy.fallback_servers = renameReferences(next.policy.fallback_servers);
+    next.policy.node_fallback_servers = renameReferences(next.policy.node_fallback_servers);
+    next.policy.direct_fallback_servers = renameReferences(next.policy.direct_fallback_servers);
+    if (next.policy.server_timeout_ms && Object.hasOwn(next.policy.server_timeout_ms, oldName)) {
+      const timeout = next.policy.server_timeout_ms[oldName];
+      delete next.policy.server_timeout_ms[oldName];
+      next.policy.server_timeout_ms[name] = timeout;
+    }
+  }
   return next;
 }
 
@@ -209,7 +290,10 @@ function isIpAddress(value: string): boolean {
     || /^[0-9a-f:]+$/i.test(value);
 }
 
-export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
+export function validateDnsDraft(
+  draft: DnsSettingsDraft,
+  context: DnsValidationContext = {},
+): DnsDraftIssue[] {
   if (draft.mode === 'disabled') return [];
   const issues: DnsDraftIssue[] = [];
   const addressFamily = draft.dns.policy?.address_family;
@@ -245,6 +329,91 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
           severity: 'warning',
         });
       }
+      const detour = server.detour?.trim();
+      if (detour && server.type === 'doq') {
+        issues.push({
+          field: `servers.${name}.detour`,
+          message: 'DoQ 暂不支持通过出站转发，请移除 detour 或改用 DoH/DoT',
+          severity: 'error',
+        });
+      } else if (detour && context.routeTargetTags && !context.routeTargetTags.has(detour)) {
+        issues.push({
+          field: `servers.${name}.detour`,
+          message: `出站 ${detour} 已不存在或未进入活动配置`,
+          severity: 'error',
+        });
+      }
+    }
+  }
+  const policy = draft.dns.policy;
+  if (policy) {
+    const timeoutInRange = (value: number | undefined) => value === undefined
+      || Number.isInteger(value) && value >= 1 && value <= 120_000;
+    if (!timeoutInRange(policy.timeout_ms)) {
+      issues.push({ field: 'policy.timeout_ms', message: '查询超时必须是 1-120000 毫秒的整数', severity: 'error' });
+    }
+    for (const [name, timeout] of Object.entries(policy.server_timeout_ms ?? {})) {
+      if (!Object.hasOwn(draft.dns.servers, name)) {
+        issues.push({ field: `policy.server_timeout_ms.${name}`, message: `服务器 ${name} 不存在`, severity: 'error' });
+      } else if (!timeoutInRange(timeout)) {
+        issues.push({ field: `policy.server_timeout_ms.${name}`, message: '查询超时必须是 1-120000 毫秒的整数', severity: 'error' });
+      }
+    }
+
+    const validateFallbacks = (field: string, values: string[] | undefined, primary?: string) => {
+      const seen = new Set<string>();
+      for (const name of values ?? []) {
+        if (!Object.hasOwn(draft.dns.servers, name)) {
+          issues.push({ field, message: `服务器 ${name} 不存在`, severity: 'error' });
+        } else if (seen.has(name)) {
+          issues.push({ field, message: `回退链重复包含服务器 ${name}`, severity: 'error' });
+        } else if (primary === name) {
+          issues.push({ field, message: `回退链不能重复主服务器 ${name}`, severity: 'error' });
+        }
+        seen.add(name);
+      }
+    };
+    const validatePrimary = (field: string, value: string | undefined) => {
+      if (value && !Object.hasOwn(draft.dns.servers, value)) {
+        issues.push({ field, message: `服务器 ${value} 不存在`, severity: 'error' });
+      }
+    };
+    validateFallbacks('policy.fallback_servers', policy.fallback_servers);
+    validatePrimary('policy.node_server', policy.node_server);
+    validatePrimary('policy.direct_server', policy.direct_server);
+    validateFallbacks('policy.node_fallback_servers', policy.node_fallback_servers, policy.node_server);
+    validateFallbacks('policy.direct_fallback_servers', policy.direct_fallback_servers, policy.direct_server);
+    if ((policy.node_fallback_servers?.length ?? 0) > 0 && !policy.node_server) {
+      issues.push({ field: 'policy.node_fallback_servers', message: '配置节点回退链前必须选择节点解析服务器', severity: 'error' });
+    }
+    if ((policy.direct_fallback_servers?.length ?? 0) > 0 && !policy.direct_server) {
+      issues.push({ field: 'policy.direct_fallback_servers', message: '配置直连回退链前必须选择直连解析服务器', severity: 'error' });
+    }
+    for (const cidr of policy.reject_address_cidrs ?? []) {
+      if (!cidr.includes('/')) {
+        issues.push({ field: 'policy.reject_address_cidrs', message: `${cidr} 不是有效的 CIDR`, severity: 'error' });
+      }
+    }
+  }
+  const detouredServers = Object.entries(draft.dns.servers)
+    .filter(([, server]) => Boolean(server.detour?.trim()));
+  if (detouredServers.length > 0) {
+    const nodeServer = policy?.node_server;
+    if (!nodeServer) {
+      issues.push({
+        field: 'policy.node_server',
+        message: '存在通过出站转发的 DNS 上游，必须选择一个直连的节点解析服务器以避免递归',
+        severity: 'error',
+      });
+    }
+    for (const name of [nodeServer, ...(policy?.node_fallback_servers ?? [])].filter(Boolean) as string[]) {
+      if (draft.dns.servers[name]?.detour) {
+        issues.push({
+          field: 'policy.node_server',
+          message: `节点解析服务器 ${name} 不能再通过 detour 转发`,
+          severity: 'error',
+        });
+      }
     }
   }
   draft.dns.dispatch.forEach((rule, index) => {
@@ -253,11 +422,76 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
     }
     if (!isObject(rule.condition)) {
       issues.push({ field: `dispatch.${index}.condition`, message: '分流条件必须是 JSON 对象', severity: 'error' });
+    } else if (rule.condition.type === 'rule_set' || typeof rule.condition.rule_set === 'string') {
+      const rawTag = rule.condition.type === 'rule_set'
+        ? rule.condition.tag
+        : rule.condition.rule_set;
+      const tag = typeof rawTag === 'string' ? rawTag.trim() : '';
+      if (!tag) {
+        issues.push({ field: `dispatch.${index}.condition.tag`, message: '请选择有效规则集', severity: 'error' });
+      } else if (context.ruleSetTags && !context.ruleSetTags.has(tag)) {
+        issues.push({
+          field: `dispatch.${index}.condition.tag`,
+          message: `规则集 ${tag} 已不存在或未进入最终有效配置`,
+          severity: 'error',
+        });
+      }
     }
   });
+  if (draft.dns.dispatch.length > 0 && context.features?.dnsSplitDispatch.state === 'unsupported') {
+    issues.push({ field: 'dispatch', message: '当前内核不支持 DNS 分流', severity: 'error' });
+  }
+  if (draft.dns.policy?.address_family
+    && context.features?.dnsAddressFamilyPolicy.state === 'unsupported') {
+    issues.push({ field: 'policy.address_family', message: '当前内核不支持 DNS 地址族策略', severity: 'error' });
+  }
+  if (draft.dnsHijack && context.features?.tunDnsHijack.state === 'unsupported') {
+    issues.push({ field: 'dnsHijack', message: '当前内核不支持 TUN DNS 劫持', severity: 'error' });
+  }
+  const usesSystemDns = Object.values(draft.dns.servers).some((server) => server.type === 'system');
+  if (draft.dnsHijack && usesSystemDns
+    && context.features?.tunDnsSystemAuto.state === 'unsupported') {
+    issues.push({
+      field: 'dnsHijack',
+      message: '当前内核不能在 TUN DNS 劫持时自动排除 system DNS；请升级内核、关闭劫持或改用显式网络 DNS',
+      severity: 'error',
+    });
+  }
+  if (draft.dns.cache) {
+    if (!Number.isInteger(draft.dns.cache.max_entries) || draft.dns.cache.max_entries < 1) {
+      issues.push({ field: 'cache.max_entries', message: '缓存容量必须是大于 0 的整数', severity: 'error' });
+    }
+    if (draft.dns.cache.max_ttl_seconds !== undefined
+      && (!Number.isInteger(draft.dns.cache.max_ttl_seconds) || draft.dns.cache.max_ttl_seconds < 1)) {
+      issues.push({ field: 'cache.max_ttl_seconds', message: '最大 TTL 必须是大于 0 的整数', severity: 'error' });
+    }
+  }
+  if (draft.dns.reverse_mapping) {
+    const reverse = draft.dns.reverse_mapping;
+    if (!Number.isInteger(reverse.max_entries) || reverse.max_entries < 1) {
+      issues.push({ field: 'reverse_mapping.max_entries', message: '真实地址映射容量必须是大于 0 的整数', severity: 'error' });
+    }
+    if (!Number.isInteger(reverse.max_domains_per_address) || reverse.max_domains_per_address < 2) {
+      issues.push({ field: 'reverse_mapping.max_domains_per_address', message: '每个地址至少保留 2 个候选域名，才能识别共享地址歧义', severity: 'error' });
+    }
+    if (!Number.isInteger(reverse.max_ttl_seconds) || reverse.max_ttl_seconds < 1) {
+      issues.push({ field: 'reverse_mapping.max_ttl_seconds', message: '映射 TTL 必须是大于 0 的整数', severity: 'error' });
+    }
+    if (context.features?.dnsRealReverseMapping.state === 'unsupported') {
+      issues.push({ field: 'reverse_mapping', message: '当前内核不支持真实地址反向映射', severity: 'error' });
+    }
+  }
   if (draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip') {
     if (!draft.dns.answer.cidr.includes('/')) {
       issues.push({ field: 'answer.cidr', message: 'Fake-IP 地址池必须使用 CIDR', severity: 'error' });
+    }
+    if (draft.dns.answer.ipv6_cidr !== undefined
+      && (!draft.dns.answer.ipv6_cidr.includes('/') || !draft.dns.answer.ipv6_cidr.includes(':'))) {
+      issues.push({ field: 'answer.ipv6_cidr', message: 'FakeIPv6 地址池必须使用 IPv6 CIDR', severity: 'error' });
+    }
+    if (draft.dns.answer.ipv6_cidr
+      && context.features?.dnsFakeIpDualStack.state === 'unsupported') {
+      issues.push({ field: 'answer.ipv6_cidr', message: '当前内核不支持双栈 Fake-IP', severity: 'error' });
     }
     if (draft.dns.answer.ttl_seconds < 1) {
       issues.push({ field: 'answer.ttl_seconds', message: 'TTL 必须大于 0', severity: 'error' });
@@ -312,26 +546,61 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
   const apiVersion = capabilities.apiVersion;
   const schemaVersion = capabilities.schemaVersion;
   const engineVersion = health?.engineVersion;
+  const limitations = capabilities.globalLimitations.filter((limitation) =>
+    limitation.startsWith('dns_') || limitation.startsWith('tun_dns_'),
+  );
+  const features = projectClientKernelFeatures(capabilities);
   if (!capabilities.available) {
     return {
       status: 'unknown',
       apiVersion,
       schemaVersion,
       engineVersion,
+      limitations,
+      features,
       detail: capabilities.error || '内核当前不可用，暂时无法确认 DNS 能力。',
+    };
+  }
+
+  const capabilityContract = capabilities.contracts?.capabilities;
+  if (!capabilityContract) {
+    return {
+      status: 'unknown',
+      apiVersion,
+      schemaVersion,
+      engineVersion,
+      limitations,
+      features,
+      detail: '内核未发布稳定能力契约版本，将按旧版兼容路径在保存时校验。',
+    };
+  }
+  if (capabilityContract.minimumSupported > 1 || capabilityContract.current < 1) {
+    return {
+      status: 'unknown',
+      apiVersion,
+      schemaVersion,
+      engineVersion,
+      limitations,
+      features,
+      detail: `内核能力契约 v${capabilityContract.minimumSupported}–v${capabilityContract.current} 与客户端支持的 V1 不相交。`,
     };
   }
 
   const declared = [...capabilities.buildFeatures, ...capabilities.features]
     .map(normalizeCapability);
   const hasDns = declared.some((feature) =>
-    feature === 'dns' || feature.startsWith('dns') || feature.includes('fakeip'),
+    feature === 'dns'
+      || feature.startsWith('dns')
+      || feature.includes('fakeip')
+      || feature === 'tundnssystemauto'
   );
   return {
     status: hasDns ? 'supported' : capabilities.buildFeatures.length > 0 ? 'unsupported' : 'unknown',
     apiVersion,
     schemaVersion,
     engineVersion,
+    limitations,
+    features,
     detail: hasDns
       ? undefined
       : capabilities.buildFeatures.length > 0

@@ -148,6 +148,9 @@ pub async fn close_connection(
 }
 
 fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {
+    if error.code == "not_found" {
+        return true;
+    }
     if error.code != "core_error" {
         return false;
     }
@@ -434,7 +437,8 @@ mod tests {
                 "domain": "example.com",
                 "removed_mappings": 1,
                 "removed_addresses": 2,
-                "live_mappings": 3
+                "live_mappings": 3,
+                "retired_addresses": 4
             }
         }));
 
@@ -445,6 +449,7 @@ mod tests {
         assert_eq!(result.removed_mappings, 1);
         assert_eq!(result.removed_addresses, 2);
         assert_eq!(result.live_mappings, 3);
+        assert_eq!(result.retired_addresses, 4);
     }
 
     #[test]
@@ -494,7 +499,15 @@ mod tests {
     }
 
     #[test]
-    fn flow_close_treats_only_already_completed_core_error_as_idempotent() {
+    fn flow_close_accepts_stable_and_legacy_already_completed_errors() {
+        let stable_not_found = AppError::core_response(json!({
+            "error": {
+                "code": "not_found",
+                "message": "flow `22397` not found or already completed"
+            }
+        }));
+        assert!(is_flow_already_completed_error(&stable_not_found));
+
         let already_completed = AppError::core_response(json!({
             "error": {
                 "message": "flow `22397` not found or already completed"

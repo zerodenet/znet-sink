@@ -61,6 +61,7 @@ assert.ok(
 );
 
 const connectionWorkspace = read('src/lib/components/tabs/ConnectionInspectorWorkspace.svelte');
+const coreStatusCard = read('src/lib/components/core/CoreStatusCard.svelte');
 const closeAllBody = connectionWorkspace.slice(
   connectionWorkspace.indexOf('async function closeAllConnections()'),
   connectionWorkspace.indexOf('function requestCloseAllConnections()'),
@@ -71,6 +72,23 @@ assert.ok(
     && !closeAllBody.includes('liveView.map(')
     && closeAllBody.indexOf('closeAllConfirm = false;') < closeAllBody.indexOf('closingAll = true;'),
   'close-all must freeze the confirmation-time flow IDs and dismiss the dialog before processing them',
+);
+
+const connectionDrawer = read('src/lib/components/ConnectionDetailsDrawer.svelte');
+assert.ok(
+  connectionWorkspace.includes('void store.refreshInteractionSurface();')
+    && connectionWorkspace.includes("{#if connection.origin === 'active'}")
+    && connectionWorkspace.includes('disabled={!canCloseConnections || terminatingIds.has(connection.flowId)}')
+    && connectionWorkspace.includes('terminateUnavailableReason={closeUnavailableReason}')
+    && !connectionWorkspace.includes('group-hover:opacity-100')
+    && connectionDrawer.includes("{#if connection.origin === 'active'}")
+    && connectionDrawer.includes('disabled={terminating || !canTerminate}')
+    && connectionDrawer.includes("terminateUnavailableReason ?? '当前内核未提供连接终止能力。'"),
+  'active connections must expose a visible terminate action and explain unavailable kernel capability',
+);
+assert.ok(
+  coreStatusCard.includes('关闭系统代理只撤销系统流量入口，不会停止内核或终止已有连接'),
+  'system-proxy control should explain that it does not stop the kernel or close existing flows',
 );
 
 console.log('runtime lifecycle tests passed');

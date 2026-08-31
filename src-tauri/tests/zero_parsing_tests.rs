@@ -170,16 +170,28 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     let caps = parsing::parse_capabilities(
         &json!({
             "api_id": "zero.api.v1",
+            "contracts": {
+                "capabilities": { "current": 1, "minimum_supported": 1 },
+                "control_api": { "current": 1, "minimum_supported": 1 },
+                "config_schema": { "current": 1, "minimum_supported": 1 },
+                "error_codes": { "current": 1, "minimum_supported": 1 }
+            },
+            "error_codes": ["invalid_argument", "unsupported"],
+            "global_limitations": ["tun_nat64_unsupported"],
             "build_features": ["tun", "quic"],
             "protocols": [
                 {
-                    "name": "shadowsocks",
+                    "protocol": "shadowsocks",
                     "status": "supported",
-                    "inbound_tcp": true,
-                    "inbound_udp": true,
-                    "outbound_tcp": true,
-                    "outbound_udp": true,
-                    "mux": true,
+                    "inbound": {
+                        "tcp": { "supported": true, "level": "supported", "notes": [] },
+                        "udp": { "supported": true, "level": "experimental", "notes": ["udp_note"] }
+                    },
+                    "outbound": {
+                        "tcp": { "supported": true, "level": "supported", "notes": [] },
+                        "udp": { "supported": true, "level": "supported", "notes": [] }
+                    },
+                    "mux": { "supported": true, "level": "partial", "notes": ["mux_note"] },
                     "limitations": []
                 },
                 {
@@ -196,6 +208,11 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
         None,
     );
 
+    let contracts = caps.contracts.as_ref().expect("V1 contracts");
+    assert_eq!(contracts.capabilities.current, 1);
+    assert_eq!(contracts.control_api.minimum_supported, 1);
+    assert_eq!(caps.error_codes, vec!["invalid_argument", "unsupported"]);
+    assert_eq!(caps.global_limitations, vec!["tun_nat64_unsupported"]);
     assert_eq!(caps.build_features, vec!["tun", "quic"]);
     assert_eq!(caps.protocols.len(), 2);
     assert_eq!(caps.protocols[0].name, "shadowsocks");
@@ -205,6 +222,9 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     assert!(caps.protocols[0].outbound_tcp);
     assert!(caps.protocols[0].outbound_udp);
     assert!(caps.protocols[0].mux);
+    assert_eq!(caps.protocols[0].inbound_udp_state.level, "experimental");
+    assert_eq!(caps.protocols[0].inbound_udp_state.notes, vec!["udp_note"]);
+    assert_eq!(caps.protocols[0].mux_state.level, "partial");
     assert_eq!(caps.protocols[1].name, "vmess");
     assert_eq!(caps.protocols[1].status, "partial");
     assert!(caps.protocols[1].inbound_tcp);
@@ -212,6 +232,31 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     assert!(caps.protocols[1].outbound_tcp);
     assert!(!caps.protocols[1].outbound_udp);
     assert_eq!(caps.protocols[1].limitations, vec!["no_udp_relay"]);
+}
+
+#[test]
+fn parse_capabilities_keeps_legacy_flat_protocol_compatibility() {
+    let caps = parsing::parse_capabilities(
+        &json!({
+            "protocols": [{
+                "name": "legacy",
+                "inbound_tcp": true,
+                "inbound_udp": false,
+                "outbound_tcp": true,
+                "outbound_udp": false,
+                "mux": true
+            }]
+        }),
+        None,
+    );
+
+    assert!(caps.contracts.is_none());
+    assert!(caps.error_codes.is_empty());
+    assert!(caps.global_limitations.is_empty());
+    assert!(caps.protocols[0].inbound_tcp);
+    assert!(!caps.protocols[0].inbound_udp);
+    assert!(caps.protocols[0].mux);
+    assert_eq!(caps.protocols[0].mux_state.level, "supported");
 }
 
 #[test]
@@ -285,7 +330,7 @@ fn unwrap_core_envelope_rejects_ok_false() {
     }))
     .unwrap_err();
 
-    assert_eq!(err.code, "core_error");
+    assert_eq!(err.code, "not_found");
 }
 
 #[test]
@@ -357,6 +402,24 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
                     "resolved_candidates": [
                         { "host": "17.57.147.6", "port": 5223 },
                         { "host": "17.57.147.7", "port": 5223 }
+                    ],
+                    "connection_attempts": [
+                        {
+                            "remote_address": { "host": "17.57.147.6", "port": 5223 },
+                            "local_address": { "host": "192.168.50.10", "port": 52864 },
+                            "stage": "connect",
+                            "outcome": "failed",
+                            "interface_bound": true,
+                            "error_kind": "connection_refused",
+                            "os_error": 10061,
+                            "error": "connection refused"
+                        },
+                        {
+                            "remote_address": { "host": "17.57.147.7", "port": 5223 },
+                            "stage": "connect",
+                            "outcome": "connected",
+                            "interface_bound": true
+                        }
                     ],
                     "address_family_policy": "prefer_ipv4",
                     "address_family_fallback": {
@@ -439,6 +502,13 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
     );
     assert_eq!(network.remote_address.as_deref(), Some("17.57.147.6:5223"));
     assert_eq!(network.resolved_candidates.len(), 2);
+    assert_eq!(network.connection_attempts.len(), 2);
+    assert_eq!(network.connection_attempts[0].outcome, "failed");
+    assert_eq!(network.connection_attempts[0].os_error, Some(10061));
+    assert_eq!(
+        network.connection_attempts[1].remote_address,
+        "17.57.147.7:5223"
+    );
     assert_eq!(
         network.address_family_policy.as_deref(),
         Some("prefer_ipv4")
@@ -719,7 +789,7 @@ fn unwrap_query_variant_rejects_ok_false() {
     )
     .unwrap_err();
 
-    assert_eq!(err.code, "core_error");
+    assert_eq!(err.code, "not_found");
 }
 
 #[test]

@@ -12,9 +12,9 @@
     { id: 'general', label: '应用' },
     { id: 'network', label: '网络' },
     { id: 'logs',    label: '日志' },
-    { id: 'core',    label: '内核运行' },
-    { id: 'dns',     label: 'DNS / Fake-IP' },
-    { id: 'tun',     label: 'TUN 接管' },
+    { id: 'core',    label: '版本管理' },
+    { id: 'dns',     label: '域名解析' },
+    { id: 'tun',     label: '流量接管' },
     { id: 'config',  label: '高级配置' },
     { id: 'about',   label: '关于' },
   ];
@@ -23,10 +23,10 @@
     general: '客户端',
     network: '客户端',
     logs: '客户端',
-    core: 'Zero 内核',
-    dns: 'Zero 内核',
-    tun: 'Zero 内核',
-    config: 'Zero 内核',
+    core: '内核',
+    dns: '内核',
+    tun: '内核',
+    config: '内核',
     about: '其他',
   };
 

@@ -362,7 +362,7 @@
       <div class="config-row">
         <div class="config-row-label">
           <span class="label-text">启动应用时启动内核</span>
-          <span class="label-desc">打开 ZNet Sink 后自动启动当前配置的 Zero 内核。</span>
+          <span class="label-desc">打开 ZNet Sink 后自动启动当前配置的内核。</span>
         </div>
         <Switch
           checked={config.core.autoStart}
@@ -375,7 +375,7 @@
       <div class="config-row">
         <div class="config-row-label">
           <span class="label-text">内核就绪后自动连接</span>
-          <span class="label-desc">Zero 内核可用后，自动启用由 ZNet Sink 管理的系统代理。</span>
+          <span class="label-desc">内核可用后，自动启用由 ZNet Sink 管理的系统代理。</span>
         </div>
         <Switch
           checked={config.core.autoConnect}
