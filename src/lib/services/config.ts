@@ -19,6 +19,7 @@ import type {
   RuleSetSyncAllOutcome,
   CommonRuleBindingInput,
   CommonRuleInjectionStatus,
+  EffectiveRuleSetOption,
 } from '$lib/types/domain';
 
 export type {
@@ -171,6 +172,10 @@ export async function updateAllRuleSets(): Promise<RuleSetSyncAllOutcome> {
 
 export async function getRuleSetKernelPayloads(): Promise<RuleSetKernelPayload[]> {
   return invoke('rule_set_kernel_payloads');
+}
+
+export async function getEffectiveRuleSetOptions(): Promise<EffectiveRuleSetOption[]> {
+  return invoke('rule_set_effective_options');
 }
 
 export async function getCommonRuleInjectionStatus(): Promise<CommonRuleInjectionStatus> {

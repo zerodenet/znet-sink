@@ -11,11 +11,33 @@ import type { DnsSettingsInput } from '$lib/types/dns';
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
 export function getAppErrorMessage(error: unknown, fallbackMessage: string): string {
-  const appError = error as { code?: string; message?: string };
+  const appError = error as { code?: string; message?: string; details?: unknown };
   if (appError.code === 'mode_restricted') {
     return `该功能仅在专业模式下可用：${appError.message || fallbackMessage}`;
   }
-  return appError.message || fallbackMessage;
+  const envelope = appError.details && typeof appError.details === 'object'
+    ? appError.details as Record<string, unknown>
+    : undefined;
+  const coreError = envelope?.error && typeof envelope.error === 'object'
+    ? envelope.error as Record<string, unknown>
+    : undefined;
+  const code = typeof coreError?.code === 'string' ? coreError.code : appError.code;
+  const message = appError.message || (typeof coreError?.message === 'string' ? coreError.message : fallbackMessage);
+  const diagnostics = Array.isArray(coreError?.details)
+    ? coreError.details
+        .filter((detail): detail is Record<string, unknown> => !!detail && typeof detail === 'object')
+        .map((detail) => {
+          const detailMessage = typeof detail.message === 'string' ? detail.message : '';
+          const fieldPath = typeof detail.field_path === 'string' ? detail.field_path : undefined;
+          return fieldPath ? `${fieldPath}：${detailMessage}` : detailMessage;
+        })
+        .filter(Boolean)
+    : [];
+  const fieldPath = typeof coreError?.field_path === 'string' ? coreError.field_path : undefined;
+  const cause = typeof coreError?.cause === 'string' ? coreError.cause : undefined;
+  return [code ? `[${code}] ${message}` : message, fieldPath ? `字段：${fieldPath}` : '', ...diagnostics, cause ? `原因：${cause}` : '']
+    .filter(Boolean)
+    .join('；');
 }
 
 export function handleAppError(error: unknown, fallbackMessage: string): void {

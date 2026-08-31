@@ -533,6 +533,7 @@ pub fn run() {
             rule_set_commands::rule_set_update,
             rule_set_commands::rule_set_update_all,
             rule_set_commands::rule_set_kernel_payloads,
+            rule_set_commands::rule_set_effective_options,
             rule_set_commands::rule_set_common_status,
             rule_set_commands::rule_set_set_common_enabled,
             rule_set_commands::rule_set_set_common_binding,

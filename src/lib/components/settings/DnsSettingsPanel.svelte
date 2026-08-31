@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { AlertTriangle, Braces, ChevronDown, ChevronUp, Pencil, Plus, RefreshCw, Save, Server, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Braces, ChevronDown, ChevronUp, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
   import { Input } from '$lib/components/ui/input';
@@ -8,6 +8,7 @@
   import { Switch } from '$lib/components/ui/switch';
   import {
     applyGlobalDnsSettings,
+    createDefaultDnsConfig,
     createDnsServer,
     getDnsKernelCompatibility,
     getDnsAddressFamilyPolicy,
@@ -20,9 +21,11 @@
     setDnsMode,
     validateDnsDraft,
   } from '$lib/services/dns-config';
+  import { getEffectiveRuleSetOptions, listProxyConfigs } from '$lib/services/config';
   import { getAppErrorMessage } from '$lib/services/core';
   import type { DnsKernelCompatibility } from '$lib/services/dns-config';
   import type { DnsAddressFamilyPolicy, DnsDispatchConfig, DnsMode, DnsServerConfig, DnsServerType, DnsSettingsDraft, DnsSettingsInput } from '$lib/types/dns';
+  import type { EffectiveRuleSetOption } from '$lib/types/domain';
 
   let loading = $state(true);
   let saving = $state(false);
@@ -50,6 +53,8 @@
   let dispatchServerDraft = $state('');
   let dispatchDialogError = $state('');
   let compatibility = $state<DnsKernelCompatibility>({ status: 'unknown' });
+  let ruleSetOptions = $state<EffectiveRuleSetOption[]>([]);
+  let activeProfileName = $state('当前无活动代理配置');
 
   const issues = $derived(draft ? validateDnsDraft(draft) : []);
   const errors = $derived(issues.filter((issue) => issue.severity === 'error'));
@@ -78,22 +83,22 @@
     {
       value: 'prefer_ipv4',
       label: '双栈 · IPv4 优先',
-      description: '保留 IPv4/IPv6；TUN direct 的物理 IPv6 出口不可用时，以可信域名回退 IPv4。',
+      description: '保留 A 与 AAAA 结果，并在 DNS 候选中优先 IPv4。不会改变 TUN 接管范围或 direct 出站回退。',
     },
     {
       value: 'prefer_ipv6',
       label: '双栈 · IPv6 优先',
-      description: '优先使用原生 IPv6；仅在物理 IPv6 出口明确不可用时，以可信域名回退 IPv4。',
+      description: '保留 A 与 AAAA 结果，并在 DNS 候选中优先 IPv6。不会承诺主机具备 IPv6 出站。',
     },
     {
       value: 'ipv4_only',
       label: '仅 IPv4',
-      description: '禁用 IPv6 DNS 结果，适合没有可用 IPv6 网络的兼容场景。',
+      description: 'DNS 应答只使用 IPv4 结果；TUN 是否接管 IPv6 仍由 TUN 双栈设置决定。',
     },
     {
       value: 'ipv6_only',
       label: '仅 IPv6',
-      description: '只使用 IPv6 DNS 结果，并明确禁止自动回退 IPv4。',
+      description: 'DNS 应答只使用 IPv6 结果；需要主机和所选出站都具备实际 IPv6 能力。',
     },
   ];
   const addressFamilyDescription = $derived(
@@ -168,6 +173,25 @@
     if (values.length === 0) throw new Error('请至少输入一个匹配值');
     condition.values = values;
     return condition;
+  }
+
+  function ruleSetSourceLabel(ruleSetSource: EffectiveRuleSetOption['source']): string {
+    return ({
+      builtin: '内置',
+      subscription: '订阅',
+      remote: '外部来源',
+      local: '本地',
+      profile: '活动配置',
+    } as const)[ruleSetSource];
+  }
+
+  function limitationLabel(code: string): string {
+    return ({
+      dns_encrypted_client_queries_not_intercepted: '无法劫持应用自带的加密 DNS 查询',
+      dns_ech_hostname_recovery_unavailable: '无法从 ECH 恢复主机名',
+      dns_doq_detour_unsupported: 'DoQ 上游暂不支持 detour',
+      tun_dns_hijack_unavailable: '当前构建不支持 TUN DNS 劫持',
+    } as Record<string, string>)[code] ?? code;
   }
 
   function changeDispatchConditionType(value: string) {
@@ -256,13 +280,17 @@
     loading = true;
     error = '';
     try {
-      const [result, kernelCompatibility] = await Promise.all([
+      const [result, kernelCompatibility, effectiveRuleSets, proxyConfigs] = await Promise.all([
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
+        getEffectiveRuleSetOptions().catch(() => []),
+        listProxyConfigs().catch(() => []),
       ]);
       source = result.source;
       draft = result.draft;
       compatibility = kernelCompatibility;
+      ruleSetOptions = effectiveRuleSets;
+      activeProfileName = proxyConfigs.find((profile) => profile.active)?.name ?? '当前无活动代理配置';
       jsonDialogOpen = false;
       nativeJson = JSON.stringify(result.source.config ?? result.draft.dns, null, 2);
       nativeError = '';
@@ -286,6 +314,14 @@
   function changeDefaultServer(value: string) {
     if (!draft) return;
     draft.dns.default_server = value;
+    touch();
+  }
+
+  function resetToSystemDefault() {
+    if (!draft) return;
+    const resetMode = draft.mode === 'fake_ip' ? 'fake_ip' : 'real';
+    draft.dns = createDefaultDnsConfig(resetMode);
+    if (draft.mode === 'fake_ip') draft.dnsHijack = true;
     touch();
   }
 
@@ -505,6 +541,9 @@
     <p>客户端覆盖，不写回代理配置；应用时注入 Zero 有效配置并由内核校验</p>
   </div>
   <div class="head-actions">
+    <Button variant="outline" size="sm" onclick={resetToSystemDefault} disabled={loading || saving || !draft}>
+      <RotateCcw />恢复 system 默认
+    </Button>
     <Button variant="outline" size="sm" onclick={openJsonEditor} disabled={loading || saving || !draft}>
       <Braces />编辑 JSON
     </Button>
@@ -524,6 +563,14 @@
   </div>
 {:else if draft}
   <p class="workflow-hint">配置流程：选择基础模式 → 编辑 DNS、Fake-IP 和分流策略 → 点击底部“保存并应用”。高级用户可从右上角打开 Zero 原生 JSON。</p>
+
+  <div class="config-lineage" aria-label="有效配置来源">
+    <div><strong>基础配置</strong><span title={activeProfileName}>{activeProfileName}</span></div>
+    <span class="lineage-arrow">→</span>
+    <div><strong>客户端覆盖</strong><span>全局 DNS · 公共规则</span></div>
+    <span class="lineage-arrow">→</span>
+    <div><strong>最终有效配置</strong><span>{ruleSetOptions.length} 个规则集 · 交给 Zero 校验</span></div>
+  </div>
 
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
     <div class="issues warning" role="status">
@@ -567,7 +614,7 @@
 
   <section class="section row-section">
     <div>
-      <strong>IPv6 兼容策略</strong>
+      <strong>DNS 应答地址族</strong>
       <span>{addressFamilyDescription}</span>
     </div>
     <Select.Root
@@ -575,7 +622,7 @@
       value={addressFamilyPolicy}
       onValueChange={(value) => { if (value) changeAddressFamilyPolicy(value); }}
     >
-      <Select.Trigger aria-label="IPv6 兼容策略">
+      <Select.Trigger aria-label="DNS 应答地址族策略">
         {addressFamilyOptions.find((option) => option.value === addressFamilyPolicy)?.label ?? addressFamilyPolicy}
       </Select.Trigger>
       <Select.Content>
@@ -640,7 +687,8 @@
         <section class="section">
           <div class="section-title">Fake-IP</div>
           <div class="field-grid">
-            <label><span>CIDR</span><Input bind:value={draft.dns.answer.cidr} oninput={touch} /></label>
+            <label><span>IPv4 CIDR</span><Input bind:value={draft.dns.answer.cidr} oninput={touch} /></label>
+            <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
             <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
@@ -668,7 +716,9 @@
         </div>
       </section>
 
-  <div class="boundary"><AlertTriangle /><span>53 端口 DNS 劫持无法覆盖应用自带的 DoH / DoT / DoQ，也不能从 ECH 中恢复域名。</span></div>
+  {#if compatibility.limitations?.length}
+    <div class="boundary"><AlertTriangle /><span>{compatibility.limitations.map(limitationLabel).join('；')}</span></div>
+  {/if}
   {#if warnings.length}<div class="issues warning">{#each warnings as issue}<div>{issue.message}</div>{/each}</div>{/if}
   {#if errors.length}<div class="issues error">{#each errors as issue}<div>{issue.field}：{issue.message}</div>{/each}</div>{/if}
   {#if error}<div class="issues error" role="alert">{error}</div>{/if}
@@ -808,9 +858,29 @@
             </label>
             {#if dispatchConditionType === 'rule_set'}
               <label class="dispatch-dialog-field">
-                <span>规则集标签</span>
-                <Input bind:value={dispatchConditionTagDraft} placeholder="AI-Suite" />
-                <small>引用 route.rule_sets 中已有的规则集 tag。</small>
+                <span>有效规则集</span>
+                {#if ruleSetOptions.length > 0}
+                  <Select.Root
+                    type="single"
+                    value={dispatchConditionTagDraft}
+                    onValueChange={(value) => { if (value) dispatchConditionTagDraft = value; }}
+                  >
+                    <Select.Trigger aria-label="DNS 分流规则集">
+                      {(ruleSetOptions.find((option) => option.tag === dispatchConditionTagDraft)?.name ?? dispatchConditionTagDraft) || '选择规则集'}
+                    </Select.Trigger>
+                    <Select.Content>
+                      {#each ruleSetOptions as option (option.tag)}
+                        <Select.Item value={option.tag} label={`${option.name} · ${ruleSetSourceLabel(option.source)}`}>
+                          {option.name} · {ruleSetSourceLabel(option.source)} · {option.tag}
+                        </Select.Item>
+                      {/each}
+                    </Select.Content>
+                  </Select.Root>
+                  <small>显示基础配置、订阅和公共规则覆盖组合后的真实 tag；无需手工推导。</small>
+                {:else}
+                  <Input bind:value={dispatchConditionTagDraft} placeholder="当前没有可选择的有效规则集" />
+                  <small>未发现活动配置中的规则集，仍可为稍后生效的配置手动填写 tag。</small>
+                {/if}
               </label>
             {:else}
               <label class="dispatch-dialog-field">
@@ -936,6 +1006,38 @@
     color: var(--muted-foreground);
     font-size: 11.5px;
     line-height: 1.45;
+  }
+
+  .config-lineage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--muted) 22%, transparent);
+  }
+
+  .config-lineage div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .config-lineage strong {
+    font-size: 10.5px;
+  }
+
+  .config-lineage span {
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+
+  .lineage-arrow {
+    font-size: 14px !important;
   }
 
   .section {
@@ -1413,6 +1515,13 @@
   }
 
   @media (max-width: 900px) {
+    .config-lineage {
+      grid-template-columns: 1fr;
+    }
+
+    .lineage-arrow {
+      display: none;
+    }
     .mode-section {
       align-items: stretch;
       flex-direction: column;

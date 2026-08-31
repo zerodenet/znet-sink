@@ -147,6 +147,12 @@ pub struct GuiZeroCapabilities {
     pub available: bool,
     pub api_version: Option<String>,
     pub schema_version: Option<String>,
+    /// Independently versioned stable contracts published by Zero V1.
+    pub contracts: Option<GuiApiContractVersions>,
+    /// Stable machine-readable core error code catalog.
+    pub error_codes: Vec<String>,
+    /// Cross-protocol limitations that apply to the current kernel build.
+    pub global_limitations: Vec<String>,
     pub features: Vec<String>,
     pub permissions: Vec<String>,
     pub adapters: Vec<GuiCapabilityEndpoint>,
@@ -166,6 +172,30 @@ pub struct GuiCapabilityEndpoint {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiApiContractVersions {
+    pub capabilities: GuiContractVersionRange,
+    pub control_api: GuiContractVersionRange,
+    pub config_schema: GuiContractVersionRange,
+    pub error_codes: GuiContractVersionRange,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiContractVersionRange {
+    pub current: u64,
+    pub minimum_supported: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiCapabilityState {
+    pub supported: bool,
+    pub level: String,
+    pub notes: Vec<String>,
+}
+
 /// Protocol capability entry from the kernel's capabilities response.
 /// Reports whether a specific protocol is supported, partial, or experimental,
 /// along with TCP/UDP inbound/outbound support and any limitations.
@@ -181,6 +211,11 @@ pub struct GuiProtocolCapability {
     pub outbound_tcp: bool,
     pub outbound_udp: bool,
     pub mux: bool,
+    pub inbound_tcp_state: GuiCapabilityState,
+    pub inbound_udp_state: GuiCapabilityState,
+    pub outbound_tcp_state: GuiCapabilityState,
+    pub outbound_udp_state: GuiCapabilityState,
+    pub mux_state: GuiCapabilityState,
     /// Opaque limitation codes from the kernel (e.g. "no_udp_relay").
     pub limitations: Vec<String>,
 }

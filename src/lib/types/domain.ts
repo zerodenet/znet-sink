@@ -129,6 +129,7 @@ export type ZeroRuleType = 'domain_exact' | 'domain_suffix' | 'domain_keyword' |
 export interface ZeroRule { type: ZeroRuleType; value: string; }
 export interface ZeroRuleIr { version: 1; name?: string; rules: ZeroRule[]; }
 export interface RuleSetKernelPayload { id: string; name: string; zrsPath: string; checksum: number; }
+export interface EffectiveRuleSetOption { tag: string; name: string; source: 'builtin' | 'subscription' | 'remote' | 'local' | 'profile'; }
 
 export interface RuleSetSource {
   url: string;

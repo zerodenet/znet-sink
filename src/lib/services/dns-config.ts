@@ -24,6 +24,7 @@ export type DnsKernelCompatibility = {
   schemaVersion?: string;
   engineVersion?: string;
   detail?: string;
+  limitations?: string[];
 };
 
 const DNS_ADDRESS_FAMILY_POLICIES: readonly DnsAddressFamilyPolicy[] = [
@@ -50,7 +51,7 @@ function defaultPort(type: DnsServerType): number | undefined {
   return 853;
 }
 
-export function createDnsServer(type: DnsServerType = 'doh'): DnsServerConfig {
+export function createDnsServer(type: DnsServerType = 'system'): DnsServerConfig {
   if (type === 'system') return { type };
   const server: DnsServerConfig = {
     type,
@@ -64,8 +65,8 @@ export function createDnsServer(type: DnsServerType = 'doh'): DnsServerConfig {
 
 export function createDefaultDnsConfig(mode: Exclude<DnsMode, 'disabled'> = 'real'): DnsConfig {
   return {
-    servers: { global: createDnsServer('doh') },
-    default_server: 'global',
+    servers: { system: createDnsServer('system') },
+    default_server: 'system',
     dispatch: [],
     cache: { max_entries: 1024 },
     policy: { address_family: 'prefer_ipv4' },
@@ -154,8 +155,10 @@ export function setDnsMode(draft: DnsSettingsDraft, mode: DnsMode): DnsSettingsD
   if (mode === 'fake_ip') {
     const previous = next.dns.answer.type === 'fake_ip' ? next.dns.answer : undefined;
     next.dns.answer = {
+      ...previous,
       type: 'fake_ip',
       cidr: previous?.cidr ?? '198.18.0.0/15',
+      ipv6_cidr: previous?.ipv6_cidr,
       ttl_seconds: previous?.ttl_seconds ?? 86_400,
       max_entries: previous?.max_entries,
       exclude_domains: previous?.exclude_domains ?? [],
@@ -259,6 +262,10 @@ export function validateDnsDraft(draft: DnsSettingsDraft): DnsDraftIssue[] {
     if (!draft.dns.answer.cidr.includes('/')) {
       issues.push({ field: 'answer.cidr', message: 'Fake-IP 地址池必须使用 CIDR', severity: 'error' });
     }
+    if (draft.dns.answer.ipv6_cidr !== undefined
+      && (!draft.dns.answer.ipv6_cidr.includes('/') || !draft.dns.answer.ipv6_cidr.includes(':'))) {
+      issues.push({ field: 'answer.ipv6_cidr', message: 'FakeIPv6 地址池必须使用 IPv6 CIDR', severity: 'error' });
+    }
     if (draft.dns.answer.ttl_seconds < 1) {
       issues.push({ field: 'answer.ttl_seconds', message: 'TTL 必须大于 0', severity: 'error' });
     }
@@ -312,26 +319,56 @@ export async function getDnsKernelCompatibility(): Promise<DnsKernelCompatibilit
   const apiVersion = capabilities.apiVersion;
   const schemaVersion = capabilities.schemaVersion;
   const engineVersion = health?.engineVersion;
+  const limitations = capabilities.globalLimitations.filter((limitation) =>
+    limitation.startsWith('dns_') || limitation.startsWith('tun_dns_'),
+  );
   if (!capabilities.available) {
     return {
       status: 'unknown',
       apiVersion,
       schemaVersion,
       engineVersion,
+      limitations,
       detail: capabilities.error || '内核当前不可用，暂时无法确认 DNS 能力。',
+    };
+  }
+
+  const capabilityContract = capabilities.contracts?.capabilities;
+  if (!capabilityContract) {
+    return {
+      status: 'unknown',
+      apiVersion,
+      schemaVersion,
+      engineVersion,
+      limitations,
+      detail: '内核未发布稳定能力契约版本，将按旧版兼容路径在保存时校验。',
+    };
+  }
+  if (capabilityContract.minimumSupported > 1 || capabilityContract.current < 1) {
+    return {
+      status: 'unknown',
+      apiVersion,
+      schemaVersion,
+      engineVersion,
+      limitations,
+      detail: `内核能力契约 v${capabilityContract.minimumSupported}–v${capabilityContract.current} 与客户端支持的 V1 不相交。`,
     };
   }
 
   const declared = [...capabilities.buildFeatures, ...capabilities.features]
     .map(normalizeCapability);
   const hasDns = declared.some((feature) =>
-    feature === 'dns' || feature.startsWith('dns') || feature.includes('fakeip'),
+    feature === 'dns'
+      || feature.startsWith('dns')
+      || feature.includes('fakeip')
+      || feature === 'tundnssystemauto'
   );
   return {
     status: hasDns ? 'supported' : capabilities.buildFeatures.length > 0 ? 'unsupported' : 'unknown',
     apiVersion,
     schemaVersion,
     engineVersion,
+    limitations,
     detail: hasDns
       ? undefined
       : capabilities.buildFeatures.length > 0

@@ -108,6 +108,13 @@ impl AppError {
                 CORE_INSUFFICIENT_OS_PRIVILEGE,
                 insufficient_os_privilege_message().to_string(),
             ),
+            Some("not_found") => ("not_found", core_message.to_string()),
+            Some("invalid_argument") => ("invalid_argument", core_message.to_string()),
+            Some("permission_denied") => ("permission_denied", core_message.to_string()),
+            Some("feature_disabled") => ("feature_disabled", core_message.to_string()),
+            Some("conflict") => ("conflict", core_message.to_string()),
+            Some("unsupported") => ("unsupported", core_message.to_string()),
+            Some("internal") => ("internal", core_message.to_string()),
             _ => ("core_error", core_message.to_string()),
         };
 
@@ -209,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_unclassified_core_errors_generic() {
+    fn promotes_stable_core_error_codes() {
         let error = AppError::core_response(json!({
             "ok": false,
             "error": {
@@ -218,7 +225,18 @@ mod tests {
             }
         }));
 
-        assert_eq!(error.code, "core_error");
+        assert_eq!(error.code, "conflict");
         assert_eq!(error.message, "runtime conflict");
+    }
+
+    #[test]
+    fn keeps_unknown_core_errors_generic() {
+        let error = AppError::core_response(json!({
+            "ok": false,
+            "error": { "code": "future_code", "message": "future error" }
+        }));
+
+        assert_eq!(error.code, "core_error");
+        assert_eq!(error.message, "future error");
     }
 }

@@ -34,6 +34,7 @@ export type DnsAnswerConfig =
   | {
       type: 'fake_ip';
       cidr: string;
+      ipv6_cidr?: string;
       ttl_seconds: number;
       max_entries?: number;
       exclude_domains: string[];

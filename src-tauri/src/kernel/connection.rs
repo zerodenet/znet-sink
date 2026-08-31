@@ -676,7 +676,7 @@ mod tests {
             "error": { "code": "permission_denied", "message": "denied" }
         }))
         .unwrap_err();
-        assert_eq!(error.code, "core_error");
+        assert_eq!(error.code, "permission_denied");
         assert_eq!(error.message, "denied");
     }
 

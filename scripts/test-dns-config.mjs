@@ -14,6 +14,9 @@ assert.match(service, /guiValidateDnsConfig\(next\)/);
 assert.match(service, /const result = await guiApplyDnsConfig\(next\)/);
 assert.match(service, /answer\.exclude_domains = Array\.isArray\(answer\.exclude_domains\)/);
 assert.match(service, /policy: \{ address_family: 'prefer_ipv4' \}/);
+assert.match(service, /servers: \{ system: createDnsServer\('system'\) \}/);
+assert.match(service, /default_server: 'system'/);
+assert.match(service, /ipv6_cidr: previous\?\.ipv6_cidr/);
 assert.match(service, /export function getDnsAddressFamilyPolicy\(dns: DnsConfig\)/);
 assert.match(service, /export function setDnsAddressFamilyPolicy\(/);
 assert.match(service, /field: 'policy\.address_family'/);
@@ -22,10 +25,11 @@ for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
 }
 assert.match(panel, /First-match-wins/);
-assert.match(panel, /DoH \/ DoT \/ DoQ/);
+assert.match(panel, /dns_encrypted_client_queries_not_intercepted/);
+assert.match(panel, /dns_ech_hostname_recovery_unavailable/);
 assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
 assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
-assert.match(panel, /aria-label="IPv6 兼容策略"/);
+assert.match(panel, /aria-label="DNS 应答地址族策略"/);
 for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
   assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
 }
@@ -38,11 +42,18 @@ assert.match(panel, /function openAddDispatch\(\)/);
 assert.match(panel, /function openEditDispatch\(index: number\)/);
 assert.match(panel, /class="dispatch-dialog-form"/);
 assert.match(panel, /function buildDispatchConditionFromForm\(\): Record<string, unknown>/);
+assert.match(panel, /getEffectiveRuleSetOptions/);
+assert.match(panel, /aria-label="DNS 分流规则集"/);
+assert.match(panel, /无需手工推导/);
 assert.match(panel, /role="tablist" aria-label="DNS 分流条件编辑方式"/);
 assert.match(panel, /switchDispatchEditorMode\('form'\)/);
 assert.match(panel, /switchDispatchEditorMode\('json'\)/);
 assert.match(panel, /const condition = \{ type: 'domain', values: \['example\.com'\] \}/);
 assert.doesNotMatch(panel, /updateDispatchCondition/);
+assert.match(panel, /draft\.dns\.answer\.ipv6_cidr/);
+assert.match(panel, /基础配置/);
+assert.match(panel, /客户端覆盖/);
+assert.match(panel, /最终有效配置/);
 assert.match(panel, /\(draft\.dns\.answer\.exclude_domains \?\? \[\]\)\.join\('\\n'\)/);
 assert.match(runtime, /json!\(tun\.dns_hijack\)/);
 assert.match(parsing, /"original_ip", "originalIp"/);

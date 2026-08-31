@@ -259,6 +259,9 @@ export interface GuiZeroCapabilities {
   available: boolean;
   apiVersion?: string;
   schemaVersion?: string;
+  contracts?: GuiApiContractVersions;
+  errorCodes: string[];
+  globalLimitations: string[];
   features: string[];
   permissions: string[];
   adapters: GuiCapabilityEndpoint[];
@@ -273,14 +276,37 @@ export interface GuiCapabilityEndpoint {
   enabled: boolean;
 }
 
+export interface GuiContractVersionRange {
+  current: number;
+  minimumSupported: number;
+}
+
+export interface GuiApiContractVersions {
+  capabilities: GuiContractVersionRange;
+  controlApi: GuiContractVersionRange;
+  configSchema: GuiContractVersionRange;
+  errorCodes: GuiContractVersionRange;
+}
+
+export interface GuiCapabilityState {
+  supported: boolean;
+  level: string;
+  notes: string[];
+}
+
 export interface GuiProtocolCapability {
   name: string;
-  status: 'supported' | 'partial' | 'experimental';
+  status: 'supported' | 'partial' | 'experimental' | 'unsupported';
   inboundTcp: boolean;
   inboundUdp: boolean;
   outboundTcp: boolean;
   outboundUdp: boolean;
   mux: boolean;
+  inboundTcpState: GuiCapabilityState;
+  inboundUdpState: GuiCapabilityState;
+  outboundTcpState: GuiCapabilityState;
+  outboundUdpState: GuiCapabilityState;
+  muxState: GuiCapabilityState;
   limitations: string[];
 }
 
