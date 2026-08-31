@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { effectiveConfigDiff } from '../src/lib/services/config-diff.ts';
 import { projectClientKernelFeatures } from '../src/lib/services/kernel-capabilities.ts';
+import {
+  createDefaultDnsConfig,
+  parseDnsConfig,
+  projectDnsSettings,
+  readDnsSettings,
+  recommendedDnsAddressFamily,
+  setDnsMode,
+} from '../src/lib/services/dns-config.ts';
 
 const service = readFileSync('src/lib/services/dns-config.ts', 'utf8');
 const panel = readFileSync('src/lib/components/settings/DnsSettingsPanel.svelte', 'utf8');
@@ -119,6 +127,87 @@ assert.equal(features.tunDnsSystemAuto.state, 'supported');
 assert.equal(features.dnsSplitDispatch.state, 'supported');
 assert.equal(features.dnsFakeIpDualStack.state, 'unsupported');
 assert.equal(features.dnsRealReverseMapping.state, 'supported');
+
+const fullFeatures = projectClientKernelFeatures({
+  available: true,
+  features: [
+    'tun_dns_system_auto',
+    'dns_split_dispatch',
+    'dns_fake_ip_dual_stack',
+    'dns_real_reverse_mapping',
+  ],
+  buildFeatures: [],
+  contracts: { capabilities: { minimumSupported: 1, current: 1 } },
+});
+
+assert.equal(recommendedDnsAddressFamily('available', 'unavailable'), 'ipv4_only');
+assert.equal(recommendedDnsAddressFamily('unavailable', 'available'), 'ipv6_only');
+assert.equal(recommendedDnsAddressFamily('available', 'available'), 'prefer_ipv4');
+assert.equal(recommendedDnsAddressFamily('unknown', 'unknown'), 'prefer_ipv4');
+
+const capableFakeIp = createDefaultDnsConfig('fake_ip', {
+  features: fullFeatures,
+  addressFamily: 'ipv4_only',
+});
+assert.deepEqual(capableFakeIp.answer, {
+  type: 'fake_ip',
+  cidr: '198.18.0.0/15',
+  ipv6_cidr: 'fd00::/96',
+  ttl_seconds: 86_400,
+  exclude_domains: [],
+});
+assert.deepEqual(capableFakeIp.reverse_mapping, {
+  max_entries: 1024,
+  max_domains_per_address: 8,
+  max_ttl_seconds: 300,
+});
+assert.equal(capableFakeIp.policy?.address_family, 'ipv4_only');
+
+const legacyFakeIp = createDefaultDnsConfig('fake_ip');
+assert.equal(legacyFakeIp.answer.type, 'fake_ip');
+assert.equal(legacyFakeIp.answer.ipv6_cidr, undefined);
+assert.equal(legacyFakeIp.reverse_mapping, undefined);
+
+const sourceWithCnameTarget = {
+  enabled: true,
+  dnsHijack: true,
+  config: {
+    ...capableFakeIp,
+    dispatch: [{
+      condition: { type: 'domain', values: ['open.bigmodel.cn'] },
+      server: 'system',
+    }],
+  },
+};
+const loaded = readDnsSettings(sourceWithCnameTarget, false);
+assert.equal(loaded.mode, 'fake_ip');
+assert.equal(loaded.dnsHijack, true);
+assert.deepEqual(loaded.dns.dispatch, sourceWithCnameTarget.config.dispatch);
+assert.deepEqual(projectDnsSettings(sourceWithCnameTarget, loaded), sourceWithCnameTarget);
+assert.deepEqual(parseDnsConfig(sourceWithCnameTarget.config), sourceWithCnameTarget.config);
+
+const realMode = setDnsMode(loaded, 'real', {
+  features: fullFeatures,
+  addressFamily: 'ipv4_only',
+});
+assert.equal(realMode.dns.answer.type, 'real');
+assert.equal(realMode.dnsHijack, true);
+assert.deepEqual(realMode.dns.dispatch, sourceWithCnameTarget.config.dispatch);
+
+const disabledMode = setDnsMode(loaded, 'disabled', { features: fullFeatures });
+const disabledProjection = projectDnsSettings(sourceWithCnameTarget, disabledMode);
+assert.equal(disabledProjection.enabled, false);
+assert.equal(disabledProjection.dnsHijack, false);
+assert.deepEqual(disabledProjection.config, sourceWithCnameTarget.config);
+
+const restoredFakeIp = setDnsMode(realMode, 'fake_ip', {
+  features: fullFeatures,
+  addressFamily: 'ipv6_only',
+});
+assert.equal(restoredFakeIp.dns.answer.type, 'fake_ip');
+assert.equal(restoredFakeIp.dns.answer.ipv6_cidr, 'fd00::/96');
+assert.equal(restoredFakeIp.dns.policy?.address_family, 'ipv6_only');
+assert.equal(restoredFakeIp.dnsHijack, true);
 
 const diff = effectiveConfigDiff(
   { runtime: { dns: { enabled: false } } },
