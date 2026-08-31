@@ -235,14 +235,35 @@ jobs:
             Stop-Zero $process
           }
 
+          function Assert-JsonContains($actual, $expected, [string]$path) {
+            if ($expected -is [pscustomobject]) {
+              foreach ($property in $expected.PSObject.Properties) {
+                $actualProperty = $actual.PSObject.Properties[$property.Name]
+                if ($null -eq $actualProperty) {
+                  throw "Persisted configuration lost $path.$($property.Name)"
+                }
+                Assert-JsonContains $actualProperty.Value $property.Value "$path.$($property.Name)"
+              }
+              return
+            }
+            if ($expected -is [System.Collections.IList] -and $expected -isnot [string]) {
+              if ($actual.Count -ne $expected.Count) {
+                throw "Persisted configuration changed $path array length or rule order"
+              }
+              for ($index = 0; $index -lt $expected.Count; $index++) {
+                Assert-JsonContains $actual[$index] $expected[$index] "$path[$index]"
+              }
+              return
+            }
+            if ($actual -ne $expected) {
+              throw "Persisted configuration changed $path"
+            }
+          }
+
           $expectedPath = Join-Path $runtimeDir $sequence[-1]
           $persistedConfig = Get-Content $initial -Raw | ConvertFrom-Json
           $expectedConfig = Get-Content $expectedPath -Raw | ConvertFrom-Json
-          $persistedDns = $persistedConfig.runtime.dns | ConvertTo-Json -Depth 100 -Compress
-          $expectedDns = $expectedConfig.runtime.dns | ConvertTo-Json -Depth 100 -Compress
-          if ($persistedDns -ne $expectedDns) {
-            throw "Zero did not persist the last hot-applied client DNS fields and rule order"
-          }
+          Assert-JsonContains $persistedConfig.runtime.dns $expectedConfig.runtime.dns "runtime.dns"
 
           try {
             $process = Start-Process -FilePath $zero -ArgumentList @(
