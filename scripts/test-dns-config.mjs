@@ -8,6 +8,7 @@ const panel = readFileSync('src/lib/components/settings/DnsSettingsPanel.svelte'
 const runtime = readFileSync('src-tauri/src/kernel/zero/runtime.rs', 'utf8');
 const parsing = readFileSync('src-tauri/src/kernel/zero/parsing.rs', 'utf8');
 const guiCore = readFileSync('src-tauri/src/commands/gui_core.rs', 'utf8');
+const dnsTransaction = readFileSync('src-tauri/src/commands/gui_core/dns_transaction.rs', 'utf8');
 const tunPanel = readFileSync('src/lib/components/settings/TunSettingsPanel.svelte', 'utf8');
 const recoveryActions = readFileSync('src/lib/components/core/ErrorRecoveryActions.svelte', 'utf8');
 const configService = readFileSync('src/lib/services/config.ts', 'utf8');
@@ -97,6 +98,10 @@ assert.match(tunPanel, /features\?\.tunDualStack\.state === 'unsupported'/);
 assert.match(recoveryActions, /guiExportDiagnostics/);
 assert.match(guiCore, /pub fn gui_inspect_dns_effective_config/);
 assert.match(guiCore, /compose_effective_config_with_dns/);
+assert.match(guiCore, /rollback_runtime_if_owned/);
+assert.match(dnsTransaction, /dnsRollback/);
+assert.match(dnsTransaction, /restored_last_known_good/);
+assert.match(dnsTransaction, /dnsStorageRollback/);
 assert.match(configService, /ruleSetSignal\.markChanged\(\)/);
 assert.match(runtime, /json!\(tun\.dns_hijack\)/);
 assert.match(parsing, /"original_ip", "originalIp"/);

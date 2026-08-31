@@ -31,6 +31,13 @@ use crate::services::{
 };
 use crate::state::app_state::AppState;
 
+mod dns_transaction;
+
+use dns_transaction::{
+    rollback_runtime_if_owned, rollback_scope_owned, validate_apply_scope,
+    with_rollback_status, with_storage_rollback_failure,
+};
+
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 const TUN_IPC_TIMEOUT_MS: u64 = 15_000;
@@ -448,6 +455,16 @@ pub async fn gui_apply_dns_config(
         .iter()
         .find(|profile| profile.active)
         .and_then(|profile| profile.content.clone());
+    let previous_effective = active_content
+        .as_ref()
+        .map(|content| {
+            crate::services::rule_overlay::compose_effective_config_with_dns(
+                state.inner(),
+                content,
+                &previous_app.dns,
+            )
+        })
+        .transpose()?;
     let next_effective = active_content
         .as_ref()
         .map(|content| {
@@ -459,54 +476,114 @@ pub async fn gui_apply_dns_config(
         })
         .transpose()?;
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let mut applied_identity = None;
     let result = if let Some(effective) = next_effective.clone().filter(|_| running) {
         let before = zero::queries::runtime_identity(Some(default_opts(state.inner()))).await?;
         let result = ZeroAdapter::new()
             .apply_config(effective, default_opts(state.inner()))
             .await?;
-        let applied = zero::queries::config_apply_identity(&result)?;
-        let current = zero::queries::runtime_identity(Some(default_opts(state.inner()))).await?;
-        validate_dns_apply_scope(&before, &applied, &current)?;
+        let applied = match zero::queries::config_apply_identity(&result) {
+            Ok(applied) => applied,
+            Err(error) => {
+                return Err(with_rollback_status(
+                    error,
+                    false,
+                    false,
+                    "apply_identity_unavailable",
+                    None,
+                ));
+            }
+        };
+        let current = match zero::queries::runtime_identity(Some(default_opts(state.inner()))).await {
+            Ok(current) => current,
+            Err(error) => {
+                let Some(previous) = previous_effective.as_ref() else {
+                    return Err(with_rollback_status(
+                        error,
+                        false,
+                        false,
+                        "previous_effective_unavailable",
+                        None,
+                    ));
+                };
+                return Err(rollback_runtime_if_owned(
+                    state.inner(),
+                    previous,
+                    &applied,
+                    error,
+                )
+                .await);
+            }
+        };
+        if let Err(error) = validate_apply_scope(&before, &applied, &current) {
+            if rollback_scope_owned(&applied, &current) {
+                let Some(previous) = previous_effective.as_ref() else {
+                    return Err(with_rollback_status(
+                        error,
+                        false,
+                        false,
+                        "previous_effective_unavailable",
+                        None,
+                    ));
+                };
+                return Err(rollback_runtime_if_owned(
+                    state.inner(),
+                    previous,
+                    &applied,
+                    error,
+                )
+                .await);
+            }
+            return Err(with_rollback_status(
+                error,
+                false,
+                false,
+                "current_scope_changed",
+                None,
+            ));
+        }
+        applied_identity = Some(applied);
         Some(result)
     } else {
         None
     };
 
     if let Err(error) = app_config::replace(state.inner(), next_app) {
-        if running {
-            if let Some(content) = active_content.as_ref() {
-                if let Ok(previous_effective) =
-                    crate::services::rule_overlay::compose_effective_config_with_dns(
-                        state.inner(),
-                        content,
-                        &previous_app.dns,
-                    )
-                {
-                    let _ = ZeroAdapter::new()
-                        .apply_config(previous_effective, default_opts(state.inner()))
-                        .await;
-                }
-            }
+        if let (Some(previous), Some(applied)) =
+            (previous_effective.as_ref(), applied_identity.as_ref())
+        {
+            return Err(rollback_runtime_if_owned(
+                state.inner(),
+                previous,
+                applied,
+                error,
+            )
+            .await);
         }
         return Err(error);
     }
     if active_content.is_some() {
         if let Err(error) = core_config::export_active(state.clone()) {
-            let _ = app_config::replace(state.inner(), previous_app.clone());
-            if let Some(content) = active_content.as_ref() {
-                if let Ok(previous_effective) =
-                    crate::services::rule_overlay::compose_effective_config_with_dns(
-                        state.inner(),
-                        content,
-                        &previous_app.dns,
-                    )
-                {
-                    if running {
-                        let _ = ZeroAdapter::new()
-                            .apply_config(previous_effective, default_opts(state.inner()))
-                            .await;
-                    }
-                }
+            let storage_rollback = match app_config::replace(state.inner(), previous_app.clone()) {
+                Ok(()) => core_config::export_active(state.clone())
+                    .err()
+                    .map(|error| ("active_config_export", error)),
+                Err(error) => Some(("app_config", error)),
+            };
+            let mut error = error;
+            if let (Some(previous), Some(applied)) =
+                (previous_effective.as_ref(), applied_identity.as_ref())
+            {
+                error = rollback_runtime_if_owned(
+                    state.inner(),
+                    previous,
+                    applied,
+                    error,
+                )
+                .await;
+            }
+            if let Some((stage, storage_rollback)) = storage_rollback {
+                error = with_storage_rollback_failure(error, stage, storage_rollback);
             }
             return Err(error);
         }
@@ -596,36 +673,6 @@ pub async fn gui_validate_dns_config(
     ZeroAdapter::new()
         .validate_config(effective, default_opts(state.inner()))
         .await
-}
-
-fn validate_dns_apply_scope(
-    before: &zero::queries::KernelRuntimeIdentity,
-    applied: &zero::queries::KernelRuntimeIdentity,
-    current: &zero::queries::KernelRuntimeIdentity,
-) -> AppResult<()> {
-    if before.core_instance_id == applied.core_instance_id && applied == current {
-        return Ok(());
-    }
-    Err(AppError {
-        code: "conflict",
-        message: "DNS configuration result belongs to a stale core instance or config revision"
-            .to_owned(),
-        details: Some(serde_json::json!({
-            "resource": "dns_config",
-            "before": {
-                "coreInstanceId": before.core_instance_id,
-                "configRevision": before.config_revision,
-            },
-            "applied": {
-                "coreInstanceId": applied.core_instance_id,
-                "configRevision": applied.config_revision,
-            },
-            "current": {
-                "coreInstanceId": current.core_instance_id,
-                "configRevision": current.config_revision,
-            },
-        })),
-    })
 }
 
 /// Inspect the exact base and client-composed configuration without applying it.
@@ -1186,10 +1233,8 @@ fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        redact_urls, sanitize_debug_record, sanitize_structured_record, validate_dns_apply_scope,
-        TUN_IPC_TIMEOUT_MS,
+        redact_urls, sanitize_debug_record, sanitize_structured_record, TUN_IPC_TIMEOUT_MS,
     };
-    use crate::kernel::zero::queries::KernelRuntimeIdentity;
 
     #[test]
     fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
@@ -1239,24 +1284,5 @@ mod tests {
     fn tun_ipc_timeout_allows_slow_platform_route_setup() {
         assert_eq!(TUN_IPC_TIMEOUT_MS, 15_000);
         assert!(TUN_IPC_TIMEOUT_MS > crate::config::DEFAULT_IPC_TIMEOUT_MS);
-    }
-
-    #[test]
-    fn dns_apply_result_must_match_the_same_live_core_scope() {
-        let identity = |core: &str, revision| KernelRuntimeIdentity {
-            core_instance_id: core.to_owned(),
-            config_revision: revision,
-        };
-        let before = identity("core-a", 6);
-        let applied = identity("core-a", 7);
-        assert!(validate_dns_apply_scope(&before, &applied, &applied).is_ok());
-
-        let restarted = identity("core-b", 1);
-        let error = validate_dns_apply_scope(&before, &restarted, &restarted)
-            .expect_err("a restarted core invalidates the pending result");
-        assert_eq!(error.code, "conflict");
-
-        let newer = identity("core-a", 8);
-        assert!(validate_dns_apply_scope(&before, &applied, &newer).is_err());
     }
 }
