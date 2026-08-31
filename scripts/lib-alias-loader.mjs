@@ -33,5 +33,16 @@ export async function resolve(specifier, context, nextResolve) {
     }
   }
 
+  // Svelte runes modules are imported without their final TypeScript suffix
+  // (for example `./toast.svelte` -> `./toast.svelte.ts`). Vite resolves this
+  // automatically, while the focused Node behavior tests need the equivalent
+  // deterministic resolution.
+  if (specifier.endsWith('.svelte') && context.parentURL) {
+    const candidate = fileURLToPath(new URL(`${specifier}.ts`, context.parentURL));
+    if (existsSync(candidate)) {
+      return { url: pathToFileURL(candidate).href, shortCircuit: true };
+    }
+  }
+
   return nextResolve(specifier, context);
 }
