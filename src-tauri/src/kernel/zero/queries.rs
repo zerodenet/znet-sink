@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult};
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
@@ -17,11 +17,42 @@ use crate::models::gui_core::{
 use super::parsing::{
     normalize_optional, parse_capabilities, parse_connection, parse_connection_list,
     parse_feature_runtime_status, parse_health, parse_policy_groups, parse_stats,
-    unwrap_call_result,
+    string_at, u64_at, unwrap_call_result,
 };
 
 const DEFAULT_CONNECTION_LIMIT: u32 = 100;
 const MAX_CONNECTION_LIMIT: u32 = 500;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelRuntimeIdentity {
+    pub core_instance_id: String,
+    pub config_revision: u64,
+}
+
+/// Read the authoritative identity of the currently reachable Zero runtime.
+pub async fn runtime_identity(
+    options: Option<CoreIpcOptions>,
+) -> AppResult<KernelRuntimeIdentity> {
+    let value = query_variant(json!({"runtime": {}}), "runtime", options).await?;
+    parse_runtime_identity(&value)
+}
+
+/// Extract the post-apply identity returned by `config.apply`.
+pub fn config_apply_identity(value: &Value) -> AppResult<KernelRuntimeIdentity> {
+    parse_runtime_identity(value.get("result").unwrap_or(value))
+}
+
+fn parse_runtime_identity(value: &Value) -> AppResult<KernelRuntimeIdentity> {
+    let core_instance_id = string_at(value, &["core_instance_id", "coreInstanceId"])
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::internal("core response omitted core_instance_id"))?;
+    let config_revision = u64_at(value, &["config_revision", "configRevision"])
+        .ok_or_else(|| AppError::internal("core response omitted config_revision"))?;
+    Ok(KernelRuntimeIdentity {
+        core_instance_id,
+        config_revision,
+    })
+}
 
 /// Query detailed kernel health (version, uptime, etc.).
 pub async fn core_health(options: Option<CoreIpcOptions>) -> AppResult<GuiCoreHealth> {

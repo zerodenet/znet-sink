@@ -460,11 +460,14 @@ pub async fn gui_apply_dns_config(
         .transpose()?;
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let result = if let Some(effective) = next_effective.clone().filter(|_| running) {
-        Some(
-            ZeroAdapter::new()
-                .apply_config(effective, default_opts(state.inner()))
-                .await?,
-        )
+        let before = zero::queries::runtime_identity(Some(default_opts(state.inner()))).await?;
+        let result = ZeroAdapter::new()
+            .apply_config(effective, default_opts(state.inner()))
+            .await?;
+        let applied = zero::queries::config_apply_identity(&result)?;
+        let current = zero::queries::runtime_identity(Some(default_opts(state.inner()))).await?;
+        validate_dns_apply_scope(&before, &applied, &current)?;
+        Some(result)
     } else {
         None
     };
@@ -593,6 +596,36 @@ pub async fn gui_validate_dns_config(
     ZeroAdapter::new()
         .validate_config(effective, default_opts(state.inner()))
         .await
+}
+
+fn validate_dns_apply_scope(
+    before: &zero::queries::KernelRuntimeIdentity,
+    applied: &zero::queries::KernelRuntimeIdentity,
+    current: &zero::queries::KernelRuntimeIdentity,
+) -> AppResult<()> {
+    if before.core_instance_id == applied.core_instance_id && applied == current {
+        return Ok(());
+    }
+    Err(AppError {
+        code: "conflict",
+        message: "DNS configuration result belongs to a stale core instance or config revision"
+            .to_owned(),
+        details: Some(serde_json::json!({
+            "resource": "dns_config",
+            "before": {
+                "coreInstanceId": before.core_instance_id,
+                "configRevision": before.config_revision,
+            },
+            "applied": {
+                "coreInstanceId": applied.core_instance_id,
+                "configRevision": applied.config_revision,
+            },
+            "current": {
+                "coreInstanceId": current.core_instance_id,
+                "configRevision": current.config_revision,
+            },
+        })),
+    })
 }
 
 /// Inspect the exact base and client-composed configuration without applying it.
@@ -1153,8 +1186,10 @@ fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        redact_urls, sanitize_debug_record, sanitize_structured_record, TUN_IPC_TIMEOUT_MS,
+        redact_urls, sanitize_debug_record, sanitize_structured_record, validate_dns_apply_scope,
+        TUN_IPC_TIMEOUT_MS,
     };
+    use crate::kernel::zero::queries::KernelRuntimeIdentity;
 
     #[test]
     fn diagnostic_log_sanitizer_removes_urls_and_credentials() {
@@ -1204,5 +1239,24 @@ mod tests {
     fn tun_ipc_timeout_allows_slow_platform_route_setup() {
         assert_eq!(TUN_IPC_TIMEOUT_MS, 15_000);
         assert!(TUN_IPC_TIMEOUT_MS > crate::config::DEFAULT_IPC_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn dns_apply_result_must_match_the_same_live_core_scope() {
+        let identity = |core: &str, revision| KernelRuntimeIdentity {
+            core_instance_id: core.to_owned(),
+            config_revision: revision,
+        };
+        let before = identity("core-a", 6);
+        let applied = identity("core-a", 7);
+        assert!(validate_dns_apply_scope(&before, &applied, &applied).is_ok());
+
+        let restarted = identity("core-b", 1);
+        let error = validate_dns_apply_scope(&before, &restarted, &restarted)
+            .expect_err("a restarted core invalidates the pending result");
+        assert_eq!(error.code, "conflict");
+
+        let newer = identity("core-a", 8);
+        assert!(validate_dns_apply_scope(&before, &applied, &newer).is_err());
     }
 }
