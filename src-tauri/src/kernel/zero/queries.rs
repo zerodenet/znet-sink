@@ -16,8 +16,8 @@ use crate::models::gui_core::{
 
 use super::parsing::{
     normalize_optional, parse_capabilities, parse_connection, parse_connection_list,
-    parse_feature_runtime_status, parse_health, parse_policy_groups, parse_stats,
-    string_at, u64_at, unwrap_call_result,
+    parse_feature_runtime_status, parse_health, parse_policy_groups, parse_stats, string_at,
+    u64_at, unwrap_call_result,
 };
 
 const DEFAULT_CONNECTION_LIMIT: u32 = 100;
@@ -30,9 +30,7 @@ pub struct KernelRuntimeIdentity {
 }
 
 /// Read the authoritative identity of the currently reachable Zero runtime.
-pub async fn runtime_identity(
-    options: Option<CoreIpcOptions>,
-) -> AppResult<KernelRuntimeIdentity> {
+pub async fn runtime_identity(options: Option<CoreIpcOptions>) -> AppResult<KernelRuntimeIdentity> {
     let value = query_variant(json!({"runtime": {}}), "runtime", options).await?;
     parse_runtime_identity(&value)
 }
