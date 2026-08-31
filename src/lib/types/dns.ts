@@ -9,6 +9,7 @@ export interface DnsServerConfig {
   path?: string;
   bootstrap?: string[];
   server_name?: string;
+  detour?: string;
   [key: string]: unknown;
 }
 
@@ -25,6 +26,14 @@ export interface DnsCacheConfig {
 }
 
 export interface DnsPolicyConfig {
+  timeout_ms?: number;
+  server_timeout_ms?: Record<string, number>;
+  fallback_servers?: string[];
+  node_server?: string;
+  node_fallback_servers?: string[];
+  direct_server?: string;
+  direct_fallback_servers?: string[];
+  reject_address_cidrs?: string[];
   address_family?: DnsAddressFamilyPolicy;
   [key: string]: unknown;
 }

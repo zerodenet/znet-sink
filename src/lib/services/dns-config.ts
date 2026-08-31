@@ -34,6 +34,7 @@ export type DnsKernelCompatibility = {
 
 export interface DnsValidationContext {
   ruleSetTags?: ReadonlySet<string>;
+  routeTargetTags?: ReadonlySet<string>;
   features?: ClientKernelFeatures;
 }
 
@@ -214,6 +215,20 @@ export function renameDnsServer(
     ...rule,
     server: rule.server === oldName ? name : rule.server,
   }));
+  if (next.policy) {
+    const renameReference = (value: string | undefined) => value === oldName ? name : value;
+    const renameReferences = (values: string[] | undefined) => values?.map((value) => value === oldName ? name : value);
+    next.policy.node_server = renameReference(next.policy.node_server);
+    next.policy.direct_server = renameReference(next.policy.direct_server);
+    next.policy.fallback_servers = renameReferences(next.policy.fallback_servers);
+    next.policy.node_fallback_servers = renameReferences(next.policy.node_fallback_servers);
+    next.policy.direct_fallback_servers = renameReferences(next.policy.direct_fallback_servers);
+    if (next.policy.server_timeout_ms && Object.hasOwn(next.policy.server_timeout_ms, oldName)) {
+      const timeout = next.policy.server_timeout_ms[oldName];
+      delete next.policy.server_timeout_ms[oldName];
+      next.policy.server_timeout_ms[name] = timeout;
+    }
+  }
   return next;
 }
 
@@ -259,6 +274,91 @@ export function validateDnsDraft(
           field: `servers.${name}.bootstrap`,
           message: '域名形式的端点建议至少提供一个 bootstrap IP；最终以内核校验为准',
           severity: 'warning',
+        });
+      }
+      const detour = server.detour?.trim();
+      if (detour && server.type === 'doq') {
+        issues.push({
+          field: `servers.${name}.detour`,
+          message: 'DoQ 暂不支持通过出站转发，请移除 detour 或改用 DoH/DoT',
+          severity: 'error',
+        });
+      } else if (detour && context.routeTargetTags && !context.routeTargetTags.has(detour)) {
+        issues.push({
+          field: `servers.${name}.detour`,
+          message: `出站 ${detour} 已不存在或未进入活动配置`,
+          severity: 'error',
+        });
+      }
+    }
+  }
+  const policy = draft.dns.policy;
+  if (policy) {
+    const timeoutInRange = (value: number | undefined) => value === undefined
+      || Number.isInteger(value) && value >= 1 && value <= 120_000;
+    if (!timeoutInRange(policy.timeout_ms)) {
+      issues.push({ field: 'policy.timeout_ms', message: '查询超时必须是 1-120000 毫秒的整数', severity: 'error' });
+    }
+    for (const [name, timeout] of Object.entries(policy.server_timeout_ms ?? {})) {
+      if (!Object.hasOwn(draft.dns.servers, name)) {
+        issues.push({ field: `policy.server_timeout_ms.${name}`, message: `服务器 ${name} 不存在`, severity: 'error' });
+      } else if (!timeoutInRange(timeout)) {
+        issues.push({ field: `policy.server_timeout_ms.${name}`, message: '查询超时必须是 1-120000 毫秒的整数', severity: 'error' });
+      }
+    }
+
+    const validateFallbacks = (field: string, values: string[] | undefined, primary?: string) => {
+      const seen = new Set<string>();
+      for (const name of values ?? []) {
+        if (!Object.hasOwn(draft.dns.servers, name)) {
+          issues.push({ field, message: `服务器 ${name} 不存在`, severity: 'error' });
+        } else if (seen.has(name)) {
+          issues.push({ field, message: `回退链重复包含服务器 ${name}`, severity: 'error' });
+        } else if (primary === name) {
+          issues.push({ field, message: `回退链不能重复主服务器 ${name}`, severity: 'error' });
+        }
+        seen.add(name);
+      }
+    };
+    const validatePrimary = (field: string, value: string | undefined) => {
+      if (value && !Object.hasOwn(draft.dns.servers, value)) {
+        issues.push({ field, message: `服务器 ${value} 不存在`, severity: 'error' });
+      }
+    };
+    validateFallbacks('policy.fallback_servers', policy.fallback_servers);
+    validatePrimary('policy.node_server', policy.node_server);
+    validatePrimary('policy.direct_server', policy.direct_server);
+    validateFallbacks('policy.node_fallback_servers', policy.node_fallback_servers, policy.node_server);
+    validateFallbacks('policy.direct_fallback_servers', policy.direct_fallback_servers, policy.direct_server);
+    if ((policy.node_fallback_servers?.length ?? 0) > 0 && !policy.node_server) {
+      issues.push({ field: 'policy.node_fallback_servers', message: '配置节点回退链前必须选择节点解析服务器', severity: 'error' });
+    }
+    if ((policy.direct_fallback_servers?.length ?? 0) > 0 && !policy.direct_server) {
+      issues.push({ field: 'policy.direct_fallback_servers', message: '配置直连回退链前必须选择直连解析服务器', severity: 'error' });
+    }
+    for (const cidr of policy.reject_address_cidrs ?? []) {
+      if (!cidr.includes('/')) {
+        issues.push({ field: 'policy.reject_address_cidrs', message: `${cidr} 不是有效的 CIDR`, severity: 'error' });
+      }
+    }
+  }
+  const detouredServers = Object.entries(draft.dns.servers)
+    .filter(([, server]) => Boolean(server.detour?.trim()));
+  if (detouredServers.length > 0) {
+    const nodeServer = policy?.node_server;
+    if (!nodeServer) {
+      issues.push({
+        field: 'policy.node_server',
+        message: '存在通过出站转发的 DNS 上游，必须选择一个直连的节点解析服务器以避免递归',
+        severity: 'error',
+      });
+    }
+    for (const name of [nodeServer, ...(policy?.node_fallback_servers ?? [])].filter(Boolean) as string[]) {
+      if (draft.dns.servers[name]?.detour) {
+        issues.push({
+          field: 'policy.node_server',
+          message: `节点解析服务器 ${name} 不能再通过 detour 转发`,
+          severity: 'error',
         });
       }
     }

@@ -27,6 +27,22 @@ pub struct ClientDnsConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientDnsPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_timeout_ms: Option<BTreeMap<String, u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_servers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_fallback_servers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_fallback_servers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_address_cidrs: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address_family: Option<ClientDnsAddressFamilyPolicy>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -57,6 +73,8 @@ pub enum ClientDnsServer {
         port: u16,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         bootstrap: Vec<IpAddr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detour: Option<String>,
         #[serde(flatten)]
         extra: BTreeMap<String, Value>,
     },
@@ -71,6 +89,8 @@ pub enum ClientDnsServer {
         bootstrap: Vec<IpAddr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detour: Option<String>,
         #[serde(flatten)]
         extra: BTreeMap<String, Value>,
     },
@@ -83,6 +103,8 @@ pub enum ClientDnsServer {
         bootstrap: Vec<IpAddr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detour: Option<String>,
         #[serde(flatten)]
         extra: BTreeMap<String, Value>,
     },
@@ -95,6 +117,8 @@ pub enum ClientDnsServer {
         bootstrap: Vec<IpAddr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detour: Option<String>,
         #[serde(flatten)]
         extra: BTreeMap<String, Value>,
     },
@@ -306,6 +330,7 @@ mod tests {
                 "global": {
                     "type": "doh", "host": "cloudflare-dns.com", "port": 443,
                     "path": "/dns-query", "bootstrap": ["1.1.1.1"],
+                    "detour": "proxy",
                     "future_transport_option": true
                 },
                 "system": { "type": "system" }
@@ -317,7 +342,18 @@ mod tests {
             ],
             "cache": { "max_entries": 1024, "future_cache_option": "keep" },
             "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 86400 },
-            "policy": { "address_family": "prefer_ipv6", "future_policy_option": true },
+            "policy": {
+                "timeout_ms": 4000,
+                "server_timeout_ms": { "global": 6000 },
+                "fallback_servers": ["system"],
+                "node_server": "system",
+                "node_fallback_servers": [],
+                "direct_server": "global",
+                "direct_fallback_servers": ["system"],
+                "reject_address_cidrs": ["0.0.0.0/32"],
+                "address_family": "prefer_ipv6",
+                "future_policy_option": true
+            },
             "future_dns_option": { "keep": true }
         });
         let model: ClientDnsConfig = serde_json::from_value(source.clone()).unwrap();

@@ -26,6 +26,13 @@ assert.match(service, /ipv6_cidr: previous\?\.ipv6_cidr/);
 assert.match(service, /export function getDnsAddressFamilyPolicy\(dns: DnsConfig\)/);
 assert.match(service, /export function setDnsAddressFamilyPolicy\(/);
 assert.match(service, /field: 'policy\.address_family'/);
+assert.match(service, /routeTargetTags\?: ReadonlySet<string>/);
+assert.match(service, /policy\.node_server/);
+assert.match(service, /policy\.direct_server/);
+assert.match(service, /policy\.fallback_servers/);
+assert.match(service, /policy\.server_timeout_ms/);
+assert.match(service, /节点解析服务器 .* 不能再通过 detour 转发/);
+assert.match(service, /DoQ 暂不支持通过出站转发/);
 assert.match(service, /context\.ruleSetTags && !context\.ruleSetTags\.has\(tag\)/);
 assert.match(service, /tunDnsSystemAuto\.state === 'unsupported'/);
 assert.match(service, /dnsFakeIpDualStack\.state === 'unsupported'/);
@@ -39,6 +46,13 @@ assert.match(panel, /dns_ech_hostname_recovery_unavailable/);
 assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
 assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
 assert.match(panel, /aria-label="DNS 应答地址族策略"/);
+assert.match(panel, /aria-label="DNS 上游经由出站"/);
+assert.match(panel, /aria-label="节点解析服务器"/);
+assert.match(panel, /aria-label="直连解析服务器"/);
+assert.match(panel, /通用回退链/);
+assert.match(panel, /单独超时/);
+assert.match(panel, /getConfigProxyNodes/);
+assert.match(panel, /getConfigPolicyGroups/);
 for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
   assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
 }
