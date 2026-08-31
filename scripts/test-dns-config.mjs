@@ -33,7 +33,7 @@ assert.match(service, /dnsFakeIpDualStack\.state === 'unsupported'/);
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
 }
-assert.match(panel, /First-match-wins/);
+assert.match(panel, /按列表顺序优先匹配/);
 assert.match(panel, /dns_encrypted_client_queries_not_intercepted/);
 assert.match(panel, /dns_ech_hostname_recovery_unavailable/);
 assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
@@ -43,7 +43,7 @@ for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
   assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
 }
 assert.match(panel, /<Dialog\.Title>\{editingServerName \? '编辑 DNS 服务器' : '新增 DNS 服务器'\}<\/Dialog\.Title>/);
-assert.match(panel, /<Dialog\.Title>编辑 Zero 原生 DNS JSON<\/Dialog\.Title>/);
+assert.match(panel, /<Dialog\.Title>编辑内核原生 DNS JSON<\/Dialog\.Title>/);
 assert.match(panel, /应用到表单/);
 assert.doesNotMatch(panel, /structuredClone/);
 assert.match(panel, /function cloneDnsValue<T>\(value: T\): T/);

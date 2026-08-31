@@ -174,7 +174,7 @@
   <!-- DNS lookup -->
   <section class="diag-tool">
     <div class="diag-head">
-      <span class="diag-title">DNS 查询</span>
+      <span class="diag-title">域名查询</span>
       <span class="diag-hint">解析域名记录（A / AAAA / CNAME / MX …）</span>
     </div>
     <div class="diag-form">
@@ -244,7 +244,7 @@
   <section class="diag-tool">
     <div class="diag-head-row">
       <div class="diag-head">
-        <span class="diag-title">Fake-IP 与 DNS 缓存</span>
+        <span class="diag-title">解析缓存</span>
         <span class="diag-hint">查询映射与运行计数，也可删除指定映射或清空全部缓存</span>
       </div>
       <Button

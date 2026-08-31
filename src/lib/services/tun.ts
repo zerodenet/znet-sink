@@ -348,7 +348,7 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
       const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
       throw {
         code: 'tun_profile_runtime_inactive',
-        message: `${name} 已要求启用 TUN，但 Zero 当前未运行该 TUN。请检查内核运行状态或配置错误。`,
+        message: `${name} 已要求启用 TUN，但当前内核未运行该 TUN。请检查内核运行状态或配置错误。`,
       };
     }
     return enriched;

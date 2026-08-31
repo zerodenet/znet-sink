@@ -9,12 +9,14 @@
   let {
     connection,
     canTerminate = false,
+    terminateUnavailableReason,
     terminating = false,
     onclose,
     onrequestterminate,
   } = $props<{
     connection: DisplayConnection | null;
     canTerminate?: boolean;
+    terminateUnavailableReason?: string;
     terminating?: boolean;
     onclose: () => void;
     onrequestterminate?: (connection: DisplayConnection) => void;
@@ -494,13 +496,17 @@
         {/if}
       </div>
 
-      {#if connection.origin === 'active' && canTerminate}
+      {#if connection.origin === 'active'}
         <footer class="dialog-footer">
-          <div><strong>终止活动连接</strong><span>将请求内核立即取消该连接，应用可能会自动重新建立。</span></div>
+          <div>
+            <strong>{canTerminate ? '终止活动连接' : '无法终止连接'}</strong>
+            <span>{canTerminate ? '将请求内核立即取消该连接，应用可能会自动重新建立。' : (terminateUnavailableReason ?? '当前内核未提供连接终止能力。')}</span>
+          </div>
           <Button
             variant="destructive"
             size="sm"
-            disabled={terminating}
+            disabled={terminating || !canTerminate}
+            title={canTerminate ? '终止连接' : terminateUnavailableReason}
             onclick={() => onrequestterminate?.(connection)}
           >
             <AlertTriangle data-icon="inline-start" class="size-3.5" />

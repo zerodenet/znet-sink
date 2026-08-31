@@ -95,9 +95,9 @@
     {:else if step === 1}
       <div transition:fly={{ y: 10, duration: 220, easing: cubicOut }} class="step-content">
         <div class="step-number">02</div>
-        <h3 class="step-title">安装 Zero 内核</h3>
+        <h3 class="step-title">安装内核</h3>
         <p class="step-desc">
-          GUI 负责管理，Zero 内核负责实际代理。进入应用后，可从概览页的「内核版本」卡片打开版本管理并安装；也可以在「设置 → 内核」选择已有可执行文件。
+          GUI 负责管理，内核负责实际代理。进入应用后，可从概览页的「内核版本」卡片打开版本管理并安装；也可以在「设置 → 内核」选择已有可执行文件。
         </p>
         <p class="step-desc subtle">
           稳定版适合日常使用；beta 和 nightly 版本可在版本管理中按需选择。

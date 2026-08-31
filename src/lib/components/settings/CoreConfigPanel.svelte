@@ -293,7 +293,7 @@
   <div class="header">
     <div class="heading">
       <div class="title-row">
-        <div class="title">内核配置</div>
+        <div class="title">版本管理</div>
         {#if currentVersion}
           <Badge variant="secondary">v{currentVersion}</Badge>
         {:else if hasExecutable}
@@ -303,7 +303,7 @@
         {/if}
       </div>
       <div class="desc">
-        管理自研内核版本，支持 stable / beta / nightly 渠道。
+        管理当前内核版本与可执行文件，支持 stable / beta / nightly 渠道。
       </div>
     </div>
 
@@ -405,7 +405,7 @@
           <div class="probe-urls-text">
             <span class="probe-urls-title">网络检测地址</span>
             <span class="probe-urls-desc">
-              每行一个 `http` 或 `https` 地址。GUI 不会指定 Zero 代理，而是按应用进程继承的网络环境依次请求；存在代理环境变量时走代理，否则直连。
+              每行一个 `http` 或 `https` 地址。GUI 不会指定内核代理，而是按应用进程继承的网络环境依次请求；存在代理环境变量时走代理，否则直连。
             </span>
           </div>
           <Button

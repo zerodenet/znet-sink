@@ -154,14 +154,14 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">网卡名称</span>
-        <span class="label-desc">传递给 Zero 的 TUN interface name；留空时由 Zero 选择默认名称。</span>
+        <span class="label-desc">传递给当前内核的 TUN interface name；留空时由内核选择默认名称。</span>
       </div>
       <div class="field-control">
         <Input
           bind:value={name}
           oninput={markDirty}
           disabled={locked}
-          placeholder="由 Zero 决定"
+          placeholder="由内核决定"
           spellcheck="false"
           aria-label="TUN 网卡名称"
         />
@@ -171,7 +171,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">入站标签</span>
-        <span class="label-desc">作为 TUN 流量进入 Zero 后使用的 inbound tag。</span>
+        <span class="label-desc">作为 TUN 流量进入当前内核后使用的 inbound tag。</span>
       </div>
       <div class="field-control">
         <Input
@@ -216,7 +216,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">第二地址</span>
-        <span class="label-desc">双栈时可指定另一地址族的 CIDR；关闭双栈时保留该值但不会传给 Zero。</span>
+        <span class="label-desc">双栈时可指定另一地址族的 CIDR；关闭双栈时保留该值但不会传给内核。</span>
       </div>
       <div class="field-control">
         <Input
@@ -234,7 +234,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">MTU</span>
-        <span class="label-desc">传递给 Zero 的 TUN MTU，允许范围为 576–65535。</span>
+        <span class="label-desc">传递给当前内核的 TUN MTU，允许范围为 576–65535。</span>
       </div>
       <div class="field-control narrow">
         <Input
@@ -264,7 +264,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">双栈接管</span>
-        <span class="label-desc">让 Zero TUN 同时准备 IPv4 与 IPv6 接口地址和路由。</span>
+        <span class="label-desc">让当前内核同时准备 IPv4 与 IPv6 的 TUN 接口地址和路由。</span>
       </div>
       <Switch
         checked={dualStack}

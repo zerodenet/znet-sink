@@ -105,6 +105,14 @@ const segmentedConsumers = [
   'src/lib/components/core/LogPanel.svelte',
 ].map(read);
 assert.ok(
+  settingsPanel.includes("{ id: 'core',    label: '版本管理' }")
+    && settingsPanel.includes("{ id: 'dns',     label: '域名解析' }")
+    && settingsPanel.includes("{ id: 'tun',     label: '流量接管' }")
+    && settingsPanel.includes("core: '内核'")
+    && !settingsPanel.includes("'Zero 内核'"),
+  'settings navigation should use concise kernel-neutral names',
+);
+assert.ok(
   !baseTabsList.includes('var(--segment-') && !baseTabsTrigger.includes('var(--segment-'),
   'upstream shadcn Tabs resources should remain unmodified by project styling',
 );

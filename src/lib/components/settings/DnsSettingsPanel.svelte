@@ -99,7 +99,7 @@
   const modeDescription = $derived(draft
     ? ({
         disabled: '暂不注入 DNS 配置，保留当前编辑内容供下次启用。',
-        real: '由 Zero 返回真实 DNS 解析结果，可按需启用 TUN DNS 劫持。',
+        real: '由当前内核返回真实 DNS 解析结果，可按需启用 TUN DNS 劫持。',
         fake_ip: '使用合成地址并恢复原始域名，同时联动 TUN DNS 劫持。',
       }[draft.mode] ?? '')
     : '');
@@ -619,8 +619,8 @@
 
 <div class="panel-head">
   <div>
-    <h2>内核 DNS 与 Fake-IP</h2>
-    <p>客户端覆盖，不写回代理配置；应用时注入 Zero 有效配置并由内核校验</p>
+    <h2>域名解析</h2>
+    <p>客户端覆盖，不写回代理配置；应用时注入最终有效配置并由当前内核校验</p>
   </div>
   <div class="head-actions">
     <Button variant="outline" size="sm" onclick={resetToAutomaticDefault} disabled={loading || saving || !draft}>
@@ -647,14 +647,14 @@
     <ErrorRecoveryActions code={errorCode} context="dns" onretry={load} />
   </div>
 {:else if draft}
-  <p class="workflow-hint">配置流程：选择基础模式 → 编辑 DNS、Fake-IP 和分流策略 → 点击底部“保存并应用”。高级用户可从右上角打开 Zero 原生 JSON。</p>
+  <p class="workflow-hint">配置流程：选择基础模式 → 编辑 DNS、Fake-IP 和分流策略 → 点击底部“保存并应用”。高级用户可从右上角打开内核原生 JSON。</p>
 
   <div class="config-lineage" aria-label="有效配置来源">
     <div><strong>基础配置</strong><span title={activeProfileName}>{activeProfileName}</span></div>
     <span class="lineage-arrow">→</span>
     <div><strong>客户端覆盖</strong><span>全局 DNS · 公共规则</span></div>
     <span class="lineage-arrow">→</span>
-    <div><strong>最终有效配置</strong><span>{ruleSetOptions.length} 个规则集 · 交给 Zero 校验</span></div>
+    <div><strong>最终有效配置</strong><span>{ruleSetOptions.length} 个规则集 · 交给当前内核校验</span></div>
   </div>
 
   {#if compatibility.features}
@@ -668,7 +668,7 @@
 
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
     <div class="issues warning" role="status">
-      <div>当前内核未声明 DNS/Fake-IP 能力。配置仍会保存到客户端，升级内核后重新点击“保存并应用”即可生效。</div>
+      <div>当前内核未声明 DNS 与 Fake-IP 能力。配置仍会保存到客户端，升级内核后重新点击“保存并应用”即可生效。</div>
       {#if compatibility.engineVersion || compatibility.apiVersion}<small>内核 {compatibility.engineVersion ?? '未知版本'} · API {compatibility.apiVersion ?? '未知'}</small>{/if}
     </div>
   {:else if compatibility.status === 'unknown' && draft.mode === 'fake_ip'}
@@ -812,7 +812,7 @@
       {/if}
 
       <section class="section">
-        <div class="section-head"><div><div class="section-title">有序 DNS 分流</div><p>First-match-wins。条件直接使用 Zero 共享规则模型，客户端不另做匹配。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
+        <div class="section-head"><div><div class="section-title">解析分流</div><p>按列表顺序优先匹配。条件直接使用内核共享规则模型，客户端不另做匹配。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
         <div class="dispatch-list">
           {#each draft.dns.dispatch as rule, index (index)}
             <article class="dispatch-card">
@@ -884,7 +884,7 @@
         </div>
 
         {#if serverDraft.type === 'system'}
-          <div class="system-note">system 使用操作系统解析器，不需要网络端点。严格 TUN/DNS 劫持场景是否允许由 Zero 校验。</div>
+          <div class="system-note">system 使用操作系统解析器，不需要网络端点。严格 TUN/DNS 劫持场景是否允许由当前内核校验。</div>
         {:else}
           <div class="dialog-field-grid">
             <label>
@@ -930,7 +930,7 @@
                 oninput={(event) => { serverDraft = { ...serverDraft, bootstrap: event.currentTarget.value.split(',').map((value) => value.trim()).filter(Boolean) }; }}
                 placeholder="1.1.1.1, 1.0.0.1"
               />
-              <small>Host 使用域名时建议提供 bootstrap，最终仍由 Zero 校验。</small>
+              <small>Host 使用域名时建议提供 bootstrap，最终仍由当前内核校验。</small>
             </label>
           </div>
         {/if}
@@ -956,7 +956,7 @@
     >
       <Dialog.Header>
         <Dialog.Title>{editingDispatchIndex === null ? '新增 DNS 分流' : '编辑 DNS 分流'}</Dialog.Title>
-        <Dialog.Description>规则按列表顺序匹配；条件使用 Zero 共享规则模型的 JSON 对象。</Dialog.Description>
+        <Dialog.Description>规则按列表顺序匹配；条件使用内核共享规则模型的 JSON 对象。</Dialog.Description>
       </Dialog.Header>
       <Dialog.Body class="dispatch-dialog-body">
         <div class="dispatch-editor-tabs" role="tablist" aria-label="DNS 分流条件编辑方式">
@@ -1054,7 +1054,7 @@
   <Dialog.Content class="sm:max-w-[1000px]">
     <Dialog.Header>
       <Dialog.Title>最终有效配置解释</Dialog.Title>
-      <Dialog.Description>只读预览，不会保存或应用；用于核对基础配置经过客户端覆盖后实际交给 Zero 的内容。</Dialog.Description>
+      <Dialog.Description>只读预览，不会保存或应用；用于核对基础配置经过客户端覆盖后实际交给当前内核的内容。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="effective-dialog-body">
       {#if effectiveLoading}
@@ -1102,11 +1102,11 @@
 <Dialog.Root bind:open={jsonDialogOpen}>
   <Dialog.Content class="sm:max-w-[760px]">
     <Dialog.Header>
-      <Dialog.Title>编辑 Zero 原生 DNS JSON</Dialog.Title>
+      <Dialog.Title>编辑内核原生 DNS JSON</Dialog.Title>
       <Dialog.Description>应用后会更新表单草稿；仍需在主页面点击“保存并应用”才会提交到内核。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="json-dialog-body">
-      <textarea class="native-json" bind:value={nativeJson} spellcheck="false" aria-label="Zero 原生 DNS JSON 配置"></textarea>
+      <textarea class="native-json" bind:value={nativeJson} spellcheck="false" aria-label="内核原生 DNS JSON 配置"></textarea>
       {#if nativeError}<div class="dialog-error" role="alert">{nativeError}</div>{/if}
     </Dialog.Body>
     <Dialog.Footer>
