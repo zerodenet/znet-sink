@@ -123,7 +123,7 @@ jobs:
           "ZERO_CONTRACT_SHA=$(git -C zero-core rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build current Zero
-        run: cargo build --manifest-path zero-core/Cargo.toml --release --locked -j 2
+        run: cargo build --manifest-path zero-core/Cargo.toml --release -j 2
 
       - name: Validate every client DNS mode against Zero
         shell: pwsh
