@@ -143,8 +143,10 @@ jobs:
           }
           foreach ($file in $manifest.invalid) {
             $path = Join-Path $env:DNS_CONTRACT_DIR $file
-            & $zero validate $path
-            if ($LASTEXITCODE -eq 0) {
+            $validation = Start-Process -FilePath $zero -ArgumentList @(
+              "validate", $path
+            ) -Wait -PassThru -NoNewWindow
+            if ($validation.ExitCode -eq 0) {
               throw "Zero $env:ZERO_CONTRACT_SHA accepted invalid client fixture $file"
             }
           }
