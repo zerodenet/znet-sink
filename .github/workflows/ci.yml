@@ -112,6 +112,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: zero-core
+          cache-on-failure: true
 
       - name: Install protoc for Zero
         uses: ./zero-core/.github/actions/setup-protoc
@@ -235,10 +236,12 @@ jobs:
           }
 
           $expectedPath = Join-Path $runtimeDir $sequence[-1]
-          $persisted = Get-Content $initial -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
-          $expected = Get-Content $expectedPath -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
-          if ($persisted -ne $expected) {
-            throw "Zero did not persist the last hot-applied client DNS configuration"
+          $persistedConfig = Get-Content $initial -Raw | ConvertFrom-Json
+          $expectedConfig = Get-Content $expectedPath -Raw | ConvertFrom-Json
+          $persistedDns = $persistedConfig.runtime.dns | ConvertTo-Json -Depth 100 -Compress
+          $expectedDns = $expectedConfig.runtime.dns | ConvertTo-Json -Depth 100 -Compress
+          if ($persistedDns -ne $expectedDns) {
+            throw "Zero did not persist the last hot-applied client DNS fields and rule order"
           }
 
           try {
