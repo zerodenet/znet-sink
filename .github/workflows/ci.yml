@@ -156,7 +156,42 @@ jobs:
         run: |
           $zero = Join-Path $PWD "zero-core/target/release/zero.exe"
           $pipe = "\\.\pipe\znet-zero-dns-contract-$PID"
-          $initial = Join-Path $env:DNS_CONTRACT_DIR "disabled-no-tun.json"
+          $runtimeDir = Join-Path $env:RUNNER_TEMP "znet-zero-dns-runtime"
+          New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+
+          $portProbe = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback,
+            0
+          )
+          $portProbe.Start()
+          $listenPort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+          $portProbe.Stop()
+
+          $fixtureNames = @(
+            "disabled-no-tun.json",
+            "real-system-no-tun.json",
+            "real-doh-no-tun.json",
+            "real-doq-no-tun.json",
+            "fake-ip-no-tun.json"
+          )
+          foreach ($file in $fixtureNames) {
+            $config = Get-Content (Join-Path $env:DNS_CONTRACT_DIR $file) -Raw | ConvertFrom-Json
+            $config.inbounds = @(
+              [pscustomobject]@{
+                tag = "contract-loopback"
+                listen = [pscustomobject]@{
+                  address = "127.0.0.1"
+                  port = $listenPort
+                }
+                protocol = [pscustomobject]@{ type = "mixed" }
+              }
+            )
+            $config | ConvertTo-Json -Depth 100 | Set-Content (
+              Join-Path $runtimeDir $file
+            ) -Encoding utf8
+          }
+
+          $initial = Join-Path $runtimeDir "disabled-no-tun.json"
           $sequence = @(
             "real-system-no-tun.json",
             "real-doh-no-tun.json",
@@ -189,7 +224,7 @@ jobs:
             ) -PassThru -WindowStyle Hidden
             Wait-ZeroReady $zero $pipe
             foreach ($file in $sequence) {
-              $candidate = Join-Path $env:DNS_CONTRACT_DIR $file
+              $candidate = Join-Path $runtimeDir $file
               & $zero reload $candidate --socket $pipe
               if ($LASTEXITCODE -ne 0) {
                 throw "Zero $env:ZERO_CONTRACT_SHA rejected hot apply for $file"
@@ -199,7 +234,7 @@ jobs:
             Stop-Zero $process
           }
 
-          $expectedPath = Join-Path $env:DNS_CONTRACT_DIR $sequence[-1]
+          $expectedPath = Join-Path $runtimeDir $sequence[-1]
           $persisted = Get-Content $initial -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
           $expected = Get-Content $expectedPath -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
           if ($persisted -ne $expected) {
