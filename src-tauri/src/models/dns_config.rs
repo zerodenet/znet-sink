@@ -210,6 +210,8 @@ pub enum ClientDnsAnswer {
     FakeIp {
         #[serde(default = "default_fake_ip_cidr")]
         cidr: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ipv6_cidr: Option<String>,
         #[serde(default = "default_fake_ip_ttl")]
         ttl_seconds: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +259,7 @@ impl ClientDnsConfig {
         }
         if let ClientDnsAnswer::FakeIp {
             cidr,
+            ipv6_cidr,
             ttl_seconds,
             max_entries,
             ..
@@ -265,6 +268,14 @@ impl ClientDnsConfig {
             if !cidr.contains('/') {
                 return Err(AppError::invalid_argument(
                     "Fake-IP CIDR must use CIDR notation",
+                ));
+            }
+            if ipv6_cidr
+                .as_ref()
+                .is_some_and(|cidr| !cidr.contains('/') || !cidr.contains(':'))
+            {
+                return Err(AppError::invalid_argument(
+                    "Fake-IPv6 CIDR must use IPv6 CIDR notation",
                 ));
             }
             if *ttl_seconds == 0 || max_entries.is_some_and(|entries| entries == 0) {
@@ -370,7 +381,12 @@ mod tests {
                 "max_ttl_seconds": 300,
                 "future_reverse_option": true
             },
-            "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 86400 },
+            "answer": {
+                "type": "fake_ip",
+                "cidr": "198.18.0.0/15",
+                "ipv6_cidr": "fd00::/96",
+                "ttl_seconds": 86400
+            },
             "policy": {
                 "timeout_ms": 4000,
                 "server_timeout_ms": { "global": 6000 },
@@ -422,5 +438,20 @@ mod tests {
             "policy": { "address_family": "automatic_magic" }
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn dns_contract_rejects_invalid_fake_ipv6_cidr() {
+        let model: ClientDnsConfig = serde_json::from_value(json!({
+            "servers": { "system": { "type": "system" } },
+            "default_server": "system",
+            "answer": {
+                "type": "fake_ip",
+                "cidr": "198.18.0.0/15",
+                "ipv6_cidr": "not-an-ipv6-cidr"
+            }
+        }))
+        .unwrap();
+        assert!(model.validate_client_shape().is_err());
     }
 }

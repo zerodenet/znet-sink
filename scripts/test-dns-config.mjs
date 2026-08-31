@@ -14,12 +14,12 @@ const configService = readFileSync('src/lib/services/config.ts', 'utf8');
 
 assert.match(service, /enabled: draft\.mode !== 'disabled'/);
 assert.match(service, /config: clone\(draft\.dns\)/);
-assert.match(service, /export function setDnsMode\(draft: DnsSettingsDraft, mode: DnsMode\)/);
+assert.match(service, /export function setDnsMode\(/);
 assert.match(service, /rule\.server === oldName \? name : rule\.server/);
 assert.match(service, /guiValidateDnsConfig\(next\)/);
 assert.match(service, /const result = await guiApplyDnsConfig\(next\)/);
 assert.match(service, /answer\.exclude_domains = Array\.isArray\(answer\.exclude_domains\)/);
-assert.match(service, /policy: \{ address_family: 'prefer_ipv4' \}/);
+assert.match(service, /policy: \{ address_family: defaults\.addressFamily \?\? 'prefer_ipv4' \}/);
 assert.match(service, /servers: \{ system: createDnsServer\('system'\) \}/);
 assert.match(service, /default_server: 'system'/);
 assert.match(service, /ipv6_cidr: previous\?\.ipv6_cidr/);
@@ -37,6 +37,10 @@ assert.match(service, /reverse_mapping\.max_domains_per_address/);
 assert.match(service, /context\.ruleSetTags && !context\.ruleSetTags\.has\(tag\)/);
 assert.match(service, /tunDnsSystemAuto\.state === 'unsupported'/);
 assert.match(service, /dnsFakeIpDualStack\.state === 'unsupported'/);
+assert.match(service, /dnsRealReverseMapping\.state === 'unsupported'/);
+assert.match(service, /ipv6_cidr: 'fd00::\/96'/);
+assert.match(service, /ipv4Availability === 'available' && ipv6Availability === 'unavailable'/);
+assert.match(service, /ipv4Availability === 'unavailable' && ipv6Availability === 'available'/);
 
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
@@ -56,6 +60,8 @@ assert.match(panel, /getConfigProxyNodes/);
 assert.match(panel, /getConfigPolicyGroups/);
 assert.match(panel, /aria-label="真实地址映射"/);
 assert.match(panel, /changeReverseMapping\('max_domains_per_address'/);
+assert.match(panel, /getGuiTunStatus/);
+assert.match(panel, /automaticAddressFamilyPolicy/);
 for (const policy of ['prefer_ipv4', 'prefer_ipv6', 'ipv4_only', 'ipv6_only']) {
   assert.ok(panel.includes(`value: '${policy}'`), `DNS panel must expose ${policy}`);
 }
@@ -100,13 +106,14 @@ assert.match(parsing, /"retired_addresses"/);
 
 const features = projectClientKernelFeatures({
   available: true,
-  features: ['tun_dns_system_auto', 'dns_split_dispatch'],
+  features: ['tun_dns_system_auto', 'dns_split_dispatch', 'dns_real_reverse_mapping'],
   buildFeatures: [],
   contracts: { capabilities: { minimumSupported: 1, current: 1 } },
 });
 assert.equal(features.tunDnsSystemAuto.state, 'supported');
 assert.equal(features.dnsSplitDispatch.state, 'supported');
 assert.equal(features.dnsFakeIpDualStack.state, 'unsupported');
+assert.equal(features.dnsRealReverseMapping.state, 'supported');
 
 const diff = effectiveConfigDiff(
   { runtime: { dns: { enabled: false } } },

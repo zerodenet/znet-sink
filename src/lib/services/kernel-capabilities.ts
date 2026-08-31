@@ -14,6 +14,7 @@ export interface ClientKernelFeatures {
   tunDnsSystemAuto: KernelFeatureSupport;
   dnsSplitDispatch: KernelFeatureSupport;
   dnsFakeIpDualStack: KernelFeatureSupport;
+  dnsRealReverseMapping: KernelFeatureSupport;
   dnsAddressFamilyPolicy: KernelFeatureSupport;
   directCandidateFallback: KernelFeatureSupport;
   directDialAttempts: KernelFeatureSupport;
@@ -50,6 +51,7 @@ export function projectClientKernelFeatures(
     tunDnsSystemAuto: support('tun_dns_system_auto'),
     dnsSplitDispatch: support('dns_split_dispatch'),
     dnsFakeIpDualStack: support('dns_fake_ip_dual_stack'),
+    dnsRealReverseMapping: support('dns_real_reverse_mapping'),
     dnsAddressFamilyPolicy: support('dns_address_family_policy'),
     directCandidateFallback: support('direct_tcp_trusted_target_candidate_fallback'),
     directDialAttempts: support('direct_tcp_dial_attempt_observability_v1'),

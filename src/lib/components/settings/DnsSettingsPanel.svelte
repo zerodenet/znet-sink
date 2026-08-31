@@ -17,6 +17,7 @@
     parseDnsConfig,
     persistGlobalDnsSettings,
     readDnsSettings,
+    recommendedDnsAddressFamily,
     renameDnsServer,
     setDnsAddressFamilyPolicy,
     setDnsMode,
@@ -33,6 +34,7 @@
   } from '$lib/services/core';
   import { compactConfigValue, effectiveConfigDiff } from '$lib/services/config-diff';
   import { featureStateLabel } from '$lib/services/kernel-capabilities';
+  import { getGuiTunStatus } from '$lib/services/tun';
   import { ruleSetSignal } from '$lib/services/rule-set-signal.svelte';
   import { store } from '$lib/services/store.svelte';
   import type { DnsKernelCompatibility } from '$lib/services/dns-config';
@@ -74,6 +76,7 @@
   let effectiveLoading = $state(false);
   let effectiveError = $state('');
   let effectiveInspection = $state<DnsEffectiveConfigInspection | null>(null);
+  let automaticAddressFamilyPolicy = $state<DnsAddressFamilyPolicy>('prefer_ipv4');
 
   const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
   const routeTargetTags = $derived(new Set(routeTargetOptions.map((option) => option.tag)));
@@ -334,16 +337,30 @@
     error = '';
     errorCode = undefined;
     try {
-      const [result, kernelCompatibility, effectiveRuleSets, proxyConfigs, configNodes, configGroups] = await Promise.all([
+      const [result, kernelCompatibility, tunStatus, effectiveRuleSets, proxyConfigs, configNodes, configGroups] = await Promise.all([
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
+        getGuiTunStatus().catch(() => null),
         getEffectiveRuleSetOptions().catch(() => []),
         listProxyConfigs().catch(() => []),
         getConfigProxyNodes().catch(() => null),
         getConfigPolicyGroups().catch(() => null),
       ]);
+      automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
+        tunStatus?.ipv4Egress.availability ?? 'unknown',
+        tunStatus?.ipv6Egress.availability ?? 'unknown',
+      );
+      const nextDraft = result.source.config
+        ? result.draft
+        : {
+            ...result.draft,
+            dns: createDefaultDnsConfig(
+              result.draft.mode === 'fake_ip' ? 'fake_ip' : 'real',
+              { features: kernelCompatibility.features, addressFamily: automaticAddressFamilyPolicy },
+            ),
+          };
       source = result.source;
-      draft = result.draft;
+      draft = nextDraft;
       compatibility = kernelCompatibility;
       ruleSetOptions = effectiveRuleSets;
       routeTargetsKnown = configNodes !== null && configGroups !== null;
@@ -355,7 +372,7 @@
       }
       activeProfileName = proxyConfigs.find((profile) => profile.active)?.name ?? '当前无活动代理配置';
       jsonDialogOpen = false;
-      nativeJson = JSON.stringify(result.source.config ?? result.draft.dns, null, 2);
+      nativeJson = JSON.stringify(result.source.config ?? nextDraft.dns, null, 2);
       nativeError = '';
       saved = false;
       savedPending = false;
@@ -370,7 +387,10 @@
 
   function changeMode(mode: DnsMode) {
     if (!draft) return;
-    draft = setDnsMode(draft, mode);
+    draft = setDnsMode(draft, mode, source?.config ? {} : {
+      features: compatibility.features,
+      addressFamily: automaticAddressFamilyPolicy,
+    });
     saved = false;
     savedPending = false;
     error = '';
@@ -393,7 +413,10 @@
   function resetToAutomaticDefault() {
     if (!draft) return;
     const resetMode = draft.mode === 'fake_ip' ? 'fake_ip' : 'real';
-    draft.dns = createDefaultDnsConfig(resetMode);
+    draft.dns = createDefaultDnsConfig(resetMode, {
+      features: compatibility.features,
+      addressFamily: automaticAddressFamilyPolicy,
+    });
     if (draft.mode === 'fake_ip') {
       draft.dnsHijack = compatibility.features?.tunDnsSystemAuto.state !== 'unsupported';
     }
@@ -809,6 +832,7 @@
       <span class:supported={compatibility.features.tunDnsSystemAuto.state === 'supported'}>system 自动排除：{featureStateLabel(compatibility.features.tunDnsSystemAuto)}</span>
       <span class:supported={compatibility.features.dnsSplitDispatch.state === 'supported'}>DNS 分流：{featureStateLabel(compatibility.features.dnsSplitDispatch)}</span>
       <span class:supported={compatibility.features.dnsFakeIpDualStack.state === 'supported'}>双栈 Fake-IP：{featureStateLabel(compatibility.features.dnsFakeIpDualStack)}</span>
+      <span class:supported={compatibility.features.dnsRealReverseMapping.state === 'supported'}>真实地址映射：{featureStateLabel(compatibility.features.dnsRealReverseMapping)}</span>
     </div>
   {/if}
 
@@ -1065,7 +1089,7 @@
       <section class="section">
         <div class="section-head">
           <div><div class="section-title">真实地址映射</div><p>记录 Real DNS 返回的 IP 与候选域名，帮助透明连接恢复逻辑目标；共享 IP 会保留歧义而不会强行猜测。</p></div>
-          <Switch checked={Boolean(draft.dns.reverse_mapping)} onCheckedChange={toggleReverseMapping} aria-label="真实地址映射" />
+          <Switch checked={Boolean(draft.dns.reverse_mapping)} disabled={compatibility.features?.dnsRealReverseMapping.state === 'unsupported'} onCheckedChange={toggleReverseMapping} aria-label="真实地址映射" />
         </div>
         {#if draft.dns.reverse_mapping}
           <div class="field-grid reverse-grid">

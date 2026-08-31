@@ -38,6 +38,17 @@ export interface DnsValidationContext {
   features?: ClientKernelFeatures;
 }
 
+export interface DnsAutomaticDefaults {
+  features?: ClientKernelFeatures;
+  addressFamily?: DnsAddressFamilyPolicy;
+}
+
+const DEFAULT_REVERSE_MAPPING = {
+  max_entries: 1024,
+  max_domains_per_address: 8,
+  max_ttl_seconds: 300,
+} as const;
+
 const DNS_ADDRESS_FAMILY_POLICIES: readonly DnsAddressFamilyPolicy[] = [
   'ipv4_only',
   'ipv6_only',
@@ -74,17 +85,33 @@ export function createDnsServer(type: DnsServerType = 'system'): DnsServerConfig
   return server;
 }
 
-export function createDefaultDnsConfig(mode: Exclude<DnsMode, 'disabled'> = 'real'): DnsConfig {
+export function recommendedDnsAddressFamily(
+  ipv4Availability: 'unknown' | 'available' | 'unavailable',
+  ipv6Availability: 'unknown' | 'available' | 'unavailable',
+): DnsAddressFamilyPolicy {
+  if (ipv4Availability === 'available' && ipv6Availability === 'unavailable') return 'ipv4_only';
+  if (ipv4Availability === 'unavailable' && ipv6Availability === 'available') return 'ipv6_only';
+  return 'prefer_ipv4';
+}
+
+export function createDefaultDnsConfig(
+  mode: Exclude<DnsMode, 'disabled'> = 'real',
+  defaults: DnsAutomaticDefaults = {},
+): DnsConfig {
+  const supportsFakeIpv6 = defaults.features?.dnsFakeIpDualStack.state === 'supported';
+  const supportsReverseMapping = defaults.features?.dnsRealReverseMapping.state === 'supported';
   return {
     servers: { system: createDnsServer('system') },
     default_server: 'system',
     dispatch: [],
     cache: { max_entries: 1024 },
-    policy: { address_family: 'prefer_ipv4' },
+    reverse_mapping: supportsReverseMapping ? { ...DEFAULT_REVERSE_MAPPING } : undefined,
+    policy: { address_family: defaults.addressFamily ?? 'prefer_ipv4' },
     answer: mode === 'fake_ip'
       ? {
           type: 'fake_ip',
           cidr: '198.18.0.0/15',
+          ...(supportsFakeIpv6 ? { ipv6_cidr: 'fd00::/96' } : {}),
           ttl_seconds: 86_400,
           exclude_domains: [],
         }
@@ -173,9 +200,16 @@ export function readDnsSettings(
   };
 }
 
-export function setDnsMode(draft: DnsSettingsDraft, mode: DnsMode): DnsSettingsDraft {
+export function setDnsMode(
+  draft: DnsSettingsDraft,
+  mode: DnsMode,
+  defaults: DnsAutomaticDefaults = {},
+): DnsSettingsDraft {
   const next = clone(draft);
   next.mode = mode;
+  if (defaults.addressFamily) {
+    next.dns = setDnsAddressFamilyPolicy(next.dns, defaults.addressFamily);
+  }
   if (mode === 'real') next.dns.answer = { type: 'real' };
   if (mode === 'fake_ip') {
     const previous = next.dns.answer.type === 'fake_ip' ? next.dns.answer : undefined;
@@ -183,11 +217,16 @@ export function setDnsMode(draft: DnsSettingsDraft, mode: DnsMode): DnsSettingsD
       ...previous,
       type: 'fake_ip',
       cidr: previous?.cidr ?? '198.18.0.0/15',
-      ipv6_cidr: previous?.ipv6_cidr,
+      ipv6_cidr: previous?.ipv6_cidr
+        ?? (defaults.features?.dnsFakeIpDualStack.state === 'supported' ? 'fd00::/96' : undefined),
       ttl_seconds: previous?.ttl_seconds ?? 86_400,
       max_entries: previous?.max_entries,
       exclude_domains: previous?.exclude_domains ?? [],
     };
+    if (!next.dns.reverse_mapping
+      && defaults.features?.dnsRealReverseMapping.state === 'supported') {
+      next.dns.reverse_mapping = { ...DEFAULT_REVERSE_MAPPING };
+    }
     next.dnsHijack = true;
   }
   if (mode === 'disabled') next.dnsHijack = false;
@@ -437,6 +476,9 @@ export function validateDnsDraft(
     }
     if (!Number.isInteger(reverse.max_ttl_seconds) || reverse.max_ttl_seconds < 1) {
       issues.push({ field: 'reverse_mapping.max_ttl_seconds', message: '映射 TTL 必须是大于 0 的整数', severity: 'error' });
+    }
+    if (context.features?.dnsRealReverseMapping.state === 'unsupported') {
+      issues.push({ field: 'reverse_mapping', message: '当前内核不支持真实地址反向映射', severity: 'error' });
     }
   }
   if (draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip') {
