@@ -34,8 +34,8 @@ use crate::state::app_state::AppState;
 mod dns_transaction;
 
 use dns_transaction::{
-    rollback_runtime_if_owned, rollback_scope_owned, validate_apply_scope,
-    with_rollback_status, with_storage_rollback_failure,
+    rollback_runtime_if_owned, rollback_scope_owned, validate_apply_scope, with_rollback_status,
+    with_storage_rollback_failure,
 };
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -494,7 +494,8 @@ pub async fn gui_apply_dns_config(
                 ));
             }
         };
-        let current = match zero::queries::runtime_identity(Some(default_opts(state.inner()))).await {
+        let current = match zero::queries::runtime_identity(Some(default_opts(state.inner()))).await
+        {
             Ok(current) => current,
             Err(error) => {
                 let Some(previous) = previous_effective.as_ref() else {
@@ -506,13 +507,9 @@ pub async fn gui_apply_dns_config(
                         None,
                     ));
                 };
-                return Err(rollback_runtime_if_owned(
-                    state.inner(),
-                    previous,
-                    &applied,
-                    error,
-                )
-                .await);
+                return Err(
+                    rollback_runtime_if_owned(state.inner(), previous, &applied, error).await,
+                );
             }
         };
         if let Err(error) = validate_apply_scope(&before, &applied, &current) {
@@ -526,13 +523,9 @@ pub async fn gui_apply_dns_config(
                         None,
                     ));
                 };
-                return Err(rollback_runtime_if_owned(
-                    state.inner(),
-                    previous,
-                    &applied,
-                    error,
-                )
-                .await);
+                return Err(
+                    rollback_runtime_if_owned(state.inner(), previous, &applied, error).await,
+                );
             }
             return Err(with_rollback_status(
                 error,
@@ -552,13 +545,7 @@ pub async fn gui_apply_dns_config(
         if let (Some(previous), Some(applied)) =
             (previous_effective.as_ref(), applied_identity.as_ref())
         {
-            return Err(rollback_runtime_if_owned(
-                state.inner(),
-                previous,
-                applied,
-                error,
-            )
-            .await);
+            return Err(rollback_runtime_if_owned(state.inner(), previous, applied, error).await);
         }
         return Err(error);
     }
@@ -574,13 +561,7 @@ pub async fn gui_apply_dns_config(
             if let (Some(previous), Some(applied)) =
                 (previous_effective.as_ref(), applied_identity.as_ref())
             {
-                error = rollback_runtime_if_owned(
-                    state.inner(),
-                    previous,
-                    applied,
-                    error,
-                )
-                .await;
+                error = rollback_runtime_if_owned(state.inner(), previous, applied, error).await;
             }
             if let Some((stage, storage_rollback)) = storage_rollback {
                 error = with_storage_rollback_failure(error, stage, storage_rollback);

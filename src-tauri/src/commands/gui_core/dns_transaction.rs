@@ -61,13 +61,7 @@ pub(super) async fn rollback_runtime_if_owned(
         }
     };
     if !rollback_scope_owned(expected, &current) {
-        return with_rollback_status(
-            error,
-            false,
-            false,
-            "current_scope_changed",
-            None,
-        );
+        return with_rollback_status(error, false, false, "current_scope_changed", None);
     }
 
     let response = match ZeroAdapter::new()
@@ -76,13 +70,7 @@ pub(super) async fn rollback_runtime_if_owned(
     {
         Ok(response) => response,
         Err(rollback_error) => {
-            return with_rollback_status(
-                error,
-                true,
-                false,
-                "apply_failed",
-                Some(rollback_error),
-            );
+            return with_rollback_status(error, true, false, "apply_failed", Some(rollback_error));
         }
     };
     let rollback_applied = match zero::queries::config_apply_identity(&response) {
@@ -109,7 +97,8 @@ pub(super) async fn rollback_runtime_if_owned(
             );
         }
     };
-    if let Err(rollback_error) = validate_apply_scope(expected, &rollback_applied, &rollback_current)
+    if let Err(rollback_error) =
+        validate_apply_scope(expected, &rollback_applied, &rollback_current)
     {
         return with_rollback_status(
             error,
@@ -120,13 +109,7 @@ pub(super) async fn rollback_runtime_if_owned(
         );
     }
 
-    with_rollback_status(
-        error,
-        true,
-        true,
-        "restored_last_known_good",
-        None,
-    )
+    with_rollback_status(error, true, true, "restored_last_known_good", None)
 }
 
 pub(super) fn with_rollback_status(
@@ -246,13 +229,8 @@ mod tests {
             message: "stale DNS apply".to_owned(),
             details: Some(serde_json::json!({ "resource": "dns_config" })),
         };
-        let restored = with_rollback_status(
-            error.clone(),
-            true,
-            true,
-            "restored_last_known_good",
-            None,
-        );
+        let restored =
+            with_rollback_status(error.clone(), true, true, "restored_last_known_good", None);
         assert_eq!(restored.details.as_ref().unwrap()["resource"], "dns_config");
         assert_eq!(
             restored.details.as_ref().unwrap()["dnsRollback"]["succeeded"],
@@ -260,13 +238,7 @@ mod tests {
         );
         assert!(restored.message.contains("last-known-good"));
 
-        let skipped = with_rollback_status(
-            error,
-            false,
-            false,
-            "current_scope_changed",
-            None,
-        );
+        let skipped = with_rollback_status(error, false, false, "current_scope_changed", None);
         assert_eq!(
             skipped.details.as_ref().unwrap()["dnsRollback"]["reason"],
             "current_scope_changed"
