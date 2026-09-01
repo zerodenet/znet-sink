@@ -971,7 +971,6 @@ mod tests {
         assert_eq!(error.code, "invalid_argument");
         assert!(error.message.contains("undefined detour `Missing`"));
     }
-
     fn verified_profile(
         id: &str,
         order: u32,
