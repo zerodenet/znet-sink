@@ -2,6 +2,7 @@
   import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-editor.svelte';
   import { Button } from '$lib/components/ui/button';
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
+  import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
 
   let textareaRef: HTMLTextAreaElement | undefined = $state();
   let tabSize = 2;
@@ -377,6 +378,8 @@
       <span class="empty-text">点击刷新按钮加载当前活动配置</span>
     </div>
   {/if}
+
+  <KernelSettingsTransfer />
 </div>
 
 <style>

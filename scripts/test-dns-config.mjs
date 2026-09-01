@@ -16,6 +16,7 @@ import {
 
 const service = readFileSync('src/lib/services/dns-config.ts', 'utf8');
 const panel = readFileSync('src/lib/components/settings/DnsSettingsPanel.svelte', 'utf8');
+const selectContent = readFileSync('src/lib/components/ui/select/select-content.svelte', 'utf8');
 const runtime = readFileSync('src-tauri/src/kernel/zero/runtime.rs', 'utf8');
 const parsing = readFileSync('src-tauri/src/kernel/zero/parsing.rs', 'utf8');
 const guiCore = readFileSync('src-tauri/src/commands/gui_core.rs', 'utf8');
@@ -60,20 +61,22 @@ assert.match(service, /ipv4Availability === 'unavailable' && ipv6Availability ==
 for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
   assert.ok(panel.includes(`value: '${protocol}'`), `DNS panel must expose ${protocol}`);
 }
-assert.match(panel, /按列表顺序优先匹配/);
+assert.match(panel, /按顺序匹配域名或规则集/);
 assert.match(panel, /dns_encrypted_client_queries_not_intercepted/);
 assert.match(panel, /dns_ech_hostname_recovery_unavailable/);
 assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
 assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
 assert.match(panel, /aria-label="DNS 应答地址族策略"/);
 assert.match(panel, /aria-label="DNS 上游经由出站"/);
-assert.match(panel, /跟随当前配置默认出站/);
+assert.match(panel, /跟随默认出站/);
 assert.match(panel, /aria-label="节点解析服务器"/);
 assert.match(panel, /aria-label="直连解析服务器"/);
 assert.match(panel, /通用回退链/);
 assert.match(panel, /单独超时/);
-assert.match(panel, /getConfigProxyNodes/);
+assert.doesNotMatch(panel, /getConfigProxyNodes/);
 assert.match(panel, /getConfigPolicyGroups/);
+assert.match(panel, /targets\.set\('block'/);
+assert.match(panel, /策略组 ·/);
 assert.match(panel, /aria-label="真实地址映射"/);
 assert.match(panel, /changeReverseMapping\('max_domains_per_address'/);
 assert.match(panel, /getGuiTunStatus/);
@@ -92,17 +95,18 @@ assert.match(panel, /class="dispatch-dialog-form"/);
 assert.match(panel, /function buildDispatchConditionFromForm\(\): Record<string, unknown>/);
 assert.match(panel, /getEffectiveRuleSetOptions/);
 assert.match(panel, /aria-label="DNS 分流规则集"/);
-assert.match(panel, /无需手工推导/);
+assert.match(panel, /只显示当前可用的规则集/);
 assert.match(panel, /role="tablist" aria-label="DNS 分流条件编辑方式"/);
 assert.match(panel, /switchDispatchEditorMode\('form'\)/);
 assert.match(panel, /switchDispatchEditorMode\('json'\)/);
 assert.match(panel, /const condition = \{ type: 'domain', values: \['example\.com'\] \}/);
 assert.doesNotMatch(panel, /updateDispatchCondition/);
+assert.match(panel, /dispatchConditionSummary\(rule\.condition\)/);
+assert.doesNotMatch(panel, /<code>\{JSON\.stringify\(rule\.condition\)\}<\/code>/);
 assert.match(panel, /draft\.dns\.answer\.ipv6_cidr/);
-assert.match(panel, /基础配置/);
-assert.match(panel, /客户端覆盖/);
 assert.match(panel, /最终有效配置/);
-assert.match(panel, /查看最终配置/);
+assert.match(panel, /高级选项/);
+assert.doesNotMatch(panel, /class="config-lineage"/);
 assert.match(panel, /guiInspectDnsEffectiveConfig/);
 assert.match(panel, /ruleSetSignal\.onChanged/);
 assert.match(service, /已不存在或未进入最终有效配置/);
@@ -125,6 +129,10 @@ assert.match(parsing, /"connection_attempts"/);
 assert.match(parsing, /"retired_addresses"/);
 assert.match(ruleOverlay, /resolve_dns_detours\(config, &mut dns\)\?/);
 assert.match(ruleOverlay, /route_final_dns_detour/);
+assert.match(ruleOverlay, /HashSet::from\(\["direct"\.to_owned\(\), "block"\.to_owned\(\)\]\)/);
+assert.match(selectContent, /max-h-80/);
+assert.match(selectContent, /max-h-72/);
+assert.doesNotMatch(selectContent, /h-\(--bits-select-anchor-height\)/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
 assert.ok(
   activation.indexOf('validate_config(content.clone(), options.clone())')

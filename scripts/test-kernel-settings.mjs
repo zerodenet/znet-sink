@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 
-const panel = read('src/lib/components/settings/CoreConfigPanel.svelte');
+const versionPanel = read('src/lib/components/settings/CoreConfigPanel.svelte');
+const advancedPanel = read('src/lib/components/settings/ConfigEditorPanel.svelte');
+const transfer = read('src/lib/components/settings/KernelSettingsTransfer.svelte');
 const service = read('src/lib/services/core.ts');
 const commands = read('src-tauri/src/commands/app_config.rs');
 const commandRegistry = read('src-tauri/src/lib.rs');
@@ -14,12 +16,18 @@ const tunRuntime = read('src-tauri/src/kernel/zero/runtime.rs');
 const tunPanel = read('src/lib/components/settings/TunSettingsPanel.svelte');
 
 assert.ok(
-  panel.includes('客户端内核配置迁移') &&
-    panel.includes('importKernelSettings') &&
-    panel.includes('exportKernelSettings') &&
-    panel.includes('不会包含订阅代理配置') &&
-    panel.includes('导入校验失败时不会覆盖当前配置'),
-  'the kernel settings panel must expose the portable migration contract',
+  advancedPanel.includes('<KernelSettingsTransfer />') &&
+    transfer.includes('配置迁移') &&
+    transfer.includes('importSettings') &&
+    transfer.includes('exportSettings') &&
+    transfer.includes('导入或导出 DNS、TUN 和客户端运行偏好'),
+  'advanced settings must expose the portable migration actions with concise copy',
+);
+assert.ok(
+  !versionPanel.includes('KernelSettingsTransfer') &&
+    !versionPanel.includes('importClientKernelSettings') &&
+    !versionPanel.includes('exportClientKernelSettings'),
+  'kernel version management must not contain client settings migration',
 );
 assert.ok(
   service.includes("invoke('app_config_import_kernel_settings'") &&

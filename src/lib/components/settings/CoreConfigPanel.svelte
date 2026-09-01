@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { UnlistenFn } from '@tauri-apps/api/event';
-  import { open as openFile, save as saveFile } from '@tauri-apps/plugin-dialog';
+  import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
-  import { AlertTriangle, Download, FolderOpen, RefreshCcw, Save, Upload, X } from '@lucide/svelte';
+  import { AlertTriangle, Download, FolderOpen, RefreshCcw, Save, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Badge } from '$lib/components/ui/badge';
@@ -12,8 +12,6 @@
     getCoreProcessStatus,
     updateAppConfig,
     getGuiCoreHealth,
-    exportClientKernelSettings,
-    importClientKernelSettings,
   } from '$lib/services/core';
   import {
     listKernelVersions,
@@ -46,7 +44,6 @@
   let networkProbeUrlsDraft = $state('');
   let loading = $state(false);
   let saving = $state(false);
-  let transferBusy = $state(false);
   let message = $state<string | null>(null);
 
   // Version management state
@@ -180,54 +177,6 @@
     if (typeof selected === 'string' && selected.trim()) {
       executablePathDraft = selected.trim();
       await saveExecutablePath();
-    }
-  }
-
-  async function exportKernelSettings() {
-    const selected = await saveFile({
-      title: '导出客户端内核配置',
-      defaultPath: 'znet-kernel-settings.json',
-      filters: [{ name: 'ZNet 客户端内核配置', extensions: ['json'] }],
-    });
-    if (!selected) return;
-
-    transferBusy = true;
-    message = null;
-    try {
-      const result = await exportClientKernelSettings(selected);
-      message = `客户端内核配置已导出：${result.path}`;
-      success('客户端内核配置已导出');
-    } catch (error) {
-      const notice = error instanceof Error ? error.message : '导出客户端内核配置失败';
-      message = notice;
-      warning(notice);
-    } finally {
-      transferBusy = false;
-    }
-  }
-
-  async function importKernelSettings() {
-    const selected = await openFile({
-      title: '导入客户端内核配置',
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'ZNet 客户端内核配置', extensions: ['json'] }],
-    });
-    if (typeof selected !== 'string') return;
-
-    transferBusy = true;
-    message = null;
-    try {
-      await importClientKernelSettings(selected);
-      await refresh();
-      message = '客户端内核配置已导入并应用';
-      success('客户端内核配置已导入');
-    } catch (error) {
-      const notice = error instanceof Error ? error.message : '导入客户端内核配置失败';
-      message = notice;
-      warning(notice);
-    } finally {
-      transferBusy = false;
     }
   }
 
@@ -369,25 +318,6 @@
       </Button>
       <Button variant="ghost" size="icon-sm" onclick={refresh} disabled={loading}>
         <RefreshCcw class="h-3.5 w-3.5" />
-      </Button>
-    </div>
-  </div>
-
-  <div class="transfer-card">
-    <div class="transfer-copy">
-      <span class="transfer-title">客户端内核配置迁移</span>
-      <span class="transfer-desc">
-        导入或导出 DNS、TUN 与客户端持有的内核运行设置，便于更换设备。不会包含订阅代理配置、日志、内核文件路径、工作目录或控制 Socket；导入校验失败时不会覆盖当前配置，运行中的内核可能会自动重启以应用设置。
-      </span>
-    </div>
-    <div class="transfer-actions">
-      <Button variant="outline" size="sm" onclick={importKernelSettings} disabled={transferBusy || loading || saving}>
-        <Upload class="h-3.5 w-3.5" />
-        <span>导入配置</span>
-      </Button>
-      <Button variant="outline" size="sm" onclick={exportKernelSettings} disabled={transferBusy || loading || saving}>
-        <Download class="h-3.5 w-3.5" />
-        <span>导出配置</span>
       </Button>
     </div>
   </div>
@@ -673,42 +603,6 @@
     padding: 16px 0;
     font-size: 12px;
     color: var(--muted-foreground);
-  }
-
-  .transfer-card {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--card);
-  }
-
-  .transfer-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .transfer-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .transfer-desc {
-    font-size: 11.5px;
-    line-height: 1.5;
-    color: var(--muted-foreground);
-  }
-
-  .transfer-actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
   }
 
   .empty-state,
@@ -1125,15 +1019,6 @@
     .actions {
       width: 100%;
       justify-content: flex-start;
-      flex-wrap: wrap;
-    }
-
-    .transfer-card {
-      flex-direction: column;
-    }
-
-    .transfer-actions {
-      width: 100%;
       flex-wrap: wrap;
     }
 

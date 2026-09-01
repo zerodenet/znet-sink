@@ -198,15 +198,18 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
 }
 
 fn route_target_tags(config: &Value) -> HashSet<String> {
-    ["outbounds", "outbound_groups"]
-        .into_iter()
-        .filter_map(|key| config.get(key).and_then(Value::as_array))
-        .flatten()
-        .filter_map(|target| target.get("tag").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(str::to_owned)
-        .collect()
+    let mut targets = HashSet::from(["direct".to_owned(), "block".to_owned()]);
+    targets.extend(
+        ["outbounds", "outbound_groups"]
+            .into_iter()
+            .filter_map(|key| config.get(key).and_then(Value::as_array))
+            .flatten()
+            .filter_map(|target| target.get("tag").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_owned),
+    );
+    targets
 }
 
 fn route_final_dns_detour(
@@ -970,6 +973,17 @@ mod tests {
 
         assert_eq!(error.code, "invalid_argument");
         assert!(error.message.contains("undefined detour `Missing`"));
+    }
+
+    #[test]
+    fn built_in_dns_detours_do_not_require_profile_outbounds() {
+        let config = json!({ "route": { "final": { "type": "direct" } } });
+
+        for target in ["direct", "block"] {
+            let mut dns = dns_with_detour(target);
+            resolve_dns_detours(&config, &mut dns).unwrap();
+            assert_eq!(dns["servers"]["cloudflare"]["detour"], target);
+        }
     }
     fn verified_profile(
         id: &str,
