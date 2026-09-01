@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
@@ -146,8 +146,37 @@ impl ClientDnsServer {
                         "DNS server `{name}` requires a non-zero port"
                     )));
                 }
+                if let Self::Doh { path, .. } = self {
+                    if !path.starts_with('/') {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` requires a DoH path starting with `/`"
+                        )));
+                    }
+                }
+                if let Some(detour) = self.detour() {
+                    if detour.trim().is_empty() {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` has an empty detour"
+                        )));
+                    }
+                    if matches!(self, Self::Doq { .. }) {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` cannot use a DoQ detour"
+                        )));
+                    }
+                }
                 Ok(())
             }
+        }
+    }
+
+    fn detour(&self) -> Option<&str> {
+        match self {
+            Self::System { .. } => None,
+            Self::Udp { detour, .. }
+            | Self::Doh { detour, .. }
+            | Self::Dot { detour, .. }
+            | Self::Doq { detour, .. } => detour.as_deref(),
         }
     }
 
@@ -391,11 +420,122 @@ impl ClientDnsConfig {
                     ensure_server(field, name)?;
                 }
             }
+            let validate_fallbacks =
+                |field: &str, primary: Option<&str>, names: Option<&[String]>| -> AppResult<()> {
+                    let mut seen = BTreeSet::new();
+                    for name in names.unwrap_or_default() {
+                        if !seen.insert(name.as_str()) {
+                            return Err(AppError::invalid_argument(format!(
+                                "DNS policy {field} contains duplicate server `{name}`"
+                            )));
+                        }
+                        if primary == Some(name.as_str()) {
+                            return Err(AppError::invalid_argument(format!(
+                                "DNS policy {field} repeats primary server `{name}`"
+                            )));
+                        }
+                    }
+                    Ok(())
+                };
+            validate_fallbacks("fallback_servers", None, policy.fallback_servers.as_deref())?;
+            if policy.node_server.is_none()
+                && policy
+                    .node_fallback_servers
+                    .as_ref()
+                    .is_some_and(|servers| !servers.is_empty())
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy node_fallback_servers requires node_server",
+                ));
+            }
+            validate_fallbacks(
+                "node_fallback_servers",
+                policy.node_server.as_deref(),
+                policy.node_fallback_servers.as_deref(),
+            )?;
+            if policy.direct_server.is_none()
+                && policy
+                    .direct_fallback_servers
+                    .as_ref()
+                    .is_some_and(|servers| !servers.is_empty())
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy direct_fallback_servers requires direct_server",
+                ));
+            }
+            validate_fallbacks(
+                "direct_fallback_servers",
+                policy.direct_server.as_deref(),
+                policy.direct_fallback_servers.as_deref(),
+            )?;
+            if policy
+                .timeout_ms
+                .is_some_and(|value| !(1..=120_000).contains(&value))
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy timeout_ms must be between 1 and 120000",
+                ));
+            }
             if let Some(timeouts) = &policy.server_timeout_ms {
-                for name in timeouts.keys() {
+                for (name, timeout) in timeouts {
                     ensure_server("server_timeout_ms", name)?;
+                    if !(1..=120_000).contains(timeout) {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS policy server_timeout_ms.{name} must be between 1 and 120000"
+                        )));
+                    }
                 }
             }
+        }
+        let has_detour = self
+            .servers
+            .values()
+            .any(|server| server.detour().is_some());
+        if has_detour {
+            let policy = self.policy.as_ref().ok_or_else(|| {
+                AppError::invalid_argument(
+                    "DNS detours require policy.node_server to avoid recursive resolution",
+                )
+            })?;
+            let node_server = policy.node_server.as_deref().ok_or_else(|| {
+                AppError::invalid_argument(
+                    "DNS detours require policy.node_server to avoid recursive resolution",
+                )
+            })?;
+            for name in std::iter::once(node_server).chain(
+                policy
+                    .node_fallback_servers
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(String::as_str),
+            ) {
+                if self
+                    .servers
+                    .get(name)
+                    .is_some_and(|server| server.detour().is_some())
+                {
+                    return Err(AppError::invalid_argument(format!(
+                        "DNS node server `{name}` must not use a detour"
+                    )));
+                }
+            }
+        }
+        if self.cache.as_ref().is_some_and(|cache| {
+            cache.max_entries == 0 || cache.max_ttl_seconds.is_some_and(|ttl| ttl == 0)
+        }) {
+            return Err(AppError::invalid_argument(
+                "DNS cache limits must be greater than zero",
+            ));
+        }
+        if self.reverse_mapping.as_ref().is_some_and(|mapping| {
+            mapping.max_entries == 0
+                || mapping.max_domains_per_address < 2
+                || mapping.max_ttl_seconds == 0
+        }) {
+            return Err(AppError::invalid_argument(
+                "DNS reverse_mapping requires positive limits and at least two domains per address",
+            ));
         }
         if let ClientDnsAnswer::FakeIp {
             cidr,
@@ -593,6 +733,92 @@ mod tests {
         }))
         .unwrap();
         assert!(model.validate_client_shape().is_err());
+    }
+
+    #[test]
+    fn dns_contract_rejects_recursive_or_unsupported_detours_before_runtime() {
+        for value in [
+            json!({
+                "servers": {
+                    "proxy": {
+                        "type": "doh", "host": "dns.example", "path": "/dns-query",
+                        "bootstrap": ["1.1.1.1"], "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy"
+            }),
+            json!({
+                "servers": {
+                    "proxy": {
+                        "type": "doh", "host": "dns.example", "path": "/dns-query",
+                        "bootstrap": ["1.1.1.1"], "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy",
+                "policy": { "node_server": "proxy" }
+            }),
+            json!({
+                "servers": {
+                    "bootstrap": { "type": "system" },
+                    "proxy": {
+                        "type": "doq", "host": "dns.example", "bootstrap": ["1.1.1.1"],
+                        "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy",
+                "policy": { "node_server": "bootstrap" }
+            }),
+        ] {
+            let model: ClientDnsConfig = serde_json::from_value(value).unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn dns_contract_rejects_invalid_fallbacks_and_timeouts_before_runtime() {
+        for policy in [
+            json!({ "fallback_servers": ["secondary", "secondary"] }),
+            json!({ "node_fallback_servers": ["secondary"] }),
+            json!({ "direct_server": "primary", "direct_fallback_servers": ["primary"] }),
+            json!({ "timeout_ms": 0 }),
+            json!({ "server_timeout_ms": { "primary": 120001 } }),
+        ] {
+            let model: ClientDnsConfig = serde_json::from_value(json!({
+                "servers": {
+                    "primary": { "type": "system" },
+                    "secondary": { "type": "udp", "host": "1.1.1.1" }
+                },
+                "default_server": "primary",
+                "policy": policy
+            }))
+            .unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn dns_contract_rejects_zero_cache_and_reverse_mapping_limits() {
+        for extra in [
+            json!({ "cache": { "max_entries": 0 } }),
+            json!({
+                "reverse_mapping": {
+                    "max_entries": 1,
+                    "max_domains_per_address": 1,
+                    "max_ttl_seconds": 300
+                }
+            }),
+        ] {
+            let mut value = json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system"
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let model: ClientDnsConfig = serde_json::from_value(value).unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
     }
 
     #[test]
