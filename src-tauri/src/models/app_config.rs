@@ -609,6 +609,8 @@ mod tests {
         assert_eq!(dns.default_server, "cloudflare");
         assert!(dns.servers.contains_key("cloudflare"));
         assert!(dns.servers.contains_key("google"));
+        assert!(dns.servers.contains_key("cloudflare-bootstrap"));
+        assert!(dns.servers.contains_key("google-bootstrap"));
         assert!(dns.servers.contains_key("system"));
         dns.validate_client_shape().unwrap();
     }

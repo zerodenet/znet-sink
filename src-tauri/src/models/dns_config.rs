@@ -259,6 +259,36 @@ impl ClientDnsConfig {
             },
         );
         servers.insert(
+            "cloudflare-bootstrap".to_string(),
+            ClientDnsServer::Doh {
+                host: "cloudflare-dns.com".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                ],
+                server_name: None,
+                detour: None,
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "google-bootstrap".to_string(),
+            ClientDnsServer::Doh {
+                host: "dns.google".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
+                ],
+                server_name: None,
+                detour: None,
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
             "system".to_string(),
             ClientDnsServer::System {
                 extra: BTreeMap::new(),
@@ -280,8 +310,11 @@ impl ClientDnsConfig {
                 timeout_ms: None,
                 server_timeout_ms: None,
                 fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
-                node_server: Some("system".to_string()),
-                node_fallback_servers: None,
+                node_server: Some("cloudflare-bootstrap".to_string()),
+                node_fallback_servers: Some(vec![
+                    "google-bootstrap".to_string(),
+                    "system".to_string(),
+                ]),
                 direct_server: None,
                 direct_fallback_servers: None,
                 reject_address_cidrs: None,
@@ -581,6 +614,14 @@ mod tests {
             value["policy"]["fallback_servers"],
             json!(["google", "system"])
         );
-        assert_eq!(value["policy"]["node_server"], "system");
+        assert_eq!(value["policy"]["node_server"], "cloudflare-bootstrap");
+        assert_eq!(
+            value["policy"]["node_fallback_servers"],
+            json!(["google-bootstrap", "system"])
+        );
+        assert!(value["servers"]["cloudflare-bootstrap"]
+            .get("detour")
+            .is_none());
+        assert!(value["servers"]["google-bootstrap"].get("detour").is_none());
     }
 }

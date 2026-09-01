@@ -185,11 +185,20 @@ assert.equal(legacyFakeIp.reverse_mapping, undefined);
 
 const recommendedDns = createRecommendedDnsConfig('real');
 assert.equal(recommendedDns.default_server, 'cloudflare');
-assert.deepEqual(Object.keys(recommendedDns.servers), ['cloudflare', 'google', 'system']);
+assert.deepEqual(Object.keys(recommendedDns.servers), [
+  'cloudflare',
+  'google',
+  'cloudflare-bootstrap',
+  'google-bootstrap',
+  'system',
+]);
 assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.equal(recommendedDns.servers.google.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'system']);
-assert.equal(recommendedDns.policy?.node_server, 'system');
+assert.equal(recommendedDns.policy?.node_server, 'cloudflare-bootstrap');
+assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['google-bootstrap', 'system']);
+assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, undefined);
+assert.equal(recommendedDns.servers['google-bootstrap'].detour, undefined);
 
 const sourceWithCnameTarget = {
   enabled: true,

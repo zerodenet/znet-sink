@@ -145,13 +145,28 @@ export function createRecommendedDnsConfig(
       bootstrap: ['8.8.8.8', '8.8.4.4'],
       detour: DNS_DETOUR_ROUTE_FINAL,
     },
+    'cloudflare-bootstrap': {
+      type: 'doh',
+      host: 'cloudflare-dns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['1.1.1.1', '1.0.0.1'],
+    },
+    'google-bootstrap': {
+      type: 'doh',
+      host: 'dns.google',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['8.8.8.8', '8.8.4.4'],
+    },
     system: createDnsServer('system'),
   };
   dns.default_server = 'cloudflare';
   dns.policy = {
     ...dns.policy,
     fallback_servers: ['google', 'system'],
-    node_server: 'system',
+    node_server: 'cloudflare-bootstrap',
+    node_fallback_servers: ['google-bootstrap', 'system'],
   };
   return dns;
 }
