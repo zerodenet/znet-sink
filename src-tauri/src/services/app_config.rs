@@ -177,6 +177,12 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             }
             config.tun.mtu = mtu;
         }
+        if let Some(include_cidrs) = tun.include_cidrs {
+            config.tun.include_cidrs = normalize_tun_cidrs(include_cidrs, "tun.includeCidrs")?;
+        }
+        if let Some(exclude_cidrs) = tun.exclude_cidrs {
+            config.tun.exclude_cidrs = normalize_tun_cidrs(exclude_cidrs, "tun.excludeCidrs")?;
+        }
         if let Some(dual_stack) = tun.dual_stack {
             config.tun.dual_stack = dual_stack;
         }
@@ -240,12 +246,80 @@ fn normalize_proxy_bypass(values: Vec<String>) -> AppResult<Vec<String>> {
                 "localProxy.bypass entries must not contain semicolons or newlines",
             ));
         }
+        let value = normalize_proxy_bypass_entry(value)?;
         let key = value.to_ascii_lowercase();
         if seen.insert(key) {
+            normalized.push(value);
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_proxy_bypass_entry(value: &str) -> AppResult<String> {
+    let Some((address, prefix)) = value.split_once('/') else {
+        return Ok(value.to_string());
+    };
+    let address = address.parse::<std::net::Ipv4Addr>().map_err(|_| {
+        AppError::invalid_argument(
+            "localProxy.bypass uses host patterns; IPv6 CIDRs are unsupported here",
+        )
+    })?;
+    let prefix = prefix.parse::<u8>().map_err(|_| {
+        AppError::invalid_argument("localProxy.bypass contains an invalid IPv4 CIDR prefix")
+    })?;
+    if !matches!(prefix, 8 | 16 | 24 | 32) {
+        return Err(AppError::invalid_argument(
+            "localProxy.bypass only converts IPv4 CIDRs with /8, /16, /24 or /32; use TUN exclude CIDRs for arbitrary networks",
+        ));
+    }
+    let octets = address.octets();
+    Ok(match prefix {
+        8 => format!("{}.*", octets[0]),
+        16 => format!("{}.{}.*", octets[0], octets[1]),
+        24 => format!("{}.{}.{}.*", octets[0], octets[1], octets[2]),
+        32 => address.to_string(),
+        _ => unreachable!(),
+    })
+}
+
+pub(crate) fn normalize_tun_cidrs(values: Vec<String>, field: &str) -> AppResult<Vec<String>> {
+    if values.len() > 128 {
+        return Err(AppError::invalid_argument(format!(
+            "{field} supports at most 128 entries"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        validate_ip_cidr(value, field)?;
+        if seen.insert(value.to_ascii_lowercase()) {
             normalized.push(value.to_string());
         }
     }
     Ok(normalized)
+}
+
+fn validate_ip_cidr(value: &str, field: &str) -> AppResult<()> {
+    let (address, prefix) = value.split_once('/').ok_or_else(|| {
+        AppError::invalid_argument(format!("{field} entries must use CIDR notation"))
+    })?;
+    let address = address.parse::<std::net::IpAddr>().map_err(|_| {
+        AppError::invalid_argument(format!("{field} contains an invalid IP address"))
+    })?;
+    let prefix = prefix
+        .parse::<u8>()
+        .map_err(|_| AppError::invalid_argument(format!("{field} contains an invalid prefix")))?;
+    let maximum = if address.is_ipv4() { 32 } else { 128 };
+    if prefix > maximum {
+        return Err(AppError::invalid_argument(format!(
+            "{field} prefix exceeds /{maximum}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
@@ -391,7 +465,10 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::{migrate_legacy_dns, normalize_network_probe_urls, normalize_proxy_bypass};
+    use super::{
+        migrate_legacy_dns, normalize_network_probe_urls, normalize_proxy_bypass,
+        normalize_tun_cidrs,
+    };
     use crate::models::app_config::default_network_probe_urls;
     use crate::models::app_config::AppConfig;
     use crate::models::proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile};
@@ -442,6 +519,40 @@ mod tests {
     fn proxy_bypass_entries_reject_platform_separators() {
         assert!(normalize_proxy_bypass(vec!["localhost;example.com".to_string()]).is_err());
         assert!(normalize_proxy_bypass(vec!["localhost\nexample.com".to_string()]).is_err());
+    }
+
+    #[test]
+    fn proxy_bypass_converts_octet_aligned_ipv4_cidrs_to_host_patterns() {
+        let bypass = normalize_proxy_bypass(vec![
+            "16.0.0.0/8".to_string(),
+            "192.168.0.0/16".to_string(),
+            "10.20.30.0/24".to_string(),
+            "10.20.30.40/32".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            bypass,
+            vec!["16.*", "192.168.*", "10.20.30.*", "10.20.30.40"]
+        );
+        assert!(normalize_proxy_bypass(vec!["10.0.0.0/9".to_string()]).is_err());
+    }
+
+    #[test]
+    fn tun_cidrs_trim_deduplicate_and_validate() {
+        assert_eq!(
+            normalize_tun_cidrs(
+                vec![
+                    " 16.0.0.0/8 ".to_string(),
+                    "16.0.0.0/8".to_string(),
+                    "fd00::/8".to_string(),
+                ],
+                "tun.excludeCidrs",
+            )
+            .unwrap(),
+            vec!["16.0.0.0/8", "fd00::/8"]
+        );
+        assert!(normalize_tun_cidrs(vec!["16.0.0.0/99".to_string()], "tun.excludeCidrs").is_err());
     }
 
     #[test]

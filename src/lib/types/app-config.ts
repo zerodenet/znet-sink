@@ -57,6 +57,10 @@ export interface AppTunConfig {
   secondaryAddr?: string;
   tag: string;
   mtu: number;
+  /** Destination CIDRs captured by automatic TUN routes. Empty means full capture. */
+  includeCidrs: string[];
+  /** Destination CIDRs left on the host routing table instead of entering TUN. */
+  excludeCidrs: string[];
   dualStack: boolean;
   dnsHijack: boolean;
 }
@@ -135,6 +139,8 @@ export interface AppTunConfigPatch {
   secondaryAddr?: string | null;
   tag?: string;
   mtu?: number;
+  includeCidrs?: string[];
+  excludeCidrs?: string[];
   dualStack?: boolean;
   dnsHijack?: boolean;
 }

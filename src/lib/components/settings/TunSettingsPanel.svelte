@@ -23,6 +23,8 @@
   let addr = $state('10.66.0.1/30');
   let secondaryAddr = $state('');
   let mtu = $state('1500');
+  let includeCidrs = $state('');
+  let excludeCidrs = $state('');
   let dualStack = $state(true);
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
@@ -51,6 +53,8 @@
       addr = config.tun.addr;
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
+      includeCidrs = (config.tun.includeCidrs ?? []).join('\n');
+      excludeCidrs = (config.tun.excludeCidrs ?? []).join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       dnsReadiness = await inspectTunDnsHijackReadiness(config.dns);
@@ -109,6 +113,8 @@
           addr: normalizedAddr,
           secondaryAddr: normalizedSecondary || null,
           mtu: normalizedMtu,
+          includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
+          excludeCidrs: excludeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
           dualStack,
           dnsHijack,
         },
@@ -118,6 +124,8 @@
       addr = config.tun.addr;
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
+      includeCidrs = config.tun.includeCidrs.join('\n');
+      excludeCidrs = config.tun.excludeCidrs.join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       saved = true;
@@ -277,6 +285,40 @@
       />
     </div>
 
+    <div class="config-row config-row-top">
+      <div class="config-row-label">
+        <span class="label-text">TUN 接管网段</span>
+        <span class="label-desc">每行一个 CIDR。留空表示接管全部地址；填写后只为这些目标安装 TUN 路由。</span>
+      </div>
+      <textarea
+        class="cidr-textarea font-mono"
+        bind:value={includeCidrs}
+        oninput={markDirty}
+        disabled={locked}
+        rows="4"
+        placeholder="留空表示全部"
+        spellcheck="false"
+        aria-label="TUN 接管网段"
+      ></textarea>
+    </div>
+
+    <div class="config-row config-row-top">
+      <div class="config-row-label">
+        <span class="label-text">TUN 排除网段</span>
+        <span class="label-desc">每行一个 CIDR。匹配目标保留系统原有路由，不进入 TUN；例如 WireGuard 内网可填写 16.0.0.0/8。</span>
+      </div>
+      <textarea
+        class="cidr-textarea font-mono"
+        bind:value={excludeCidrs}
+        oninput={markDirty}
+        disabled={locked}
+        rows="4"
+        placeholder="例如 16.0.0.0/8"
+        spellcheck="false"
+        aria-label="TUN 排除网段"
+      ></textarea>
+    </div>
+
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">DNS 劫持</span>
@@ -361,6 +403,28 @@
 
   .config-row:last-child {
     border-bottom: none;
+  }
+
+  .config-row-top {
+    align-items: flex-start;
+  }
+
+  .cidr-textarea {
+    width: 260px;
+    min-height: 82px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--background);
+    padding: 8px 10px;
+    color: var(--foreground);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .cidr-textarea:focus {
+    border-color: var(--ring);
+    outline: none;
   }
 
   .config-row-label {

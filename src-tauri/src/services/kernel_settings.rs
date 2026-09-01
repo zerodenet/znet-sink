@@ -127,6 +127,14 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
         .take()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    settings.tun.include_cidrs = super::app_config::normalize_tun_cidrs(
+        std::mem::take(&mut settings.tun.include_cidrs),
+        "tun.includeCidrs",
+    )?;
+    settings.tun.exclude_cidrs = super::app_config::normalize_tun_cidrs(
+        std::mem::take(&mut settings.tun.exclude_cidrs),
+        "tun.excludeCidrs",
+    )?;
 
     let (tun_addr, _) = validate_cidr(&settings.tun.addr, "tun.addr")?;
     let tun_mask = settings
@@ -359,6 +367,9 @@ mod tests {
         bundle.settings.tun.mask = " 255.255.255.252 ".to_string();
         bundle.settings.tun.tag = " tun-in ".to_string();
         bundle.settings.tun.secondary_addr = Some(" fd66::1/64 ".to_string());
+        bundle.settings.tun.include_cidrs = vec![" 0.0.0.0/0 ".to_string()];
+        bundle.settings.tun.exclude_cidrs =
+            vec![" 16.0.0.0/8 ".to_string(), "16.0.0.0/8".to_string()];
 
         let imported = import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).unwrap();
 
@@ -367,6 +378,21 @@ mod tests {
         assert_eq!(imported.tun.mask, "255.255.255.252");
         assert_eq!(imported.tun.tag, "tun-in");
         assert_eq!(imported.tun.secondary_addr.as_deref(), Some("fd66::1/64"));
+        assert_eq!(imported.tun.include_cidrs, vec!["0.0.0.0/0"]);
+        assert_eq!(imported.tun.exclude_cidrs, vec!["16.0.0.0/8"]);
+    }
+
+    #[test]
+    fn invalid_imported_tun_route_cidr_never_produces_a_candidate() {
+        let current = AppConfig::default();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&current),
+        };
+        bundle.settings.tun.exclude_cidrs = vec!["16.0.0.0/99".to_string()];
+
+        assert!(import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).is_err());
     }
 
     #[test]

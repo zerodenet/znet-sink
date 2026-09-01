@@ -10,6 +10,8 @@ const commandRegistry = read('src-tauri/src/lib.rs');
 const model = read('src-tauri/src/models/app_config.rs');
 const migration = read('src-tauri/src/services/kernel_settings.rs');
 const overlay = read('src-tauri/src/services/rule_overlay.rs');
+const tunRuntime = read('src-tauri/src/kernel/zero/runtime.rs');
+const tunPanel = read('src/lib/components/settings/TunSettingsPanel.svelte');
 
 assert.ok(
   panel.includes('客户端内核配置迁移') &&
@@ -36,6 +38,8 @@ assert.match(model, /pub tun: AppTunConfig/);
 assert.match(model, /pub dns: AppDnsConfig/);
 assert.match(model, /pub routing: AppRoutingConfig/);
 assert.match(model, /pub url_test: AppUrlTestConfig/);
+assert.match(model, /pub include_cidrs: Vec<String>/);
+assert.match(model, /pub exclude_cidrs: Vec<String>/);
 assert.match(
   model.slice(model.indexOf('impl AppTunConfig'), model.indexOf('impl Default for AppLocalProxyConfig')),
   /enabled: Some\(false\)/,
@@ -53,6 +57,13 @@ assert.ok(
     importCommand.indexOf('rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?') <
     importCommand.indexOf('app_config::replace(state.inner(), new_config.clone())?'),
   'import must parse and compose a detached candidate against the active profile before persisting it',
+);
+assert.ok(
+  tunRuntime.includes('"include_cidrs"') &&
+    tunRuntime.includes('"exclude_cidrs"') &&
+    tunPanel.includes('TUN 接管网段') &&
+    tunPanel.includes('TUN 排除网段'),
+  'portable TUN route inclusion and exclusion must reach tun.start and remain manageable',
 );
 assert.ok(
   importCommand.includes('app_config::replace(state.inner(), old_config.clone())') &&

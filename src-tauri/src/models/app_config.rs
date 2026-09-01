@@ -163,6 +163,12 @@ pub struct AppTunConfig {
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
+    /// Positive automatic-route capture set. Empty means full capture.
+    #[serde(default)]
+    pub include_cidrs: Vec<String>,
+    /// Destination CIDRs that must remain on the host routing table.
+    #[serde(default)]
+    pub exclude_cidrs: Vec<String>,
     #[serde(default = "default_true")]
     pub dual_stack: bool,
     #[serde(default)]
@@ -243,6 +249,8 @@ impl Default for AppTunConfig {
             secondary_addr: None,
             tag: default_tun_tag(),
             mtu: default_tun_mtu(),
+            include_cidrs: Vec::new(),
+            exclude_cidrs: Vec::new(),
             dual_stack: true,
             dns_hijack: false,
         }
@@ -399,6 +407,8 @@ pub struct AppTunConfigPatch {
     pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+    pub include_cidrs: Option<Vec<String>>,
+    pub exclude_cidrs: Option<Vec<String>>,
     pub dual_stack: Option<bool>,
     pub dns_hijack: Option<bool>,
 }

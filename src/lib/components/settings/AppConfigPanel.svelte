@@ -435,8 +435,8 @@
 
       <div class="proxy-bypass-editor">
         <div class="config-row-label">
-          <span class="label-text">本地地址绕过</span>
-          <span class="label-desc">每行一项。匹配的本机或局域网地址不会进入系统代理。</span>
+          <span class="label-text">系统代理绕过</span>
+          <span class="label-desc">每行一项，仅作用于系统代理，不等于 TUN 排除。支持 localhost、域名和 16.* 这类主机模式；整字节 IPv4 CIDR（如 16.0.0.0/8）保存时会自动转换。</span>
         </div>
         <textarea
           class="bypass-textarea"

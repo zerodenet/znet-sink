@@ -84,6 +84,8 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     }
     params.insert("tag".to_string(), json!(tun.tag));
     params.insert("mtu".to_string(), json!(tun.mtu));
+    params.insert("include_cidrs".to_string(), json!(tun.include_cidrs));
+    params.insert("exclude_cidrs".to_string(), json!(tun.exclude_cidrs));
 
     // ZNet-Sink's command-managed TUN mode means full system capture. These
     // are Zero runtime parameters, but they are client policy rather than user
@@ -246,6 +248,8 @@ mod tests {
             secondary_addr: Some("fd88::1/64".to_string()),
             tag: "tun-in".to_string(),
             mtu: 1400,
+            include_cidrs: vec!["0.0.0.0/0".to_string()],
+            exclude_cidrs: vec!["16.0.0.0/8".to_string()],
             dual_stack: true,
             dns_hijack: true,
         };
@@ -256,6 +260,8 @@ mod tests {
         assert_eq!(params["secondary_addr"], "fd88::1/64");
         assert_eq!(params["tag"], "tun-in");
         assert_eq!(params["mtu"], 1400);
+        assert_eq!(params["include_cidrs"], json!(["0.0.0.0/0"]));
+        assert_eq!(params["exclude_cidrs"], json!(["16.0.0.0/8"]));
         assert_eq!(params["auto_route"], true);
         assert_eq!(params["strict_route"], true);
         assert_eq!(params["dual_stack"], true);
