@@ -43,6 +43,10 @@ export interface DnsAutomaticDefaults {
   addressFamily?: DnsAddressFamilyPolicy;
 }
 
+// Client-only semantic value. The Rust composition layer resolves it against
+// the target profile's route.final before sending a configuration to Zero.
+export const DNS_DETOUR_ROUTE_FINAL = '$route_final';
+
 const DEFAULT_REVERSE_MAPPING = {
   max_entries: 1024,
   max_domains_per_address: 8,
@@ -336,7 +340,10 @@ export function validateDnsDraft(
           message: 'DoQ 暂不支持通过出站转发，请移除 detour 或改用 DoH/DoT',
           severity: 'error',
         });
-      } else if (detour && context.routeTargetTags && !context.routeTargetTags.has(detour)) {
+      } else if (detour
+        && detour !== DNS_DETOUR_ROUTE_FINAL
+        && context.routeTargetTags
+        && !context.routeTargetTags.has(detour)) {
         issues.push({
           field: `servers.${name}.detour`,
           message: `出站 ${detour} 已不存在或未进入活动配置`,

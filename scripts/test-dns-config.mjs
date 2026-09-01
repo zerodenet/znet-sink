@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { effectiveConfigDiff } from '../src/lib/services/config-diff.ts';
 import { projectClientKernelFeatures } from '../src/lib/services/kernel-capabilities.ts';
 import {
+  DNS_DETOUR_ROUTE_FINAL,
   createDefaultDnsConfig,
   parseDnsConfig,
   projectDnsSettings,
   readDnsSettings,
   recommendedDnsAddressFamily,
   setDnsMode,
+  validateDnsDraft,
 } from '../src/lib/services/dns-config.ts';
 
 const service = readFileSync('src/lib/services/dns-config.ts', 'utf8');
@@ -20,6 +22,8 @@ const dnsTransaction = readFileSync('src-tauri/src/commands/gui_core/dns_transac
 const tunPanel = readFileSync('src/lib/components/settings/TunSettingsPanel.svelte', 'utf8');
 const recoveryActions = readFileSync('src/lib/components/core/ErrorRecoveryActions.svelte', 'utf8');
 const configService = readFileSync('src/lib/services/config.ts', 'utf8');
+const ruleOverlay = readFileSync('src-tauri/src/services/rule_overlay.rs', 'utf8');
+const proxyConfig = readFileSync('src-tauri/src/services/proxy_config.rs', 'utf8');
 
 assert.match(service, /enabled: draft\.mode !== 'disabled'/);
 assert.match(service, /config: clone\(draft\.dns\)/);
@@ -36,6 +40,7 @@ assert.match(service, /export function getDnsAddressFamilyPolicy\(dns: DnsConfig
 assert.match(service, /export function setDnsAddressFamilyPolicy\(/);
 assert.match(service, /field: 'policy\.address_family'/);
 assert.match(service, /routeTargetTags\?: ReadonlySet<string>/);
+assert.match(service, /detour !== DNS_DETOUR_ROUTE_FINAL/);
 assert.match(service, /policy\.node_server/);
 assert.match(service, /policy\.direct_server/);
 assert.match(service, /policy\.fallback_servers/);
@@ -61,6 +66,7 @@ assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
 assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
 assert.match(panel, /aria-label="DNS 应答地址族策略"/);
 assert.match(panel, /aria-label="DNS 上游经由出站"/);
+assert.match(panel, /跟随当前配置默认出站/);
 assert.match(panel, /aria-label="节点解析服务器"/);
 assert.match(panel, /aria-label="直连解析服务器"/);
 assert.match(panel, /通用回退链/);
@@ -116,6 +122,14 @@ assert.match(parsing, /"original_ip", "originalIp"/);
 assert.match(parsing, /"fake_ip_reverse_status", "fakeIpReverseStatus"/);
 assert.match(parsing, /"connection_attempts"/);
 assert.match(parsing, /"retired_addresses"/);
+assert.match(ruleOverlay, /resolve_dns_detours\(config, &mut dns\)\?/);
+assert.match(ruleOverlay, /route_final_dns_detour/);
+const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
+assert.ok(
+  activation.indexOf('validate_config(content.clone(), options.clone())')
+    < activation.indexOf('match adapter.apply_config(content, options).await'),
+  'profile activation must validate the composed target config before hot apply or restart fallback',
+);
 
 const features = projectClientKernelFeatures({
   available: true,
@@ -185,6 +199,31 @@ assert.equal(loaded.dnsHijack, true);
 assert.deepEqual(loaded.dns.dispatch, sourceWithCnameTarget.config.dispatch);
 assert.deepEqual(projectDnsSettings(sourceWithCnameTarget, loaded), sourceWithCnameTarget);
 assert.deepEqual(parseDnsConfig(sourceWithCnameTarget.config), sourceWithCnameTarget.config);
+
+const followRouteFinalDraft = readDnsSettings({
+  enabled: true,
+  dnsHijack: false,
+  config: {
+    ...capableFakeIp,
+    servers: {
+      ...capableFakeIp.servers,
+      cloudflare: {
+        type: 'doh',
+        host: 'cloudflare-dns.com',
+        port: 443,
+        path: '/dns-query',
+        bootstrap: ['1.1.1.1'],
+        detour: DNS_DETOUR_ROUTE_FINAL,
+      },
+    },
+  },
+}, false);
+assert.equal(
+  validateDnsDraft(followRouteFinalDraft, { routeTargetTags: new Set(['Proxy']) })
+    .some((issue) => issue.field === 'servers.cloudflare.detour'),
+  false,
+  'client-only route.final detour must not be reported as a stale concrete target',
+);
 
 const realMode = setDnsMode(loaded, 'real', {
   features: fullFeatures,

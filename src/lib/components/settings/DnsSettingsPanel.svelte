@@ -8,6 +8,7 @@
   import * as Select from '$lib/components/ui/select';
   import { Switch } from '$lib/components/ui/switch';
   import {
+    DNS_DETOUR_ROUTE_FINAL,
     applyGlobalDnsSettings,
     createDefaultDnsConfig,
     createDnsServer,
@@ -165,6 +166,12 @@
     { value: 'rule_set', label: '规则集', placeholder: 'AI-Suite' },
   ] as const;
   const unsetSelection = '__znet_unset__';
+
+  function dnsDetourLabel(detour?: string): string {
+    if (!detour) return '直接连接';
+    if (detour === DNS_DETOUR_ROUTE_FINAL) return '跟随当前配置默认出站';
+    return detour;
+  }
   type PolicyServerField = 'node_server' | 'direct_server';
   type PolicyFallbackField = 'fallback_servers' | 'node_fallback_servers' | 'direct_fallback_servers';
   type ReverseMappingField = 'max_entries' | 'max_domains_per_address' | 'max_ttl_seconds';
@@ -1242,18 +1249,19 @@
                   value={serverDraft.detour ?? unsetSelection}
                   onValueChange={(value) => { if (value) serverDraft = { ...serverDraft, detour: value === unsetSelection ? undefined : value }; }}
                 >
-                  <Select.Trigger class="w-full" aria-label="DNS 上游经由出站">{serverDraft.detour ?? '直接连接'}</Select.Trigger>
+                  <Select.Trigger class="w-full" aria-label="DNS 上游经由出站">{dnsDetourLabel(serverDraft.detour)}</Select.Trigger>
                   <Select.Content>
                     <Select.Item value={unsetSelection} label="直接连接">直接连接</Select.Item>
+                    <Select.Item value={DNS_DETOUR_ROUTE_FINAL} label="跟随当前配置默认出站">跟随当前配置默认出站</Select.Item>
                     {#each routeTargetOptions as target}
                       <Select.Item value={target.tag} label={`${target.tag}（${target.kind}）`}>{target.tag}（{target.kind}）</Select.Item>
                     {/each}
-                    {#if serverDraft.detour && !routeTargetTags.has(serverDraft.detour)}
+                    {#if serverDraft.detour && serverDraft.detour !== DNS_DETOUR_ROUTE_FINAL && !routeTargetTags.has(serverDraft.detour)}
                       <Select.Item value={serverDraft.detour} label={`${serverDraft.detour}（已失效）`}>{serverDraft.detour}（已失效）</Select.Item>
                     {/if}
                   </Select.Content>
                 </Select.Root>
-                <small>UDP 将改用 DNS-over-TCP；DoH/DoT 复用所选出站。启用后还必须在“节点解析”选择直连 DNS。</small>
+                <small>“跟随当前配置默认出站”会在切换配置时解析为该配置的 route.final；UDP 将改用 DNS-over-TCP，DoH/DoT 复用所选出站。启用后还必须在“节点解析”选择直连 DNS。</small>
               </label>
             {:else}
               <div class="system-note wide">当前内核不支持 DoQ detour；为避免静默直连泄露，表单不会写入该字段。</div>
