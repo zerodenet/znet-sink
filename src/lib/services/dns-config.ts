@@ -175,10 +175,14 @@ export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (!isObject(value) || !isObject(value.servers) || typeof value.default_server !== 'string') {
     return null;
   }
-  if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
-  if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
-  if (Object.hasOwn(value, 'policy') && !isObject(value.policy)) return null;
-  if (Object.hasOwn(value, 'reverse_mapping') && !isObject(value.reverse_mapping)) return null;
+  // Client-created drafts retain optional keys with `undefined`, while the
+  // same values disappear after JSON serialization. Treat both shapes alike
+  // so validation never discards an in-memory draft and silently replaces it
+  // with recommended defaults.
+  if (value.dispatch !== undefined && !Array.isArray(value.dispatch)) return null;
+  if (value.answer !== undefined && !isObject(value.answer)) return null;
+  if (value.policy !== undefined && !isObject(value.policy)) return null;
+  if (value.reverse_mapping !== undefined && !isObject(value.reverse_mapping)) return null;
   const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
   if (answer.type === 'fake_ip') {
     answer.exclude_domains = Array.isArray(answer.exclude_domains)
