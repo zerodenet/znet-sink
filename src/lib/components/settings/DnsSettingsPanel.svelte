@@ -945,7 +945,7 @@
       <label class="wide">
         <span>拒绝响应地址（每行一个 CIDR）</span>
         <textarea value={(draft.dns.policy?.reject_address_cidrs ?? []).join('\n')} placeholder="例如 0.0.0.0/32" oninput={(event) => changeRejectedCidrs(event.currentTarget.value)}></textarea>
-        <small>命中这些地址的响应不会进入缓存，并继续尝试回退服务器。</small>
+        <small>仅校验真实 DNS 上游响应：命中后不缓存并继续回退。它不会排除 Fake-IP，也不会绕过系统代理或 TUN；内网域名请使用 Fake-IP“排除域名”，内网网段请使用“TUN 排除网段”。</small>
       </label>
     </div>
 
@@ -1117,7 +1117,7 @@
             <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" disabled={compatibility.features?.dnsFakeIpDualStack.state === 'unsupported'} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
-            <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
+            <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea><small>这些域名返回真实 DNS 结果，不分配 Fake-IP。按目标网段绕过 TUN 请到 TUN 设置配置排除 CIDR。</small></label>
           </div>
         </section>
       {/if}
