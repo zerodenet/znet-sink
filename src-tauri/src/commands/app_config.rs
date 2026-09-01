@@ -40,6 +40,7 @@ pub async fn app_config_import_kernel_settings(
     if new_config == old_config {
         return Ok(new_config);
     }
+    rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?;
 
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;

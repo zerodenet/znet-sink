@@ -9,6 +9,7 @@ const commands = read('src-tauri/src/commands/app_config.rs');
 const commandRegistry = read('src-tauri/src/lib.rs');
 const model = read('src-tauri/src/models/app_config.rs');
 const migration = read('src-tauri/src/services/kernel_settings.rs');
+const overlay = read('src-tauri/src/services/rule_overlay.rs');
 
 assert.ok(
   panel.includes('客户端内核配置迁移') &&
@@ -43,8 +44,10 @@ assert.doesNotMatch(
 const importCommand = commands.slice(commands.indexOf('pub async fn app_config_import_kernel_settings'));
 assert.ok(
   importCommand.indexOf('kernel_settings::import_from_path(&old_config, path)?') <
+    importCommand.indexOf('rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?') &&
+    importCommand.indexOf('rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?') <
     importCommand.indexOf('app_config::replace(state.inner(), new_config.clone())?'),
-  'import must parse and validate a detached candidate before persisting it',
+  'import must parse and compose a detached candidate against the active profile before persisting it',
 );
 assert.ok(
   importCommand.includes('app_config::replace(state.inner(), old_config.clone())') &&
@@ -56,6 +59,12 @@ assert.ok(
     migration.includes('unsupported client kernel settings schema') &&
     migration.includes('MAX_IMPORT_BYTES'),
   'import must support legacy projection and reject unsupported or oversized bundles',
+);
+assert.ok(
+  overlay.includes('pub(crate) fn validate_app_config_candidate') &&
+    overlay.includes('Some(app_config.url_test.tolerance_ms)') &&
+    overlay.includes('Some(&app_config.dns)'),
+  'candidate validation must use the imported DNS, routing, and URLTest settings',
 );
 
 console.log('kernel-settings: ok');
