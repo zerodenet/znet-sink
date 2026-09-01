@@ -497,6 +497,7 @@
 
   function policyPrimaryFor(field: PolicyFallbackField): string | undefined {
     if (!draft?.dns.policy) return undefined;
+    if (field === 'fallback_servers') return draft.dns.default_server;
     if (field === 'node_fallback_servers') return draft.dns.policy.node_server;
     if (field === 'direct_fallback_servers') return draft.dns.policy.direct_server;
     return undefined;

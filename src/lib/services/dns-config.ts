@@ -433,7 +433,7 @@ export function validateDnsDraft(
         issues.push({ field, message: `服务器 ${value} 不存在`, severity: 'error' });
       }
     };
-    validateFallbacks('policy.fallback_servers', policy.fallback_servers);
+    validateFallbacks('policy.fallback_servers', policy.fallback_servers, draft.dns.default_server);
     validatePrimary('policy.node_server', policy.node_server);
     validatePrimary('policy.direct_server', policy.direct_server);
     validateFallbacks('policy.node_fallback_servers', policy.node_fallback_servers, policy.node_server);

@@ -36,6 +36,11 @@ assert.match(model, /pub tun: AppTunConfig/);
 assert.match(model, /pub dns: AppDnsConfig/);
 assert.match(model, /pub routing: AppRoutingConfig/);
 assert.match(model, /pub url_test: AppUrlTestConfig/);
+assert.match(
+  model.slice(model.indexOf('impl AppTunConfig'), model.indexOf('impl Default for AppLocalProxyConfig')),
+  /enabled: Some\(false\)/,
+  'new installs must keep privileged TUN explicitly disabled while retaining prepared defaults',
+);
 assert.doesNotMatch(
   model.slice(model.indexOf('pub struct PortableCoreConfig'), model.indexOf('impl ClientKernelSettings')),
   /executable_path|working_dir|config_path|socket|download_url/,
@@ -51,13 +56,17 @@ assert.ok(
 );
 assert.ok(
   importCommand.includes('app_config::replace(state.inner(), old_config.clone())') &&
-    importCommand.includes('restart_core_and_restore_tun(app_handle.clone(), state.inner())'),
+    importCommand.includes('legacy_tun_runtime_enabled') &&
+    importCommand.includes('rollback_tun_override') &&
+    importCommand.includes('restart_core_and_restore_tun('),
   'failed runtime application must restore both persisted settings and app-owned TUN',
 );
 assert.ok(
   migration.includes('"gui.app.v1"') &&
     migration.includes('unsupported client kernel settings schema') &&
-    migration.includes('MAX_IMPORT_BYTES'),
+    migration.includes('MAX_IMPORT_BYTES') &&
+    migration.includes('is_contiguous_mask') &&
+    migration.includes('validate_tun_owned_addresses'),
   'import must support legacy projection and reject unsupported or oversized bundles',
 );
 assert.ok(

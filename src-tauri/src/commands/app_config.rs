@@ -21,11 +21,19 @@ pub fn app_config_export_kernel_settings(
     kernel_settings::export_to_path(&config, path)
 }
 
-async fn restart_core_and_restore_tun(app_handle: AppHandle, state: &AppState) -> AppResult<()> {
+async fn restart_core_and_restore_tun(
+    app_handle: AppHandle,
+    state: &AppState,
+    tun_desired_override: Option<bool>,
+) -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(move || core_process::restart(app_handle).map(|_| ()))
         .await
         .map_err(|error| AppError::internal(format!("core transition task failed: {error}")))??;
-    crate::commands::core_process::restore_app_tun_after_core_transition(state).await
+    crate::commands::core_process::restore_app_tun_after_core_transition_with_desired(
+        state,
+        tun_desired_override,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -44,22 +52,44 @@ pub async fn app_config_import_kernel_settings(
 
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let legacy_tun_runtime_enabled = if kernel_running
+        && (old_config.tun.enabled.is_none() || new_config.tun.enabled.is_none())
+    {
+        Some(crate::commands::core_process::app_tun_runtime_enabled(state.inner()).await?)
+    } else {
+        None
+    };
     let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
     app_config::replace(state.inner(), new_config.clone())?;
 
     if kernel_running {
-        let transition = restart_core_and_restore_tun(app_handle.clone(), state.inner()).await;
+        let imported_tun_override = new_config
+            .tun
+            .enabled
+            .is_none()
+            .then_some(legacy_tun_runtime_enabled.unwrap_or(false));
+        let transition =
+            restart_core_and_restore_tun(app_handle.clone(), state.inner(), imported_tun_override)
+                .await;
 
         if let Err(error) = transition {
             let storage_rollback = app_config::replace(state.inner(), old_config.clone())
                 .err()
                 .map(|rollback| rollback.message);
             crate::kernel::connection::reset();
-            let mut runtime_rollback =
-                restart_core_and_restore_tun(app_handle.clone(), state.inner())
-                    .await
-                    .err()
-                    .map(|rollback| rollback.message);
+            let rollback_tun_override = old_config
+                .tun
+                .enabled
+                .is_none()
+                .then_some(legacy_tun_runtime_enabled.unwrap_or(false));
+            let mut runtime_rollback = restart_core_and_restore_tun(
+                app_handle.clone(),
+                state.inner(),
+                rollback_tun_override,
+            )
+            .await
+            .err()
+            .map(|rollback| rollback.message);
             if managed_proxy_enabled
                 && runtime_rollback.is_none()
                 && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)

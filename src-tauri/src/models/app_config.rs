@@ -312,6 +312,11 @@ impl ClientKernelSettings {
 impl AppTunConfig {
     pub fn recommended_default() -> Self {
         Self {
+            // New installs must not let Lite's legacy `None` compatibility
+            // state turn auto-connect into an implicit privileged TUN start.
+            // Deserializing an older config still uses `Default` and therefore
+            // preserves `None` until that user explicitly toggles TUN.
+            enabled: Some(false),
             dns_hijack: true,
             ..Self::default()
         }
@@ -602,6 +607,7 @@ mod tests {
     #[test]
     fn new_install_enables_recommended_dns_and_tun_hijack_defaults() {
         let config = AppConfig::default();
+        assert_eq!(config.tun.enabled, Some(false));
         assert!(config.dns.enabled);
         assert!(config.dns.dns_hijack);
         assert!(config.tun.dns_hijack);

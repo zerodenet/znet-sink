@@ -62,6 +62,11 @@ pub fn import_from_path(current: &AppConfig, path: impl AsRef<Path>) -> AppResul
         message: format!("failed to read client kernel settings: {error}"),
         details: Some(serde_json::json!({ "path": path.display().to_string() })),
     })?;
+    if content.len() as u64 > MAX_IMPORT_BYTES {
+        return Err(AppError::invalid_argument(
+            "client kernel settings file must not exceed 2 MiB",
+        ));
+    }
     import_from_str(current, &content)
 }
 
@@ -107,11 +112,26 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
     settings.core.network_probe_urls =
         super::app_config::normalize_network_probe_urls(settings.core.network_probe_urls.clone())?;
 
-    let tun_addr = validate_cidr(&settings.tun.addr, "tun.addr")?;
+    settings.tun.name = settings
+        .tun
+        .name
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    settings.tun.addr = settings.tun.addr.trim().to_owned();
+    settings.tun.mask = settings.tun.mask.trim().to_owned();
+    settings.tun.tag = settings.tun.tag.trim().to_owned();
+    settings.tun.secondary_addr = settings
+        .tun
+        .secondary_addr
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    let (tun_addr, _) = validate_cidr(&settings.tun.addr, "tun.addr")?;
     let tun_mask = settings
         .tun
         .mask
-        .trim()
         .parse::<IpAddr>()
         .map_err(|_| AppError::invalid_argument("tun.mask must be an IP address"))?;
     if tun_addr.is_ipv4() != tun_mask.is_ipv4() {
@@ -119,25 +139,60 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
             "tun.addr and tun.mask must use the same address family",
         ));
     }
-    if settings.tun.tag.trim().is_empty() {
+    if !is_contiguous_mask(tun_mask) {
+        return Err(AppError::invalid_argument(
+            "tun.mask must be a contiguous network mask",
+        ));
+    }
+    if settings.tun.tag.is_empty() {
         return Err(AppError::invalid_argument("tun.tag must not be empty"));
     }
     if settings.tun.mtu < 576 {
         return Err(AppError::invalid_argument("tun.mtu must be at least 576"));
     }
-    if let Some(address) = settings.tun.secondary_addr.as_deref() {
-        validate_cidr(address, "tun.secondaryAddr")?;
+    let secondary_addr = if let Some(address) = settings.tun.secondary_addr.as_deref() {
+        if !settings.tun.dual_stack {
+            return Err(AppError::invalid_argument(
+                "tun.secondaryAddr requires tun.dualStack=true",
+            ));
+        }
+        let (address, _) = validate_cidr(address, "tun.secondaryAddr")?;
+        if address.is_ipv4() == tun_addr.is_ipv4() {
+            return Err(AppError::invalid_argument(
+                "tun.addr and tun.secondaryAddr must use different address families",
+            ));
+        }
+        Some(address)
+    } else if settings.tun.dual_stack {
+        Some(if tun_addr.is_ipv4() {
+            "fd66::1".parse().expect("static IPv6 address")
+        } else {
+            "10.66.0.1".parse().expect("static IPv4 address")
+        })
+    } else {
+        None
+    };
+
+    if let Some(dns) = settings.dns.config.as_ref() {
+        dns.validate_client_shape()?;
+    } else if settings.dns.enabled {
+        return Err(AppError::invalid_argument(
+            "dns.config is required when dns.enabled is true",
+        ));
     }
 
     if settings.dns.enabled {
+        let mut owned_addresses = vec![tun_addr];
+        if let Some(address) = secondary_addr {
+            owned_addresses.push(address);
+        }
+        owned_addresses.extend(owned_addresses.clone().into_iter().filter_map(next_ip));
         settings
             .dns
             .config
             .as_ref()
-            .ok_or_else(|| {
-                AppError::invalid_argument("dns.config is required when dns.enabled is true")
-            })?
-            .validate_client_shape()?;
+            .expect("enabled DNS config was checked")
+            .validate_tun_owned_addresses(&owned_addresses)?;
     }
     let dns_hijack = settings.dns.enabled && settings.dns.dns_hijack;
     settings.dns.dns_hijack = dns_hijack;
@@ -145,7 +200,7 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
     Ok(())
 }
 
-fn validate_cidr(value: &str, field: &str) -> AppResult<IpAddr> {
+fn validate_cidr(value: &str, field: &str) -> AppResult<(IpAddr, u8)> {
     let (address, prefix) = value
         .trim()
         .split_once('/')
@@ -162,7 +217,30 @@ fn validate_cidr(value: &str, field: &str) -> AppResult<IpAddr> {
             "{field} prefix must be between 0 and {maximum}"
         )));
     }
-    Ok(address)
+    Ok((address, prefix))
+}
+
+fn is_contiguous_mask(mask: IpAddr) -> bool {
+    let bits = match mask {
+        IpAddr::V4(mask) => u32::from(mask) as u128,
+        IpAddr::V6(mask) => u128::from(mask),
+    };
+    let relevant = if mask.is_ipv4() { bits << 96 } else { bits };
+    let inverted = !relevant;
+    inverted == 0 || (inverted & inverted.wrapping_add(1)) == 0
+}
+
+fn next_ip(address: IpAddr) -> Option<IpAddr> {
+    match address {
+        IpAddr::V4(address) => u32::from(address)
+            .checked_add(1)
+            .map(std::net::Ipv4Addr::from)
+            .map(IpAddr::V4),
+        IpAddr::V6(address) => u128::from(address)
+            .checked_add(1)
+            .map(std::net::Ipv6Addr::from)
+            .map(IpAddr::V6),
+    }
 }
 
 fn normalized_path(path: impl AsRef<Path>) -> AppResult<PathBuf> {
@@ -224,6 +302,27 @@ mod tests {
     }
 
     #[test]
+    fn sparse_legacy_app_config_keeps_historical_dns_and_tun_semantics() {
+        let current = AppConfig::default();
+        let imported = import_from_str(
+            &current,
+            &serde_json::json!({
+                "schemaVersion": "gui.app.v1",
+                "core": { "autoStart": false },
+                "tun": { "mtu": 1280 }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(!imported.core.auto_start);
+        assert_eq!(imported.tun.mtu, 1280);
+        assert!(imported.tun.enabled.is_none());
+        assert!(!imported.dns.enabled);
+        assert!(imported.dns.config.is_none());
+    }
+
+    #[test]
     fn invalid_or_future_bundle_never_produces_a_candidate() {
         let current = AppConfig::default();
         assert!(import_from_str(&current, "{not-json").is_err());
@@ -243,6 +342,96 @@ mod tests {
             settings: ClientKernelSettings::from_app_config(&current),
         };
         bundle.settings.tun.addr = "10.66.0.1/99".to_string();
+
+        assert!(import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).is_err());
+    }
+
+    #[test]
+    fn imported_tun_values_are_normalized_before_persistence() {
+        let current = AppConfig::default();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&current),
+        };
+        bundle.settings.tun.name = Some("  PortableTun  ".to_string());
+        bundle.settings.tun.addr = " 10.66.0.1/30 ".to_string();
+        bundle.settings.tun.mask = " 255.255.255.252 ".to_string();
+        bundle.settings.tun.tag = " tun-in ".to_string();
+        bundle.settings.tun.secondary_addr = Some(" fd66::1/64 ".to_string());
+
+        let imported = import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).unwrap();
+
+        assert_eq!(imported.tun.name.as_deref(), Some("PortableTun"));
+        assert_eq!(imported.tun.addr, "10.66.0.1/30");
+        assert_eq!(imported.tun.mask, "255.255.255.252");
+        assert_eq!(imported.tun.tag, "tun-in");
+        assert_eq!(imported.tun.secondary_addr.as_deref(), Some("fd66::1/64"));
+    }
+
+    #[test]
+    fn invalid_tun_mask_or_secondary_address_never_produces_a_candidate() {
+        let current = AppConfig::default();
+        let mutations: [fn(&mut ClientKernelSettings); 3] = [
+            |settings: &mut ClientKernelSettings| {
+                settings.tun.mask = "255.0.255.0".to_string();
+            },
+            |settings: &mut ClientKernelSettings| {
+                settings.tun.secondary_addr = Some("10.67.0.1/24".to_string());
+            },
+            |settings: &mut ClientKernelSettings| {
+                settings.tun.dual_stack = false;
+                settings.tun.secondary_addr = Some("fd66::1/64".to_string());
+            },
+        ];
+        for mutate in mutations {
+            let mut bundle = ClientKernelSettingsBundle {
+                schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+                exported_at_unix_ms: 1,
+                settings: ClientKernelSettings::from_app_config(&current),
+            };
+            mutate(&mut bundle.settings);
+            assert!(import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn fake_ip_pool_overlapping_tun_is_rejected_before_persistence() {
+        let current = AppConfig::default();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&current),
+        };
+        bundle.settings.dns.config = Some(
+            serde_json::from_value(serde_json::json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system",
+                "answer": { "type": "fake_ip", "cidr": "10.66.0.0/24" }
+            }))
+            .unwrap(),
+        );
+
+        assert!(import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).is_err());
+    }
+
+    #[test]
+    fn disabled_but_invalid_dns_is_rejected_before_persistence() {
+        let current = AppConfig::default();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&current),
+        };
+        bundle.settings.dns.enabled = false;
+        bundle.settings.dns.config = Some(
+            serde_json::from_value(serde_json::json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system",
+                "answer": { "type": "fake_ip", "cidr": "not-a-cidr" }
+            }))
+            .unwrap(),
+        );
 
         assert!(import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).is_err());
     }

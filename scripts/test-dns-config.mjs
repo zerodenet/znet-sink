@@ -200,6 +200,21 @@ assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['google-bootstra
 assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, undefined);
 assert.equal(recommendedDns.servers['google-bootstrap'].detour, undefined);
 
+const repeatedPrimaryFallback = readDnsSettings({
+  enabled: true,
+  dnsHijack: false,
+  config: {
+    ...recommendedDns,
+    policy: { ...recommendedDns.policy, fallback_servers: ['cloudflare'] },
+  },
+}, false);
+assert.equal(
+  validateDnsDraft(repeatedPrimaryFallback)
+    .some((issue) => issue.field === 'policy.fallback_servers' && issue.severity === 'error'),
+  true,
+  'the general fallback chain must not repeat the default DNS server',
+);
+
 const sourceWithCnameTarget = {
   enabled: true,
   dnsHijack: true,
