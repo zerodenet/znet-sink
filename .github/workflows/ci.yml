@@ -39,6 +39,9 @@ jobs:
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
 
+      - name: Run portable kernel settings contract
+        run: pnpm test:kernel-settings
+
       - name: Check Svelte and TypeScript
         run: pnpm check
 
@@ -66,6 +69,9 @@ jobs:
 
       - name: Run Windows DNS capability and mode matrix
         run: pnpm test:dns-config
+
+      - name: Run Windows portable kernel settings contract
+        run: pnpm test:kernel-settings
 
       - uses: dtolnay/rust-toolchain@stable
         with:

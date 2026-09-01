@@ -3,12 +3,95 @@ use tauri::{AppHandle, Manager, State};
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::models::core_process::CoreProcessState;
+use crate::services::kernel_settings::{self, KernelSettingsExportResult};
 use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
 pub fn app_config_get(state: State<'_, AppState>) -> AppResult<AppConfig> {
     app_config::get(state)
+}
+
+#[tauri::command]
+pub fn app_config_export_kernel_settings(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<KernelSettingsExportResult> {
+    let config = app_config::get(state)?;
+    kernel_settings::export_to_path(&config, path)
+}
+
+async fn restart_core_and_restore_tun(app_handle: AppHandle, state: &AppState) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || core_process::restart(app_handle).map(|_| ()))
+        .await
+        .map_err(|error| AppError::internal(format!("core transition task failed: {error}")))??;
+    crate::commands::core_process::restore_app_tun_after_core_transition(state).await
+}
+
+#[tauri::command]
+pub async fn app_config_import_kernel_settings(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<AppConfig> {
+    let _operation = state.proxy_config_operation().lock().await;
+    let old_config = app_config::get(state.clone())?;
+    let new_config = kernel_settings::import_from_path(&old_config, path)?;
+    if new_config == old_config {
+        return Ok(new_config);
+    }
+
+    let kernel_running =
+        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    app_config::replace(state.inner(), new_config.clone())?;
+
+    if kernel_running {
+        let transition = restart_core_and_restore_tun(app_handle.clone(), state.inner()).await;
+
+        if let Err(error) = transition {
+            let storage_rollback = app_config::replace(state.inner(), old_config.clone())
+                .err()
+                .map(|rollback| rollback.message);
+            crate::kernel::connection::reset();
+            let mut runtime_rollback =
+                restart_core_and_restore_tun(app_handle.clone(), state.inner())
+                    .await
+                    .err()
+                    .map(|rollback| rollback.message);
+            if managed_proxy_enabled
+                && runtime_rollback.is_none()
+                && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+            {
+                if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
+                    &old_config.local_proxy.host,
+                    old_config.local_proxy.port,
+                    &old_config.local_proxy.bypass,
+                ) {
+                    runtime_rollback = Some(format!(
+                        "system proxy rollback failed: {}",
+                        proxy_error.message
+                    ));
+                }
+            }
+
+            let mut message = format!(
+                "failed to apply imported client kernel settings: {}",
+                error.message
+            );
+            if let Some(storage_rollback) = storage_rollback {
+                message.push_str(&format!(
+                    "; configuration rollback failed: {storage_rollback}"
+                ));
+            }
+            if let Some(runtime_rollback) = runtime_rollback {
+                message.push_str(&format!("; runtime rollback failed: {runtime_rollback}"));
+            }
+            return Err(AppError::internal(message));
+        }
+    }
+
+    Ok(new_config)
 }
 
 #[tauri::command]

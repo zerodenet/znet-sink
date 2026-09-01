@@ -123,6 +123,39 @@ export function createDefaultDnsConfig(
   };
 }
 
+export function createRecommendedDnsConfig(
+  mode: Exclude<DnsMode, 'disabled'> = 'real',
+  defaults: DnsAutomaticDefaults = {},
+): DnsConfig {
+  const dns = createDefaultDnsConfig(mode, defaults);
+  dns.servers = {
+    cloudflare: {
+      type: 'doh',
+      host: 'cloudflare-dns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['1.1.1.1', '1.0.0.1'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
+    },
+    google: {
+      type: 'doh',
+      host: 'dns.google',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['8.8.8.8', '8.8.4.4'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
+    },
+    system: createDnsServer('system'),
+  };
+  dns.default_server = 'cloudflare';
+  dns.policy = {
+    ...dns.policy,
+    fallback_servers: ['google', 'system'],
+    node_server: 'system',
+  };
+  return dns;
+}
+
 export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (!isObject(value) || !isObject(value.servers) || typeof value.default_server !== 'string') {
     return null;
@@ -190,7 +223,7 @@ export function readDnsSettings(
   if (!dns) {
     return {
       mode: enabled ? 'real' : 'disabled',
-      dns: createDefaultDnsConfig('real'),
+      dns: createRecommendedDnsConfig('real'),
       dnsHijack: root.dnsHijack === true || appDnsHijack,
       advanced: enabled,
     };

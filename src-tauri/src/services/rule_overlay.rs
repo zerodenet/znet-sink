@@ -10,6 +10,7 @@ use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
 use crate::models::app_config::AppDnsConfig;
 use crate::models::core_process::CoreProcessState;
+use crate::models::dns_config::CLIENT_DNS_DETOUR_ROUTE_FINAL;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
     CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
@@ -22,7 +23,6 @@ use crate::services::{
 use crate::state::app_state::AppState;
 
 const COMMON_TAG_PREFIX: &str = "gui-common-";
-const DNS_DETOUR_ROUTE_FINAL: &str = "$route_final";
 
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
     let enabled = common::lock(state.app_config(), "app_config")?
@@ -127,9 +127,9 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
         .get_mut("servers")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| AppError::invalid_argument("global DNS servers must be a JSON object"))?;
-    let follows_route_final = servers
-        .values()
-        .any(|server| server.get("detour").and_then(Value::as_str) == Some(DNS_DETOUR_ROUTE_FINAL));
+    let follows_route_final = servers.values().any(|server| {
+        server.get("detour").and_then(Value::as_str) == Some(CLIENT_DNS_DETOUR_ROUTE_FINAL)
+    });
     let route_final = follows_route_final
         .then(|| route_final_dns_detour(config, &route_targets))
         .transpose()?;
@@ -153,7 +153,7 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
                 "global DNS server `{name}` has an empty detour"
             )));
         }
-        if detour == DNS_DETOUR_ROUTE_FINAL {
+        if detour == CLIENT_DNS_DETOUR_ROUTE_FINAL {
             match route_final.as_ref().expect("route.final was resolved") {
                 RouteFinalDnsDetour::Direct => {
                     server.remove("detour");
@@ -858,14 +858,14 @@ mod tests {
                 "outbound_groups": [{ "tag": outbound, "type": "selector", "outbounds": [] }],
                 "route": { "final": { "type": "route", "outbound": outbound } }
             });
-            let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
 
             resolve_dns_detours(&config, &mut dns).unwrap();
 
             assert_eq!(dns["servers"]["cloudflare"]["detour"], outbound);
             assert_ne!(
                 dns["servers"]["cloudflare"]["detour"],
-                DNS_DETOUR_ROUTE_FINAL
+                CLIENT_DNS_DETOUR_ROUTE_FINAL
             );
         }
     }
@@ -873,7 +873,7 @@ mod tests {
     #[test]
     fn dns_detour_following_direct_route_final_is_omitted() {
         let config = json!({ "route": { "final": { "type": "direct" } } });
-        let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+        let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
 
         resolve_dns_detours(&config, &mut dns).unwrap();
 
@@ -902,7 +902,7 @@ mod tests {
             json!({ "route": { "final": { "type": "reject" } } }),
             json!({ "route": { "rules": [] } }),
         ] {
-            let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
             let error = resolve_dns_detours(&config, &mut dns).unwrap_err();
             assert_eq!(error.code, "invalid_argument");
             assert!(error.message.contains("route.final"));

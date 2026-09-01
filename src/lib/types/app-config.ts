@@ -75,6 +75,11 @@ export interface AppUrlTestConfig {
   toleranceMs: number;
 }
 
+export interface KernelSettingsExportResult {
+  path: string;
+  schemaVersion: string;
+}
+
 // Patch types for partial updates
 
 export interface AppConfigPatch {

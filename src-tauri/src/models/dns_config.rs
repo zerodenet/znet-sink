@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
+
+pub const CLIENT_DNS_DETOUR_ROUTE_FINAL: &str = "$route_final";
 
 /// Lossless client-side representation of Zero's runtime DNS contract.
 /// Additive fields from a newer kernel are retained instead of silently lost.
@@ -224,6 +226,72 @@ pub enum ClientDnsAnswer {
 }
 
 impl ClientDnsConfig {
+    pub fn recommended_default() -> Self {
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "cloudflare".to_string(),
+            ClientDnsServer::Doh {
+                host: "cloudflare-dns.com".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                ],
+                server_name: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "google".to_string(),
+            ClientDnsServer::Doh {
+                host: "dns.google".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
+                ],
+                server_name: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "system".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+
+        Self {
+            servers,
+            default_server: "cloudflare".to_string(),
+            dispatch: Vec::new(),
+            cache: Some(ClientDnsCache {
+                max_entries: 1024,
+                max_ttl_seconds: None,
+                extra: BTreeMap::new(),
+            }),
+            reverse_mapping: None,
+            answer: ClientDnsAnswer::Real,
+            policy: Some(ClientDnsPolicy {
+                timeout_ms: None,
+                server_timeout_ms: None,
+                fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
+                node_server: Some("system".to_string()),
+                node_fallback_servers: None,
+                direct_server: None,
+                direct_fallback_servers: None,
+                reject_address_cidrs: None,
+                address_family: Some(ClientDnsAddressFamilyPolicy::PreferIpv4),
+                extra: BTreeMap::new(),
+            }),
+            extra: BTreeMap::new(),
+        }
+    }
+
     pub fn validate_client_shape(&self) -> AppResult<()> {
         if self.servers.is_empty() {
             return Err(AppError::invalid_argument(
@@ -255,6 +323,45 @@ impl ClientDnsConfig {
                 return Err(AppError::invalid_argument(format!(
                     "DNS dispatch {index} condition must be an object"
                 )));
+            }
+        }
+        if let Some(policy) = &self.policy {
+            let ensure_server = |field: &str, name: &str| -> AppResult<()> {
+                if self.servers.contains_key(name) {
+                    Ok(())
+                } else {
+                    Err(AppError::invalid_argument(format!(
+                        "DNS policy {field} references undefined server `{name}`"
+                    )))
+                }
+            };
+            for (field, name) in [
+                ("node_server", policy.node_server.as_deref()),
+                ("direct_server", policy.direct_server.as_deref()),
+            ] {
+                if let Some(name) = name {
+                    ensure_server(field, name)?;
+                }
+            }
+            for (field, names) in [
+                ("fallback_servers", policy.fallback_servers.as_deref()),
+                (
+                    "node_fallback_servers",
+                    policy.node_fallback_servers.as_deref(),
+                ),
+                (
+                    "direct_fallback_servers",
+                    policy.direct_fallback_servers.as_deref(),
+                ),
+            ] {
+                for name in names.unwrap_or_default() {
+                    ensure_server(field, name)?;
+                }
+            }
+            if let Some(timeouts) = &policy.server_timeout_ms {
+                for name in timeouts.keys() {
+                    ensure_server("server_timeout_ms", name)?;
+                }
             }
         }
         if let ClientDnsAnswer::FakeIp {
@@ -453,5 +560,27 @@ mod tests {
         }))
         .unwrap();
         assert!(model.validate_client_shape().is_err());
+    }
+
+    #[test]
+    fn recommended_default_uses_public_dns_with_system_as_final_fallback() {
+        let model = ClientDnsConfig::recommended_default();
+        model.validate_client_shape().unwrap();
+        let value = serde_json::to_value(model).unwrap();
+
+        assert_eq!(value["default_server"], "cloudflare");
+        assert_eq!(
+            value["servers"]["cloudflare"]["detour"],
+            CLIENT_DNS_DETOUR_ROUTE_FINAL
+        );
+        assert_eq!(
+            value["servers"]["google"]["detour"],
+            CLIENT_DNS_DETOUR_ROUTE_FINAL
+        );
+        assert_eq!(
+            value["policy"]["fallback_servers"],
+            json!(["google", "system"])
+        );
+        assert_eq!(value["policy"]["node_server"], "system");
     }
 }

@@ -5,6 +5,7 @@ import { projectClientKernelFeatures } from '../src/lib/services/kernel-capabili
 import {
   DNS_DETOUR_ROUTE_FINAL,
   createDefaultDnsConfig,
+  createRecommendedDnsConfig,
   parseDnsConfig,
   projectDnsSettings,
   readDnsSettings,
@@ -181,6 +182,14 @@ const legacyFakeIp = createDefaultDnsConfig('fake_ip');
 assert.equal(legacyFakeIp.answer.type, 'fake_ip');
 assert.equal(legacyFakeIp.answer.ipv6_cidr, undefined);
 assert.equal(legacyFakeIp.reverse_mapping, undefined);
+
+const recommendedDns = createRecommendedDnsConfig('real');
+assert.equal(recommendedDns.default_server, 'cloudflare');
+assert.deepEqual(Object.keys(recommendedDns.servers), ['cloudflare', 'google', 'system']);
+assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
+assert.equal(recommendedDns.servers.google.detour, DNS_DETOUR_ROUTE_FINAL);
+assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'system']);
+assert.equal(recommendedDns.policy?.node_server, 'system');
 
 const sourceWithCnameTarget = {
   enabled: true,

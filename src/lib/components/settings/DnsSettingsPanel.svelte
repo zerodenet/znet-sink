@@ -11,6 +11,7 @@
     DNS_DETOUR_ROUTE_FINAL,
     applyGlobalDnsSettings,
     createDefaultDnsConfig,
+    createRecommendedDnsConfig,
     createDnsServer,
     getDnsKernelCompatibility,
     getDnsAddressFamilyPolicy,
@@ -361,7 +362,7 @@
         ? result.draft
         : {
             ...result.draft,
-            dns: createDefaultDnsConfig(
+            dns: createRecommendedDnsConfig(
               result.draft.mode === 'fake_ip' ? 'fake_ip' : 'real',
               { features: kernelCompatibility.features, addressFamily: automaticAddressFamilyPolicy },
             ),
@@ -420,7 +421,7 @@
   function resetToAutomaticDefault() {
     if (!draft) return;
     const resetMode = draft.mode === 'fake_ip' ? 'fake_ip' : 'real';
-    draft.dns = createDefaultDnsConfig(resetMode, {
+    draft.dns = createRecommendedDnsConfig(resetMode, {
       features: compatibility.features,
       addressFamily: automaticAddressFamilyPolicy,
     });

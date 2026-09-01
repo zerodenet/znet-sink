@@ -33,8 +33,8 @@ impl Default for AppConfig {
             logs: AppLogConfig::default(),
             ui: AppUiConfig::default(),
             local_proxy: AppLocalProxyConfig::default(),
-            tun: AppTunConfig::default(),
-            dns: AppDnsConfig::default(),
+            tun: AppTunConfig::recommended_default(),
+            dns: AppDnsConfig::recommended_default(),
             routing: AppRoutingConfig::default(),
             url_test: AppUrlTestConfig::default(),
         }
@@ -193,6 +193,16 @@ impl Default for AppDnsConfig {
     }
 }
 
+impl AppDnsConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            enabled: true,
+            config: Some(ClientDnsConfig::recommended_default()),
+            dns_hijack: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppRoutingConfig {
@@ -235,6 +245,75 @@ impl Default for AppTunConfig {
             mtu: default_tun_mtu(),
             dual_stack: true,
             dns_hijack: false,
+        }
+    }
+}
+
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v1";
+
+/// Portable client-owned settings projected onto every active proxy profile.
+/// Machine-bound executable paths, runtime sockets, UI state, logs, and
+/// subscription/profile data are deliberately outside this contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettingsBundle {
+    pub schema_version: String,
+    pub exported_at_unix_ms: u64,
+    pub settings: ClientKernelSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettings {
+    pub core: PortableCoreConfig,
+    pub tun: AppTunConfig,
+    pub dns: AppDnsConfig,
+    pub routing: AppRoutingConfig,
+    pub url_test: AppUrlTestConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableCoreConfig {
+    pub auto_connect: bool,
+    pub auto_start: bool,
+    pub cleanup_proxy_on_exit: bool,
+    pub network_probe_urls: Vec<String>,
+}
+
+impl ClientKernelSettings {
+    pub fn from_app_config(config: &AppConfig) -> Self {
+        Self {
+            core: PortableCoreConfig {
+                auto_connect: config.core.auto_connect,
+                auto_start: config.core.auto_start,
+                cleanup_proxy_on_exit: config.core.cleanup_proxy_on_exit,
+                network_probe_urls: config.core.network_probe_urls.clone(),
+            },
+            tun: config.tun.clone(),
+            dns: config.dns.clone(),
+            routing: config.routing.clone(),
+            url_test: config.url_test.clone(),
+        }
+    }
+
+    pub fn apply_to(self, config: &mut AppConfig) {
+        config.core.auto_connect = self.core.auto_connect;
+        config.core.auto_start = self.core.auto_start;
+        config.core.cleanup_proxy_on_exit = self.core.cleanup_proxy_on_exit;
+        config.core.network_probe_urls = self.core.network_probe_urls;
+        config.tun = self.tun;
+        config.dns = self.dns;
+        config.routing = self.routing;
+        config.url_test = self.url_test;
+    }
+}
+
+impl AppTunConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            dns_hijack: true,
+            ..Self::default()
         }
     }
 }
@@ -518,6 +597,20 @@ mod tests {
         assert!(config.tun.secondary_addr.is_none());
         assert!(config.tun.dual_stack);
         assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn new_install_enables_recommended_dns_and_tun_hijack_defaults() {
+        let config = AppConfig::default();
+        assert!(config.dns.enabled);
+        assert!(config.dns.dns_hijack);
+        assert!(config.tun.dns_hijack);
+        let dns = config.dns.config.unwrap();
+        assert_eq!(dns.default_server, "cloudflare");
+        assert!(dns.servers.contains_key("cloudflare"));
+        assert!(dns.servers.contains_key("google"));
+        assert!(dns.servers.contains_key("system"));
+        dns.validate_client_shape().unwrap();
     }
 
     #[test]

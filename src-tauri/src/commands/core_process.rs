@@ -32,7 +32,7 @@ fn active_profile_defines_tun(state: &AppState) -> AppResult<bool> {
         .is_some_and(|runtime| runtime.contains_key("tun")))
 }
 
-async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()> {
+pub(crate) async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()> {
     let app_config = common::lock(state.app_config(), "app_config")?.clone();
     if app_config.tun.enabled != Some(true) || active_profile_defines_tun(state)? {
         return Ok(());
