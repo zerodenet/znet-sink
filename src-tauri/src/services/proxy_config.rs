@@ -255,10 +255,12 @@ pub async fn upsert_runtime(
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
-    match ZeroAdapter::new()
-        .apply_config(content, ipc_options(state.inner())?)
-        .await
-    {
+    let options = ipc_options(state.inner())?;
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => {
             if let Err(error) = persist_profile_transition(state.inner(), &previous, next) {
                 if let Some(previous_active) = previous_active.as_ref() {
@@ -385,7 +387,11 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
-    match ZeroAdapter::new().apply_config(content, options).await {
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
                 if let Err(error) = export_and_retarget_active(state.clone()) {
@@ -470,7 +476,11 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
-    match ZeroAdapter::new().apply_config(content, options).await {
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => {
             if let Err(error) = remove(state.clone(), id) {
                 let _ = reapply_profile(state.inner(), &removed).await;
