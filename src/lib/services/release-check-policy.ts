@@ -1,0 +1,2 @@
+export const RELEASE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const RELEASE_CHECK_FAILURE_RETRY_MS = 15 * 60 * 1000;

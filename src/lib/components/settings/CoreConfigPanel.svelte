@@ -195,10 +195,10 @@
     installResult = null;
   }
 
-  async function loadVersions() {
+  async function loadVersions(force = false) {
     versionListLoading = true;
     try {
-      versionList = await listKernelVersions();
+      versionList = await listKernelVersions({ force });
     } catch (error) {
       warning(error instanceof Error ? error.message : '获取版本列表失败');
     } finally {
@@ -443,7 +443,7 @@
   width="min(560px, 90vw)"
 >
   {#snippet headerActions()}
-    <Button variant="ghost" size="icon-sm" onclick={loadVersions} disabled={versionListLoading || installBusy}>
+    <Button variant="ghost" size="icon-sm" onclick={() => loadVersions(true)} disabled={versionListLoading || installBusy}>
       <RefreshCcw class="h-3.5 w-3.5" />
     </Button>
   {/snippet}

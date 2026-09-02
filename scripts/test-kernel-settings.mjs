@@ -4,7 +4,11 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(path, 'utf8');
 
 const versionPanel = read('src/lib/components/settings/CoreConfigPanel.svelte');
+const versionCard = read('src/lib/components/core/KernelVersionCard.svelte');
 const draggableModal = read('src/lib/components/DraggableModal.svelte');
+const kernelVersionService = read('src/lib/services/kernel-version.ts');
+const releaseCheckPolicy = read('src/lib/services/release-check-policy.ts');
+const updaterService = read('src/lib/services/updater.svelte.ts');
 const advancedPanel = read('src/lib/components/settings/ConfigEditorPanel.svelte');
 const transfer = read('src/lib/components/settings/KernelSettingsTransfer.svelte');
 const service = read('src/lib/services/core.ts');
@@ -33,6 +37,18 @@ assert.ok(
 assert.ok(
   draggableModal.includes('destroy()') && draggableModal.includes('node.remove()'),
   'portaled version dialogs must release their document.body node when navigation unmounts the owner',
+);
+assert.ok(
+  releaseCheckPolicy.includes('RELEASE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000') &&
+    kernelVersionService.includes('cachedVersionList') &&
+    kernelVersionService.includes('pendingVersionList') &&
+    kernelVersionService.includes('RELEASE_CHECK_FAILURE_RETRY_MS') &&
+    updaterService.includes('UPDATE_CHECK_INTERVAL_MS = RELEASE_CHECK_INTERVAL_MS') &&
+    updaterService.includes("document.visibilityState === 'visible') this.runScheduledCheck();") &&
+    versionPanel.includes('listKernelVersions({ force })') &&
+    versionPanel.includes('onclick={() => loadVersions(true)}') &&
+    versionCard.includes('更新信息暂不可用'),
+  'app and kernel release checks must share a six-hour cadence, cache results, deduplicate requests, and reserve bypass for manual refresh',
 );
 assert.ok(
   service.includes("invoke('app_config_import_kernel_settings'") &&

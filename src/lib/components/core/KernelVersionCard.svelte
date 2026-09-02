@@ -114,8 +114,10 @@
           </svg>
           <span class="update-text">v{latestVersion} 可用</span>
         </div>
-      {:else}
+      {:else if latestStable}
         <div class="up-to-date">已是最新</div>
+      {:else}
+        <div class="update-unavailable">更新信息暂不可用</div>
       {/if}
     </div>
   {:else if hasInstall}
@@ -222,6 +224,11 @@
     font-size: 11px;
     color: #16A34A;
     font-weight: 500;
+  }
+
+  .update-unavailable {
+    font-size: 11px;
+    color: var(--muted-foreground);
   }
 
   :global(.dark) .up-to-date { color: #4ADE80; }
