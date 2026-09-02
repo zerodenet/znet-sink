@@ -6,6 +6,7 @@
     listSubscriptions,
     syncSubscription,
     removeSubscription,
+    getSubscriptionRemovalPreview,
     upsertSubscription,
     listProxyConfigs,
     syncAllSubscriptions,
@@ -21,6 +22,7 @@
     SubscriptionProfile,
     SubscriptionUpsert,
     ProxyConfigProfile,
+    SubscriptionRemovalPreview,
   } from '$lib/types/domain';
 
   const FORMAT_OPTIONS = [
@@ -66,6 +68,9 @@
   let formError = $state<string | null>(null);
   let removingId = $state<string | null>(null);
   let deleteTarget = $state<SubscriptionProfile | null>(null);
+  let deletePreview = $state<SubscriptionRemovalPreview | null>(null);
+  let deletePreviewLoading = $state(false);
+  let removeAssociatedConfig = $state(false);
   let editingId = $state<string | null>(null);
   let searchQuery = $state('');
   let viewMode = $state<ViewMode>('list');
@@ -204,14 +209,26 @@
     }
   }
 
-  function requestRemove(sub: SubscriptionProfile) {
+  async function requestRemove(sub: SubscriptionProfile) {
     if (busy) return;
     deleteTarget = sub;
+    deletePreview = null;
+    removeAssociatedConfig = false;
+    deletePreviewLoading = true;
+    try {
+      deletePreview = await getSubscriptionRemovalPreview(sub.id);
+    } catch (cause) {
+      handleAppError(cause, '读取订阅关联项失败');
+    } finally {
+      deletePreviewLoading = false;
+    }
   }
 
   function closeDelete() {
     if (removingId !== null) return;
     deleteTarget = null;
+    deletePreview = null;
+    removeAssociatedConfig = false;
   }
 
   async function handleRemove() {
@@ -219,10 +236,11 @@
     const target = deleteTarget;
     removingId = target.id;
     try {
-      await removeSubscription(target.id);
+      const outcome = await removeSubscription(target.id, removeAssociatedConfig);
       deleteTarget = null;
+      deletePreview = null;
       await refresh(false);
-      toast.success('订阅已删除');
+      toast.success(outcome.removedProxyConfig ? '订阅及关联配置已删除' : '订阅已删除');
     } catch (e) {
       handleAppError(e, '删除订阅失败');
     } finally {
@@ -693,18 +711,58 @@
   <Dialog.Content class="sm:max-w-[440px]" showCloseButton={removingId === null}>
     <Dialog.Header>
       <Dialog.Title>删除订阅</Dialog.Title>
-      <Dialog.Description>关联的代理配置会被保留，删除不会中断当前内核配置。</Dialog.Description>
+      <Dialog.Description>选择是否保留该订阅当前关联的代理配置。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body>
       {#if deleteTarget}
         <div class="form-error-box" role="alert">
           确认删除“{deleteTarget.name}”吗？此操作无法从应用内撤销。
         </div>
+        {#if deletePreviewLoading}
+          <div class="delete-option-loading">正在读取关联项…</div>
+        {:else if deletePreview?.targetProxyConfig}
+          {@const target = deletePreview.targetProxyConfig}
+          <div class="delete-options">
+            <label class="delete-option">
+              <input
+                type="radio"
+                name="subscription-delete-mode"
+                checked={!removeAssociatedConfig}
+                onchange={() => (removeAssociatedConfig = false)}
+              />
+              <span>
+                <strong>仅删除订阅</strong>
+                <small>保留代理配置“{target.name}”及其规则制品</small>
+              </span>
+            </label>
+            <label class="delete-option" class:disabled={target.sharedBySubscriptionCount > 0}>
+              <input
+                type="radio"
+                name="subscription-delete-mode"
+                checked={removeAssociatedConfig}
+                disabled={target.sharedBySubscriptionCount > 0}
+                onchange={() => (removeAssociatedConfig = true)}
+              />
+              <span>
+                <strong>同时删除关联配置</strong>
+                <small>
+                  {#if target.sharedBySubscriptionCount > 0}
+                    仍被 {target.sharedBySubscriptionCount} 个其他订阅使用，不能删除
+                  {:else if target.active}
+                    当前正在使用；删除后将切换到其他配置，没有可用配置时会停止内核
+                  {:else}
+                    同时清理 {deletePreview.managedRuleSetCount} 个订阅规则记录
+                  {/if}
+                </small>
+              </span>
+            </label>
+          </div>
+        {/if}
       {/if}
     </Dialog.Body>
     <Dialog.Footer>
       <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
-      <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
+      <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null || deletePreviewLoading}>
         {removingId !== null ? '删除中…' : '确认删除'}
       </Button>
     </Dialog.Footer>
@@ -801,6 +859,15 @@
   .form-error { color: var(--destructive); font-size: 10.5px; }
   .switch-row { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 9px; border: 1px solid var(--input); border-radius: var(--control-radius); background: var(--background); color: var(--muted-foreground); font-size: 11.5px; }
   .form-error-box { padding: 9px 11px; border: 1px solid rgba(239, 68, 68, 0.24); border-radius: 7px; background: rgba(239, 68, 68, 0.08); color: var(--destructive); font-size: 11.5px; line-height: 1.5; }
+  .delete-option-loading { padding: 12px 2px 2px; color: var(--muted-foreground); font-size: 11.5px; }
+  .delete-options { display: grid; gap: 8px; margin-top: 12px; }
+  .delete-option { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); cursor: pointer; }
+  .delete-option:has(input:checked) { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); background: color-mix(in srgb, var(--primary) 6%, var(--background)); }
+  .delete-option.disabled { cursor: not-allowed; opacity: 0.55; }
+  .delete-option input { margin-top: 2px; accent-color: var(--primary); }
+  .delete-option span { display: grid; gap: 3px; min-width: 0; }
+  .delete-option strong { font-size: 12px; font-weight: 600; }
+  .delete-option small { color: var(--muted-foreground); font-size: 10.5px; line-height: 1.45; }
 
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 

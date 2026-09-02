@@ -410,6 +410,17 @@ pub(crate) fn migrate_legacy_recommended_node_dns(config: &mut AppConfig) -> boo
         .is_some_and(ClientDnsConfig::migrate_legacy_recommended_node_resolution)
 }
 
+/// Add newly shipped client-owned resolver presets to configurations that
+/// still use the recommended resolver scaffold. The presets remain unselected
+/// until the user references them from dispatch or fallback policy.
+pub(crate) fn migrate_builtin_domestic_resolvers(config: &mut AppConfig) -> bool {
+    config
+        .dns
+        .config
+        .as_mut()
+        .is_some_and(ClientDnsConfig::migrate_missing_builtin_domestic_resolvers)
+}
+
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {
     keys.into_iter()
         .filter_map(|key| {
@@ -476,8 +487,9 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_legacy_dns, migrate_legacy_recommended_node_dns, normalize_network_probe_urls,
-        normalize_proxy_bypass, normalize_tun_cidrs,
+        migrate_builtin_domestic_resolvers, migrate_legacy_dns,
+        migrate_legacy_recommended_node_dns, normalize_network_probe_urls, normalize_proxy_bypass,
+        normalize_tun_cidrs,
     };
     use crate::models::app_config::default_network_probe_urls;
     use crate::models::app_config::AppConfig;
@@ -617,5 +629,19 @@ mod tests {
                 "google-bootstrap".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn adds_domestic_resolvers_only_to_the_recommended_scaffold() {
+        let mut config = AppConfig::default();
+        let dns = config.dns.config.as_mut().unwrap();
+        dns.servers.remove("alidns");
+        dns.servers.remove("114dns");
+
+        assert!(migrate_builtin_domestic_resolvers(&mut config));
+        let dns = config.dns.config.as_ref().unwrap();
+        assert!(dns.servers.contains_key("alidns"));
+        assert!(dns.servers.contains_key("114dns"));
+        assert!(!migrate_builtin_domestic_resolvers(&mut config));
     }
 }

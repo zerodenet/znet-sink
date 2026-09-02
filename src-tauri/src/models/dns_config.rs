@@ -322,6 +322,8 @@ impl ClientDnsConfig {
                 extra: BTreeMap::new(),
             },
         );
+        servers.insert("alidns".to_string(), recommended_alidns_server());
+        servers.insert("114dns".to_string(), recommended_114dns_server());
         servers.insert(
             "system".to_string(),
             ClientDnsServer::System {
@@ -357,6 +359,39 @@ impl ClientDnsConfig {
             }),
             extra: BTreeMap::new(),
         }
+    }
+
+    /// Add the client-owned domestic resolver presets without changing any
+    /// dispatch or fallback order. Only configurations that still retain the
+    /// original recommended resolver scaffold are migrated; imported or
+    /// user-replaced server definitions remain authoritative.
+    pub fn migrate_missing_builtin_domestic_resolvers(&mut self) -> bool {
+        let recommended = Self::recommended_default();
+        let retains_recommended_scaffold = [
+            "cloudflare",
+            "google",
+            "cloudflare-bootstrap",
+            "google-bootstrap",
+            "system",
+        ]
+        .iter()
+        .all(|tag| self.servers.get(*tag) == recommended.servers.get(*tag));
+        if !retains_recommended_scaffold {
+            return false;
+        }
+
+        let mut changed = false;
+        if !self.servers.contains_key("alidns") {
+            self.servers
+                .insert("alidns".to_string(), recommended_alidns_server());
+            changed = true;
+        }
+        if !self.servers.contains_key("114dns") {
+            self.servers
+                .insert("114dns".to_string(), recommended_114dns_server());
+            changed = true;
+        }
+        changed
     }
 
     /// Move only the previous built-in node-resolution policy to the safer
@@ -693,6 +728,33 @@ impl ClientDnsConfig {
             }
         }
         Ok(())
+    }
+}
+
+fn recommended_alidns_server() -> ClientDnsServer {
+    ClientDnsServer::Doh {
+        host: "dns.alidns.com".to_string(),
+        port: 443,
+        path: "/dns-query".to_string(),
+        bootstrap: vec![
+            IpAddr::V4(Ipv4Addr::new(223, 5, 5, 5)),
+            IpAddr::V4(Ipv4Addr::new(223, 6, 6, 6)),
+        ],
+        server_name: None,
+        // Domestic CDN selection must observe the user's physical egress,
+        // rather than whichever proxy node is selected as route.final.
+        detour: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn recommended_114dns_server() -> ClientDnsServer {
+    ClientDnsServer::Udp {
+        host: "114.114.114.114".to_string(),
+        port: 53,
+        bootstrap: Vec::new(),
+        detour: None,
+        extra: BTreeMap::new(),
     }
 }
 
@@ -1047,6 +1109,39 @@ mod tests {
             .get("detour")
             .is_none());
         assert!(value["servers"]["google-bootstrap"].get("detour").is_none());
+        assert_eq!(value["servers"]["alidns"]["type"], "doh");
+        assert_eq!(value["servers"]["alidns"]["host"], "dns.alidns.com");
+        assert_eq!(
+            value["servers"]["alidns"]["bootstrap"],
+            json!(["223.5.5.5", "223.6.6.6"])
+        );
+        assert!(value["servers"]["alidns"].get("detour").is_none());
+        assert_eq!(value["servers"]["114dns"]["type"], "udp");
+        assert_eq!(value["servers"]["114dns"]["host"], "114.114.114.114");
+        assert!(value["servers"]["114dns"].get("detour").is_none());
+    }
+
+    #[test]
+    fn domestic_resolver_migration_is_additive_and_preserves_custom_servers() {
+        let mut previous = ClientDnsConfig::recommended_default();
+        previous.servers.remove("alidns");
+        previous.servers.remove("114dns");
+
+        assert!(previous.migrate_missing_builtin_domestic_resolvers());
+        assert!(previous.servers.contains_key("alidns"));
+        assert!(previous.servers.contains_key("114dns"));
+        assert!(!previous.migrate_missing_builtin_domestic_resolvers());
+
+        let mut custom = previous.clone();
+        custom.servers.remove("alidns");
+        custom.servers.insert(
+            "cloudflare".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+        assert!(!custom.migrate_missing_builtin_domestic_resolvers());
+        assert!(!custom.servers.contains_key("alidns"));
     }
 
     #[test]

@@ -274,43 +274,51 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let enabled = common::lock(state.app_config(), "app_config")?
         .routing
         .inject_common_rules;
-    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone());
-    let Some(base) = active else {
+    let eligible_count = {
+        let profiles = common::lock(state.rule_sets(), "rule_set")?;
+        eligible_profiles(&profiles).count()
+    };
+    let mode = {
+        let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
+        profiles
+            .iter()
+            .find(|profile| profile.active)
+            .and_then(|profile| profile.content.as_ref())
+            .and_then(proxy_mode::detect_route_mode)
+            .map(|detected| match detected.mode {
+                GuiProxyMode::Global => "global".to_string(),
+                GuiProxyMode::Rule => "rule".to_string(),
+                GuiProxyMode::Direct => "direct".to_string(),
+            })
+    };
+    let Some(mode) = mode else {
         return Ok(CommonRuleInjectionStatus {
             enabled,
             effective: false,
             mode: None,
-            eligible_count: eligible_profiles(&profiles).count(),
+            eligible_count,
             injected_count: 0,
             reason: Some("当前没有活动配置".to_string()),
         });
     };
-    match compose_with(&base, enabled, &profiles) {
-        Ok(result) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: result.injected_count > 0,
-            mode: result.mode,
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: result.injected_count,
-            reason: result.reason,
-        }),
-        Err(error) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: false,
-            mode: proxy_mode::detect_route_mode(&base).map(|detected| match detected.mode {
-                GuiProxyMode::Global => "global".to_string(),
-                GuiProxyMode::Rule => "rule".to_string(),
-                GuiProxyMode::Direct => "direct".to_string(),
-            }),
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: 0,
-            reason: Some(error.message),
-        }),
-    }
+    let effective = enabled && mode == "rule" && eligible_count > 0;
+    let reason = if !enabled {
+        Some("公共规则注入已关闭".to_string())
+    } else if mode != "rule" {
+        Some("等待活动配置切换到规则模式".to_string())
+    } else if eligible_count == 0 {
+        Some("尚未启用公共规则".to_string())
+    } else {
+        None
+    };
+    Ok(CommonRuleInjectionStatus {
+        enabled,
+        effective,
+        mode: Some(mode),
+        eligible_count,
+        injected_count: if effective { eligible_count } else { 0 },
+        reason,
+    })
 }
 
 pub fn effective_rule_set_options(state: &AppState) -> AppResult<Vec<EffectiveRuleSetOption>> {
@@ -511,11 +519,10 @@ fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
         .transpose()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 struct ComposeResult {
     config: Value,
     injected_count: usize,
-    mode: Option<String>,
-    reason: Option<String>,
 }
 
 fn compose_with(
@@ -535,16 +542,12 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("公共规则注入已关闭".to_string()),
         });
     }
     if mode.as_deref() != Some("rule") {
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("等待活动配置切换到规则模式".to_string()),
         });
     }
 
@@ -560,8 +563,6 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("尚未启用公共规则".to_string()),
         });
     }
 
@@ -612,8 +613,6 @@ fn compose_with(
     Ok(ComposeResult {
         config,
         injected_count,
-        mode,
-        reason: None,
     })
 }
 

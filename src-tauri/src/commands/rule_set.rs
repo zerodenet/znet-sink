@@ -3,13 +3,13 @@ use tauri::{AppHandle, Manager, State};
 use crate::errors::AppResult;
 use crate::models::rule_set::{
     CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
-    RuleSetKernelPayload, RuleSetProfile, RuleSetSyncAllOutcome, RuleSetUpsert,
+    RuleSetKernelPayload, RuleSetProfile, RuleSetSummary, RuleSetSyncAllOutcome, RuleSetUpsert,
 };
-use crate::services::{interaction_mode, rule_overlay, rule_set};
+use crate::services::{builtin_rules, interaction_mode, rule_overlay, rule_set};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
-pub fn rule_set_list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetProfile>> {
+pub fn rule_set_list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetSummary>> {
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     rule_set::list(state)
 }
@@ -55,6 +55,17 @@ pub async fn rule_set_update_all(app_handle: AppHandle) -> AppResult<RuleSetSync
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     let outcome = rule_set::update_all(state).await?;
     rule_overlay::reconcile_after_rule_change(app_handle).await?;
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub async fn rule_set_update_builtins(app_handle: AppHandle) -> AppResult<RuleSetSyncAllOutcome> {
+    let state = app_handle.state::<AppState>();
+    interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
+    let outcome = builtin_rules::update_all(state.inner()).await?;
+    if outcome.updated > 0 {
+        rule_overlay::reconcile_after_rule_change(app_handle.clone()).await?;
+    }
     Ok(outcome)
 }
 

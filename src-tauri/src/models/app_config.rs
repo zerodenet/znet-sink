@@ -627,6 +627,8 @@ mod tests {
         assert!(dns.servers.contains_key("google"));
         assert!(dns.servers.contains_key("cloudflare-bootstrap"));
         assert!(dns.servers.contains_key("google-bootstrap"));
+        assert!(dns.servers.contains_key("alidns"));
+        assert!(dns.servers.contains_key("114dns"));
         assert!(dns.servers.contains_key("system"));
         dns.validate_client_shape().unwrap();
     }

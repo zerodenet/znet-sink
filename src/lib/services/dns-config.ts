@@ -159,6 +159,18 @@ export function createRecommendedDnsConfig(
       path: '/dns-query',
       bootstrap: ['8.8.8.8', '8.8.4.4'],
     },
+    alidns: {
+      type: 'doh',
+      host: 'dns.alidns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['223.5.5.5', '223.6.6.6'],
+    },
+    '114dns': {
+      type: 'udp',
+      host: '114.114.114.114',
+      port: 53,
+    },
     system: createDnsServer('system'),
   };
   dns.default_server = 'cloudflare';

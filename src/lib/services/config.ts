@@ -14,7 +14,10 @@ import type {
   SubscriptionProfile,
   SubscriptionUpsert,
   SubscriptionSyncAllOutcome,
+  SubscriptionRemovalPreview,
+  SubscriptionRemovalOutcome,
   RuleSetProfile,
+  RuleSetSummary,
   RuleSetUpsert,
   RuleSetKernelPayload,
   RuleSetSyncAllOutcome,
@@ -28,6 +31,7 @@ export type {
   SubscriptionProfile,
   SubscriptionSyncAllOutcome,
   RuleSetProfile,
+  RuleSetSummary,
 };
 
 function reconcileTunAfterConfigMutation(context: string): Promise<void> {
@@ -146,15 +150,27 @@ export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome
   return outcome;
 }
 
-export async function removeSubscription(id: string): Promise<void> {
-  await invoke('subscription_remove', { id });
+export async function getSubscriptionRemovalPreview(id: string): Promise<SubscriptionRemovalPreview> {
+  return invoke('subscription_remove_preview', { id });
+}
+
+export async function removeSubscription(
+  id: string,
+  removeAssociatedConfig = false,
+): Promise<SubscriptionRemovalOutcome> {
+  const outcome = await invoke<SubscriptionRemovalOutcome>('subscription_remove', {
+    id,
+    removeAssociatedConfig,
+  });
+  if (outcome.removedProxyConfig) proxyConfigSignal.markChanged(true);
   ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('subscription removal');
+  return outcome;
 }
 
 // ── Rule sets ──
 
-export async function listRuleSets(): Promise<RuleSetProfile[]> {
+export async function listRuleSets(): Promise<RuleSetSummary[]> {
   return invoke('rule_set_list');
 }
 
@@ -181,6 +197,12 @@ export async function updateRuleSet(id: string): Promise<RuleSetProfile> {
 
 export async function updateAllRuleSets(): Promise<RuleSetSyncAllOutcome> {
   const result = await invoke<RuleSetSyncAllOutcome>('rule_set_update_all');
+  ruleSetSignal.markChanged();
+  return result;
+}
+
+export async function updateBuiltinRuleSets(): Promise<RuleSetSyncAllOutcome> {
+  const result = await invoke<RuleSetSyncAllOutcome>('rule_set_update_builtins');
   ruleSetSignal.markChanged();
   return result;
 }

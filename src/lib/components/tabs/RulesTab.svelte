@@ -10,16 +10,18 @@
   import { Switch } from '$lib/components/ui/switch';
   import {
     getCommonRuleInjectionStatus,
+    getRuleSet,
     listRuleSets,
     removeRuleSet,
     setCommonRuleBinding,
     setCommonRuleInjectionEnabled,
     updateAllRuleSets,
+    updateBuiltinRuleSets,
     updateRuleSet,
     upsertRuleSet,
   } from '$lib/services/config';
   import { getAppErrorMessage } from '$lib/services/core';
-  import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, ZeroRule, ZeroRuleType } from '$lib/types/domain';
+  import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, RuleSetSummary, ZeroRule, ZeroRuleType } from '$lib/types/domain';
 
   const RULE_TYPES: { value: ZeroRuleType; label: string; placeholder: string }[] = [
     { value: 'domain_exact', label: '精确域名', placeholder: 'api.example.com' },
@@ -29,15 +31,17 @@
     { value: 'ipv6_cidr', label: 'IPv6 CIDR', placeholder: 'fd00::/8' },
   ];
   const VIEW_MODE_KEY = 'znet-rules-view-mode';
+  const MAX_VISUAL_EDIT_RULES = 1000;
   type ViewMode = 'card' | 'list';
 
-  let items = $state<RuleSetProfile[]>([]);
+  let items = $state<RuleSetSummary[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let updatingId = $state<string | null>(null);
   let updatingAll = $state(false);
+  let updatingBuiltins = $state(false);
   let deletingId = $state<string | null>(null);
-  let pendingDelete = $state<RuleSetProfile | null>(null);
+  let pendingDelete = $state<RuleSetSummary | null>(null);
   let loadError = $state('');
   let pageError = $state('');
   let editorError = $state('');
@@ -56,12 +60,13 @@
   let commonStatus = $state<CommonRuleInjectionStatus | null>(null);
   let commonSaving = $state(false);
   let bindingId = $state<string | null>(null);
-  let builtinDetails = $state<RuleSetProfile | null>(null);
+  let loadingDetailId = $state<string | null>(null);
+  let builtinDetails = $state<RuleSetSummary | null>(null);
   let builtinDetailsError = $state('');
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
-  const busy = $derived(saving || updatingId !== null || updatingAll || deletingId !== null || commonSaving || bindingId !== null);
+  const busy = $derived(saving || updatingId !== null || updatingAll || updatingBuiltins || deletingId !== null || commonSaving || bindingId !== null || loadingDetailId !== null);
   const canSave = $derived(
     !busy
       && name.trim().length > 0
@@ -127,7 +132,7 @@
   }
 
   async function updateCommonBinding(
-    item: RuleSetProfile,
+    item: RuleSetSummary,
     patch: Partial<{ enabled: boolean; action: CommonRuleAction; order: number }>,
   ) {
     if (bindingId) return;
@@ -142,7 +147,9 @@
         action: patch.action ?? current.action,
         order: Number.isFinite(requestedOrder) ? Math.max(0, Math.trunc(requestedOrder)) : current.order,
       });
-      items = items.map((candidate) => candidate.id === updated.id ? updated : candidate);
+      items = items.map((candidate) => candidate.id === updated.id
+        ? { ...candidate, enabled: updated.enabled, commonBinding: updated.commonBinding, artifact: updated.artifact }
+        : candidate);
       commonStatus = await getCommonRuleInjectionStatus();
     } catch (cause) {
       pageError = getAppErrorMessage(cause, '更新公共规则绑定失败，已保留原运行配置');
@@ -166,29 +173,55 @@
     showEditor = true;
   }
 
-  function openEdit(item: RuleSetProfile) {
-    if (busy) return;
+  function openSourceEdit(item: RuleSetSummary) {
     editingId = item.id;
     name = item.name;
-    mode = 'visual';
-    rules = item.semanticIr.rules.map((rule) => ({ ...rule }));
+    mode = 'subscription';
+    rules = [];
     sourceUrl = item.source?.url ?? '';
     sourceFormat = item.source?.format ?? 'auto';
     updateIntervalSecs = item.source?.updateIntervalSecs ?? 0;
     userAgent = item.source?.userAgent ?? '';
-    retainSource = !!item.source;
+    retainSource = true;
     editorError = '';
     showEditor = true;
   }
 
-  function openRuleSet(item: RuleSetProfile) {
+  async function openRuleSet(item: RuleSetSummary) {
     if (busy) return;
     if (item.builtIn) {
       builtinDetails = item;
       builtinDetailsError = '';
       return;
     }
-    openEdit(item);
+    if (item.source) {
+      openSourceEdit(item);
+      return;
+    }
+    if (item.editableRuleCount > MAX_VISUAL_EDIT_RULES) {
+      pageError = `“${item.name}”包含 ${item.editableRuleCount} 条规则，不能载入可视化编辑器；请拆分为小型覆盖规则集。`;
+      return;
+    }
+    loadingDetailId = item.id;
+    pageError = '';
+    try {
+      const profile: RuleSetProfile = await getRuleSet(item.id);
+      editingId = profile.id;
+      name = profile.name;
+      mode = 'visual';
+      rules = profile.semanticIr.rules.map((rule) => ({ ...rule }));
+      sourceUrl = '';
+      sourceFormat = 'auto';
+      updateIntervalSecs = 0;
+      userAgent = '';
+      retainSource = false;
+      editorError = '';
+      showEditor = true;
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '读取规则集失败');
+    } finally {
+      loadingDetailId = null;
+    }
   }
 
   function closeBuiltinDetails() {
@@ -240,8 +273,9 @@
     saving = true;
     editorError = '';
     try {
-      if (mode === 'subscription' && !editingId) {
+      if (mode === 'subscription') {
         await upsertRuleSet({
+          id: editingId,
           name: name.trim(),
           enabled: true,
           source: {
@@ -293,7 +327,7 @@
     }
   }
 
-  function requestRemove(item: RuleSetProfile) {
+  function requestRemove(item: RuleSetSummary) {
     if (busy) return;
     deleteError = '';
     pendingDelete = item;
@@ -332,6 +366,21 @@
       pageError = getAppErrorMessage(cause, '批量更新规则集失败');
     } finally {
       updatingAll = false;
+    }
+  }
+
+  async function updateBuiltins() {
+    if (busy) return;
+    updatingBuiltins = true;
+    pageError = '';
+    try {
+      const outcome = await updateBuiltinRuleSets();
+      await load(false);
+      if (outcome.updated === 0) pageError = '内置规则已是最新版本';
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '更新内置规则失败，已继续使用当前版本');
+    } finally {
+      updatingBuiltins = false;
     }
   }
 
@@ -387,6 +436,12 @@
         <Button variant="outline" size="sm" onclick={updateAll} disabled={busy}>
           <RefreshCw class={`h-3.5 w-3.5 ${updatingAll ? 'spin' : ''}`} />
           <span>{updatingAll ? '更新中...' : '更新全部'}</span>
+        </Button>
+      {/if}
+      {#if items.some((item) => item.builtIn)}
+        <Button variant="outline" size="sm" onclick={updateBuiltins} disabled={busy}>
+          <RefreshCw class={`h-3.5 w-3.5 ${updatingBuiltins ? 'spin' : ''}`} />
+          <span>{updatingBuiltins ? '更新中...' : '更新内置'}</span>
         </Button>
       {/if}
       <Button size="sm" onclick={openNew} disabled={busy}>
@@ -482,8 +537,10 @@
             <div class="row-meta">
               {#if item.builtIn}
                 <span>{item.artifact?.entryCount ?? 0} 条内置规则</span>
+              {:else if item.source}
+                <span>{item.artifact?.entryCount ?? 0} 条外部规则</span>
               {:else}
-                <span>{item.semanticIr.rules.length} 条源规则</span>
+                <span>{item.editableRuleCount} 条本地规则</span>
                 <span>→</span>
                 <span>{item.artifact?.entryCount ?? 0} 个索引项</span>
               {/if}
@@ -618,7 +675,7 @@
     </div>
   {/if}
 
-  {#if mode === 'subscription' && !editingId}
+  {#if mode === 'subscription'}
     <div class="form-item">
       <span class="form-label">规则源地址 <span class="required">*</span></span>
       <div class="form-input-wrap">
@@ -725,7 +782,7 @@
   {#snippet footer()}
     <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
     <Button onclick={save} disabled={!canSave}>
-      {saving ? '构建并保存中...' : mode === 'subscription' && !editingId ? '导入并构建' : '保存并构建'}
+      {saving ? '构建并保存中...' : mode === 'subscription' ? (editingId ? '更新来源并重建' : '导入并构建') : '保存并构建'}
     </Button>
   {/snippet}
 </DraggableModal>
