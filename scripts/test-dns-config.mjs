@@ -198,6 +198,8 @@ assert.deepEqual(Object.keys(recommendedDns.servers), [
   'google',
   'cloudflare-bootstrap',
   'google-bootstrap',
+  'alidns',
+  '114dns',
   'system',
 ]);
 assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
@@ -210,6 +212,20 @@ assert.deepEqual(recommendedDns.policy?.node_fallback_servers, [
 ]);
 assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, undefined);
 assert.equal(recommendedDns.servers['google-bootstrap'].detour, undefined);
+assert.deepEqual(recommendedDns.servers.alidns, {
+  type: 'doh',
+  host: 'dns.alidns.com',
+  port: 443,
+  path: '/dns-query',
+  bootstrap: ['223.5.5.5', '223.6.6.6'],
+});
+assert.deepEqual(recommendedDns.servers['114dns'], {
+  type: 'udp',
+  host: '114.114.114.114',
+  port: 53,
+});
+assert.equal(recommendedDns.servers.alidns.detour, undefined);
+assert.equal(recommendedDns.servers['114dns'].detour, undefined);
 
 const repeatedPrimaryFallback = readDnsSettings({
   enabled: true,
