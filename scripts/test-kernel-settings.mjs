@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(path, 'utf8');
 
 const versionPanel = read('src/lib/components/settings/CoreConfigPanel.svelte');
+const draggableModal = read('src/lib/components/DraggableModal.svelte');
 const advancedPanel = read('src/lib/components/settings/ConfigEditorPanel.svelte');
 const transfer = read('src/lib/components/settings/KernelSettingsTransfer.svelte');
 const service = read('src/lib/services/core.ts');
@@ -28,6 +29,10 @@ assert.ok(
     !versionPanel.includes('importClientKernelSettings') &&
     !versionPanel.includes('exportClientKernelSettings'),
   'kernel version management must not contain client settings migration',
+);
+assert.ok(
+  draggableModal.includes('destroy()') && draggableModal.includes('node.remove()'),
+  'portaled version dialogs must release their document.body node when navigation unmounts the owner',
 );
 assert.ok(
   service.includes("invoke('app_config_import_kernel_settings'") &&
