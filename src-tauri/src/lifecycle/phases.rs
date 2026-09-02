@@ -88,7 +88,10 @@ impl OnPhase for ConfigPhase {
                 format!("failed to install built-in rules: {error:?}"),
             );
         }
-        if app_config::migrate_legacy_dns(&mut app_config, &mut domain_data.proxy_configs) {
+        let migrated_profile_dns =
+            app_config::migrate_legacy_dns(&mut app_config, &mut domain_data.proxy_configs);
+        let migrated_node_dns = app_config::migrate_legacy_recommended_node_dns(&mut app_config);
+        if migrated_profile_dns || migrated_node_dns {
             if let Err(error) = app_config_store::save(&config_path, &app_config) {
                 crate::services::logs::znet_log(
                     None,
@@ -96,15 +99,17 @@ impl OnPhase for ConfigPhase {
                     format!("failed to persist migrated global DNS settings: {error:?}"),
                 );
             }
-            if let Err(error) = domain_store::save_relational_data(
-                &domain_data.proxy_configs,
-                &domain_data.subscriptions,
-            ) {
-                crate::services::logs::znet_log(
-                    None,
-                    crate::models::logs::LogLevel::Warn,
-                    format!("failed to persist profile DNS migration: {error:?}"),
-                );
+            if migrated_profile_dns {
+                if let Err(error) = domain_store::save_relational_data(
+                    &domain_data.proxy_configs,
+                    &domain_data.subscriptions,
+                ) {
+                    crate::services::logs::znet_log(
+                        None,
+                        crate::models::logs::LogLevel::Warn,
+                        format!("failed to persist profile DNS migration: {error:?}"),
+                    );
+                }
             }
         }
         let logs = log_store::load_recent(app_config.logs.max_entries).unwrap_or_else(|e| {

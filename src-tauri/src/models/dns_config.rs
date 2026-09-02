@@ -344,10 +344,10 @@ impl ClientDnsConfig {
                 timeout_ms: None,
                 server_timeout_ms: None,
                 fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
-                node_server: Some("cloudflare-bootstrap".to_string()),
+                node_server: Some("system".to_string()),
                 node_fallback_servers: Some(vec![
+                    "cloudflare-bootstrap".to_string(),
                     "google-bootstrap".to_string(),
-                    "system".to_string(),
                 ]),
                 direct_server: None,
                 direct_fallback_servers: None,
@@ -357,6 +357,47 @@ impl ClientDnsConfig {
             }),
             extra: BTreeMap::new(),
         }
+    }
+
+    /// Move only the previous built-in node-resolution policy to the safer
+    /// system-first order. Custom server definitions or policy orders are
+    /// deliberately left untouched.
+    pub fn migrate_legacy_recommended_node_resolution(&mut self) -> bool {
+        let legacy = Self::legacy_recommended_default();
+        let uses_builtin_servers = ["system", "cloudflare-bootstrap", "google-bootstrap"]
+            .into_iter()
+            .all(|tag| self.servers.get(tag) == legacy.servers.get(tag));
+        let uses_legacy_policy = self.policy.as_ref().is_some_and(|policy| {
+            policy.node_server.as_deref() == Some("cloudflare-bootstrap")
+                && policy.node_fallback_servers.as_deref()
+                    == Some(["google-bootstrap".to_string(), "system".to_string()].as_slice())
+        });
+        if !uses_builtin_servers || !uses_legacy_policy {
+            return false;
+        }
+
+        let policy = self
+            .policy
+            .as_mut()
+            .expect("legacy policy match requires DNS policy");
+        policy.node_server = Some("system".to_string());
+        policy.node_fallback_servers = Some(vec![
+            "cloudflare-bootstrap".to_string(),
+            "google-bootstrap".to_string(),
+        ]);
+        true
+    }
+
+    fn legacy_recommended_default() -> Self {
+        let mut config = Self::recommended_default();
+        let policy = config
+            .policy
+            .as_mut()
+            .expect("recommended DNS configuration has a policy");
+        policy.node_server = Some("cloudflare-bootstrap".to_string());
+        policy.node_fallback_servers =
+            Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
+        config
     }
 
     pub fn validate_client_shape(&self) -> AppResult<()> {
@@ -997,14 +1038,50 @@ mod tests {
             value["policy"]["fallback_servers"],
             json!(["google", "system"])
         );
-        assert_eq!(value["policy"]["node_server"], "cloudflare-bootstrap");
+        assert_eq!(value["policy"]["node_server"], "system");
         assert_eq!(
             value["policy"]["node_fallback_servers"],
-            json!(["google-bootstrap", "system"])
+            json!(["cloudflare-bootstrap", "google-bootstrap"])
         );
         assert!(value["servers"]["cloudflare-bootstrap"]
             .get("detour")
             .is_none());
         assert!(value["servers"]["google-bootstrap"].get("detour").is_none());
+    }
+
+    #[test]
+    fn legacy_recommended_node_resolution_migrates_without_overwriting_custom_policy() {
+        let mut legacy = ClientDnsConfig::legacy_recommended_default();
+        assert!(legacy.migrate_legacy_recommended_node_resolution());
+        let policy = legacy.policy.as_ref().unwrap();
+        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(
+            policy.node_fallback_servers.as_deref(),
+            Some(
+                [
+                    "cloudflare-bootstrap".to_string(),
+                    "google-bootstrap".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert!(!legacy.migrate_legacy_recommended_node_resolution());
+
+        let mut custom = ClientDnsConfig::legacy_recommended_default();
+        custom.policy.as_mut().unwrap().node_fallback_servers = Some(vec!["system".to_string()]);
+        assert!(!custom.migrate_legacy_recommended_node_resolution());
+        assert_eq!(
+            custom.policy.unwrap().node_fallback_servers,
+            Some(vec!["system".to_string()])
+        );
+
+        let mut custom_server = ClientDnsConfig::legacy_recommended_default();
+        custom_server.servers.insert(
+            "cloudflare-bootstrap".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+        assert!(!custom_server.migrate_legacy_recommended_node_resolution());
     }
 }

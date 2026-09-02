@@ -400,6 +400,16 @@ pub(crate) fn migrate_legacy_dns(
     changed
 }
 
+/// Upgrade only the previous client-owned node DNS defaults. Imported or
+/// user-edited server definitions and fallback orders remain authoritative.
+pub(crate) fn migrate_legacy_recommended_node_dns(config: &mut AppConfig) -> bool {
+    config
+        .dns
+        .config
+        .as_mut()
+        .is_some_and(ClientDnsConfig::migrate_legacy_recommended_node_resolution)
+}
+
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {
     keys.into_iter()
         .filter_map(|key| {
@@ -466,8 +476,8 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_legacy_dns, normalize_network_probe_urls, normalize_proxy_bypass,
-        normalize_tun_cidrs,
+        migrate_legacy_dns, migrate_legacy_recommended_node_dns, normalize_network_probe_urls,
+        normalize_proxy_bypass, normalize_tun_cidrs,
     };
     use crate::models::app_config::default_network_probe_urls;
     use crate::models::app_config::AppConfig;
@@ -587,5 +597,25 @@ mod tests {
             .and_then(|content| content.get("runtime"))
             .and_then(|runtime| runtime.get("dns"))
             .is_none());
+    }
+
+    #[test]
+    fn migrates_only_the_previous_client_owned_node_dns_defaults() {
+        let mut config = AppConfig::default();
+        let dns = config.dns.config.as_mut().unwrap();
+        dns.policy.as_mut().unwrap().node_server = Some("cloudflare-bootstrap".to_string());
+        dns.policy.as_mut().unwrap().node_fallback_servers =
+            Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
+
+        assert!(migrate_legacy_recommended_node_dns(&mut config));
+        let policy = config.dns.config.unwrap().policy.unwrap();
+        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(
+            policy.node_fallback_servers,
+            Some(vec![
+                "cloudflare-bootstrap".to_string(),
+                "google-bootstrap".to_string(),
+            ])
+        );
     }
 }

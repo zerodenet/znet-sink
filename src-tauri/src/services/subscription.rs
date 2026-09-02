@@ -2175,6 +2175,22 @@ rule-providers:
     }
 
     #[test]
+    fn clash_node_addresses_do_not_generate_global_direct_rules() {
+        let parsed = parse_subscription_content(
+            "proxies:\n  - {name: Node, type: ss, server: 8.138.144.121, port: 443, password: p}\nrules:\n  - MATCH,Node\n",
+            "clash",
+        )
+        .unwrap();
+        let rules = parsed.content["route"]["rules"].as_array().unwrap();
+
+        assert!(rules.iter().all(|rule| {
+            rule["condition"]["values"]
+                .as_array()
+                .is_none_or(|values| values.iter().all(|value| value != "8.138.144.121/32"))
+        }));
+    }
+
+    #[test]
     #[ignore = "requires ZNET_REAL_SUBSCRIPTION_URL and live provider access"]
     fn live_clash_subscription_rule_providers_compile_to_verified_zrs() {
         use zero_rule::protocol::decode_json;

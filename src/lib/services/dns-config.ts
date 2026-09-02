@@ -165,8 +165,8 @@ export function createRecommendedDnsConfig(
   dns.policy = {
     ...dns.policy,
     fallback_servers: ['google', 'system'],
-    node_server: 'cloudflare-bootstrap',
-    node_fallback_servers: ['google-bootstrap', 'system'],
+    node_server: 'system',
+    node_fallback_servers: ['cloudflare-bootstrap', 'google-bootstrap'],
   };
   return dns;
 }
