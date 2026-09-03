@@ -19,10 +19,17 @@ pub fn get(state: State<'_, AppState>) -> AppResult<AppConfig> {
 
 pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<AppConfig> {
     let start = std::time::Instant::now();
-    // Validate and persist a detached snapshot. Mutating the shared config as
-    // fields are validated can leave a half-applied patch in memory when a
-    // later field is invalid or the disk write fails.
-    let mut config = lock(state.app_config(), "app_config")?.clone();
+    let current = lock(state.app_config(), "app_config")?.clone();
+    let config = prepare_update(&current, patch)?;
+    replace(state.inner(), config.clone())?;
+    eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed());
+    Ok(config)
+}
+
+pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppResult<AppConfig> {
+    // Validate a detached snapshot so callers can apply runtime changes before
+    // publishing it. A rejected field never mutates the current configuration.
+    let mut config = current.clone();
 
     if let Some(core) = patch.core {
         if let Some(kernel) = core.kernel {
@@ -225,10 +232,6 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             config.url_test.tolerance_ms = tolerance_ms;
         }
     }
-
-    replace(state.inner(), config.clone())?;
-
-    eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed(),);
 
     Ok(config)
 }

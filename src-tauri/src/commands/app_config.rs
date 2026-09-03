@@ -7,6 +7,17 @@ use crate::services::kernel_settings::{self, KernelSettingsExportResult};
 use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
+mod tun_settings;
+
+#[tauri::command]
+pub async fn app_config_apply_tun(
+    state: State<'_, AppState>,
+    tun: crate::models::app_config::AppTunConfigPatch,
+) -> AppResult<AppConfig> {
+    let _operation = state.proxy_config_operation().lock().await;
+    tun_settings::apply(state.inner(), tun).await
+}
+
 #[tauri::command]
 pub fn app_config_get(state: State<'_, AppState>) -> AppResult<AppConfig> {
     app_config::get(state)

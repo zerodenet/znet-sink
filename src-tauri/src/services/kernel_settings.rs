@@ -208,7 +208,7 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
     Ok(())
 }
 
-fn validate_cidr(value: &str, field: &str) -> AppResult<(IpAddr, u8)> {
+pub(crate) fn validate_cidr(value: &str, field: &str) -> AppResult<(IpAddr, u8)> {
     let (address, prefix) = value
         .trim()
         .split_once('/')
@@ -228,7 +228,7 @@ fn validate_cidr(value: &str, field: &str) -> AppResult<(IpAddr, u8)> {
     Ok((address, prefix))
 }
 
-fn is_contiguous_mask(mask: IpAddr) -> bool {
+pub(crate) fn is_contiguous_mask(mask: IpAddr) -> bool {
     let bits = match mask {
         IpAddr::V4(mask) => u32::from(mask) as u128,
         IpAddr::V6(mask) => u128::from(mask),
@@ -238,7 +238,7 @@ fn is_contiguous_mask(mask: IpAddr) -> bool {
     inverted == 0 || (inverted & inverted.wrapping_add(1)) == 0
 }
 
-fn next_ip(address: IpAddr) -> Option<IpAddr> {
+pub(crate) fn next_ip(address: IpAddr) -> Option<IpAddr> {
     match address {
         IpAddr::V4(address) => u32::from(address)
             .checked_add(1)

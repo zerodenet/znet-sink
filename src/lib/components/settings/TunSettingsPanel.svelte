@@ -5,7 +5,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
-  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
+  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, applyTunSettings } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import {
@@ -32,9 +32,7 @@
 
   const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
   const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
-  // Profile-owned TUN does not consume these local defaults, so they remain
-  // editable for the next profile that omits runtime.tun.
-  const locked = $derived((guiState.isTunEnabled && !profileManaged) || saving);
+  const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
   const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
 
@@ -107,18 +105,16 @@
 
     saving = true;
     try {
-      const config = await updateAppConfig({
-        tun: {
-          name: name.trim() || null,
-          tag: normalizedTag,
-          addr: normalizedAddr,
-          secondaryAddr: normalizedSecondary || null,
-          mtu: normalizedMtu,
-          includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
-          excludeCidrs: excludeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
-          dualStack,
-          dnsHijack,
-        },
+      const config = await applyTunSettings({
+        name: name.trim() || null,
+        tag: normalizedTag,
+        addr: normalizedAddr,
+        secondaryAddr: normalizedSecondary || null,
+        mtu: normalizedMtu,
+        includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
+        excludeCidrs: excludeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
+        dualStack,
+        dnsHijack,
       });
       name = config.tun.name ?? '';
       tag = config.tun.tag;
@@ -135,6 +131,7 @@
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
     } finally {
+      await guiState.refreshTunStatus();
       saving = false;
     }
   }
@@ -150,7 +147,7 @@
   </div>
 {:else if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
-    TUN 正在运行。当前启动参数已锁定，关闭 TUN 后可修改。
+    保存后会自动重建 TUN 并应用新参数，期间连接可能短暂中断，客户端和内核保持运行。
   </div>
 {/if}
 
@@ -350,7 +347,7 @@
 {#if !loading}
   <div class="settings-actions">
     <Button size="sm" onclick={save} disabled={locked}>
-      {saving ? '保存中...' : saved ? '已保存' : '保存'}
+      {saving ? '应用中...' : saved ? '已保存' : profileManaged ? '保存缺省值' : guiState.isTunEnabled ? '保存并应用' : '保存'}
     </Button>
   </div>
 {/if}

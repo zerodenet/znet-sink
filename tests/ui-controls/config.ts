@@ -24,4 +24,8 @@ export const upsertRuleSet = async (input: RuleSetUpsert) => {
 export const updateAllRuleSets = async () => ({ total: 4, updated: 4, unchanged: 0, failed: 0 });
 export const updateBuiltinRuleSets = updateAllRuleSets;
 export const updateRuleSet = async () => items[0];
-export const getAppErrorMessage = (_error: unknown, fallback: string) => fallback;
+export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
+export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
+export { getTunConfig as getAppConfig, applyFixtureTun as applyTunSettings } from './tun-state.svelte';
+export const guiExportDiagnostics = async () => ({ path: 'fixture' });
+export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };

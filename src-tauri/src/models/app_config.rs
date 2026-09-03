@@ -342,7 +342,7 @@ impl Default for AppLocalProxyConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigPatch {
     pub core: Option<AppCoreConfigPatch>,
@@ -401,9 +401,11 @@ pub struct AppLocalProxyConfigPatch {
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfigPatch {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
     pub mask: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
@@ -411,6 +413,15 @@ pub struct AppTunConfigPatch {
     pub exclude_cidrs: Option<Vec<String>>,
     pub dual_stack: Option<bool>,
     pub dns_hijack: Option<bool>,
+}
+
+fn deserialize_nullable_tun_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize)]

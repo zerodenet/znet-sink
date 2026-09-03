@@ -514,6 +514,7 @@ pub fn run() {
             proxy_mode_commands::gui_set_proxy_mode,
             app_config_commands::app_config_get,
             app_config_commands::app_config_update,
+            app_config_commands::app_config_apply_tun,
             app_config_commands::app_config_export_kernel_settings,
             app_config_commands::app_config_import_kernel_settings,
             app_update_commands::app_check_release,

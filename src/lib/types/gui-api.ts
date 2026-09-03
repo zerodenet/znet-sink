@@ -352,6 +352,8 @@ export interface GuiTunStatus extends GuiFeatureStatus {
   tag?: string;
   healthy: boolean;
   autoRoute: boolean;
+  includeCidrs?: string[] | null;
+  excludeCidrs?: string[] | null;
   dualStack: boolean;
   strictRoute: boolean;
   dnsHijack: boolean;

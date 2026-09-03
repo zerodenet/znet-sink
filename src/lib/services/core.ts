@@ -270,6 +270,10 @@ export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig>
   return invoke('app_config_update', { patch });
 }
 
+export async function applyTunSettings(tun: NonNullable<AppConfigPatch['tun']>): Promise<AppConfig> {
+  return invoke('app_config_apply_tun', { tun });
+}
+
 export async function exportClientKernelSettings(path: string): Promise<KernelSettingsExportResult> {
   return invoke('app_config_export_kernel_settings', { path });
 }
