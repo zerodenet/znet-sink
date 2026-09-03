@@ -39,7 +39,8 @@ for (const file of ['input/input.svelte', 'textarea/textarea.svelte', 'select/se
   assert.ok(read(`src/lib/components/ui/${file}`).includes('znet-field'), `${file}: missing shared field surface`);
 }
 const menu = read('src/lib/components/ui/select/select-content.svelte');
-assert.ok(menu.includes('SelectPortal') && menu.includes('--layer-menu') && menu.includes('--bits-select-content-available-height'));
+assert.ok(menu.includes('SelectPortal') && menu.includes('--layer-menu') && menu.includes('--bits-floating-available-height'));
+assert.ok(menu.includes('--bits-floating-anchor-width') && menu.includes('min-h-0') && !menu.includes('--bits-select-'), 'menu sizing must use current Bits floating variables and a shrinkable scrolling viewport');
 for (const name of ['DraggableModal', 'ActionConfirmDialog', 'ConnectionDetailsDrawer']) {
   assert.ok(read(`src/lib/components/${name}.svelte`).includes('if (isNestedOverlayEvent(event)) return;'), `${name}: do not consume menu Escape/Tab`);
 }

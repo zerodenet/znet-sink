@@ -75,8 +75,14 @@ test('long menus fit a short window and keyboard selection works', async ({ page
   await expect(menu).toBeVisible();
   await expect.poll(async () => {
     const bounds = await menu.boundingBox();
-    return bounds !== null && bounds.y >= 0 && bounds.y + bounds.height <= 480;
-  }).toBe(true);
+    return {
+      bounds,
+      topInside: bounds !== null && bounds.y >= 0,
+      bottomInside: bounds !== null && bounds.y + bounds.height <= 480,
+      leftInside: bounds !== null && bounds.x >= 0,
+      rightInside: bounds !== null && bounds.x + bounds.width <= 650,
+    };
+  }).toMatchObject({ topInside: true, bottomInside: true, leftInside: true, rightInside: true });
   await page.keyboard.press('End');
   await page.keyboard.press('Enter');
   await expect(trigger).toHaveText('选项 79');
