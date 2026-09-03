@@ -91,11 +91,11 @@ export async function getCoreProcessStatus(): Promise<CoreProcessStatus> {
   return invoke('core_process_status');
 }
 
-export async function startCoreProcess(): Promise<CoreProcessStatus> {
+export async function startCoreProcess(): Promise<import('$lib/types/core').CoreProcessTransitionResult> {
   return invoke('core_process_start');
 }
 
-export async function restartCoreProcess(): Promise<CoreProcessStatus> {
+export async function restartCoreProcess(): Promise<import('$lib/types/core').CoreProcessTransitionResult> {
   return invoke('core_process_restart');
 }
 

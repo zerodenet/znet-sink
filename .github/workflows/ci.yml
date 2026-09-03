@@ -39,6 +39,9 @@ jobs:
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
 
+      - name: Run TUN state and restart recovery regression
+        run: pnpm test:tun-recovery
+
       - name: Check Svelte and TypeScript
         run: pnpm check
 

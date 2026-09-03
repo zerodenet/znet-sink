@@ -6,27 +6,21 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::errors::AppResult;
+use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppTunConfig;
 use crate::models::core::CoreIpcOptions;
-use crate::models::gui_core::GuiFeatureStatus;
 use crate::models::zero_runtime::GuiTunStatus;
 
 use super::{commands, parsing, queries};
 
 pub async fn tun_status(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
-    let fallback = queries::feature_status(
-        "tun",
-        &["tun", "tun-status", "tun-snapshot"],
-        options.clone(),
-    )
-    .await
-    .ok();
+    // Capability support is not a runtime observation. In particular, an IPC
+    // timeout must not turn its default enabled=false into a successful OFF.
+    decode_tun_status(queries::query_value(json!({"tun_status": {}}), "tun_status", options).await)
+}
 
-    match queries::query_value(json!({"tun_status": {}}), "tun_status", options).await {
-        Ok(value) => Ok(parse_tun_status(&value, fallback.as_ref())),
-        Err(error) => fallback.map(from_feature_status).ok_or(error),
-    }
+fn decode_tun_status(result: AppResult<Value>) -> AppResult<GuiTunStatus> {
+    parse_tun_status(&result?)
 }
 
 pub async fn enable_tun(
@@ -45,13 +39,8 @@ pub async fn enable_tun(
     super::wintun_compat::ensure_for_current_runtime().await?;
 
     let params = build_tun_start_params(tun);
-    let response = commands::run_command("tun.start", params, options.clone()).await?;
-    let fallback = parsing::parse_feature_runtime_status("tun", &response, None);
-
-    match tun_status(options).await {
-        Ok(status) => Ok(status),
-        Err(_) => Ok(from_feature_status(fallback)),
-    }
+    commands::run_command("tun.start", params, options.clone()).await?;
+    tun_status(options).await
 }
 
 pub async fn disable_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
@@ -61,13 +50,8 @@ pub async fn disable_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunSta
         }
     }
 
-    let response = commands::run_command("tun.stop", json!({}), options.clone()).await?;
-    let fallback = parsing::parse_feature_runtime_status("tun", &response, None);
-
-    match tun_status(options).await {
-        Ok(status) => Ok(status),
-        Err(_) => Ok(from_feature_status(fallback)),
-    }
+    commands::run_command("tun.stop", json!({}), options.clone()).await?;
+    tun_status(options).await
 }
 
 fn build_tun_start_params(tun: AppTunConfig) -> Value {
@@ -100,14 +84,13 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     Value::Object(params)
 }
 
-fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTunStatus {
+fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
     let running = bool_at(value, &["running", "enabled"])
-        .unwrap_or_else(|| fallback.is_some_and(|status| status.enabled));
+        .ok_or_else(|| AppError::internal("TUN status response is missing its running state"))?;
     let healthy = bool_at(value, &["healthy"]).unwrap_or(running);
     let last_error = parsing::string_at(value, &["last_error", "lastError", "error"]);
     // A successful typed tun_status query is itself proof that the runtime
-    // surface is supported. Capability metadata is only a fallback path for
-    // older Zero builds and must not override a successful query.
+    // surface is supported. Capability metadata cannot supply runtime state.
     let supported = true;
     let state = if !healthy && running {
         "error"
@@ -118,14 +101,12 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
     }
     .to_string();
 
-    GuiTunStatus {
+    Ok(GuiTunStatus {
         key: "tun".to_string(),
         supported,
         enabled: running,
         state,
-        reason: last_error
-            .clone()
-            .or_else(|| fallback.and_then(|status| status.reason.clone())),
+        reason: last_error.clone(),
         name: parsing::string_at(value, &["name", "interface_name", "interfaceName"]),
         addr: parsing::string_at(value, &["addr", "address"]),
         addresses: string_array_at(value, &["addresses"]),
@@ -169,7 +150,7 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
         last_error,
         managed_by_config: bool_at(value, &["managed_by_config", "managedByConfig"])
             .unwrap_or(false),
-    }
+    })
 }
 
 fn parse_tun_family_egress(
@@ -198,18 +179,6 @@ fn parse_tun_family_egress(
     }
 }
 
-fn from_feature_status(status: GuiFeatureStatus) -> GuiTunStatus {
-    GuiTunStatus {
-        key: status.key,
-        supported: status.supported,
-        enabled: status.enabled,
-        state: status.state,
-        reason: status.reason,
-        healthy: status.enabled,
-        ..GuiTunStatus::default()
-    }
-}
-
 fn bool_at(value: &Value, keys: &[&str]) -> Option<bool> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_bool))
@@ -227,6 +196,10 @@ fn string_array_at(value: &Value, keys: &[&str]) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "runtime/tests/status.rs"]
+mod status_tests;
 
 #[cfg(test)]
 mod tests {
@@ -277,36 +250,34 @@ mod tests {
 
     #[test]
     fn parses_detailed_tun_route_state() {
-        let status = parse_tun_status(
-            &json!({
-                "running": true,
-                "healthy": true,
-                "name": "znet0",
-                "addr": "10.66.0.1/24",
-                "addresses": ["10.66.0.1/24", "fd66::1/64"],
-                "mtu": 1500,
-                "tag": "tun",
-                "auto_route": true,
-                "dual_stack": true,
-                "strict_route": true,
-                "dns_hijack": false,
-                "egress_interface_v4": "Ethernet",
-                "egress_interface_v6": "Ethernet",
-                "ipv4_egress": {
-                    "availability": "available",
-                    "interface": "Ethernet"
-                },
-                "ipv6_egress": {
-                    "availability": "unavailable",
-                    "reason": "no_default_route"
-                },
-                "network_generation": 7,
-                "address_family_policy": "prefer_ipv4",
-                "ipv6_to_ipv4_fallbacks": 2,
-                "managed_by_config": false
-            }),
-            None,
-        );
+        let status = parse_tun_status(&json!({
+            "running": true,
+            "healthy": true,
+            "name": "znet0",
+            "addr": "10.66.0.1/24",
+            "addresses": ["10.66.0.1/24", "fd66::1/64"],
+            "mtu": 1500,
+            "tag": "tun",
+            "auto_route": true,
+            "dual_stack": true,
+            "strict_route": true,
+            "dns_hijack": false,
+            "egress_interface_v4": "Ethernet",
+            "egress_interface_v6": "Ethernet",
+            "ipv4_egress": {
+                "availability": "available",
+                "interface": "Ethernet"
+            },
+            "ipv6_egress": {
+                "availability": "unavailable",
+                "reason": "no_default_route"
+            },
+            "network_generation": 7,
+            "address_family_policy": "prefer_ipv4",
+            "ipv6_to_ipv4_fallbacks": 2,
+            "managed_by_config": false
+        }))
+        .unwrap();
 
         assert!(status.supported);
         assert!(status.enabled);

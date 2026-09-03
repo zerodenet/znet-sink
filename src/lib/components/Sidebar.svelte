@@ -20,7 +20,8 @@
 
   const isCoreRunning = $derived(guiState.isProcessRunning);
   const proxyEnabled = $derived(guiState.isSystemProxyEnabled);
-  const isTunActive = $derived(guiState.isTunEnabled);
+  const isTunActive = $derived(guiState.isTunEnabled && !guiState.tunStatusError);
+  const tunUnconfirmed = $derived(!!guiState.tunStatusError || (guiState.isTunDesiredEnabled && !guiState.isTunEnabled));
 </script>
 
 <aside class="w-14 h-full bg-[#121418] border-r border-zinc-800/40 flex flex-col items-center py-4 justify-between flex-shrink-0 hidden sm:flex">
@@ -45,14 +46,14 @@
   <div class="flex flex-col gap-2">
     <button
       onclick={toggleTun}
-      disabled={isTunActive ? !guiState.canDisableTun : !guiState.canEnableTun}
+      disabled={guiState.isTunSwitchOn ? !guiState.canDisableTun : !guiState.canEnableTun}
       class="w-7 h-7 rounded-lg text-[10px] font-mono font-bold border transition-colors duration-150
-             {isTunActive
+             {tunUnconfirmed ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : isTunActive
                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                : isCoreRunning
                  ? 'bg-zinc-800 border-zinc-700/40 text-zinc-500 hover:text-zinc-300'
                  : 'bg-zinc-900 border-zinc-800 text-zinc-600'}"
-      title={isTunActive ? "TUN 已开启" : "TUN 未开启"}
+      title={guiState.tunStatusError ? 'TUN 状态未知' : guiState.isTunDesiredEnabled && !guiState.isTunEnabled ? 'TUN 尚未运行；已保存开启设置，点击可取消' : isTunActive ? 'TUN 已开启' : 'TUN 未开启'}
     >
       {guiState.isSwitchingTun ? '…' : 'TUN'}
     </button>

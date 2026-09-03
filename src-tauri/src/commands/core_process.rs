@@ -10,8 +10,18 @@ use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
 use crate::services::{common, core_config, core_process};
 use crate::state::app_state::AppState;
 
+mod tun_restore;
+
 const TUN_RESTORE_TIMEOUT: Duration = Duration::from_secs(8);
 const TUN_RESTORE_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreProcessTransitionResponse {
+    #[serde(flatten)]
+    pub status: CoreProcessStatus,
+    pub tun_restore_error: Option<AppError>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,37 +49,27 @@ async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()
     }
 
     let options = core_config::ipc_options_from_app_config(&app_config.core);
-    let deadline = tokio::time::Instant::now() + TUN_RESTORE_TIMEOUT;
-    loop {
-        match zero::runtime::tun_status(Some(options.clone())).await {
-            Ok(status) => {
-                if status.enabled {
-                    return Ok(());
-                }
-                if !status.supported {
-                    return Err(AppError::invalid_argument(
-                        "the current Zero runtime does not support TUN",
-                    ));
-                }
-                zero::runtime::enable_tun(app_config.tun.clone(), Some(options)).await?;
-                return Ok(());
-            }
-            Err(error) if tokio::time::Instant::now() < deadline => {
-                let _ = error;
-                tokio::time::sleep(TUN_RESTORE_INTERVAL).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    tun_restore::restore(
+        || zero::runtime::tun_status(Some(options.clone())),
+        || zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone())),
+        TUN_RESTORE_TIMEOUT,
+        TUN_RESTORE_INTERVAL,
+    )
+    .await
 }
 
-async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str) {
-    if let Err(error) = restore_app_tun_after_core_transition(state).await {
+async fn restore_app_tun_best_effort(
+    state: &AppState,
+    transition: &'static str,
+) -> Option<AppError> {
+    let error = restore_app_tun_after_core_transition(state).await.err();
+    if let Some(error) = &error {
         crate::services::file_logger::line(&format!(
             "failed to restore persisted app-owned TUN after Core transition: transition={transition} code={} error={}",
             error.code, error.message
         ));
     }
+    error
 }
 
 /// Fast in-memory process state read. Resource metrics are opt-in so existing
@@ -104,7 +104,7 @@ pub fn core_process_status(
 }
 
 #[tauri::command]
-pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
+pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessTransitionResponse> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
     let start_app = app_handle.clone();
@@ -115,12 +115,17 @@ pub async fn core_process_start(app_handle: AppHandle) -> AppResult<CoreProcessS
     .await
     .map_err(|e| AppError::internal(format!("core start task failed: {e}")))??;
 
-    restore_app_tun_best_effort(state.inner(), "start").await;
-    Ok(status)
+    let tun_restore_error = restore_app_tun_best_effort(state.inner(), "start").await;
+    Ok(CoreProcessTransitionResponse {
+        status,
+        tun_restore_error,
+    })
 }
 
 #[tauri::command]
-pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
+pub async fn core_process_restart(
+    app_handle: AppHandle,
+) -> AppResult<CoreProcessTransitionResponse> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
     let restart_app = app_handle.clone();
@@ -128,6 +133,9 @@ pub async fn core_process_restart(app_handle: AppHandle) -> AppResult<CoreProces
         .await
         .map_err(|e| AppError::internal(format!("core restart task failed: {e}")))??;
 
-    restore_app_tun_best_effort(state.inner(), "restart").await;
-    Ok(status)
+    let tun_restore_error = restore_app_tun_best_effort(state.inner(), "restart").await;
+    Ok(CoreProcessTransitionResponse {
+        status,
+        tun_restore_error,
+    })
 }

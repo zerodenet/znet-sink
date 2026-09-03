@@ -248,15 +248,7 @@ async function validateAppDnsHijackPrecondition(policy: TunPolicy): Promise<void
 
 export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {
   const status = await rawTunStatus();
-  try {
-    return enrichTunStatus(status, await resolveTunPolicy());
-  } catch {
-    return {
-      ...status,
-      desiredEnabled: status.enabled,
-      configSource: status.enabled ? 'runtime' : undefined,
-    };
-  }
+  return enrichTunStatus(status, await resolveTunPolicy());
 }
 
 /**
@@ -366,7 +358,9 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     if (!current.enabled) {
       await invoke('gui_tun_enable');
     }
-    return getGuiTunStatus();
+    const confirmed = await getGuiTunStatus();
+    if (!confirmed.enabled) throw { code: 'tun_start_unconfirmed', message: 'Zero 未确认 TUN 已启动' };
+    return confirmed;
   } catch (error) {
     // tun.start can finish its platform route work after the IPC response
     // deadline. Reconcile the authoritative runtime state before reporting a
@@ -385,16 +379,20 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
 
 export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
-  const current = await rawTunStatus();
 
   if (policy.profileManaged) {
     throw profileManagedError(policy, 'disable');
   }
-  if (current.enabled && current.managedByConfig) {
+  // Cancelling a saved ON intent must work even while the runtime is
+  // unreachable. Failure to confirm the stop remains an error, not an OFF
+  // snapshot, but the next Core generation must not replay the old intent.
+  const current = await rawTunStatus().catch(() => null);
+  if (current?.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
   }
+  await updateAppConfig({ tun: { enabled: false } });
 
-  if (current.enabled) {
+  if (!current || current.enabled) {
     try {
       await invoke('gui_tun_disable');
     } catch (error) {
@@ -404,6 +402,7 @@ export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
       if (!reconciled) throw error;
     }
   }
-  await updateAppConfig({ tun: { enabled: false } });
-  return getGuiTunStatus();
+  const confirmed = await getGuiTunStatus();
+  if (confirmed.enabled) throw { code: 'tun_stop_unconfirmed', message: 'Zero 未确认 TUN 已关闭；已取消自动恢复' };
+  return confirmed;
 }
