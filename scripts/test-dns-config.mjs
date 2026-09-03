@@ -64,8 +64,8 @@ for (const protocol of ['udp', 'doh', 'dot', 'doq', 'system']) {
 assert.match(panel, /按顺序匹配域名或规则集/);
 assert.match(panel, /dns_encrypted_client_queries_not_intercepted/);
 assert.match(panel, /dns_ech_hostname_recovery_unavailable/);
-assert.match(panel, /role="radiogroup" aria-label="DNS 基础模式"/);
-assert.match(panel, /aria-checked=\{draft\.mode === item\[0\]\}/);
+assert.match(panel, /<SegmentedControl\.Root value=\{draft\.mode\}[\s\S]*?aria-label="DNS 基础模式"/);
+assert.match(panel, /<SegmentedControl\.Item value=\{item\[0\]\}/);
 assert.match(panel, /aria-label="DNS 应答地址族策略"/);
 assert.match(panel, /aria-label="DNS 上游经由出站"/);
 assert.match(panel, /跟随默认出站/);
@@ -96,9 +96,10 @@ assert.match(panel, /function buildDispatchConditionFromForm\(\): Record<string,
 assert.match(panel, /getEffectiveRuleSetOptions/);
 assert.match(panel, /aria-label="DNS 分流规则集"/);
 assert.match(panel, /只显示当前可用的规则集/);
-assert.match(panel, /role="tablist" aria-label="DNS 分流条件编辑方式"/);
-assert.match(panel, /switchDispatchEditorMode\('form'\)/);
-assert.match(panel, /switchDispatchEditorMode\('json'\)/);
+assert.match(panel, /<SegmentedControl\.Root value=\{dispatchEditorMode\}[\s\S]*?aria-label="DNS 分流条件编辑方式"/);
+assert.match(panel, /switchDispatchEditorMode\(value as 'form' \| 'json'\)/);
+assert.match(panel, /<SegmentedControl\.Item value="form"/);
+assert.match(panel, /<SegmentedControl\.Item value="json"/);
 assert.match(panel, /const condition = \{ type: 'domain', values: \['example\.com'\] \}/);
 assert.doesNotMatch(panel, /updateDispatchCondition/);
 assert.match(panel, /dispatchConditionSummary\(rule\.condition\)/);
@@ -130,8 +131,8 @@ assert.match(parsing, /"retired_addresses"/);
 assert.match(ruleOverlay, /resolve_dns_detours\(config, &mut dns\)\?/);
 assert.match(ruleOverlay, /route_final_dns_detour/);
 assert.match(ruleOverlay, /HashSet::from\(\["direct"\.to_owned\(\), "block"\.to_owned\(\)\]\)/);
-assert.match(selectContent, /max-h-80/);
-assert.match(selectContent, /max-h-72/);
+assert.ok(selectContent.includes('max-h-[min(20rem,var(--bits-select-content-available-height,20rem))]'));
+assert.ok(selectContent.includes('max-h-[min(18rem,var(--bits-select-content-available-height,18rem))]'));
 assert.doesNotMatch(selectContent, /h-\(--bits-select-anchor-height\)/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
 assert.ok(

@@ -1,4 +1,5 @@
-﻿<script lang="ts">
+<script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import type { ProxyNode } from '$lib/types/protocol';
   import { gradeDelay, formatProbeTime, parseNodeName } from '$lib/services/node-utils';
   import { meanDelay, buildSparkline, sparklinePath } from '$lib/components/tabs/nodes-delay-sparkline.js';
@@ -112,7 +113,7 @@
 <div class="delay-portal-popover">
   <div class="popover-header">
     <span class="popover-title">历史延迟 ({hist.length})</span>
-    <button class="toggle-btn" onclick={toggleView} title={viewMode === 'chart' ? '切换列表' : '切换图表'}>
+    <Button variant="ghost" size="icon-xs" onclick={toggleView} title={viewMode === 'chart' ? '切换列表' : '切换图表'}>
       {#if viewMode === 'chart'}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
@@ -123,7 +124,7 @@
           <polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/>
         </svg>
       {/if}
-    </button>
+    </Button>
   </div>
 
   {#if viewMode === 'chart'}
@@ -274,21 +275,7 @@
     letter-spacing: 0.04em;
   }
 
-  .toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
-  }
-
-  .toggle-btn:hover {
+.toggle-btn:hover {
     background: var(--muted);
     color: var(--foreground);
   }

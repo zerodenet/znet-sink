@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
+  import * as Tabs from '$lib/components/AppTabs';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
@@ -418,14 +420,14 @@
           </Button>
         </div>
 
-        <textarea
+        <Textarea
           bind:value={networkProbeUrlsDraft}
-          class="probe-urls-textarea mono"
-          rows="4"
+          class="font-mono"
+          rows={4}
           spellcheck="false"
           disabled={loading || saving}
           placeholder="https://ipinfo.io/json"
-        ></textarea>
+        ></Textarea>
       </div>
     </div>
   {/if}
@@ -448,24 +450,23 @@
     </Button>
   {/snippet}
 
-  <div class="channel-tabs" role="tablist" aria-label="内核发布渠道">
+  <Tabs.Root value={activeChannel} onValueChange={(value) => {
+    activeChannel = value as ReleaseChannel;
+    installResult = null;
+    downloadProgress = null;
+  }}>
+    <Tabs.List class="w-full" aria-label="内核发布渠道">
       {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
-        <button
-          class="channel-tab"
-          class:active={activeChannel === ch}
-          role="tab"
-          aria-selected={activeChannel === ch}
+        <Tabs.Trigger
+          value={ch}
+          class="flex-1"
           disabled={installBusy}
-          onclick={() => {
-            activeChannel = ch;
-            installResult = null;
-            downloadProgress = null;
-          }}
         >
           {CHANNEL_LABELS[ch]}
-        </button>
+        </Tabs.Trigger>
       {/each}
-  </div>
+    </Tabs.List>
+    <Tabs.Content value={activeChannel}>
 
     {#if installResult?.success}
       <div class="install-success">
@@ -518,9 +519,9 @@
             </div>
             <div class="version-actions">
               {#if release.releaseNotesUrl}
-                <button class="link-btn" onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
+                <Button variant="link" size="sm"  onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
-                </button>
+                </Button>
               {/if}
               <Button
                 size="sm"
@@ -541,14 +542,17 @@
         {/each}
       </div>
     {/if}
+    </Tabs.Content>
+  </Tabs.Root>
+
   {#snippet footer()}
     <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
       {installResult?.success ? '关闭' : '取消'}
     </Button>
-    <button class="link-btn" onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
+    <Button variant="link" size="sm"  onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
       <span>手动下载</span>
-    </button>
+    </Button>
   {/snippet}
 </DraggableModal>
 
@@ -755,30 +759,6 @@
     line-height: 1.5;
   }
 
-  .probe-urls-textarea {
-    width: 100%;
-    min-height: 108px;
-    resize: vertical;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--background);
-    color: var(--foreground);
-    padding: 10px 12px;
-    font-size: 12px;
-    line-height: 1.6;
-    outline: none;
-  }
-
-  .probe-urls-textarea:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
-  }
-
-  .probe-urls-textarea:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
   .message {
     padding: 10px 12px;
     font-size: 12px;
@@ -786,42 +766,6 @@
   }
 
   /* Modal content styles (layout provided by DraggableModal) */
-
-  .channel-tabs {
-    display: flex;
-    gap: 2px;
-    background: var(--muted);
-    border-radius: 8px;
-    padding: 3px;
-  }
-
-  .channel-tab {
-    flex: 1;
-    padding: 6px 0;
-    border: none;
-    background: transparent;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .channel-tab:hover:not(:disabled) {
-    color: var(--foreground);
-  }
-
-  .channel-tab.active {
-    background: var(--card);
-    color: var(--foreground);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  }
-
-  .channel-tab:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
 
   /* Version list */
   .version-list {
@@ -975,29 +919,6 @@
   }
 
   /* Link button */
-  .link-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    cursor: pointer;
-    padding: 4px 6px;
-    border-radius: 4px;
-    transition: color 0.12s ease, background 0.12s ease;
-  }
-
-  .link-btn:hover:not(:disabled) {
-    color: var(--foreground);
-    background: var(--muted);
-  }
-
-  .link-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
 
   :global(.sr-only) {
     position: absolute;

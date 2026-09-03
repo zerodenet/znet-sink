@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
+  import { Textarea } from '$lib/components/ui/textarea';
   import { appendLog, getAppErrorMessage, getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
@@ -309,7 +311,7 @@
     <div class="settings-error" role="alert">
       <span>{configError ?? updateError ?? trafficBallPreference.error}</span>
       {#if configError}
-        <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
+        <Button variant="outline" size="sm"  onclick={refreshConfig} disabled={configLoading}>重试</Button>
       {/if}
     </div>
   {/if}
@@ -333,15 +335,15 @@
         {:else}
           <div class="menu-button-row">
             {#each menuTabs as tab}
-              <button
+              <Button variant="outline" size="sm"
                 type="button"
-                class="menu-chip {isMenuVisible(tab.id) ? 'active' : ''}"
+
                 onclick={() => toggleMenuVisibility(tab.id)}
                 disabled={updatingMenuKey !== null || loading}
                 aria-pressed={isMenuVisible(tab.id)}
               >
                 <span>{TAB_LABELS[tab.id] ?? tab.label}{tab.comingSoon ? '（敬请期待）' : ''}</span>
-              </button>
+              </Button>
             {/each}
           </div>
         {/if}
@@ -397,9 +399,9 @@
         <span class="label-text">重新显示新手引导</span>
         <span class="label-desc">下次进入应用时重新显示当前版本的引导，不会重置其他设置。</span>
       </div>
-      <button class="reset-btn" onclick={() => store.resetOnboarding()}>
+      <Button variant="outline" size="sm"  onclick={() => store.resetOnboarding()}>
         重新显示
-      </button>
+      </Button>
     </div>
   </div>
 {:else if scope === 'network'}
@@ -407,7 +409,7 @@
     <div class="settings-error" role="alert">
       <span>{configError ?? updateError}</span>
       {#if configError}
-        <button class="log-action-btn" onclick={refreshConfig} disabled={configLoading}>重试</button>
+        <Button variant="outline" size="sm"  onclick={refreshConfig} disabled={configLoading}>重试</Button>
       {/if}
     </div>
   {/if}
@@ -438,21 +440,21 @@
           <span class="label-text">系统代理绕过</span>
           <span class="label-desc">每行一项，仅作用于系统代理，不等于 TUN 排除。支持 localhost、域名和 16.* 这类主机模式；整字节 IPv4 CIDR（如 16.0.0.0/8）保存时会自动转换。</span>
         </div>
-        <textarea
-          class="bypass-textarea"
+        <Textarea
+          class="font-mono"
           bind:value={proxyBypassDraft}
           disabled={loading}
-          rows="6"
+          rows={6}
           spellcheck="false"
           aria-label="本地地址绕过列表"
-        ></textarea>
+        ></Textarea>
         <div class="bypass-actions">
-          <button
-            class="log-action-btn"
+          <Button variant="outline" size="sm"
+
             onclick={() => (proxyBypassDraft = DEFAULT_PROXY_BYPASS.join('\n'))}
             disabled={loading}
-          >恢复默认</button>
-          <button class="log-action-btn primary" onclick={saveProxyBypass} disabled={loading}>保存</button>
+          >恢复默认</Button>
+          <Button variant="default" size="sm"  onclick={saveProxyBypass} disabled={loading}>保存</Button>
         </div>
       </div>
     {/if}
@@ -466,7 +468,7 @@
         <div class="config-row-label">
           <span class="label-text" style="color: var(--destructive);">{logPathsError}</span>
         </div>
-        <button class="log-action-btn" onclick={loadLogPaths}>重试</button>
+        <Button variant="outline" size="sm"  onclick={loadLogPaths}>重试</Button>
       </div>
     {:else if logPaths}
       <div class="config-row">
@@ -475,10 +477,10 @@
           <span class="label-desc log-path">{logPaths.logFile}</span>
         </div>
         <div class="log-actions">
-          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.logFile, 'logFile')}> 
+          <Button variant="outline" size="sm"  onclick={() => copyToClipboard(logPaths!.logFile, 'logFile')}>
             {copiedField === 'logFile' ? '已复制' : '复制'}
-          </button>
-          <button class="log-action-btn primary" onclick={() => revealLogFile(logPaths!.logFile)}>打开目录</button>
+          </Button>
+          <Button variant="default" size="sm"  onclick={() => revealLogFile(logPaths!.logFile)}>打开目录</Button>
         </div>
       </div>
 
@@ -488,10 +490,10 @@
           <span class="label-desc log-path">{logPaths.coreLogFile}</span>
         </div>
         <div class="log-actions">
-          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.coreLogFile, 'coreLogFile')}> 
+          <Button variant="outline" size="sm"  onclick={() => copyToClipboard(logPaths!.coreLogFile, 'coreLogFile')}>
             {copiedField === 'coreLogFile' ? '已复制' : '复制'}
-          </button>
-          <button class="log-action-btn primary" onclick={() => revealLogFile(logPaths!.coreLogFile)}>打开目录</button>
+          </Button>
+          <Button variant="default" size="sm"  onclick={() => revealLogFile(logPaths!.coreLogFile)}>打开目录</Button>
         </div>
       </div>
 
@@ -501,10 +503,10 @@
           <span class="label-desc log-path">{logPaths.logsDir}</span>
         </div>
         <div class="log-actions">
-          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.logsDir, 'logsDir')}> 
+          <Button variant="outline" size="sm"  onclick={() => copyToClipboard(logPaths!.logsDir, 'logsDir')}>
             {copiedField === 'logsDir' ? '已复制' : '复制'}
-          </button>
-          <button class="log-action-btn primary" onclick={() => openDirectory(logPaths!.logsDir)}>打开</button>
+          </Button>
+          <Button variant="default" size="sm"  onclick={() => openDirectory(logPaths!.logsDir)}>打开</Button>
         </div>
       </div>
 
@@ -514,10 +516,10 @@
           <span class="label-desc log-path">{logPaths.dataDir}</span>
         </div>
         <div class="log-actions">
-          <button class="log-action-btn" onclick={() => copyToClipboard(logPaths!.dataDir, 'dataDir')}> 
+          <Button variant="outline" size="sm"  onclick={() => copyToClipboard(logPaths!.dataDir, 'dataDir')}>
             {copiedField === 'dataDir' ? '已复制' : '复制'}
-          </button>
-          <button class="log-action-btn primary" onclick={() => openDirectory(logPaths!.dataDir)}>打开</button>
+          </Button>
+          <Button variant="default" size="sm"  onclick={() => openDirectory(logPaths!.dataDir)}>打开</Button>
         </div>
       </div>
     {:else}
@@ -632,60 +634,12 @@
     padding: 14px;
   }
 
-  .menu-chip {
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
-  }
-
-  .menu-chip:hover:not(:disabled) {
-    color: var(--foreground);
-    background: var(--muted);
-  }
-
-  .menu-chip.active {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: var(--primary-foreground);
-    font-weight: 600;
-  }
-
-  .menu-chip:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
   .config-loading {
     font-size: 12px;
     color: var(--muted-foreground);
     padding: 14px 0;
     text-align: center;
     opacity: 0.6;
-  }
-
-  .reset-btn {
-    height: var(--control-height);
-    padding: 0 14px;
-    border-radius: var(--control-radius);
-    border: 1px solid var(--input);
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.13s ease;
-    white-space: nowrap;
-  }
-
-  .reset-btn:hover {
-    background: var(--muted);
   }
 
   .log-path {
@@ -709,60 +663,10 @@
     padding: 10px 0;
   }
 
-  .bypass-textarea {
-    width: 100%;
-    min-height: 112px;
-    resize: vertical;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    padding: 9px 10px;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    line-height: 1.5;
-    outline: none;
-  }
-
-  .bypass-textarea:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
-  }
-
   .bypass-actions {
     display: flex;
     justify-content: flex-end;
     gap: 6px;
-  }
-
-  .log-action-btn {
-    height: var(--control-height);
-    padding: 0 10px;
-    border-radius: var(--control-radius);
-    border: 1px solid var(--input);
-    background: var(--background);
-    color: var(--foreground);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.13s ease;
-    white-space: nowrap;
-  }
-
-  .log-action-btn:hover {
-    background: var(--muted);
-    color: var(--foreground);
-  }
-
-  .log-action-btn.primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: var(--primary-foreground);
-  }
-
-  .log-action-btn.primary:hover {
-    opacity: 0.9;
   }
 
   @media (max-width: 760px) {

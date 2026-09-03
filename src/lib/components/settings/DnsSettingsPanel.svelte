@@ -1,4 +1,6 @@
 <script lang="ts">
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { AlertTriangle, Braces, ChevronDown, ChevronUp, FileDiff, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
@@ -866,21 +868,15 @@
       <div class="section-title">基础模式</div>
       <p>{modeDescription}</p>
     </div>
-    <div class="mode-control" role="radiogroup" aria-label="DNS 基础模式">
+    <SegmentedControl.Root value={draft.mode} onValueChange={(value) => changeMode(value as DnsMode)} aria-label="DNS 基础模式">
       {#each [
         ['disabled', '关闭'],
         ['real', 'Real DNS'],
         ['fake_ip', 'Fake-IP'],
       ] as item}
-        <button
-          class:active={draft.mode === item[0]}
-          type="button"
-          role="radio"
-          aria-checked={draft.mode === item[0]}
-          onclick={() => changeMode(item[0] as DnsMode)}
-        >{item[1]}</button>
+        <SegmentedControl.Item value={item[0]}>{item[1]}</SegmentedControl.Item>
       {/each}
-    </div>
+    </SegmentedControl.Root>
   </section>
 
   {#if draft.mode === 'disabled'}
@@ -935,7 +931,7 @@
   </section>
 
   <section class="advanced-toggle">
-    <button type="button" aria-expanded={advancedOpen} onclick={() => (advancedOpen = !advancedOpen)}>
+    <button data-slot="surface-button" type="button" aria-expanded={advancedOpen} onclick={() => (advancedOpen = !advancedOpen)}>
       <span><strong>高级选项</strong><small>解析链、缓存与 JSON</small></span>
       <ChevronDown class={advancedOpen ? 'expanded' : ''} />
     </button>
@@ -965,7 +961,7 @@
       </label>
       <label class="wide">
         <span>拒绝响应地址（每行一个 CIDR）</span>
-        <textarea value={(draft.dns.policy?.reject_address_cidrs ?? []).join('\n')} placeholder="例如 0.0.0.0/32" oninput={(event) => changeRejectedCidrs(event.currentTarget.value)}></textarea>
+        <Textarea class="font-mono" value={(draft.dns.policy?.reject_address_cidrs ?? []).join('\n')} placeholder="例如 0.0.0.0/32" oninput={(event) => changeRejectedCidrs(event.currentTarget.value)}></Textarea>
         <small>仅校验真实 DNS 上游响应：命中后不缓存并继续回退。它不会排除 Fake-IP，也不会绕过系统代理或 TUN；内网域名请使用 Fake-IP“排除域名”，内网网段请使用“TUN 排除网段”。</small>
       </label>
     </div>
@@ -1141,7 +1137,7 @@
             <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" disabled={compatibility.features?.dnsFakeIpDualStack.state === 'unsupported'} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
-            <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea><small>这些域名返回真实 DNS 结果，不分配 Fake-IP。按目标网段绕过 TUN 请到 TUN 设置配置排除 CIDR。</small></label>
+            <label class="wide"><span>排除域名（每行一个）</span><Textarea class="font-mono" value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></Textarea><small>这些域名返回真实 DNS 结果，不分配 Fake-IP。按目标网段绕过 TUN 请到 TUN 设置配置排除 CIDR。</small></label>
           </div>
         </section>
       {/if}
@@ -1321,10 +1317,10 @@
         <Dialog.Description>按顺序匹配，命中后使用指定 DNS。</Dialog.Description>
       </Dialog.Header>
       <Dialog.Body class="dispatch-dialog-body">
-        <div class="dispatch-editor-tabs" role="tablist" aria-label="DNS 分流条件编辑方式">
-          <button type="button" role="tab" aria-selected={dispatchEditorMode === 'form'} data-active={dispatchEditorMode === 'form'} onclick={() => switchDispatchEditorMode('form')}>表单</button>
-          <button type="button" role="tab" aria-selected={dispatchEditorMode === 'json'} data-active={dispatchEditorMode === 'json'} onclick={() => switchDispatchEditorMode('json')}>高级 JSON</button>
-        </div>
+        <SegmentedControl.Root value={dispatchEditorMode} onValueChange={(value) => switchDispatchEditorMode(value as 'form' | 'json')} aria-label="DNS 分流条件编辑方式">
+          <SegmentedControl.Item value="form">表单</SegmentedControl.Item>
+          <SegmentedControl.Item value="json">高级 JSON</SegmentedControl.Item>
+        </SegmentedControl.Root>
         {#if dispatchEditorMode === 'form'}
           <div class="dispatch-condition-form">
             <label class="dispatch-dialog-field">
@@ -1372,18 +1368,18 @@
             {:else}
               <label class="dispatch-dialog-field">
                 <span>匹配值 <small>每行一个</small></span>
-                <textarea
-                  class="condition dispatch-values-editor"
+                <Textarea
+                  class="font-mono min-h-28"
                   bind:value={dispatchConditionValuesDraft}
                   placeholder={dispatchConditionOptions.find((option) => option.value === dispatchConditionType)?.placeholder ?? ''}
-                ></textarea>
+                ></Textarea>
               </label>
             {/if}
           </div>
         {:else}
           <label class="dispatch-dialog-field">
             <span>匹配条件 JSON</span>
-            <textarea class="condition dispatch-condition-editor" bind:value={dispatchConditionDraft} spellcheck="false"></textarea>
+            <Textarea class="font-mono min-h-40" bind:value={dispatchConditionDraft} spellcheck="false"></Textarea>
             <small>支持 <code>and</code> / <code>or</code> 复合条件以及新版内核字段。</small>
           </label>
         {/if}
@@ -1468,7 +1464,7 @@
       <Dialog.Description>应用后会更新表单草稿；仍需在主页面点击“保存并应用”才会提交到内核。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="json-dialog-body">
-      <textarea class="native-json" bind:value={nativeJson} spellcheck="false" aria-label="内核原生 DNS JSON 配置"></textarea>
+      <Textarea class="font-mono min-h-[min(54vh,480px)] resize-none" bind:value={nativeJson} spellcheck="false" aria-label="内核原生 DNS JSON 配置"></Textarea>
       {#if nativeError}<div class="dialog-error" role="alert">{nativeError}</div>{/if}
     </Dialog.Body>
     <Dialog.Footer>
@@ -1483,7 +1479,6 @@
   .section-head,
   .head-actions,
   .mode-section,
-  .mode-control,
   .server-row,
   .server-name,
   .server-actions,
@@ -1611,38 +1606,6 @@
     color: var(--muted-foreground);
     font-size: 11.5px;
     line-height: 1.45;
-  }
-
-  .mode-control {
-    flex: none;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--muted) 40%, transparent);
-  }
-
-  .mode-control button {
-    min-width: 72px;
-    padding: 6px 10px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .mode-control button:hover {
-    color: var(--foreground);
-  }
-
-  .mode-control button.active {
-    background: var(--background);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
-    color: var(--foreground);
-    font-weight: 600;
   }
 
   .disabled-note {
@@ -1868,12 +1831,6 @@
     grid-column: 1 / -1;
   }
 
-  .field-grid textarea {
-    min-height: 76px;
-    padding: 8px;
-    resize: vertical;
-  }
-
   .policy-section {
     display: flex;
     flex-direction: column;
@@ -2040,15 +1997,6 @@
     font-size: 11px;
   }
 
-  .condition {
-    min-height: 74px;
-    flex: 1;
-    padding: 7px;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    resize: vertical;
-  }
-
   .server-dialog-form,
   .dispatch-dialog-form {
     display: contents;
@@ -2090,35 +2038,6 @@
     gap: 6px;
   }
 
-  .dispatch-editor-tabs {
-    display: flex;
-    width: fit-content;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--muted) 40%, transparent);
-  }
-
-  .dispatch-editor-tabs button {
-    min-width: 72px;
-    padding: 6px 12px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .dispatch-editor-tabs button[data-active='true'] {
-    background: var(--background);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
-    color: var(--foreground);
-    font-weight: 600;
-  }
-
   .dispatch-condition-form {
     display: grid;
     grid-template-columns: minmax(150px, .65fr) minmax(0, 1.35fr);
@@ -2139,41 +2058,11 @@
     font-size: 10px;
   }
 
-  .dispatch-condition-editor {
-    min-height: 180px;
-    width: 100%;
-  }
-
-  .dispatch-values-editor {
-    min-height: 112px;
-    width: 100%;
-  }
-
   .system-note {
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: color-mix(in srgb, var(--muted) 28%, transparent);
-  }
-
-  .native-json {
-    width: 100%;
-    min-height: min(54vh, 480px);
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-    background: var(--background);
-    color: var(--foreground);
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    line-height: 1.55;
-    resize: none;
-  }
-
-  .native-json:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 15%, transparent);
   }
 
   .dialog-error {
@@ -2261,10 +2150,6 @@
       align-items: stretch;
       flex-direction: column;
       gap: 10px;
-    }
-
-    .mode-control {
-      align-self: flex-start;
     }
 
     .field-grid,

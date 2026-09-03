@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
   import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
@@ -8,6 +9,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
+  import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import {
     getCommonRuleInjectionStatus,
     getRuleSet,
@@ -516,7 +518,7 @@
     <div class="list-scroll" class:card-view={viewMode === 'card'}>
       {#each items as item (item.id)}
         <div class="list-row">
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="row-main"
             onclick={() => openRuleSet(item)}
@@ -578,20 +580,21 @@
                   disabled={busy || !item.artifact}
                   aria-label={`将 ${item.name} 用作公共规则`}
                 />
-                <select
-                  class="binding-select"
+                <FieldSelect
+                  class="w-[116px]"
                   value={item.commonBinding?.action ?? 'final'}
-                  onchange={(event) => updateCommonBinding(item, { action: event.currentTarget.value as CommonRuleAction })}
+                  onValueChange={(value) => updateCommonBinding(item, { action: value as CommonRuleAction })}
                   disabled={busy || !item.commonBinding?.enabled}
                   aria-label="匹配动作"
-                >
-                  <option value="final">沿用最终路由</option>
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
-                  <option value="reject">拒绝</option>
-                </select>
-                <input
-                  class="binding-order"
+                  options={[
+                    { value: 'final', label: '沿用最终路由' },
+                    { value: 'proxy', label: '代理' },
+                    { value: 'direct', label: '直连' },
+                    { value: 'reject', label: '拒绝' },
+                  ]}
+                />
+                <Input
+                  class="w-14 font-mono"
                   type="number"
                   min="0"
                   value={item.commonBinding?.order ?? items.indexOf(item) * 10}
@@ -687,22 +690,26 @@
       <div class="form-item">
         <span class="form-label">来源格式</span>
         <div class="form-input-wrap">
-          <select bind:value={sourceFormat} class="field-select" disabled={saving}>
-            <option value="auto">自动识别</option>
-            <option value="zero-rule-ir-v1">Zero Rule IR v1</option>
-            <option value="clash-classical-yaml">Clash Classical YAML</option>
-          </select>
+          <FieldSelect value={sourceFormat} onValueChange={(value) => sourceFormat = value as typeof sourceFormat} disabled={saving} aria-label="来源格式"
+            options={[
+              { value: 'auto', label: '自动识别' },
+              { value: 'zero-rule-ir-v1', label: 'Zero Rule IR v1' },
+              { value: 'clash-classical-yaml', label: 'Clash Classical YAML' },
+            ]}
+          />
         </div>
       </div>
       <div class="form-item">
         <span class="form-label">自动更新</span>
         <div class="form-input-wrap">
-          <select bind:value={updateIntervalSecs} class="field-select" disabled={saving}>
-            <option value={0}>手动</option>
-            <option value={3600}>每小时</option>
-            <option value={21600}>每 6 小时</option>
-            <option value={86400}>每天</option>
-          </select>
+          <FieldSelect value={String(updateIntervalSecs)} onValueChange={(value) => updateIntervalSecs = Number(value)} disabled={saving} aria-label="自动更新"
+            options={[
+              { value: '0', label: '手动' },
+              { value: '3600', label: '每小时' },
+              { value: '21600', label: '每 6 小时' },
+              { value: '86400', label: '每天' },
+            ]}
+          />
         </div>
       </div>
     </div>
@@ -730,17 +737,13 @@
       <div class="rule-list">
         {#each rules as rule, index (index)}
           <div class="rule-row">
-            <select
+            <FieldSelect
               value={rule.type}
-              class="field-select"
-              onchange={(event) => setRuleType(index, event.currentTarget.value as ZeroRuleType)}
+              onValueChange={(value) => setRuleType(index, value as ZeroRuleType)}
               disabled={saving}
               aria-label="规则类型"
-            >
-              {#each RULE_TYPES as type}
-                <option value={type.value}>{type.label}</option>
-              {/each}
-            </select>
+              options={RULE_TYPES}
+            />
             <Input
               value={rule.value}
               oninput={(event) => setRuleValue(index, event.currentTarget.value)}
@@ -766,7 +769,7 @@
 
     {#if sourceUrl}
       <label class="retain-source">
-        <input type="checkbox" bind:checked={retainSource} disabled={saving} />
+        <Choice class="mt-0.5" type="checkbox" bind:checked={retainSource} disabled={saving} />
         <span>保留外部来源；下次同步会用远程内容覆盖当前规则</span>
       </label>
     {/if}
@@ -1245,22 +1248,6 @@
     border-right: 1px solid var(--border);
   }
 
-  .binding-select,
-  .binding-order {
-    height: 27px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--muted);
-    color: var(--foreground);
-    font-size: 10.5px;
-  }
-
-  .binding-select { width: 100px; padding: 0 5px; }
-  .binding-order { width: 48px; padding: 0 5px; font-family: var(--font-mono); }
-
-  .binding-select:disabled,
-  .binding-order:disabled { opacity: 0.45; }
-
   .card-view .common-binding {
     position: absolute;
     right: 10px;
@@ -1406,25 +1393,6 @@
     line-height: 1.45;
   }
 
-  .field-select {
-    width: 100%;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    font: inherit;
-    font-size: 12px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    outline: none;
-  }
-
-  .field-select:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-
   .rules-section {
     display: flex;
     flex-direction: column;
@@ -1473,8 +1441,6 @@
     font-size: 11px;
     cursor: pointer;
   }
-
-  .retain-source input { accent-color: var(--primary); }
 
   :global(.spin) { animation: spin 0.8s linear infinite; }
 

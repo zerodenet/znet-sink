@@ -42,11 +42,39 @@ jobs:
       - name: Run portable kernel settings contract
         run: pnpm test:kernel-settings
 
+      - name: Check shared UI control contract
+        run: pnpm test:ui-controls
+
       - name: Check Svelte and TypeScript
         run: pnpm check
 
       - name: Build frontend
         run: pnpm build
+
+  ui-controls:
+    name: UI controls (Chromium and WebKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium webkit
+      - run: pnpm test:ui-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-control-browser-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
 
   windows-client-core:
     name: Windows DNS and client core

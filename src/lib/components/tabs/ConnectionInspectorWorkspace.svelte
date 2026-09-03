@@ -884,7 +884,7 @@
           class="group relative flex rounded-lg border border-border/70 bg-background transition-colors hover:bg-muted/40"
           style="content-visibility: auto; contain-intrinsic-size: 82px;"
         >
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-20 text-left text-foreground outline-none focus-visible:bg-muted/50"
             aria-label={`查看连接 ${connection.destination}`}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { isNestedOverlayEvent } from '$lib/services/overlay-keyboard';
+  import { Button } from '$lib/components/ui/button';
   import { tick } from 'svelte';
 
   interface Props {
@@ -73,6 +75,7 @@
       : null;
 
     function handleWindowKeydown(event: KeyboardEvent) {
+      if (isNestedOverlayEvent(event)) return;
       if (event.key === 'Escape') {
         if (!closeDisabled) {
           event.preventDefault();
@@ -234,8 +237,8 @@
           {#if headerActions}
             {@render headerActions()}
           {/if}
-          <button
-            class="dm-icon-btn"
+          <Button variant="ghost" size="icon-sm"
+
             onclick={toggleFullscreen}
             title={fullscreen ? '还原' : '全屏'}
             aria-label={fullscreen ? '还原' : '全屏'}
@@ -251,9 +254,9 @@
                 <path d="M1 5V1h4M9 13h4V9M1 1l4 4M13 13l-4-4"/>
               </svg>
             {/if}
-          </button>
-          <button
-            class="dm-icon-btn"
+          </Button>
+          <Button variant="ghost" size="icon-sm"
+
             onclick={onClose}
             disabled={closeDisabled}
             title="关闭"
@@ -262,7 +265,7 @@
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
               <line x1="3" y1="3" x2="11" y2="11"/><line x1="11" y1="3" x2="3" y2="11"/>
             </svg>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -284,7 +287,7 @@
   .dm-overlay {
     position: fixed;
     inset: 0;
-    z-index: 1000;
+    z-index: var(--layer-dialog);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -366,29 +369,6 @@
   }
 
   /* ── Icon buttons ── */
-  .dm-icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
-  }
-
-  .dm-icon-btn:hover:not(:disabled) {
-    background: var(--muted);
-    color: var(--foreground);
-  }
-
-  .dm-icon-btn:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
 
   /* ── Body ── */
   .dm-body {

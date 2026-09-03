@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
@@ -321,7 +322,7 @@
       <span class="search-icon">
         <Search class="h-3.5 w-3.5" />
       </span>
-      <input bind:value={query} class="search-input" placeholder="搜索名称、ID 或文件路径" />
+      <Input bind:value={query} class="w-[180px] max-w-full" placeholder="搜索名称、ID 或文件路径" />
     </div>
   </div>
 
@@ -350,7 +351,7 @@
       <div class="config-list">
         {#each filteredConfigs as config (config.id)}
           <div class="config-row">
-            <button
+            <button data-slot="surface-button"
               type="button"
               class="row-open"
               onclick={() => openEdit(config)}
@@ -475,13 +476,13 @@
       <div class="form-item">
         <span class="form-label">JSON 内容</span>
         <div class="form-input-wrap">
-          <textarea
+          <Textarea
             bind:value={draft.content}
-            class="json-editor mono"
+            class="font-mono min-h-80"
             placeholder="粘贴代理配置 JSON..."
             rows={16}
             disabled={saving}
-          ></textarea>
+          ></Textarea>
           <div class="form-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
         </div>
       </div>
@@ -616,29 +617,6 @@
     transform: translateY(-50%);
     color: var(--muted-foreground);
     pointer-events: none;
-  }
-
-  .search-input {
-    width: 100%;
-    height: 32px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 12px;
-    padding: 0 12px 0 30px;
-    outline: none;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .search-input:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-
-  .search-input::placeholder {
-    color: var(--muted-foreground);
   }
 
   .list-shell {
@@ -802,24 +780,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-  }
-
-  .json-editor {
-    width: 100%;
-    min-height: 320px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--muted);
-    color: var(--foreground);
-    font-size: 12px;
-    line-height: 1.6;
-    resize: vertical;
-    outline: none;
-  }
-
-  .json-editor:focus {
-    border-color: rgba(99, 102, 241, 0.24);
   }
 
   .validation-row {

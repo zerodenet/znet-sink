@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./lib/components/ui/controls.css";
 @import "flag-icons/css/flag-icons.min.css";
 @import "@fontsource-variable/inter/wght.css";
 
@@ -104,6 +105,8 @@
   --control-height-comfortable: 32px;
   --control-radius-compact: 5px;
   --control-radius: 7px;
+  --layer-dialog: 1000;
+  --layer-menu: 1100;
 }
 
 /* ============================================

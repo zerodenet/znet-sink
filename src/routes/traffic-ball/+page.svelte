@@ -351,7 +351,7 @@
       <span>拖动移动</span>
     </span>
     <span class="traffic-size-controls">
-      <button
+      <button data-slot="surface-button"
         type="button"
         class="traffic-size-button"
         aria-label="缩小流量球"
@@ -361,7 +361,7 @@
         onclick={(event) => { event.stopPropagation(); void resize(-1); }}
       >−</button>
       <span class="traffic-size-value" aria-live="polite">{logicalSize}</span>
-      <button
+      <button data-slot="surface-button"
         type="button"
         class="traffic-size-button"
         aria-label="放大流量球"

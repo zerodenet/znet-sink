@@ -455,7 +455,7 @@
         {#each visibleFrames as frame (frame.id)}
           <div class="debug-row" class:expanded={expandedIds.has(frame.id)}>
             <div class="debug-row-head">
-              <button class="debug-main" onclick={() => toggleExpand(frame.id)}>
+              <button data-slot="surface-button" class="debug-main" onclick={() => toggleExpand(frame.id)}>
                 <span class="debug-dir" style="color: {dirColor(frame.direction)}">{dirLabel(frame.direction)}</span>
                 <span class="debug-summary">{frameSummary(frame)}</span>
                 {#if frame.elapsedMs != null}

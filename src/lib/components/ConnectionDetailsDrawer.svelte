@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { isNestedOverlayEvent } from '$lib/services/overlay-keyboard';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { onDestroy, tick } from 'svelte';
   import type { DisplayConnection } from '$lib/services/connection-view';
   import { copyTextToClipboard } from '$lib/services/clipboard';
@@ -75,6 +77,7 @@
     document.body.style.overflow = 'hidden';
 
     function handleKeydown(event: KeyboardEvent) {
+      if (isNestedOverlayEvent(event)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         close();
@@ -241,7 +244,7 @@
 
 {#if connection}
   <div use:portal class="dialog-layer" role="presentation">
-    <button
+    <button data-slot="surface-button"
       class="dialog-scrim"
       type="button"
       tabindex="-1"
@@ -289,30 +292,24 @@
         </Button>
       </header>
 
-      <div class="dialog-tabs" role="tablist" aria-label="连接详情栏目">
-        <button
+      <div class="dialog-tabs">
+      <SegmentedControl.Root value={activeSection} onValueChange={(value) => activeSection = value as 'details' | 'diagnostics'} aria-label="连接详情栏目">
+        <SegmentedControl.Item
           id="connection-details-tab"
-          type="button"
-          role="tab"
-          aria-selected={activeSection === 'details'}
+          value="details"
           aria-controls="connection-details-panel"
-          class:active={activeSection === 'details'}
-          onclick={() => activeSection = 'details'}
-        >详情</button>
-        <button
+        >详情</SegmentedControl.Item>
+        <SegmentedControl.Item
           id="connection-diagnostics-tab"
-          type="button"
-          role="tab"
-          aria-selected={activeSection === 'diagnostics'}
+          value="diagnostics"
           aria-controls="connection-diagnostics-panel"
-          class:active={activeSection === 'diagnostics'}
-          onclick={() => activeSection = 'diagnostics'}
-        >诊断数据</button>
+        >诊断数据</SegmentedControl.Item>
+      </SegmentedControl.Root>
       </div>
 
       <div class="dialog-content">
         {#if activeSection === 'details'}
-          <div id="connection-details-panel" role="tabpanel" aria-labelledby="connection-details-tab">
+          <div id="connection-details-panel" role="region" aria-labelledby="connection-details-tab">
             <section class="summary-grid">
               <article class="summary-card">
                 <span class="summary-label">上传</span>
@@ -435,7 +432,7 @@
             {/if}
           </div>
         {:else}
-          <div id="connection-diagnostics-panel" role="tabpanel" aria-labelledby="connection-diagnostics-tab">
+          <div id="connection-diagnostics-panel" role="region" aria-labelledby="connection-diagnostics-tab">
             <section class="detail-section diagnostics-intro first-section">
               <h3>事件与记录</h3>
               <p>这里保留内核原始结构，用于排查字段缺失和版本兼容问题；日常查看连接不需要展开原始 JSON。</p>
@@ -519,7 +516,7 @@
 {/if}
 
 <style>
-  .dialog-layer { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .dialog-layer { position: fixed; inset: 0; z-index: var(--layer-dialog); display: flex; align-items: center; justify-content: center; padding: 20px; }
   .dialog-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.38); backdrop-filter: blur(2px); cursor: default; }
   .dialog { position: relative; z-index: 1; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 24px 70px rgb(0 0 0 / 0.28); animation: dialog-in 0.16s ease-out; outline: none; }
   @keyframes dialog-in { from { transform: translateY(8px) scale(0.985); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
@@ -534,9 +531,6 @@
   .tag, .state-tag { flex-shrink: 0; border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 700; }
   .state-tag.active-state { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
   .dialog-tabs { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--border); }
-  .dialog-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
-  .dialog-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
-  .dialog-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
   .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent; padding: 16px 18px 24px; }
   .dialog-content::-webkit-scrollbar { width: 9px; }
   .dialog-content::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }

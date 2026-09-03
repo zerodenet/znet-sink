@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { detectKernelVersion, listKernelVersions } from '$lib/services/kernel-version';
   import { getGuiCoreHealth } from '$lib/services/core';
   import type { KernelRelease } from '$lib/types/kernel-version';
@@ -126,9 +127,9 @@
     </div>
   {/if}
 
-  <button class="kernel-link" onclick={openKernelSettings}>
+  <Button variant="link" size="sm"   onclick={openKernelSettings}>
     {hasInstall ? '管理版本' : '安装内核'}
-  </button>
+  </Button>
 </div>
 
 <style>
@@ -242,20 +243,4 @@
     flex-shrink: 0;
   }
 
-  .kernel-link {
-    align-self: flex-start;
-    border: none;
-    background: transparent;
-    color: var(--primary);
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 0;
-    cursor: pointer;
-    margin-top: auto;
-    flex-shrink: 0;
-  }
-
-  .kernel-link:hover {
-    text-decoration: underline;
-  }
 </style>

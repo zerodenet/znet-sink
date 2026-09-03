@@ -33,7 +33,7 @@
       {#if item.group && (index === 0 || items[index - 1]?.group !== item.group)}
         <div class="section-nav-group">{item.group}</div>
       {/if}
-      <button
+      <button data-slot="surface-button"
         type="button"
         class="section-nav-item"
         class:active={activeId === item.id}

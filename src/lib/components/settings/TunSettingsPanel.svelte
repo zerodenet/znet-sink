@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -290,16 +291,16 @@
         <span class="label-text">TUN 接管网段</span>
         <span class="label-desc">每行一个 CIDR。留空表示接管全部地址；填写后只为这些目标安装 TUN 路由。</span>
       </div>
-      <textarea
-        class="cidr-textarea font-mono"
+      <Textarea
+        class="font-mono"
         bind:value={includeCidrs}
         oninput={markDirty}
         disabled={locked}
-        rows="4"
+        rows={4}
         placeholder="留空表示全部"
         spellcheck="false"
         aria-label="TUN 接管网段"
-      ></textarea>
+      ></Textarea>
     </div>
 
     <div class="config-row config-row-top">
@@ -307,16 +308,16 @@
         <span class="label-text">TUN 排除网段</span>
         <span class="label-desc">每行一个 CIDR。匹配目标保留系统原有路由，不进入 TUN；例如 WireGuard 内网可填写 16.0.0.0/8。</span>
       </div>
-      <textarea
-        class="cidr-textarea font-mono"
+      <Textarea
+        class="font-mono"
         bind:value={excludeCidrs}
         oninput={markDirty}
         disabled={locked}
-        rows="4"
+        rows={4}
         placeholder="例如 16.0.0.0/8"
         spellcheck="false"
         aria-label="TUN 排除网段"
-      ></textarea>
+      ></Textarea>
     </div>
 
     <div class="config-row">
@@ -407,24 +408,6 @@
 
   .config-row-top {
     align-items: flex-start;
-  }
-
-  .cidr-textarea {
-    width: 260px;
-    min-height: 82px;
-    resize: vertical;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--background);
-    padding: 8px 10px;
-    color: var(--foreground);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .cidr-textarea:focus {
-    border-color: var(--ring);
-    outline: none;
   }
 
   .config-row-label {
