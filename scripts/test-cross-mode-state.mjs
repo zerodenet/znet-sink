@@ -202,7 +202,8 @@ assert.ok(
     && coreProcessCommand.includes('desired_enabled.unwrap_or(app_config.tun.enabled == Some(true))')
     && coreProcessCommand.includes('if !should_enable || active_profile_defines_tun(state)?')
     && coreProcessCommand.includes('active_profile_defines_tun(state)?')
-    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options)).await?'),
+    && coreProcessCommand.includes('tun_restore::restore(')
+    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone()))'),
   'managed Core start/restart must replay persisted app-owned TUN only when the active profile does not own runtime.tun',
 );
 

@@ -3,6 +3,7 @@
   import { Button } from '$lib/components/ui/button';
   import { guiExportDiagnostics, restartCoreProcess } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
+  import { guiState } from '$lib/services/gui-state.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
 
   let {
@@ -21,15 +22,21 @@
   const dnsRecovery = $derived(context === 'tun' || code === 'tun_dns_hijack_requires_dns');
 
   async function restartCore() {
-    if (busy) return;
+    if (busy || guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isConnecting || guiState.isDisconnecting) return;
     busy = true;
+    guiState.isStoppingCore = true;
+    guiState.invalidateTunObservation();
     try {
-      await restartCoreProcess();
-      success('内核已重新启动');
+      const result = await restartCoreProcess();
+      if (result.tunRestoreError) warning(`内核已重启，但 TUN 恢复失败：${result.tunRestoreError.message}`);
+      else success('内核已重新启动');
       await onretry?.();
     } catch {
       warning('内核重启失败，请查看日志或导出诊断材料');
     } finally {
+      guiState.invalidateTunObservation();
+      guiState.isStoppingCore = false;
+      await Promise.allSettled([guiState.refreshTunStatus(), guiState.refreshConnectionStatus()]);
       busy = false;
     }
   }
@@ -62,7 +69,7 @@
     <Button variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')} disabled={busy}><Settings2 />管理规则</Button>
   {/if}
   {#if coreRecovery}
-    <Button variant="outline" size="sm" onclick={restartCore} disabled={busy}><RotateCw />重启内核</Button>
+    <Button variant="outline" size="sm" onclick={restartCore} disabled={busy || guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isConnecting || guiState.isDisconnecting}><RotateCw />重启内核</Button>
   {/if}
   <Button variant="ghost" size="sm" onclick={() => (store.activeTab = 'logs')} disabled={busy}><ScrollText />查看日志</Button>
   <Button variant="ghost" size="sm" onclick={exportDiagnostics} disabled={busy}><Download />导出诊断</Button>

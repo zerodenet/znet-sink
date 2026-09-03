@@ -16,6 +16,7 @@
   // authoritative. Event state is deliberately not allowed to outrank it,
   // because an old event generation may still say "started" during restart.
   const tunLabel = $derived(
+    guiState.tunStatusError ? '状态未知' :
     !guiState.tunStatus ? '—' :
     guiState.isSwitchingTun ? '切换中' :
     guiState.tunStatus.enabled ? '活跃' :
@@ -24,6 +25,7 @@
   );
 
   const tunDotColor = $derived(
+    guiState.tunStatusError ? '#F59E0B' :
     guiState.tunStatus?.enabled ? '#22C55E' :
     guiState.tunStatus?.lastError ? '#EF4444' :
     guiState.tunStatus?.supported ? '#F59E0B' : 'var(--muted-foreground)'
@@ -132,13 +134,19 @@
         {/if}
       </div>
       <Switch
-        checked={guiState.isTunEnabled}
+        checked={guiState.isTunSwitchOn}
         onCheckedChange={() => guiState.toggleTun()}
-        disabled={guiState.isTunEnabled ? !guiState.canDisableTun : !guiState.canEnableTun}
-        aria-label={guiState.isTunEnabled ? '关闭 TUN' : '开启 TUN'}
+        disabled={guiState.isTunSwitchOn ? !guiState.canDisableTun : !guiState.canEnableTun}
+        aria-label={guiState.isTunSwitchOn ? '关闭 TUN 并取消自动恢复' : '开启 TUN'}
       />
     </div>
 
+    {#if guiState.tunStatusError || (guiState.isTunDesiredEnabled && !guiState.isTunEnabled)}
+      <p class="feature-meta" role="status">
+        {guiState.tunStatusError ? '暂时无法确认 TUN 状态。' : 'TUN 尚未运行。'}
+        {guiState.isTunDesiredEnabled ? '已保存开启设置，重启后会尝试恢复；关闭开关可取消。' : '请刷新确认运行状态。'}
+      </p>
+    {/if}
     {#if tunDiagnostics.length > 0}
       <div class="tun-diagnostics" aria-label="TUN 出口诊断">
         {#each tunDiagnostics as diagnostic}
