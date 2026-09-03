@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  page.on('pageerror', (error) => console.error('UI fixture runtime error:', error));
   // The fixture has no reason to contact anything outside its static UI server.
   await page.route('**/*', (route) => {
     if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue();
@@ -10,8 +11,15 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus) {
+    console.error('UI failure accessibility snapshot:', await page.locator('body').ariaSnapshot());
+  }
+});
+
 test('rule actions use styled controls and preserve numeric ordering', async ({ page }, testInfo) => {
-  const action = page.getByRole('combobox', { name: '匹配动作' }).first();
+  const action = page.getByRole('button', { name: '匹配动作' }).first();
+  await expect(action).toHaveAttribute('aria-haspopup', 'listbox');
   await expect(action).toHaveText('直连');
   await expect(page.locator('select')).toHaveCount(0);
   await expect(action).toHaveCSS('height', '30px');
@@ -34,7 +42,7 @@ test('select inside draggable dialog stays above overlay and Escape closes only 
   await page.getByRole('button', { name: '新建', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  const trigger = page.getByRole('combobox', { name: '规则类型' });
+  const trigger = page.getByRole('button', { name: '规则类型' });
   await trigger.click();
   await page.getByRole('option', { name: '精确域名', exact: true }).click();
   await expect(trigger).toHaveText('精确域名');
@@ -49,10 +57,10 @@ test('select inside draggable dialog stays above overlay and Escape closes only 
 
 test('source interval selector saves a number instead of a string', async ({ page }) => {
   await page.getByRole('button', { name: '新建', exact: true }).click();
-  await page.getByRole('button', { name: '外部导入', exact: true }).click();
+  await page.getByRole('radio', { name: '外部导入', exact: true }).click();
   await page.getByPlaceholder('例如：AI 服务、局域网直连').fill('UI fixture');
   await page.getByPlaceholder('https://example.com/rules.yaml').fill('https://example.invalid/rules');
-  await page.getByRole('combobox', { name: '自动更新' }).click();
+  await page.getByRole('button', { name: '自动更新' }).click();
   await page.getByRole('option', { name: '每小时', exact: true }).click();
   await page.getByRole('button', { name: '导入并构建', exact: true }).click();
   await expect(page.getByLabel('保存结果')).toContainText('"updateIntervalSecs":3600');
@@ -61,7 +69,7 @@ test('source interval selector saves a number instead of a string', async ({ pag
 test('long menus fit a short window and keyboard selection works', async ({ page }) => {
   await page.setViewportSize({ width: 650, height: 480 });
   await page.getByRole('button', { name: '更多选项' }).click();
-  const trigger = page.getByRole('combobox', { name: '长菜单' });
+  const trigger = page.getByRole('button', { name: '长菜单' });
   await trigger.click();
   const menu = page.getByRole('listbox');
   await expect(menu).toBeVisible();
