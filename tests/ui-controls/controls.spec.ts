@@ -13,6 +13,23 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status !== testInfo.expectedStatus) {
+    console.error('UI failure geometry:', JSON.stringify(await page.locator(
+      '[data-slot="select-content"], [data-select-viewport], [data-bits-floating-content-wrapper], [data-slot="dialog-content"], [aria-label="长菜单"]',
+    ).evaluateAll((nodes) => nodes.map((node) => {
+      const style = getComputedStyle(node);
+      return {
+        slot: node.getAttribute('data-slot') ?? node.getAttribute('data-select-viewport'),
+        rect: node.getBoundingClientRect().toJSON(),
+        maxHeight: style.maxHeight,
+        available: style.getPropertyValue('--bits-floating-available-height'),
+        position: style.position,
+        transform: style.transform,
+        translate: style.translate,
+        inlineStyle: node.getAttribute('style'),
+        scrollHeight: node.scrollHeight,
+        scrollTop: node.scrollTop,
+      };
+    }))));
     console.error('UI failure accessibility snapshot:', await page.locator('body').ariaSnapshot());
   }
 });

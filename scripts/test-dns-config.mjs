@@ -131,9 +131,9 @@ assert.match(parsing, /"retired_addresses"/);
 assert.match(ruleOverlay, /resolve_dns_detours\(config, &mut dns\)\?/);
 assert.match(ruleOverlay, /route_final_dns_detour/);
 assert.match(ruleOverlay, /HashSet::from\(\["direct"\.to_owned\(\), "block"\.to_owned\(\)\]\)/);
-assert.ok(selectContent.includes('max-h-[min(20rem,var(--bits-select-content-available-height,20rem))]'));
-assert.ok(selectContent.includes('max-h-[min(18rem,var(--bits-select-content-available-height,18rem))]'));
-assert.doesNotMatch(selectContent, /h-\(--bits-select-anchor-height\)/);
+assert.ok(selectContent.includes('max-h-[min(20rem,calc(100dvh-1rem),var(--bits-floating-available-height,20rem))]'));
+assert.ok(selectContent.includes('min-h-0') && selectContent.includes('max-h-72'));
+assert.doesNotMatch(selectContent, /--bits-select-/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
 assert.ok(
   activation.indexOf('validate_config(content.clone(), options.clone())')
