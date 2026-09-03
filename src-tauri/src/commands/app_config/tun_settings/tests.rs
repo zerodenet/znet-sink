@@ -303,3 +303,22 @@ fn rejects_bad_interface_and_family_before_runtime_changes() {
     candidate.tun.mask = "255.0.255.0".into();
     assert!(super::validation::validate(&mut candidate).is_err());
 }
+
+#[test]
+fn accepts_kernel_normalized_ipv6_without_ignoring_address_or_prefix_changes() {
+    let mut tun = AppConfig::default().tun;
+    tun.dual_stack = true;
+    tun.secondary_addr = Some("FD77:0:0:0:0:0:0:1/64".into());
+    tun.include_cidrs = vec!["2001:0DB8:0:0:0:0:0:0/32".into()];
+    tun.exclude_cidrs = vec!["2001:0DB8:0:0:0:0:0:1/128".into()];
+    let mut snapshot = status(&tun);
+    snapshot.addresses = vec!["fd77::1/64".into()];
+    snapshot.include_cidrs = Some(vec!["2001:db8::/32".into()]);
+    snapshot.exclude_cidrs = Some(vec!["2001:db8::1/128".into()]);
+    assert!(transaction::matches(&snapshot, &tun));
+    snapshot.addresses = vec!["fd77::2/64".into()];
+    assert!(!transaction::matches(&snapshot, &tun));
+    snapshot.addresses = vec!["fd77::1/64".into()];
+    snapshot.exclude_cidrs = Some(vec!["2001:db8::1/64".into()]);
+    assert!(!transaction::matches(&snapshot, &tun));
+}

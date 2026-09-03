@@ -5,6 +5,7 @@ use crate::errors::{AppError, AppResult};
 use crate::kernel::zero::queries::KernelRuntimeIdentity;
 use crate::models::app_config::{AppConfig, AppTunConfig};
 use crate::models::zero_runtime::GuiTunStatus;
+use crate::services::kernel_settings::validate_cidr;
 
 pub(super) struct Snapshot {
     pub identity: KernelRuntimeIdentity,
@@ -37,12 +38,33 @@ pub(super) fn matches(status: &GuiTunStatus, tun: &AppTunConfig) -> bool {
         && status.strict_route
         && status.dual_stack == tun.dual_stack
         && status.dns_hijack == tun.dns_hijack
-        && status.include_cidrs.as_ref() == Some(&tun.include_cidrs)
-        && status.exclude_cidrs.as_ref() == Some(&tun.exclude_cidrs)
-        && tun
-            .secondary_addr
-            .as_ref()
-            .is_none_or(|addr| status.addresses.contains(addr))
+        && routes_match(status.include_cidrs.as_deref(), &tun.include_cidrs)
+        && routes_match(status.exclude_cidrs.as_deref(), &tun.exclude_cidrs)
+        && tun.secondary_addr.as_ref().is_none_or(|addr| {
+            status
+                .addresses
+                .iter()
+                .any(|actual| cidr_matches(actual, addr))
+        })
+}
+
+// Zero formats parsed IP networks in its snapshot. IPv6 compression or casing
+// must not make a successfully applied setting look like an unknown transition.
+fn cidr_matches(actual: &str, expected: &str) -> bool {
+    match (
+        validate_cidr(actual, "TUN status"),
+        validate_cidr(expected, "TUN setting"),
+    ) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => false,
+    }
+}
+
+fn routes_match(actual: Option<&[String]>, expected: &[String]) -> bool {
+    actual.is_some_and(|actual| {
+        actual.len() == expected.len()
+            && actual.iter().zip(expected).all(|(a, b)| cidr_matches(a, b))
+    })
 }
 
 async fn owned(backend: &impl Backend, identity: &KernelRuntimeIdentity) -> AppResult<Snapshot> {
