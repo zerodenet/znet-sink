@@ -45,6 +45,9 @@ jobs:
       - name: Check shared UI control contract
         run: pnpm test:ui-controls
 
+      - name: Check TUN lifecycle and mode contract
+        run: pnpm test:cross-mode-state
+
       - name: Check Svelte and TypeScript
         run: pnpm check
 

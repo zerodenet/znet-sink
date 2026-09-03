@@ -17,6 +17,9 @@ const appStore = read('src/lib/services/store.svelte.ts');
 const settingsPanel = read('src/lib/components/SettingsPanel.svelte');
 const tunSettings = read('src/lib/components/settings/TunSettingsPanel.svelte');
 const tunRuntime = read('src-tauri/src/kernel/zero/runtime.rs');
+const zeroCommands = read('src-tauri/src/kernel/zero/commands.rs');
+const ipcProtocol = read('src-tauri/src/kernel/protocol.rs');
+const guiCoreCommand = read('src-tauri/src/commands/gui_core.rs');
 const tunService = read('src/lib/services/tun.ts');
 const ruleOverlay = read('src-tauri/src/services/rule_overlay.rs');
 const appConfigModel = read('src-tauri/src/models/app_config.rs');
@@ -196,10 +199,21 @@ assert.ok(
 
 assert.ok(
   coreProcessCommand.includes('restore_app_tun_after_core_transition')
-    && coreProcessCommand.includes('app_config.tun.enabled != Some(true)')
+    && coreProcessCommand.includes('desired_enabled.unwrap_or(app_config.tun.enabled == Some(true))')
+    && coreProcessCommand.includes('if !should_enable || active_profile_defines_tun(state)?')
     && coreProcessCommand.includes('active_profile_defines_tun(state)?')
     && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options)).await?'),
   'managed Core start/restart must replay persisted app-owned TUN only when the active profile does not own runtime.tun',
+);
+
+assert.ok(
+  zeroCommands.includes('"tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT)')
+    && zeroCommands.includes('protocol::command_with_response_timeout(')
+    && zeroCommands.includes('command_response_timeout(method),')
+    && ipcProtocol.includes('connection::get_or_connect(connect_endpoint, timeout)')
+    && /conn\s*\.request\(frame_bytes, request_id_str, response_timeout\)\s*\.await/.test(ipcProtocol)
+    && !guiCoreCommand.includes('fn tun_opts('),
+  'all Zero TUN callers must share a command-level response budget without extending connection or ordinary query deadlines',
 );
 
 assert.ok(
