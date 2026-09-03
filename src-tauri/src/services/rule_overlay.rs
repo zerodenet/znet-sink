@@ -8,8 +8,9 @@ use zero_rule::zrs::{verify, VerifyMode};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
-use crate::models::app_config::AppDnsConfig;
+use crate::models::app_config::{AppConfig, AppDnsConfig};
 use crate::models::core_process::CoreProcessState;
+use crate::models::dns_config::CLIENT_DNS_DETOUR_ROUTE_FINAL;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
     CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
@@ -22,14 +23,13 @@ use crate::services::{
 use crate::state::app_state::AppState;
 
 const COMMON_TAG_PREFIX: &str = "gui-common-";
-const DNS_DETOUR_ROUTE_FINAL: &str = "$route_final";
 
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
     let enabled = common::lock(state.app_config(), "app_config")?
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_effective_with(state, base, enabled, &profiles, None)
+    compose_effective_with(state, base, enabled, &profiles, None, None)
 }
 
 pub(crate) fn compose_effective_config_with_dns(
@@ -41,7 +41,26 @@ pub(crate) fn compose_effective_config_with_dns(
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_effective_with(state, base, enabled, &profiles, Some(dns))
+    compose_effective_with(state, base, enabled, &profiles, Some(dns), None)
+}
+
+pub(crate) fn validate_app_config_candidate(
+    state: &AppState,
+    app_config: &AppConfig,
+) -> AppResult<()> {
+    let Some(base) = active_content(state)? else {
+        return Ok(());
+    };
+    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
+    let config = compose_with(&base, app_config.routing.inject_common_rules, &profiles)?.config;
+    finalize_effective_config(
+        state,
+        &base,
+        config,
+        Some(&app_config.dns),
+        Some(app_config.url_test.tolerance_ms),
+    )?;
+    Ok(())
 }
 
 fn compose_effective_with(
@@ -50,9 +69,10 @@ fn compose_effective_with(
     enabled: bool,
     profiles: &[RuleSetProfile],
     dns_override: Option<&AppDnsConfig>,
+    tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
     let config = compose_with(base, enabled, profiles)?.config;
-    finalize_effective_config(state, base, config, dns_override)
+    finalize_effective_config(state, base, config, dns_override, tolerance_override)
 }
 
 fn finalize_effective_config(
@@ -60,11 +80,17 @@ fn finalize_effective_config(
     base: &Value,
     mut config: Value,
     dns_override: Option<&AppDnsConfig>,
+    tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
     apply_global_dns(state, &mut config, dns_override)?;
-    let tolerance_ms = common::lock(state.app_config(), "app_config")?
-        .url_test
-        .tolerance_ms;
+    let tolerance_ms = match tolerance_override {
+        Some(value) => value,
+        None => {
+            common::lock(state.app_config(), "app_config")?
+                .url_test
+                .tolerance_ms
+        }
+    };
     if url_test::supports_tolerance(state) {
         url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
     }
@@ -127,9 +153,9 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
         .get_mut("servers")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| AppError::invalid_argument("global DNS servers must be a JSON object"))?;
-    let follows_route_final = servers
-        .values()
-        .any(|server| server.get("detour").and_then(Value::as_str) == Some(DNS_DETOUR_ROUTE_FINAL));
+    let follows_route_final = servers.values().any(|server| {
+        server.get("detour").and_then(Value::as_str) == Some(CLIENT_DNS_DETOUR_ROUTE_FINAL)
+    });
     let route_final = follows_route_final
         .then(|| route_final_dns_detour(config, &route_targets))
         .transpose()?;
@@ -153,7 +179,7 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
                 "global DNS server `{name}` has an empty detour"
             )));
         }
-        if detour == DNS_DETOUR_ROUTE_FINAL {
+        if detour == CLIENT_DNS_DETOUR_ROUTE_FINAL {
             match route_final.as_ref().expect("route.final was resolved") {
                 RouteFinalDnsDetour::Direct => {
                     server.remove("detour");
@@ -172,15 +198,18 @@ fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
 }
 
 fn route_target_tags(config: &Value) -> HashSet<String> {
-    ["outbounds", "outbound_groups"]
-        .into_iter()
-        .filter_map(|key| config.get(key).and_then(Value::as_array))
-        .flatten()
-        .filter_map(|target| target.get("tag").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(str::to_owned)
-        .collect()
+    let mut targets = HashSet::from(["direct".to_owned(), "block".to_owned()]);
+    targets.extend(
+        ["outbounds", "outbound_groups"]
+            .into_iter()
+            .filter_map(|key| config.get(key).and_then(Value::as_array))
+            .flatten()
+            .filter_map(|target| target.get("tag").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_owned),
+    );
+    targets
 }
 
 fn route_final_dns_detour(
@@ -245,43 +274,51 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let enabled = common::lock(state.app_config(), "app_config")?
         .routing
         .inject_common_rules;
-    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone());
-    let Some(base) = active else {
+    let eligible_count = {
+        let profiles = common::lock(state.rule_sets(), "rule_set")?;
+        eligible_profiles(&profiles).count()
+    };
+    let mode = {
+        let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
+        profiles
+            .iter()
+            .find(|profile| profile.active)
+            .and_then(|profile| profile.content.as_ref())
+            .and_then(proxy_mode::detect_route_mode)
+            .map(|detected| match detected.mode {
+                GuiProxyMode::Global => "global".to_string(),
+                GuiProxyMode::Rule => "rule".to_string(),
+                GuiProxyMode::Direct => "direct".to_string(),
+            })
+    };
+    let Some(mode) = mode else {
         return Ok(CommonRuleInjectionStatus {
             enabled,
             effective: false,
             mode: None,
-            eligible_count: eligible_profiles(&profiles).count(),
+            eligible_count,
             injected_count: 0,
             reason: Some("当前没有活动配置".to_string()),
         });
     };
-    match compose_with(&base, enabled, &profiles) {
-        Ok(result) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: result.injected_count > 0,
-            mode: result.mode,
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: result.injected_count,
-            reason: result.reason,
-        }),
-        Err(error) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: false,
-            mode: proxy_mode::detect_route_mode(&base).map(|detected| match detected.mode {
-                GuiProxyMode::Global => "global".to_string(),
-                GuiProxyMode::Rule => "rule".to_string(),
-                GuiProxyMode::Direct => "direct".to_string(),
-            }),
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: 0,
-            reason: Some(error.message),
-        }),
-    }
+    let effective = enabled && mode == "rule" && eligible_count > 0;
+    let reason = if !enabled {
+        Some("公共规则注入已关闭".to_string())
+    } else if mode != "rule" {
+        Some("等待活动配置切换到规则模式".to_string())
+    } else if eligible_count == 0 {
+        Some("尚未启用公共规则".to_string())
+    } else {
+        None
+    };
+    Ok(CommonRuleInjectionStatus {
+        enabled,
+        effective,
+        mode: Some(mode),
+        eligible_count,
+        injected_count: if effective { eligible_count } else { 0 },
+        reason,
+    })
 }
 
 pub fn effective_rule_set_options(state: &AppState) -> AppResult<Vec<EffectiveRuleSetOption>> {
@@ -361,12 +398,13 @@ pub async fn set_enabled(
                 previous.routing.inject_common_rules,
                 &profiles,
                 None,
+                None,
             )
         })
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles, None))
+        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles, None, None))
         .transpose()?;
 
     apply_if_running(state.inner(), next_effective.clone()).await?;
@@ -423,11 +461,13 @@ pub async fn set_binding(
         .inject_common_rules;
     let old_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &previous, None))
+        .map(|base| {
+            compose_effective_with(state.inner(), base, inject_enabled, &previous, None, None)
+        })
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next, None))
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next, None, None))
         .transpose()?;
     apply_if_running(state.inner(), next_effective).await?;
     if let Err(error) = domain_store::save_rule_sets(&next) {
@@ -479,11 +519,10 @@ fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
         .transpose()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 struct ComposeResult {
     config: Value,
     injected_count: usize,
-    mode: Option<String>,
-    reason: Option<String>,
 }
 
 fn compose_with(
@@ -503,16 +542,12 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("公共规则注入已关闭".to_string()),
         });
     }
     if mode.as_deref() != Some("rule") {
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("等待活动配置切换到规则模式".to_string()),
         });
     }
 
@@ -528,8 +563,6 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("尚未启用公共规则".to_string()),
         });
     }
 
@@ -580,8 +613,6 @@ fn compose_with(
     Ok(ComposeResult {
         config,
         injected_count,
-        mode,
-        reason: None,
     })
 }
 
@@ -858,14 +889,14 @@ mod tests {
                 "outbound_groups": [{ "tag": outbound, "type": "selector", "outbounds": [] }],
                 "route": { "final": { "type": "route", "outbound": outbound } }
             });
-            let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
 
             resolve_dns_detours(&config, &mut dns).unwrap();
 
             assert_eq!(dns["servers"]["cloudflare"]["detour"], outbound);
             assert_ne!(
                 dns["servers"]["cloudflare"]["detour"],
-                DNS_DETOUR_ROUTE_FINAL
+                CLIENT_DNS_DETOUR_ROUTE_FINAL
             );
         }
     }
@@ -873,7 +904,7 @@ mod tests {
     #[test]
     fn dns_detour_following_direct_route_final_is_omitted() {
         let config = json!({ "route": { "final": { "type": "direct" } } });
-        let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+        let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
 
         resolve_dns_detours(&config, &mut dns).unwrap();
 
@@ -902,13 +933,57 @@ mod tests {
             json!({ "route": { "final": { "type": "reject" } } }),
             json!({ "route": { "rules": [] } }),
         ] {
-            let mut dns = dns_with_detour(DNS_DETOUR_ROUTE_FINAL);
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
             let error = resolve_dns_detours(&config, &mut dns).unwrap_err();
             assert_eq!(error.code, "invalid_argument");
             assert!(error.message.contains("route.final"));
         }
     }
 
+    #[test]
+    fn imported_app_config_is_composed_against_the_active_profile_before_persisting() {
+        let base = json!({
+            "outbounds": [{ "tag": "Proxy", "protocol": { "type": "direct" } }],
+            "route": { "final": { "type": "route", "outbound": "Proxy" } }
+        });
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".into(),
+                name: "Active".into(),
+                kernel: "zero".into(),
+                format: "zero-json".into(),
+                path: None,
+                content: Some(base),
+                active: true,
+                updated_at_unix_ms: 0,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut candidate = AppConfig::default();
+        candidate.dns.config = Some(
+            serde_json::from_value(dns_with_detour("Missing")).expect("valid client DNS shape"),
+        );
+
+        let error = validate_app_config_candidate(&state, &candidate).unwrap_err();
+
+        assert_eq!(error.code, "invalid_argument");
+        assert!(error.message.contains("undefined detour `Missing`"));
+    }
+
+    #[test]
+    fn built_in_dns_detours_do_not_require_profile_outbounds() {
+        let config = json!({ "route": { "final": { "type": "direct" } } });
+
+        for target in ["direct", "block"] {
+            let mut dns = dns_with_detour(target);
+            resolve_dns_detours(&config, &mut dns).unwrap();
+            assert_eq!(dns["servers"]["cloudflare"]["detour"], target);
+        }
+    }
     fn verified_profile(
         id: &str,
         order: u32,

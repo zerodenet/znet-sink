@@ -123,14 +123,78 @@ export function createDefaultDnsConfig(
   };
 }
 
+export function createRecommendedDnsConfig(
+  mode: Exclude<DnsMode, 'disabled'> = 'real',
+  defaults: DnsAutomaticDefaults = {},
+): DnsConfig {
+  const dns = createDefaultDnsConfig(mode, defaults);
+  dns.servers = {
+    cloudflare: {
+      type: 'doh',
+      host: 'cloudflare-dns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['1.1.1.1', '1.0.0.1'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
+    },
+    google: {
+      type: 'doh',
+      host: 'dns.google',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['8.8.8.8', '8.8.4.4'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
+    },
+    'cloudflare-bootstrap': {
+      type: 'doh',
+      host: 'cloudflare-dns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['1.1.1.1', '1.0.0.1'],
+    },
+    'google-bootstrap': {
+      type: 'doh',
+      host: 'dns.google',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['8.8.8.8', '8.8.4.4'],
+    },
+    alidns: {
+      type: 'doh',
+      host: 'dns.alidns.com',
+      port: 443,
+      path: '/dns-query',
+      bootstrap: ['223.5.5.5', '223.6.6.6'],
+    },
+    '114dns': {
+      type: 'udp',
+      host: '114.114.114.114',
+      port: 53,
+    },
+    system: createDnsServer('system'),
+  };
+  dns.default_server = 'cloudflare';
+  dns.policy = {
+    ...dns.policy,
+    fallback_servers: ['google', 'system'],
+    node_server: 'system',
+    node_fallback_servers: ['cloudflare-bootstrap', 'google-bootstrap'],
+  };
+  return dns;
+}
+
 export function parseDnsConfig(value: unknown): DnsConfig | null {
   if (!isObject(value) || !isObject(value.servers) || typeof value.default_server !== 'string') {
     return null;
   }
-  if (Object.hasOwn(value, 'dispatch') && !Array.isArray(value.dispatch)) return null;
-  if (Object.hasOwn(value, 'answer') && !isObject(value.answer)) return null;
-  if (Object.hasOwn(value, 'policy') && !isObject(value.policy)) return null;
-  if (Object.hasOwn(value, 'reverse_mapping') && !isObject(value.reverse_mapping)) return null;
+  // Client-created drafts retain optional keys with `undefined`, while the
+  // same values disappear after JSON serialization. Treat both shapes alike
+  // so validation never discards an in-memory draft and silently replaces it
+  // with recommended defaults.
+  if (value.dispatch !== undefined && !Array.isArray(value.dispatch)) return null;
+  if (value.answer !== undefined && !isObject(value.answer)) return null;
+  if (value.policy !== undefined && !isObject(value.policy)) return null;
+  if (value.reverse_mapping !== undefined && !isObject(value.reverse_mapping)) return null;
   const answer = clone(isObject(value.answer) ? value.answer : { type: 'real' }) as DnsConfig['answer'];
   if (answer.type === 'fake_ip') {
     answer.exclude_domains = Array.isArray(answer.exclude_domains)
@@ -190,7 +254,7 @@ export function readDnsSettings(
   if (!dns) {
     return {
       mode: enabled ? 'real' : 'disabled',
-      dns: createDefaultDnsConfig('real'),
+      dns: createRecommendedDnsConfig('real'),
       dnsHijack: root.dnsHijack === true || appDnsHijack,
       advanced: enabled,
     };
@@ -385,7 +449,7 @@ export function validateDnsDraft(
         issues.push({ field, message: `服务器 ${value} 不存在`, severity: 'error' });
       }
     };
-    validateFallbacks('policy.fallback_servers', policy.fallback_servers);
+    validateFallbacks('policy.fallback_servers', policy.fallback_servers, draft.dns.default_server);
     validatePrimary('policy.node_server', policy.node_server);
     validatePrimary('policy.direct_server', policy.direct_server);
     validateFallbacks('policy.node_fallback_servers', policy.node_fallback_servers, policy.node_server);

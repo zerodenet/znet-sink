@@ -1,20 +1,30 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use zero_rule::zrs::{verify, VerifyMode};
 
 use super::{data_dir, domain_store};
 use crate::errors::{AppError, AppResult};
 use crate::models::rule_set::{
     CommonRuleAction, CommonRuleBinding, RuleSetProfile, RuleSetProvenance, RuleSetSourceState,
-    ZrsArtifact,
+    RuleSetSyncAllOutcome, ZrsArtifact,
 };
+use crate::services::common::{lock, now_unix_ms};
+use crate::state::app_state::AppState;
 
 const MANIFEST_JSON: &str = include_str!("../../resources/builtin-rules/manifest.json");
+const REMOTE_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/zerodenet/znet-sink/builtin-rules/manifest.json";
+const REMOTE_ASSET_ROOT: &str =
+    "https://raw.githubusercontent.com/zerodenet/znet-sink/builtin-rules";
+const MAX_REMOTE_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_REMOTE_ASSET_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
     schema: String,
@@ -26,7 +36,7 @@ struct Manifest {
     assets: Vec<ManifestAsset>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ManifestAsset {
     id: String,
@@ -36,6 +46,7 @@ struct ManifestAsset {
     source_sha256: String,
     ir_sha256: String,
     zrs_checksum: u32,
+    zrs_sha256: String,
     zrs_file_size: u64,
     entry_count: u64,
     default_action: CommonRuleAction,
@@ -49,7 +60,7 @@ pub(crate) fn install_defaults(items: &mut Vec<RuleSetProfile>) -> AppResult<boo
 fn install_defaults_in(base: &Path, items: &mut Vec<RuleSetProfile>) -> AppResult<bool> {
     let manifest: Manifest = serde_json::from_str(MANIFEST_JSON)
         .map_err(|error| AppError::internal(format!("invalid built-in rule manifest: {error}")))?;
-    if manifest.schema != "znet.builtin-rules/v1" || manifest.version != 1 {
+    if manifest.schema != "znet.builtin-rules/v1" || manifest.version != 2 {
         return Err(AppError::internal("unsupported built-in rule manifest"));
     }
 
@@ -151,17 +162,227 @@ fn profile_is_current(
 }
 
 fn installed_artifact_is_valid(path: &Path, asset: &ManifestAsset) -> bool {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| verify(&bytes, VerifyMode::FullChecksum).ok())
-        .is_some_and(|metadata| {
-            metadata.body_checksum == asset.zrs_checksum
-                && metadata.file_size == asset.zrs_file_size
-                && metadata.entry_count() == asset.entry_count
-        })
+    fs::read(path).ok().is_some_and(|bytes| {
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        verify(&bytes, VerifyMode::FullChecksum)
+            .ok()
+            .is_some_and(|metadata| {
+                sha256 == asset.zrs_sha256
+                    && metadata.body_checksum == asset.zrs_checksum
+                    && metadata.file_size == asset.zrs_file_size
+                    && metadata.entry_count() == asset.entry_count
+            })
+    })
+}
+
+/// Download one client-owned, precompiled rule bundle and atomically switch
+/// every built-in profile only after the complete manifest and all ZRS assets
+/// have passed SHA-256 plus structural verification.
+pub(crate) async fn update_all(state: &AppState) -> AppResult<RuleSetSyncAllOutcome> {
+    let current_generation = lock(state.rule_sets(), "rule_set")?
+        .iter()
+        .filter(|item| item.built_in)
+        .map(|item| item.updated_at_unix_ms)
+        .max()
+        .unwrap_or_default();
+    let (manifest, assets) = tauri::async_runtime::spawn_blocking(fetch_remote_bundle)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("built-in rule update worker failed: {error}"))
+        })??;
+    let total = manifest.assets.len();
+    if manifest.generated_at_unix_ms < current_generation {
+        return Ok(RuleSetSyncAllOutcome {
+            total,
+            updated: 0,
+            unchanged: total,
+            failed: 0,
+        });
+    }
+
+    let base = data_dir()?;
+    let mut items = lock(state.rule_sets(), "rule_set")?;
+    let mut next = items.clone();
+    let mut updated = 0;
+    for (asset, bytes) in manifest.assets.iter().zip(assets.iter()) {
+        let existing_index = next.iter().position(|item| item.id == asset.id);
+        if existing_index.is_some_and(|index| !next[index].built_in) {
+            return Err(AppError::invalid_argument(format!(
+                "reserved built-in rule id is already used: {}",
+                asset.id
+            )));
+        }
+        if existing_index.is_some_and(|index| profile_is_current(&next[index], &manifest, asset)) {
+            continue;
+        }
+        validate_asset(bytes, asset)?;
+        let metadata = verify(bytes, VerifyMode::FullChecksum).map_err(|error| {
+            AppError::internal(format!("invalid remote ZRS '{}': {error}", asset.id))
+        })?;
+        let artifact_path = install_artifact(&base, asset, bytes)?;
+        let previous = existing_index.map(|index| next[index].clone());
+        let profile = RuleSetProfile {
+            id: asset.id.clone(),
+            name: asset.name.clone(),
+            enabled: previous.as_ref().map_or(true, |profile| profile.enabled),
+            built_in: true,
+            provenance: Some(RuleSetProvenance {
+                repository: manifest.source_repository.clone(),
+                revision: manifest.source_commit.clone(),
+                license: manifest.source_license.clone(),
+                source_url: asset.source_url.clone(),
+                source_sha256: asset.source_sha256.clone(),
+                ir_sha256: asset.ir_sha256.clone(),
+            }),
+            managed_by_subscription_id: None,
+            common_binding: previous
+                .as_ref()
+                .and_then(|profile| profile.common_binding.clone())
+                .or_else(|| {
+                    Some(CommonRuleBinding {
+                        enabled: true,
+                        action: asset.default_action.clone(),
+                        order: asset.default_order,
+                    })
+                }),
+            semantic_ir: serde_json::json!({
+                "version": 1,
+                "name": asset.name,
+                "rules": []
+            }),
+            source: None,
+            source_state: RuleSetSourceState::default(),
+            artifact: Some(ZrsArtifact {
+                path: artifact_path.to_string_lossy().into_owned(),
+                major_version: metadata.major_version,
+                minor_version: metadata.minor_version,
+                checksum: metadata.body_checksum,
+                file_size: metadata.file_size,
+                entry_count: metadata.entry_count(),
+                built_at_unix_ms: manifest.generated_at_unix_ms,
+            }),
+            updated_at_unix_ms: manifest.generated_at_unix_ms,
+            last_sync_at_unix_ms: Some(now_unix_ms()),
+            last_error: None,
+        };
+        match existing_index {
+            Some(index) => next[index] = profile,
+            None => next.push(profile),
+        }
+        updated += 1;
+    }
+    if updated > 0 {
+        domain_store::save_rule_sets(&next)?;
+        *items = next;
+    }
+    Ok(RuleSetSyncAllOutcome {
+        total,
+        updated,
+        unchanged: total.saturating_sub(updated),
+        failed: 0,
+    })
+}
+
+fn fetch_remote_bundle() -> AppResult<(Manifest, Vec<Vec<u8>>)> {
+    let embedded: Manifest = serde_json::from_str(MANIFEST_JSON)
+        .map_err(|error| AppError::internal(format!("invalid embedded rule manifest: {error}")))?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| AppError::internal(format!("failed to build rule client: {error}")))?;
+    let manifest_bytes = download_limited(
+        &client,
+        REMOTE_MANIFEST_URL,
+        MAX_REMOTE_MANIFEST_BYTES,
+        "built-in rule manifest",
+    )?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
+        AppError::invalid_argument(format!("invalid remote built-in rule manifest: {error}"))
+    })?;
+    validate_remote_manifest(&manifest, &embedded)?;
+    let mut assets = Vec::with_capacity(manifest.assets.len());
+    for asset in &manifest.assets {
+        let url = format!("{REMOTE_ASSET_ROOT}/{}", asset.zrs_file);
+        let bytes = download_limited(&client, &url, MAX_REMOTE_ASSET_BYTES, &asset.id)?;
+        validate_asset(&bytes, asset)?;
+        assets.push(bytes);
+    }
+    Ok((manifest, assets))
+}
+
+fn validate_remote_manifest(manifest: &Manifest, embedded: &Manifest) -> AppResult<()> {
+    if manifest.schema != "znet.builtin-rules/v1" || manifest.version != 2 {
+        return Err(AppError::invalid_argument(
+            "unsupported remote built-in rule manifest",
+        ));
+    }
+    if manifest.source_repository != embedded.source_repository
+        || manifest.source_license != embedded.source_license
+    {
+        return Err(AppError::invalid_argument(
+            "remote built-in rule provenance does not match the embedded bundle",
+        ));
+    }
+    let expected = embedded
+        .assets
+        .iter()
+        .map(|asset| (&asset.id, &asset.zrs_file))
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = manifest
+        .assets
+        .iter()
+        .map(|asset| (&asset.id, &asset.zrs_file))
+        .collect::<std::collections::BTreeSet<_>>();
+    if actual != expected || actual.len() != manifest.assets.len() {
+        return Err(AppError::invalid_argument(
+            "remote built-in rule asset set does not match the client contract",
+        ));
+    }
+    Ok(())
+}
+
+fn download_limited(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    limit: usize,
+    label: &str,
+) -> AppResult<Vec<u8>> {
+    let mut response = client
+        .get(url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| AppError::internal(format!("failed to download {label}: {error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(AppError::invalid_argument(format!(
+            "downloaded {label} exceeds the size limit"
+        )));
+    }
+    let mut bytes = Vec::new();
+    response
+        .by_ref()
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| AppError::internal(format!("failed to read {label}: {error}")))?;
+    if bytes.len() > limit {
+        return Err(AppError::invalid_argument(format!(
+            "downloaded {label} exceeds the size limit"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn validate_asset(zrs: &[u8], asset: &ManifestAsset) -> AppResult<()> {
+    let sha256 = format!("{:x}", Sha256::digest(zrs));
+    if sha256 != asset.zrs_sha256 {
+        return Err(AppError::internal(format!(
+            "built-in ZRS SHA-256 mismatch: {}",
+            asset.id
+        )));
+    }
     let metadata = verify(zrs, VerifyMode::FullChecksum).map_err(|error| {
         AppError::internal(format!("invalid built-in ZRS '{}': {error}", asset.id))
     })?;
@@ -313,5 +534,38 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn embedded_manifest_and_assets_match_the_remote_update_contract() {
+        let manifest: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
+
+        validate_remote_manifest(&manifest, &manifest).unwrap();
+        for asset in &manifest.assets {
+            validate_asset(embedded_file(&asset.zrs_file).unwrap(), asset).unwrap();
+        }
+    }
+
+    #[test]
+    fn remote_manifest_cannot_replace_or_duplicate_the_builtin_asset_set() {
+        let embedded: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
+        let mut missing = embedded.clone();
+        missing.assets.pop();
+        assert!(validate_remote_manifest(&missing, &embedded).is_err());
+
+        let mut duplicate = embedded.clone();
+        duplicate.assets.push(duplicate.assets[0].clone());
+        assert!(validate_remote_manifest(&duplicate, &embedded).is_err());
+    }
+
+    #[test]
+    fn asset_sha256_is_checked_before_publication() {
+        let manifest: Manifest = serde_json::from_str(MANIFEST_JSON).unwrap();
+        let asset = &manifest.assets[0];
+        let mut corrupted = embedded_file(&asset.zrs_file).unwrap().to_vec();
+        corrupted[0] ^= 0xff;
+
+        let error = validate_asset(&corrupted, asset).unwrap_err();
+        assert!(error.message.contains("SHA-256 mismatch"));
     }
 }

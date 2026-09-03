@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { scale, fly, fade } from 'svelte/transition';
   import { elasticOut, cubicOut } from 'svelte/easing';
   import { store } from '$lib/services/store.svelte';
@@ -45,7 +46,7 @@
     <!-- Step indicators -->
     <div class="step-dots">
       {#each Array(totalSteps) as _, i}
-        <button
+        <button data-slot="surface-button"
           class="step-dot {i === step ? 'active' : ''} {i < step ? 'done' : ''}"
           onclick={() => step = i}
           aria-label="步骤 {i + 1}"
@@ -65,7 +66,7 @@
           简约模式保留日常使用入口；专业模式开放节点、静态配置、规则、连接和调试等完整控制面。
         </p>
         <div class="mode-cards">
-          <button
+          <button data-slot="surface-button"
             onclick={() => selectedMode = 'lite'}
             class="mode-card {selectedMode === 'lite' ? 'selected' : ''}"
             aria-pressed={selectedMode === 'lite'}
@@ -74,7 +75,7 @@
             <span class="mode-card-desc">概览、订阅、日志和设置</span>
             <span class="mode-card-badge">推荐入门</span>
           </button>
-          <button
+          <button data-slot="surface-button"
             onclick={() => selectedMode = 'pro'}
             class="mode-card {selectedMode === 'pro' ? 'selected' : ''}"
             aria-pressed={selectedMode === 'pro'}
@@ -85,9 +86,9 @@
           </button>
         </div>
         <div class="step-actions">
-          <button onclick={next} class="primary-action">
+          <Button variant="default" size="sm" onclick={next} >
             下一步
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -103,8 +104,8 @@
           稳定版适合日常使用；beta 和 nightly 版本可在版本管理中按需选择。
         </p>
         <div class="step-actions">
-          <button onclick={prev} class="secondary-action">上一步</button>
-          <button onclick={next} class="primary-action">下一步</button>
+          <Button variant="outline" size="sm" onclick={prev} >上一步</Button>
+          <Button variant="default" size="sm" onclick={next} >下一步</Button>
         </div>
       </div>
 
@@ -122,8 +123,8 @@
           <li>规则和公共规则可在专业模式的「规则」页继续管理</li>
         </ul>
         <div class="step-actions">
-          <button onclick={prev} class="secondary-action">上一步</button>
-          <button onclick={next} class="primary-action">下一步</button>
+          <Button variant="outline" size="sm" onclick={prev} >上一步</Button>
+          <Button variant="default" size="sm" onclick={next} >下一步</Button>
         </div>
       </div>
 
@@ -144,14 +145,14 @@
           <div class="enter-error" role="alert">保存界面模式失败：{enterError}</div>
         {/if}
         <div class="step-actions">
-          <button onclick={prev} class="secondary-action" disabled={entering}>上一步</button>
-          <button
+          <Button variant="outline" size="sm" onclick={prev}  disabled={entering}>上一步</Button>
+          <Button variant="default" size="sm"
             onclick={() => enterApp(selectedMode)}
-            class="primary-action"
+
             disabled={entering}
           >
             {entering ? '正在进入…' : '开始使用'}
-          </button>
+          </Button>
         </div>
       </div>
     {/if}
@@ -309,44 +310,6 @@
     display: flex;
     gap: 10px;
     margin-top: 4px;
-  }
-
-  .primary-action {
-    height: 36px;
-    padding: 0 20px;
-    border: none;
-    border-radius: 8px;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    font-size: 12.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.13s ease;
-  }
-
-  .primary-action:hover { opacity: 0.88; }
-  .primary-action:disabled,
-  .secondary-action:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .secondary-action {
-    height: 36px;
-    padding: 0 16px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.13s ease, color 0.13s ease;
-  }
-
-  .secondary-action:hover {
-    background: var(--muted);
-    color: var(--foreground);
   }
 
   /* Mode cards */

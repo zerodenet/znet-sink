@@ -8,11 +8,11 @@ use zero_rule::zrs::{encode, verify, VerifyMode};
 use zero_rule::{Rule, RuleSet, RuleSetCompiler};
 
 const SOURCE_REPOSITORY: &str = "https://github.com/MetaCubeX/meta-rules-dat";
-const SOURCE_COMMIT: &str = "f1fedafc389862084dab3ff0232e856bcfbbc042";
+const DEFAULT_SOURCE_COMMIT: &str = "f1fedafc389862084dab3ff0232e856bcfbbc042";
 const SOURCE_LICENSE: &str = "GPL-3.0-only";
 const SOURCE_LICENSE_URL: &str =
     "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/4178770badecb1b349fbcd62c737e0d7a2079729/LICENSE";
-const SNAPSHOT_BUILT_AT_UNIX_MS: u64 = 1_784_688_400_068;
+const DEFAULT_SNAPSHOT_BUILT_AT_UNIX_MS: u64 = 1_784_688_400_068;
 
 #[derive(Clone, Copy)]
 enum SourceKind {
@@ -76,7 +76,7 @@ struct Manifest {
     version: u32,
     generated_at_unix_ms: u64,
     source_repository: &'static str,
-    source_commit: &'static str,
+    source_commit: String,
     source_license: &'static str,
     assets: Vec<ManifestAsset>,
 }
@@ -91,6 +91,7 @@ struct ManifestAsset {
     source_sha256: String,
     ir_sha256: String,
     zrs_checksum: u32,
+    zrs_sha256: String,
     zrs_file_size: u64,
     entry_count: u64,
     default_action: &'static str,
@@ -98,6 +99,15 @@ struct ManifestAsset {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source_commit = std::env::var("BUILTIN_RULE_SOURCE_COMMIT")
+        .unwrap_or_else(|_| DEFAULT_SOURCE_COMMIT.to_string());
+    if source_commit.len() != 40 || !source_commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("BUILTIN_RULE_SOURCE_COMMIT must be a 40-character Git commit SHA".into());
+    }
+    let generated_at_unix_ms = std::env::var("BUILTIN_RULE_GENERATED_AT_UNIX_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_SNAPSHOT_BUILT_AT_UNIX_MS);
     let output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("builtin-rules");
@@ -115,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for definition in DEFINITIONS {
         let source_url = format!(
-            "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/{SOURCE_COMMIT}/{}",
+            "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/{source_commit}/{}",
             definition.relative_url
         );
         let source = client
@@ -147,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source_sha256: sha256(&source),
             ir_sha256: sha256(&ir),
             zrs_checksum: metadata.body_checksum,
+            zrs_sha256: sha256(&zrs),
             zrs_file_size: zrs.len() as u64,
             entry_count: report.output_entries as u64,
             default_action: definition.action,
@@ -156,10 +167,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let manifest = Manifest {
         schema: "znet.builtin-rules/v1",
-        version: 1,
-        generated_at_unix_ms: SNAPSHOT_BUILT_AT_UNIX_MS,
+        version: 2,
+        generated_at_unix_ms,
         source_repository: SOURCE_REPOSITORY,
-        source_commit: SOURCE_COMMIT,
+        source_commit,
         source_license: SOURCE_LICENSE,
         assets,
     };

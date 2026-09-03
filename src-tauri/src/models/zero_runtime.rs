@@ -38,6 +38,8 @@ pub struct GuiTunStatus {
     pub tag: Option<String>,
     pub healthy: bool,
     pub auto_route: bool,
+    pub include_cidrs: Option<Vec<String>>,
+    pub exclude_cidrs: Option<Vec<String>>,
     pub dual_stack: bool,
     pub strict_route: bool,
     pub dns_hijack: bool,

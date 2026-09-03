@@ -19,6 +19,7 @@ pub mod interaction_mode;
 pub mod internet_sharing;
 pub mod ipc_observability;
 pub mod kernel_manager;
+pub mod kernel_settings;
 pub mod local_proxy;
 pub mod log_store;
 pub mod logs;

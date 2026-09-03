@@ -32,9 +32,24 @@ fn active_profile_defines_tun(state: &AppState) -> AppResult<bool> {
         .is_some_and(|runtime| runtime.contains_key("tun")))
 }
 
-async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()> {
+pub(crate) async fn app_tun_runtime_enabled(state: &AppState) -> AppResult<bool> {
+    if active_profile_defines_tun(state)? {
+        return Ok(false);
+    }
     let app_config = common::lock(state.app_config(), "app_config")?.clone();
-    if app_config.tun.enabled != Some(true) || active_profile_defines_tun(state)? {
+    let options = core_config::ipc_options_from_app_config(&app_config.core);
+    zero::runtime::tun_status(Some(options))
+        .await
+        .map(|status| status.enabled)
+}
+
+pub(crate) async fn restore_app_tun_after_core_transition_with_desired(
+    state: &AppState,
+    desired_enabled: Option<bool>,
+) -> AppResult<()> {
+    let app_config = common::lock(state.app_config(), "app_config")?.clone();
+    let should_enable = desired_enabled.unwrap_or(app_config.tun.enabled == Some(true));
+    if !should_enable || active_profile_defines_tun(state)? {
         return Ok(());
     }
 
@@ -61,6 +76,10 @@ async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()
             Err(error) => return Err(error),
         }
     }
+}
+
+pub(crate) async fn restore_app_tun_after_core_transition(state: &AppState) -> AppResult<()> {
+    restore_app_tun_after_core_transition_with_desired(state, None).await
 }
 
 async fn restore_app_tun_best_effort(state: &AppState, transition: &'static str) {

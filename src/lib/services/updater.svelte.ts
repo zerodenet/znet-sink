@@ -8,10 +8,11 @@ import {
   shouldShowProminentUpdate,
   type AppRelease,
 } from '$lib/services/app-update-policy';
+import { RELEASE_CHECK_INTERVAL_MS } from '$lib/services/release-check-policy';
 
 export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready-to-install' | 'error' | 'unsupported';
 
-export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const UPDATE_CHECK_INTERVAL_MS = RELEASE_CHECK_INTERVAL_MS;
 const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
 
 interface AppUpdateMetadata {
@@ -183,7 +184,7 @@ class UpdaterService {
   }
 
   private handleVisibilityChange = () => {
-    if (document.visibilityState === 'visible') this.runScheduledCheck(true);
+    if (document.visibilityState === 'visible') this.runScheduledCheck();
   };
 
   private handleOnline = () => {

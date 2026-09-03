@@ -79,7 +79,7 @@
         {@const isActive = selected === node.id}
         {@const protoStyle = getProtoStyle(node.protocol)}
 
-        <button
+        <button data-slot="surface-button"
           class="ns-row {isActive ? 'active' : ''} {switching === node.id ? 'switching' : ''}"
           onclick={() => handleSelect(node)}
           disabled={switching !== null || !store.isActionOperable('policies.select')}

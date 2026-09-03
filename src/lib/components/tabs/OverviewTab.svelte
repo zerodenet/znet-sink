@@ -454,7 +454,7 @@
         {#if networkProbeLoading}
           <span class="network-status-badge loading">检测中…</span>
         {/if}
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="network-strip-trigger"
             onclick={() => void guiState.probeNetwork()}
@@ -484,7 +484,7 @@
     </div>
 
     <div class="overview-card flex-shrink-0">
-      <button class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
+      <button data-slot="surface-button" class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
         <span class="card-label">系统自测</span>
         <div class="flex items-center gap-2">
           {#if guiState.selfTest}
@@ -594,7 +594,7 @@
           </span>
         </div>
 
-        <button
+        <button data-slot="surface-button"
           class="lite-power"
           class:on={liteConnected}
           class:connecting={isPowerBusy}
@@ -694,7 +694,7 @@
               </Select.Content>
             </Select.Root>
           {/if}
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="lite-manage-source"
             onclick={() => (store.activeTab = 'subscriptions')}
@@ -705,7 +705,7 @@
       </div>
 
       {#if hasConfig || hasNodes}
-        <button
+        <button data-slot="surface-button"
           type="button"
           class="lite-entry"
           onclick={() => (store.activeTab = 'nodes')}

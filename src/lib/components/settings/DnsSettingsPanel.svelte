@@ -1,4 +1,6 @@
 <script lang="ts">
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { AlertTriangle, Braces, ChevronDown, ChevronUp, FileDiff, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
@@ -11,6 +13,7 @@
     DNS_DETOUR_ROUTE_FINAL,
     applyGlobalDnsSettings,
     createDefaultDnsConfig,
+    createRecommendedDnsConfig,
     createDnsServer,
     getDnsKernelCompatibility,
     getDnsAddressFamilyPolicy,
@@ -24,17 +27,15 @@
     setDnsMode,
     validateDnsDraft,
   } from '$lib/services/dns-config';
-  import { getEffectiveRuleSetOptions, listProxyConfigs } from '$lib/services/config';
+  import { getEffectiveRuleSetOptions } from '$lib/services/config';
   import {
     getAppErrorInfo,
     getAppErrorMessage,
     getConfigPolicyGroups,
-    getConfigProxyNodes,
     guiInspectDnsEffectiveConfig,
     type DnsEffectiveConfigInspection,
   } from '$lib/services/core';
   import { compactConfigValue, effectiveConfigDiff } from '$lib/services/config-diff';
-  import { featureStateLabel } from '$lib/services/kernel-capabilities';
   import { getGuiTunStatus } from '$lib/services/tun';
   import { ruleSetSignal } from '$lib/services/rule-set-signal.svelte';
   import { store } from '$lib/services/store.svelte';
@@ -70,9 +71,9 @@
   let dispatchDialogError = $state('');
   let compatibility = $state<DnsKernelCompatibility>({ status: 'unknown' });
   let ruleSetOptions = $state<EffectiveRuleSetOption[]>([]);
-  let routeTargetOptions = $state<Array<{ tag: string; kind: '出站' | '策略组' }>>([]);
+  let routeTargetOptions = $state<Array<{ tag: string; label: string }>>([]);
   let routeTargetsKnown = $state(false);
-  let activeProfileName = $state('当前无活动代理配置');
+  let advancedOpen = $state(false);
   let effectiveDialogOpen = $state(false);
   let effectiveLoading = $state(false);
   let effectiveError = $state('');
@@ -114,9 +115,9 @@
   const addressFamilyPolicy = $derived(draft ? getDnsAddressFamilyPolicy(draft.dns) : 'prefer_ipv4');
   const modeDescription = $derived(draft
     ? ({
-        disabled: '暂不注入 DNS 配置，保留当前编辑内容供下次启用。',
-        real: '由当前内核返回真实 DNS 解析结果，可按需启用 TUN DNS 劫持。',
-        fake_ip: '使用合成地址并恢复原始域名，同时联动 TUN DNS 劫持。',
+        disabled: '不接管域名解析。',
+        real: '返回真实 IP，适合常规代理和内网。',
+        fake_ip: '返回合成地址，由内核恢复域名并分流。',
       }[draft.mode] ?? '')
     : '');
   const serverTypeOptions: Array<{ value: DnsServerType; label: string }> = [
@@ -134,22 +135,22 @@
     {
       value: 'prefer_ipv4',
       label: '双栈 · IPv4 优先',
-      description: '保留 A 与 AAAA 结果，并在 DNS 候选中优先 IPv4。不会改变 TUN 接管范围或 direct 出站回退。',
+      description: '同时保留 IPv4/IPv6，优先 IPv4。',
     },
     {
       value: 'prefer_ipv6',
       label: '双栈 · IPv6 优先',
-      description: '保留 A 与 AAAA 结果，并在 DNS 候选中优先 IPv6。不会承诺主机具备 IPv6 出站。',
+      description: '同时保留 IPv4/IPv6，优先 IPv6。',
     },
     {
       value: 'ipv4_only',
       label: '仅 IPv4',
-      description: 'DNS 应答只使用 IPv4 结果；TUN 是否接管 IPv6 仍由 TUN 双栈设置决定。',
+      description: '只使用 IPv4 解析结果。',
     },
     {
       value: 'ipv6_only',
       label: '仅 IPv6',
-      description: 'DNS 应答只使用 IPv6 结果；需要主机和所选出站都具备实际 IPv6 能力。',
+      description: '只使用 IPv6 解析结果。',
     },
   ];
   const addressFamilyDescription = $derived(
@@ -169,8 +170,9 @@
 
   function dnsDetourLabel(detour?: string): string {
     if (!detour) return '直接连接';
-    if (detour === DNS_DETOUR_ROUTE_FINAL) return '跟随当前配置默认出站';
-    return detour;
+    if (detour === DNS_DETOUR_ROUTE_FINAL) return '跟随默认出站';
+    if (detour === 'block') return '阻断';
+    return routeTargetOptions.find((option) => option.tag === detour)?.label ?? detour;
   }
   type PolicyServerField = 'node_server' | 'direct_server';
   type PolicyFallbackField = 'fallback_servers' | 'node_fallback_servers' | 'direct_fallback_servers';
@@ -234,6 +236,43 @@
     if (values.length === 0) throw new Error('请至少输入一个匹配值');
     condition.values = values;
     return condition;
+  }
+
+  function dispatchConditionSummary(condition: Record<string, unknown>): string {
+    const labels: Record<string, string> = {
+      domain: '域名',
+      domain_keyword: '域名关键字',
+      domain_regex: '域名正则',
+      ip: 'IP / CIDR',
+      geoip: 'GeoIP',
+      sni: 'SNI',
+      inbound: '入站',
+      rule_set: '规则集',
+      and: '同时满足',
+      or: '满足任一',
+      not: '排除',
+    };
+    const explicitType = typeof condition.type === 'string' ? condition.type : '';
+    const type = explicitType || dispatchConditionOptions.find((option) => Object.hasOwn(condition, option.value))?.value || '';
+    if (type === 'rule_set') {
+      const tag = String(condition.tag ?? condition.rule_set ?? '').trim();
+      const name = ruleSetOptions.find((option) => option.tag === tag)?.name;
+      return `${labels[type]} · ${name || tag || '未选择'}`;
+    }
+    if (type === 'and' || type === 'or') {
+      const items = condition.items ?? condition.conditions ?? condition.values;
+      const count = Array.isArray(items) ? items.length : 0;
+      return `${labels[type]} · ${count ? `${count} 个` : '多个'}条件`;
+    }
+    if (type === 'not') return labels[type];
+    const rawValues = explicitType ? condition.values : condition[type];
+    if (Array.isArray(rawValues)) {
+      const values = rawValues.filter((value): value is string => typeof value === 'string');
+      const visible = values.slice(0, 2).join('、');
+      const more = values.length > 2 ? ` 等 ${values.length} 项` : '';
+      return `${labels[type] ?? '匹配条件'} · ${visible || '未填写'}${more}`;
+    }
+    return labels[type] ?? '高级条件';
   }
 
   function ruleSetSourceLabel(ruleSetSource: EffectiveRuleSetOption['source']): string {
@@ -344,13 +383,11 @@
     error = '';
     errorCode = undefined;
     try {
-      const [result, kernelCompatibility, tunStatus, effectiveRuleSets, proxyConfigs, configNodes, configGroups] = await Promise.all([
+      const [result, kernelCompatibility, tunStatus, effectiveRuleSets, configGroups] = await Promise.all([
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
         getGuiTunStatus().catch(() => null),
         getEffectiveRuleSetOptions().catch(() => []),
-        listProxyConfigs().catch(() => []),
-        getConfigProxyNodes().catch(() => null),
         getConfigPolicyGroups().catch(() => null),
       ]);
       automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
@@ -361,7 +398,7 @@
         ? result.draft
         : {
             ...result.draft,
-            dns: createDefaultDnsConfig(
+            dns: createRecommendedDnsConfig(
               result.draft.mode === 'fake_ip' ? 'fake_ip' : 'real',
               { features: kernelCompatibility.features, addressFamily: automaticAddressFamilyPolicy },
             ),
@@ -370,14 +407,13 @@
       draft = nextDraft;
       compatibility = kernelCompatibility;
       ruleSetOptions = effectiveRuleSets;
-      routeTargetsKnown = configNodes !== null && configGroups !== null;
-      if (routeTargetsKnown) {
-        const targets = new Map<string, { tag: string; kind: '出站' | '策略组' }>();
-        for (const node of configNodes ?? []) targets.set(node.tag, { tag: node.tag, kind: '出站' });
-        for (const group of configGroups ?? []) targets.set(group.name, { tag: group.name, kind: '策略组' });
-        routeTargetOptions = [...targets.values()].sort((left, right) => left.tag.localeCompare(right.tag, 'zh-CN'));
+      routeTargetsKnown = configGroups !== null;
+      const targets = new Map<string, { tag: string; label: string }>();
+      targets.set('block', { tag: 'block', label: '阻断' });
+      for (const group of configGroups ?? []) {
+        targets.set(group.name, { tag: group.name, label: group.name });
       }
-      activeProfileName = proxyConfigs.find((profile) => profile.active)?.name ?? '当前无活动代理配置';
+      routeTargetOptions = [...targets.values()].sort((left, right) => left.tag.localeCompare(right.tag, 'zh-CN'));
       jsonDialogOpen = false;
       nativeJson = JSON.stringify(result.source.config ?? nextDraft.dns, null, 2);
       nativeError = '';
@@ -420,7 +456,7 @@
   function resetToAutomaticDefault() {
     if (!draft) return;
     const resetMode = draft.mode === 'fake_ip' ? 'fake_ip' : 'real';
-    draft.dns = createDefaultDnsConfig(resetMode, {
+    draft.dns = createRecommendedDnsConfig(resetMode, {
       features: compatibility.features,
       addressFamily: automaticAddressFamilyPolicy,
     });
@@ -496,6 +532,7 @@
 
   function policyPrimaryFor(field: PolicyFallbackField): string | undefined {
     if (!draft?.dns.policy) return undefined;
+    if (field === 'fallback_servers') return draft.dns.default_server;
     if (field === 'node_fallback_servers') return draft.dns.policy.node_server;
     if (field === 'direct_fallback_servers') return draft.dns.policy.direct_server;
     return undefined;
@@ -796,17 +833,11 @@
 <div class="panel-head">
   <div>
     <h2>域名解析</h2>
-    <p>客户端覆盖，不写回代理配置；应用时注入最终有效配置并由当前内核校验</p>
+    <p>选择解析模式、DNS 服务和分流规则。</p>
   </div>
   <div class="head-actions">
     <Button variant="outline" size="sm" onclick={resetToAutomaticDefault} disabled={loading || saving || !draft}>
       <RotateCcw />恢复自动默认
-    </Button>
-    <Button variant="outline" size="sm" onclick={openEffectiveConfig} disabled={loading || saving || !draft}>
-      <FileDiff />查看最终配置
-    </Button>
-    <Button variant="outline" size="sm" onclick={openJsonEditor} disabled={loading || saving || !draft}>
-      <Braces />编辑 JSON
     </Button>
     <Button variant="ghost" size="icon-sm" onclick={load} disabled={loading || saving} aria-label="重新加载 DNS 配置">
       <RefreshCw class={loading ? 'spin' : ''} />
@@ -823,26 +854,6 @@
     <ErrorRecoveryActions code={errorCode} context="dns" onretry={load} />
   </div>
 {:else if draft}
-  <p class="workflow-hint">配置流程：选择基础模式 → 编辑 DNS、Fake-IP 和分流策略 → 点击底部“保存并应用”。高级用户可从右上角打开内核原生 JSON。</p>
-
-  <div class="config-lineage" aria-label="有效配置来源">
-    <div><strong>基础配置</strong><span title={activeProfileName}>{activeProfileName}</span></div>
-    <span class="lineage-arrow">→</span>
-    <div><strong>客户端覆盖</strong><span>全局 DNS · 公共规则</span></div>
-    <span class="lineage-arrow">→</span>
-    <div><strong>最终有效配置</strong><span>{ruleSetOptions.length} 个规则集 · 交给当前内核校验</span></div>
-  </div>
-
-  {#if compatibility.features}
-    <div class="capability-strip" aria-label="DNS 精确能力">
-      <span class:supported={compatibility.features.tunDnsHijack.state === 'supported'}>DNS 劫持：{featureStateLabel(compatibility.features.tunDnsHijack)}</span>
-      <span class:supported={compatibility.features.tunDnsSystemAuto.state === 'supported'}>system 自动排除：{featureStateLabel(compatibility.features.tunDnsSystemAuto)}</span>
-      <span class:supported={compatibility.features.dnsSplitDispatch.state === 'supported'}>DNS 分流：{featureStateLabel(compatibility.features.dnsSplitDispatch)}</span>
-      <span class:supported={compatibility.features.dnsFakeIpDualStack.state === 'supported'}>双栈 Fake-IP：{featureStateLabel(compatibility.features.dnsFakeIpDualStack)}</span>
-      <span class:supported={compatibility.features.dnsRealReverseMapping.state === 'supported'}>真实地址映射：{featureStateLabel(compatibility.features.dnsRealReverseMapping)}</span>
-    </div>
-  {/if}
-
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
     <div class="issues warning" role="status">
       <div>当前内核未声明 DNS 与 Fake-IP 能力。配置仍会保存到客户端，升级内核后重新点击“保存并应用”即可生效。</div>
@@ -857,28 +868,22 @@
       <div class="section-title">基础模式</div>
       <p>{modeDescription}</p>
     </div>
-    <div class="mode-control" role="radiogroup" aria-label="DNS 基础模式">
+    <SegmentedControl.Root value={draft.mode} onValueChange={(value) => changeMode(value as DnsMode)} aria-label="DNS 基础模式">
       {#each [
         ['disabled', '关闭'],
         ['real', 'Real DNS'],
         ['fake_ip', 'Fake-IP'],
       ] as item}
-        <button
-          class:active={draft.mode === item[0]}
-          type="button"
-          role="radio"
-          aria-checked={draft.mode === item[0]}
-          onclick={() => changeMode(item[0] as DnsMode)}
-        >{item[1]}</button>
+        <SegmentedControl.Item value={item[0]}>{item[1]}</SegmentedControl.Item>
       {/each}
-    </div>
+    </SegmentedControl.Root>
   </section>
 
   {#if draft.mode === 'disabled'}
-    <div class="disabled-note">当前未启用 DNS 覆盖；下面的服务器、缓存和分流策略仍可编辑，保存后会作为下次启用时的配置。</div>
+    <div class="disabled-note">DNS 配置已停用，当前设置会保留。</div>
   {:else}
     <section class="section row-section">
-      <div><strong>DNS 劫持</strong><span>Fake-IP 基础模式会自动开启；Real DNS 可按需开启。</span></div>
+      <div><strong>DNS 劫持</strong><span>让 TUN 模式统一处理 DNS 请求。</span></div>
       <Switch checked={draft.dnsHijack} onCheckedChange={(checked) => { if (draft) { draft.dnsHijack = checked; touch(); } }} disabled={compatibility.features?.tunDnsHijack.state === 'unsupported'} aria-label="DNS 劫持" />
     </section>
   {/if}
@@ -925,7 +930,21 @@
     </Select.Root>
   </section>
 
-  <section class="section policy-section">
+  <section class="advanced-toggle">
+    <button data-slot="surface-button" type="button" aria-expanded={advancedOpen} onclick={() => (advancedOpen = !advancedOpen)}>
+      <span><strong>高级选项</strong><small>解析链、缓存与 JSON</small></span>
+      <ChevronDown class={advancedOpen ? 'expanded' : ''} />
+    </button>
+    {#if advancedOpen}
+      <div class="advanced-actions">
+        <Button variant="ghost" size="sm" onclick={openEffectiveConfig}><FileDiff />最终配置</Button>
+        <Button variant="ghost" size="sm" onclick={openJsonEditor}><Braces />JSON</Button>
+      </div>
+    {/if}
+  </section>
+
+  {#if advancedOpen}
+    <section class="section policy-section">
     <div class="section-head">
       <div>
         <div class="section-title">解析策略</div>
@@ -942,8 +961,8 @@
       </label>
       <label class="wide">
         <span>拒绝响应地址（每行一个 CIDR）</span>
-        <textarea value={(draft.dns.policy?.reject_address_cidrs ?? []).join('\n')} placeholder="例如 0.0.0.0/32" oninput={(event) => changeRejectedCidrs(event.currentTarget.value)}></textarea>
-        <small>命中这些地址的响应不会进入缓存，并继续尝试回退服务器。</small>
+        <Textarea class="font-mono" value={(draft.dns.policy?.reject_address_cidrs ?? []).join('\n')} placeholder="例如 0.0.0.0/32" oninput={(event) => changeRejectedCidrs(event.currentTarget.value)}></Textarea>
+        <small>仅校验真实 DNS 上游响应：命中后不缓存并继续回退。它不会排除 Fake-IP，也不会绕过系统代理或 TUN；内网域名请使用 Fake-IP“排除域名”，内网网段请使用“TUN 排除网段”。</small>
       </label>
     </div>
 
@@ -1041,11 +1060,12 @@
         {/each}
       </div>
     </div>
-  </section>
+    </section>
+  {/if}
 
   <section class="section">
       <div class="section-head">
-        <div><div class="section-title">命名服务器</div><p>支持 UDP、DoH、DoT、DoQ 和 system；名称用于默认服务器与分流引用。</p></div>
+        <div><div class="section-title">DNS 服务器</div><p>选择默认解析服务，或添加自定义服务器。</p></div>
         <Button variant="outline" size="sm" onclick={openAddServer}><Plus />新增</Button>
       </div>
       <div class="server-list">
@@ -1085,17 +1105,18 @@
       </div>
   </section>
 
-      <section class="section">
+  {#if advancedOpen}
+    <section class="section">
         <div class="section-head"><div><div class="section-title">DNS 缓存</div><p>控制内核缓存的容量和最长保留时间。</p></div></div>
         <div class="field-grid">
           <label><span>最大缓存条目</span><Input type="number" value={draft.dns.cache?.max_entries ?? 1024} oninput={(event) => { if (draft) { draft.dns.cache = { ...draft.dns.cache, max_entries: Number(event.currentTarget.value) }; touch(); } }} /></label>
           <label><span>最大 TTL（秒，可选）</span><Input type="number" value={draft.dns.cache?.max_ttl_seconds ?? ''} oninput={(event) => { if (draft?.dns.cache) { draft.dns.cache.max_ttl_seconds = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
         </div>
-      </section>
+    </section>
 
-      <section class="section">
+    <section class="section">
         <div class="section-head">
-          <div><div class="section-title">真实地址映射</div><p>记录 Real DNS 返回的 IP 与候选域名，帮助透明连接恢复逻辑目标；共享 IP 会保留歧义而不会强行猜测。</p></div>
+          <div><div class="section-title">真实地址映射</div><p>为透明连接保留 IP 与域名的对应关系。</p></div>
           <Switch checked={Boolean(draft.dns.reverse_mapping)} disabled={compatibility.features?.dnsRealReverseMapping.state === 'unsupported'} onCheckedChange={toggleReverseMapping} aria-label="真实地址映射" />
         </div>
         {#if draft.dns.reverse_mapping}
@@ -1105,7 +1126,8 @@
             <label><span>最长保留时间（秒）</span><Input type="number" min="1" value={draft.dns.reverse_mapping.max_ttl_seconds} oninput={(event) => changeReverseMapping('max_ttl_seconds', event.currentTarget.value)} /></label>
           </div>
         {/if}
-      </section>
+    </section>
+  {/if}
 
       {#if draft.mode === 'fake_ip' && draft.dns.answer.type === 'fake_ip'}
         <section class="section">
@@ -1115,20 +1137,20 @@
             <label><span>IPv6 CIDR <small>可选，启用 AAAA 合成</small></span><Input value={draft.dns.answer.ipv6_cidr ?? ''} placeholder="fd00::/96" disabled={compatibility.features?.dnsFakeIpDualStack.state === 'unsupported'} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.ipv6_cidr = event.currentTarget.value.trim() || undefined; touch(); } }} /></label>
             <label><span>TTL（秒）</span><Input type="number" bind:value={draft.dns.answer.ttl_seconds} oninput={touch} /></label>
             <label><span>最大映射数（可选）</span><Input type="number" value={draft.dns.answer.max_entries ?? ''} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.max_entries = event.currentTarget.value ? Number(event.currentTarget.value) : undefined; touch(); } }} /></label>
-            <label class="wide"><span>排除域名（每行一个）</span><textarea value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></textarea></label>
+            <label class="wide"><span>排除域名（每行一个）</span><Textarea class="font-mono" value={(draft.dns.answer.exclude_domains ?? []).join('\n')} oninput={(event) => { if (draft?.dns.answer.type === 'fake_ip') { draft.dns.answer.exclude_domains = event.currentTarget.value.split('\n').map((value) => value.trim()).filter(Boolean); touch(); } }}></Textarea><small>这些域名返回真实 DNS 结果，不分配 Fake-IP。按目标网段绕过 TUN 请到 TUN 设置配置排除 CIDR。</small></label>
           </div>
         </section>
       {/if}
 
       <section class="section">
-        <div class="section-head"><div><div class="section-title">解析分流</div><p>按列表顺序优先匹配。条件直接使用内核共享规则模型，客户端不另做匹配。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
+        <div class="section-head"><div><div class="section-title">解析分流</div><p>按顺序匹配域名或规则集。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
         <div class="dispatch-list">
           {#each draft.dns.dispatch as rule, index (index)}
             <article class="dispatch-card">
               <div class="dispatch-order"><span>#{index + 1}</span><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, -1)} disabled={index === 0}><ChevronUp /></Button><Button variant="ghost" size="icon-xs" onclick={() => moveDispatch(index, 1)} disabled={index === draft.dns.dispatch.length - 1}><ChevronDown /></Button></div>
               <div class="dispatch-summary">
-                <strong>{rule.server}</strong>
-                <code>{JSON.stringify(rule.condition)}</code>
+                <strong>{dispatchConditionSummary(rule.condition)}</strong>
+                <span>使用 {rule.server}</span>
               </div>
               <div class="dispatch-actions">
                 <Button variant="ghost" size="icon-sm" onclick={() => openEditDispatch(index)} aria-label={`编辑第 ${index + 1} 条分流规则`}><Pencil /></Button>
@@ -1155,7 +1177,7 @@
 {/if}
 
 <Dialog.Root bind:open={serverDialogOpen}>
-  <Dialog.Content class="sm:max-w-[620px]">
+  <Dialog.Content class="sm:max-w-[560px]">
     <form
       class="server-dialog-form"
       onsubmit={(event) => {
@@ -1165,7 +1187,7 @@
     >
       <Dialog.Header>
         <Dialog.Title>{editingServerName ? '编辑 DNS 服务器' : '新增 DNS 服务器'}</Dialog.Title>
-        <Dialog.Description>服务器名称会被默认路由和分流规则引用；协议切换只显示相关字段。</Dialog.Description>
+        <Dialog.Description>配置 DNS 地址和连接方式。</Dialog.Description>
       </Dialog.Header>
       <Dialog.Body class="server-dialog-body">
         <div class="dialog-field-grid">
@@ -1193,7 +1215,7 @@
         </div>
 
         {#if serverDraft.type === 'system'}
-          <div class="system-note">system 使用操作系统解析器，不需要网络端点。严格 TUN/DNS 劫持场景是否允许由当前内核校验。</div>
+          <div class="system-note">system 使用操作系统 DNS，可作为公共 DNS 不可用时的降级选项。</div>
         {:else}
           <div class="dialog-field-grid">
             <label>
@@ -1239,11 +1261,11 @@
                 oninput={(event) => { serverDraft = { ...serverDraft, bootstrap: event.currentTarget.value.split(',').map((value) => value.trim()).filter(Boolean) }; }}
                 placeholder="1.1.1.1, 1.0.0.1"
               />
-              <small>Host 使用域名时建议提供 bootstrap，最终仍由当前内核校验。</small>
+                <small>Host 为域名时，可填写用于首次连接的 IP。</small>
             </label>
             {#if serverDraft.type !== 'doq'}
               <label class="wide">
-                <span>经由出站 <small>detour，可选</small></span>
+              <span>连接方式</span>
                 <Select.Root
                   type="single"
                   value={serverDraft.detour ?? unsetSelection}
@@ -1252,19 +1274,21 @@
                   <Select.Trigger class="w-full" aria-label="DNS 上游经由出站">{dnsDetourLabel(serverDraft.detour)}</Select.Trigger>
                   <Select.Content>
                     <Select.Item value={unsetSelection} label="直接连接">直接连接</Select.Item>
-                    <Select.Item value={DNS_DETOUR_ROUTE_FINAL} label="跟随当前配置默认出站">跟随当前配置默认出站</Select.Item>
+                    <Select.Item value={DNS_DETOUR_ROUTE_FINAL} label="跟随默认出站">跟随默认出站</Select.Item>
                     {#each routeTargetOptions as target}
-                      <Select.Item value={target.tag} label={`${target.tag}（${target.kind}）`}>{target.tag}（{target.kind}）</Select.Item>
+                      <Select.Item value={target.tag} label={target.tag === 'block' ? target.label : `策略组 · ${target.label}`}>
+                        {target.tag === 'block' ? target.label : `策略组 · ${target.label}`}
+                      </Select.Item>
                     {/each}
                     {#if serverDraft.detour && serverDraft.detour !== DNS_DETOUR_ROUTE_FINAL && !routeTargetTags.has(serverDraft.detour)}
                       <Select.Item value={serverDraft.detour} label={`${serverDraft.detour}（已失效）`}>{serverDraft.detour}（已失效）</Select.Item>
                     {/if}
                   </Select.Content>
                 </Select.Root>
-                <small>“跟随当前配置默认出站”会在切换配置时解析为该配置的 route.final；UDP 将改用 DNS-over-TCP，DoH/DoT 复用所选出站。启用后还必须在“节点解析”选择直连 DNS。</small>
+                <small>默认出站会随当前代理配置切换。</small>
               </label>
             {:else}
-              <div class="system-note wide">当前内核不支持 DoQ detour；为避免静默直连泄露，表单不会写入该字段。</div>
+              <div class="system-note wide">DoQ 暂不支持经由代理连接。</div>
             {/if}
           </div>
         {/if}
@@ -1280,7 +1304,7 @@
 </Dialog.Root>
 
 <Dialog.Root bind:open={dispatchDialogOpen}>
-  <Dialog.Content class="sm:max-w-[680px]">
+  <Dialog.Content class="sm:max-w-[620px]">
     <form
       class="dispatch-dialog-form"
       onsubmit={(event) => {
@@ -1290,13 +1314,13 @@
     >
       <Dialog.Header>
         <Dialog.Title>{editingDispatchIndex === null ? '新增 DNS 分流' : '编辑 DNS 分流'}</Dialog.Title>
-        <Dialog.Description>规则按列表顺序匹配；条件使用内核共享规则模型的 JSON 对象。</Dialog.Description>
+        <Dialog.Description>按顺序匹配，命中后使用指定 DNS。</Dialog.Description>
       </Dialog.Header>
       <Dialog.Body class="dispatch-dialog-body">
-        <div class="dispatch-editor-tabs" role="tablist" aria-label="DNS 分流条件编辑方式">
-          <button type="button" role="tab" aria-selected={dispatchEditorMode === 'form'} data-active={dispatchEditorMode === 'form'} onclick={() => switchDispatchEditorMode('form')}>表单</button>
-          <button type="button" role="tab" aria-selected={dispatchEditorMode === 'json'} data-active={dispatchEditorMode === 'json'} onclick={() => switchDispatchEditorMode('json')}>JSON</button>
-        </div>
+        <SegmentedControl.Root value={dispatchEditorMode} onValueChange={(value) => switchDispatchEditorMode(value as 'form' | 'json')} aria-label="DNS 分流条件编辑方式">
+          <SegmentedControl.Item value="form">表单</SegmentedControl.Item>
+          <SegmentedControl.Item value="json">高级 JSON</SegmentedControl.Item>
+        </SegmentedControl.Root>
         {#if dispatchEditorMode === 'form'}
           <div class="dispatch-condition-form">
             <label class="dispatch-dialog-field">
@@ -1330,7 +1354,7 @@
                       {/each}
                     </Select.Content>
                   </Select.Root>
-                  <small>显示基础配置、订阅和公共规则覆盖组合后的真实 tag；无需手工推导。</small>
+                  <small>只显示当前可用的规则集。</small>
                   {#if dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
                     <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
                   {/if}
@@ -1344,18 +1368,18 @@
             {:else}
               <label class="dispatch-dialog-field">
                 <span>匹配值 <small>每行一个</small></span>
-                <textarea
-                  class="condition dispatch-values-editor"
+                <Textarea
+                  class="font-mono min-h-28"
                   bind:value={dispatchConditionValuesDraft}
                   placeholder={dispatchConditionOptions.find((option) => option.value === dispatchConditionType)?.placeholder ?? ''}
-                ></textarea>
+                ></Textarea>
               </label>
             {/if}
           </div>
         {:else}
           <label class="dispatch-dialog-field">
             <span>匹配条件 JSON</span>
-            <textarea class="condition dispatch-condition-editor" bind:value={dispatchConditionDraft} spellcheck="false"></textarea>
+            <Textarea class="font-mono min-h-40" bind:value={dispatchConditionDraft} spellcheck="false"></Textarea>
             <small>支持 <code>and</code> / <code>or</code> 复合条件以及新版内核字段。</small>
           </label>
         {/if}
@@ -1440,7 +1464,7 @@
       <Dialog.Description>应用后会更新表单草稿；仍需在主页面点击“保存并应用”才会提交到内核。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="json-dialog-body">
-      <textarea class="native-json" bind:value={nativeJson} spellcheck="false" aria-label="内核原生 DNS JSON 配置"></textarea>
+      <Textarea class="font-mono min-h-[min(54vh,480px)] resize-none" bind:value={nativeJson} spellcheck="false" aria-label="内核原生 DNS JSON 配置"></Textarea>
       {#if nativeError}<div class="dialog-error" role="alert">{nativeError}</div>{/if}
     </Dialog.Body>
     <Dialog.Footer>
@@ -1455,7 +1479,6 @@
   .section-head,
   .head-actions,
   .mode-section,
-  .mode-control,
   .server-row,
   .server-name,
   .server-actions,
@@ -1505,46 +1528,6 @@
     height: 14px;
   }
 
-  .workflow-hint {
-    margin: 0 0 4px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: color-mix(in srgb, var(--primary) 5%, transparent);
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-    line-height: 1.45;
-  }
-
-  .config-lineage {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-    padding: 9px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: color-mix(in srgb, var(--muted) 22%, transparent);
-  }
-
-  .config-lineage div {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .config-lineage strong {
-    font-size: 10.5px;
-  }
-
-  .config-lineage span {
-    color: var(--muted-foreground);
-    font-size: 10px;
-  }
-
-  .capability-strip,
   .effective-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1552,7 +1535,6 @@
     margin-bottom: 10px;
   }
 
-  .capability-strip span,
   .effective-meta span {
     padding: 3px 7px;
     border: 1px solid var(--border);
@@ -1561,7 +1543,6 @@
     font-size: 10px;
   }
 
-  .capability-strip span.supported,
   .effective-meta span.source-enabled {
     border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
     color: var(--primary);
@@ -1593,10 +1574,6 @@
   .config-preview-grid strong { display: block; margin-bottom: 5px; font-size: 11px; }
   .config-preview-grid pre { max-height: 360px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--muted) 30%, transparent); font-size: 9.5px; line-height: 1.45; white-space: pre; }
   .state.compact { min-height: 0; padding: 10px; }
-
-  .lineage-arrow {
-    font-size: 14px !important;
-  }
 
   .section {
     padding: 14px 0;
@@ -1631,38 +1608,6 @@
     line-height: 1.45;
   }
 
-  .mode-control {
-    flex: none;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--muted) 40%, transparent);
-  }
-
-  .mode-control button {
-    min-width: 72px;
-    padding: 6px 10px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .mode-control button:hover {
-    color: var(--foreground);
-  }
-
-  .mode-control button.active {
-    background: var(--background);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
-    color: var(--foreground);
-    font-weight: 600;
-  }
-
   .disabled-note {
     margin: 0 0 2px;
     padding: 10px 12px;
@@ -1689,6 +1634,72 @@
 
   .row-section :global([data-slot=select-trigger]) {
     min-width: 190px;
+  }
+
+  .advanced-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 5px 6px 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--muted) 20%, transparent);
+  }
+
+  .advanced-toggle > button {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--foreground);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .advanced-toggle > button span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .advanced-toggle strong {
+    font-size: 11.5px;
+  }
+
+  .advanced-toggle small {
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+
+  .advanced-toggle > button :global(svg) {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    transition: transform .15s ease;
+  }
+
+  .advanced-toggle > button :global(svg.expanded) {
+    transform: rotate(180deg);
+  }
+
+  .advanced-actions {
+    display: flex;
+    flex: none;
+    gap: 2px;
+  }
+
+  .advanced-actions :global(svg) {
+    width: 13px;
+    height: 13px;
   }
 
   .server-list,
@@ -1818,12 +1829,6 @@
   .field-grid .wide,
   .dialog-field-grid .wide {
     grid-column: 1 / -1;
-  }
-
-  .field-grid textarea {
-    min-height: 76px;
-    padding: 8px;
-    resize: vertical;
   }
 
   .policy-section {
@@ -1967,7 +1972,7 @@
     font-size: 11.5px;
   }
 
-  .dispatch-summary code {
+  .dispatch-summary span {
     overflow: hidden;
     color: var(--muted-foreground);
     font-size: 10.5px;
@@ -1992,15 +1997,6 @@
     font-size: 11px;
   }
 
-  .condition {
-    min-height: 74px;
-    flex: 1;
-    padding: 7px;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    resize: vertical;
-  }
-
   .server-dialog-form,
   .dispatch-dialog-form {
     display: contents;
@@ -2017,6 +2013,14 @@
 
   :global(.effective-dialog-body) { max-height: min(72vh, 760px); overflow: auto; }
 
+  :global(.server-dialog-body),
+  :global(.dispatch-dialog-body) {
+    max-height: min(68dvh, 640px);
+    padding-right: 3px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .dialog-field-grid + .dialog-field-grid {
     padding-top: 2px;
   }
@@ -2032,35 +2036,6 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-  }
-
-  .dispatch-editor-tabs {
-    display: flex;
-    width: fit-content;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--muted) 40%, transparent);
-  }
-
-  .dispatch-editor-tabs button {
-    min-width: 72px;
-    padding: 6px 12px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .dispatch-editor-tabs button[data-active='true'] {
-    background: var(--background);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
-    color: var(--foreground);
-    font-weight: 600;
   }
 
   .dispatch-condition-form {
@@ -2083,41 +2058,11 @@
     font-size: 10px;
   }
 
-  .dispatch-condition-editor {
-    min-height: 180px;
-    width: 100%;
-  }
-
-  .dispatch-values-editor {
-    min-height: 112px;
-    width: 100%;
-  }
-
   .system-note {
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: color-mix(in srgb, var(--muted) 28%, transparent);
-  }
-
-  .native-json {
-    width: 100%;
-    min-height: min(54vh, 480px);
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
-    background: var(--background);
-    color: var(--foreground);
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    line-height: 1.55;
-    resize: none;
-  }
-
-  .native-json:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 15%, transparent);
   }
 
   .dialog-error {
@@ -2200,23 +2145,11 @@
   }
 
   @media (max-width: 900px) {
-    .config-lineage {
-      grid-template-columns: 1fr;
-    }
-
-    .lineage-arrow {
-      display: none;
-    }
-
     .config-preview-grid { grid-template-columns: 1fr; }
     .mode-section {
       align-items: stretch;
       flex-direction: column;
       gap: 10px;
-    }
-
-    .mode-control {
-      align-self: flex-start;
     }
 
     .field-grid,
@@ -2235,6 +2168,15 @@
     .dispatch-card {
       align-items: stretch;
       flex-direction: column;
+    }
+
+    .advanced-toggle {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .advanced-actions {
+      justify-content: flex-end;
     }
   }
 </style>

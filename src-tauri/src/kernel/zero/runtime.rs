@@ -84,6 +84,8 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     }
     params.insert("tag".to_string(), json!(tun.tag));
     params.insert("mtu".to_string(), json!(tun.mtu));
+    params.insert("include_cidrs".to_string(), json!(tun.include_cidrs));
+    params.insert("exclude_cidrs".to_string(), json!(tun.exclude_cidrs));
 
     // ZNet-Sink's command-managed TUN mode means full system capture. These
     // are Zero runtime parameters, but they are client policy rather than user
@@ -133,6 +135,14 @@ fn parse_tun_status(value: &Value, fallback: Option<&GuiFeatureStatus>) -> GuiTu
         tag: parsing::string_at(value, &["tag"]),
         healthy,
         auto_route: bool_at(value, &["auto_route", "autoRoute"]).unwrap_or(false),
+        include_cidrs: value
+            .get("include_cidrs")
+            .or_else(|| value.get("includeCidrs"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        exclude_cidrs: value
+            .get("exclude_cidrs")
+            .or_else(|| value.get("excludeCidrs"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         dual_stack: bool_at(value, &["dual_stack", "dualStack"]).unwrap_or(false),
         strict_route: bool_at(value, &["strict_route", "strictRoute"]).unwrap_or(false),
         dns_hijack: bool_at(value, &["dns_hijack", "dnsHijack"]).unwrap_or(false),
@@ -246,6 +256,8 @@ mod tests {
             secondary_addr: Some("fd88::1/64".to_string()),
             tag: "tun-in".to_string(),
             mtu: 1400,
+            include_cidrs: vec!["0.0.0.0/0".to_string()],
+            exclude_cidrs: vec!["16.0.0.0/8".to_string()],
             dual_stack: true,
             dns_hijack: true,
         };
@@ -256,6 +268,8 @@ mod tests {
         assert_eq!(params["secondary_addr"], "fd88::1/64");
         assert_eq!(params["tag"], "tun-in");
         assert_eq!(params["mtu"], 1400);
+        assert_eq!(params["include_cidrs"], json!(["0.0.0.0/0"]));
+        assert_eq!(params["exclude_cidrs"], json!(["16.0.0.0/8"]));
         assert_eq!(params["auto_route"], true);
         assert_eq!(params["strict_route"], true);
         assert_eq!(params["dual_stack"], true);
@@ -287,6 +301,8 @@ mod tests {
                 "mtu": 1500,
                 "tag": "tun",
                 "auto_route": true,
+                "include_cidrs": [],
+                "exclude_cidrs": ["203.0.113.10/32"],
                 "dual_stack": true,
                 "strict_route": true,
                 "dns_hijack": false,
@@ -312,6 +328,11 @@ mod tests {
         assert!(status.enabled);
         assert_eq!(status.addresses.len(), 2);
         assert!(status.auto_route);
+        assert_eq!(status.include_cidrs, Some(vec![]));
+        assert_eq!(
+            status.exclude_cidrs,
+            Some(vec!["203.0.113.10/32".to_string()])
+        );
         assert!(status.dual_stack);
         assert!(status.strict_route);
         assert!(!status.dns_hijack);
@@ -326,5 +347,12 @@ mod tests {
         assert_eq!(status.network_generation, 7);
         assert_eq!(status.address_family_policy.as_deref(), Some("prefer_ipv4"));
         assert_eq!(status.ipv6_to_ipv4_fallbacks, 2);
+    }
+
+    #[test]
+    fn missing_route_metadata_is_not_mistaken_for_an_empty_exclusion_list() {
+        let status = parse_tun_status(&json!({"running": true}), None);
+        assert!(status.include_cidrs.is_none());
+        assert!(status.exclude_cidrs.is_none());
     }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
   import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
@@ -8,18 +9,21 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
+  import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import {
     getCommonRuleInjectionStatus,
+    getRuleSet,
     listRuleSets,
     removeRuleSet,
     setCommonRuleBinding,
     setCommonRuleInjectionEnabled,
     updateAllRuleSets,
+    updateBuiltinRuleSets,
     updateRuleSet,
     upsertRuleSet,
   } from '$lib/services/config';
   import { getAppErrorMessage } from '$lib/services/core';
-  import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, ZeroRule, ZeroRuleType } from '$lib/types/domain';
+  import type { CommonRuleAction, CommonRuleInjectionStatus, RuleSetProfile, RuleSetSummary, ZeroRule, ZeroRuleType } from '$lib/types/domain';
 
   const RULE_TYPES: { value: ZeroRuleType; label: string; placeholder: string }[] = [
     { value: 'domain_exact', label: '精确域名', placeholder: 'api.example.com' },
@@ -29,15 +33,17 @@
     { value: 'ipv6_cidr', label: 'IPv6 CIDR', placeholder: 'fd00::/8' },
   ];
   const VIEW_MODE_KEY = 'znet-rules-view-mode';
+  const MAX_VISUAL_EDIT_RULES = 1000;
   type ViewMode = 'card' | 'list';
 
-  let items = $state<RuleSetProfile[]>([]);
+  let items = $state<RuleSetSummary[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let updatingId = $state<string | null>(null);
   let updatingAll = $state(false);
+  let updatingBuiltins = $state(false);
   let deletingId = $state<string | null>(null);
-  let pendingDelete = $state<RuleSetProfile | null>(null);
+  let pendingDelete = $state<RuleSetSummary | null>(null);
   let loadError = $state('');
   let pageError = $state('');
   let editorError = $state('');
@@ -56,12 +62,13 @@
   let commonStatus = $state<CommonRuleInjectionStatus | null>(null);
   let commonSaving = $state(false);
   let bindingId = $state<string | null>(null);
-  let builtinDetails = $state<RuleSetProfile | null>(null);
+  let loadingDetailId = $state<string | null>(null);
+  let builtinDetails = $state<RuleSetSummary | null>(null);
   let builtinDetailsError = $state('');
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
-  const busy = $derived(saving || updatingId !== null || updatingAll || deletingId !== null || commonSaving || bindingId !== null);
+  const busy = $derived(saving || updatingId !== null || updatingAll || updatingBuiltins || deletingId !== null || commonSaving || bindingId !== null || loadingDetailId !== null);
   const canSave = $derived(
     !busy
       && name.trim().length > 0
@@ -127,7 +134,7 @@
   }
 
   async function updateCommonBinding(
-    item: RuleSetProfile,
+    item: RuleSetSummary,
     patch: Partial<{ enabled: boolean; action: CommonRuleAction; order: number }>,
   ) {
     if (bindingId) return;
@@ -142,7 +149,9 @@
         action: patch.action ?? current.action,
         order: Number.isFinite(requestedOrder) ? Math.max(0, Math.trunc(requestedOrder)) : current.order,
       });
-      items = items.map((candidate) => candidate.id === updated.id ? updated : candidate);
+      items = items.map((candidate) => candidate.id === updated.id
+        ? { ...candidate, enabled: updated.enabled, commonBinding: updated.commonBinding, artifact: updated.artifact }
+        : candidate);
       commonStatus = await getCommonRuleInjectionStatus();
     } catch (cause) {
       pageError = getAppErrorMessage(cause, '更新公共规则绑定失败，已保留原运行配置');
@@ -166,29 +175,55 @@
     showEditor = true;
   }
 
-  function openEdit(item: RuleSetProfile) {
-    if (busy) return;
+  function openSourceEdit(item: RuleSetSummary) {
     editingId = item.id;
     name = item.name;
-    mode = 'visual';
-    rules = item.semanticIr.rules.map((rule) => ({ ...rule }));
+    mode = 'subscription';
+    rules = [];
     sourceUrl = item.source?.url ?? '';
     sourceFormat = item.source?.format ?? 'auto';
     updateIntervalSecs = item.source?.updateIntervalSecs ?? 0;
     userAgent = item.source?.userAgent ?? '';
-    retainSource = !!item.source;
+    retainSource = true;
     editorError = '';
     showEditor = true;
   }
 
-  function openRuleSet(item: RuleSetProfile) {
+  async function openRuleSet(item: RuleSetSummary) {
     if (busy) return;
     if (item.builtIn) {
       builtinDetails = item;
       builtinDetailsError = '';
       return;
     }
-    openEdit(item);
+    if (item.source) {
+      openSourceEdit(item);
+      return;
+    }
+    if (item.editableRuleCount > MAX_VISUAL_EDIT_RULES) {
+      pageError = `“${item.name}”包含 ${item.editableRuleCount} 条规则，不能载入可视化编辑器；请拆分为小型覆盖规则集。`;
+      return;
+    }
+    loadingDetailId = item.id;
+    pageError = '';
+    try {
+      const profile: RuleSetProfile = await getRuleSet(item.id);
+      editingId = profile.id;
+      name = profile.name;
+      mode = 'visual';
+      rules = profile.semanticIr.rules.map((rule) => ({ ...rule }));
+      sourceUrl = '';
+      sourceFormat = 'auto';
+      updateIntervalSecs = 0;
+      userAgent = '';
+      retainSource = false;
+      editorError = '';
+      showEditor = true;
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '读取规则集失败');
+    } finally {
+      loadingDetailId = null;
+    }
   }
 
   function closeBuiltinDetails() {
@@ -240,8 +275,9 @@
     saving = true;
     editorError = '';
     try {
-      if (mode === 'subscription' && !editingId) {
+      if (mode === 'subscription') {
         await upsertRuleSet({
+          id: editingId,
           name: name.trim(),
           enabled: true,
           source: {
@@ -293,7 +329,7 @@
     }
   }
 
-  function requestRemove(item: RuleSetProfile) {
+  function requestRemove(item: RuleSetSummary) {
     if (busy) return;
     deleteError = '';
     pendingDelete = item;
@@ -332,6 +368,21 @@
       pageError = getAppErrorMessage(cause, '批量更新规则集失败');
     } finally {
       updatingAll = false;
+    }
+  }
+
+  async function updateBuiltins() {
+    if (busy) return;
+    updatingBuiltins = true;
+    pageError = '';
+    try {
+      const outcome = await updateBuiltinRuleSets();
+      await load(false);
+      if (outcome.updated === 0) pageError = '内置规则已是最新版本';
+    } catch (cause) {
+      pageError = getAppErrorMessage(cause, '更新内置规则失败，已继续使用当前版本');
+    } finally {
+      updatingBuiltins = false;
     }
   }
 
@@ -387,6 +438,12 @@
         <Button variant="outline" size="sm" onclick={updateAll} disabled={busy}>
           <RefreshCw class={`h-3.5 w-3.5 ${updatingAll ? 'spin' : ''}`} />
           <span>{updatingAll ? '更新中...' : '更新全部'}</span>
+        </Button>
+      {/if}
+      {#if items.some((item) => item.builtIn)}
+        <Button variant="outline" size="sm" onclick={updateBuiltins} disabled={busy}>
+          <RefreshCw class={`h-3.5 w-3.5 ${updatingBuiltins ? 'spin' : ''}`} />
+          <span>{updatingBuiltins ? '更新中...' : '更新内置'}</span>
         </Button>
       {/if}
       <Button size="sm" onclick={openNew} disabled={busy}>
@@ -461,7 +518,7 @@
     <div class="list-scroll" class:card-view={viewMode === 'card'}>
       {#each items as item (item.id)}
         <div class="list-row">
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="row-main"
             onclick={() => openRuleSet(item)}
@@ -482,8 +539,10 @@
             <div class="row-meta">
               {#if item.builtIn}
                 <span>{item.artifact?.entryCount ?? 0} 条内置规则</span>
+              {:else if item.source}
+                <span>{item.artifact?.entryCount ?? 0} 条外部规则</span>
               {:else}
-                <span>{item.semanticIr.rules.length} 条源规则</span>
+                <span>{item.editableRuleCount} 条本地规则</span>
                 <span>→</span>
                 <span>{item.artifact?.entryCount ?? 0} 个索引项</span>
               {/if}
@@ -521,20 +580,21 @@
                   disabled={busy || !item.artifact}
                   aria-label={`将 ${item.name} 用作公共规则`}
                 />
-                <select
-                  class="binding-select"
+                <FieldSelect
+                  class="w-[116px]"
                   value={item.commonBinding?.action ?? 'final'}
-                  onchange={(event) => updateCommonBinding(item, { action: event.currentTarget.value as CommonRuleAction })}
+                  onValueChange={(value) => updateCommonBinding(item, { action: value as CommonRuleAction })}
                   disabled={busy || !item.commonBinding?.enabled}
                   aria-label="匹配动作"
-                >
-                  <option value="final">沿用最终路由</option>
-                  <option value="proxy">代理</option>
-                  <option value="direct">直连</option>
-                  <option value="reject">拒绝</option>
-                </select>
-                <input
-                  class="binding-order"
+                  options={[
+                    { value: 'final', label: '沿用最终路由' },
+                    { value: 'proxy', label: '代理' },
+                    { value: 'direct', label: '直连' },
+                    { value: 'reject', label: '拒绝' },
+                  ]}
+                />
+                <Input
+                  class="w-14 font-mono"
                   type="number"
                   min="0"
                   value={item.commonBinding?.order ?? items.indexOf(item) * 10}
@@ -618,7 +678,7 @@
     </div>
   {/if}
 
-  {#if mode === 'subscription' && !editingId}
+  {#if mode === 'subscription'}
     <div class="form-item">
       <span class="form-label">规则源地址 <span class="required">*</span></span>
       <div class="form-input-wrap">
@@ -630,22 +690,26 @@
       <div class="form-item">
         <span class="form-label">来源格式</span>
         <div class="form-input-wrap">
-          <select bind:value={sourceFormat} class="field-select" disabled={saving}>
-            <option value="auto">自动识别</option>
-            <option value="zero-rule-ir-v1">Zero Rule IR v1</option>
-            <option value="clash-classical-yaml">Clash Classical YAML</option>
-          </select>
+          <FieldSelect value={sourceFormat} onValueChange={(value) => sourceFormat = value as typeof sourceFormat} disabled={saving} aria-label="来源格式"
+            options={[
+              { value: 'auto', label: '自动识别' },
+              { value: 'zero-rule-ir-v1', label: 'Zero Rule IR v1' },
+              { value: 'clash-classical-yaml', label: 'Clash Classical YAML' },
+            ]}
+          />
         </div>
       </div>
       <div class="form-item">
         <span class="form-label">自动更新</span>
         <div class="form-input-wrap">
-          <select bind:value={updateIntervalSecs} class="field-select" disabled={saving}>
-            <option value={0}>手动</option>
-            <option value={3600}>每小时</option>
-            <option value={21600}>每 6 小时</option>
-            <option value={86400}>每天</option>
-          </select>
+          <FieldSelect value={String(updateIntervalSecs)} onValueChange={(value) => updateIntervalSecs = Number(value)} disabled={saving} aria-label="自动更新"
+            options={[
+              { value: '0', label: '手动' },
+              { value: '3600', label: '每小时' },
+              { value: '21600', label: '每 6 小时' },
+              { value: '86400', label: '每天' },
+            ]}
+          />
         </div>
       </div>
     </div>
@@ -673,17 +737,13 @@
       <div class="rule-list">
         {#each rules as rule, index (index)}
           <div class="rule-row">
-            <select
+            <FieldSelect
               value={rule.type}
-              class="field-select"
-              onchange={(event) => setRuleType(index, event.currentTarget.value as ZeroRuleType)}
+              onValueChange={(value) => setRuleType(index, value as ZeroRuleType)}
               disabled={saving}
               aria-label="规则类型"
-            >
-              {#each RULE_TYPES as type}
-                <option value={type.value}>{type.label}</option>
-              {/each}
-            </select>
+              options={RULE_TYPES}
+            />
             <Input
               value={rule.value}
               oninput={(event) => setRuleValue(index, event.currentTarget.value)}
@@ -709,7 +769,7 @@
 
     {#if sourceUrl}
       <label class="retain-source">
-        <input type="checkbox" bind:checked={retainSource} disabled={saving} />
+        <Choice class="mt-0.5" type="checkbox" bind:checked={retainSource} disabled={saving} />
         <span>保留外部来源；下次同步会用远程内容覆盖当前规则</span>
       </label>
     {/if}
@@ -725,7 +785,7 @@
   {#snippet footer()}
     <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
     <Button onclick={save} disabled={!canSave}>
-      {saving ? '构建并保存中...' : mode === 'subscription' && !editingId ? '导入并构建' : '保存并构建'}
+      {saving ? '构建并保存中...' : mode === 'subscription' ? (editingId ? '更新来源并重建' : '导入并构建') : '保存并构建'}
     </Button>
   {/snippet}
 </DraggableModal>
@@ -1188,22 +1248,6 @@
     border-right: 1px solid var(--border);
   }
 
-  .binding-select,
-  .binding-order {
-    height: 27px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--muted);
-    color: var(--foreground);
-    font-size: 10.5px;
-  }
-
-  .binding-select { width: 100px; padding: 0 5px; }
-  .binding-order { width: 48px; padding: 0 5px; font-family: var(--font-mono); }
-
-  .binding-select:disabled,
-  .binding-order:disabled { opacity: 0.45; }
-
   .card-view .common-binding {
     position: absolute;
     right: 10px;
@@ -1349,25 +1393,6 @@
     line-height: 1.45;
   }
 
-  .field-select {
-    width: 100%;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    font: inherit;
-    font-size: 12px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    outline: none;
-  }
-
-  .field-select:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-
   .rules-section {
     display: flex;
     flex-direction: column;
@@ -1416,8 +1441,6 @@
     font-size: 11px;
     cursor: pointer;
   }
-
-  .retain-source input { accent-color: var(--primary); }
 
   :global(.spin) { animation: spin 0.8s linear infinite; }
 

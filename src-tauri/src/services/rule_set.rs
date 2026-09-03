@@ -14,8 +14,8 @@ use zero_rule::RuleSetCompiler;
 use crate::errors::{AppError, AppResult};
 use crate::models::logs::LogLevel;
 use crate::models::rule_set::{
-    RuleSetKernelPayload, RuleSetProfile, RuleSetSource, RuleSetSourceState, RuleSetSyncAllOutcome,
-    RuleSetUpsert, ZrsArtifact,
+    RuleSetKernelPayload, RuleSetProfile, RuleSetSource, RuleSetSourceState, RuleSetSummary,
+    RuleSetSyncAllOutcome, RuleSetUpsert, ZrsArtifact,
 };
 use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
@@ -25,6 +25,7 @@ use crate::services::{data_dir, domain_store, logs, rule_overlay};
 use crate::state::app_state::AppState;
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_LOCAL_VISUAL_RULES: usize = 1_000;
 const MIN_UPDATE_INTERVAL_SECS: u64 = 60;
 const AUTO_UPDATE_TICK_SECS: u64 = 60;
 const AUTO_UPDATE_MAX_RETRIES: u32 = 3;
@@ -95,7 +96,7 @@ enum AutoUpdateFailureDisposition {
     },
 }
 
-pub fn list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetProfile>> {
+pub fn list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetSummary>> {
     // Subscription-owned providers are implementation details of subscription
     // conversion. They share persistence with rule assets, but are not GUI
     // resources and must not cross the rule-set command boundary.
@@ -174,7 +175,22 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
             )
         }
     };
+    if source.is_none()
+        && semantic_ir
+            .get("rules")
+            .and_then(Value::as_array)
+            .is_some_and(|rules| rules.len() > MAX_LOCAL_VISUAL_RULES)
+    {
+        return Err(AppError::invalid_argument(format!(
+            "local visual rule sets are limited to {MAX_LOCAL_VISUAL_RULES} entries; use an external source for larger assets"
+        )));
+    }
     let artifact = build_zrs_artifact(&id, &semantic_ir)?;
+    let stored_semantic_ir = if source.is_some() {
+        empty_semantic_ir(&name)
+    } else {
+        semantic_ir
+    };
     let now = now_unix_ms();
     let profile = RuleSetProfile {
         id: id.clone(),
@@ -188,7 +204,7 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
         common_binding: previous_profile
             .as_ref()
             .and_then(|item| item.common_binding.clone()),
-        semantic_ir,
+        semantic_ir: stored_semantic_ir,
         source: source.clone(),
         source_state,
         artifact: Some(artifact),
@@ -262,7 +278,11 @@ async fn update_by_id(state: &AppState, id: String) -> AppResult<(RuleSetProfile
         Ok((changed, source_state)) => {
             let was_updated = changed.is_some();
             if let Some((semantic_ir, artifact)) = changed {
-                item.semantic_ir = semantic_ir;
+                item.semantic_ir = if item.source.is_some() {
+                    empty_semantic_ir(&item.name)
+                } else {
+                    semantic_ir
+                };
                 item.artifact = Some(artifact);
                 item.last_sync_at_unix_ms = Some(now_unix_ms());
                 item.updated_at_unix_ms = now_unix_ms();
@@ -372,7 +392,7 @@ pub(crate) async fn sync_managed_subscription_sources(
             let values = match fetch_source(&source, previous_state).await? {
                 FetchOutcome::Modified(resource) => {
                     let display_name = format!("{subscription_name} / {}", managed.tag);
-                    let (semantic_ir, artifact) = if source.format == "zrs" {
+                    let artifact = if source.format == "zrs" {
                         let metadata =
                             verify(&resource.bytes, VerifyMode::FullChecksum).map_err(|error| {
                                 AppError::invalid_argument(format!(
@@ -380,19 +400,13 @@ pub(crate) async fn sync_managed_subscription_sources(
                                     managed.tag
                                 ))
                             })?;
-                        let artifact =
-                            publish_zrs_in(&data_dir()?, &id, &resource.bytes, metadata)?;
-                        let semantic_ir = previous
-                            .map(|item| item.semantic_ir.clone())
-                            .unwrap_or_else(|| opaque_zrs_semantic_ir(&display_name));
-                        (semantic_ir, artifact)
+                        publish_zrs_in(&data_dir()?, &id, &resource.bytes, metadata)?
                     } else {
                         let semantic_ir =
                             convert_managed_clash_source(resource_text(&resource)?, &display_name)?;
-                        let artifact = build_zrs_artifact(&id, &semantic_ir)?;
-                        (semantic_ir, artifact)
+                        build_zrs_artifact(&id, &semantic_ir)?
                     };
-                    (semantic_ir, artifact, resource.state, Some(now), now)
+                    (artifact, resource.state, Some(now), now)
                 }
                 FetchOutcome::NotModified(source_state) => {
                     let previous = previous.ok_or_else(|| {
@@ -407,7 +421,6 @@ pub(crate) async fn sync_managed_subscription_sources(
                         ))
                     })?;
                     (
-                        previous.semantic_ir.clone(),
                         artifact,
                         source_state,
                         previous.last_sync_at_unix_ms,
@@ -419,26 +432,25 @@ pub(crate) async fn sync_managed_subscription_sources(
         }
         .await;
 
-        let (semantic_ir, artifact, source_state, last_sync_at_unix_ms, updated_at_unix_ms) =
-            match result {
-                Ok(values) => values,
-                Err(error) => {
-                    push_managed_source_failure(
-                        &mut prepared,
-                        &mut artifacts,
-                        &mut failures,
-                        previous,
-                        id,
-                        subscription_id,
-                        subscription_name,
-                        &managed.tag,
-                        source,
-                        error,
-                        now,
-                    );
-                    continue;
-                }
-            };
+        let (artifact, source_state, last_sync_at_unix_ms, updated_at_unix_ms) = match result {
+            Ok(values) => values,
+            Err(error) => {
+                push_managed_source_failure(
+                    &mut prepared,
+                    &mut artifacts,
+                    &mut failures,
+                    previous,
+                    id,
+                    subscription_id,
+                    subscription_name,
+                    &managed.tag,
+                    source,
+                    error,
+                    now,
+                );
+                continue;
+            }
+        };
 
         artifacts.push(ManagedRuleSetArtifact {
             tag: managed.tag.clone(),
@@ -452,7 +464,7 @@ pub(crate) async fn sync_managed_subscription_sources(
             provenance: None,
             managed_by_subscription_id: Some(subscription_id.to_string()),
             common_binding: None,
-            semantic_ir,
+            semantic_ir: empty_managed_semantic_ir(subscription_name, &managed.tag),
             source: Some(source),
             source_state,
             artifact: Some(artifact),
@@ -511,6 +523,7 @@ fn push_managed_source_failure(
     profile.enabled = true;
     profile.managed_by_subscription_id = Some(subscription_id.to_string());
     profile.common_binding = None;
+    profile.semantic_ir = empty_managed_semantic_ir(subscription_name, tag);
     if profile.source.as_ref().is_none_or(|previous_source| {
         previous_source.url != source.url || previous_source.format != source.format
     }) {
@@ -534,6 +547,14 @@ fn push_managed_source_failure(
     prepared.push(profile);
 }
 
+fn empty_managed_semantic_ir(subscription_name: &str, tag: &str) -> Value {
+    empty_semantic_ir(&format!("{subscription_name} / {tag}"))
+}
+
+fn empty_semantic_ir(display_name: &str) -> Value {
+    json!({ "version": 1, "name": display_name, "rules": [] })
+}
+
 fn managed_rule_set_id_prefix(subscription_id: &str) -> String {
     format!("subscription-rule-{subscription_id}-")
 }
@@ -546,12 +567,64 @@ fn is_subscription_managed_rule_set(profile: &RuleSetProfile) -> bool {
     profile.managed_by_subscription_id.is_some() || is_managed_subscription_rule_set_id(&profile.id)
 }
 
-fn gui_owned_rule_sets(items: &[RuleSetProfile]) -> Vec<RuleSetProfile> {
+fn gui_owned_rule_sets(items: &[RuleSetProfile]) -> Vec<RuleSetSummary> {
     items
         .iter()
         .filter(|item| !is_subscription_managed_rule_set(item))
-        .cloned()
+        .map(RuleSetSummary::from)
         .collect()
+}
+
+pub(crate) fn managed_subscription_rule_set_count(
+    state: &AppState,
+    subscription_id: &str,
+) -> AppResult<usize> {
+    let id_prefix = managed_rule_set_id_prefix(subscription_id);
+    Ok(lock(state.rule_sets(), "rule_set")?
+        .iter()
+        .filter(|item| {
+            item.managed_by_subscription_id.as_deref() == Some(subscription_id)
+                || item.id.starts_with(&id_prefix)
+        })
+        .count())
+}
+
+pub(crate) fn remove_managed_subscription_rule_sets(
+    state: &AppState,
+    subscription_id: &str,
+) -> AppResult<usize> {
+    let id_prefix = managed_rule_set_id_prefix(subscription_id);
+    let mut items = lock(state.rule_sets(), "rule_set")?;
+    let mut next = items.clone();
+    let before = next.len();
+    next.retain(|item| {
+        item.managed_by_subscription_id.as_deref() != Some(subscription_id)
+            && !item.id.starts_with(&id_prefix)
+    });
+    let removed = before.saturating_sub(next.len());
+    if removed == 0 {
+        return Ok(0);
+    }
+    // Immutable ZRS generations are retained until a later garbage-collection
+    // pass because a running kernel may still have one memory-mapped.
+    domain_store::save_rule_sets(&next)?;
+    *items = next;
+    Ok(removed)
+}
+
+pub(crate) fn compact_source_managed_semantics(items: &mut [RuleSetProfile]) -> bool {
+    let mut changed = false;
+    for item in items {
+        if item.managed_by_subscription_id.is_none() && item.source.is_none() {
+            continue;
+        }
+        let compact = empty_semantic_ir(&item.name);
+        if item.semantic_ir != compact {
+            item.semantic_ir = compact;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn managed_rule_set_id(prefix: &str, tag: &str) -> String {
@@ -678,15 +751,6 @@ struct FetchedResource {
 fn resource_text(resource: &FetchedResource) -> AppResult<&str> {
     std::str::from_utf8(&resource.bytes).map_err(|error| {
         AppError::invalid_argument(format!("rule source is not valid UTF-8: {error}"))
-    })
-}
-
-fn opaque_zrs_semantic_ir(display_name: &str) -> Value {
-    json!({
-        "version": 1,
-        "name": display_name,
-        "rules": [],
-        "managedOpaqueZrs": true
     })
 }
 
@@ -1341,6 +1405,56 @@ mod tests {
     }
 
     #[test]
+    fn rule_list_summary_never_serializes_semantic_rules() {
+        let mut profile = scheduled_profile();
+        profile.source = None;
+        profile.semantic_ir = json!({
+            "version": 1,
+            "name": "Large local asset",
+            "rules": [
+                {"type":"domain_exact","value":"one.example"},
+                {"type":"domain_exact","value":"two.example"}
+            ]
+        });
+
+        let summary = RuleSetSummary::from(&profile);
+        let value = serde_json::to_value(summary).unwrap();
+
+        assert_eq!(value["editableRuleCount"], 2);
+        assert!(value.get("semanticIr").is_none());
+    }
+
+    #[test]
+    fn startup_compaction_discards_source_managed_semantic_arrays_only() {
+        let mut source_managed = scheduled_profile();
+        source_managed.semantic_ir = json!({
+            "version": 1,
+            "name": "External",
+            "rules": [{"type":"domain_exact","value":"large.example"}]
+        });
+        let mut local = scheduled_profile();
+        local.id = "local".into();
+        local.source = None;
+        local.semantic_ir = json!({
+            "version": 1,
+            "name": "Local",
+            "rules": [{"type":"domain_exact","value":"keep.example"}]
+        });
+
+        let mut profiles = vec![source_managed, local];
+        assert!(compact_source_managed_semantics(&mut profiles));
+        assert_eq!(
+            profiles[0].semantic_ir["rules"].as_array().unwrap().len(),
+            0
+        );
+        assert_eq!(
+            profiles[1].semantic_ir["rules"].as_array().unwrap().len(),
+            1
+        );
+        assert!(!compact_source_managed_semantics(&mut profiles));
+    }
+
+    #[test]
     fn managed_provider_failure_reuses_last_verified_artifact() {
         let mut previous = scheduled_profile();
         previous.managed_by_subscription_id = Some("subscription-1".into());
@@ -1382,6 +1496,10 @@ mod tests {
         assert!(failures[0].used_previous_artifact);
         assert_eq!(prepared[0].source.as_ref().unwrap().url, source.url);
         assert_eq!(prepared[0].last_error.as_deref(), Some("404 Not Found"));
+        assert!(prepared[0].semantic_ir["rules"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -205,7 +205,7 @@ assert.ok(
     overviewTab.includes('class="lite-proxy-segment"') &&
     overviewTab.includes('class="lite-power-orbit"') &&
     overviewTab.includes('class="lite-traffic-ring"') &&
-    overviewTab.includes('onclick={() => proxyEnabled ? guiState.disconnect() : guiState.connect()}') &&
+    overviewTab.includes('onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}') &&
     !overviewTab.includes('class="lite-chart"'),
   'Lite Overview should keep the graphical power surface, mode selector, and narrow subscription source chooser',
 );

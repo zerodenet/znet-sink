@@ -53,6 +53,13 @@ pub fn timeout_from_options(options: Option<&CoreIpcOptions>) -> AppResult<Durat
     Ok(Duration::from_millis(timeout_ms))
 }
 
+pub(crate) fn response_timeout_from_options(
+    options: Option<&CoreIpcOptions>,
+    minimum: Option<Duration>,
+) -> AppResult<Duration> {
+    Ok(timeout_from_options(options)?.max(minimum.unwrap_or_default()))
+}
+
 /// Send a bare `ping` frame.
 pub async fn ping(options: Option<CoreIpcOptions>) -> AppResult<CoreCallResult> {
     request(json!({ "type": "ping" }), options).await
@@ -76,6 +83,17 @@ pub async fn command(
     params: Option<Value>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
+    command_with_response_timeout(method, params, options, None).await
+}
+
+/// Adapters may give slow mutations more time without extending transport
+/// connection/subscribe deadlines or the deadlines of unrelated queries.
+pub(crate) async fn command_with_response_timeout(
+    method: String,
+    params: Option<Value>,
+    options: Option<CoreIpcOptions>,
+    minimum_response_timeout: Option<Duration>,
+) -> AppResult<CoreCallResult> {
     if method.trim().is_empty() {
         return Err(AppError::invalid_argument(
             "command method must not be empty",
@@ -89,21 +107,32 @@ pub async fn command(
         ));
     }
 
-    request(
+    request_with_response_timeout(
         json!({
             "type": "command",
             "method": method,
             "params": params,
         }),
         options,
+        minimum_response_timeout,
     )
     .await
 }
 
 /// Send a raw IPC frame and return the response.
 pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult<CoreCallResult> {
+    request_with_response_timeout(frame, options, None).await
+}
+
+async fn request_with_response_timeout(
+    frame: Value,
+    options: Option<CoreIpcOptions>,
+    minimum_response_timeout: Option<Duration>,
+) -> AppResult<CoreCallResult> {
     let endpoint = endpoint_from_options(options.as_ref())?;
     let timeout = timeout_from_options(options.as_ref())?;
+    let response_timeout =
+        response_timeout_from_options(options.as_ref(), minimum_response_timeout)?;
     let (frame_value, request_id) = ensure_request_id(frame)?;
     let frame_type = frame_type_for_debug(&frame_value);
     // Capture outgoing frame
@@ -136,7 +165,9 @@ pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult
 
     // Send the request and await its response over the multiplexed connection.
     let t0 = std::time::Instant::now();
-    let raw_response = conn.request(frame_bytes, request_id_str, timeout).await;
+    let raw_response = conn
+        .request(frame_bytes, request_id_str, response_timeout)
+        .await;
     let elapsed = t0.elapsed().as_millis() as u64;
 
     // Verify the echoed request id matches (defends against response

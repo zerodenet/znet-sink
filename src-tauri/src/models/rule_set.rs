@@ -30,6 +30,51 @@ pub struct RuleSetProfile {
     pub last_error: Option<String>,
 }
 
+/// Lightweight list projection. Large source-managed rule arrays never cross
+/// the Tauri IPC boundary; callers fetch a full profile only for small local
+/// rule sets that can be edited safely.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSetSummary {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub built_in: bool,
+    pub provenance: Option<RuleSetProvenance>,
+    pub common_binding: Option<CommonRuleBinding>,
+    pub editable_rule_count: usize,
+    pub source: Option<RuleSetSource>,
+    pub source_state: RuleSetSourceState,
+    pub artifact: Option<ZrsArtifact>,
+    pub updated_at_unix_ms: u64,
+    pub last_sync_at_unix_ms: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+impl From<&RuleSetProfile> for RuleSetSummary {
+    fn from(profile: &RuleSetProfile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            enabled: profile.enabled,
+            built_in: profile.built_in,
+            provenance: profile.provenance.clone(),
+            common_binding: profile.common_binding.clone(),
+            editable_rule_count: profile
+                .semantic_ir
+                .get("rules")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len),
+            source: profile.source.clone(),
+            source_state: profile.source_state.clone(),
+            artifact: profile.artifact.clone(),
+            updated_at_unix_ms: profile.updated_at_unix_ms,
+            last_sync_at_unix_ms: profile.last_sync_at_unix_ms,
+            last_error: profile.last_error.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CommonRuleAction {

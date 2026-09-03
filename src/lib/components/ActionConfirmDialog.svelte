@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isNestedOverlayEvent } from '$lib/services/overlay-keyboard';
   import { tick } from 'svelte';
   import { AlertTriangle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
@@ -57,6 +58,7 @@
       : null;
 
     function handleKeydown(event: KeyboardEvent) {
+      if (isNestedOverlayEvent(event)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         close();
@@ -95,10 +97,10 @@
 {#if open}
   <div
     use:portal
-    class="fixed inset-0 z-[100] flex items-center justify-center p-4"
+    class="fixed inset-0 z-[var(--layer-dialog)] flex items-center justify-center p-4"
     role="presentation"
   >
-    <button
+    <button data-slot="surface-button"
       type="button"
       class="absolute inset-0 size-full border-0 bg-black/35 backdrop-blur-[1px]"
       aria-label="取消操作"

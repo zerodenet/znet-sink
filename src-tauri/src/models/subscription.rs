@@ -58,6 +58,30 @@ pub struct SubscriptionUpsert {
     pub user_agent: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionRemovalPreview {
+    pub subscription_id: String,
+    pub target_proxy_config: Option<SubscriptionRemovalTarget>,
+    pub managed_rule_set_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionRemovalTarget {
+    pub id: String,
+    pub name: String,
+    pub active: bool,
+    pub shared_by_subscription_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionRemovalOutcome {
+    pub removed_proxy_config: bool,
+    pub removed_managed_rule_set_count: usize,
+}
+
 /// Fields that a sync operation may refresh on the stored profile.
 /// Kept as a separate struct so the command/service layers stay
 /// decoupled from the full `SubscriptionProfile` shape.
