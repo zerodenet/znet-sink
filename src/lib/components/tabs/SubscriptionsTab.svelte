@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
   import { LayoutGrid, List } from '@lucide/svelte';
   import { getAppErrorMessage, handleAppError } from '$lib/services/core';
@@ -6,6 +7,7 @@
     listSubscriptions,
     syncSubscription,
     removeSubscription,
+    getSubscriptionRemovalPreview,
     upsertSubscription,
     listProxyConfigs,
     syncAllSubscriptions,
@@ -21,6 +23,7 @@
     SubscriptionProfile,
     SubscriptionUpsert,
     ProxyConfigProfile,
+    SubscriptionRemovalPreview,
   } from '$lib/types/domain';
 
   const FORMAT_OPTIONS = [
@@ -66,6 +69,9 @@
   let formError = $state<string | null>(null);
   let removingId = $state<string | null>(null);
   let deleteTarget = $state<SubscriptionProfile | null>(null);
+  let deletePreview = $state<SubscriptionRemovalPreview | null>(null);
+  let deletePreviewLoading = $state(false);
+  let removeAssociatedConfig = $state(false);
   let editingId = $state<string | null>(null);
   let searchQuery = $state('');
   let viewMode = $state<ViewMode>('list');
@@ -204,14 +210,26 @@
     }
   }
 
-  function requestRemove(sub: SubscriptionProfile) {
+  async function requestRemove(sub: SubscriptionProfile) {
     if (busy) return;
     deleteTarget = sub;
+    deletePreview = null;
+    removeAssociatedConfig = false;
+    deletePreviewLoading = true;
+    try {
+      deletePreview = await getSubscriptionRemovalPreview(sub.id);
+    } catch (cause) {
+      handleAppError(cause, '读取订阅关联项失败');
+    } finally {
+      deletePreviewLoading = false;
+    }
   }
 
   function closeDelete() {
     if (removingId !== null) return;
     deleteTarget = null;
+    deletePreview = null;
+    removeAssociatedConfig = false;
   }
 
   async function handleRemove() {
@@ -219,10 +237,11 @@
     const target = deleteTarget;
     removingId = target.id;
     try {
-      await removeSubscription(target.id);
+      const outcome = await removeSubscription(target.id, removeAssociatedConfig);
       deleteTarget = null;
+      deletePreview = null;
       await refresh(false);
-      toast.success('订阅已删除');
+      toast.success(outcome.removedProxyConfig ? '订阅及关联配置已删除' : '订阅已删除');
     } catch (e) {
       handleAppError(e, '删除订阅失败');
     } finally {
@@ -388,10 +407,10 @@
         </SegmentedControl.Root>
       {/if}
       {#if subscriptions.length > 0}
-        <input bind:value={searchQuery} placeholder="搜索…" class="search-input" />
+        <Input bind:value={searchQuery} placeholder="搜索…" class="w-[180px] max-w-full" />
       {/if}
       {#if subscriptions.length > 0}
-        <button class="action-btn" onclick={handleSyncAll} disabled={busy}>
+        <Button variant="outline" size="sm"  onclick={handleSyncAll} disabled={busy}>
           {#if syncingAll}
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="spin">
               <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
@@ -403,14 +422,14 @@
             </svg>
             同步全部
           {/if}
-        </button>
+        </Button>
       {/if}
-      <button class="action-btn primary" onclick={openCreate} disabled={loading || busy}>
+      <Button variant="default" size="sm"  onclick={openCreate} disabled={loading || busy}>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
         </svg>
         新增
-      </button>
+      </Button>
     </div>
   </div>
 
@@ -421,7 +440,7 @@
       <div class="empty-stack error-stack">
         <span>订阅列表加载失败</span>
         <span class="empty-hint">{loadError}</span>
-        <button class="action-btn" onclick={() => refresh()}>重试</button>
+        <Button variant="outline" size="sm"  onclick={() => refresh()}>重试</Button>
       </div>
     </div>
   {:else if subscriptions.length === 0 && !showForm}
@@ -515,8 +534,8 @@
           </div>
 
           <div class="row-actions">
-            <button
-              class="row-action sync-btn"
+            <Button variant="ghost" size="icon-sm"
+
               onclick={(e: MouseEvent) => { e.stopPropagation(); handleSync(sub.id); }}
               disabled={busy || !sub.enabled}
               title="同步订阅"
@@ -529,9 +548,9 @@
               >
                 <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
               </svg>
-            </button>
-            <button
-              class="row-action edit-btn"
+            </Button>
+            <Button variant="ghost" size="icon-sm"
+
               onclick={(e: MouseEvent) => { e.stopPropagation(); openEdit(sub); }}
               disabled={busy}
               title="编辑订阅"
@@ -540,9 +559,9 @@
               <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M8.5 1.5l2 2L4 10H2V8z"/>
               </svg>
-            </button>
-            <button
-              class="row-action del-btn"
+            </Button>
+            <Button variant="destructive" size="icon-sm"
+
               onclick={(e: MouseEvent) => { e.stopPropagation(); requestRemove(sub); }}
               disabled={busy}
               title="删除订阅"
@@ -551,7 +570,7 @@
               <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
                 <path d="M2 3h8M4.5 3V2h3v1M3 3l.5 7h5L9 3"/>
               </svg>
-            </button>
+            </Button>
           </div>
         </div>
       {/each}
@@ -693,18 +712,58 @@
   <Dialog.Content class="sm:max-w-[440px]" showCloseButton={removingId === null}>
     <Dialog.Header>
       <Dialog.Title>删除订阅</Dialog.Title>
-      <Dialog.Description>关联的代理配置会被保留，删除不会中断当前内核配置。</Dialog.Description>
+      <Dialog.Description>选择是否保留该订阅当前关联的代理配置。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body>
       {#if deleteTarget}
         <div class="form-error-box" role="alert">
           确认删除“{deleteTarget.name}”吗？此操作无法从应用内撤销。
         </div>
+        {#if deletePreviewLoading}
+          <div class="delete-option-loading">正在读取关联项…</div>
+        {:else if deletePreview?.targetProxyConfig}
+          {@const target = deletePreview.targetProxyConfig}
+          <div class="delete-options">
+            <label class="delete-option">
+              <Choice class="mt-0.5"
+                type="radio"
+                name="subscription-delete-mode"
+                checked={!removeAssociatedConfig}
+                onchange={() => (removeAssociatedConfig = false)}
+              />
+              <span>
+                <strong>仅删除订阅</strong>
+                <small>保留代理配置“{target.name}”及其规则制品</small>
+              </span>
+            </label>
+            <label class="delete-option" class:disabled={target.sharedBySubscriptionCount > 0}>
+              <Choice class="mt-0.5"
+                type="radio"
+                name="subscription-delete-mode"
+                checked={removeAssociatedConfig}
+                disabled={target.sharedBySubscriptionCount > 0}
+                onchange={() => (removeAssociatedConfig = true)}
+              />
+              <span>
+                <strong>同时删除关联配置</strong>
+                <small>
+                  {#if target.sharedBySubscriptionCount > 0}
+                    仍被 {target.sharedBySubscriptionCount} 个其他订阅使用，不能删除
+                  {:else if target.active}
+                    当前正在使用；删除后将切换到其他配置，没有可用配置时会停止内核
+                  {:else}
+                    同时清理 {deletePreview.managedRuleSetCount} 个订阅规则记录
+                  {/if}
+                </small>
+              </span>
+            </label>
+          </div>
+        {/if}
       {/if}
     </Dialog.Body>
     <Dialog.Footer>
       <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
-      <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
+      <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null || deletePreviewLoading}>
         {removingId !== null ? '删除中…' : '确认删除'}
       </Button>
     </Dialog.Footer>
@@ -725,28 +784,13 @@
   .panel-title { font-size: 13px; font-weight: 600; color: var(--foreground); letter-spacing: -0.01em; }
   .panel-subtitle { font-size: 10.5px; color: var(--muted-foreground); opacity: 0.8; }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  .search-input {
-    width: 130px; height: var(--control-height); padding: 0 9px; border-radius: var(--control-radius);
-    border: 1px solid var(--input); background: var(--background); color: var(--foreground); font-size: 12px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); outline: none;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, width 0.15s ease;
-  }
-  .search-input:focus { border-color: var(--ring); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent); width: 170px; }
+
   .panel-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted-foreground); }
   .empty-stack { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .empty-icon { opacity: 0.3; }
   .empty-hint { font-size: 11px; opacity: 0.7; }
   .error-stack { color: var(--destructive); max-width: 440px; text-align: center; }
-  .action-btn {
-    display: inline-flex; align-items: center; gap: 5px; height: var(--control-height); padding: 0 10px;
-    border-radius: var(--control-radius); font-size: 12px; font-weight: 500; background: var(--background);
-    color: var(--foreground); border: 1px solid var(--input); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    cursor: pointer; transition: background 0.12s ease;
-  }
-  .action-btn:hover { background: var(--muted); }
-  .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .action-btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
-  .action-btn.primary:hover { opacity: 0.9; }
+
   .list-scroll { flex: 1; overflow-y: auto; padding: 5px; display: flex; flex-direction: column; gap: 1px; min-height: 0; }
   .list-scroll.card-view { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: 10px; padding: 10px; }
   .list-row { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; border-radius: 8px; border: 1px solid transparent; transition: background 0.12s ease, border-color 0.12s ease; }
@@ -785,11 +829,7 @@
   .row-error { font-size: 10.5px; color: var(--destructive); opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; opacity: 0.35; transition: opacity 0.12s ease; }
   .list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }
-  .row-action { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; background: transparent; border: none; cursor: pointer; color: var(--muted-foreground); transition: background 0.12s ease, color 0.12s ease; }
-  .row-action.sync-btn:hover { background: rgba(34, 197, 94, 0.12); color: var(--success); }
-  .row-action.edit-btn:hover { background: rgba(99, 102, 241, 0.12); color: var(--primary); }
-  .row-action.del-btn:hover { background: rgba(239, 68, 68, 0.1); color: var(--destructive); }
-  .row-action:disabled { opacity: 0.35; cursor: not-allowed; }
+
   .spin { animation: spin 0.8s linear infinite; }
 
   .subscription-form { display: grid; min-height: 0; max-height: calc(100dvh - 2rem); grid-template-rows: auto minmax(0, 1fr) auto; }
@@ -801,14 +841,22 @@
   .form-error { color: var(--destructive); font-size: 10.5px; }
   .switch-row { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 9px; border: 1px solid var(--input); border-radius: var(--control-radius); background: var(--background); color: var(--muted-foreground); font-size: 11.5px; }
   .form-error-box { padding: 9px 11px; border: 1px solid rgba(239, 68, 68, 0.24); border-radius: 7px; background: rgba(239, 68, 68, 0.08); color: var(--destructive); font-size: 11.5px; line-height: 1.5; }
+  .delete-option-loading { padding: 12px 2px 2px; color: var(--muted-foreground); font-size: 11.5px; }
+  .delete-options { display: grid; gap: 8px; margin-top: 12px; }
+  .delete-option { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); cursor: pointer; }
+  .delete-option:has(:global([data-slot='choice']:checked)) { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); background: color-mix(in srgb, var(--primary) 6%, var(--background)); }
+  .delete-option.disabled { cursor: not-allowed; opacity: 0.55; }
+
+  .delete-option span { display: grid; gap: 3px; min-width: 0; }
+  .delete-option strong { font-size: 12px; font-weight: 600; }
+  .delete-option small { color: var(--muted-foreground); font-size: 10.5px; line-height: 1.45; }
 
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   @media (max-width: 700px) {
     .panel-header { align-items: flex-start; flex-direction: column; }
     .header-actions { width: 100%; flex-wrap: wrap; }
-    .search-input { flex: 1; min-width: 120px; }
-    .search-input:focus { width: auto; }
+
     .list-scroll.card-view { grid-template-columns: 1fr; }
     .form-grid { grid-template-columns: 1fr; }
   }

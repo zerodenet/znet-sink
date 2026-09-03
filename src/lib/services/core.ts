@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { warning } from './toast.svelte';
 import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo } from '$lib/types/core';
-import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
+import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
 import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiFakeIpClearInput, GuiFakeIpClearResult, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
@@ -268,6 +268,18 @@ export async function getAppConfig(): Promise<AppConfig> {
 
 export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig> {
   return invoke('app_config_update', { patch });
+}
+
+export async function applyTunSettings(tun: NonNullable<AppConfigPatch['tun']>): Promise<AppConfig> {
+  return invoke('app_config_apply_tun', { tun });
+}
+
+export async function exportClientKernelSettings(path: string): Promise<KernelSettingsExportResult> {
+  return invoke('app_config_export_kernel_settings', { path });
+}
+
+export async function importClientKernelSettings(path: string): Promise<AppConfig> {
+  return invoke('app_config_import_kernel_settings', { path });
 }
 
 // Logs

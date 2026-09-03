@@ -1,10 +1,12 @@
-use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
+
+pub const CLIENT_DNS_DETOUR_ROUTE_FINAL: &str = "$route_final";
 
 /// Lossless client-side representation of Zero's runtime DNS contract.
 /// Additive fields from a newer kernel are retained instead of silently lost.
@@ -139,13 +141,47 @@ impl ClientDnsServer {
                         "DNS server `{name}` requires a host"
                     )));
                 }
+                if host != host.trim() {
+                    return Err(AppError::invalid_argument(format!(
+                        "DNS server `{name}` host must not contain surrounding whitespace"
+                    )));
+                }
                 if *port == 0 {
                     return Err(AppError::invalid_argument(format!(
                         "DNS server `{name}` requires a non-zero port"
                     )));
                 }
+                if let Self::Doh { path, .. } = self {
+                    if !path.starts_with('/') {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` requires a DoH path starting with `/`"
+                        )));
+                    }
+                }
+                if let Some(detour) = self.detour() {
+                    if detour.trim().is_empty() {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` has an empty detour"
+                        )));
+                    }
+                    if matches!(self, Self::Doq { .. }) {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS server `{name}` cannot use a DoQ detour"
+                        )));
+                    }
+                }
                 Ok(())
             }
+        }
+    }
+
+    fn detour(&self) -> Option<&str> {
+        match self {
+            Self::System { .. } => None,
+            Self::Udp { detour, .. }
+            | Self::Doh { detour, .. }
+            | Self::Dot { detour, .. }
+            | Self::Doq { detour, .. } => detour.as_deref(),
         }
     }
 
@@ -224,6 +260,181 @@ pub enum ClientDnsAnswer {
 }
 
 impl ClientDnsConfig {
+    pub fn recommended_default() -> Self {
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "cloudflare".to_string(),
+            ClientDnsServer::Doh {
+                host: "cloudflare-dns.com".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                ],
+                server_name: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "google".to_string(),
+            ClientDnsServer::Doh {
+                host: "dns.google".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
+                ],
+                server_name: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "cloudflare-bootstrap".to_string(),
+            ClientDnsServer::Doh {
+                host: "cloudflare-dns.com".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                ],
+                server_name: None,
+                detour: None,
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert(
+            "google-bootstrap".to_string(),
+            ClientDnsServer::Doh {
+                host: "dns.google".to_string(),
+                port: 443,
+                path: "/dns-query".to_string(),
+                bootstrap: vec![
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                    IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
+                ],
+                server_name: None,
+                detour: None,
+                extra: BTreeMap::new(),
+            },
+        );
+        servers.insert("alidns".to_string(), recommended_alidns_server());
+        servers.insert("114dns".to_string(), recommended_114dns_server());
+        servers.insert(
+            "system".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+
+        Self {
+            servers,
+            default_server: "cloudflare".to_string(),
+            dispatch: Vec::new(),
+            cache: Some(ClientDnsCache {
+                max_entries: 1024,
+                max_ttl_seconds: None,
+                extra: BTreeMap::new(),
+            }),
+            reverse_mapping: None,
+            answer: ClientDnsAnswer::Real,
+            policy: Some(ClientDnsPolicy {
+                timeout_ms: None,
+                server_timeout_ms: None,
+                fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
+                node_server: Some("system".to_string()),
+                node_fallback_servers: Some(vec![
+                    "cloudflare-bootstrap".to_string(),
+                    "google-bootstrap".to_string(),
+                ]),
+                direct_server: None,
+                direct_fallback_servers: None,
+                reject_address_cidrs: None,
+                address_family: Some(ClientDnsAddressFamilyPolicy::PreferIpv4),
+                extra: BTreeMap::new(),
+            }),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    /// Add the client-owned domestic resolver presets without changing any
+    /// dispatch or fallback order. Only configurations that still retain the
+    /// original recommended resolver scaffold are migrated; imported or
+    /// user-replaced server definitions remain authoritative.
+    pub fn migrate_missing_builtin_domestic_resolvers(&mut self) -> bool {
+        let recommended = Self::recommended_default();
+        let retains_recommended_scaffold = [
+            "cloudflare",
+            "google",
+            "cloudflare-bootstrap",
+            "google-bootstrap",
+            "system",
+        ]
+        .iter()
+        .all(|tag| self.servers.get(*tag) == recommended.servers.get(*tag));
+        if !retains_recommended_scaffold {
+            return false;
+        }
+
+        let mut changed = false;
+        if !self.servers.contains_key("alidns") {
+            self.servers
+                .insert("alidns".to_string(), recommended_alidns_server());
+            changed = true;
+        }
+        if !self.servers.contains_key("114dns") {
+            self.servers
+                .insert("114dns".to_string(), recommended_114dns_server());
+            changed = true;
+        }
+        changed
+    }
+
+    /// Move only the previous built-in node-resolution policy to the safer
+    /// system-first order. Custom server definitions or policy orders are
+    /// deliberately left untouched.
+    pub fn migrate_legacy_recommended_node_resolution(&mut self) -> bool {
+        let legacy = Self::legacy_recommended_default();
+        let uses_builtin_servers = ["system", "cloudflare-bootstrap", "google-bootstrap"]
+            .into_iter()
+            .all(|tag| self.servers.get(tag) == legacy.servers.get(tag));
+        let uses_legacy_policy = self.policy.as_ref().is_some_and(|policy| {
+            policy.node_server.as_deref() == Some("cloudflare-bootstrap")
+                && policy.node_fallback_servers.as_deref()
+                    == Some(["google-bootstrap".to_string(), "system".to_string()].as_slice())
+        });
+        if !uses_builtin_servers || !uses_legacy_policy {
+            return false;
+        }
+
+        let policy = self
+            .policy
+            .as_mut()
+            .expect("legacy policy match requires DNS policy");
+        policy.node_server = Some("system".to_string());
+        policy.node_fallback_servers = Some(vec![
+            "cloudflare-bootstrap".to_string(),
+            "google-bootstrap".to_string(),
+        ]);
+        true
+    }
+
+    fn legacy_recommended_default() -> Self {
+        let mut config = Self::recommended_default();
+        let policy = config
+            .policy
+            .as_mut()
+            .expect("recommended DNS configuration has a policy");
+        policy.node_server = Some("cloudflare-bootstrap".to_string());
+        policy.node_fallback_servers =
+            Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
+        config
+    }
+
     pub fn validate_client_shape(&self) -> AppResult<()> {
         if self.servers.is_empty() {
             return Err(AppError::invalid_argument(
@@ -257,6 +468,163 @@ impl ClientDnsConfig {
                 )));
             }
         }
+        if let Some(policy) = &self.policy {
+            let ensure_server = |field: &str, name: &str| -> AppResult<()> {
+                if self.servers.contains_key(name) {
+                    Ok(())
+                } else {
+                    Err(AppError::invalid_argument(format!(
+                        "DNS policy {field} references undefined server `{name}`"
+                    )))
+                }
+            };
+            for (field, name) in [
+                ("node_server", policy.node_server.as_deref()),
+                ("direct_server", policy.direct_server.as_deref()),
+            ] {
+                if let Some(name) = name {
+                    ensure_server(field, name)?;
+                }
+            }
+            for (field, names) in [
+                ("fallback_servers", policy.fallback_servers.as_deref()),
+                (
+                    "node_fallback_servers",
+                    policy.node_fallback_servers.as_deref(),
+                ),
+                (
+                    "direct_fallback_servers",
+                    policy.direct_fallback_servers.as_deref(),
+                ),
+            ] {
+                for name in names.unwrap_or_default() {
+                    ensure_server(field, name)?;
+                }
+            }
+            let validate_fallbacks =
+                |field: &str, primary: Option<&str>, names: Option<&[String]>| -> AppResult<()> {
+                    let mut seen = BTreeSet::new();
+                    for name in names.unwrap_or_default() {
+                        if !seen.insert(name.as_str()) {
+                            return Err(AppError::invalid_argument(format!(
+                                "DNS policy {field} contains duplicate server `{name}`"
+                            )));
+                        }
+                        if primary == Some(name.as_str()) {
+                            return Err(AppError::invalid_argument(format!(
+                                "DNS policy {field} repeats primary server `{name}`"
+                            )));
+                        }
+                    }
+                    Ok(())
+                };
+            validate_fallbacks(
+                "fallback_servers",
+                Some(self.default_server.as_str()),
+                policy.fallback_servers.as_deref(),
+            )?;
+            if policy.node_server.is_none()
+                && policy
+                    .node_fallback_servers
+                    .as_ref()
+                    .is_some_and(|servers| !servers.is_empty())
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy node_fallback_servers requires node_server",
+                ));
+            }
+            validate_fallbacks(
+                "node_fallback_servers",
+                policy.node_server.as_deref(),
+                policy.node_fallback_servers.as_deref(),
+            )?;
+            if policy.direct_server.is_none()
+                && policy
+                    .direct_fallback_servers
+                    .as_ref()
+                    .is_some_and(|servers| !servers.is_empty())
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy direct_fallback_servers requires direct_server",
+                ));
+            }
+            validate_fallbacks(
+                "direct_fallback_servers",
+                policy.direct_server.as_deref(),
+                policy.direct_fallback_servers.as_deref(),
+            )?;
+            if policy
+                .timeout_ms
+                .is_some_and(|value| !(1..=120_000).contains(&value))
+            {
+                return Err(AppError::invalid_argument(
+                    "DNS policy timeout_ms must be between 1 and 120000",
+                ));
+            }
+            if let Some(timeouts) = &policy.server_timeout_ms {
+                for (name, timeout) in timeouts {
+                    ensure_server("server_timeout_ms", name)?;
+                    if !(1..=120_000).contains(timeout) {
+                        return Err(AppError::invalid_argument(format!(
+                            "DNS policy server_timeout_ms.{name} must be between 1 and 120000"
+                        )));
+                    }
+                }
+            }
+            for cidr in policy.reject_address_cidrs.as_deref().unwrap_or_default() {
+                parse_cidr(cidr, "DNS policy reject_address_cidrs")?;
+            }
+        }
+        let has_detour = self
+            .servers
+            .values()
+            .any(|server| server.detour().is_some());
+        if has_detour {
+            let policy = self.policy.as_ref().ok_or_else(|| {
+                AppError::invalid_argument(
+                    "DNS detours require policy.node_server to avoid recursive resolution",
+                )
+            })?;
+            let node_server = policy.node_server.as_deref().ok_or_else(|| {
+                AppError::invalid_argument(
+                    "DNS detours require policy.node_server to avoid recursive resolution",
+                )
+            })?;
+            for name in std::iter::once(node_server).chain(
+                policy
+                    .node_fallback_servers
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(String::as_str),
+            ) {
+                if self
+                    .servers
+                    .get(name)
+                    .is_some_and(|server| server.detour().is_some())
+                {
+                    return Err(AppError::invalid_argument(format!(
+                        "DNS node server `{name}` must not use a detour"
+                    )));
+                }
+            }
+        }
+        if self.cache.as_ref().is_some_and(|cache| {
+            cache.max_entries == 0 || cache.max_ttl_seconds.is_some_and(|ttl| ttl == 0)
+        }) {
+            return Err(AppError::invalid_argument(
+                "DNS cache limits must be greater than zero",
+            ));
+        }
+        if self.reverse_mapping.as_ref().is_some_and(|mapping| {
+            mapping.max_entries == 0
+                || mapping.max_domains_per_address < 2
+                || mapping.max_ttl_seconds == 0
+        }) {
+            return Err(AppError::invalid_argument(
+                "DNS reverse_mapping requires positive limits and at least two domains per address",
+            ));
+        }
         if let ClientDnsAnswer::FakeIp {
             cidr,
             ipv6_cidr,
@@ -265,24 +633,66 @@ impl ClientDnsConfig {
             ..
         } = &self.answer
         {
-            if !cidr.contains('/') {
+            let (address, prefix) = parse_cidr(cidr, "Fake-IP CIDR")?;
+            if !address.is_ipv4() {
                 return Err(AppError::invalid_argument(
-                    "Fake-IP CIDR must use CIDR notation",
+                    "Fake-IP CIDR must be an IPv4 CIDR",
                 ));
             }
-            if ipv6_cidr
-                .as_ref()
-                .is_some_and(|cidr| !cidr.contains('/') || !cidr.contains(':'))
+            if prefix > 30 {
+                return Err(AppError::invalid_argument(
+                    "Fake-IP CIDR must provide at least four addresses (maximum prefix /30)",
+                ));
+            }
+            let usable_ipv4 = usable_ipv4_addresses(prefix);
+            let usable_ipv6 = ipv6_cidr
+                .as_deref()
+                .map(|cidr| {
+                    let (address, prefix) = parse_cidr(cidr, "Fake-IPv6 CIDR")?;
+                    if !address.is_ipv6() {
+                        return Err(AppError::invalid_argument(
+                            "Fake-IPv6 CIDR must be an IPv6 CIDR",
+                        ));
+                    }
+                    if prefix > 126 {
+                        return Err(AppError::invalid_argument(
+                            "Fake-IPv6 CIDR must provide at least four addresses (maximum prefix /126)",
+                        ));
+                    }
+                    Ok(usable_ipv6_addresses(prefix))
+                })
+                .transpose()?;
+            let usable_addresses = usable_ipv6.map_or(usable_ipv4, |value| value.min(usable_ipv4));
+            if *ttl_seconds == 0
+                || max_entries.is_some_and(|entries| entries == 0 || entries > usable_addresses)
             {
                 return Err(AppError::invalid_argument(
-                    "Fake-IPv6 CIDR must use IPv6 CIDR notation",
+                    "Fake-IP TTL must be positive and max entries must fit the configured address pools",
                 ));
             }
-            if *ttl_seconds == 0 || max_entries.is_some_and(|entries| entries == 0) {
-                return Err(AppError::invalid_argument(
-                    "Fake-IP TTL and max entries must be greater than zero",
-                ));
-            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_tun_owned_addresses(&self, addresses: &[IpAddr]) -> AppResult<()> {
+        let ClientDnsAnswer::FakeIp {
+            cidr, ipv6_cidr, ..
+        } = &self.answer
+        else {
+            return Ok(());
+        };
+        let ipv4 = parse_cidr(cidr, "Fake-IP CIDR")?;
+        let ipv6 = ipv6_cidr
+            .as_deref()
+            .map(|cidr| parse_cidr(cidr, "Fake-IPv6 CIDR"))
+            .transpose()?;
+        if let Some(address) = addresses.iter().find(|address| {
+            cidr_contains(ipv4, **address)
+                || ipv6.is_some_and(|network| cidr_contains(network, **address))
+        }) {
+            return Err(AppError::invalid_argument(format!(
+                "Fake-IP pool overlaps TUN-owned address `{address}`"
+            )));
         }
         Ok(())
     }
@@ -318,6 +728,88 @@ impl ClientDnsConfig {
             }
         }
         Ok(())
+    }
+}
+
+fn recommended_alidns_server() -> ClientDnsServer {
+    ClientDnsServer::Doh {
+        host: "dns.alidns.com".to_string(),
+        port: 443,
+        path: "/dns-query".to_string(),
+        bootstrap: vec![
+            IpAddr::V4(Ipv4Addr::new(223, 5, 5, 5)),
+            IpAddr::V4(Ipv4Addr::new(223, 6, 6, 6)),
+        ],
+        server_name: None,
+        // Domestic CDN selection must observe the user's physical egress,
+        // rather than whichever proxy node is selected as route.final.
+        detour: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn recommended_114dns_server() -> ClientDnsServer {
+    ClientDnsServer::Udp {
+        host: "114.114.114.114".to_string(),
+        port: 53,
+        bootstrap: Vec::new(),
+        detour: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn parse_cidr(value: &str, field: &str) -> AppResult<(IpAddr, u8)> {
+    let (address, prefix) = value
+        .trim()
+        .split_once('/')
+        .ok_or_else(|| AppError::invalid_argument(format!("{field} must use CIDR notation")))?;
+    let address = address.parse::<IpAddr>().map_err(|_| {
+        AppError::invalid_argument(format!("{field} contains an invalid IP address"))
+    })?;
+    let prefix = prefix
+        .parse::<u8>()
+        .map_err(|_| AppError::invalid_argument(format!("{field} contains an invalid prefix")))?;
+    let maximum = if address.is_ipv4() { 32 } else { 128 };
+    if prefix > maximum {
+        return Err(AppError::invalid_argument(format!(
+            "{field} prefix must be between 0 and {maximum}"
+        )));
+    }
+    Ok((address, prefix))
+}
+
+fn usable_ipv4_addresses(prefix: u8) -> usize {
+    ((1_u128 << (32 - prefix)) - 2).min(usize::MAX as u128) as usize
+}
+
+fn usable_ipv6_addresses(prefix: u8) -> usize {
+    let host_bits = 128 - prefix;
+    if u32::from(host_bits) >= usize::BITS {
+        usize::MAX
+    } else {
+        1_usize << host_bits
+    }
+}
+
+fn cidr_contains((network, prefix): (IpAddr, u8), address: IpAddr) -> bool {
+    match (network, address) {
+        (IpAddr::V4(network), IpAddr::V4(address)) => {
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            u32::from(network) & mask == u32::from(address) & mask
+        }
+        (IpAddr::V6(network), IpAddr::V6(address)) => {
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            u128::from(network) & mask == u128::from(address) & mask
+        }
+        _ => false,
     }
 }
 
@@ -453,5 +945,238 @@ mod tests {
         }))
         .unwrap();
         assert!(model.validate_client_shape().is_err());
+    }
+
+    #[test]
+    fn dns_contract_rejects_recursive_or_unsupported_detours_before_runtime() {
+        for value in [
+            json!({
+                "servers": {
+                    "proxy": {
+                        "type": "doh", "host": "dns.example", "path": "/dns-query",
+                        "bootstrap": ["1.1.1.1"], "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy"
+            }),
+            json!({
+                "servers": {
+                    "proxy": {
+                        "type": "doh", "host": "dns.example", "path": "/dns-query",
+                        "bootstrap": ["1.1.1.1"], "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy",
+                "policy": { "node_server": "proxy" }
+            }),
+            json!({
+                "servers": {
+                    "bootstrap": { "type": "system" },
+                    "proxy": {
+                        "type": "doq", "host": "dns.example", "bootstrap": ["1.1.1.1"],
+                        "detour": "$route_final"
+                    }
+                },
+                "default_server": "proxy",
+                "policy": { "node_server": "bootstrap" }
+            }),
+        ] {
+            let model: ClientDnsConfig = serde_json::from_value(value).unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn dns_contract_rejects_invalid_fallbacks_and_timeouts_before_runtime() {
+        for policy in [
+            json!({ "fallback_servers": ["secondary", "secondary"] }),
+            json!({ "fallback_servers": ["primary"] }),
+            json!({ "node_fallback_servers": ["secondary"] }),
+            json!({ "direct_server": "primary", "direct_fallback_servers": ["primary"] }),
+            json!({ "timeout_ms": 0 }),
+            json!({ "server_timeout_ms": { "primary": 120001 } }),
+        ] {
+            let model: ClientDnsConfig = serde_json::from_value(json!({
+                "servers": {
+                    "primary": { "type": "system" },
+                    "secondary": { "type": "udp", "host": "1.1.1.1" }
+                },
+                "default_server": "primary",
+                "policy": policy
+            }))
+            .unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn dns_contract_rejects_invalid_policy_and_fake_ip_cidrs() {
+        let invalid_policy: ClientDnsConfig = serde_json::from_value(json!({
+            "servers": { "system": { "type": "system" } },
+            "default_server": "system",
+            "policy": { "reject_address_cidrs": ["not-a-cidr"] }
+        }))
+        .unwrap();
+        assert!(invalid_policy.validate_client_shape().is_err());
+
+        for answer in [
+            json!({ "type": "fake_ip", "cidr": "fd00::/96" }),
+            json!({ "type": "fake_ip", "cidr": "198.18.0.0/31" }),
+            json!({ "type": "fake_ip", "cidr": "198.18.0.0/30", "max_entries": 3 }),
+            json!({
+                "type": "fake_ip",
+                "cidr": "198.18.0.0/15",
+                "ipv6_cidr": "198.19.0.0/16"
+            }),
+        ] {
+            let model: ClientDnsConfig = serde_json::from_value(json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system",
+                "answer": answer
+            }))
+            .unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn fake_ip_pool_rejects_tun_owned_addresses() {
+        let model: ClientDnsConfig = serde_json::from_value(json!({
+            "servers": { "system": { "type": "system" } },
+            "default_server": "system",
+            "answer": { "type": "fake_ip", "cidr": "10.66.0.0/24" }
+        }))
+        .unwrap();
+
+        assert!(model
+            .validate_tun_owned_addresses(&["10.66.0.1".parse().unwrap()])
+            .is_err());
+        assert!(model
+            .validate_tun_owned_addresses(&["10.67.0.1".parse().unwrap()])
+            .is_ok());
+    }
+
+    #[test]
+    fn dns_contract_rejects_zero_cache_and_reverse_mapping_limits() {
+        for extra in [
+            json!({ "cache": { "max_entries": 0 } }),
+            json!({
+                "reverse_mapping": {
+                    "max_entries": 1,
+                    "max_domains_per_address": 1,
+                    "max_ttl_seconds": 300
+                }
+            }),
+        ] {
+            let mut value = json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system"
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let model: ClientDnsConfig = serde_json::from_value(value).unwrap();
+            assert!(model.validate_client_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn recommended_default_uses_public_dns_with_system_as_final_fallback() {
+        let model = ClientDnsConfig::recommended_default();
+        model.validate_client_shape().unwrap();
+        let value = serde_json::to_value(model).unwrap();
+
+        assert_eq!(value["default_server"], "cloudflare");
+        assert_eq!(
+            value["servers"]["cloudflare"]["detour"],
+            CLIENT_DNS_DETOUR_ROUTE_FINAL
+        );
+        assert_eq!(
+            value["servers"]["google"]["detour"],
+            CLIENT_DNS_DETOUR_ROUTE_FINAL
+        );
+        assert_eq!(
+            value["policy"]["fallback_servers"],
+            json!(["google", "system"])
+        );
+        assert_eq!(value["policy"]["node_server"], "system");
+        assert_eq!(
+            value["policy"]["node_fallback_servers"],
+            json!(["cloudflare-bootstrap", "google-bootstrap"])
+        );
+        assert!(value["servers"]["cloudflare-bootstrap"]
+            .get("detour")
+            .is_none());
+        assert!(value["servers"]["google-bootstrap"].get("detour").is_none());
+        assert_eq!(value["servers"]["alidns"]["type"], "doh");
+        assert_eq!(value["servers"]["alidns"]["host"], "dns.alidns.com");
+        assert_eq!(
+            value["servers"]["alidns"]["bootstrap"],
+            json!(["223.5.5.5", "223.6.6.6"])
+        );
+        assert!(value["servers"]["alidns"].get("detour").is_none());
+        assert_eq!(value["servers"]["114dns"]["type"], "udp");
+        assert_eq!(value["servers"]["114dns"]["host"], "114.114.114.114");
+        assert!(value["servers"]["114dns"].get("detour").is_none());
+    }
+
+    #[test]
+    fn domestic_resolver_migration_is_additive_and_preserves_custom_servers() {
+        let mut previous = ClientDnsConfig::recommended_default();
+        previous.servers.remove("alidns");
+        previous.servers.remove("114dns");
+
+        assert!(previous.migrate_missing_builtin_domestic_resolvers());
+        assert!(previous.servers.contains_key("alidns"));
+        assert!(previous.servers.contains_key("114dns"));
+        assert!(!previous.migrate_missing_builtin_domestic_resolvers());
+
+        let mut custom = previous.clone();
+        custom.servers.remove("alidns");
+        custom.servers.insert(
+            "cloudflare".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+        assert!(!custom.migrate_missing_builtin_domestic_resolvers());
+        assert!(!custom.servers.contains_key("alidns"));
+    }
+
+    #[test]
+    fn legacy_recommended_node_resolution_migrates_without_overwriting_custom_policy() {
+        let mut legacy = ClientDnsConfig::legacy_recommended_default();
+        assert!(legacy.migrate_legacy_recommended_node_resolution());
+        let policy = legacy.policy.as_ref().unwrap();
+        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(
+            policy.node_fallback_servers.as_deref(),
+            Some(
+                [
+                    "cloudflare-bootstrap".to_string(),
+                    "google-bootstrap".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert!(!legacy.migrate_legacy_recommended_node_resolution());
+
+        let mut custom = ClientDnsConfig::legacy_recommended_default();
+        custom.policy.as_mut().unwrap().node_fallback_servers = Some(vec!["system".to_string()]);
+        assert!(!custom.migrate_legacy_recommended_node_resolution());
+        assert_eq!(
+            custom.policy.unwrap().node_fallback_servers,
+            Some(vec!["system".to_string()])
+        );
+
+        let mut custom_server = ClientDnsConfig::legacy_recommended_default();
+        custom_server.servers.insert(
+            "cloudflare-bootstrap".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
+        assert!(!custom_server.migrate_legacy_recommended_node_resolution());
     }
 }

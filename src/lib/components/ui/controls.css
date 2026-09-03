@@ -1,0 +1,97 @@
+/* Shared by every window and theme. Page CSS owns layout, not native chrome. */
+button[data-slot='surface-button']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+button[data-slot='surface-button']:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@layer base {
+  :where(button, input, textarea) {
+    font-family: inherit;
+  }
+
+  :where(button, input:not([type='checkbox']):not([type='radio']), textarea) {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  :where(button):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  :where(button):disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+@layer components {
+  .znet-field {
+    -webkit-appearance: none;
+    appearance: none;
+    min-width: 0;
+    border: 1px solid var(--input);
+    border-radius: var(--control-radius);
+    background: var(--popover);
+    color: var(--foreground);
+    font-size: 12px;
+    line-height: 1.5;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  .znet-field:not(textarea) { height: var(--control-height); }
+  .znet-field::placeholder { color: var(--muted-foreground); }
+  .znet-field:focus-visible {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 25%, transparent);
+  }
+  .znet-field[aria-invalid='true'] { border-color: var(--destructive); }
+  .znet-field:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* Retain native numeric validation and keyboard stepping, not OS spinners. */
+  input.znet-field[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+  input.znet-field::-webkit-inner-spin-button,
+  input.znet-field::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input.znet-field::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+  .znet-choice {
+    -webkit-appearance: none;
+    appearance: none;
+    display: inline-block;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    vertical-align: middle;
+    border: 1px solid var(--input);
+    border-radius: 4px;
+    background-color: var(--popover);
+    cursor: pointer;
+  }
+  .znet-choice[type='checkbox']:checked {
+    border-color: var(--primary);
+    background-color: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 8 3 3 7-7' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  .dark .znet-choice[type='checkbox']:checked {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 8 3 3 7-7' fill='none' stroke='%230F1014' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  .znet-choice[type='radio'] { border-radius: 50%; }
+  .znet-choice[type='radio']:checked {
+    border-color: var(--primary);
+    background-color: var(--primary);
+    box-shadow: inset 0 0 0 3px var(--popover);
+  }
+  .znet-choice:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .znet-choice:disabled { opacity: 0.45; cursor: not-allowed; }
+  @media (forced-colors: active) {
+    .znet-choice { appearance: auto; background-image: none !important; }
+  }
+}

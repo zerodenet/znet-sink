@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
-  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
+  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, applyTunSettings } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import {
@@ -23,15 +24,15 @@
   let addr = $state('10.66.0.1/30');
   let secondaryAddr = $state('');
   let mtu = $state('1500');
+  let includeCidrs = $state('');
+  let excludeCidrs = $state('');
   let dualStack = $state(true);
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
 
   const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
   const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
-  // Profile-owned TUN does not consume these local defaults, so they remain
-  // editable for the next profile that omits runtime.tun.
-  const locked = $derived((guiState.isTunEnabled && !profileManaged) || saving);
+  const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
   const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
 
@@ -51,6 +52,8 @@
       addr = config.tun.addr;
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
+      includeCidrs = (config.tun.includeCidrs ?? []).join('\n');
+      excludeCidrs = (config.tun.excludeCidrs ?? []).join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       dnsReadiness = await inspectTunDnsHijackReadiness(config.dns);
@@ -102,22 +105,24 @@
 
     saving = true;
     try {
-      const config = await updateAppConfig({
-        tun: {
-          name: name.trim() || null,
-          tag: normalizedTag,
-          addr: normalizedAddr,
-          secondaryAddr: normalizedSecondary || null,
-          mtu: normalizedMtu,
-          dualStack,
-          dnsHijack,
-        },
+      const config = await applyTunSettings({
+        name: name.trim() || null,
+        tag: normalizedTag,
+        addr: normalizedAddr,
+        secondaryAddr: normalizedSecondary || null,
+        mtu: normalizedMtu,
+        includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
+        excludeCidrs: excludeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
+        dualStack,
+        dnsHijack,
       });
       name = config.tun.name ?? '';
       tag = config.tun.tag;
       addr = config.tun.addr;
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
+      includeCidrs = config.tun.includeCidrs.join('\n');
+      excludeCidrs = config.tun.excludeCidrs.join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       saved = true;
@@ -126,6 +131,7 @@
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
     } finally {
+      await guiState.refreshTunStatus();
       saving = false;
     }
   }
@@ -141,7 +147,7 @@
   </div>
 {:else if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
-    TUN 正在运行。当前启动参数已锁定，关闭 TUN 后可修改。
+    保存后会自动重建 TUN 并应用新参数，期间连接可能短暂中断，客户端和内核保持运行。
   </div>
 {/if}
 
@@ -277,6 +283,40 @@
       />
     </div>
 
+    <div class="config-row config-row-top">
+      <div class="config-row-label">
+        <span class="label-text">TUN 接管网段</span>
+        <span class="label-desc">每行一个 CIDR。留空表示接管全部地址；填写后只为这些目标安装 TUN 路由。</span>
+      </div>
+      <Textarea
+        class="font-mono"
+        bind:value={includeCidrs}
+        oninput={markDirty}
+        disabled={locked}
+        rows={4}
+        placeholder="留空表示全部"
+        spellcheck="false"
+        aria-label="TUN 接管网段"
+      ></Textarea>
+    </div>
+
+    <div class="config-row config-row-top">
+      <div class="config-row-label">
+        <span class="label-text">TUN 排除网段</span>
+        <span class="label-desc">每行一个 CIDR。匹配目标保留系统原有路由，不进入 TUN；例如 WireGuard 内网可填写 16.0.0.0/8。</span>
+      </div>
+      <Textarea
+        class="font-mono"
+        bind:value={excludeCidrs}
+        oninput={markDirty}
+        disabled={locked}
+        rows={4}
+        placeholder="例如 16.0.0.0/8"
+        spellcheck="false"
+        aria-label="TUN 排除网段"
+      ></Textarea>
+    </div>
+
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">DNS 劫持</span>
@@ -307,7 +347,7 @@
 {#if !loading}
   <div class="settings-actions">
     <Button size="sm" onclick={save} disabled={locked}>
-      {saving ? '保存中...' : saved ? '已保存' : '保存'}
+      {saving ? '应用中...' : saved ? '已保存' : profileManaged ? '保存缺省值' : guiState.isTunEnabled ? '保存并应用' : '保存'}
     </Button>
   </div>
 {/if}
@@ -361,6 +401,10 @@
 
   .config-row:last-child {
     border-bottom: none;
+  }
+
+  .config-row-top {
+    align-items: flex-start;
   }
 
   .config-row-label {

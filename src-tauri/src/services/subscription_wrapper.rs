@@ -8,7 +8,9 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert};
+use crate::models::subscription::{
+    SubscriptionProfile, SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionUpsert,
+};
 use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
 
@@ -191,8 +193,19 @@ pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     original::sync_all(app_handle).await
 }
 
-pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    original::remove(state, id)
+pub fn removal_preview(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<SubscriptionRemovalPreview> {
+    original::removal_preview(state, id)
+}
+
+pub async fn remove(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: bool,
+) -> AppResult<SubscriptionRemovalOutcome> {
+    original::remove(app_handle, id, remove_associated_config).await
 }
 
 pub fn spawn_auto_sync_scheduler(app: AppHandle) {
@@ -340,7 +353,6 @@ fn looks_like_zero_config(value: &Value) -> bool {
 #[cfg(test)]
 mod wrapper_tests {
     use super::*;
-    use base64::Engine as _;
 
     #[test]
     fn source_formats_are_canonicalized_without_rewriting_auto() {

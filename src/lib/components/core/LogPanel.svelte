@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
   import { onMount, untrack } from 'svelte';
   import {
     Check,
@@ -452,85 +454,85 @@
         {/if}
       </div>
 
-      <button
+      <Button variant="ghost" size="icon-sm"
         type="button"
-        class="action-button icon-only"
+        class="max-[900px]:px-2"
         onclick={() => void refreshLogs({ forceFollow: followLatest })}
         disabled={refreshing}
         title="立即刷新"
         aria-label="立即刷新"
       >
         <RefreshCw class={`h-3.5 w-3.5 ${refreshing ? 'spin' : ''}`} />
-      </button>
+      </Button>
 
-      <button
+      <Button variant="outline" size="sm"
         type="button"
-        class="action-button"
-        class:active={!liveUpdates}
+        class="max-[900px]:px-2"
+        aria-pressed={!liveUpdates}
         onclick={toggleLiveUpdates}
         title={liveUpdates ? '暂停实时刷新' : '恢复实时刷新'}
       >
         {#if liveUpdates}<Pause class="h-3.5 w-3.5" />{:else}<Play class="h-3.5 w-3.5" />{/if}
         <span class="action-label">{liveUpdates ? '暂停' : '继续'}</span>
-      </button>
+      </Button>
 
-      <button
+      <Button variant="outline" size="sm"
         type="button"
-        class="action-button"
-        class:active={followLatest}
+        class="max-[900px]:px-2"
+        aria-pressed={followLatest}
         onclick={jumpToLatest}
         title="回到最新日志并保持跟随"
       >
         <ChevronDown class="h-3.5 w-3.5" />
         <span class="action-label">跟随</span>
         {#if unseenCount > 0}<span class="unseen-count">{unseenCount > 99 ? '99+' : unseenCount}</span>{/if}
-      </button>
+      </Button>
 
-      <button
+      <Button variant="ghost" size="icon-sm"
         type="button"
-        class="action-button icon-only"
-        class:active={wrapMessages}
+        class="max-[900px]:px-2"
+
         onclick={() => wrapMessages = !wrapMessages}
         title={wrapMessages ? '关闭长文本换行' : '开启长文本换行'}
         aria-label={wrapMessages ? '关闭长文本换行' : '开启长文本换行'}
         aria-pressed={wrapMessages}
       >
         <WrapText class="h-3.5 w-3.5" />
-      </button>
+      </Button>
 
-      <button
+      <Button variant="ghost" size="icon-sm"
         type="button"
-        class="action-button icon-only"
+        class="max-[900px]:px-2"
         onclick={copyLastError}
         disabled={errorCount === 0}
         title="复制最新错误"
         aria-label="复制最新错误"
       >
         <CircleAlert class="h-3.5 w-3.5" />
-      </button>
+      </Button>
 
-      <button
+      <Button variant="default" size="sm"
         type="button"
-        class="action-button primary-action"
+        class="max-[900px]:px-2"
         onclick={copyVisibleLogs}
         disabled={visibleLogs.length === 0}
         title="复制当前筛选和搜索结果中的完整日志"
       >
         <Copy class="h-3.5 w-3.5" />
         <span>复制</span>
-      </button>
+      </Button>
 
-      <button
+      <Button variant="destructive" size="sm"
         type="button"
-        class="action-button clear-action"
-        class:armed={clearArmed}
+        class="max-[900px]:px-2"
+
         onclick={armClear}
         disabled={clearing}
         title={clearArmed ? '再次点击确认清空日志' : '清空日志'}
       >
         <Trash2 class="h-3.5 w-3.5" />
         {#if clearing}<span>清空中</span>{:else if clearArmed}<span>确认清空</span>{/if}
-      </button>
+      </Button>
     </div>
   </header>
 
@@ -564,17 +566,17 @@
 
     <label class="search-wrap">
       <Search class="search-icon h-3.5 w-3.5" />
-      <input
-        bind:this={searchEl}
+      <Input class="w-full pl-8 pr-8"
+        bind:ref={searchEl}
         value={searchQuery}
         oninput={(event) => searchQuery = event.currentTarget.value}
         placeholder="搜索日志（Ctrl+F）"
         aria-label="搜索已加载日志"
       />
       {#if searchQuery}
-        <button type="button" class="search-clear" onclick={() => searchQuery = ''} title="清除搜索" aria-label="清除搜索">
+        <Button variant="ghost" size="icon-sm" type="button" class="absolute right-0.5 top-1/2 -translate-y-1/2" onclick={() => searchQuery = ''} title="清除搜索" aria-label="清除搜索">
           <X class="h-3 w-3" />
-        </button>
+        </Button>
       {/if}
     </label>
 
@@ -587,7 +589,7 @@
     <div class="load-error" role="alert">
       <CircleAlert class="h-3.5 w-3.5" />
       <span>日志读取失败：{loadError}</span>
-      <button type="button" onclick={() => void refreshLogs({ forceFollow: false })}>重试</button>
+      <Button variant="outline" size="sm"  type="button" onclick={() => void refreshLogs({ forceFollow: false })}>重试</Button>
     </div>
   {/if}
 
@@ -608,12 +610,12 @@
         <span>{normalizedSearch ? '当前已加载日志中没有匹配项' : '当前筛选条件下暂无日志'}</span>
         <div class="empty-actions">
           {#if normalizedSearch}
-            <button type="button" onclick={() => searchQuery = ''}>清除搜索</button>
+            <Button variant="outline" size="sm"  type="button" onclick={() => searchQuery = ''}>清除搜索</Button>
           {/if}
           {#if hasMore}
-            <button type="button" onclick={loadMoreLogs} disabled={loadingMore}>
+            <Button variant="outline" size="sm"  type="button" onclick={loadMoreLogs} disabled={loadingMore}>
               {loadingMore ? '加载中...' : '继续加载更早日志'}
-            </button>
+            </Button>
           {/if}
         </div>
       </div>
@@ -625,7 +627,7 @@
           class="log-row level-{log.level}"
           class:expanded={expandedLogId === log.id}
         >
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="log-summary"
             onclick={() => toggleExpanded(log.id)}
@@ -652,15 +654,15 @@
             {/if}
           </button>
 
-          <button
+          <Button variant="ghost" size="icon-xs"
             type="button"
-            class="row-copy"
+            class="mt-0.5 shrink-0 self-start"
             onclick={() => void copyLog(log)}
             title={`复制日志 #${log.id}`}
             aria-label={`复制日志 #${log.id}`}
           >
             <Copy class="h-3.5 w-3.5" />
-          </button>
+          </Button>
 
           {#if expandedLogId === log.id}
             <div class="log-details">
@@ -679,10 +681,10 @@
 
       {#if hasMore}
         <div class="log-more">
-          <button type="button" class="load-more-button" onclick={loadMoreLogs} disabled={loadingMore}>
+          <Button variant="outline" size="sm" type="button" class="self-center" onclick={loadMoreLogs} disabled={loadingMore}>
             {#if loadingMore}<RefreshCw class="h-3.5 w-3.5 spin" />{/if}
             <span>{loadingMore ? '加载中...' : '加载更早日志'}</span>
-          </button>
+          </Button>
         </div>
       {/if}
     {/if}
@@ -806,68 +808,6 @@
   .copy-feedback.error { color: var(--destructive); }
   .copy-feedback span { overflow: hidden; text-overflow: ellipsis; }
 
-  .action-button {
-    height: var(--control-height);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    padding: 0 8px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 10.5px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
-  }
-
-  .action-button.icon-only {
-    width: var(--control-height);
-    padding: 0;
-  }
-
-  .action-button:hover:not(:disabled) {
-    background: var(--muted);
-    color: var(--foreground);
-  }
-
-  .action-button.active {
-    border-color: transparent;
-    background: var(--segment-active-bg);
-    color: var(--foreground);
-    box-shadow: var(--segment-active-shadow);
-  }
-
-  .action-button.primary-action {
-    border-color: transparent;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-  }
-
-  .action-button.clear-action {
-    width: var(--control-height);
-    padding: 0;
-  }
-
-  .action-button.clear-action.armed {
-    width: auto;
-    padding: 0 8px;
-    border-color: color-mix(in srgb, var(--destructive) 35%, var(--border));
-    background: color-mix(in srgb, var(--destructive) 8%, var(--card));
-    color: var(--destructive);
-  }
-
-  .action-button:disabled {
-    opacity: 0.38;
-    cursor: not-allowed;
-  }
-
   .log-filters {
     display: flex;
     align-items: center;
@@ -894,49 +834,6 @@
     opacity: 0.55;
     pointer-events: none;
   }
-
-  .search-wrap input {
-    width: 100%;
-    height: var(--control-height);
-    padding: 0 29px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    font: inherit;
-    font-size: 11px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    outline: none;
-  }
-
-  .search-wrap input:focus {
-    border-color: var(--ring);
-    background: var(--background);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-
-  .search-wrap input::placeholder {
-    color: var(--muted-foreground);
-    opacity: 0.65;
-  }
-
-  .search-clear {
-    position: absolute;
-    right: 5px;
-    width: 20px;
-    height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-  }
-
-  .search-clear:hover { background: var(--border); color: var(--foreground); }
 
   .result-count {
     min-width: 38px;
@@ -1143,30 +1040,6 @@
     flex-shrink: 0;
   }
 
-  .row-copy {
-    align-self: start;
-    width: 24px;
-    height: 24px;
-    margin-top: 3px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
-  }
-
-  .log-row:hover .row-copy,
-  .log-row:focus-within .row-copy,
-  .log-row.expanded .row-copy { opacity: 1; }
-
-  .row-copy:hover { background: var(--card); color: var(--foreground); }
-
   .log-details {
     grid-column: 1 / -1;
     display: flex;
@@ -1223,25 +1096,6 @@
     padding: 11px 0 4px;
   }
 
-  .load-more-button {
-    height: var(--control-height);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 12px;
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    background: var(--background);
-    color: var(--foreground);
-    font: inherit;
-    font-size: 10.5px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .load-more-button:hover:not(:disabled) { background: var(--muted); }
-  .load-more-button:disabled { opacity: 0.6; cursor: progress; }
-
   :global(.spin) { animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1251,7 +1105,7 @@
     .copy-feedback { flex: 1 1 100%; max-width: none; min-height: 0; }
     .log-fields { display: none; }
     .action-label { display: none; }
-    .action-button:not(.primary-action):not(.clear-action) { width: 27px; padding: 0; }
+
   }
 
   @media (max-width: 680px) {

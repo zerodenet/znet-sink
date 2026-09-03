@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { updater, formatBytes } from '$lib/services/updater.svelte';
   import { warning } from '$lib/services/toast.svelte';
 
@@ -48,12 +49,12 @@
         <span class="update-current">（当前 v{updater.currentVersion}）</span>
       {/if}
     </div>
-    <button class="update-action" onclick={handleUpdate} disabled={updater.downloading}>
+    <Button variant="default" size="sm"  onclick={handleUpdate} disabled={updater.downloading}>
       {updater.downloading ? '下载中…' : '立即更新'}
-    </button>
+    </Button>
     {#if !updater.downloading}
-      <button
-        class="update-dismiss"
+      <Button variant="ghost" size="icon-sm"
+
         onclick={() => (dismissed = true)}
         title="本次启动不再提示"
         aria-label="关闭更新提示"
@@ -62,7 +63,7 @@
           <line x1="2" y1="2" x2="8" y2="8" />
           <line x1="8" y1="2" x2="2" y2="8" />
         </svg>
-      </button>
+      </Button>
     {/if}
     {#if updater.downloading}
       <div class="update-progress-track" aria-hidden="true">
@@ -185,50 +186,6 @@
     100% { transform: translateX(400%); }
   }
 
-  .update-action {
-    border: none;
-    border-radius: 6px;
-    background: #f59e0b;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 5px 12px;
-    cursor: pointer;
-    transition: background 0.12s ease;
-    flex-shrink: 0;
-  }
-
-  .update-action:hover:not(:disabled) {
-    background: #d97706;
-  }
-
-  .update-action:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .update-dismiss {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition:
-      background 0.12s ease,
-      color 0.12s ease;
-  }
-
-  .update-dismiss:hover {
-    background: rgba(245, 158, 11, 0.14);
-    color: var(--foreground);
-  }
-
   :global(.dark) .update-banner {
     border-color: rgba(245, 158, 11, 0.32);
     background: rgba(245, 158, 11, 0.1);
@@ -245,8 +202,5 @@
       order: 1;
     }
 
-    .update-action {
-      margin-left: auto;
-    }
   }
 </style>

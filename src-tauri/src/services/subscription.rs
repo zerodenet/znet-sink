@@ -7,7 +7,10 @@ use serde_json::{json, Map, Value};
 use crate::errors::{AppError, AppResult};
 use crate::models::logs::LogLevel;
 use crate::models::proxy_config::{ProxyConfigProfile, ProxyConfigUpsert};
-use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert, SyncMetadata};
+use crate::models::subscription::{
+    SubscriptionProfile, SubscriptionRemovalOutcome, SubscriptionRemovalPreview,
+    SubscriptionRemovalTarget, SubscriptionUpsert, SyncMetadata,
+};
 use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
     normalize_required, now_unix_ms,
@@ -163,16 +166,117 @@ pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     sync_all_with_state(&app_handle, state.inner()).await
 }
 
-pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub fn removal_preview(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<SubscriptionRemovalPreview> {
     let id = normalize_required(id, "id")?;
+    let subscriptions = lock(state.subscriptions(), "subscription")?.clone();
+    let subscription = subscriptions
+        .iter()
+        .find(|profile| profile.id == id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("subscription", id.clone()))?;
+    let target_proxy_config =
+        if let Some(target_id) = subscription.target_proxy_config_id.as_deref() {
+            lock(state.proxy_configs(), "proxy_config")?
+                .iter()
+                .find(|profile| profile.id == target_id)
+                .map(|profile| SubscriptionRemovalTarget {
+                    id: profile.id.clone(),
+                    name: profile.name.clone(),
+                    active: profile.active,
+                    shared_by_subscription_count: shared_target_count(
+                        &subscriptions,
+                        &subscription.id,
+                        target_id,
+                    ),
+                })
+        } else {
+            None
+        };
+    Ok(SubscriptionRemovalPreview {
+        subscription_id: subscription.id.clone(),
+        target_proxy_config,
+        managed_rule_set_count: rule_set::managed_subscription_rule_set_count(
+            state.inner(),
+            &subscription.id,
+        )?,
+    })
+}
+
+pub async fn remove(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: bool,
+) -> AppResult<SubscriptionRemovalOutcome> {
+    let id = normalize_required(id, "id")?;
+    let state = app_handle.state::<AppState>();
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
+    let subscription = lock(state.subscriptions(), "subscription")?
+        .iter()
+        .find(|profile| profile.id == id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found("subscription", id.clone()))?;
+
+    let mut removed_proxy_config = false;
+    if remove_associated_config {
+        if let Some(target_id) = subscription.target_proxy_config_id.as_deref() {
+            let shared_count = shared_target_count(
+                &lock(state.subscriptions(), "subscription")?,
+                &subscription.id,
+                target_id,
+            );
+            if shared_count > 0 {
+                return Err(AppError::invalid_argument(format!(
+                    "associated proxy config is still used by {shared_count} other subscription(s)"
+                )));
+            }
+            if lock(state.proxy_configs(), "proxy_config")?
+                .iter()
+                .any(|profile| profile.id == target_id)
+            {
+                proxy_config::remove_runtime(app_handle.clone(), target_id.to_string()).await?;
+                removed_proxy_config = true;
+            }
+        }
+    }
+
+    remove_record(state.inner(), &id)?;
+    let removed_managed_rule_set_count = if remove_associated_config {
+        rule_set::remove_managed_subscription_rule_sets(state.inner(), &id)?
+    } else {
+        0
+    };
+
+    Ok(SubscriptionRemovalOutcome {
+        removed_proxy_config,
+        removed_managed_rule_set_count,
+    })
+}
+
+fn shared_target_count(
+    subscriptions: &[SubscriptionProfile],
+    subscription_id: &str,
+    target_id: &str,
+) -> usize {
+    subscriptions
+        .iter()
+        .filter(|candidate| {
+            candidate.id != subscription_id
+                && candidate.target_proxy_config_id.as_deref() == Some(target_id)
+        })
+        .count()
+}
+
+fn remove_record(state: &AppState, id: &str) -> AppResult<()> {
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
     let mut next = subscriptions.clone();
     let before = next.len();
     next.retain(|profile| profile.id != id);
 
     if next.len() == before {
-        return Err(AppError::not_found("subscription", id));
+        return Err(AppError::not_found("subscription", id.to_string()));
     }
     domain_store::save_subscriptions(&next)?;
     *subscriptions = next;
@@ -1978,6 +2082,45 @@ fn record_auto_sync_failure(
 mod tests {
     use super::*;
 
+    fn subscription_with_target(id: &str, target: Option<&str>) -> SubscriptionProfile {
+        SubscriptionProfile {
+            id: id.into(),
+            name: id.into(),
+            url: format!("https://example.com/{id}"),
+            enabled: true,
+            kernel: "zero".into(),
+            format: "zero".into(),
+            target_proxy_config_id: target.map(str::to_string),
+            policy_selections: Default::default(),
+            update_interval_secs: None,
+            user_agent: None,
+            node_count: None,
+            upload_bytes: None,
+            download_bytes: None,
+            total_bytes: None,
+            expire_at_unix_ms: None,
+            updated_at_unix_ms: 1,
+            last_sync_at_unix_ms: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn associated_config_delete_detects_other_subscription_owners() {
+        let subscriptions = vec![
+            subscription_with_target("current", Some("config-a")),
+            subscription_with_target("shared", Some("config-a")),
+            subscription_with_target("other", Some("config-b")),
+        ];
+
+        assert_eq!(
+            shared_target_count(&subscriptions, "current", "config-a"),
+            1
+        );
+        assert_eq!(shared_target_count(&subscriptions, "shared", "config-a"), 1);
+        assert_eq!(shared_target_count(&subscriptions, "other", "config-b"), 0);
+    }
+
     #[test]
     fn clash_rule_providers_are_kept_for_zrs_synchronization() {
         let parsed = parse_subscription_content(
@@ -2172,6 +2315,22 @@ rule-providers:
         assert_eq!(rules[0]["condition"]["values"][0], "(?i)^exact\\.example$");
         assert_eq!(rules[1]["condition"]["type"], "domain");
         assert_eq!(rules[2]["condition"]["type"], "ip");
+    }
+
+    #[test]
+    fn clash_node_addresses_do_not_generate_global_direct_rules() {
+        let parsed = parse_subscription_content(
+            "proxies:\n  - {name: Node, type: ss, server: 8.138.144.121, port: 443, password: p}\nrules:\n  - MATCH,Node\n",
+            "clash",
+        )
+        .unwrap();
+        let rules = parsed.content["route"]["rules"].as_array().unwrap();
+
+        assert!(rules.iter().all(|rule| {
+            rule["condition"]["values"]
+                .as_array()
+                .is_none_or(|values| values.iter().all(|value| value != "8.138.144.121/32"))
+        }));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! GUI model type. Stateless — receives `CoreIpcOptions` directly.
 
 use serde_json::{json, Map, Value};
+use std::time::Duration;
 
 use crate::errors::AppResult;
 use crate::kernel::protocol;
@@ -22,6 +23,22 @@ use super::parsing::{
 /// kernel and take tens of seconds. The process watchdog remains responsible
 /// for detecting a genuinely unresponsive IPC channel.
 const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
+
+/// Creating/removing the device and routes can exceed the ordinary two-second
+/// IPC budget. Keep this at the adapter command boundary: manual toggles,
+/// startup/restart restoration and legacy adapter callers all pass here.
+const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn command_response_timeout(method: &str) -> Option<Duration> {
+    match method {
+        "tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "commands/timeout_tests.rs"]
+mod timeout_tests;
 
 /// Switch the selected outbound in a policy group.
 pub async fn select_policy(
@@ -360,7 +377,13 @@ pub(crate) async fn run_command(
     params: Value,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Value> {
-    let call = protocol::command(method.to_string(), Some(params), options).await?;
+    let call = protocol::command_with_response_timeout(
+        method.to_string(),
+        Some(params),
+        options,
+        command_response_timeout(method),
+    )
+    .await?;
     unwrap_call_result(call.response, call.error)
 }
 

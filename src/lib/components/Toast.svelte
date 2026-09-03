@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { store } from '$lib/services/store.svelte';
   import { getToasts, dismissToast, type ToastType } from '$lib/services/toast.svelte';
   import { MAX_ACTIVE_TOASTS } from '$lib/services/toast-policy';
@@ -86,12 +87,12 @@
           <span class="toast-msg">{toast.message}</span>
         </div>
 
-        <button class="toast-log-button" type="button" onclick={() => openLogs(toast.id)}>
+        <Button variant="outline" size="sm"  type="button" onclick={() => openLogs(toast.id)}>
           查看日志
-        </button>
-        <button
+        </Button>
+        <Button variant="ghost" size="icon-sm"
           onclick={() => dismissToast(toast.id)}
-          class="toast-dismiss"
+
           type="button"
           aria-label="关闭提示"
         >
@@ -99,7 +100,7 @@
             <line x1="2" y1="2" x2="8" y2="8"/>
             <line x1="8" y1="2" x2="2" y2="8"/>
           </svg>
-        </button>
+        </Button>
       </div>
     {/each}
   </div>
@@ -210,43 +211,6 @@
     white-space: normal;
   }
 
-  .toast-log-button {
-    flex-shrink: 0;
-    height: 26px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--background);
-    color: var(--foreground);
-    cursor: pointer;
-    font-size: 10.5px;
-    font-weight: 600;
-  }
-
-  .toast-log-button:hover {
-    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-    background: var(--muted);
-  }
-
-  .toast-dismiss {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-  }
-
-  .toast-dismiss:hover {
-    background: var(--muted);
-    color: var(--foreground);
-  }
-
   @keyframes toast-in {
     from {
       opacity: 0;
@@ -263,8 +227,7 @@
       width: calc(100vw - 20px);
     }
 
-    .toast-recorded,
-    .toast-log-button {
+    .toast-recorded {
       display: none;
     }
   }

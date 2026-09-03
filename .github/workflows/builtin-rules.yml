@@ -1,0 +1,85 @@
+name: Publish built-in rules
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - '.github/workflows/builtin-rules.yml'
+      - 'src-tauri/examples/build_builtin_rules.rs'
+      - 'src-tauri/resources/builtin-rules/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+  schedule:
+    - cron: '23 3 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: builtin-rules-publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+
+      - name: Resolve upstream rule revision
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(git ls-remote https://github.com/MetaCubeX/meta-rules-dat.git refs/heads/meta | awk '{print $1}')"
+          test -n "$revision"
+          published="$(curl --fail --silent --show-error \
+            https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/builtin-rules/manifest.json \
+            | jq -r '.sourceCommit // empty' 2>/dev/null || true)"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] || [ "$published" != "$revision" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build verified ZRS bundle
+        if: steps.upstream.outputs.publish == 'true'
+        shell: bash
+        env:
+          BUILTIN_RULE_SOURCE_COMMIT: ${{ steps.upstream.outputs.revision }}
+        run: |
+          set -euo pipefail
+          export BUILTIN_RULE_GENERATED_AT_UNIX_MS="$(($(date +%s) * 1000))"
+          cargo run --manifest-path src-tauri/Cargo.toml --example build_builtin_rules
+
+      - name: Publish immutable bundle view
+        if: steps.upstream.outputs.publish == 'true'
+        shell: bash
+        env:
+          BUILTIN_RULE_SOURCE_COMMIT: ${{ steps.upstream.outputs.revision }}
+        run: |
+          set -euo pipefail
+          publish_dir="$(mktemp -d)"
+          cp src-tauri/resources/builtin-rules/manifest.json "$publish_dir/manifest.json"
+          cp src-tauri/resources/builtin-rules/*.zrs "$publish_dir/"
+          git checkout --orphan builtin-rules-publish
+          git rm -rf .
+          cp "$publish_dir"/* .
+          git add manifest.json ./*.zrs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "chore(rules): publish ${BUILTIN_RULE_SOURCE_COMMIT}"
+          git push --force origin HEAD:builtin-rules

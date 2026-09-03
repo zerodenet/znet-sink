@@ -104,7 +104,7 @@
     </span>
     <!-- Version — opens About; yellow pulse dot when an update is available -->
     {#if appVersion}
-      <button
+      <button data-slot="surface-button"
         onclick={() => store.openSettings('about')}
         class="titlebar-version"
         title={updater.prominentUpdateAvailable
@@ -159,7 +159,7 @@
 
     <span class="titlebar-divider flex-shrink-0" aria-hidden="true"></span>
 
-    <button
+    <button data-slot="surface-button"
       onclick={handleMinimize}
       class="titlebar-btn"
       aria-label={trafficBallPreference.enabled ? '最小化为流量悬浮球' : '最小化'}
@@ -169,7 +169,7 @@
         <rect x="0" y="5" width="10" height="1" rx="0.5"/>
       </svg>
     </button>
-    <button
+    <button data-slot="surface-button"
       onclick={handleMaximize}
       class="titlebar-btn"
       aria-label="最大化"
@@ -179,7 +179,7 @@
         <rect x="0.5" y="0.5" width="9" height="9" rx="1"/>
       </svg>
     </button>
-    <button
+    <button data-slot="surface-button"
       onclick={handleClose}
       class="titlebar-btn titlebar-btn-close"
       aria-label={trafficBallPreference.enabled ? '关闭为流量悬浮球' : '关闭'}

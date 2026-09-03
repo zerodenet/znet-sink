@@ -26,7 +26,7 @@
 
   <div class="group-list">
     {#if showAllNodes}
-      <button
+      <button data-slot="surface-button"
         class="group-item {!selectedGroup ? 'active' : ''}"
         onclick={() => onSelectGroup(null)}
       >
@@ -38,7 +38,7 @@
     {/if}
 
     {#each groups as group}
-      <button
+      <button data-slot="surface-button"
         class="group-item {selectedGroup === group.name ? 'active' : ''}"
         onclick={() => onSelectGroup(group.name)}
       >

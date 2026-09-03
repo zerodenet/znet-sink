@@ -33,8 +33,8 @@ impl Default for AppConfig {
             logs: AppLogConfig::default(),
             ui: AppUiConfig::default(),
             local_proxy: AppLocalProxyConfig::default(),
-            tun: AppTunConfig::default(),
-            dns: AppDnsConfig::default(),
+            tun: AppTunConfig::recommended_default(),
+            dns: AppDnsConfig::recommended_default(),
             routing: AppRoutingConfig::default(),
             url_test: AppUrlTestConfig::default(),
         }
@@ -163,6 +163,12 @@ pub struct AppTunConfig {
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
+    /// Positive automatic-route capture set. Empty means full capture.
+    #[serde(default)]
+    pub include_cidrs: Vec<String>,
+    /// Destination CIDRs that must remain on the host routing table.
+    #[serde(default)]
+    pub exclude_cidrs: Vec<String>,
     #[serde(default = "default_true")]
     pub dual_stack: bool,
     #[serde(default)]
@@ -189,6 +195,16 @@ impl Default for AppDnsConfig {
             enabled: false,
             config: None,
             dns_hijack: false,
+        }
+    }
+}
+
+impl AppDnsConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            enabled: true,
+            config: Some(ClientDnsConfig::recommended_default()),
+            dns_hijack: true,
         }
     }
 }
@@ -233,8 +249,84 @@ impl Default for AppTunConfig {
             secondary_addr: None,
             tag: default_tun_tag(),
             mtu: default_tun_mtu(),
+            include_cidrs: Vec::new(),
+            exclude_cidrs: Vec::new(),
             dual_stack: true,
             dns_hijack: false,
+        }
+    }
+}
+
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v1";
+
+/// Portable client-owned settings projected onto every active proxy profile.
+/// Machine-bound executable paths, runtime sockets, UI state, logs, and
+/// subscription/profile data are deliberately outside this contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettingsBundle {
+    pub schema_version: String,
+    pub exported_at_unix_ms: u64,
+    pub settings: ClientKernelSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettings {
+    pub core: PortableCoreConfig,
+    pub tun: AppTunConfig,
+    pub dns: AppDnsConfig,
+    pub routing: AppRoutingConfig,
+    pub url_test: AppUrlTestConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableCoreConfig {
+    pub auto_connect: bool,
+    pub auto_start: bool,
+    pub cleanup_proxy_on_exit: bool,
+    pub network_probe_urls: Vec<String>,
+}
+
+impl ClientKernelSettings {
+    pub fn from_app_config(config: &AppConfig) -> Self {
+        Self {
+            core: PortableCoreConfig {
+                auto_connect: config.core.auto_connect,
+                auto_start: config.core.auto_start,
+                cleanup_proxy_on_exit: config.core.cleanup_proxy_on_exit,
+                network_probe_urls: config.core.network_probe_urls.clone(),
+            },
+            tun: config.tun.clone(),
+            dns: config.dns.clone(),
+            routing: config.routing.clone(),
+            url_test: config.url_test.clone(),
+        }
+    }
+
+    pub fn apply_to(self, config: &mut AppConfig) {
+        config.core.auto_connect = self.core.auto_connect;
+        config.core.auto_start = self.core.auto_start;
+        config.core.cleanup_proxy_on_exit = self.core.cleanup_proxy_on_exit;
+        config.core.network_probe_urls = self.core.network_probe_urls;
+        config.tun = self.tun;
+        config.dns = self.dns;
+        config.routing = self.routing;
+        config.url_test = self.url_test;
+    }
+}
+
+impl AppTunConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            // New installs must not let Lite's legacy `None` compatibility
+            // state turn auto-connect into an implicit privileged TUN start.
+            // Deserializing an older config still uses `Default` and therefore
+            // preserves `None` until that user explicitly toggles TUN.
+            enabled: Some(false),
+            dns_hijack: true,
+            ..Self::default()
         }
     }
 }
@@ -250,7 +342,7 @@ impl Default for AppLocalProxyConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigPatch {
     pub core: Option<AppCoreConfigPatch>,
@@ -309,14 +401,27 @@ pub struct AppLocalProxyConfigPatch {
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfigPatch {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
     pub mask: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+    pub include_cidrs: Option<Vec<String>>,
+    pub exclude_cidrs: Option<Vec<String>>,
     pub dual_stack: Option<bool>,
     pub dns_hijack: Option<bool>,
+}
+
+fn deserialize_nullable_tun_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -518,6 +623,25 @@ mod tests {
         assert!(config.tun.secondary_addr.is_none());
         assert!(config.tun.dual_stack);
         assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn new_install_enables_recommended_dns_and_tun_hijack_defaults() {
+        let config = AppConfig::default();
+        assert_eq!(config.tun.enabled, Some(false));
+        assert!(config.dns.enabled);
+        assert!(config.dns.dns_hijack);
+        assert!(config.tun.dns_hijack);
+        let dns = config.dns.config.unwrap();
+        assert_eq!(dns.default_server, "cloudflare");
+        assert!(dns.servers.contains_key("cloudflare"));
+        assert!(dns.servers.contains_key("google"));
+        assert!(dns.servers.contains_key("cloudflare-bootstrap"));
+        assert!(dns.servers.contains_key("google-bootstrap"));
+        assert!(dns.servers.contains_key("alidns"));
+        assert!(dns.servers.contains_key("114dns"));
+        assert!(dns.servers.contains_key("system"));
+        dns.validate_client_shape().unwrap();
     }
 
     #[test]

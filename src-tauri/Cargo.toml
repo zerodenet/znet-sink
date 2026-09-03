@@ -48,3 +48,6 @@ tauri-plugin-updater = "2"
 dirs = "6.0.0"
 zero-rule = { git = "https://github.com/zerodenet/core.git", rev = "c69f417c5a835ab8193924279c5b562e6d244ab8" }
 tauri-plugin-clipboard-manager = { version = "2", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "test-util", "macros"] }

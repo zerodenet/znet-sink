@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { detectKernelVersion, listKernelVersions } from '$lib/services/kernel-version';
   import { getGuiCoreHealth } from '$lib/services/core';
   import type { KernelRelease } from '$lib/types/kernel-version';
@@ -114,8 +115,10 @@
           </svg>
           <span class="update-text">v{latestVersion} 可用</span>
         </div>
-      {:else}
+      {:else if latestStable}
         <div class="up-to-date">已是最新</div>
+      {:else}
+        <div class="update-unavailable">更新信息暂不可用</div>
       {/if}
     </div>
   {:else if hasInstall}
@@ -124,9 +127,9 @@
     </div>
   {/if}
 
-  <button class="kernel-link" onclick={openKernelSettings}>
+  <Button variant="link" size="sm"   onclick={openKernelSettings}>
     {hasInstall ? '管理版本' : '安装内核'}
-  </button>
+  </Button>
 </div>
 
 <style>
@@ -224,6 +227,11 @@
     font-weight: 500;
   }
 
+  .update-unavailable {
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
   :global(.dark) .up-to-date { color: #4ADE80; }
 
   .kernel-error {
@@ -235,20 +243,4 @@
     flex-shrink: 0;
   }
 
-  .kernel-link {
-    align-self: flex-start;
-    border: none;
-    background: transparent;
-    color: var(--primary);
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 0;
-    cursor: pointer;
-    margin-top: auto;
-    flex-shrink: 0;
-  }
-
-  .kernel-link:hover {
-    text-decoration: underline;
-  }
 </style>

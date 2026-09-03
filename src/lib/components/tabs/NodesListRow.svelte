@@ -46,7 +46,7 @@
 </script>
 
 <div class="node-row {isActive ? 'active' : ''}" role="listitem">
-  <button
+  <button data-slot="surface-button"
     class="node-main"
     onclick={() => onSelectNode(node)}
     disabled={selectDisabled}
@@ -111,7 +111,7 @@
           <div class="delay-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
         </div>
 
-        <button
+        <button data-slot="surface-button"
           class="probe-btn"
           onclick={() => onProbeNode(node)}
           disabled={probeDisabled || isProbing || probingAll}

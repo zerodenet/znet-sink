@@ -61,7 +61,7 @@
   }
 </script>
 
-<button
+<button data-slot="surface-button"
   class="kernel-pill tone-{status.tone}"
   onclick={handleClick}
   title={status.title}

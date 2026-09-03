@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { onDestroy, onMount } from 'svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
@@ -674,7 +675,7 @@
         </div>
         {#if searchQuery}
           <span class="empty-text">无匹配节点</span>
-          <button class="empty-clear" onclick={() => (searchQuery = '')}>清除搜索</button>
+          <Button variant="link" size="sm"  onclick={() => (searchQuery = '')}>清除搜索</Button>
         {:else if allNodes.length === 0}
           <span class="empty-text">暂无节点数据</span>
           <span class="empty-hint">
@@ -684,7 +685,7 @@
               当前配置不包含节点。请在“配置”页导入一份包含 outbounds 的代理配置。
             {/if}
           </span>
-          <button class="empty-clear" onclick={() => (store.activeTab = 'profiles')}>前往代理配置页</button>
+          <Button variant="link" size="sm"  onclick={() => (store.activeTab = 'profiles')}>前往代理配置页</Button>
         {:else}
           <span class="empty-text">暂无节点数据</span>
         {/if}
@@ -734,7 +735,7 @@
         {#each sections as section (section.name)}
           {@const isCollapsed = collapsedGroups.has(section.name)}
           <section class="node-section">
-            <button class="section-header" onclick={() => toggleCollapse(section.name)}>
+            <button data-slot="surface-button" class="section-header" onclick={() => toggleCollapse(section.name)}>
               <span class="section-caret {isCollapsed ? 'collapsed' : ''}">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="9,18 15,12 9,6"/>
@@ -867,18 +868,6 @@
     text-align: center;
   }
 
-  .empty-clear {
-    font-size: 11px;
-    color: var(--accent-foreground);
-    background: none;
-    border: none;
-    cursor: pointer;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .empty-clear:hover { opacity: 0.8; }
-
   /* Collapsible sections in the all-nodes view */
   .node-sections {
     flex: 1;
@@ -974,7 +963,6 @@
     gap: 10px;
     align-content: start;
   }
-
 
   /* Error bar */
   /* Popover anchor */

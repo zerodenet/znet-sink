@@ -261,13 +261,13 @@
             </span>
           </div>
         {/if}
-        <button
-          class="update-btn"
+        <Button variant="default" size="sm"
+
           onclick={handleDownloadUpdate}
           disabled={updater.downloading}
         >
           {updater.downloading ? '下载中…' : '下载并安装'}
-        </button>
+        </Button>
       </div>
     {:else}
       <div class="config-row">
@@ -276,13 +276,13 @@
       </div>
       <div class="config-row">
         <span class="config-label"></span>
-        <button class="check-update-btn" onclick={handleCheckUpdate} disabled={updater.checking}>
+        <Button variant="outline" size="sm"  onclick={handleCheckUpdate} disabled={updater.checking}>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="1 6 3 8 7 2"/>
             <path d="M11 6A5 5 0 1 1 9.6 2.4"/>
           </svg>
           <span>检查更新</span>
-        </button>
+        </Button>
       </div>
     {/if}
   </div>
@@ -310,12 +310,12 @@
     <div class="config-row">
       <span class="config-label"></span>
       <div class="diagnostic-actions">
-        <button class="check-update-btn" onclick={handleExportDiagnostics} disabled={exportingDiagnostics || cleaningDebugStorage}>
+        <Button variant="outline" size="sm"  onclick={handleExportDiagnostics} disabled={exportingDiagnostics || cleaningDebugStorage}>
           <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
-        </button>
-        <button class="check-update-btn danger" onclick={openCleanupConfirm} disabled={exportingDiagnostics || cleaningDebugStorage}>
+        </Button>
+        <Button variant="destructive" size="sm"  onclick={openCleanupConfirm} disabled={exportingDiagnostics || cleaningDebugStorage}>
           <span>清理本地调试数据</span>
-        </button>
+        </Button>
       </div>
     </div>
     {#if cleanupNotice}
@@ -598,52 +598,6 @@
     color: var(--muted-foreground);
   }
 
-  .update-btn {
-    align-self: flex-start;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 30px;
-    padding: 0 16px;
-    border-radius: 7px;
-    border: none;
-    background: #D97706;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.13s ease;
-  }
-
-  .update-btn:hover:not(:disabled) { opacity: 0.88; }
-  .update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .check-update-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: var(--control-height);
-    border: 1px solid var(--input);
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0 10px;
-    border-radius: var(--control-radius);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    transition: background 0.12s ease, border-color 0.12s ease;
-  }
-
-  .check-update-btn:hover:not(:disabled) {
-    background: var(--muted);
-  }
-
-  .check-update-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
   .diagnostic-actions {
     display: flex;
     align-items: center;
@@ -652,14 +606,8 @@
     gap: 4px;
   }
 
-  .check-update-btn.danger,
   .storage-error {
     color: var(--destructive);
-  }
-
-  .check-update-btn.danger {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--destructive) 10%, transparent);
   }
 
   .cleanup-notice {

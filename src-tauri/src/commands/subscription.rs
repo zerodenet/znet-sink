@@ -1,7 +1,9 @@
 use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
-use crate::models::subscription::{SubscriptionProfile, SubscriptionUpsert};
+use crate::models::subscription::{
+    SubscriptionProfile, SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionUpsert,
+};
 use crate::services::subscription::{self, SyncAllOutcome};
 use crate::state::app_state::AppState;
 
@@ -37,6 +39,18 @@ pub async fn subscription_sync_all(app_handle: AppHandle) -> AppResult<SyncAllOu
 }
 
 #[tauri::command]
-pub fn subscription_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    subscription::remove(state, id)
+pub fn subscription_remove_preview(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<SubscriptionRemovalPreview> {
+    subscription::removal_preview(state, id)
+}
+
+#[tauri::command]
+pub async fn subscription_remove(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: Option<bool>,
+) -> AppResult<SubscriptionRemovalOutcome> {
+    subscription::remove(app_handle, id, remove_associated_config.unwrap_or(false)).await
 }

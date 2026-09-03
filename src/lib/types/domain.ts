@@ -87,6 +87,22 @@ export interface SubscriptionSyncAllOutcome {
   failed: number;
 }
 
+export interface SubscriptionRemovalPreview {
+  subscriptionId: string;
+  targetProxyConfig?: {
+    id: string;
+    name: string;
+    active: boolean;
+    sharedBySubscriptionCount: number;
+  };
+  managedRuleSetCount: number;
+}
+
+export interface SubscriptionRemovalOutcome {
+  removedProxyConfig: boolean;
+  removedManagedRuleSetCount: number;
+}
+
 export interface RuleSetProfile {
   id: string;
   name: string;
@@ -96,6 +112,22 @@ export interface RuleSetProfile {
   managedBySubscriptionId?: string;
   commonBinding?: CommonRuleBinding;
   semanticIr: ZeroRuleIr;
+  source?: RuleSetSource;
+  sourceState: RuleSetSourceState;
+  artifact?: ZrsArtifact;
+  updatedAtUnixMs: number;
+  lastSyncAtUnixMs?: number;
+  lastError?: string;
+}
+
+export interface RuleSetSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  builtIn: boolean;
+  provenance?: RuleSetProvenance;
+  commonBinding?: CommonRuleBinding;
+  editableRuleCount: number;
   source?: RuleSetSource;
   sourceState: RuleSetSourceState;
   artifact?: ZrsArtifact;
