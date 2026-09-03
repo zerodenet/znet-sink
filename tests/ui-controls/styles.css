@@ -1,0 +1,5 @@
+@import "../../src/app.css";
+
+/* This standalone Vite root must scan the real components, just like the app. */
+@source "../../src";
+@source "./";

@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
   });
   await page.addInitScript(() => localStorage.setItem('znet-rules-view-mode', 'card'));
   await page.goto('/');
+  await expect(page.locator('main')).toHaveCSS('display', 'flex');
 });
 
 test.afterEach(async ({ page }, testInfo) => {
@@ -86,10 +87,13 @@ test('source interval selector saves a number instead of a string', async ({ pag
 test('long menus fit a short window and keyboard selection works', async ({ page }) => {
   await page.setViewportSize({ width: 650, height: 480 });
   await page.getByRole('button', { name: '更多选项' }).click();
+  await expect(page.getByRole('dialog')).toHaveCSS('position', 'fixed');
   const trigger = page.getByRole('button', { name: '长菜单' });
   await trigger.click();
   const menu = page.getByRole('listbox');
   await expect(menu).toBeVisible();
+  await expect(menu).not.toHaveCSS('max-height', 'none');
+  await expect(menu).toHaveCSS('z-index', '1100');
   await expect.poll(async () => {
     const bounds = await menu.boundingBox();
     return {
