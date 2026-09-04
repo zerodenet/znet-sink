@@ -227,7 +227,8 @@ export function selectPreviousReleaseTag(currentTag, tags) {
 }
 
 function git(args, options = {}) {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options }).trim();
+  const output = execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
+  return output == null ? '' : output.trim();
 }
 
 function livePlan(input) {
