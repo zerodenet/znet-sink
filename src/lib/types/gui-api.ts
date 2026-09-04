@@ -357,6 +357,8 @@ export interface GuiTunStatus extends GuiFeatureStatus {
   dualStack: boolean;
   strictRoute: boolean;
   dnsHijack: boolean;
+  fakeIpEnabled: boolean;
+  dnsHijackedQueries: number;
   egressInterface?: string;
   egressInterfaceV4?: string;
   egressInterfaceV6?: string;
@@ -531,4 +533,3 @@ export interface ConfigPlanApplyResult {
   /** Validation errors (present when `valid` is false). */
   errors: string[];
 }
-

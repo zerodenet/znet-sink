@@ -592,6 +592,7 @@ pub struct GuiConfigChangedEvent {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiPolicyProbeCompletedEvent {
+    pub operation_id: Option<String>,
     pub policy_tag: String,
     pub trigger: Option<String>,
     pub url: Option<String>,

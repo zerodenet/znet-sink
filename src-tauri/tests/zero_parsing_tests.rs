@@ -10,6 +10,7 @@ fn policy_probe_completed_preserves_runtime_details() {
         "event_type": "policy.probe.completed",
         "payload": {
             "policy_tag": "auto",
+            "operation_id": "manual-op-1",
             "trigger": "manual",
             "url": "http://www.gstatic.com/generate_204",
             "started_at_unix_ms": 1710000000000_u64,
@@ -29,6 +30,7 @@ fn policy_probe_completed_preserves_runtime_details() {
         panic!("expected policy probe event");
     };
     assert_eq!(probe.policy_tag, "auto");
+    assert_eq!(probe.operation_id.as_deref(), Some("manual-op-1"));
     assert_eq!(probe.trigger.as_deref(), Some("manual"));
     assert_eq!(probe.duration_ms, Some(320));
     assert_eq!(probe.selected.as_deref(), Some("server-b"));

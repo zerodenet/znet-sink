@@ -136,7 +136,7 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
         "tun.excludeCidrs",
     )?;
 
-    let (tun_addr, _) = validate_cidr(&settings.tun.addr, "tun.addr")?;
+    let (tun_addr, tun_prefix) = validate_cidr(&settings.tun.addr, "tun.addr")?;
     let tun_mask = settings
         .tun
         .mask
@@ -150,6 +150,11 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
     if !is_contiguous_mask(tun_mask) {
         return Err(AppError::invalid_argument(
             "tun.mask must be a contiguous network mask",
+        ));
+    }
+    if network_mask_prefix(tun_mask) != Some(tun_prefix) {
+        return Err(AppError::invalid_argument(
+            "tun.addr prefix and tun.mask must describe the same network",
         ));
     }
     if settings.tun.tag.is_empty() {
@@ -236,6 +241,13 @@ pub(crate) fn is_contiguous_mask(mask: IpAddr) -> bool {
     let relevant = if mask.is_ipv4() { bits << 96 } else { bits };
     let inverted = !relevant;
     inverted == 0 || (inverted & inverted.wrapping_add(1)) == 0
+}
+
+pub(crate) fn network_mask_prefix(mask: IpAddr) -> Option<u8> {
+    is_contiguous_mask(mask).then(|| match mask {
+        IpAddr::V4(mask) => u32::from(mask).count_ones() as u8,
+        IpAddr::V6(mask) => u128::from(mask).count_ones() as u8,
+    })
 }
 
 pub(crate) fn next_ip(address: IpAddr) -> Option<IpAddr> {

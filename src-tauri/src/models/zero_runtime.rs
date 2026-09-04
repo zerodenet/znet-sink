@@ -43,6 +43,8 @@ pub struct GuiTunStatus {
     pub dual_stack: bool,
     pub strict_route: bool,
     pub dns_hijack: bool,
+    pub fake_ip_enabled: bool,
+    pub dns_hijacked_queries: u64,
     pub egress_interface: Option<String>,
     pub egress_interface_v4: Option<String>,
     pub egress_interface_v6: Option<String>,

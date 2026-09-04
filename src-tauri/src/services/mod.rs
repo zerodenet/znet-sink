@@ -23,6 +23,8 @@ pub mod kernel_settings;
 pub mod local_proxy;
 pub mod log_store;
 pub mod logs;
+#[cfg(target_os = "macos")]
+pub mod macos_privilege;
 pub mod network_probe;
 pub mod node_screen;
 pub mod policy_selection;

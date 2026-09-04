@@ -4,7 +4,8 @@
 //! Individual node probes go through the core engine's outbound IPC probe without any
 //! upfront health check — each probe handles its own timeout and failure.
 
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,6 +28,41 @@ pub const PROBE_JOB_UPDATED_EVENT: &str = "client-core:probe-job-updated";
 pub const CLIENT_CORE_UPDATED_EVENT: &str = "client-core:updated";
 
 static PROBE_CONCURRENCY: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+static POLICY_PROBE_OPERATIONS: OnceLock<Mutex<HashMap<(ProbeJobId, String), String>>> =
+    OnceLock::new();
+
+fn policy_probe_operations() -> &'static Mutex<HashMap<(ProbeJobId, String), String>> {
+    POLICY_PROBE_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str, operation_id: String) {
+    policy_probe_operations()
+        .lock()
+        .expect("policy probe operation lock poisoned")
+        .insert((job_id, policy_tag.to_owned()), operation_id);
+}
+
+fn expected_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str) -> Option<String> {
+    policy_probe_operations()
+        .lock()
+        .expect("policy probe operation lock poisoned")
+        .get(&(job_id, policy_tag.to_owned()))
+        .cloned()
+}
+
+fn forget_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str) {
+    policy_probe_operations()
+        .lock()
+        .expect("policy probe operation lock poisoned")
+        .remove(&(job_id, policy_tag.to_owned()));
+}
+
+pub(crate) fn forget_policy_probe_job(job_id: ProbeJobId) {
+    policy_probe_operations()
+        .lock()
+        .expect("policy probe operation lock poisoned")
+        .retain(|(registered_job_id, _), _| *registered_job_id != job_id);
+}
 
 fn probe_semaphore() -> Arc<tokio::sync::Semaphore> {
     PROBE_CONCURRENCY
@@ -400,15 +436,28 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
                 continue;
             }
         };
-        let command = commands::probe_policy(policy_tag.clone(), options).await;
+        let requested_operation_id = format!("gui-manual-policy-{}", job.id.0);
+        remember_policy_probe_operation(job.id, &policy_tag, requested_operation_id.clone());
+        let command = commands::probe_policy_with_operation_id(
+            policy_tag.clone(),
+            Some(requested_operation_id),
+            options,
+        )
+        .await;
         let rejection = match command {
             Err(error) => Some(error.message),
             Ok(response) if !commands::policy_probe_command_accepted(&response) => {
                 Some("kernel rejected the policy probe request".to_string())
             }
-            Ok(_) => None,
+            Ok(response) => {
+                if let Some(operation_id) = commands::policy_probe_operation_id(&response) {
+                    remember_policy_probe_operation(job.id, &policy_tag, operation_id.to_owned());
+                }
+                None
+            }
         };
         if let Some(message) = rejection {
+            forget_policy_probe_operation(job.id, &policy_tag);
             record_policy_job_failure(&app_handle, &job, policy_tag, message);
         } else {
             wait_for_policy_target(&app_handle, job.id, &policy_tag).await;
@@ -491,12 +540,12 @@ fn policy_probe_summary(event: &GuiPolicyProbeCompletedEvent) -> (bool, Option<u
     (reachable, latency_ms, failed)
 }
 
-/// Reconcile a normalized Zero policy completion event into any matching
-/// manual policy job. Scheduled observations remain distinguishable and do
-/// not masquerade as completion of an overlapping manual request.
+/// Reconcile a normalized Zero policy completion event into its exact manual
+/// policy job. Automatic startup/scheduled observations never complete a
+/// manual request.
 pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyProbeCompletedEvent) {
     let scheduled =
-        crate::kernel::zero::events::policy_probe_is_scheduled(event.trigger.as_deref());
+        crate::kernel::zero::events::policy_probe_is_automatic(event.trigger.as_deref());
 
     let state = app_handle.state::<AppState>();
     let current_scope = state.client_core_snapshot().scope;
@@ -558,29 +607,11 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
                 && job.kind == ProbeJobKind::ManualPolicy
                 && job.scope == current_scope
                 && job.target_tags.contains(&event.policy_tag)
-                && policy_completion_is_fresh(event, job)
+                && policy_completion_matches_job(event, job)
         })
         .collect();
 
     for job in matching_jobs {
-        if scheduled {
-            logs::znet_log_fields(
-                Some(state.inner()),
-                LogLevel::Debug,
-                format!("周期测速结果完成主动策略测速（{}）", event.policy_tag),
-                serde_json::json!({
-                    "schema": "znet.node-probe.v1",
-                    "area": "nodes",
-                    "operation": "probe.policy.coalesced_completion",
-                    "probeJobId": job.id.0,
-                    "policyTag": event.policy_tag,
-                    "trigger": event.trigger,
-                    "selectedTag": event.selected,
-                    "completedAtUnixMs": event.completed_at_unix_ms,
-                    "outcome": if reachable { "success" } else { "failed" },
-                }),
-            );
-        }
         let update = state.record_client_probe_result(
             job.id,
             &job.scope,
@@ -596,7 +627,31 @@ pub fn record_policy_probe_completed(app_handle: &AppHandle, event: &GuiPolicyPr
         if let Some(update) = update {
             let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
         }
+        forget_policy_probe_operation(job.id, &event.policy_tag);
     }
+}
+
+fn policy_completion_matches_job(
+    event: &GuiPolicyProbeCompletedEvent,
+    job: &ProbeJobSnapshot,
+) -> bool {
+    if crate::kernel::zero::events::policy_probe_is_automatic(event.trigger.as_deref()) {
+        return false;
+    }
+    if event
+        .trigger
+        .as_deref()
+        .is_some_and(|trigger| !trigger.eq_ignore_ascii_case("manual"))
+    {
+        return false;
+    }
+    if let (Some(expected), Some(actual)) = (
+        expected_policy_probe_operation(job.id, &event.policy_tag),
+        event.operation_id.as_deref(),
+    ) {
+        return expected == actual;
+    }
+    policy_completion_is_fresh(event, job)
 }
 
 fn policy_completion_is_fresh(
@@ -634,6 +689,7 @@ pub fn reconcile_policy_snapshot(app_handle: &AppHandle, groups: &[GuiPolicyGrou
         record_policy_probe_completed(
             app_handle,
             &GuiPolicyProbeCompletedEvent {
+                operation_id: None,
                 policy_tag: group.name.clone(),
                 trigger: Some("scheduled".to_string()),
                 url: None,
@@ -664,6 +720,7 @@ pub fn spawn_probe_timeout(app_handle: AppHandle, job: &ProbeJobSnapshot) {
         let state = app_handle.state::<AppState>();
         if let Some(update) = state.timeout_client_probe(job_id) {
             if update.state == ProbeJobState::TimedOut {
+                forget_policy_probe_job(job_id);
                 let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
             }
         }
@@ -680,8 +737,10 @@ fn default_ipc_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_outbound_probe_failure, policy_completion_is_fresh, policy_probe_summary,
-        policy_probe_timeout_ms,
+        expected_policy_probe_operation, forget_policy_probe_job, forget_policy_probe_operation,
+        normalize_outbound_probe_failure, policy_completion_is_fresh,
+        policy_completion_matches_job, policy_probe_summary, policy_probe_timeout_ms,
+        remember_policy_probe_operation,
     };
     use crate::client_core::{
         ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
@@ -716,6 +775,7 @@ mod tests {
         checked: Option<u64>,
     ) -> GuiPolicyProbeCompletedEvent {
         GuiPolicyProbeCompletedEvent {
+            operation_id: None,
             policy_tag: "auto".to_string(),
             trigger: Some("manual".to_string()),
             url: None,
@@ -733,6 +793,32 @@ mod tests {
                 last_error: None,
             }],
         }
+    }
+
+    #[test]
+    fn manual_policy_completion_requires_the_acknowledged_operation() {
+        let job = job(1_000);
+        let mut completion = event(Some(1_000), Some(1_100), Some(1_050));
+        remember_policy_probe_operation(job.id, "auto", "manual-op".to_owned());
+
+        completion.operation_id = Some("scheduled-op".to_owned());
+        assert!(!policy_completion_matches_job(&completion, &job));
+        completion.operation_id = Some("manual-op".to_owned());
+        assert!(policy_completion_matches_job(&completion, &job));
+
+        forget_policy_probe_operation(job.id, "auto");
+    }
+
+    #[test]
+    fn terminal_policy_job_forgets_every_target_operation() {
+        let job_id = ProbeJobId(999);
+        remember_policy_probe_operation(job_id, "auto-a", "manual-a".to_owned());
+        remember_policy_probe_operation(job_id, "auto-b", "manual-b".to_owned());
+
+        forget_policy_probe_job(job_id);
+
+        assert_eq!(expected_policy_probe_operation(job_id, "auto-a"), None);
+        assert_eq!(expected_policy_probe_operation(job_id, "auto-b"), None);
     }
 
     #[test]

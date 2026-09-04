@@ -127,6 +127,12 @@ fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
         dual_stack: bool_at(value, &["dual_stack", "dualStack"]).unwrap_or(false),
         strict_route: bool_at(value, &["strict_route", "strictRoute"]).unwrap_or(false),
         dns_hijack: bool_at(value, &["dns_hijack", "dnsHijack"]).unwrap_or(false),
+        fake_ip_enabled: bool_at(value, &["fake_ip_enabled", "fakeIpEnabled"]).unwrap_or(false),
+        dns_hijacked_queries: parsing::u64_at(
+            value,
+            &["dns_hijacked_queries", "dnsHijackedQueries"],
+        )
+        .unwrap_or(0),
         egress_interface: parsing::string_at(value, &["egress_interface", "egressInterface"]),
         egress_interface_v4: parsing::string_at(
             value,
@@ -278,6 +284,8 @@ mod tests {
             "dual_stack": true,
             "strict_route": true,
             "dns_hijack": false,
+            "fake_ip_enabled": true,
+            "dns_hijacked_queries": 23,
             "egress_interface_v4": "Ethernet",
             "egress_interface_v6": "Ethernet",
             "ipv4_egress": {
@@ -307,6 +315,8 @@ mod tests {
         assert!(status.dual_stack);
         assert!(status.strict_route);
         assert!(!status.dns_hijack);
+        assert!(status.fake_ip_enabled);
+        assert_eq!(status.dns_hijacked_queries, 23);
         assert_eq!(status.egress_interface_v4.as_deref(), Some("Ethernet"));
         assert_eq!(status.ipv4_egress.availability, "available");
         assert_eq!(status.ipv4_egress.interface.as_deref(), Some("Ethernet"));

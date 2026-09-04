@@ -397,18 +397,6 @@ fn networksetup_failure(output: &std::process::Output) -> AppError {
 }
 
 #[cfg(any(target_os = "macos", test))]
-const MACOS_PRIVILEGED_COMMAND_SCRIPT: &str = r#"
-on run argv
-    if (count of argv) is 0 then error "missing privileged command"
-    set commandText to quoted form of (item 1 of argv)
-    repeat with argumentIndex from 2 to (count of argv)
-        set commandText to commandText & " " & quoted form of (item argumentIndex of argv)
-    end repeat
-    do shell script commandText with administrator privileges
-end run
-"#;
-
-#[cfg(any(target_os = "macos", test))]
 fn networksetup_requires_admin(stdout: &[u8], stderr: &[u8]) -> bool {
     let diagnostics = format!(
         "{}\n{}",
@@ -421,89 +409,20 @@ fn networksetup_requires_admin(stdout: &[u8], stderr: &[u8]) -> bool {
         || diagnostics.contains("not authorized")
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn elevated_networksetup_script(commands: &[Vec<String>]) -> String {
-    commands
-        .iter()
-        .map(|arguments| {
-            std::iter::once("/usr/sbin/networksetup")
-                .chain(arguments.iter().map(String::as_str))
-                .map(shell_quote)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join(" && ")
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn macos_authorization_cancelled(stdout: &[u8], stderr: &[u8]) -> bool {
-    let diagnostics = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(stdout),
-        String::from_utf8_lossy(stderr)
-    )
-    .to_ascii_lowercase();
-    diagnostics.contains("(-128)")
-        || diagnostics.contains("user canceled")
-        || diagnostics.contains("user cancelled")
-        || diagnostics.contains("用户已取消")
-}
-
 #[cfg(target_os = "macos")]
 fn run_networksetup_elevated(commands: &[Vec<String>]) -> AppResult<()> {
-    // One `do shell script` covers the complete proxy transaction, so macOS
-    // presents one authorization dialog instead of one per network service
-    // and proxy protocol. Every external value is POSIX-shell quoted before
-    // the complete script is passed as a single AppleScript argv value.
-    let script = elevated_networksetup_script(commands);
-    let output = common::background_command("/usr/bin/osascript")
-        .args([
-            "-e",
-            MACOS_PRIVILEGED_COMMAND_SCRIPT,
-            "--",
-            "/bin/sh",
-            "-c",
-            &script,
-        ])
-        .output()
-        .map_err(|error| {
-            AppError::internal(format!(
-                "failed to request administrator authorization for networksetup: {error}"
-            ))
-        })?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if !stderr.trim().is_empty() {
-        stderr.trim()
-    } else if !stdout.trim().is_empty() {
-        stdout.trim()
-    } else {
-        "no diagnostic output"
-    };
-    if macos_authorization_cancelled(&output.stdout, &output.stderr) {
-        return Err(AppError::authorization_cancelled(
-            "macOS administrator authorization was cancelled",
-        ));
-    }
-    Err(AppError::internal(format!(
-        "administrator-authorized networksetup failed (status {}): {detail}",
-        output.status
-    )))
+    super::macos_privilege::run_networksetup_commands(commands)
 }
 
 #[cfg(target_os = "macos")]
 fn run_networksetup_commands(commands: &[Vec<String>]) -> AppResult<()> {
+    // After the first authorization, avoid knowingly issuing a command that
+    // must fail as the desktop user. Send the complete transaction through
+    // the already-authorized, process-lifetime helper instead.
+    if super::macos_privilege::has_authorized_helper() {
+        return run_networksetup_elevated(commands);
+    }
+
     for (index, arguments) in commands.iter().enumerate() {
         let output = common::background_command("networksetup")
             .args(arguments)
@@ -997,9 +916,8 @@ fn local_bypass_configured_platform() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        elevated_networksetup_script, macos_authorization_cancelled, macos_proxy_commands,
-        networksetup_requires_admin, parse_network_services, windows_proxy_server,
-        windows_restore_server, ProxyBackup, MACOS_PRIVILEGED_COMMAND_SCRIPT,
+        macos_proxy_commands, networksetup_requires_admin, parse_network_services,
+        windows_proxy_server, windows_restore_server, ProxyBackup,
     };
 
     #[test]
@@ -1018,12 +936,10 @@ mod tests {
             b"",
             b"Error: Command requires admin privileges."
         ));
-        assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("quoted form of"));
-        assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("with administrator privileges"));
     }
 
     #[test]
-    fn macos_proxy_changes_form_one_safely_quoted_privileged_transaction() {
+    fn macos_proxy_changes_stay_as_structured_arguments() {
         let commands = macos_proxy_commands(
             &["Home Wi-Fi's && touch /tmp/not-created".to_string()],
             Some(("127.0.0.1", 7890)),
@@ -1031,18 +947,9 @@ mod tests {
         );
 
         assert_eq!(commands.len(), 3);
-        let script = elevated_networksetup_script(&commands);
-        assert_eq!(script.matches("/usr/sbin/networksetup").count(), 3);
-        assert_eq!(script.matches("' && '/usr/sbin/networksetup'").count(), 2);
-        assert!(script.contains("'Home Wi-Fi'\"'\"'s && touch /tmp/not-created'"));
-    }
-
-    #[test]
-    fn macos_cancelled_authorization_is_detected_without_rollback_prompt() {
-        assert!(macos_authorization_cancelled(
-            b"",
-            "execution error: 用户已取消。 (-128)".as_bytes(),
-        ));
+        assert_eq!(commands[0][1], "Home Wi-Fi's && touch /tmp/not-created");
+        assert_eq!(commands[0][2], "127.0.0.1");
+        assert_eq!(commands[0][3], "7890");
     }
 
     #[test]

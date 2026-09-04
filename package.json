@@ -3,6 +3,9 @@
   "version": "0.0.16-rc.202609041021",
   "description": "ZNet Sink desktop client for ZeroDenet",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",

@@ -2,11 +2,13 @@ use std::net::IpAddr;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppConfig;
-use crate::services::kernel_settings::{is_contiguous_mask, next_ip, validate_cidr};
+use crate::services::kernel_settings::{
+    is_contiguous_mask, network_mask_prefix, next_ip, validate_cidr,
+};
 
 pub(super) fn validate(config: &mut AppConfig) -> AppResult<()> {
     let tun = &config.tun;
-    let (primary, _) = validate_cidr(&tun.addr, "tun.addr")?;
+    let (primary, prefix) = validate_cidr(&tun.addr, "tun.addr")?;
     let mask = tun
         .mask
         .parse::<IpAddr>()
@@ -18,6 +20,11 @@ pub(super) fn validate(config: &mut AppConfig) -> AppResult<()> {
     }
     if !is_contiguous_mask(mask) {
         return Err(AppError::invalid_argument("TUN mask must be contiguous"));
+    }
+    if network_mask_prefix(mask) != Some(prefix) {
+        return Err(AppError::invalid_argument(
+            "TUN address prefix and mask must describe the same network",
+        ));
     }
     let secondary = match tun.secondary_addr.as_deref() {
         Some(value) => {
@@ -86,5 +93,15 @@ mod tests {
         assert_eq!(candidate.tun.enabled, Some(true));
         assert_eq!(previous.tun.name.as_deref(), Some("OldTun"));
         super::validate(&mut candidate).unwrap();
+    }
+
+    #[test]
+    fn rejects_mismatched_tun_prefix_and_network_mask() {
+        let mut config = AppConfig::default();
+        config.tun.addr = "10.0.0.1/24".into();
+        config.tun.mask = "255.255.255.252".into();
+
+        let error = super::validate(&mut config).expect_err("mismatched mask must fail");
+        assert!(error.message.contains("same network"));
     }
 }

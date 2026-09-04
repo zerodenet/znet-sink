@@ -104,10 +104,14 @@ pub fn cleanup_on_startup() {
                     return;
                 }
                 eprintln!(
-                    "[ZNet] proxy guard: failed to restore previous proxy: {:?}, falling back to disable",
+                    "[ZNet] proxy guard: failed to restore previous proxy: {:?}; keeping marker for a later retry",
                     e
                 );
-                let _ = system_proxy::disable();
+                // Do not immediately invoke a second privileged mutation. It
+                // can display another authorization dialog and may destroy a
+                // pre-existing user proxy. The durable marker is the safe
+                // recovery point for an explicit later retry.
+                return;
             }
         }
         Ok(status) => {
@@ -118,10 +122,14 @@ pub fn cleanup_on_startup() {
         }
         Err(e) => {
             eprintln!("[ZNet] proxy guard: cannot read proxy status: {:?}", e);
+            // Ownership could not be verified, so preserve the only durable
+            // backup and avoid guessing at the user's current proxy state.
+            return;
         }
     }
 
-    // Always remove the marker
+    // The restore succeeded, or the user already changed the proxy and the
+    // marker no longer represents state owned by this application.
     remove_marker_file(&path);
 
     eprintln!("[ZNet] proxy guard: startup cleanup complete");
@@ -315,23 +323,15 @@ pub fn disable_with_guard() -> AppResult<()> {
         marker.host, marker.port
     );
     if let Err(restore_error) = system_proxy::restore(&marker.previous) {
-        if restore_error.code == "authorization_cancelled" {
-            // Keep the durable marker and let the user retry explicitly.
-            // A fallback disable would only show the same prompt again.
-            return Err(restore_error);
-        }
         eprintln!(
-            "[ZNet] proxy guard: failed to restore previous proxy: {:?}, falling back to disable",
+            "[ZNet] proxy guard: failed to restore previous proxy: {:?}; keeping marker for a later retry",
             restore_error
         );
-        if let Err(disable_error) = system_proxy::disable() {
-            // Do not delete the marker when both restoration paths fail. It is
-            // the only durable recovery point and a later retry may succeed.
-            return Err(AppError::internal(format!(
-                "failed to restore previous proxy: {}; fallback disable also failed: {}",
-                restore_error.message, disable_error.message
-            )));
-        }
+        // One user action gets one restoration attempt. A destructive
+        // fallback would repeat the authorization request and could overwrite
+        // the user's original proxy state. Keep the marker so retry remains
+        // possible without losing the backup.
+        return Err(restore_error);
     }
     remove_marker_file(&path);
     Ok(())

@@ -1553,6 +1553,7 @@ version = "0.0.16-rc.202609041021"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "libc",
  "reqwest 0.12.28",
  "rusqlite",
  "semver",

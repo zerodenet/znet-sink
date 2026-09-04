@@ -87,6 +87,9 @@
       egressLabel('IPv4', tunRuntime.ipv4Egress),
       egressLabel('IPv6', tunRuntime.ipv6Egress),
       tunRuntime.addressFamilyPolicy ? `策略 ${tunRuntime.addressFamilyPolicy}` : null,
+      tunRuntime.dnsHijack
+        ? `DNS 劫持 ${tunRuntime.dnsHijackedQueries} 次${tunRuntime.fakeIpEnabled ? ' · Fake-IP' : ' · Real-IP'}`
+        : 'DNS 劫持关闭',
       `Gen ${tunRuntime.networkGeneration}`,
       tunRuntime.ipv6ToIpv4Fallbacks > 0
         ? `IPv6→IPv4 回退 ${tunRuntime.ipv6ToIpv4Fallbacks} 次`

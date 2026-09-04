@@ -84,6 +84,7 @@ pub fn gui_probe_job_cancel(
     let job = state
         .cancel_client_probe(job_id)
         .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))?;
+    probe::forget_policy_probe_job(job_id);
     let _ = app_handle.emit(probe::PROBE_JOB_UPDATED_EVENT, job.clone());
     Ok(job)
 }

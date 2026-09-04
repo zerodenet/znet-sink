@@ -341,7 +341,17 @@ impl ClientDnsConfig {
                 extra: BTreeMap::new(),
             }),
             reverse_mapping: None,
-            answer: ClientDnsAnswer::Real,
+            // TUN is opt-in, but once a new user enables it the recommended
+            // DNS path should preserve domain identity for routing instead of
+            // silently falling back to real-address interception.
+            answer: ClientDnsAnswer::FakeIp {
+                cidr: default_fake_ip_cidr(),
+                ipv6_cidr: Some(default_fake_ip_ipv6_cidr()),
+                ttl_seconds: default_fake_ip_ttl(),
+                max_entries: None,
+                exclude_domains: Vec::new(),
+                extra: BTreeMap::new(),
+            },
             policy: Some(ClientDnsPolicy {
                 timeout_ms: None,
                 server_timeout_ms: None,
@@ -843,6 +853,9 @@ fn default_doh_path() -> String {
 fn default_fake_ip_cidr() -> String {
     "198.18.0.0/15".to_owned()
 }
+fn default_fake_ip_ipv6_cidr() -> String {
+    "fd00::/96".to_owned()
+}
 
 #[cfg(test)]
 mod tests {
@@ -1119,6 +1132,19 @@ mod tests {
         assert_eq!(value["servers"]["114dns"]["type"], "udp");
         assert_eq!(value["servers"]["114dns"]["host"], "114.114.114.114");
         assert!(value["servers"]["114dns"].get("detour").is_none());
+        assert_eq!(value["answer"]["type"], "fake_ip");
+        assert_eq!(value["answer"]["cidr"], "198.18.0.0/15");
+        assert_eq!(value["answer"]["ipv6_cidr"], "fd00::/96");
+    }
+
+    #[test]
+    fn missing_answer_in_an_existing_dns_config_keeps_real_ip_compatibility() {
+        let mut value = serde_json::to_value(ClientDnsConfig::recommended_default()).unwrap();
+        value.as_object_mut().unwrap().remove("answer");
+
+        let restored: ClientDnsConfig = serde_json::from_value(value).unwrap();
+
+        assert_eq!(restored.answer, ClientDnsAnswer::Real);
     }
 
     #[test]

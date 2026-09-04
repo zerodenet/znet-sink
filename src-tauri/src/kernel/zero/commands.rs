@@ -77,13 +77,20 @@ pub async fn select_policy(
 
 /// Probe a url_test policy group (triggers latency measurement).
 pub async fn probe_policy(policy_tag: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
+    probe_policy_with_operation_id(policy_tag, None, options).await
+}
+
+pub async fn probe_policy_with_operation_id(
+    policy_tag: String,
+    operation_id: Option<String>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<Value> {
     let policy_tag = normalize_non_empty(policy_tag, "policyTag")?;
-    run_command(
-        "policies.probe",
-        json!({ "policy_tag": policy_tag }),
-        options,
-    )
-    .await
+    let mut params = json!({ "policy_tag": policy_tag });
+    if let Some(operation_id) = operation_id {
+        params["operation_id"] = Value::String(operation_id);
+    }
+    run_command("policies.probe", params, options).await
 }
 
 /// Normalize legacy policy-probe acknowledgement fields at the Zero boundary.
@@ -99,6 +106,17 @@ pub fn policy_probe_command_accepted(response: &Value) -> bool {
             })
             .and_then(Value::as_bool)
             != Some(false)
+}
+
+pub fn policy_probe_operation_id(response: &Value) -> Option<&str> {
+    response
+        .get("result")
+        .and_then(|result| {
+            result
+                .get("operationId")
+                .or_else(|| result.get("operation_id"))
+        })
+        .and_then(Value::as_str)
 }
 
 /// Probe a single target for reachability and latency.

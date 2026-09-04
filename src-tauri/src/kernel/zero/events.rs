@@ -220,6 +220,7 @@ fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeComplet
         .unwrap_or_default();
 
     Some(GuiPolicyProbeCompletedEvent {
+        operation_id: string_at(payload, &["operation_id", "operationId"]),
         policy_tag: string_at(payload, &["policy_tag", "policyTag"])?,
         trigger: string_at(payload, &["trigger"]),
         url: string_at(payload, &["url"]),
@@ -233,11 +234,11 @@ fn parse_policy_probe_completed(payload: &Value) -> Option<GuiPolicyProbeComplet
 
 /// Normalize legacy Zero trigger spellings at the kernel boundary so the
 /// application layer only decides workflow semantics from one predicate.
-pub fn policy_probe_is_scheduled(trigger: Option<&str>) -> bool {
+pub fn policy_probe_is_automatic(trigger: Option<&str>) -> bool {
     trigger.is_some_and(|trigger| {
         matches!(
             trigger.trim().to_ascii_lowercase().as_str(),
-            "scheduled" | "schedule" | "timer" | "interval" | "periodic"
+            "startup" | "scheduled" | "schedule" | "timer" | "interval" | "periodic"
         )
     })
 }
@@ -276,15 +277,22 @@ fn unknown_payload(message: &'static str, payload: &Value) -> GuiEventData {
 mod tests {
     use serde_json::json;
 
-    use super::{parse_policy_probe_completed, policy_probe_is_scheduled};
+    use super::{parse_policy_probe_completed, policy_probe_is_automatic};
 
     #[test]
     fn scheduled_trigger_compatibility_is_normalized_at_zero_boundary() {
-        for trigger in ["scheduled", "schedule", "timer", "interval", "periodic"] {
-            assert!(policy_probe_is_scheduled(Some(trigger)));
+        for trigger in [
+            "startup",
+            "scheduled",
+            "schedule",
+            "timer",
+            "interval",
+            "periodic",
+        ] {
+            assert!(policy_probe_is_automatic(Some(trigger)));
         }
-        assert!(!policy_probe_is_scheduled(Some("manual")));
-        assert!(!policy_probe_is_scheduled(None));
+        assert!(!policy_probe_is_automatic(Some("manual")));
+        assert!(!policy_probe_is_automatic(None));
     }
 
     #[test]
