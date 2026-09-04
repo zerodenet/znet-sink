@@ -128,11 +128,13 @@ pub fn query_page_from_path(path: &Path, query: &LogQuery) -> AppResult<LogPage>
             continue;
         }
 
-        let mut entry = serde_json::from_str::<LogEntry>(line).map_err(|error| AppError {
-            code: "invalid_argument",
-            message: format!("failed to parse logs: {error}"),
-            details: Some(serde_json::json!({ "path": path.display().to_string() })),
-        })?;
+        // A partial final write after a crash or a record from an older app
+        // version must not make the complete log page unreadable. Startup
+        // already treats persisted history as best-effort; queries should be
+        // equally tolerant and return every valid record around a bad line.
+        let Ok(mut entry) = serde_json::from_str::<LogEntry>(line) else {
+            continue;
+        };
         repair_log_entry(&mut entry);
 
         if query
@@ -557,6 +559,52 @@ mod tests {
         let entries = load_recent_from_path(&path, 10).unwrap();
         assert_eq!(entries[0].message, expected);
         assert_eq!(entries[0].fields.as_ref().unwrap()["raw_line"], expected);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_store_query_skips_corrupt_records() {
+        let dir =
+            std::env::temp_dir().join(format!("znet-log-corrupt-query-{}", std::process::id()));
+        let path = dir.join("logs.jsonl");
+
+        append_to_path(
+            &path,
+            &LogEntry {
+                id: 1,
+                source: LogSource::App,
+                level: LogLevel::Info,
+                message: "before".to_string(),
+                fields: None,
+                occurred_at_unix_ms: 1,
+            },
+        )
+        .unwrap();
+        use std::io::Write as _;
+        writeln!(
+            fs::OpenOptions::new().append(true).open(&path).unwrap(),
+            "{{not valid json"
+        )
+        .unwrap();
+        append_to_path(
+            &path,
+            &LogEntry {
+                id: 2,
+                source: LogSource::Core,
+                level: LogLevel::Error,
+                message: "after".to_string(),
+                fields: None,
+                occurred_at_unix_ms: 2,
+            },
+        )
+        .unwrap();
+
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(
+            page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

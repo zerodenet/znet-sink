@@ -312,35 +312,54 @@ fn local_bypass_configured_platform() -> Option<bool> {
     None
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn parse_network_services(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("An asterisk (*) denotes")
+                && !line.starts_with('*')
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 fn active_network_services() -> AppResult<Vec<String>> {
-    // List hardware ports to find active network services
+    // Proxy commands accept network-service names, not hardware-port names.
+    // Those usually match (for example "Wi-Fi") but users can rename a
+    // service, so deriving them from `-listallhardwareports` is incorrect.
     let output = common::background_command("networksetup")
-        .args(["-listallhardwareports"])
+        .args(["-listallnetworkservices"])
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut services = Vec::new();
-    let mut lines = stdout.lines().peekable();
-
-    while let Some(line) = lines.next() {
-        if line.starts_with("Hardware Port:") {
-            let service_name = line.trim_start_matches("Hardware Port:").trim();
-            // Skip disabled/inactive ports - check next line for Device
-            if let Some(device_line) = lines.next() {
-                if device_line.contains("Device:") {
-                    let device = device_line.trim_start_matches("Device:").trim();
-                    // Only include real network interfaces (skip Bluetooth, Thunderbolt bridge, etc.)
-                    if device.starts_with("en") || device.starts_with("wl") {
-                        services.push(service_name.to_string());
-                    }
-                }
-            }
-        }
+    if !output.status.success() {
+        return Err(networksetup_failure(&output));
     }
 
-    Ok(services)
+    Ok(parse_network_services(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+#[cfg(target_os = "macos")]
+fn networksetup_failure(output: &std::process::Output) -> AppError {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim()
+    } else {
+        "no diagnostic output"
+    };
+    AppError::internal(format!(
+        "networksetup failed (status {}): {detail}",
+        output.status
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -351,11 +370,7 @@ fn run_networksetup(args: &[&str]) -> AppResult<()> {
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::internal(format!(
-            "networksetup failed: {}",
-            stderr.trim()
-        )));
+        return Err(networksetup_failure(&output));
     }
     Ok(())
 }
@@ -366,6 +381,10 @@ fn run_networksetup_output(args: &[&str]) -> AppResult<String> {
         .args(args)
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
+
+    if !output.status.success() {
+        return Err(networksetup_failure(&output));
+    }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -831,7 +850,19 @@ fn local_bypass_configured_platform() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{windows_proxy_server, windows_restore_server, ProxyBackup};
+    use super::{
+        parse_network_services, windows_proxy_server, windows_restore_server, ProxyBackup,
+    };
+
+    #[test]
+    fn macos_network_services_use_service_names_and_skip_disabled_entries() {
+        let output = "An asterisk (*) denotes that a network service is disabled.\nHome Wi-Fi\n*USB LAN\nOffice Ethernet\n";
+
+        assert_eq!(
+            parse_network_services(output),
+            vec!["Home Wi-Fi".to_string(), "Office Ethernet".to_string()]
+        );
+    }
 
     #[test]
     fn windows_manual_proxy_uses_settings_compatible_endpoint() {
