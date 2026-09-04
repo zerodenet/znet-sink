@@ -37,6 +37,24 @@ assert.equal(stable.releaseVersion, '0.0.17');
 assert.equal(stable.channel, 'stable');
 assert.throws(() => resolveReleasePlan({ branch: 'main', input: '0.0.18', tags: withRc, now, buildNumber: 103 }), /active release line/);
 
+const cleanedRemoteHistory = ['v0.0.16', 'v0.0.17-rc.202608181030'];
+const recoveredRc = resolveReleasePlan({
+  branch: 'main',
+  input: '0.0.17-rc',
+  tags: cleanedRemoteHistory,
+  now: new Date('2026-08-18T10:38:00Z'),
+  buildNumber: 104,
+});
+assert.equal(recoveredRc.releaseVersion, '0.0.17-rc.202608181038');
+assert.equal(
+  validatePublishedRelease({
+    branch: 'main',
+    tag: recoveredRc.tag,
+    tags: [...cleanedRemoteHistory, recoveredRc.tag],
+  }).channel,
+  'rc',
+);
+
 assert.equal(
   validatePublishedRelease({ branch: 'develop', tag: dev.tag, tags: [...stableTags, dev.tag] }).channel,
   'dev',

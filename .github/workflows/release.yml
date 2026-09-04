@@ -48,6 +48,12 @@ jobs:
           fi
 
           mapfile -t TAGS < <(git tag --list)
+          PARENT_VERSION=$(git show "$GITHUB_SHA^:package.json" | node -e '
+            let body = "";
+            process.stdin.on("data", chunk => { body += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(body).version));
+          ')
+          TAGS+=("v$PARENT_VERSION")
           node scripts/release-policy.mjs validate-published "$EXPECTED_BRANCH" "$TAG" "${TAGS[@]}" >/dev/null
 
           EXPECTED_COMMIT="chore(release): $VERSION"

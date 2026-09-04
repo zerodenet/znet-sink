@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -251,8 +252,13 @@ function livePlan(input) {
     .filter(Boolean)
     .map((line) => line.split(/\s+/)[1]?.replace(/^refs\/tags\//, ''))
     .filter(Boolean);
+  // Prerelease cleanup may have removed the tag for the version currently on
+  // the authoritative branch. The manifest is still an immutable transition
+  // predecessor, so include it when calculating the next promotion.
+  const currentVersion = JSON.parse(readFileSync('package.json', 'utf8')).version;
+  const releaseHistory = [...remoteTags, `v${currentVersion}`];
   const buildNumber = Number(git(['rev-list', '--count', 'HEAD'])) + 1;
-  return resolveReleasePlan({ branch, input, tags: remoteTags, buildNumber });
+  return resolveReleasePlan({ branch, input, tags: releaseHistory, buildNumber });
 }
 
 function usage() {
