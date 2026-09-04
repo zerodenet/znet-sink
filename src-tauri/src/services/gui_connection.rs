@@ -33,17 +33,6 @@ pub async fn connect(
     let managed_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
 
-    // If a core is responding on the pipe but we do NOT own a child process
-    // for it, it's a stale instance left by a previous session. Kill it so
-    // we can start a fresh one with the current config instead of blocking.
-    if !managed_running {
-        let opts = default_ipc_opts(state.inner());
-        let adapter = ZeroAdapter::new();
-        if adapter.readiness_health(opts).await.is_ok() {
-            core_process::kill_external(state.inner())?;
-        }
-    }
-
     if managed_running {
         // We already manage a running core — no need to start another one.
     } else {

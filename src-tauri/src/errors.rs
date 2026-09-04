@@ -45,6 +45,14 @@ impl AppError {
         }
     }
 
+    pub(crate) fn authorization_cancelled(message: impl Into<String>) -> Self {
+        Self {
+            code: "authorization_cancelled",
+            message: message.into(),
+            details: None,
+        }
+    }
+
     pub(crate) fn not_found(resource: &'static str, id: impl Into<String>) -> Self {
         Self {
             code: "not_found",

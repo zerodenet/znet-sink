@@ -208,23 +208,9 @@ fn set_proxy_platform(
         ));
     }
 
-    for service in &services {
-        if enable {
-            run_networksetup(&["-setwebproxy", service, host, &port.to_string()])?;
-            run_networksetup(&["-setsecurewebproxy", service, host, &port.to_string()])?;
-            if socks_enabled {
-                run_networksetup(&["-setsocksfirewallproxy", service, host, &port.to_string()])?;
-            } else {
-                run_networksetup(&["-setsocksfirewallproxystate", service, "off"])?;
-            }
-        } else {
-            run_networksetup(&["-setwebproxystate", service, "off"])?;
-            run_networksetup(&["-setsecurewebproxystate", service, "off"])?;
-            run_networksetup(&["-setsocksfirewallproxystate", service, "off"])?;
-        }
-    }
-
-    Ok(())
+    let web_proxy = enable.then_some((host, port));
+    let socks_proxy = (enable && socks_enabled).then_some((host, port));
+    run_networksetup_commands(&macos_proxy_commands(&services, web_proxy, socks_proxy))
 }
 
 #[cfg(target_os = "macos")]
@@ -288,20 +274,15 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
 #[cfg(target_os = "macos")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
     if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled, &[])?;
-        for service in active_network_services()? {
-            if backup.socks_enabled {
-                run_networksetup(&[
-                    "-setsocksfirewallproxy",
-                    &service,
-                    &backup.socks_host,
-                    &backup.socks_port.to_string(),
-                ])?;
-            } else {
-                run_networksetup(&["-setsocksfirewallproxystate", &service, "off"])?;
-            }
-        }
-        Ok(())
+        let services = active_network_services()?;
+        let socks_proxy = backup
+            .socks_enabled
+            .then_some((backup.socks_host.as_str(), backup.socks_port));
+        run_networksetup_commands(&macos_proxy_commands(
+            &services,
+            Some((backup.host.as_str(), backup.port)),
+            socks_proxy,
+        ))
     } else {
         set_proxy_platform("", 0, false, false, &[])
     }
@@ -343,6 +324,59 @@ fn active_network_services() -> AppResult<Vec<String>> {
     Ok(parse_network_services(&String::from_utf8_lossy(
         &output.stdout,
     )))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_proxy_commands(
+    services: &[String],
+    web_proxy: Option<(&str, u16)>,
+    socks_proxy: Option<(&str, u16)>,
+) -> Vec<Vec<String>> {
+    let mut commands = Vec::with_capacity(services.len() * 3);
+    for service in services {
+        if let Some((host, port)) = web_proxy {
+            let port = port.to_string();
+            commands.push(vec![
+                "-setwebproxy".to_string(),
+                service.clone(),
+                host.to_string(),
+                port.clone(),
+            ]);
+            commands.push(vec![
+                "-setsecurewebproxy".to_string(),
+                service.clone(),
+                host.to_string(),
+                port,
+            ]);
+        } else {
+            commands.push(vec![
+                "-setwebproxystate".to_string(),
+                service.clone(),
+                "off".to_string(),
+            ]);
+            commands.push(vec![
+                "-setsecurewebproxystate".to_string(),
+                service.clone(),
+                "off".to_string(),
+            ]);
+        }
+
+        if let Some((host, port)) = socks_proxy {
+            commands.push(vec![
+                "-setsocksfirewallproxy".to_string(),
+                service.clone(),
+                host.to_string(),
+                port.to_string(),
+            ]);
+        } else {
+            commands.push(vec![
+                "-setsocksfirewallproxystate".to_string(),
+                service.clone(),
+                "off".to_string(),
+            ]);
+        }
+    }
+    commands
 }
 
 #[cfg(target_os = "macos")]
@@ -387,19 +421,56 @@ fn networksetup_requires_admin(stdout: &[u8], stderr: &[u8]) -> bool {
         || diagnostics.contains("not authorized")
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn elevated_networksetup_script(commands: &[Vec<String>]) -> String {
+    commands
+        .iter()
+        .map(|arguments| {
+            std::iter::once("/usr/sbin/networksetup")
+                .chain(arguments.iter().map(String::as_str))
+                .map(shell_quote)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_authorization_cancelled(stdout: &[u8], stderr: &[u8]) -> bool {
+    let diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+    .to_ascii_lowercase();
+    diagnostics.contains("(-128)")
+        || diagnostics.contains("user canceled")
+        || diagnostics.contains("user cancelled")
+        || diagnostics.contains("用户已取消")
+}
+
 #[cfg(target_os = "macos")]
-fn run_networksetup_elevated(args: &[&str]) -> AppResult<()> {
-    // Pass every value as an AppleScript argv item and let `quoted form of`
-    // perform shell escaping. Network service names are user-controlled OS
-    // data and must never be interpolated into the script source.
+fn run_networksetup_elevated(commands: &[Vec<String>]) -> AppResult<()> {
+    // One `do shell script` covers the complete proxy transaction, so macOS
+    // presents one authorization dialog instead of one per network service
+    // and proxy protocol. Every external value is POSIX-shell quoted before
+    // the complete script is passed as a single AppleScript argv value.
+    let script = elevated_networksetup_script(commands);
     let output = common::background_command("/usr/bin/osascript")
         .args([
             "-e",
             MACOS_PRIVILEGED_COMMAND_SCRIPT,
             "--",
-            "/usr/sbin/networksetup",
+            "/bin/sh",
+            "-c",
+            &script,
         ])
-        .args(args)
         .output()
         .map_err(|error| {
             AppError::internal(format!(
@@ -420,6 +491,11 @@ fn run_networksetup_elevated(args: &[&str]) -> AppResult<()> {
     } else {
         "no diagnostic output"
     };
+    if macos_authorization_cancelled(&output.stdout, &output.stderr) {
+        return Err(AppError::authorization_cancelled(
+            "macOS administrator authorization was cancelled",
+        ));
+    }
     Err(AppError::internal(format!(
         "administrator-authorized networksetup failed (status {}): {detail}",
         output.status
@@ -427,19 +503,22 @@ fn run_networksetup_elevated(args: &[&str]) -> AppResult<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_networksetup(args: &[&str]) -> AppResult<()> {
-    let output = common::background_command("networksetup")
-        .args(args)
-        .output()
-        .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
+fn run_networksetup_commands(commands: &[Vec<String>]) -> AppResult<()> {
+    for (index, arguments) in commands.iter().enumerate() {
+        let output = common::background_command("networksetup")
+            .args(arguments)
+            .output()
+            .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
 
-    if output.status.success() {
-        return Ok(());
+        if output.status.success() {
+            continue;
+        }
+        if networksetup_requires_admin(&output.stdout, &output.stderr) {
+            return run_networksetup_elevated(&commands[index..]);
+        }
+        return Err(networksetup_failure(&output));
     }
-    if networksetup_requires_admin(&output.stdout, &output.stderr) {
-        return run_networksetup_elevated(args);
-    }
-    Err(networksetup_failure(&output))
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -918,6 +997,7 @@ fn local_bypass_configured_platform() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
+        elevated_networksetup_script, macos_authorization_cancelled, macos_proxy_commands,
         networksetup_requires_admin, parse_network_services, windows_proxy_server,
         windows_restore_server, ProxyBackup, MACOS_PRIVILEGED_COMMAND_SCRIPT,
     };
@@ -940,6 +1020,29 @@ mod tests {
         ));
         assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("quoted form of"));
         assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("with administrator privileges"));
+    }
+
+    #[test]
+    fn macos_proxy_changes_form_one_safely_quoted_privileged_transaction() {
+        let commands = macos_proxy_commands(
+            &["Home Wi-Fi's && touch /tmp/not-created".to_string()],
+            Some(("127.0.0.1", 7890)),
+            Some(("127.0.0.1", 7890)),
+        );
+
+        assert_eq!(commands.len(), 3);
+        let script = elevated_networksetup_script(&commands);
+        assert_eq!(script.matches("/usr/sbin/networksetup").count(), 3);
+        assert_eq!(script.matches("' && '/usr/sbin/networksetup'").count(), 2);
+        assert!(script.contains("'Home Wi-Fi'\"'\"'s && touch /tmp/not-created'"));
+    }
+
+    #[test]
+    fn macos_cancelled_authorization_is_detected_without_rollback_prompt() {
+        assert!(macos_authorization_cancelled(
+            b"",
+            "execution error: 用户已取消。 (-128)".as_bytes(),
+        ));
     }
 
     #[test]

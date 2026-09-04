@@ -23,94 +23,12 @@ pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     refresh_status(state.inner())
 }
 
-/// Kill any core process left by a previous session that we don't own.
-///
-/// Uses OS-level force-kill (`taskkill` on Windows, `pkill` on Unix) to
-/// terminate the core executable, then waits briefly for the OS and the
-/// named pipe server to release handles.
-pub(crate) fn kill_external(state: &AppState) -> AppResult<()> {
-    let config = { lock(state.app_config(), "app_config")?.core.clone() };
-    let snapshot = core_config::snapshot_from_config(&config)?;
-
-    let configured_name = snapshot
-        .executable_path
-        .as_deref()
-        .and_then(|path| std::path::Path::new(path).file_name())
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string());
-
-    // Always try to kill the default binary name as a fallback — the
-    // kernel may have been started by auto_start with a path that
-    // isn't (yet) recorded in the config.
-    let fallback = if cfg!(windows) {
-        "zero.exe".to_string()
-    } else {
-        "zero".to_string()
-    };
-
-    let executable_name = configured_name.as_deref().unwrap_or(&fallback);
-
-    #[cfg(windows)]
-    {
-        let _ = common::background_command("taskkill")
-            .args(["/F", "/IM", executable_name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = common::background_command("pkill")
-            .args(["-9", executable_name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-
-    // Give the OS and pipe server time to release handles before we
-    // try to spawn a new process.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    Ok(())
-}
-
-/// Kill the kernel by its default binary name (`zero.exe` / `zero`).
-///
-/// Unlike [`kill_external`] this needs no [`AppState`], so the shutdown
-/// coordinator can call it from a bare `Fn()` callback. This guarantees the
-/// kernel exits with the GUI even when the managed child handle is gone —
-/// e.g. the GUI connected to an already-running (external) kernel and never
-/// owned a child, or `ManagedCoreProcess::Drop` didn't run because the
-/// process exited without full Rust destructor unwinding.
-pub fn kill_core_default() {
-    let name = if cfg!(windows) { "zero.exe" } else { "zero" };
-    #[cfg(windows)]
-    {
-        let _ = common::background_command("taskkill")
-            .args(["/F", "/IM", name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = common::background_command("pkill")
-            .args(["-9", name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    // Give the OS a moment to release the pipe handle.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-}
-
 /// Gracefully tear down app-owned network capture before the GUI exits.
 ///
 /// The shutdown event loop calls this while Tauri state and the async runtime
-/// are still alive. TUN is stopped first, then the managed child (or the
-/// matching external kernel) is stopped through the normal service path,
-/// which also restores the guarded system proxy.
+/// are still alive. TUN is stopped first, then the managed child is stopped
+/// through the normal service path, which also restores the guarded system
+/// proxy. The client never terminates or adopts a kernel it did not spawn.
 pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
     let state = app_handle.state::<AppState>();
     state
@@ -151,16 +69,14 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
         Ok(Ok(_)) => crate::services::file_logger::line("shutdown: managed core stopped"),
         Ok(Err(error)) => {
             crate::services::file_logger::line(&format!(
-                "shutdown: managed core stop failed; using process fallback: {}",
+                "shutdown: managed core stop failed; lifetime pipe will close on process exit: {}",
                 error.message
             ));
-            kill_core_default();
         }
         Err(error) => {
             crate::services::file_logger::line(&format!(
-                "shutdown: managed core stop task failed; using process fallback: {error}"
+                "shutdown: managed core stop task failed; lifetime pipe will close on process exit: {error}"
             ));
-            kill_core_default();
         }
     }
 }
@@ -259,11 +175,6 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
         };
     }
 
-    // Kill any stale core process left by a previous GUI session (crashed
-    // tab, force-quit, etc.).  Without this the new core can't bind the
-    // named pipe and the whole flow blocks.
-    let _ = kill_external(state.inner());
-
     // Pre-check the local proxy port before spawning. If something else
     // already occupies it (another proxy, a stale process), the kernel
     // will fail to bind and die immediately — which previously cascaded
@@ -297,24 +208,13 @@ pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Cor
 }
 
 /// Restart the managed kernel while preserving a system proxy owned by this
-/// GUI. `stop` restores the user's original proxy; once the new kernel is
-/// running we re-enable the guard against the current local endpoint.
+/// GUI. The local endpoint does not change during an ordinary restart, so
+/// restoring and immediately re-enabling the OS proxy would only create two
+/// unnecessary macOS authorization prompts.
 pub fn restart(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
-    let reconnect_system_proxy = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-    stop(app_handle.clone(), state.clone())?;
+    stop_preserving_system_proxy(app_handle.clone(), state.clone())?;
     let status = start(app_handle.clone(), state.clone())?;
-    if reconnect_system_proxy {
-        let (host, port, bypass) = {
-            let config = lock(state.app_config(), "app_config")?;
-            (
-                config.local_proxy.host.clone(),
-                config.local_proxy.port,
-                config.local_proxy.bypass.clone(),
-            )
-        };
-        system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
-    }
     crate::services::network_probe::emit_host_network_changed(&app_handle, "core.restarted");
     Ok(status)
 }
@@ -349,7 +249,10 @@ fn spawn_core_child(
     if let Some(working_dir) = snapshot.working_dir.as_deref() {
         command.current_dir(working_dir);
     }
-    command.stdin(Stdio::null());
+    // Keep the write end in `Child::stdin` for the entire managed lifetime.
+    // If the GUI exits normally, crashes, or is force-killed, every desktop
+    // OS closes this inherited pipe and Zero observes EOF.
+    command.stdin(Stdio::piped());
     command.stdout(Stdio::null());
     command.stderr(Stdio::piped());
 
@@ -379,6 +282,13 @@ fn spawn_core_child(
     };
 
     let pid = child.id();
+    if child.stdin.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(AppError::internal(
+            "core process parent-lifetime pipe was not available",
+        ));
+    }
     let stderr = child.stderr.take().ok_or_else(|| {
         let _ = child.kill();
         let _ = child.wait();
@@ -747,7 +657,30 @@ fn spawn_monitor(app_handle: AppHandle, snapshot: CoreConfigSnapshot, monitor_ge
 }
 
 pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    let proxy_result = system_proxy_guard::disable_with_guard();
+    stop_with_proxy_restore(app_handle, state, true)
+}
+
+/// Stop the managed kernel without changing a GUI-owned system proxy.
+///
+/// This is only for short internal transitions (restart or in-place kernel
+/// replacement) where the same local proxy endpoint will be available again.
+pub(crate) fn stop_preserving_system_proxy(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<CoreProcessStatus> {
+    stop_with_proxy_restore(app_handle, state, false)
+}
+
+fn stop_with_proxy_restore(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    restore_system_proxy: bool,
+) -> AppResult<CoreProcessStatus> {
+    let proxy_result = if restore_system_proxy {
+        system_proxy_guard::disable_with_guard()
+    } else {
+        Ok(())
+    };
     // Drop the multiplexed connection so the next request opens a fresh one
     // instead of reusing a handle whose peer (the kernel) is about to die.
     crate::kernel::connection::reset();
@@ -767,26 +700,23 @@ pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Core
     };
 
     let Some(mut child) = child else {
-        // No managed child — but the kernel might be an external process
-        // (e.g. started by a previous GUI session).  Force-kill it so the
-        // UI "stop" button actually works in that scenario.
-        let _ = kill_external(state.inner());
+        // The GUI only controls children it owns. An independently launched
+        // Zero process is deliberately outside this lifecycle.
         proxy_result?;
         let status = refresh_status(state.inner());
         return status;
     };
 
     let pid = child.id();
-    let kill_result = child.kill();
-    let wait_result = child.wait();
+    let wait_result = stop_owned_child(&mut child, Duration::from_secs(5));
 
     if let Some(handle) = stderr_handle {
         let _ = handle.join();
     }
 
     let mut process = lock(state.core_process(), "core_process")?;
-    match (kill_result, wait_result) {
-        (Ok(()), Ok(status)) => {
+    match wait_result {
+        Ok(status) => {
             process.status.state = CoreProcessState::Exited;
             process.status.pid = None;
             process.status.exit_code = status.code();
@@ -812,7 +742,7 @@ pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Core
             );
             Ok(status)
         }
-        (Err(error), _) | (_, Err(error)) => {
+        Err(error) => {
             let message = format!("failed to stop core process: {error}");
             process.status.state = CoreProcessState::Failed;
             process.status.last_error = Some(message.clone());
@@ -827,6 +757,26 @@ pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<Core
 
             Err(AppError::internal(message))
         }
+    }
+}
+
+/// Ask Zero to stop by closing the parent-lifetime pipe, then fall back to
+/// terminating this exact child if graceful cleanup does not finish in time.
+fn stop_owned_child(
+    child: &mut std::process::Child,
+    graceful_timeout: Duration,
+) -> std::io::Result<std::process::ExitStatus> {
+    child.stdin.take();
+    let deadline = Instant::now() + graceful_timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            return child.wait();
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

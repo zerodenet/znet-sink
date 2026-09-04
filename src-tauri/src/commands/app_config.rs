@@ -257,7 +257,6 @@ pub async fn app_config_update(
     }
 
     if managed_proxy_enabled && old_config.local_proxy.bypass != new_config.local_proxy.bypass {
-        system_proxy_guard::disable_with_guard()?;
         if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(
             &new_config.local_proxy.host,
             new_config.local_proxy.port,

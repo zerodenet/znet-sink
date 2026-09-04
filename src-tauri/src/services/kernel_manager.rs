@@ -346,7 +346,10 @@ pub fn install_version(
     // Keep the kernel running during the network transfer so environments
     // that depend on the kernel's mixed-port can still reach the release
     // asset. We only stop it immediately before replacing the executable.
-    core_process::stop(app.clone(), state.clone())?;
+    // This is a short in-place replacement and the restarted kernel keeps the
+    // same local endpoint. Preserve the guarded OS proxy so macOS does not ask
+    // for authorization once to disable it and again to re-enable it.
+    core_process::stop_preserving_system_proxy(app.clone(), state.clone())?;
 
     let _ = crate::services::logs::append_entry(
         state.inner(),

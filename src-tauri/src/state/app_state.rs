@@ -60,9 +60,27 @@ pub(crate) struct ManagedCoreProcess {
 impl Drop for ManagedCoreProcess {
     fn drop(&mut self) {
         if let Some(ref mut child) = self.child {
-            eprintln!("[ZNet] shutdown: killing core process (pid={})", child.id());
-            let _ = child.kill();
-            let _ = child.wait();
+            eprintln!(
+                "[ZNet] shutdown: closing core lifetime pipe (pid={})",
+                child.id()
+            );
+            child.stdin.take();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    _ => {
+                        // This is still scoped to the exact child owned by
+                        // this state; never kill processes by executable name.
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
         }
         self.stderr_handle.take().map(|h| h.join());
     }

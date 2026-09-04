@@ -35,18 +35,19 @@ assertUsesTag(
   'src/lib/components/NodeTileGrid.svelte',
   'selectPolicy(\'proxy\', node.tag)',
 );
-assertUsesTag(
+assertContains(
   'src/lib/components/tabs/OverviewTab.svelte',
-  'selectPolicy(groupName, tag)',
+  'resolveEffectiveNodeSelection(groups, rootTag)',
+  'OverviewTab should project the active node from the authoritative runtime policy selection',
 );
 assertContains(
   'src/lib/components/tabs/OverviewTab.svelte',
-  'disabled={nodeSwitching !== null || !isCoreRunning}',
-  'OverviewTab should disable node switching when the core is not ready',
+  "onclick={() => (store.activeTab = 'nodes')}",
+  'OverviewTab should route node changes through the dedicated Nodes page',
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',
-  "const isCoreAvailable = $derived(nodeScreen?.sourceStatus === 'ready');",
+  'const isCoreAvailable = $derived(',
   'NodesTab should gate node actions on the authoritative Client Core snapshot',
 );
 assertContains(
@@ -56,7 +57,7 @@ assertContains(
 );
 assertContains(
   'src/lib/components/tabs/NodesTab.svelte',
-  'policyProbeTagForNode(groups, node.tag)',
+  'const policyProbe = isUrlTestPolicyNode(node);',
   'NodesTab should route a nested url_test node card through the policy probe contract',
 );
 assertContains(

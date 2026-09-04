@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   classifyAppVersion,
   compareAppVersions,
@@ -47,5 +48,23 @@ assert.deepEqual(releases.map(({ version, channel }) => ({ version, channel })),
   { version: '0.0.17-rc.1', channel: 'preview' },
   { version: '0.0.16', channel: 'stable' },
 ]);
+
+const updaterService = fs.readFileSync('src/lib/services/updater.svelte.ts', 'utf8');
+assert.match(
+  updaterService,
+  /import \{ relaunch \} from '@tauri-apps\/plugin-process';/,
+  'the updater must import the supported Tauri process relaunch API',
+);
+assert.equal(
+  updaterService.match(/\(\) => relaunch\(\)/g)?.length,
+  2,
+  'both immediate updates and version-manager installs must relaunch after installation',
+);
+
+const capability = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'));
+assert.ok(
+  capability.permissions.includes('process:allow-restart'),
+  'the desktop capability must allow updater-triggered relaunches',
+);
 
 console.log('app-update-policy: ok');

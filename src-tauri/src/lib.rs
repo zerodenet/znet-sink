@@ -28,12 +28,14 @@ use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
 use crate::lifecycle::phases;
-use crate::services::{core_process, local_proxy, network_probe, system_proxy_guard};
+use crate::services::{core_process, network_probe, system_proxy_guard};
 use crate::state::app_state::AppState;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+#[cfg(target_os = "windows")]
+use crate::services::local_proxy;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
@@ -250,66 +252,67 @@ fn open_main_window_route(app: &tauri::AppHandle, tab: &str, section: Option<&st
     );
 }
 
-fn tray_start_core(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _operation = state.proxy_config_operation().blocking_lock();
-        let _ = core_process::start(app.clone(), state.clone());
-    });
+fn emit_tray_action(app: &tauri::AppHandle, action: &str) {
+    if let Err(error) = app.emit("app:tray-action", serde_json::json!({ "action": action })) {
+        crate::services::file_logger::line(&format!(
+            "tray: failed to dispatch action {action}: {error}"
+        ));
+    }
 }
 
-fn tray_restart_core(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _operation = state.proxy_config_operation().blocking_lock();
-        let _ = core_process::restart(app.clone());
-    });
-}
-
-fn tray_enable_system_proxy(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _operation = state.proxy_config_operation().blocking_lock();
-        let _ = core_process::start(app.clone(), state.clone());
-        let host = state
-            .app_config()
-            .lock()
-            .map(|config| config.local_proxy.host.clone())
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = state
-            .app_config()
-            .lock()
-            .map(|config| config.local_proxy.port)
-            .unwrap_or(7890);
-        let bypass = state
-            .app_config()
-            .lock()
-            .map(|config| config.local_proxy.bypass.clone())
-            .unwrap_or_else(|_| crate::models::app_config::default_proxy_bypass());
-        if local_proxy::wait_until_listening(&host, port).is_ok()
-            && system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass).is_ok()
-        {
-            network_probe::emit_host_network_changed(&app, "system_proxy.enabled");
-        }
-    });
-}
-
-fn tray_disable_system_proxy(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn_blocking(move || {
-        if system_proxy_guard::disable_with_guard().is_ok() {
-            network_probe::emit_host_network_changed(&app, "system_proxy.disabled");
-        }
-    });
-}
-
-/// Holds references to the status-dependent tray menu items so we can
-/// toggle their enabled state at runtime (e.g. disable "启动内核" while
-/// the kernel is already running). Stored via `app.manage()`.
+/// Holds references to the status-dependent tray menu items so their labels,
+/// checked state, and availability can track the live runtime state.
 struct TrayMenuItems {
-    start_core: tauri::menu::MenuItem<tauri::Wry>,
+    status: tauri::menu::MenuItem<tauri::Wry>,
+    profile: tauri::menu::MenuItem<tauri::Wry>,
+    toggle_proxy: tauri::menu::MenuItem<tauri::Wry>,
+    system_proxy: tauri::menu::CheckMenuItem<tauri::Wry>,
+    tun: tauri::menu::CheckMenuItem<tauri::Wry>,
     restart_core: tauri::menu::MenuItem<tauri::Wry>,
-    enable_proxy: tauri::menu::MenuItem<tauri::Wry>,
-    disable_proxy: tauri::menu::MenuItem<tauri::Wry>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TrayPresentation {
+    status_label: &'static str,
+    action_label: &'static str,
+    capture_enabled: bool,
+    individual_controls_enabled: bool,
+}
+
+fn tray_presentation(
+    ui_mode: &str,
+    running: bool,
+    system_proxy_enabled: bool,
+    tun_enabled: bool,
+) -> TrayPresentation {
+    let lite_mode = ui_mode.eq_ignore_ascii_case("lite");
+    let capture_enabled = if lite_mode {
+        system_proxy_enabled || tun_enabled
+    } else {
+        system_proxy_enabled
+    };
+    let status_label = if system_proxy_enabled && tun_enabled {
+        "系统代理 + TUN"
+    } else if tun_enabled {
+        "TUN 运行中"
+    } else if system_proxy_enabled {
+        "系统代理运行中"
+    } else if running {
+        "待机"
+    } else {
+        "已停止"
+    };
+
+    TrayPresentation {
+        status_label,
+        action_label: if capture_enabled {
+            "关闭代理"
+        } else {
+            "开启代理"
+        },
+        capture_enabled,
+        individual_controls_enabled: running && !lite_mode,
+    }
 }
 
 /// Update the tray icon tooltip and the enabled state of status-dependent
@@ -321,28 +324,53 @@ struct TrayMenuItems {
 #[tauri::command]
 fn tray_update_status(
     app: tauri::AppHandle,
-    state: tauri::State<'_, TrayMenuItems>,
+    menu: tauri::State<'_, TrayMenuItems>,
+    domain: tauri::State<'_, AppState>,
     running: bool,
-    connected: bool,
+    system_proxy_enabled: bool,
+    tun_enabled: bool,
 ) {
-    let status_label = if connected {
-        "服务中"
-    } else if running {
-        "内核监听中"
-    } else {
-        "已停止"
-    };
+    let ui_mode = domain
+        .app_config()
+        .lock()
+        .map(|config| config.ui.ui_mode.clone())
+        .unwrap_or_else(|_| "lite".to_string());
+    let profile_name = domain.proxy_configs().lock().ok().and_then(|profiles| {
+        profiles
+            .iter()
+            .find(|profile| profile.active)
+            .map(|profile| profile.name.clone())
+    });
+    let presentation = tray_presentation(&ui_mode, running, system_proxy_enabled, tun_enabled);
 
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some(format!("ZNet Sink · {status_label}")));
+        let _ = tray.set_tooltip(Some(format!("ZNet Sink · {}", presentation.status_label)));
     }
 
-    // Mirror the actionable state into the menu so the user can't pick
-    // an action that would no-op (e.g. "启动内核" while already running).
-    let _ = state.start_core.set_enabled(!running);
-    let _ = state.restart_core.set_enabled(running);
-    let _ = state.enable_proxy.set_enabled(!connected);
-    let _ = state.disable_proxy.set_enabled(connected);
+    let _ = menu
+        .status
+        .set_text(format!("状态：{}", presentation.status_label));
+    let _ = menu.profile.set_text(format!(
+        "当前配置：{}",
+        profile_name.as_deref().unwrap_or("未选择")
+    ));
+    let _ = menu.toggle_proxy.set_text(presentation.action_label);
+    // A profile is required to start capture, but never prevent users from
+    // turning off a capture session that is already active.
+    let _ = menu
+        .toggle_proxy
+        .set_enabled(profile_name.is_some() || presentation.capture_enabled);
+    let _ = menu.system_proxy.set_checked(system_proxy_enabled);
+    let _ = menu.tun.set_checked(tun_enabled);
+    // Lite mode treats system proxy + TUN as one transaction. Individual
+    // switches are advanced controls and stay available only in Pro mode.
+    let _ = menu
+        .system_proxy
+        .set_enabled(presentation.individual_controls_enabled);
+    let _ = menu
+        .tun
+        .set_enabled(presentation.individual_controls_enabled);
+    let _ = menu.restart_core.set_enabled(running);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -379,28 +407,11 @@ pub fn run() {
     // The lifecycle fallback reads the same state after the event loop exits.
     let shutdown_stage = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
 
-    // Register core-process shutdown guard: stop core on exit.
+    // Mark shutdown before lifecycle teardown so background watchdogs cannot
+    // restart the managed child. Normal cleanup runs in the Tauri exit event;
+    // on an abrupt GUI death the inherited lifetime pipe closes in the OS.
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
     let shutdown_flag = app_state.shutting_down_handle();
-    let fallback_shutdown_stage = shutdown_stage.clone();
-    shutdown_coord.register(
-        lifecycle::Phase::Runtime,
-        "stop_core_process",
-        Box::new(move || {
-            // Explicitly kill the kernel so it exits with the GUI. Relying
-            // on ManagedCoreProcess::Drop alone is unreliable — Drop may not
-            // run (external kernel, or process exit without unwinding).
-            if fallback_shutdown_stage.load(std::sync::atomic::Ordering::SeqCst) == 2 {
-                eprintln!("[ZNet] shutdown: core already stopped gracefully");
-                return;
-            }
-            eprintln!("[ZNet] shutdown: stopping core process");
-            core_process::kill_core_default();
-        }),
-    );
-    // Registered AFTER stop_core_process so LIFO ordering runs it FIRST:
-    // the watchdog must see the shutdown flag before we tear the process
-    // down, otherwise it would immediately try to restart the kernel.
     shutdown_coord.register(
         lifecycle::Phase::Runtime,
         "mark_shutting_down",
@@ -434,6 +445,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // ── Phase 4: Register commands ──
         .invoke_handler(tauri::generate_handler![
@@ -564,9 +576,8 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
-            let ipc_observer = std::sync::Arc::new(
-                crate::services::ipc_observability::IpcLogObserver::default(),
-            );
+            let ipc_observer =
+                std::sync::Arc::new(crate::services::ipc_observability::IpcLogObserver::default());
             let observer_app = app.handle().clone();
             let installed = crate::models::debug::install_debug_frame_observer(
                 std::sync::Arc::new(move |frame| {
@@ -585,183 +596,20 @@ pub fn run() {
                     error.message
                 ));
             }
-            // Always check kernel health on startup. If the kernel is already
-            // running (e.g. external daemon), just connect. If not, try to
-            // start a managed kernel when auto_start is enabled (default).
+            // A GUI lifetime owns exactly one kernel child. Never probe or
+            // adopt a process from an earlier GUI lifetime; the private IPC
+            // endpoint and inherited stdin pipe form the ownership contract.
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<AppState>();
                     let _operation = state.proxy_config_operation().lock().await;
-                    let base_opts = crate::services::core_config::ipc_options_from_app_config(
-                        &state
-                            .app_config()
-                            .lock()
-                            .map(|c| c.core.clone())
-                            .unwrap_or_default(),
-                    );
-
-                    // Fast probe: try a ping with a 200ms timeout.  On local
-                    // IPC this should connect in sub-ms time if the kernel
-                    // is alive. A timeout means the pipe is a stale leftover
-                    // from a crashed/killed previous session — clean up and
-                    // start fresh.
-                    let probe_opts = crate::models::core::CoreIpcOptions {
-                        timeout_ms: Some(200),
-                        ..base_opts.clone()
-                    };
-                    // Use a short-lived connection for the probe — the kernel
-                    // closes non-subscribe connections after responding, and we
-                    // don't want to poison the global multiplexed connection.
-                    let kernel_alive = {
-                        let frame = serde_json::json!({"type":"ping"});
-                        let endpoint =
-                            crate::kernel::protocol::endpoint_from_options(Some(&probe_opts)).ok();
-                        let timeout =
-                            crate::kernel::protocol::timeout_from_options(Some(&probe_opts)).ok();
-                        match (endpoint, timeout) {
-                            (Some(ep), Some(to)) => {
-                                let frame_bytes =
-                                    crate::kernel::transport::serialize_frame(&frame).ok();
-                                frame_bytes
-                                    .and_then(|fb| {
-                                        crate::kernel::transport::send_json_line_request(ep, fb, to)
-                                            .ok()
-                                    })
-                                    .is_some()
-                            }
-                            _ => false,
-                        }
-                    };
-
-                    // Extract values needed for decision-making before
-                    // consuming `state`. All three are needed regardless of
-                    // which branch we take below.
                     let core_config = state
                         .app_config()
                         .lock()
                         .map(|c| c.core.clone())
                         .unwrap_or_default();
-                    let auto_start = core_config.auto_start;
-                    let configured_path = core_config.executable_path.clone();
-
-                    if kernel_alive {
-                        // Check whether the running kernel matches the
-                        // configured executable path. If the user changed
-                        // the path between sessions the old kernel is still
-                        // listening on the pipe but is no longer the binary
-                        // the user intended.
-                        let snapshot =
-                            crate::services::core_config::snapshot_from_config(&core_config).ok();
-
-                        let path_matches = match (&configured_path, &snapshot) {
-                            (Some(configured), Some(snap)) => {
-                                snap.executable_path.as_deref() == Some(configured.as_str())
-                                    || configured.is_empty()
-                            }
-                            _ => true, // no custom path → any running kernel is fine
-                        };
-
-                        if !path_matches {
-                            crate::services::file_logger::line(
-                                "kernel alive but path mismatch, restarting",
-                            );
-                            // Use fresh State — the outer `state` is not `Copy`.
-                            let _ = core_process::stop(
-                                app_handle.clone(),
-                                app_handle.state::<AppState>(),
-                            );
-                            crate::kernel::connection::reset();
-                            // Fall through to start the configured kernel.
-                        } else {
-                            crate::services::file_logger::line(
-                                "kernel already running (fast probe ok), connecting",
-                            );
-
-                            // Update the process state so the UI reflects the
-                            // actual kernel status. Without this the UI shows
-                            // "not started" even though the kernel is alive,
-                            // which confuses users and also means stop() won't
-                            // know to kill the external process.
-                            {
-                                let mut process = match state.core_process().lock() {
-                                    Ok(p) => p,
-                                    Err(_) => return,
-                                };
-                                process.status.state =
-                                    crate::models::core_process::CoreProcessState::Running;
-                                process.status.kernel = "zero".to_string();
-                                // No child — we don't own this process, so
-                                // stop() will fall through to kill_external().
-                            }
-
-                            // The existing kernel belongs to the previous GUI
-                            // lifetime and may still be running an older
-                            // effective config. This matters when startup just
-                            // installed or upgraded built-in common rules: the
-                            // domain state is current, but no rule-set command
-                            // exists to trigger the normal reconciliation path.
-                            match crate::services::rule_overlay::reconcile_current_config_locked(
-                                app_handle.clone(),
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    crate::services::logs::znet_log_fields(
-                                        Some(state.inner()),
-                                        crate::models::logs::LogLevel::Info,
-                                        "reconciled current configuration with existing kernel",
-                                        serde_json::json!({
-                                            "schema": "znet.telemetry.v1",
-                                            "area": "rule",
-                                            "operation": "rule.overlay.startup_reconcile",
-                                            "outcome": "success"
-                                        }),
-                                    );
-                                }
-                                Err(error) => {
-                                    crate::services::logs::znet_log_fields(
-                                        Some(state.inner()),
-                                        crate::models::logs::LogLevel::Warn,
-                                        format!(
-                                            "failed to reconcile current configuration with existing kernel: {}",
-                                            error.message
-                                        ),
-                                        serde_json::json!({
-                                            "schema": "znet.telemetry.v1",
-                                            "area": "rule",
-                                            "operation": "rule.overlay.startup_reconcile",
-                                            "outcome": "failed",
-                                            "code": error.code
-                                        }),
-                                    );
-                                }
-                            }
-
-                            // An already-running kernel is not represented by
-                            // a managed Child (therefore pid remains None),
-                            // but it still needs the normal GUI connection
-                            // handshake when auto-connect is enabled.
-                            if core_config.auto_connect {
-                                let connect_state = app_handle.state::<AppState>();
-                                if let Err(error) = crate::services::gui_connection::connect(
-                                    app_handle.clone(),
-                                    connect_state,
-                                )
-                                .await
-                                {
-                                    crate::services::file_logger::line(&format!(
-                                        "failed to auto-connect to existing kernel: {}",
-                                        error.message
-                                    ));
-                                }
-                            }
-                            return;
-                        }
-                    }
-
-                    // Kernel not running (or was restarted due to path mismatch).
-                    if !auto_start {
+                    if !core_config.auto_start {
                         crate::services::file_logger::line(
                             "auto_start disabled, not starting kernel",
                         );
@@ -769,29 +617,71 @@ pub fn run() {
                     }
 
                     let app_handle_start = app_handle.clone();
-                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                    let start_result = tauri::async_runtime::spawn_blocking(move || {
                         let state = app_handle_start.state::<AppState>();
-                        let _ = core_process::start(app_handle_start.clone(), state);
+                        core_process::start(app_handle_start.clone(), state)
                     })
                     .await;
+                    // `connect` serializes on the same operation mutex, so
+                    // release the startup transaction before entering it.
+                    drop(_operation);
+
+                    match start_result {
+                        Ok(Ok(_)) if core_config.auto_connect => {
+                            let connect_state = app_handle.state::<AppState>();
+                            if let Err(error) = crate::services::gui_connection::connect(
+                                app_handle.clone(),
+                                connect_state,
+                            )
+                            .await
+                            {
+                                crate::services::file_logger::line(&format!(
+                                    "failed to auto-connect to managed kernel: {}",
+                                    error.message
+                                ));
+                            }
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => crate::services::file_logger::line(&format!(
+                            "failed to auto-start managed kernel: {}",
+                            error.message
+                        )),
+                        Err(error) => crate::services::file_logger::line(&format!(
+                            "managed kernel start task failed: {error}"
+                        )),
+                    }
                 });
             }
 
             // System tray
-            let show_item = tauri::menu::MenuItemBuilder::new("显示/隐藏")
+            let show_item = tauri::menu::MenuItemBuilder::new("打开 ZNet Sink")
                 .id("show")
                 .build(app)?;
-            let enable_proxy_item = tauri::menu::MenuItemBuilder::new("开启系统代理")
-                .id("enable_proxy")
+            let status_item = tauri::menu::MenuItemBuilder::new("状态：正在初始化")
+                .id("status")
+                .enabled(false)
                 .build(app)?;
-            let disable_proxy_item = tauri::menu::MenuItemBuilder::new("关闭系统代理")
-                .id("disable_proxy")
+            let profile_item = tauri::menu::MenuItemBuilder::new("当前配置：读取中")
+                .id("profile")
+                .enabled(false)
                 .build(app)?;
-            let start_core_item = tauri::menu::MenuItemBuilder::new("启动内核")
-                .id("start_core")
+            let toggle_proxy_item = tauri::menu::MenuItemBuilder::new("开启代理")
+                .id("toggle_proxy")
+                .enabled(false)
+                .build(app)?;
+            let system_proxy_item = tauri::menu::CheckMenuItemBuilder::new("系统代理")
+                .id("toggle_system_proxy")
+                .enabled(false)
+                .checked(false)
+                .build(app)?;
+            let tun_item = tauri::menu::CheckMenuItemBuilder::new("TUN 模式")
+                .id("toggle_tun")
+                .enabled(false)
+                .checked(false)
                 .build(app)?;
             let restart_core_item = tauri::menu::MenuItemBuilder::new("重启内核")
                 .id("restart_core")
+                .enabled(false)
                 .build(app)?;
             let copy_proxy_env_item = tauri::menu::MenuItemBuilder::new("复制代理环境变量")
                 .id("copy_proxy_env")
@@ -803,44 +693,57 @@ pub fn run() {
             let settings_item = tauri::menu::MenuItemBuilder::new("设置")
                 .id("settings")
                 .build(app)?;
+            let overview_item = tauri::menu::MenuItemBuilder::new("概览")
+                .id("overview")
+                .build(app)?;
+            let nodes_item = tauri::menu::MenuItemBuilder::new("节点")
+                .id("nodes")
+                .build(app)?;
+            let subscriptions_item = tauri::menu::MenuItemBuilder::new("订阅")
+                .id("subscriptions")
+                .build(app)?;
+            let logs_item = tauri::menu::MenuItemBuilder::new("日志")
+                .id("logs")
+                .build(app)?;
             let quit_item = tauri::menu::MenuItemBuilder::new("退出")
                 .id("quit")
                 .build(app)?;
 
+            let proxy_controls = tauri::menu::SubmenuBuilder::new(app, "代理控制")
+                .items(&[&system_proxy_item, &tun_item])
+                .build()?;
+            let shortcuts = tauri::menu::SubmenuBuilder::new(app, "快捷入口")
+                .items(&[&overview_item, &nodes_item, &subscriptions_item, &logs_item])
+                .build()?;
+
             #[cfg(target_os = "windows")]
-            let tray_menu = tauri::menu::Menu::with_items(
-                app,
-                &[
-                    &show_item,
-                    &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &enable_proxy_item,
-                    &disable_proxy_item,
-                    &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &start_core_item,
+            let tools = tauri::menu::SubmenuBuilder::new(app, "诊断与工具")
+                .items(&[
                     &restart_core_item,
                     &copy_proxy_env_item,
                     &open_proxy_terminal_item,
-                    &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &settings_item,
-                    &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &quit_item,
-                ],
-            )?;
+                ])
+                .build()?;
 
             #[cfg(not(target_os = "windows"))]
+            let tools = tauri::menu::SubmenuBuilder::new(app, "诊断与工具")
+                .items(&[&restart_core_item, &copy_proxy_env_item])
+                .build()?;
+
             let tray_menu = tauri::menu::Menu::with_items(
                 app,
                 &[
                     &show_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &enable_proxy_item,
-                    &disable_proxy_item,
+                    &status_item,
+                    &profile_item,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
-                    &start_core_item,
-                    &restart_core_item,
-                    &copy_proxy_env_item,
+                    &toggle_proxy_item,
+                    &proxy_controls,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
+                    &shortcuts,
                     &settings_item,
+                    &tools,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &quit_item,
                 ],
@@ -849,10 +752,12 @@ pub fn run() {
             // Hold references to the status-dependent items so
             // `tray_update_status` can toggle their enabled state.
             app.manage(TrayMenuItems {
-                start_core: start_core_item,
+                status: status_item,
+                profile: profile_item,
+                toggle_proxy: toggle_proxy_item,
+                system_proxy: system_proxy_item,
+                tun: tun_item,
                 restart_core: restart_core_item,
-                enable_proxy: enable_proxy_item,
-                disable_proxy: disable_proxy_item,
             });
 
             let _tray_menu = TrayIconBuilder::with_id("main-tray")
@@ -861,11 +766,14 @@ pub fn run() {
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => toggle_main_window(app),
-                    "enable_proxy" => tray_enable_system_proxy(app.clone()),
-                    "disable_proxy" => tray_disable_system_proxy(app.clone()),
-                    "start_core" => tray_start_core(app.clone()),
-                    "restart_core" => tray_restart_core(app.clone()),
+                    "show" | "overview" => open_main_window_route(app, "overview", None),
+                    "toggle_proxy" => emit_tray_action(app, "toggle_proxy"),
+                    "toggle_system_proxy" => emit_tray_action(app, "toggle_system_proxy"),
+                    "toggle_tun" => emit_tray_action(app, "toggle_tun"),
+                    "restart_core" => emit_tray_action(app, "restart_core"),
+                    "nodes" => open_main_window_route(app, "nodes", None),
+                    "subscriptions" => open_main_window_route(app, "subscriptions", None),
+                    "logs" => open_main_window_route(app, "logs", None),
                     "copy_proxy_env" => tray_copy_proxy_environment(app),
                     #[cfg(target_os = "windows")]
                     "open_proxy_terminal" => tray_open_proxy_terminal(app.clone()),
@@ -945,7 +853,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{proxy_environment_command, proxy_environment_no_proxy};
+    use super::{proxy_environment_command, proxy_environment_no_proxy, tray_presentation};
     use crate::models::app_config::default_proxy_bypass;
 
     #[test]
@@ -976,5 +884,34 @@ mod tests {
             proxy_environment_no_proxy(&bypass),
             "localhost,127.0.0.0/8,::1,172.16.0.0/16,192.168.0.0/16,intranet.example"
         );
+    }
+
+    #[test]
+    fn lite_tray_treats_partial_capture_as_an_active_session() {
+        let presentation = tray_presentation("lite", true, false, true);
+
+        assert_eq!(presentation.status_label, "TUN 运行中");
+        assert_eq!(presentation.action_label, "关闭代理");
+        assert!(!presentation.individual_controls_enabled);
+    }
+
+    #[test]
+    fn pro_tray_keeps_tun_and_system_proxy_independent() {
+        let presentation = tray_presentation("pro", true, false, true);
+
+        assert_eq!(presentation.status_label, "TUN 运行中");
+        assert_eq!(presentation.action_label, "开启代理");
+        assert!(presentation.individual_controls_enabled);
+    }
+
+    #[test]
+    fn tray_reports_combined_capture_and_stopped_states() {
+        let combined = tray_presentation("pro", true, true, true);
+        let stopped = tray_presentation("lite", false, false, false);
+
+        assert_eq!(combined.status_label, "系统代理 + TUN");
+        assert_eq!(combined.action_label, "关闭代理");
+        assert_eq!(stopped.status_label, "已停止");
+        assert_eq!(stopped.action_label, "开启代理");
     }
 }

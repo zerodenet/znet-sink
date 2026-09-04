@@ -229,11 +229,10 @@ fn resolve_working_dir(config: &AppCoreConfig, executable_path: Option<&Path>) -
         })
 }
 
-/// Socket path used when spawning a GUI-managed kernel.
-///
-/// On Windows, the named pipe (`\\.\pipe\zero-control`) is resolved by
-/// `transport::default_endpoint` — no file path needed here.
-/// On Unix, defaults to the Zero daemon path: `~/.zero/control.sock`.
+/// Private IPC endpoint used by this GUI process and its managed kernel.
+/// Explicit overrides remain supported for diagnostics, but the default is
+/// namespaced by the GUI PID on every platform so another GUI lifetime cannot
+/// silently attach to it.
 fn resolve_launch_socket(
     config: &AppCoreConfig,
     executable_path: Option<&Path>,
@@ -245,57 +244,35 @@ fn resolve_launch_socket(
     default_launch_socket_path(config, executable_path)
 }
 
-#[cfg(windows)]
-fn default_runtime_socket_path(
-    _config: &AppCoreConfig,
-    _executable_path: Option<&Path>,
-) -> Option<PathBuf> {
-    None
-}
-
-#[cfg(unix)]
 fn default_runtime_socket_path(
     config: &AppCoreConfig,
     executable_path: Option<&Path>,
 ) -> Option<PathBuf> {
-    executable_path
-        .map(|path| {
-            PathBuf::from(transport::default_socket_path_for_executable(
-                Some(path),
-                &config.kernel,
-            ))
-        })
-        .or_else(external_default_socket_path)
+    executable_path.map(|path| {
+        PathBuf::from(transport::managed_socket_path(
+            Some(path),
+            &config.kernel,
+            std::process::id(),
+        ))
+    })
 }
 
-#[cfg(windows)]
-fn default_launch_socket_path(
-    _config: &AppCoreConfig,
-    _executable_path: Option<&Path>,
-) -> Option<PathBuf> {
-    None
-}
-
-#[cfg(unix)]
 fn default_launch_socket_path(
     config: &AppCoreConfig,
     executable_path: Option<&Path>,
 ) -> Option<PathBuf> {
     executable_path.map(|path| {
-        PathBuf::from(transport::default_socket_path_for_executable(
+        PathBuf::from(transport::managed_socket_path(
             Some(path),
             &config.kernel,
+            std::process::id(),
         ))
     })
 }
 
-#[cfg(unix)]
-fn external_default_socket_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".zero").join("control.sock"))
-}
-
 fn launch_args(config_path: Option<&Path>, socket: Option<&Path>) -> Vec<String> {
     let mut args = vec!["run".to_string()];
+    args.push("--parent-lifetime-stdin".to_string());
     if let Some(socket) = socket {
         args.push("--control-socket".to_string());
         args.push(path_to_string(socket));

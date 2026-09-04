@@ -24,17 +24,26 @@ fn explicitly_missing_zero_core_executable_is_reported() {
     #[cfg(windows)]
     {
         assert_eq!(snapshot.endpoint.transport, "named-pipe");
-        assert_eq!(snapshot.endpoint.path, r"\\.\pipe\zero-control");
+        assert_eq!(
+            snapshot.endpoint.path,
+            format!(r"\\.\pipe\zero-control-{}", std::process::id())
+        );
     }
 
     #[cfg(unix)]
     {
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert!(snapshot.endpoint.path.ends_with("zero-control.sock"));
+        assert!(snapshot
+            .endpoint
+            .path
+            .ends_with(&format!("zero-control-{}.sock", std::process::id())));
         assert!(snapshot
             .launch_args
             .contains(&"--control-socket".to_string()));
     }
+    assert!(snapshot
+        .launch_args
+        .contains(&"--parent-lifetime-stdin".to_string()));
 }
 
 #[test]
@@ -49,11 +58,15 @@ fn managed_unix_core_uses_socket_next_to_executable() {
         let snapshot = snapshot_from_config(&config).unwrap();
 
         assert_eq!(snapshot.endpoint.transport, "unix-socket");
-        assert_eq!(snapshot.endpoint.path, "/opt/znet/core/zero-control.sock");
+        let expected = format!("/opt/znet/core/zero-control-{}.sock", std::process::id());
+        assert_eq!(snapshot.endpoint.path, expected);
         assert!(snapshot
             .launch_args
             .windows(2)
-            .any(|args| args == ["--control-socket", "/opt/znet/core/zero-control.sock"]));
+            .any(|args| args == ["--control-socket", expected.as_str()]));
+        assert!(snapshot
+            .launch_args
+            .contains(&"--parent-lifetime-stdin".to_string()));
     }
 }
 
@@ -86,6 +99,9 @@ fn explicit_socket_overrides_platform_default() {
     let snapshot = snapshot_from_config(&config).unwrap();
 
     assert_eq!(snapshot.endpoint.path, custom_socket());
+    assert!(snapshot
+        .launch_args
+        .contains(&"--parent-lifetime-stdin".to_string()));
 }
 
 #[test]

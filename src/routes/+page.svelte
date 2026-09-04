@@ -81,8 +81,46 @@
     }
   }
 
+  async function handleTrayAction(action?: string) {
+    switch (action) {
+      case 'toggle_proxy':
+        if (store.uiMode === 'lite') {
+          if (guiState.isCaptureEnabled) {
+            await guiState.disconnect();
+            break;
+          }
+        } else {
+          if (guiState.isSystemProxyEnabled) {
+            await guiState.disableSystemProxy();
+            break;
+          }
+        }
+
+        // Starting the managed kernel is part of enabling capture, not of
+        // disabling it. This avoids reviving a stopped process just to clean
+        // up an independently lingering system/TUN state.
+        if (!guiState.isProcessRunning) {
+          await guiState.startCore();
+          if (!guiState.isProcessRunning) return;
+        }
+        if (store.uiMode === 'lite') await guiState.connect();
+        else await guiState.enableSystemProxy();
+        break;
+      case 'toggle_system_proxy':
+        await guiState.toggleSystemProxy();
+        break;
+      case 'toggle_tun':
+        await guiState.toggleTun();
+        break;
+      case 'restart_core':
+        await guiState.restartCore();
+        break;
+    }
+  }
+
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
+    let unlistenTrayAction: UnlistenFn | null = null;
     const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry();
     const uninstallDesktopWebviewGuards = installDesktopWebviewGuards();
     initTheme();
@@ -101,6 +139,11 @@
     }).then((unlisten) => {
       unlistenNavigate = unlisten;
     });
+    void listen<{ action?: string }>('app:tray-action', (event) => {
+      void handleTrayAction(event.payload.action);
+    }).then((unlisten) => {
+      unlistenTrayAction = unlisten;
+    });
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const onSystemThemeChange = () => {
       if (store.selectedTheme === 'system') applyTheme('system');
@@ -116,6 +159,7 @@
       mediaQuery.removeEventListener('change', onSystemThemeChange);
       motionQuery.removeEventListener('change', onMotionPreferenceChange);
       unlistenNavigate?.();
+      unlistenTrayAction?.();
       uninstallGlobalErrorTelemetry();
       uninstallDesktopWebviewGuards();
     };

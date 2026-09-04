@@ -175,19 +175,34 @@ fn default_socket_path(_kernel_name: &str) -> AppResult<String> {
         .to_string())
 }
 
-/// Compute a GUI-managed socket path relative to the kernel executable.
-/// Used when spawning a managed kernel with `--control-socket` override.
-#[cfg(unix)]
-pub fn default_socket_path_for_executable(
+/// Compute the private IPC endpoint for one GUI-managed kernel lifetime.
+///
+/// The owner PID prevents a newly started GUI from attaching to an orphaned
+/// or independently launched kernel that happens to use the same default
+/// endpoint. The inherited parent-lifetime pipe remains the authoritative
+/// liveness contract; this endpoint only isolates control-plane identity.
+pub fn managed_socket_path(
     executable: Option<&std::path::Path>,
     kernel_name: &str,
+    owner_pid: u32,
 ) -> String {
-    executable
-        .and_then(std::path::Path::parent)
-        .map(|parent| parent.join(format!("{kernel_name}-control.sock")))
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("{kernel_name}-control.sock")))
-        .to_string_lossy()
-        .to_string()
+    #[cfg(windows)]
+    {
+        let _ = executable;
+        format!(r"\\.\pipe\{kernel_name}-control-{owner_pid}")
+    }
+
+    #[cfg(unix)]
+    {
+        executable
+            .and_then(std::path::Path::parent)
+            .map(|parent| parent.join(format!("{kernel_name}-control-{owner_pid}.sock")))
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(format!("{kernel_name}-control-{owner_pid}.sock"))
+            })
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 // ── JSON-line framing ───────────────────────────────────────────────

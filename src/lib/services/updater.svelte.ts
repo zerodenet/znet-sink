@@ -1,6 +1,7 @@
 import { check, Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { info, warning } from '$lib/services/toast.svelte';
 import { appendLog } from '$lib/services/core';
 import { tracedOperation } from '$lib/services/telemetry';
@@ -281,7 +282,13 @@ class UpdaterService {
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
 
-      // The app will restart after install
+      await tracedOperation(
+        'update',
+        'update.relaunch',
+        () => relaunch(),
+        { fromVersion: this.currentVersion, toVersion: update.version },
+      );
+
       this.downloading = false;
       this.status = 'up-to-date';
       return true;
@@ -347,6 +354,12 @@ class UpdaterService {
         'update',
         'update.install',
         () => update.install(),
+        { fromVersion: this.currentVersion, toVersion: update.version },
+      );
+      await tracedOperation(
+        'update',
+        'update.relaunch',
+        () => relaunch(),
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
       this.readyToInstall = false;

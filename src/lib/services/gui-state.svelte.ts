@@ -338,7 +338,11 @@ class GuiStateStore {
   }
 
   private syncTrayStatus() {
-    void trayUpdateStatus(this.isProcessRunning, this.isCaptureEnabled).catch(() => {});
+    void trayUpdateStatus(
+      this.isProcessRunning,
+      this.isSystemProxyEnabled,
+      this.isTunEnabled,
+    ).catch(() => {});
   }
 
   async probeNetwork() {

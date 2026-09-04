@@ -13,7 +13,9 @@
 //!      settings are left completely untouched.
 //!   3. **Startup cleanup** — On every launch, check for a stale marker. If
 //!      found and the proxy still points at our endpoint, restore the backup.
-//!   4. **Panic hook** — Best-effort restore on Rust panics.
+//!   4. **Panic hook** — On macOS, preserve the marker for startup cleanup so
+//!      a crashing background thread cannot display an authorization dialog.
+//!      Other platforms retain the best-effort immediate restore.
 
 use std::fs;
 use std::path::PathBuf;
@@ -95,6 +97,12 @@ pub fn cleanup_on_startup() {
                 marker.host, marker.port
             );
             if let Err(e) = system_proxy::restore(&marker.previous) {
+                if e.code == "authorization_cancelled" {
+                    eprintln!(
+                        "[ZNet] proxy guard: startup restoration authorization cancelled; keeping marker for a later retry"
+                    );
+                    return;
+                }
                 eprintln!(
                     "[ZNet] proxy guard: failed to restore previous proxy: {:?}, falling back to disable",
                     e
@@ -151,6 +159,15 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
 
                     write_marker(host, port, marker.previous.clone(), bypass)?;
                     if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
+                        if error.code == "authorization_cancelled" {
+                            let _ = write_marker(
+                                &marker.host,
+                                marker.port,
+                                marker.previous,
+                                &marker.bypass,
+                            );
+                            return Err(error);
+                        }
                         let rollback = system_proxy::enable_with_bypass(
                             &marker.host,
                             marker.port,
@@ -193,6 +210,13 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
     // after this line, cleanup_on_startup still has the backup to restore.
     write_marker(host, port, backup.clone(), bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
+        if error.code == "authorization_cancelled" {
+            // A single privileged transaction is not started when the user
+            // cancels its authorization dialog, so there is nothing to roll
+            // back. Retrying here would immediately show a second dialog.
+            remove_marker_file(&path);
+            return Err(error);
+        }
         eprintln!(
             "[ZNet] proxy guard: enable failed after writing marker, restoring backup: {:?}",
             error
@@ -246,6 +270,10 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
 
     write_marker(host, port, marker.previous.clone(), &marker.bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, &marker.bypass) {
+        if error.code == "authorization_cancelled" {
+            let _ = write_marker(&marker.host, marker.port, marker.previous, &marker.bypass);
+            return Err(error);
+        }
         let rollback = system_proxy::enable_with_bypass(&marker.host, marker.port, &marker.bypass);
         let _ = write_marker(&marker.host, marker.port, marker.previous, &marker.bypass);
         if let Err(rollback_error) = rollback {
@@ -287,6 +315,11 @@ pub fn disable_with_guard() -> AppResult<()> {
         marker.host, marker.port
     );
     if let Err(restore_error) = system_proxy::restore(&marker.previous) {
+        if restore_error.code == "authorization_cancelled" {
+            // Keep the durable marker and let the user retry explicitly.
+            // A fallback disable would only show the same prompt again.
+            return Err(restore_error);
+        }
         eprintln!(
             "[ZNet] proxy guard: failed to restore previous proxy: {:?}, falling back to disable",
             restore_error
@@ -309,13 +342,22 @@ pub fn disable_with_guard() -> AppResult<()> {
 pub fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        #[cfg(target_os = "macos")]
+        eprintln!(
+            "[ZNet] panic guard: preserving proxy marker for startup cleanup; skipping interactive macOS restore"
+        );
+
+        #[cfg(not(target_os = "macos"))]
         eprintln!("[ZNet] panic guard: attempting emergency proxy restore");
+
         // Only restore if we own a marker; never touch a proxy the GUI
         // didn't set.
+        #[cfg(not(target_os = "macos"))]
         if let Ok(path) = marker_path() {
             if let Ok(marker) = read_marker(&path) {
-                let _ = system_proxy::restore(&marker.previous);
-                let _ = fs::remove_file(&path);
+                if system_proxy::restore(&marker.previous).is_ok() {
+                    let _ = fs::remove_file(&path);
+                }
             }
         }
         (original)(info);
