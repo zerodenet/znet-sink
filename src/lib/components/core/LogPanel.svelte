@@ -62,7 +62,10 @@
   let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let clearArmTimer: ReturnType<typeof setTimeout> | null = null;
   let logBodyEl: HTMLDivElement | undefined = $state();
-  let searchEl: HTMLInputElement | undefined = $state();
+  // Input.ref has a null fallback. Svelte 5 rejects binding an undefined
+  // parent value to a bindable prop with a non-undefined fallback before the
+  // element mounts, which previously crashed the production logs tab.
+  let searchEl: HTMLInputElement | null = $state(null);
 
   const sources: Array<{ value: LogSource | 'all'; label: string }> = [
     { value: 'all', label: '全部' },

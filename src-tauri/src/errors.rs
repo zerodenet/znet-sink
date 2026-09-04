@@ -167,7 +167,7 @@ fn insufficient_os_privilege_message() -> &'static str {
 
 #[cfg(target_os = "macos")]
 fn insufficient_os_privilege_message() -> &'static str {
-    "TUN 需要更高的系统网络权限。请以具备管理员权限的方式重新启动 ZNet-Sink，然后重新开启 TUN。"
+    "TUN 需要配置虚拟网卡、路由和防火墙。请在 macOS 管理员授权弹窗中允许本次操作后重试。"
 }
 
 #[cfg(target_os = "linux")]

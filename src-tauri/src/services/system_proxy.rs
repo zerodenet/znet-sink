@@ -362,6 +362,70 @@ fn networksetup_failure(output: &std::process::Output) -> AppError {
     ))
 }
 
+#[cfg(any(target_os = "macos", test))]
+const MACOS_PRIVILEGED_COMMAND_SCRIPT: &str = r#"
+on run argv
+    if (count of argv) is 0 then error "missing privileged command"
+    set commandText to quoted form of (item 1 of argv)
+    repeat with argumentIndex from 2 to (count of argv)
+        set commandText to commandText & " " & quoted form of (item argumentIndex of argv)
+    end repeat
+    do shell script commandText with administrator privileges
+end run
+"#;
+
+#[cfg(any(target_os = "macos", test))]
+fn networksetup_requires_admin(stdout: &[u8], stderr: &[u8]) -> bool {
+    let diagnostics = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+    .to_ascii_lowercase();
+    diagnostics.contains("requires admin privileges")
+        || diagnostics.contains("administrator privileges")
+        || diagnostics.contains("not authorized")
+}
+
+#[cfg(target_os = "macos")]
+fn run_networksetup_elevated(args: &[&str]) -> AppResult<()> {
+    // Pass every value as an AppleScript argv item and let `quoted form of`
+    // perform shell escaping. Network service names are user-controlled OS
+    // data and must never be interpolated into the script source.
+    let output = common::background_command("/usr/bin/osascript")
+        .args([
+            "-e",
+            MACOS_PRIVILEGED_COMMAND_SCRIPT,
+            "--",
+            "/usr/sbin/networksetup",
+        ])
+        .args(args)
+        .output()
+        .map_err(|error| {
+            AppError::internal(format!(
+                "failed to request administrator authorization for networksetup: {error}"
+            ))
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim()
+    } else {
+        "no diagnostic output"
+    };
+    Err(AppError::internal(format!(
+        "administrator-authorized networksetup failed (status {}): {detail}",
+        output.status
+    )))
+}
+
 #[cfg(target_os = "macos")]
 fn run_networksetup(args: &[&str]) -> AppResult<()> {
     let output = common::background_command("networksetup")
@@ -369,10 +433,13 @@ fn run_networksetup(args: &[&str]) -> AppResult<()> {
         .output()
         .map_err(|e| AppError::internal(format!("failed to run networksetup: {e}")))?;
 
-    if !output.status.success() {
-        return Err(networksetup_failure(&output));
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(())
+    if networksetup_requires_admin(&output.stdout, &output.stderr) {
+        return run_networksetup_elevated(args);
+    }
+    Err(networksetup_failure(&output))
 }
 
 #[cfg(target_os = "macos")]
@@ -851,7 +918,8 @@ fn local_bypass_configured_platform() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_network_services, windows_proxy_server, windows_restore_server, ProxyBackup,
+        networksetup_requires_admin, parse_network_services, windows_proxy_server,
+        windows_restore_server, ProxyBackup, MACOS_PRIVILEGED_COMMAND_SCRIPT,
     };
 
     #[test]
@@ -862,6 +930,16 @@ mod tests {
             parse_network_services(output),
             vec!["Home Wi-Fi".to_string(), "Office Ethernet".to_string()]
         );
+    }
+
+    #[test]
+    fn macos_admin_diagnostic_triggers_native_authorization_retry() {
+        assert!(networksetup_requires_admin(
+            b"",
+            b"Error: Command requires admin privileges."
+        ));
+        assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("quoted form of"));
+        assert!(MACOS_PRIVILEGED_COMMAND_SCRIPT.contains("with administrator privileges"));
     }
 
     #[test]
