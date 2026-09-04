@@ -7,7 +7,8 @@ use crate::errors::AppResult;
 use crate::models::app_config::AppConfig;
 use crate::services::domain_store::DomainStoreData;
 use crate::services::{
-    app_config_store, builtin_rules, debug_store, domain_store, log_store, system_proxy_guard,
+    app_config, app_config_store, builtin_rules, debug_store, domain_store, log_store, rule_set,
+    system_proxy_guard,
 };
 
 use super::{Lifecycle, OnPhase, Phase};
@@ -64,7 +65,7 @@ impl OnPhase for ConfigPhase {
             );
             PathBuf::from("app-config.json")
         });
-        let app_config = app_config_store::load_or_default(&config_path).unwrap_or_else(|e| {
+        let mut app_config = app_config_store::load_or_default(&config_path).unwrap_or_else(|e| {
             crate::services::logs::znet_log(
                 None,
                 crate::models::logs::LogLevel::Warn,
@@ -86,6 +87,40 @@ impl OnPhase for ConfigPhase {
                 crate::models::logs::LogLevel::Warn,
                 format!("failed to install built-in rules: {error:?}"),
             );
+        }
+        if rule_set::compact_source_managed_semantics(&mut domain_data.rule_sets) {
+            if let Err(error) = domain_store::save_rule_sets(&domain_data.rule_sets) {
+                crate::services::logs::znet_log(
+                    None,
+                    crate::models::logs::LogLevel::Warn,
+                    format!("failed to compact managed rule metadata: {error:?}"),
+                );
+            }
+        }
+        let migrated_profile_dns =
+            app_config::migrate_legacy_dns(&mut app_config, &mut domain_data.proxy_configs);
+        let migrated_node_dns = app_config::migrate_legacy_recommended_node_dns(&mut app_config);
+        let migrated_domestic_dns = app_config::migrate_builtin_domestic_resolvers(&mut app_config);
+        if migrated_profile_dns || migrated_node_dns || migrated_domestic_dns {
+            if let Err(error) = app_config_store::save(&config_path, &app_config) {
+                crate::services::logs::znet_log(
+                    None,
+                    crate::models::logs::LogLevel::Warn,
+                    format!("failed to persist migrated global DNS settings: {error:?}"),
+                );
+            }
+            if migrated_profile_dns {
+                if let Err(error) = domain_store::save_relational_data(
+                    &domain_data.proxy_configs,
+                    &domain_data.subscriptions,
+                ) {
+                    crate::services::logs::znet_log(
+                        None,
+                        crate::models::logs::LogLevel::Warn,
+                        format!("failed to persist profile DNS migration: {error:?}"),
+                    );
+                }
+            }
         }
         let logs = log_store::load_recent(app_config.logs.max_entries).unwrap_or_else(|e| {
             crate::services::logs::znet_log(

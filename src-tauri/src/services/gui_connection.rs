@@ -67,9 +67,7 @@ pub async fn connect(
     };
     if !health.healthy {
         cleanup_failed_connect(state.clone());
-        return Err(AppError::internal(
-            "core health check reported unhealthy",
-        ));
+        return Err(AppError::internal("core health check reported unhealthy"));
     }
 
     let (host, port) = local_proxy_endpoint(state.inner())?;
@@ -108,10 +106,9 @@ pub async fn connect(
     if !status.connected {
         cleanup_failed_connect(state.clone());
         return Err(AppError::internal(
-            status
-                .last_error
-                .clone()
-                .unwrap_or_else(|| "system proxy did not enter the managed connected state".to_string()),
+            status.last_error.clone().unwrap_or_else(|| {
+                "system proxy did not enter the managed connected state".to_string()
+            }),
         ));
     }
 

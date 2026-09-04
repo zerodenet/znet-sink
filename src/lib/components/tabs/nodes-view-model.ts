@@ -1,5 +1,11 @@
 import type { PolicyGroup, ProbeJobSnapshot } from '$lib/types/gui-api';
 import type { ProxyNode } from '$lib/types/protocol';
+import {
+  compareNodeDelay,
+  isDelaySortEnabled,
+  isUrlTestGroup,
+  matchesNodeHealthFilter,
+} from '$lib/components/tabs/nodes-display-preferences.svelte';
 
 export interface ProbeTargets {
   nodes: ProxyNode[];
@@ -133,6 +139,22 @@ export function collectGroupNodeTags(groups: PolicyGroup[], groupName: string): 
 }
 
 /**
+ * Preserve configured order by default. When the user opts into latency order,
+ * URLTest groups present successful observations from fastest to slowest,
+ * followed by untested nodes and then timeout/failure observations.
+ */
+function sortGroupNodes(group: PolicyGroup, nodes: ProxyNode[]): ProxyNode[] {
+  if (!isUrlTestGroup(group) || !isDelaySortEnabled()) return nodes;
+
+  return nodes
+    .map((node, index) => ({ node, index }))
+    .sort((a, b) => {
+      return compareNodeDelay(a.node, b.node) || a.index - b.index;
+    })
+    .map(({ node }) => node);
+}
+
+/**
  * A nested policy group is rendered as one effective outbound card in its
  * parent. Runtime parent-member metadata can lag behind the nested group's own
  * selection after a scheduled/manual URLTest cycle, so derive that card's
@@ -187,14 +209,15 @@ export function filterNodes(options: {
 }): ProxyNode[] {
   const { allNodes, groups, query, selectedGroup } = options;
   const projected = projectNestedGroupNodes(allNodes, groups);
-  const nodes = projected.filter((node) => matchesSearch(node, query));
+  const nodes = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
   if (!selectedGroup) return nodes;
   const group = groups.find((item) => item.name === selectedGroup);
   if (!group) return nodes;
   const byTag = new Map(nodes.map((node) => [node.tag, node]));
-  return group.outbounds
+  const groupNodes = group.outbounds
     .map((outbound) => byTag.get(outbound.tag))
     .filter((node): node is ProxyNode => node !== undefined);
+  return sortGroupNodes(group, groupNodes);
 }
 
 export function buildSections(options: {
@@ -205,7 +228,7 @@ export function buildSections(options: {
 }): NodeSection[] {
   const { allNodes, groups, query, orphanSectionName = '其他' } = options;
   const projected = projectNestedGroupNodes(allNodes, groups);
-  const filtered = projected.filter((node) => matchesSearch(node, query));
+  const filtered = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
   const assigned = new Set<string>();
   const sections: NodeSection[] = groups.flatMap((group) => {
     const byTag = new Map(filtered.map((node) => [node.tag, node]));
@@ -213,7 +236,9 @@ export function buildSections(options: {
       .map((outbound) => byTag.get(outbound.tag))
       .filter((node): node is ProxyNode => node !== undefined && !assigned.has(node.id));
     for (const node of nodes) assigned.add(node.id);
-    return nodes.length > 0 ? [{ name: group.name, kind: group.kind, nodes }] : [];
+    return nodes.length > 0
+      ? [{ name: group.name, kind: group.kind, nodes: sortGroupNodes(group, nodes) }]
+      : [];
   });
   const orphan = filtered.filter((node) => !assigned.has(node.id));
   if (orphan.length > 0) sections.push({ name: orphanSectionName, nodes: orphan });

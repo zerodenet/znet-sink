@@ -192,9 +192,7 @@ fn rotate_path(path: &Path) -> AppResult<()> {
         retained_bytes += bytes;
         records.push_back((serialized, bytes));
 
-        while records.len() > HISTORY_RECORD_LIMIT
-            || retained_bytes as u64 > HISTORY_MAX_BYTES
-        {
+        while records.len() > HISTORY_RECORD_LIMIT || retained_bytes as u64 > HISTORY_MAX_BYTES {
             if let Some((_, removed_bytes)) = records.pop_front() {
                 retained_bytes = retained_bytes.saturating_sub(removed_bytes);
                 changed = true;
@@ -303,7 +301,9 @@ fn normalized_filter(value: Option<&str>) -> Option<String> {
         .map(str::to_lowercase)
 }
 
-fn object(value: Option<&serde_json::Value>) -> Option<&serde_json::Map<String, serde_json::Value>> {
+fn object(
+    value: Option<&serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
     value.and_then(serde_json::Value::as_object)
 }
 

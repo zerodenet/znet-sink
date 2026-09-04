@@ -33,7 +33,6 @@
     Search,
     SlidersHorizontal,
     Trash2,
-    X,
   } from '@lucide/svelte';
 
   const HISTORY_SCOPE = 'connection-history';
@@ -73,6 +72,7 @@
   let selectedKey = $state<string | null>(null);
   let singleConfirmKey = $state<string | null>(null);
   let closeAllConfirm = $state(false);
+  let closeAllSnapshotIds = $state<string[]>([]);
   let clearHistoryConfirm = $state(false);
   let terminatingIds = $state<Set<string>>(new Set());
   let closingAll = $state(false);
@@ -113,6 +113,13 @@
   const singleConfirmConnection = $derived(
     liveView.find((connection) => connectionKey(connection) === singleConfirmKey) ?? null,
   );
+  const closeAction = $derived(store.interactionSurface.actions.get('core.flow.close'));
+  const canCloseConnections = $derived(closeAction?.operable ?? true);
+  const closeUnavailableReason = $derived.by(() => {
+    if (canCloseConnections) return undefined;
+    if (closeAction?.reason === 'hidden in lite mode') return '连接终止仅在专业模式下可用。';
+    return '当前内核未声明连接终止能力；请更新内核后刷新能力信息。';
+  });
 
   const protocolOptions = $derived.by(() => {
     const values = new Set(currentSource.map((connection) => connection.protocol).filter(Boolean));
@@ -190,10 +197,6 @@
     protocolFilter = 'all';
     outboundFilter = 'all';
     resultFilter = 'all';
-  }
-
-  function clearSearch() {
-    searchQuery = '';
   }
 
   function historySignature(): string {
@@ -456,9 +459,10 @@
 
   async function closeAllConnections() {
     if (closingAll) return;
-    const ids = [...new Set(liveView.map((connection) => connection.flowId))];
+    const ids = [...closeAllSnapshotIds];
+    closeAllConfirm = false;
+    closeAllSnapshotIds = [];
     if (ids.length === 0) {
-      closeAllConfirm = false;
       return;
     }
 
@@ -478,7 +482,6 @@
 
       suppressedActiveIds = new Set([...suppressedActiveIds, ...closed]);
       pausedSnapshot = pausedSnapshot.filter((connection) => !closed.has(connection.flowId));
-      closeAllConfirm = false;
       if (failed > 0) {
         showWarningToast(`已关闭 ${closed.size} 条连接，${failed} 条失败`);
       } else {
@@ -487,6 +490,16 @@
     } finally {
       closingAll = false;
     }
+  }
+
+  function requestCloseAllConnections() {
+    closeAllSnapshotIds = [...new Set(liveView.map((connection) => connection.flowId))];
+    if (closeAllSnapshotIds.length > 0) closeAllConfirm = true;
+  }
+
+  function dismissCloseAllConnections() {
+    closeAllConfirm = false;
+    closeAllSnapshotIds = [];
   }
 
   function eventStatusLabel(): string {
@@ -627,6 +640,7 @@
   onMount(() => {
     historyFilterSignature = historySignature();
     void loadHistory(true);
+    void store.refreshInteractionSurface();
     const clock = window.setInterval(() => {
       now = Date.now();
     }, 1_000);
@@ -672,23 +686,11 @@
       <Search class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         type="search"
-        class="h-[30px] pl-8 pr-8 text-xs"
+        class="h-[30px] pl-8 text-xs"
         aria-label="搜索连接"
         placeholder="搜索目标、进程、出口、规则或 ID"
         bind:value={searchQuery}
       />
-      {#if searchQuery}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          class="absolute right-0.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-          title="清除搜索"
-          aria-label="清除搜索"
-          onclick={clearSearch}
-        >
-          <X class="size-3.5" />
-        </Button>
-      {/if}
     </div>
 
     <Button
@@ -748,10 +750,11 @@
                 size="sm"
                 class="w-full justify-start text-destructive hover:text-destructive"
                 role="menuitem"
-                disabled={liveView.length === 0 || closingAll || !store.isActionOperable('core.flow.close')}
+                disabled={liveView.length === 0 || closingAll || !canCloseConnections}
+                title={canCloseConnections ? '关闭当前全部活动连接' : closeUnavailableReason}
                 onclick={() => {
                   actionsOpen = false;
-                  closeAllConfirm = true;
+                  requestCloseAllConnections();
                 }}
               >
                 <CircleX data-icon="inline-start" class="size-3.5" />
@@ -778,6 +781,12 @@
       </div>
     </div>
   </div>
+
+  {#if activeTab === 'live' && !canCloseConnections}
+    <div class="border-b border-border bg-amber-500/5 px-3 py-2 text-[10.5px] text-amber-700 dark:text-amber-400" role="status">
+      {closeUnavailableReason}
+    </div>
+  {/if}
 
   {#if filtersOpen}
     <div class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
@@ -875,9 +884,9 @@
           class="group relative flex rounded-lg border border-border/70 bg-background transition-colors hover:bg-muted/40"
           style="content-visibility: auto; contain-intrinsic-size: 82px;"
         >
-          <button
+          <button data-slot="surface-button"
             type="button"
-            class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-12 text-left text-foreground outline-none focus-visible:bg-muted/50"
+            class="flex min-w-0 flex-1 flex-col gap-2 bg-transparent px-3.5 py-3 pr-20 text-left text-foreground outline-none focus-visible:bg-muted/50"
             aria-label={`查看连接 ${connection.destination}`}
             onclick={() => openDetails(connection)}
           >
@@ -917,17 +926,18 @@
             </div>
           </button>
 
-          {#if connection.origin === 'active' && store.isActionOperable('core.flow.close')}
+          {#if connection.origin === 'active'}
             <Button
-              variant="ghost"
-              size="icon-sm"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
-              disabled={terminatingIds.has(connection.flowId)}
-              title="终止连接"
+              variant="outline"
+              size="xs"
+              class="absolute right-2 top-1/2 h-7 -translate-y-1/2 gap-1 px-2 text-[10px] text-muted-foreground opacity-75 transition-colors hover:border-destructive/40 hover:text-destructive focus-visible:opacity-100 disabled:opacity-45"
+              disabled={!canCloseConnections || terminatingIds.has(connection.flowId)}
+              title={canCloseConnections ? '终止连接' : closeUnavailableReason}
               aria-label={`终止连接 ${connection.destination}`}
               onclick={() => requestSingleTerminate(connection)}
             >
               <CircleX class="size-3.5" />
+              终止
             </Button>
           {/if}
         </article>
@@ -954,7 +964,8 @@
 
   <ConnectionDetailsDrawer
     connection={selectedConnection}
-    canTerminate={selectedConnection?.origin === 'active' && store.isActionOperable('core.flow.close')}
+    canTerminate={selectedConnection?.origin === 'active' && canCloseConnections}
+    terminateUnavailableReason={closeUnavailableReason}
     terminating={selectedConnection ? terminatingIds.has(selectedConnection.flowId) : false}
     onclose={() => selectedKey = null}
     onrequestterminate={requestSingleTerminate}
@@ -980,12 +991,12 @@
 <ActionConfirmDialog
   open={closeAllConfirm}
   title="关闭当前全部连接？"
-  description={`将尝试关闭当前检测到的 ${liveView.length} 条活动连接。应用可能立即重新建立部分连接。`}
+  description={`将只关闭刚才检测到的 ${closeAllSnapshotIds.length} 条活动连接，新建立的连接不受本次操作影响。`}
   confirmLabel="关闭全部"
   busyLabel="关闭中…"
   busy={closingAll}
   destructive
-  onClose={() => closeAllConfirm = false}
+  onClose={dismissCloseAllConnections}
   onConfirm={closeAllConnections}
 />
 

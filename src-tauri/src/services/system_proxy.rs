@@ -842,8 +842,7 @@ mod tests {
     fn windows_restore_preserves_protocol_map_verbatim() {
         let backup = ProxyBackup {
             raw_server: Some(
-                "http=127.0.0.1:8080;https=127.0.0.1:8443;socks=127.0.0.1:1080"
-                    .to_string(),
+                "http=127.0.0.1:8080;https=127.0.0.1:8443;socks=127.0.0.1:1080".to_string(),
             ),
             ..ProxyBackup::default()
         };

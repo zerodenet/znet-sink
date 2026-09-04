@@ -1,6 +1,11 @@
 <script lang="ts">
+  import { Button } from '$lib/components/ui/button';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
+  import { getRuntimePerformanceSnapshot } from '$lib/services/runtime-performance';
+  import type { RuntimePerformanceSnapshot } from '$lib/types/runtime-performance';
+
+  const RUNTIME_REFRESH_INTERVAL_MS = 2000;
 
   const c = $derived(guiState.connection);
 
@@ -11,11 +16,86 @@
   const isCrashed = $derived(c?.processExitReason === 'crashed');
   const isStopped = $derived(c?.processExitReason === 'stopped');
   const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
+  const missingActiveConfig = $derived(
+    guiState.selfTest !== null && !guiState.selfTest.activeProxyConfigId,
+  );
   const localProxyEndpoint = $derived(
     c?.localProxyHost && c?.localProxyPort
       ? `${c.localProxyHost}:${c.localProxyPort}`
       : '已设置'
   );
+
+  let runtimeSnapshot = $state<RuntimePerformanceSnapshot | null>(null);
+  let runtimePending = false;
+
+  function formatCpu(value: number | null | undefined): string {
+    if (value == null) return '—';
+    if (value < 0.1) return '<0.1%';
+    return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
+  }
+
+  function formatMemory(bytes: number | null | undefined): string {
+    if (bytes == null) return '—';
+    const mib = bytes / 1024 / 1024;
+    if (mib >= 1024) return `${(mib / 1024).toFixed(2)} GB`;
+    return `${mib.toFixed(mib >= 100 ? 0 : 1)} MB`;
+  }
+
+  async function refreshRuntime(): Promise<void> {
+    if (
+      runtimePending
+      || store.uiMode !== 'pro'
+      || !isProcessRunning
+      || document.visibilityState === 'hidden'
+    ) return;
+
+    runtimePending = true;
+    try {
+      runtimeSnapshot = await getRuntimePerformanceSnapshot();
+    } catch {
+      runtimeSnapshot = null;
+    } finally {
+      runtimePending = false;
+    }
+  }
+
+  $effect(() => {
+    // Professional overview only needs Zero process resource data while the
+    // managed core is running. Do not keep a sampler alive in Lite mode,
+    // while the app is hidden, or for an external/unmanaged Zero process.
+    if (store.uiMode !== 'pro' || !isProcessRunning) {
+      runtimeSnapshot = null;
+      return;
+    }
+
+    let timer: number | null = null;
+
+    const stop = () => {
+      if (timer != null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (timer != null || document.visibilityState === 'hidden') return;
+      void refreshRuntime();
+      timer = window.setInterval(() => void refreshRuntime(), RUNTIME_REFRESH_INTERVAL_MS);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') stop();
+      else start();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    start();
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  });
+
+  const coreRuntime = $derived(runtimeSnapshot?.core ?? null);
 
   const stateLabel = $derived(
     guiState.isInitializing
@@ -84,11 +164,19 @@
             ? '开启服务'
             : '配置不完整'
   );
+
+  function openBlockingIssueTarget() {
+    if (missingActiveConfig) {
+      store.activeTab = 'profiles';
+      return;
+    }
+    store.openSettings('core');
+  }
 </script>
 
 <div class="core-card">
   <div class="core-header">
-    <span class="core-label">{`内核状态`}</span>
+    <span class="core-label">内核状态</span>
     <div class="core-state">
       <span
         class="core-dot"
@@ -106,20 +194,30 @@
         <span class="meta-val">{isProcessRunning ? (c.processPid ?? '—') : '外部'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`系统代理`}</span>
+        <span class="meta-key">系统代理</span>
         <span class="meta-val" class:connected={isSystemProxyEnabled}>
           {c.systemProxyEnabled ? localProxyEndpoint : '未设置'}
         </span>
       </div>
+      {#if store.uiMode === 'pro'}
+        <div class="core-meta-row" title="Zero 进程 CPU 使用率，每 2 秒更新">
+          <span class="meta-key">CPU</span>
+          <span class="meta-val">{isProcessRunning ? formatCpu(coreRuntime?.cpuPercent) : '—'}</span>
+        </div>
+        <div class="core-meta-row" title="Zero 进程常驻内存，每 2 秒更新">
+          <span class="meta-key">内存</span>
+          <span class="meta-val">{isProcessRunning ? formatMemory(coreRuntime?.memoryBytes) : '—'}</span>
+        </div>
+      {/if}
     </div>
   {:else if c?.processExitReason && c?.processState === 'exited'}
     <div class="core-meta">
       <div class="core-meta-row">
-        <span class="meta-key">{`退出码`}</span>
+        <span class="meta-key">退出码</span>
         <span class="meta-val">{c.processExitCode ?? '—'}</span>
       </div>
       <div class="core-meta-row">
-        <span class="meta-key">{`原因`}</span>
+        <span class="meta-key">原因</span>
         <span class="meta-val" class:danger={isCrashed}>
           {isStopped ? '手动停止' : isCrashed ? '崩溃' : '自行退出'}
         </span>
@@ -141,44 +239,47 @@
       </svg>
       <span class="truncate">{guiState.blockingIssues[0]}</span>
     </div>
-    <button class="core-link" onclick={() => store.openSettings('core')}>
-      {`配置内核`}
-    </button>
+    <Button variant="link" size="sm" class="self-start px-0" onclick={openBlockingIssueTarget}>
+      {missingActiveConfig ? '前往代理配置' : '配置内核'}
+    </Button>
   {/if}
 
   {#if store.uiMode === 'pro'}
     <div class="core-actions">
-      <button
+      <Button variant="outline" size="sm"
         onclick={() => isProcessRunning ? guiState.restartCore() : guiState.startCore()}
         disabled={isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : !guiState.canStartCore}
-        class="core-action"
-        class:active={isCoreAvailable}
-        class:danger={isProcessRunning}
+
+        class="min-w-0 overflow-hidden"
+
         title={isCoreAvailable && !isProcessRunning ? '检测到外部内核，无法由当前应用管理' : !isCoreAvailable && !guiState.canStartCore && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
       >
         {coreActionLabel}
-      </button>
-      <button
+      </Button>
+      <Button variant="outline" size="sm"
         onclick={() => guiState.toggleSystemProxy()}
         disabled={isSystemProxyEnabled ? !guiState.canDisableSystemProxy : !guiState.canEnableSystemProxy}
-        class="core-action"
-        class:active={isSystemProxyEnabled}
-        title={!isSystemProxyEnabled && !guiState.canEnableSystemProxy && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
+
+        aria-pressed={isSystemProxyEnabled}
+        title={isSystemProxyEnabled
+          ? '关闭系统代理只撤销系统流量入口，不会停止内核或终止已有连接'
+          : !guiState.canEnableSystemProxy && guiState.blockingIssues.length
+            ? guiState.blockingIssues.join('; ')
+            : '开启由 ZNet Sink 管理的系统代理'}
       >
         {proxyActionLabel}
-      </button>
+      </Button>
     </div>
   {:else}
-    <button
+    <Button variant={guiState.isConnected ? 'destructive' : 'default'} size="sm"
       onclick={() => guiState.isConnected ? guiState.disconnect() : guiState.connect()}
       disabled={guiState.isConnecting || guiState.isDisconnecting || (!guiState.isConnected && !guiState.canConnect)}
-      class="core-toggle"
-      class:running={guiState.isConnected}
-      class:startable={guiState.canConnect && !guiState.isConnected}
+      class="mt-auto w-full"
+
       title={!guiState.canConnect && guiState.blockingIssues.length ? guiState.blockingIssues.join('; ') : ''}
     >
       {liteActionLabel}
-    </button>
+    </Button>
   {/if}
 </div>
 
@@ -234,7 +335,7 @@
   .core-meta {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1px 8px;
+    gap: 2px 8px;
     flex-shrink: 0;
   }
 
@@ -243,6 +344,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 4px;
+    min-width: 0;
     overflow: hidden;
   }
 
@@ -272,17 +374,6 @@
     flex-shrink: 0;
   }
 
-  .core-link {
-    align-self: flex-start;
-    border: none;
-    background: transparent;
-    color: var(--primary);
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 0;
-    cursor: pointer;
-  }
-
   .core-error {
     font-size: 11px;
     color: var(--destructive);
@@ -300,96 +391,4 @@
     flex-shrink: 0;
   }
 
-  .core-action {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 26px;
-    min-width: 0;
-    padding: 0 7px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.13s ease, border-color 0.13s ease, color 0.13s ease;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .core-action:hover:not(:disabled) {
-    color: var(--foreground);
-    background: var(--accent, var(--muted));
-  }
-
-  .core-action:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .core-action.active {
-    background: rgba(34, 197, 94, 0.08);
-    border-color: rgba(34, 197, 94, 0.25);
-    color: #16A34A;
-  }
-
-  .core-action.danger:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.25);
-    color: var(--destructive);
-  }
-
-  :global(.dark) .core-action.active { color: #4ADE80; }
-  :global(.dark) .core-action.danger:hover:not(:disabled) { color: #EF4444; }
-
-  .core-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.13s ease;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: auto;
-    flex-shrink: 0;
-  }
-
-  .core-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .core-toggle.running {
-    background: rgba(34, 197, 94, 0.10);
-    border-color: rgba(34, 197, 94, 0.30);
-    color: #16A34A;
-  }
-
-  .core-toggle.running:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.25);
-    color: var(--destructive);
-  }
-
-  .core-toggle.startable {
-    background: rgba(34, 197, 94, 0.08);
-    border-color: rgba(34, 197, 94, 0.25);
-    color: #16A34A;
-  }
-
-  .core-toggle.startable:hover:not(:disabled) { background: rgba(34, 197, 94, 0.14); }
-
-  :global(.dark) .core-toggle.running,
-  :global(.dark) .core-toggle.startable { color: #4ADE80; }
-  :global(.dark) .core-toggle.running:hover:not(:disabled) { color: #EF4444; }
 </style>

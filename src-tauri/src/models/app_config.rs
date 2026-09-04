@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::dns_config::ClientDnsConfig;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -16,6 +18,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub tun: AppTunConfig,
     #[serde(default)]
+    pub dns: AppDnsConfig,
+    #[serde(default)]
     pub routing: AppRoutingConfig,
     #[serde(default)]
     pub url_test: AppUrlTestConfig,
@@ -29,7 +33,8 @@ impl Default for AppConfig {
             logs: AppLogConfig::default(),
             ui: AppUiConfig::default(),
             local_proxy: AppLocalProxyConfig::default(),
-            tun: AppTunConfig::default(),
+            tun: AppTunConfig::recommended_default(),
+            dns: AppDnsConfig::recommended_default(),
             routing: AppRoutingConfig::default(),
             url_test: AppUrlTestConfig::default(),
         }
@@ -43,7 +48,7 @@ pub struct AppCoreConfig {
     pub kernel: String,
     #[serde(default = "default_true")]
     pub auto_connect: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub auto_start: bool,
     #[serde(default = "default_true")]
     pub cleanup_proxy_on_exit: bool,
@@ -107,6 +112,8 @@ pub struct AppUiConfig {
     pub sidebar_collapsed: bool,
     #[serde(default)]
     pub hidden_menu_keys: Vec<String>,
+    #[serde(default = "default_true")]
+    pub traffic_ball_enabled: bool,
     #[serde(default)]
     pub default_route: Option<String>,
 }
@@ -118,6 +125,7 @@ impl Default for AppUiConfig {
             ui_mode: default_ui_mode(),
             sidebar_collapsed: false,
             hidden_menu_keys: vec!["debug".to_string()],
+            traffic_ball_enabled: true,
             default_route: None,
         }
     }
@@ -151,17 +159,54 @@ pub struct AppTunConfig {
     pub mask: String,
     #[serde(default)]
     pub secondary_addr: Option<String>,
-    #[serde(
-        default = "default_tun_tag",
-        deserialize_with = "deserialize_tun_tag"
-    )]
+    #[serde(default = "default_tun_tag", deserialize_with = "deserialize_tun_tag")]
     pub tag: String,
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
+    /// Positive automatic-route capture set. Empty means full capture.
+    #[serde(default)]
+    pub include_cidrs: Vec<String>,
+    /// Destination CIDRs that must remain on the host routing table.
+    #[serde(default)]
+    pub exclude_cidrs: Vec<String>,
     #[serde(default = "default_true")]
     pub dual_stack: bool,
     #[serde(default)]
     pub dns_hijack: bool,
+}
+
+/// Global DNS/Fake-IP settings owned by ZNet-Sink and injected into the
+/// effective Zero runtime configuration. This is intentionally independent
+/// from any proxy profile so switching profiles cannot reset DNS behavior.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDnsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub config: Option<ClientDnsConfig>,
+    #[serde(default)]
+    pub dns_hijack: bool,
+}
+
+impl Default for AppDnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            config: None,
+            dns_hijack: false,
+        }
+    }
+}
+
+impl AppDnsConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            enabled: true,
+            config: Some(ClientDnsConfig::recommended_default()),
+            dns_hijack: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,8 +249,84 @@ impl Default for AppTunConfig {
             secondary_addr: None,
             tag: default_tun_tag(),
             mtu: default_tun_mtu(),
+            include_cidrs: Vec::new(),
+            exclude_cidrs: Vec::new(),
             dual_stack: true,
             dns_hijack: false,
+        }
+    }
+}
+
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v1";
+
+/// Portable client-owned settings projected onto every active proxy profile.
+/// Machine-bound executable paths, runtime sockets, UI state, logs, and
+/// subscription/profile data are deliberately outside this contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettingsBundle {
+    pub schema_version: String,
+    pub exported_at_unix_ms: u64,
+    pub settings: ClientKernelSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKernelSettings {
+    pub core: PortableCoreConfig,
+    pub tun: AppTunConfig,
+    pub dns: AppDnsConfig,
+    pub routing: AppRoutingConfig,
+    pub url_test: AppUrlTestConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableCoreConfig {
+    pub auto_connect: bool,
+    pub auto_start: bool,
+    pub cleanup_proxy_on_exit: bool,
+    pub network_probe_urls: Vec<String>,
+}
+
+impl ClientKernelSettings {
+    pub fn from_app_config(config: &AppConfig) -> Self {
+        Self {
+            core: PortableCoreConfig {
+                auto_connect: config.core.auto_connect,
+                auto_start: config.core.auto_start,
+                cleanup_proxy_on_exit: config.core.cleanup_proxy_on_exit,
+                network_probe_urls: config.core.network_probe_urls.clone(),
+            },
+            tun: config.tun.clone(),
+            dns: config.dns.clone(),
+            routing: config.routing.clone(),
+            url_test: config.url_test.clone(),
+        }
+    }
+
+    pub fn apply_to(self, config: &mut AppConfig) {
+        config.core.auto_connect = self.core.auto_connect;
+        config.core.auto_start = self.core.auto_start;
+        config.core.cleanup_proxy_on_exit = self.core.cleanup_proxy_on_exit;
+        config.core.network_probe_urls = self.core.network_probe_urls;
+        config.tun = self.tun;
+        config.dns = self.dns;
+        config.routing = self.routing;
+        config.url_test = self.url_test;
+    }
+}
+
+impl AppTunConfig {
+    pub fn recommended_default() -> Self {
+        Self {
+            // New installs must not let Lite's legacy `None` compatibility
+            // state turn auto-connect into an implicit privileged TUN start.
+            // Deserializing an older config still uses `Default` and therefore
+            // preserves `None` until that user explicitly toggles TUN.
+            enabled: Some(false),
+            dns_hijack: true,
+            ..Self::default()
         }
     }
 }
@@ -221,7 +342,7 @@ impl Default for AppLocalProxyConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigPatch {
     pub core: Option<AppCoreConfigPatch>,
@@ -229,6 +350,7 @@ pub struct AppConfigPatch {
     pub ui: Option<AppUiConfigPatch>,
     pub local_proxy: Option<AppLocalProxyConfigPatch>,
     pub tun: Option<AppTunConfigPatch>,
+    pub dns: Option<AppDnsConfigPatch>,
     pub routing: Option<AppRoutingConfigPatch>,
     pub url_test: Option<AppUrlTestConfigPatch>,
 }
@@ -262,6 +384,7 @@ pub struct AppUiConfigPatch {
     pub ui_mode: Option<String>,
     pub sidebar_collapsed: Option<bool>,
     pub hidden_menu_keys: Option<Vec<String>>,
+    pub traffic_ball_enabled: Option<bool>,
     pub default_route: Option<Option<String>>,
 }
 
@@ -278,13 +401,34 @@ pub struct AppLocalProxyConfigPatch {
 #[serde(rename_all = "camelCase")]
 pub struct AppTunConfigPatch {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub name: Option<Option<String>>,
     pub addr: Option<String>,
     pub mask: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_tun_patch")]
     pub secondary_addr: Option<Option<String>>,
     pub tag: Option<String>,
     pub mtu: Option<u16>,
+    pub include_cidrs: Option<Vec<String>>,
+    pub exclude_cidrs: Option<Vec<String>>,
     pub dual_stack: Option<bool>,
+    pub dns_hijack: Option<bool>,
+}
+
+fn deserialize_nullable_tun_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDnsConfigPatch {
+    pub enabled: Option<bool>,
+    pub config: Option<Option<ClientDnsConfig>>,
     pub dns_hijack: Option<bool>,
 }
 
@@ -337,11 +481,11 @@ fn default_local_proxy_port() -> u16 {
 }
 
 fn default_tun_addr() -> String {
-    "10.0.0.1/24".to_string()
+    "10.66.0.1/30".to_string()
 }
 
 fn default_tun_mask() -> String {
-    "255.255.255.0".to_string()
+    "255.255.255.252".to_string()
 }
 
 fn default_tun_tag() -> String {
@@ -438,6 +582,20 @@ mod tests {
     }
 
     #[test]
+    fn traffic_ball_defaults_to_enabled_and_preserves_opt_out() {
+        assert!(AppConfig::default().ui.traffic_ball_enabled);
+
+        let legacy: AppConfig = serde_json::from_value(json!({ "ui": {} })).unwrap();
+        assert!(legacy.ui.traffic_ball_enabled);
+
+        let disabled: AppConfig = serde_json::from_value(json!({
+            "ui": { "trafficBallEnabled": false }
+        }))
+        .unwrap();
+        assert!(!disabled.ui.traffic_ball_enabled);
+    }
+
+    #[test]
     fn urltest_tolerance_defaults_to_50ms_for_new_and_legacy_configs() {
         assert_eq!(AppConfig::default().url_test.tolerance_ms, 50);
 
@@ -456,14 +614,34 @@ mod tests {
     }
 
     #[test]
-    fn tun_defaults_are_backwards_compatible_and_keep_dns_hijack_opt_in() {
+    fn tun_defaults_use_a_narrow_subnet_and_keep_dns_hijack_opt_in() {
         let config: AppConfig = serde_json::from_value(json!({})).unwrap();
         assert!(config.tun.enabled.is_none());
-        assert_eq!(config.tun.mask, "255.255.255.0");
+        assert_eq!(config.tun.addr, "10.66.0.1/30");
+        assert_eq!(config.tun.mask, "255.255.255.252");
         assert_eq!(config.tun.tag, "znet-sink-tun");
         assert!(config.tun.secondary_addr.is_none());
         assert!(config.tun.dual_stack);
         assert!(!config.tun.dns_hijack);
+    }
+
+    #[test]
+    fn new_install_enables_recommended_dns_and_tun_hijack_defaults() {
+        let config = AppConfig::default();
+        assert_eq!(config.tun.enabled, Some(false));
+        assert!(config.dns.enabled);
+        assert!(config.dns.dns_hijack);
+        assert!(config.tun.dns_hijack);
+        let dns = config.dns.config.unwrap();
+        assert_eq!(dns.default_server, "cloudflare");
+        assert!(dns.servers.contains_key("cloudflare"));
+        assert!(dns.servers.contains_key("google"));
+        assert!(dns.servers.contains_key("cloudflare-bootstrap"));
+        assert!(dns.servers.contains_key("google-bootstrap"));
+        assert!(dns.servers.contains_key("alidns"));
+        assert!(dns.servers.contains_key("114dns"));
+        assert!(dns.servers.contains_key("system"));
+        dns.validate_client_shape().unwrap();
     }
 
     #[test]
@@ -479,6 +657,14 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(disabled.tun.enabled, Some(false));
+    }
+
+    #[test]
+    fn global_dns_defaults_to_disabled_for_legacy_configs() {
+        let config: AppConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(!config.dns.enabled);
+        assert!(config.dns.config.is_none());
+        assert!(!config.dns.dns_hijack);
     }
 
     #[test]

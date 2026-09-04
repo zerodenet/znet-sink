@@ -3,6 +3,8 @@ use tauri::State;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
+use crate::models::dns_config::ClientDnsConfig;
+use crate::models::proxy_config::ProxyConfigProfile;
 use crate::services::app_config_store;
 use crate::services::common::{lock, normalize_optional};
 use crate::state::app_state::AppState;
@@ -17,10 +19,17 @@ pub fn get(state: State<'_, AppState>) -> AppResult<AppConfig> {
 
 pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<AppConfig> {
     let start = std::time::Instant::now();
-    // Validate and persist a detached snapshot. Mutating the shared config as
-    // fields are validated can leave a half-applied patch in memory when a
-    // later field is invalid or the disk write fails.
-    let mut config = lock(state.app_config(), "app_config")?.clone();
+    let current = lock(state.app_config(), "app_config")?.clone();
+    let config = prepare_update(&current, patch)?;
+    replace(state.inner(), config.clone())?;
+    eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed());
+    Ok(config)
+}
+
+pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppResult<AppConfig> {
+    // Validate a detached snapshot so callers can apply runtime changes before
+    // publishing it. A rejected field never mutates the current configuration.
+    let mut config = current.clone();
 
     if let Some(core) = patch.core {
         if let Some(kernel) = core.kernel {
@@ -108,6 +117,9 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
         if let Some(hidden_menu_keys) = ui.hidden_menu_keys {
             config.ui.hidden_menu_keys = normalize_menu_keys(hidden_menu_keys);
         }
+        if let Some(traffic_ball_enabled) = ui.traffic_ball_enabled {
+            config.ui.traffic_ball_enabled = traffic_ball_enabled;
+        }
         if let Some(default_route) = ui.default_route {
             config.ui.default_route = normalize_optional(default_route);
         }
@@ -172,11 +184,40 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             }
             config.tun.mtu = mtu;
         }
+        if let Some(include_cidrs) = tun.include_cidrs {
+            config.tun.include_cidrs = normalize_tun_cidrs(include_cidrs, "tun.includeCidrs")?;
+        }
+        if let Some(exclude_cidrs) = tun.exclude_cidrs {
+            config.tun.exclude_cidrs = normalize_tun_cidrs(exclude_cidrs, "tun.excludeCidrs")?;
+        }
         if let Some(dual_stack) = tun.dual_stack {
             config.tun.dual_stack = dual_stack;
         }
         if let Some(dns_hijack) = tun.dns_hijack {
             config.tun.dns_hijack = dns_hijack;
+        }
+    }
+
+    if let Some(dns) = patch.dns {
+        if let Some(enabled) = dns.enabled {
+            config.dns.enabled = enabled;
+        }
+        if let Some(dns_config) = dns.config {
+            if let Some(ref value) = dns_config {
+                value.validate_client_shape()?;
+            }
+            config.dns.config = dns_config;
+        }
+        if let Some(dns_hijack) = dns.dns_hijack {
+            config.dns.dns_hijack = dns_hijack;
+        }
+        if config.dns.enabled && config.dns.config.is_none() {
+            return Err(AppError::invalid_argument(
+                "dns.config is required when dns.enabled is true",
+            ));
+        }
+        if !config.dns.enabled {
+            config.dns.dns_hijack = false;
         }
     }
 
@@ -191,10 +232,6 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
             config.url_test.tolerance_ms = tolerance_ms;
         }
     }
-
-    replace(state.inner(), config.clone())?;
-
-    eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed(),);
 
     Ok(config)
 }
@@ -212,12 +249,80 @@ fn normalize_proxy_bypass(values: Vec<String>) -> AppResult<Vec<String>> {
                 "localProxy.bypass entries must not contain semicolons or newlines",
             ));
         }
+        let value = normalize_proxy_bypass_entry(value)?;
         let key = value.to_ascii_lowercase();
         if seen.insert(key) {
+            normalized.push(value);
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_proxy_bypass_entry(value: &str) -> AppResult<String> {
+    let Some((address, prefix)) = value.split_once('/') else {
+        return Ok(value.to_string());
+    };
+    let address = address.parse::<std::net::Ipv4Addr>().map_err(|_| {
+        AppError::invalid_argument(
+            "localProxy.bypass uses host patterns; IPv6 CIDRs are unsupported here",
+        )
+    })?;
+    let prefix = prefix.parse::<u8>().map_err(|_| {
+        AppError::invalid_argument("localProxy.bypass contains an invalid IPv4 CIDR prefix")
+    })?;
+    if !matches!(prefix, 8 | 16 | 24 | 32) {
+        return Err(AppError::invalid_argument(
+            "localProxy.bypass only converts IPv4 CIDRs with /8, /16, /24 or /32; use TUN exclude CIDRs for arbitrary networks",
+        ));
+    }
+    let octets = address.octets();
+    Ok(match prefix {
+        8 => format!("{}.*", octets[0]),
+        16 => format!("{}.{}.*", octets[0], octets[1]),
+        24 => format!("{}.{}.{}.*", octets[0], octets[1], octets[2]),
+        32 => address.to_string(),
+        _ => unreachable!(),
+    })
+}
+
+pub(crate) fn normalize_tun_cidrs(values: Vec<String>, field: &str) -> AppResult<Vec<String>> {
+    if values.len() > 128 {
+        return Err(AppError::invalid_argument(format!(
+            "{field} supports at most 128 entries"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        validate_ip_cidr(value, field)?;
+        if seen.insert(value.to_ascii_lowercase()) {
             normalized.push(value.to_string());
         }
     }
     Ok(normalized)
+}
+
+fn validate_ip_cidr(value: &str, field: &str) -> AppResult<()> {
+    let (address, prefix) = value.split_once('/').ok_or_else(|| {
+        AppError::invalid_argument(format!("{field} entries must use CIDR notation"))
+    })?;
+    let address = address.parse::<std::net::IpAddr>().map_err(|_| {
+        AppError::invalid_argument(format!("{field} contains an invalid IP address"))
+    })?;
+    let prefix = prefix
+        .parse::<u8>()
+        .map_err(|_| AppError::invalid_argument(format!("{field} contains an invalid prefix")))?;
+    let maximum = if address.is_ipv4() { 32 } else { 128 };
+    if prefix > maximum {
+        return Err(AppError::invalid_argument(format!(
+            "{field} prefix exceeds /{maximum}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
@@ -230,6 +335,93 @@ pub(crate) fn replace(state: &AppState, config: AppConfig) -> AppResult<()> {
         entries.drain(0..remove_count);
     }
     Ok(())
+}
+
+/// Move the legacy profile-owned `runtime.dns` value into the global client
+/// DNS settings. The migration is idempotent and removes the old field from
+/// every profile once a valid global value exists.
+pub(crate) fn migrate_legacy_dns(
+    config: &mut AppConfig,
+    profiles: &mut [ProxyConfigProfile],
+) -> bool {
+    let mut changed = false;
+    let has_global_dns = config.dns.enabled || config.dns.config.is_some();
+
+    if !has_global_dns {
+        let candidate = profiles
+            .iter()
+            .find(|profile| profile.active)
+            .or_else(|| profiles.first());
+        if let Some(content) = candidate.and_then(|profile| profile.content.as_ref()) {
+            let legacy_dns: Option<ClientDnsConfig> = content
+                .get("runtime")
+                .and_then(|runtime| runtime.get("dns"))
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok());
+            if let Some(dns) = legacy_dns {
+                if dns.validate_client_shape().is_ok() {
+                    let dns_hijack = content
+                        .get("runtime")
+                        .and_then(|runtime| runtime.get("tun"))
+                        .and_then(|tun| tun.get("dns_hijack"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(config.tun.dns_hijack);
+                    config.dns.enabled = true;
+                    config.dns.config = Some(dns);
+                    config.dns.dns_hijack = dns_hijack;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if config.dns.enabled || config.dns.config.is_some() {
+        for profile in profiles {
+            let Some(content) = profile.content.as_mut() else {
+                continue;
+            };
+            let (removed_dns, remove_runtime) = content
+                .get_mut("runtime")
+                .and_then(|value| value.as_object_mut())
+                .map(|runtime| {
+                    let removed = runtime.remove("dns").is_some();
+                    (removed, removed && runtime.is_empty())
+                })
+                .unwrap_or((false, false));
+            if remove_runtime {
+                if let Some(root) = content.as_object_mut() {
+                    root.remove("runtime");
+                }
+            }
+            if removed_dns {
+                profile.updated_at_unix_ms = crate::services::common::now_unix_ms();
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+/// Upgrade only the previous client-owned node DNS defaults. Imported or
+/// user-edited server definitions and fallback orders remain authoritative.
+pub(crate) fn migrate_legacy_recommended_node_dns(config: &mut AppConfig) -> bool {
+    config
+        .dns
+        .config
+        .as_mut()
+        .is_some_and(ClientDnsConfig::migrate_legacy_recommended_node_resolution)
+}
+
+/// Add newly shipped client-owned resolver presets to configurations that
+/// still use the recommended resolver scaffold. The presets remain unselected
+/// until the user references them from dispatch or fallback policy.
+pub(crate) fn migrate_builtin_domestic_resolvers(config: &mut AppConfig) -> bool {
+    config
+        .dns
+        .config
+        .as_mut()
+        .is_some_and(ClientDnsConfig::migrate_missing_builtin_domestic_resolvers)
 }
 
 pub fn normalize_menu_keys(keys: Vec<String>) -> Vec<String> {
@@ -297,8 +489,15 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_network_probe_urls, normalize_proxy_bypass};
+    use super::{
+        migrate_builtin_domestic_resolvers, migrate_legacy_dns,
+        migrate_legacy_recommended_node_dns, normalize_network_probe_urls, normalize_proxy_bypass,
+        normalize_tun_cidrs,
+    };
     use crate::models::app_config::default_network_probe_urls;
+    use crate::models::app_config::AppConfig;
+    use crate::models::proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile};
+    use serde_json::json;
 
     #[test]
     fn network_probe_urls_trim_and_deduplicate() {
@@ -345,5 +544,107 @@ mod tests {
     fn proxy_bypass_entries_reject_platform_separators() {
         assert!(normalize_proxy_bypass(vec!["localhost;example.com".to_string()]).is_err());
         assert!(normalize_proxy_bypass(vec!["localhost\nexample.com".to_string()]).is_err());
+    }
+
+    #[test]
+    fn proxy_bypass_converts_octet_aligned_ipv4_cidrs_to_host_patterns() {
+        let bypass = normalize_proxy_bypass(vec![
+            "16.0.0.0/8".to_string(),
+            "192.168.0.0/16".to_string(),
+            "10.20.30.0/24".to_string(),
+            "10.20.30.40/32".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            bypass,
+            vec!["16.*", "192.168.*", "10.20.30.*", "10.20.30.40"]
+        );
+        assert!(normalize_proxy_bypass(vec!["10.0.0.0/9".to_string()]).is_err());
+    }
+
+    #[test]
+    fn tun_cidrs_trim_deduplicate_and_validate() {
+        assert_eq!(
+            normalize_tun_cidrs(
+                vec![
+                    " 16.0.0.0/8 ".to_string(),
+                    "16.0.0.0/8".to_string(),
+                    "fd00::/8".to_string(),
+                ],
+                "tun.excludeCidrs",
+            )
+            .unwrap(),
+            vec!["16.0.0.0/8", "fd00::/8"]
+        );
+        assert!(normalize_tun_cidrs(vec!["16.0.0.0/99".to_string()], "tun.excludeCidrs").is_err());
+    }
+
+    #[test]
+    fn migrates_profile_dns_to_global_config_and_removes_legacy_field() {
+        let mut config = AppConfig::default();
+        let mut profiles = vec![ProxyConfigProfile {
+            id: "profile-1".to_string(),
+            name: "Current".to_string(),
+            kernel: "zero".to_string(),
+            format: "json".to_string(),
+            path: None,
+            content: Some(json!({
+                "runtime": {
+                    "dns": {
+                        "servers": { "global": { "type": "system" } },
+                        "default_server": "global",
+                        "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 60 }
+                    }
+                }
+            })),
+            active: true,
+            updated_at_unix_ms: 0,
+            capabilities: ProxyConfigCapabilities::default(),
+        }];
+
+        assert!(migrate_legacy_dns(&mut config, &mut profiles));
+        assert!(config.dns.enabled);
+        assert!(config.dns.config.is_some());
+        assert!(profiles[0]
+            .content
+            .as_ref()
+            .and_then(|content| content.get("runtime"))
+            .and_then(|runtime| runtime.get("dns"))
+            .is_none());
+    }
+
+    #[test]
+    fn migrates_only_the_previous_client_owned_node_dns_defaults() {
+        let mut config = AppConfig::default();
+        let dns = config.dns.config.as_mut().unwrap();
+        dns.policy.as_mut().unwrap().node_server = Some("cloudflare-bootstrap".to_string());
+        dns.policy.as_mut().unwrap().node_fallback_servers =
+            Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
+
+        assert!(migrate_legacy_recommended_node_dns(&mut config));
+        let policy = config.dns.config.unwrap().policy.unwrap();
+        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(
+            policy.node_fallback_servers,
+            Some(vec![
+                "cloudflare-bootstrap".to_string(),
+                "google-bootstrap".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn adds_domestic_resolvers_only_to_the_recommended_scaffold() {
+        let mut config = AppConfig::default();
+        let dns = config.dns.config.as_mut().unwrap();
+        dns.servers.remove("alidns");
+        dns.servers.remove("114dns");
+
+        assert!(migrate_builtin_domestic_resolvers(&mut config));
+        let dns = config.dns.config.as_ref().unwrap();
+        assert!(dns.servers.contains_key("alidns"));
+        assert!(dns.servers.contains_key("114dns"));
+        assert!(!migrate_builtin_domestic_resolvers(&mut config));
     }
 }

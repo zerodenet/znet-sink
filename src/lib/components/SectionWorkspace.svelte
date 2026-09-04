@@ -4,6 +4,7 @@
   export interface SectionWorkspaceItem {
     id: string;
     label: string;
+    group?: string;
   }
 
   interface Props {
@@ -28,8 +29,11 @@
 <section class="section-workspace animate-fade-in">
   <nav class="section-nav" aria-label={title}>
     <div class="section-nav-header">{title}</div>
-    {#each items as item (item.id)}
-      <button
+    {#each items as item, index (item.id)}
+      {#if item.group && (index === 0 || items[index - 1]?.group !== item.group)}
+        <div class="section-nav-group">{item.group}</div>
+      {/if}
+      <button data-slot="surface-button"
         type="button"
         class="section-nav-item"
         class:active={activeId === item.id}
@@ -83,6 +87,20 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     opacity: 0.65;
+  }
+
+  .section-nav-group {
+    margin: 8px 8px 3px;
+    color: var(--muted-foreground);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.58;
+  }
+
+  .section-nav-group:first-of-type {
+    margin-top: 0;
   }
 
   .section-nav-item {

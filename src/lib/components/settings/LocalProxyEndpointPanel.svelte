@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Input } from '$lib/components/ui/input';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
@@ -93,8 +94,8 @@
 
       <div class="endpoint-editor">
         <div class="endpoint-fields">
-          <input
-            class="endpoint-input host-input"
+          <Input
+            class="w-[126px] font-mono"
             type="text"
             bind:value={host}
             oninput={() => (saved = false)}
@@ -103,8 +104,8 @@
             aria-label="代理监听地址"
           />
           <span class="endpoint-colon">:</span>
-          <input
-            class="endpoint-input port-input"
+          <Input
+            class="w-[72px] font-mono"
             type="text"
             inputmode="numeric"
             bind:value={port}
@@ -205,37 +206,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-
-  .endpoint-input {
-    height: var(--control-height);
-    border: 1px solid var(--input);
-    border-radius: var(--control-radius);
-    outline: none;
-    background: var(--background);
-    color: var(--foreground);
-    padding: 0 9px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-  }
-
-  .endpoint-input:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
-  }
-
-  .endpoint-input:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .host-input {
-    width: 126px;
-  }
-
-  .port-input {
-    width: 68px;
   }
 
   .endpoint-colon {

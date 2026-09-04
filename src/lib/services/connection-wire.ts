@@ -1,5 +1,6 @@
 import type { DebugFrame } from '$lib/types/debug';
 import type { GuiConnectionItem } from '$lib/types/gui-api';
+import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 
 export type ConnectionWireSource = 'event' | 'active_flows' | 'recent_flows';
 
@@ -97,8 +98,13 @@ function hydrateConnectionFromRaw(
   if (!raw) return normalized;
 
   const source = objectValue(raw['source']);
+  const path = objectValue(raw['path']);
+  const networkContext = parseConnectionNetworkContext(
+    path?.['network'] ?? path?.['networkContext'],
+  );
   const throughput = objectValue(raw['throughput']) ?? raw;
   const timing = objectValue(raw['timing']) ?? raw;
+  const target = objectValue(raw['target']) ?? raw;
 
   const sourceIp = stringValue(source ?? raw, ['ip', 'source_ip', 'sourceIp', 'client_ip', 'clientIp']);
   const sourcePort = numberValue(source ?? raw, ['port', 'source_port', 'sourcePort', 'client_port', 'clientPort']);
@@ -113,6 +119,12 @@ function hydrateConnectionFromRaw(
     source: firstText(normalized.source === '-' ? undefined : normalized.source, sourceDisplay),
     sourceIp: firstText(normalized.sourceIp, sourceIp),
     sourcePort: firstNumber(normalized.sourcePort, sourcePort),
+    originalIp: firstText(normalized.originalIp, stringValue(target, ['original_ip', 'originalIp'])),
+    hostSource: firstText(normalized.hostSource, stringValue(target, ['host_source', 'hostSource'])),
+    fakeIpReverseStatus: firstText(
+      normalized.fakeIpReverseStatus,
+      stringValue(target, ['fake_ip_reverse_status', 'fakeIpReverseStatus']),
+    ),
     processId: firstNumber(
       normalized.processId,
       numberValue(source ?? raw, ['process_id', 'processId', 'pid']),
@@ -124,6 +136,11 @@ function hydrateConnectionFromRaw(
     processPath: firstText(
       normalized.processPath,
       stringValue(source ?? raw, ['process_path', 'processPath']),
+    ),
+    networkContext: normalized.networkContext ?? networkContext,
+    remoteDestination: firstText(
+      normalized.remoteDestination,
+      networkContext?.remoteAddress,
     ),
     throughputUpBps: firstNumber(
       normalized.throughputUpBps,
@@ -174,6 +191,9 @@ function normalizeNullableConnection(connection: GuiConnectionItem): GuiConnecti
     state: firstText(connection.state),
     sourceIp: firstText(connection.sourceIp),
     sourcePort: firstNumber(connection.sourcePort),
+    originalIp: firstText(connection.originalIp),
+    hostSource: firstText(connection.hostSource),
+    fakeIpReverseStatus: firstText(connection.fakeIpReverseStatus),
     processId: firstNumber(connection.processId),
     processName: firstText(connection.processName),
     processPath: firstText(connection.processPath),

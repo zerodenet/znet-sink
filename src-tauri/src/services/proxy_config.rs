@@ -131,6 +131,12 @@ pub(crate) fn persist_profile_transition(
     previous: &[ProxyConfigProfile],
     next: Vec<ProxyConfigProfile>,
 ) -> AppResult<()> {
+    let mut next = next;
+    for profile in &mut next {
+        if let Some(content) = profile.content.as_mut() {
+            crate::services::rule_overlay::strip_profile_dns(content);
+        }
+    }
     let previous_active = previous.iter().find(|profile| profile.active);
     let next_active = next.iter().find(|profile| profile.active);
     let active_config_changed = match (previous_active, next_active) {
@@ -149,17 +155,37 @@ pub(crate) fn persist_profile_transition(
     if let Some(active) = next.iter().find(|profile| profile.active) {
         ensure_managed_system_proxy_compatible(active.content.as_ref())?;
     }
-    domain_store::save_proxy_configs(&next)?;
+    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
+    let mut next_subscriptions = previous_subscriptions.clone();
+    let mut subscriptions_changed = false;
+    let profile_ids = next
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for subscription in &mut next_subscriptions {
+        if subscription
+            .target_proxy_config_id
+            .as_deref()
+            .is_some_and(|id| !profile_ids.contains(id))
+        {
+            subscription.target_proxy_config_id = None;
+            subscriptions_changed = true;
+        }
+    }
+    domain_store::save_relational_data(&next, &next_subscriptions)?;
     let local_proxy_result = if let Some(active) = next.iter().find(|profile| profile.active) {
         sync_local_proxy_from_profile(state, active)
     } else {
         clear_local_proxy_source(state)
     };
     if let Err(error) = local_proxy_result {
-        let _ = domain_store::save_proxy_configs(previous);
+        let _ = domain_store::save_relational_data(previous, &previous_subscriptions);
         return Err(error);
     }
     *lock(state.proxy_configs(), "proxy_config")? = next;
+    if subscriptions_changed {
+        *lock(state.subscriptions(), "subscription")? = next_subscriptions;
+    }
     if active_config_changed {
         state.client_core_configuration_committed(next_active_profile.as_ref());
     }
@@ -229,10 +255,12 @@ pub async fn upsert_runtime(
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
-    match ZeroAdapter::new()
-        .apply_config(content, ipc_options(state.inner())?)
-        .await
-    {
+    let options = ipc_options(state.inner())?;
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => {
             if let Err(error) = persist_profile_transition(state.inner(), &previous, next) {
                 if let Some(previous_active) = previous_active.as_ref() {
@@ -359,7 +387,11 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
-    match ZeroAdapter::new().apply_config(content, options).await {
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
                 if let Err(error) = export_and_retarget_active(state.clone()) {
@@ -444,7 +476,11 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     })?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
-    match ZeroAdapter::new().apply_config(content, options).await {
+    let adapter = ZeroAdapter::new();
+    adapter
+        .validate_config(content.clone(), options.clone())
+        .await?;
+    match adapter.apply_config(content, options).await {
         Ok(_) => {
             if let Err(error) = remove(state.clone(), id) {
                 let _ = reapply_profile(state.inner(), &removed).await;

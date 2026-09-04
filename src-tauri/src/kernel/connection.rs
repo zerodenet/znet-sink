@@ -230,7 +230,7 @@ impl MultiplexedConnection {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 self.inner.remove_pending(&request_id);
-                self.mark_dead();
+                self.retire();
                 return Err(AppError::from_io(
                     "failed to write IPC request",
                     &endpoint,
@@ -239,7 +239,7 @@ impl MultiplexedConnection {
             }
             Err(error) => {
                 self.inner.remove_pending(&request_id);
-                self.mark_dead();
+                self.retire();
                 return Err(AppError::internal(format!(
                     "IPC write worker failed: {error}"
                 )));
@@ -320,13 +320,29 @@ impl MultiplexedConnection {
         &self.inner.endpoint.path
     }
 
-    fn received_within(&self, window: Duration) -> bool {
+    pub(crate) fn received_within(&self, window: Duration) -> bool {
         let now = crate::services::common::now_unix_ms();
         let last = self.inner.last_received_at_ms.load(Ordering::Acquire);
         now.saturating_sub(last) <= window.as_millis() as u64
     }
 
-    fn mark_dead(&self) {
+    /// Whether another request is still legitimately waiting for a response.
+    ///
+    /// A long-running command such as `tun.start` can temporarily delay
+    /// otherwise cheap reads on kernels that serialize command handling. A
+    /// read timeout must not retire the shared transport while that command is
+    /// still inside its own response deadline.
+    pub(crate) fn has_pending_requests(&self) -> bool {
+        !recover_lock(&self.inner.pending).is_empty()
+    }
+
+    /// Retire this shared transport so the manager opens a fresh subscribed
+    /// connection on the next request.
+    ///
+    /// Event forwarders must also observe [`Self::is_alive`]: they keep a
+    /// connection clone alongside the broadcast receiver, so retiring the
+    /// transport alone cannot drop the sender and close that receiver.
+    pub(crate) fn retire(&self) {
         self.inner.mark_dead();
     }
 }
@@ -553,7 +569,7 @@ pub fn reset() {
     let _connect_guard = recover_lock(&CONNECT_GATE);
     let mut guard = recover_lock(&MANAGER);
     if let Some(managed) = guard.take() {
-        managed.conn.mark_dead();
+        managed.conn.retire();
     }
 }
 
@@ -572,7 +588,7 @@ pub async fn ensure_healthy(
     activity_window: Duration,
 ) -> AppResult<bool> {
     let conn = connect_for_health(endpoint.clone(), timeout).await?;
-    if conn.received_within(activity_window) {
+    if conn.received_within(activity_window) || conn.has_pending_requests() {
         return Ok(false);
     }
 
@@ -611,13 +627,13 @@ async fn ping_connection(conn: MultiplexedConnection, timeout: Duration) -> AppR
     let response = match conn.request(frame_bytes, request_id.clone(), timeout).await {
         Ok(response) => response,
         Err(error) => {
-            conn.mark_dead();
+            conn.retire();
             return Err(error);
         }
     };
 
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
-        conn.mark_dead();
+        conn.retire();
         return Err(AppError::core_response(response));
     }
     let response_id = response
@@ -626,7 +642,7 @@ async fn ping_connection(conn: MultiplexedConnection, timeout: Duration) -> AppR
         .or_else(|| response.get("requestId"))
         .and_then(Value::as_str);
     if response_id != Some(request_id.as_str()) {
-        conn.mark_dead();
+        conn.retire();
         return Err(AppError::internal(
             "kernel IPC health response id did not match the request",
         ));
@@ -660,7 +676,7 @@ mod tests {
             "error": { "code": "permission_denied", "message": "denied" }
         }))
         .unwrap_err();
-        assert_eq!(error.code, "core_error");
+        assert_eq!(error.code, "permission_denied");
         assert_eq!(error.message, "denied");
     }
 

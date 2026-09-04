@@ -1,5 +1,6 @@
 pub mod app_config;
 pub mod app_config_store;
+mod app_database;
 pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
@@ -18,6 +19,7 @@ pub mod interaction_mode;
 pub mod internet_sharing;
 pub mod ipc_observability;
 pub mod kernel_manager;
+pub mod kernel_settings;
 pub mod local_proxy;
 pub mod log_store;
 pub mod logs;

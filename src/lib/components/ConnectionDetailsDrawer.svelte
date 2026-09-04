@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { isNestedOverlayEvent } from '$lib/services/overlay-keyboard';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { onDestroy, tick } from 'svelte';
   import type { DisplayConnection } from '$lib/services/connection-view';
   import { copyTextToClipboard } from '$lib/services/clipboard';
@@ -9,12 +11,14 @@
   let {
     connection,
     canTerminate = false,
+    terminateUnavailableReason,
     terminating = false,
     onclose,
     onrequestterminate,
   } = $props<{
     connection: DisplayConnection | null;
     canTerminate?: boolean;
+    terminateUnavailableReason?: string;
     terminating?: boolean;
     onclose: () => void;
     onrequestterminate?: (connection: DisplayConnection) => void;
@@ -73,6 +77,7 @@
     document.body.style.overflow = 'hidden';
 
     function handleKeydown(event: KeyboardEvent) {
+      if (isNestedOverlayEvent(event)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         close();
@@ -197,6 +202,32 @@
     }
   }
 
+  function interfaceLabel(value?: { name: string; index?: number }): string {
+    if (!value) return '未提供';
+    return isNumber(value.index) ? `${value.name} · #${value.index}` : value.name;
+  }
+
+  function booleanLabel(value: boolean | undefined, positive: string, negative: string): string {
+    if (value === undefined) return '未提供';
+    return value ? positive : negative;
+  }
+
+  function addressFamilyPolicyLabel(policy?: string): string {
+    switch (policy) {
+      case 'prefer_ipv4': return '双栈 · IPv4 优先';
+      case 'prefer_ipv6': return '双栈 · IPv6 优先';
+      case 'ipv4_only': return '仅 IPv4';
+      case 'ipv6_only': return '仅 IPv6';
+      default: return policy ?? '未提供';
+    }
+  }
+
+  function addressFamilyFallbackReasonLabel(reason?: string): string {
+    return reason === 'tun_ipv6_egress_unavailable'
+      ? 'TUN 物理 IPv6 出口不可用'
+      : reason ?? '未提供';
+  }
+
   function rawSourceLabel(source?: string): string {
     switch (source) {
       case 'event': return '事件流';
@@ -213,7 +244,7 @@
 
 {#if connection}
   <div use:portal class="dialog-layer" role="presentation">
-    <button
+    <button data-slot="surface-button"
       class="dialog-scrim"
       type="button"
       tabindex="-1"
@@ -261,30 +292,24 @@
         </Button>
       </header>
 
-      <div class="dialog-tabs" role="tablist" aria-label="连接详情栏目">
-        <button
+      <div class="dialog-tabs">
+      <SegmentedControl.Root value={activeSection} onValueChange={(value) => activeSection = value as 'details' | 'diagnostics'} aria-label="连接详情栏目">
+        <SegmentedControl.Item
           id="connection-details-tab"
-          type="button"
-          role="tab"
-          aria-selected={activeSection === 'details'}
+          value="details"
           aria-controls="connection-details-panel"
-          class:active={activeSection === 'details'}
-          onclick={() => activeSection = 'details'}
-        >详情</button>
-        <button
+        >详情</SegmentedControl.Item>
+        <SegmentedControl.Item
           id="connection-diagnostics-tab"
-          type="button"
-          role="tab"
-          aria-selected={activeSection === 'diagnostics'}
+          value="diagnostics"
           aria-controls="connection-diagnostics-panel"
-          class:active={activeSection === 'diagnostics'}
-          onclick={() => activeSection = 'diagnostics'}
-        >诊断数据</button>
+        >诊断数据</SegmentedControl.Item>
+      </SegmentedControl.Root>
       </div>
 
       <div class="dialog-content">
         {#if activeSection === 'details'}
-          <div id="connection-details-panel" role="tabpanel" aria-labelledby="connection-details-tab">
+          <div id="connection-details-panel" role="region" aria-labelledby="connection-details-tab">
             <section class="summary-grid">
               <article class="summary-card">
                 <span class="summary-label">上传</span>
@@ -311,6 +336,9 @@
                   <div class="property"><span>进程</span><strong title={connection.processPath}>{connection.processName ?? connection.processPath ?? `PID ${connection.processId}`}</strong></div>
                 {/if}
                 <div class="property"><span>目标</span><strong title={connection.targetHost}>{connection.targetHost ?? connection.destination}</strong></div>
+                {#if hasText(connection.originalIp)}<div class="property"><span>原始目标 IP</span><strong>{connection.originalIp}</strong></div>{/if}
+                {#if hasText(connection.hostSource)}<div class="property"><span>域名来源</span><strong>{connection.hostSource}</strong></div>{/if}
+                {#if hasText(connection.fakeIpReverseStatus)}<div class="property"><span>Fake-IP 反查</span><strong>{connection.fakeIpReverseStatus}</strong></div>{/if}
                 {#if hasText(connection.targetIp)}<div class="property"><span>解析地址</span><strong>{connection.targetIp}</strong></div>{/if}
                 {#if hasText(connection.sniffedHost)}<div class="property"><span>嗅探域名</span><strong>{connection.sniffedHost}</strong></div>{/if}
                 {#if hasText(connection.remoteDestination)}<div class="property"><span>实际远端</span><strong>{connection.remoteDestination}</strong></div>{/if}
@@ -329,6 +357,57 @@
                 {#if connection.relayChain.length > 0}<div class="property wide"><span>中继链</span><strong>{connection.relayChain.join(' → ')}</strong></div>{/if}
               </div>
             </section>
+
+            {#if connection.networkContext}
+              <section class="detail-section">
+                <h3>网络出口</h3>
+                <div class="property-grid">
+                  {#if hasText(connection.networkContext.connectStage)}<div class="property"><span>连接阶段</span><strong>{connection.networkContext.connectStage}</strong></div>{/if}
+                  {#if hasText(connection.networkContext.localAddress)}<div class="property"><span>本地地址</span><strong>{connection.networkContext.localAddress}</strong></div>{/if}
+                  {#if hasText(connection.networkContext.remoteAddress)}<div class="property"><span>远端地址</span><strong>{connection.networkContext.remoteAddress}</strong></div>{/if}
+                  {#if connection.networkContext.resolvedCandidates.length > 0}<div class="property wide"><span>解析候选</span><strong>{connection.networkContext.resolvedCandidates.join(' · ')}</strong></div>{/if}
+                  {#if connection.networkContext.connectionAttempts.length > 0}
+                    <div class="property wide">
+                      <span>逐候选拨号</span>
+                      <div class="attempt-list">
+                        {#each connection.networkContext.connectionAttempts as attempt, index}
+                          <div class:failed={attempt.outcome !== 'connected' && attempt.outcome !== 'success'}>
+                            <strong>#{index + 1} {attempt.remoteAddress} · {attempt.outcome || attempt.stage}</strong>
+                            <small>{attempt.stage}{attempt.interfaceBound ? ' · 已绑定出口接口' : ''}{attempt.errorKind ? ` · ${attempt.errorKind}` : ''}{attempt.osError !== undefined ? ` · OS ${attempt.osError}` : ''}{attempt.error ? ` · ${attempt.error}` : ''}</small>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  {#if hasText(connection.networkContext.addressFamilyPolicy)}<div class="property"><span>地址族策略</span><strong>{addressFamilyPolicyLabel(connection.networkContext.addressFamilyPolicy)}</strong></div>{/if}
+                  {#if connection.networkContext.addressFamilyFallback}
+                    {@const fallback = connection.networkContext.addressFamilyFallback}
+                    {#if hasText(fallback.from) || hasText(fallback.to)}<div class="property"><span>地址族回退</span><strong>{fallback.from?.toUpperCase() ?? '?'} → {fallback.to?.toUpperCase() ?? '?'}</strong></div>{/if}
+                    {#if hasText(fallback.reason)}<div class="property wide"><span>回退原因</span><strong>{addressFamilyFallbackReasonLabel(fallback.reason)}</strong></div>{/if}
+                    {#if isNumber(fallback.triggerEgressGeneration)}<div class="property"><span>触发出口代次</span><strong>{fallback.triggerEgressGeneration}</strong></div>{/if}
+                    {#if hasText(fallback.unavailableReason)}<div class="property wide failure"><span>回退时出口状态</span><strong>{fallback.unavailableReason}</strong></div>{/if}
+                  {/if}
+                  {#if connection.networkContext.egress}
+                    {#if hasText(connection.networkContext.egress.addressFamily)}<div class="property"><span>地址族</span><strong>{connection.networkContext.egress.addressFamily}</strong></div>{/if}
+                    {#if connection.networkContext.egress.tunActive !== undefined}<div class="property"><span>TUN 出口</span><strong>{booleanLabel(connection.networkContext.egress.tunActive, '已启用', '未启用')}</strong></div>{/if}
+                    {#if isNumber(connection.networkContext.egress.generation)}<div class="property"><span>出口代次</span><strong>{connection.networkContext.egress.generation}</strong></div>{/if}
+                    {#if connection.networkContext.egress.configuredInterface}<div class="property"><span>配置接口</span><strong>{interfaceLabel(connection.networkContext.egress.configuredInterface)}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.egress.unavailableReason)}<div class="property wide failure"><span>出口不可用原因</span><strong>{connection.networkContext.egress.unavailableReason}</strong></div>{/if}
+                  {/if}
+                  {#if connection.networkContext.selectedInterface}<div class="property"><span>选中接口</span><strong>{interfaceLabel(connection.networkContext.selectedInterface)}</strong></div>{/if}
+                  {#if connection.networkContext.routeLookup}
+                    {#if hasText(connection.networkContext.routeLookup.status)}<div class="property"><span>路由查询</span><strong>{connection.networkContext.routeLookup.status}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.routeLookup.sourceAddress)}<div class="property"><span>路由源地址</span><strong>{connection.networkContext.routeLookup.sourceAddress}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.routeLookup.error)}<div class="property wide failure"><span>路由查询错误</span><strong>{connection.networkContext.routeLookup.error}</strong></div>{/if}
+                  {/if}
+                  {#if connection.networkContext.socketBinding}
+                    {#if hasText(connection.networkContext.socketBinding.mode)}<div class="property"><span>Socket 绑定模式</span><strong>{connection.networkContext.socketBinding.mode}</strong></div>{/if}
+                    {#if connection.networkContext.socketBinding.interfaceBound !== undefined}<div class="property"><span>接口绑定</span><strong>{booleanLabel(connection.networkContext.socketBinding.interfaceBound, '已绑定', '未绑定')}</strong></div>{/if}
+                    {#if hasText(connection.networkContext.socketBinding.reason)}<div class="property wide"><span>绑定原因</span><strong>{connection.networkContext.socketBinding.reason}</strong></div>{/if}
+                  {/if}
+                </div>
+              </section>
+            {/if}
 
             <section class="detail-section">
               <h3>时间</h3>
@@ -353,7 +432,7 @@
             {/if}
           </div>
         {:else}
-          <div id="connection-diagnostics-panel" role="tabpanel" aria-labelledby="connection-diagnostics-tab">
+          <div id="connection-diagnostics-panel" role="region" aria-labelledby="connection-diagnostics-tab">
             <section class="detail-section diagnostics-intro first-section">
               <h3>事件与记录</h3>
               <p>这里保留内核原始结构，用于排查字段缺失和版本兼容问题；日常查看连接不需要展开原始 JSON。</p>
@@ -414,13 +493,17 @@
         {/if}
       </div>
 
-      {#if connection.origin === 'active' && canTerminate}
+      {#if connection.origin === 'active'}
         <footer class="dialog-footer">
-          <div><strong>终止活动连接</strong><span>将请求内核立即取消该连接，应用可能会自动重新建立。</span></div>
+          <div>
+            <strong>{canTerminate ? '终止活动连接' : '无法终止连接'}</strong>
+            <span>{canTerminate ? '将请求内核立即取消该连接，应用可能会自动重新建立。' : (terminateUnavailableReason ?? '当前内核未提供连接终止能力。')}</span>
+          </div>
           <Button
             variant="destructive"
             size="sm"
-            disabled={terminating}
+            disabled={terminating || !canTerminate}
+            title={canTerminate ? '终止连接' : terminateUnavailableReason}
             onclick={() => onrequestterminate?.(connection)}
           >
             <AlertTriangle data-icon="inline-start" class="size-3.5" />
@@ -433,7 +516,7 @@
 {/if}
 
 <style>
-  .dialog-layer { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .dialog-layer { position: fixed; inset: 0; z-index: var(--layer-dialog); display: flex; align-items: center; justify-content: center; padding: 20px; }
   .dialog-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(0 0 0 / 0.38); backdrop-filter: blur(2px); cursor: default; }
   .dialog { position: relative; z-index: 1; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 24px 70px rgb(0 0 0 / 0.28); animation: dialog-in 0.16s ease-out; outline: none; }
   @keyframes dialog-in { from { transform: translateY(8px) scale(0.985); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
@@ -448,9 +531,6 @@
   .tag, .state-tag { flex-shrink: 0; border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 700; }
   .state-tag.active-state { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
   .dialog-tabs { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--border); }
-  .dialog-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 8px 10px 9px; background: transparent; color: var(--muted-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
-  .dialog-tabs button.active { border-bottom-color: var(--primary); color: var(--foreground); }
-  .dialog-tabs button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
   .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent; padding: 16px 18px 24px; }
   .dialog-content::-webkit-scrollbar { width: 9px; }
   .dialog-content::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 28%, transparent); background-clip: padding-box; }
@@ -468,6 +548,11 @@
   .property span { color: var(--muted-foreground); font-size: 10.5px; }
   .property strong { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
   .property.failure strong, .property.failure span { color: var(--destructive); }
+  .attempt-list { display: flex; flex-direction: column; gap: 4px; }
+  .attempt-list > div { padding: 6px 7px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--muted) 22%, transparent); }
+  .attempt-list > div.failed { border-color: rgba(239, 68, 68, .25); }
+  .attempt-list strong, .attempt-list small { display: block; }
+  .attempt-list small { margin-top: 2px; overflow-wrap: anywhere; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 9.5px; }
   .section-note, .diagnostics-intro p { margin: 9px 0 0; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.55; }
   .raw-block { position: relative; margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--muted) 40%, transparent); }
   .raw-block summary { padding: 9px 82px 9px 11px; cursor: pointer; color: var(--muted-foreground); font-size: 11px; font-weight: 600; }

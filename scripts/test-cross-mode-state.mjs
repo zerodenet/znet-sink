@@ -17,6 +17,9 @@ const appStore = read('src/lib/services/store.svelte.ts');
 const settingsPanel = read('src/lib/components/SettingsPanel.svelte');
 const tunSettings = read('src/lib/components/settings/TunSettingsPanel.svelte');
 const tunRuntime = read('src-tauri/src/kernel/zero/runtime.rs');
+const zeroCommands = read('src-tauri/src/kernel/zero/commands.rs');
+const ipcProtocol = read('src-tauri/src/kernel/protocol.rs');
+const guiCoreCommand = read('src-tauri/src/commands/gui_core.rs');
 const tunService = read('src/lib/services/tun.ts');
 const ruleOverlay = read('src-tauri/src/services/rule_overlay.rs');
 const appConfigModel = read('src-tauri/src/models/app_config.rs');
@@ -118,11 +121,12 @@ assert.ok(
 
 assert.ok(
   appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
-    && appStore.includes("if (mode === 'lite')")
-    && appStore.includes('await guiState.prepareLiteCapture()')
+    && appStore.includes("if (mode === 'lite' && guiState.isCaptureEnabled)")
+    && appStore.includes('void this.prepareLiteCaptureInBackground(generation)')
+    && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
-  'TUN configuration must remain Pro-only while entering Lite reconciles the active capture path',
+  'TUN configuration and navigation must switch to Lite synchronously while capture reconciliation runs in the background',
 );
 
 assert.ok(
@@ -134,13 +138,12 @@ assert.ok(
     && tunSettings.includes('oninput={markDirty}')
     && tunSettings.includes('checked={dualStack}')
     && tunSettings.includes('checked={dnsHijack}')
-    && tunSettings.includes('DNS 劫持（暂不可用）')
-    && tunSettings.includes('disabled={true}')
-    && tunSettings.includes('dnsHijack: false')
+    && tunSettings.includes('<span class="label-text">DNS 劫持</span>')
+    && tunSettings.includes('dnsHijack,')
     && tunSettings.includes('已显式定义 <code>runtime.tun</code>')
     && !tunSettings.includes('autoRoute')
     && !tunSettings.includes('strictRoute'),
-  'Pro TUN settings should expose local defaults while keeping incomplete app-owned DNS hijack visibly disabled for release',
+  'Pro TUN settings should expose local defaults and persist DNS hijack only through the completed DNS configuration surface',
 );
 
 assert.ok(
@@ -167,11 +170,22 @@ assert.ok(
 );
 
 assert.ok(
-  tunService.includes('function validateAppDnsHijackPrecondition(_policy: TunPolicy): void')
-    && !tunService.includes("server.type !== 'system'")
-    && tunRuntime.includes('params.insert("dns_hijack".to_string(), json!(false));')
-    && tunRuntime.includes('assert_eq!(params["dns_hijack"], false);'),
-  'app-owned DNS hijack must stay disabled until ZNet-Sink exposes complete DNS configuration, including for stale persisted prerelease values',
+  tunService.includes('async function waitForTunStateAfterTransientIpcError(')
+    && tunService.includes("code === 'timeout' || code === 'connection_closed' || code === 'core_unavailable'")
+    && tunService.includes('const reconciled = await waitForTunStateAfterTransientIpcError(true, error);')
+    && tunService.includes('const reconciled = await waitForTunStateAfterTransientIpcError(false, error);'),
+  'TUN commands must reconcile authoritative runtime state before treating a late IPC response as failure',
+);
+
+assert.ok(
+  tunService.includes('async function validateAppDnsHijackPrecondition(policy: TunPolicy): Promise<void>')
+    && tunService.includes('const readiness = await inspectTunDnsHijackReadiness(policy.appConfig.dns);')
+    && tunService.includes("features?.tunDnsSystemAuto.state === 'unsupported'")
+    && tunService.includes("code: 'tun_dns_hijack_requires_dns'")
+    && tunService.includes('Object.keys(dns.config.servers).length === 0')
+    && tunRuntime.includes('params.insert("dns_hijack".to_string(), json!(tun.dns_hijack));')
+    && tunRuntime.includes('assert_eq!(params["dns_hijack"], true);'),
+  'app-owned DNS hijack must require a saved DNS profile and pass the explicit value to tun.start',
 );
 
 assert.ok(
@@ -185,10 +199,22 @@ assert.ok(
 
 assert.ok(
   coreProcessCommand.includes('restore_app_tun_after_core_transition')
-    && coreProcessCommand.includes('app_config.tun.enabled != Some(true)')
+    && coreProcessCommand.includes('desired_enabled.unwrap_or(app_config.tun.enabled == Some(true))')
+    && coreProcessCommand.includes('if !should_enable || active_profile_defines_tun(state)?')
     && coreProcessCommand.includes('active_profile_defines_tun(state)?')
-    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options)).await?'),
+    && coreProcessCommand.includes('tun_restore::restore(')
+    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone()))'),
   'managed Core start/restart must replay persisted app-owned TUN only when the active profile does not own runtime.tun',
+);
+
+assert.ok(
+  zeroCommands.includes('"tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT)')
+    && zeroCommands.includes('protocol::command_with_response_timeout(')
+    && zeroCommands.includes('command_response_timeout(method),')
+    && ipcProtocol.includes('connection::get_or_connect(connect_endpoint, timeout)')
+    && /conn\s*\.request\(frame_bytes, request_id_str, response_timeout\)\s*\.await/.test(ipcProtocol)
+    && !guiCoreCommand.includes('fn tun_opts('),
+  'all Zero TUN callers must share a command-level response budget without extending connection or ordinary query deadlines',
 );
 
 assert.ok(

@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Component } from 'svelte';
   import { recordTelemetry } from '$lib/services/telemetry';
+  import { store } from '$lib/services/store.svelte';
+  import RuntimePerformance from '$lib/components/RuntimePerformance.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Spinner } from '$lib/components/ui/Spinner';
 
@@ -75,7 +77,16 @@
     <Button variant="outline" size="sm" onclick={reloadApplication}>重新加载</Button>
   </div>
 {:else if ActiveComponent}
-  <ActiveComponent {...activeProps} />
+  {#if tab === 'overview' && store.uiMode === 'lite'}
+    <div class="overview-runtime-shell">
+      <RuntimePerformance mode="lite" />
+      <div class="overview-runtime-content">
+        <ActiveComponent {...activeProps} />
+      </div>
+    </div>
+  {:else}
+    <ActiveComponent {...activeProps} />
+  {/if}
 {:else}
   <div class="tab-load-state">
     <Spinner size="sm" color="default" />
@@ -102,4 +113,20 @@
     overflow-wrap: anywhere;
   }
 
+  .overview-runtime-shell {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .overview-runtime-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
 </style>

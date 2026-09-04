@@ -34,10 +34,7 @@ pub async fn gui_debug_frames(
 }
 
 #[tauri::command]
-pub async fn gui_debug_clear(
-    _state: State<'_, AppState>,
-    scope: Option<String>,
-) -> AppResult<()> {
+pub async fn gui_debug_clear(_state: State<'_, AppState>, scope: Option<String>) -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         if scope.as_deref() == Some(CONNECTION_HISTORY_SCOPE) {
             return connection_history_store::clear();

@@ -11,9 +11,9 @@ use crate::kernel::adapter::KernelAdapter;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates, GuiTrafficSnapshot,
-    GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
+    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates,
+    GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 use super::{commands, config, queries};
@@ -233,6 +233,33 @@ impl KernelAdapter for ZeroAdapter {
         commands::dns_lookup(hostname, Some(options)).await
     }
 
+    async fn dns_cache(
+        &self,
+        domain: Option<String>,
+        limit: Option<usize>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value> {
+        commands::dns_cache(domain, limit, Some(options)).await
+    }
+
+    async fn fakeip_lookup(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value> {
+        commands::fakeip_lookup(domain, ip, Some(options)).await
+    }
+
+    async fn clear_fake_ip(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<GuiFakeIpClearResult> {
+        commands::clear_fake_ip(domain, ip, Some(options)).await
+    }
+
     async fn trace_route(
         &self,
         target: String,
@@ -267,7 +294,7 @@ impl KernelAdapter for ZeroAdapter {
         // This trait method uses sensible defaults.
         commands::enable_tun(
             None,
-            "10.0.0.1".to_string(),
+            "10.66.0.1/30".to_string(),
             "tun-in".to_string(),
             1500,
             Some(options),

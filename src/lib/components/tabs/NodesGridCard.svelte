@@ -51,7 +51,7 @@
   class="grid-card-wrap"
   role="listitem"
 >
-  <button
+  <button data-slot="surface-button"
     class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
     onclick={() => onSelectNode(node)}
     disabled={selectDisabled}

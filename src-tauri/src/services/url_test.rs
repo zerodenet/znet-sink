@@ -59,7 +59,10 @@ pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResu
     let root = config
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_argument("Zero config must be a JSON object"))?;
-    let Some(groups) = root.get_mut("outbound_groups").and_then(Value::as_array_mut) else {
+    let Some(groups) = root
+        .get_mut("outbound_groups")
+        .and_then(Value::as_array_mut)
+    else {
         return Ok(0);
     };
 
@@ -109,9 +112,7 @@ mod tests {
 
         assert_eq!(apply_default_tolerance(&mut config, 50).unwrap(), 1);
         assert_eq!(config["outbound_groups"][0]["tolerance_ms"], 50);
-        assert!(config["outbound_groups"][1]
-            .get("tolerance_ms")
-            .is_none());
+        assert!(config["outbound_groups"][1].get("tolerance_ms").is_none());
     }
 
     #[test]

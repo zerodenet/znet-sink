@@ -3,6 +3,7 @@ import {
   getAppConfig,
   getGuiConnectionStatus,
   getGuiCoreHealth,
+  getGuiZeroCapabilities,
   startCoreProcess,
   updateAppConfig,
 } from './core';
@@ -10,15 +11,28 @@ import type { AppConfig } from '$lib/types/app-config';
 import type { ProxyConfigProfile } from '$lib/types/domain';
 import type { GuiTunStatus } from '$lib/types/gui-api';
 import type { GuiManagedTunStatus, TunConfigSource } from '$lib/types/tun';
+import {
+  projectClientKernelFeatures,
+  type ClientKernelFeatures,
+} from '$lib/services/kernel-capabilities';
 
 const CORE_READY_TIMEOUT_MS = 8_000;
 const CORE_READY_INTERVAL_MS = 100;
+const TUN_STATE_RECONCILE_TIMEOUT_MS = 15_000;
+const TUN_STATE_RECONCILE_INTERVAL_MS = 250;
 
 interface TunPolicy {
   appConfig: AppConfig;
   profile?: ProxyConfigProfile;
   profileManaged: boolean;
   profileDesiredEnabled: boolean;
+}
+
+export interface TunDnsHijackReadiness {
+  state: 'ready' | 'blocked' | 'unknown';
+  code?: string;
+  message: string;
+  features?: ClientKernelFeatures;
 }
 
 export interface TunProfileTransition {
@@ -95,6 +109,34 @@ async function rawTunStatus(): Promise<GuiTunStatus> {
   return invoke('gui_tun_status');
 }
 
+function isTransientCoreIpcError(error: unknown): boolean {
+  const code = isObject(error) && typeof error.code === 'string' ? error.code : '';
+  if (code === 'timeout' || code === 'connection_closed' || code === 'core_unavailable') {
+    return true;
+  }
+  const message = isObject(error) && typeof error.message === 'string'
+    ? error.message
+    : String(error ?? '');
+  return message.includes('core IPC request timed out')
+    || message.includes('core IPC connection closed');
+}
+
+async function waitForTunStateAfterTransientIpcError(
+  expectedEnabled: boolean,
+  error: unknown,
+): Promise<GuiManagedTunStatus | null> {
+  const deadline = Date.now() + (
+    isTransientCoreIpcError(error) ? TUN_STATE_RECONCILE_TIMEOUT_MS : 0
+  );
+
+  do {
+    const status = await getGuiTunStatus().catch(() => null);
+    if (status?.enabled === expectedEnabled) return status;
+    if (Date.now() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, TUN_STATE_RECONCILE_INTERVAL_MS));
+  } while (true);
+}
+
 async function ensureCoreReady(): Promise<void> {
   const current = await getGuiConnectionStatus().catch(() => null);
   if (!current?.coreAvailable) {
@@ -134,23 +176,79 @@ function runtimeOwnershipError(): { code: string; message: string } {
   };
 }
 
-function validateAppDnsHijackPrecondition(_policy: TunPolicy): void {
-  // App-owned DNS hijack is temporarily disabled for this release. The Rust
-  // tun.start builder forces dns_hijack=false so persisted values from older
-  // builds cannot block TUN startup before the client has a complete DNS UI.
+export function evaluateTunDnsHijackReadiness(
+  dns: AppConfig['dns'],
+  features?: ClientKernelFeatures,
+): TunDnsHijackReadiness {
+  if (!dns.enabled || !dns.config || Object.keys(dns.config.servers).length === 0) {
+    return {
+      state: 'blocked',
+      code: 'tun_dns_hijack_requires_dns',
+      message: '开启 TUN DNS 劫持前，请先在 DNS 设置中启用并保存 Real DNS 或 Fake-IP。',
+      features,
+    };
+  }
+  if (features?.tunDnsHijack.state === 'unsupported') {
+    return {
+      state: 'blocked',
+      code: 'feature_disabled',
+      message: '当前内核未声明 TUN DNS 劫持能力，请升级内核或关闭 DNS 劫持。',
+      features,
+    };
+  }
+  const usesSystemDns = Object.values(dns.config.servers).some((server) => server.type === 'system');
+  if (usesSystemDns && features?.tunDnsSystemAuto.state === 'unsupported') {
+    return {
+      state: 'blocked',
+      code: 'tun_dns_system_auto_unsupported',
+      message: '当前内核不能为 TUN 自动排除 system DNS。请升级内核、关闭 DNS 劫持或改用显式网络 DNS。',
+      features,
+    };
+  }
+  if (!features || features.tunDnsHijack.state === 'unknown'
+    || (usesSystemDns && features.tunDnsSystemAuto.state === 'unknown')) {
+    return {
+      state: 'unknown',
+      message: '当前内核的 TUN DNS 能力未知，启动时将继续由内核进行最终校验。',
+      features,
+    };
+  }
+  return {
+    state: 'ready',
+    message: usesSystemDns
+      ? 'system DNS 将由内核自动发现真实上游并排除 TUN 自捕获。'
+      : '当前 DNS 后端可用于 TUN DNS 劫持。',
+    features,
+  };
+}
+
+export async function inspectTunDnsHijackReadiness(
+  dns?: AppConfig['dns'],
+): Promise<TunDnsHijackReadiness> {
+  const [appConfig, capabilities] = await Promise.all([
+    dns ? Promise.resolve(null) : getAppConfig(),
+    getGuiZeroCapabilities().catch(() => null),
+  ]);
+  return evaluateTunDnsHijackReadiness(
+    dns ?? appConfig!.dns,
+    projectClientKernelFeatures(capabilities),
+  );
+}
+
+async function validateAppDnsHijackPrecondition(policy: TunPolicy): Promise<void> {
+  if (!policy.appConfig.tun.dnsHijack) return;
+  const readiness = await inspectTunDnsHijackReadiness(policy.appConfig.dns);
+  if (readiness.state === 'blocked') {
+    throw {
+      code: readiness.code,
+      message: readiness.message,
+    };
+  }
 }
 
 export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {
   const status = await rawTunStatus();
-  try {
-    return enrichTunStatus(status, await resolveTunPolicy());
-  } catch {
-    return {
-      ...status,
-      desiredEnabled: status.enabled,
-      configSource: status.enabled ? 'runtime' : undefined,
-    };
-  }
+  return enrichTunStatus(status, await resolveTunPolicy());
 }
 
 /**
@@ -186,7 +284,7 @@ export async function restoreGuiTunAfterFailedProfileSwitch(
 
   const current = await rawTunStatus();
   if (current.enabled) return;
-  validateAppDnsHijackPrecondition(policy);
+  await validateAppDnsHijackPrecondition(policy);
   await ensureCoreReady();
   await invoke('gui_tun_enable');
 }
@@ -218,7 +316,7 @@ export async function reconcileGuiTunRuntime(): Promise<GuiManagedTunStatus> {
   }
 
   if (desired && !current.enabled) {
-    validateAppDnsHijackPrecondition(policy);
+    await validateAppDnsHijackPrecondition(policy);
     await ensureCoreReady();
     current = await invoke('gui_tun_enable');
   } else if (!desired && current.enabled) {
@@ -242,13 +340,13 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
       const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
       throw {
         code: 'tun_profile_runtime_inactive',
-        message: `${name} 已要求启用 TUN，但 Zero 当前未运行该 TUN。请检查内核运行状态或配置错误。`,
+        message: `${name} 已要求启用 TUN，但当前内核未运行该 TUN。请检查内核运行状态或配置错误。`,
       };
     }
     return enriched;
   }
 
-  validateAppDnsHijackPrecondition(policy);
+  await validateAppDnsHijackPrecondition(policy);
   if (current.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
   }
@@ -260,8 +358,16 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
     if (!current.enabled) {
       await invoke('gui_tun_enable');
     }
-    return getGuiTunStatus();
+    const confirmed = await getGuiTunStatus();
+    if (!confirmed.enabled) throw { code: 'tun_start_unconfirmed', message: 'Zero 未确认 TUN 已启动' };
+    return confirmed;
   } catch (error) {
+    // tun.start can finish its platform route work after the IPC response
+    // deadline. Reconcile the authoritative runtime state before reporting a
+    // false failure or rolling the persisted desired state back to OFF.
+    const reconciled = await waitForTunStateAfterTransientIpcError(true, error);
+    if (reconciled) return reconciled;
+
     // A failed explicit enable should not leave a new persisted ON intent that
     // will be replayed on every subsequent Core generation. AppConfig's patch
     // model cannot restore legacy undefined, so failure falls back to explicit
@@ -273,18 +379,30 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
 
 export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
-  const current = await rawTunStatus();
 
   if (policy.profileManaged) {
     throw profileManagedError(policy, 'disable');
   }
-  if (current.enabled && current.managedByConfig) {
+  // Cancelling a saved ON intent must work even while the runtime is
+  // unreachable. Failure to confirm the stop remains an error, not an OFF
+  // snapshot, but the next Core generation must not replay the old intent.
+  const current = await rawTunStatus().catch(() => null);
+  if (current?.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
   }
-
-  if (current.enabled) {
-    await invoke('gui_tun_disable');
-  }
   await updateAppConfig({ tun: { enabled: false } });
-  return getGuiTunStatus();
+
+  if (!current || current.enabled) {
+    try {
+      await invoke('gui_tun_disable');
+    } catch (error) {
+      // As with enable, a late response is not a failed operation when Zero's
+      // subsequent status already confirms that TUN is stopped.
+      const reconciled = await waitForTunStateAfterTransientIpcError(false, error);
+      if (!reconciled) throw error;
+    }
+  }
+  const confirmed = await getGuiTunStatus();
+  if (confirmed.enabled) throw { code: 'tun_stop_unconfirmed', message: 'Zero 未确认 TUN 已关闭；已取消自动恢复' };
+  return confirmed;
 }

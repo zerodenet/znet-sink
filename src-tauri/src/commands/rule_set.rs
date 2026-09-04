@@ -2,14 +2,14 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::errors::AppResult;
 use crate::models::rule_set::{
-    CommonRuleBindingInput, CommonRuleInjectionStatus, RuleSetKernelPayload, RuleSetProfile,
-    RuleSetSyncAllOutcome, RuleSetUpsert,
+    CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
+    RuleSetKernelPayload, RuleSetProfile, RuleSetSummary, RuleSetSyncAllOutcome, RuleSetUpsert,
 };
-use crate::services::{interaction_mode, rule_overlay, rule_set};
+use crate::services::{builtin_rules, interaction_mode, rule_overlay, rule_set};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
-pub fn rule_set_list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetProfile>> {
+pub fn rule_set_list(state: State<'_, AppState>) -> AppResult<Vec<RuleSetSummary>> {
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     rule_set::list(state)
 }
@@ -59,6 +59,17 @@ pub async fn rule_set_update_all(app_handle: AppHandle) -> AppResult<RuleSetSync
 }
 
 #[tauri::command]
+pub async fn rule_set_update_builtins(app_handle: AppHandle) -> AppResult<RuleSetSyncAllOutcome> {
+    let state = app_handle.state::<AppState>();
+    interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
+    let outcome = builtin_rules::update_all(state.inner()).await?;
+    if outcome.updated > 0 {
+        rule_overlay::reconcile_after_rule_change(app_handle.clone()).await?;
+    }
+    Ok(outcome)
+}
+
+#[tauri::command]
 pub fn rule_set_common_status(state: State<'_, AppState>) -> AppResult<CommonRuleInjectionStatus> {
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     rule_overlay::status(state.inner())
@@ -90,4 +101,12 @@ pub fn rule_set_kernel_payloads(
 ) -> AppResult<Vec<RuleSetKernelPayload>> {
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
     rule_set::kernel_payloads(state)
+}
+
+#[tauri::command]
+pub fn rule_set_effective_options(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<EffectiveRuleSetOption>> {
+    interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
+    rule_overlay::effective_rule_set_options(state.inner())
 }

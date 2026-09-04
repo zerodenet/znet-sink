@@ -19,6 +19,10 @@ export interface CoreProcessStatus {
   lastError?: string;
 }
 
+export interface CoreProcessTransitionResult extends CoreProcessStatus {
+  tunRestoreError?: AppError | null;
+}
+
 export interface CoreEndpoint {
   transport: string;   // "unix-socket" | "named-pipe"
   path: string;
@@ -119,7 +123,6 @@ export interface CoreKernelInfo {
   sizeBytes?: number;
   modifiedAtUnixMs?: number;
   recommendedInstallDir?: string;
-  downloadUrl?: string;
   hasActiveConfig: boolean;
   warnings: string[];
 }

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
+  import * as Tabs from '$lib/components/AppTabs';
+  import type { UnlistenFn } from '@tauri-apps/api/event';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
   import { AlertTriangle, Download, FolderOpen, RefreshCcw, Save, X } from '@lucide/svelte';
@@ -28,7 +31,6 @@
     KernelInstallResult,
   } from '$lib/types/kernel-version';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
-  import * as Tabs from '$lib/components/AppTabs';
   import { success, warning } from '$lib/services/toast.svelte';
 
   const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/core/releases/latest';
@@ -195,10 +197,10 @@
     installResult = null;
   }
 
-  async function loadVersions() {
+  async function loadVersions(force = false) {
     versionListLoading = true;
     try {
-      versionList = await listKernelVersions();
+      versionList = await listKernelVersions({ force });
     } catch (error) {
       warning(error instanceof Error ? error.message : '获取版本列表失败');
     } finally {
@@ -217,11 +219,12 @@
     downloadProgress = null;
     installResult = null;
 
-    const unlisten = await onDownloadProgress((progress) => {
-      downloadProgress = progress;
-    });
+    let unlisten: UnlistenFn | null = null;
 
     try {
+      unlisten = await onDownloadProgress((progress) => {
+        downloadProgress = progress;
+      });
       const result = await installKernelVersion(
         release.version,
         release.assetDownloadUrl,
@@ -240,7 +243,7 @@
     } catch (error) {
       warning(error instanceof Error ? error.message : '安装失败');
     } finally {
-      unlisten();
+      unlisten?.();
       installBusy = false;
       installingVersion = null;
     }
@@ -292,7 +295,7 @@
   <div class="header">
     <div class="heading">
       <div class="title-row">
-        <div class="title">内核配置</div>
+        <div class="title">版本管理</div>
         {#if currentVersion}
           <Badge variant="secondary">v{currentVersion}</Badge>
         {:else if hasExecutable}
@@ -302,7 +305,7 @@
         {/if}
       </div>
       <div class="desc">
-        管理自研内核版本，支持 stable / beta / nightly 渠道。
+        管理当前内核版本与可执行文件，支持 stable / beta / nightly 渠道。
       </div>
     </div>
 
@@ -404,7 +407,7 @@
           <div class="probe-urls-text">
             <span class="probe-urls-title">网络检测地址</span>
             <span class="probe-urls-desc">
-              每行一个 `http` 或 `https` 地址。GUI 不会指定 Zero 代理，而是按应用进程继承的网络环境依次请求；存在代理环境变量时走代理，否则直连。
+              每行一个 `http` 或 `https` 地址。GUI 不会指定内核代理，而是按应用进程继承的网络环境依次请求；存在代理环境变量时走代理，否则直连。
             </span>
           </div>
           <Button
@@ -417,14 +420,14 @@
           </Button>
         </div>
 
-        <textarea
+        <Textarea
           bind:value={networkProbeUrlsDraft}
-          class="probe-urls-textarea mono"
-          rows="4"
+          class="font-mono"
+          rows={4}
           spellcheck="false"
           disabled={loading || saving}
           placeholder="https://ipinfo.io/json"
-        ></textarea>
+        ></Textarea>
       </div>
     </div>
   {/if}
@@ -442,31 +445,28 @@
   width="min(560px, 90vw)"
 >
   {#snippet headerActions()}
-    <Button variant="ghost" size="icon-sm" onclick={loadVersions} disabled={versionListLoading || installBusy}>
+    <Button variant="ghost" size="icon-sm" onclick={() => loadVersions(true)} disabled={versionListLoading || installBusy}>
       <RefreshCcw class="h-3.5 w-3.5" />
     </Button>
   {/snippet}
 
-  <Tabs.Root
-    value={activeChannel}
-    onValueChange={(value) => {
-      activeChannel = value as ReleaseChannel;
-      installResult = null;
-      downloadProgress = null;
-    }}
-    class="kernel-channel-root"
-  >
-    <Tabs.List class="channel-tabs" aria-label="内核发布渠道">
+  <Tabs.Root value={activeChannel} onValueChange={(value) => {
+    activeChannel = value as ReleaseChannel;
+    installResult = null;
+    downloadProgress = null;
+  }}>
+    <Tabs.List class="w-full" aria-label="内核发布渠道">
       {#each (['stable', 'beta', 'nightly'] as ReleaseChannel[]) as ch}
         <Tabs.Trigger
           value={ch}
-          class="channel-tab"
+          class="flex-1"
           disabled={installBusy}
         >
           {CHANNEL_LABELS[ch]}
         </Tabs.Trigger>
       {/each}
     </Tabs.List>
+    <Tabs.Content value={activeChannel}>
 
     {#if installResult?.success}
       <div class="install-success">
@@ -519,9 +519,9 @@
             </div>
             <div class="version-actions">
               {#if release.releaseNotesUrl}
-                <button class="link-btn" onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
+                <Button variant="link" size="sm"  onclick={() => openLink(release.releaseNotesUrl!)} title="查看更新说明">
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
-                </button>
+                </Button>
               {/if}
               <Button
                 size="sm"
@@ -542,16 +542,17 @@
         {/each}
       </div>
     {/if}
+    </Tabs.Content>
   </Tabs.Root>
 
   {#snippet footer()}
     <Button variant="outline" onclick={closeVersionManager} disabled={installBusy}>
       {installResult?.success ? '关闭' : '取消'}
     </Button>
-    <button class="link-btn" onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
+    <Button variant="link" size="sm"  onclick={() => openLink(FALLBACK_DOWNLOAD_URL)} disabled={installBusy} title="在浏览器中打开下载页">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 7v2.5h-7v-7h2.5"/><path d="M9.5 1.5h-4v4M10 1L5.5 5.5"/></svg>
       <span>手动下载</span>
-    </button>
+    </Button>
   {/snippet}
 </DraggableModal>
 
@@ -758,30 +759,6 @@
     line-height: 1.5;
   }
 
-  .probe-urls-textarea {
-    width: 100%;
-    min-height: 108px;
-    resize: vertical;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--background);
-    color: var(--foreground);
-    padding: 10px 12px;
-    font-size: 12px;
-    line-height: 1.6;
-    outline: none;
-  }
-
-  .probe-urls-textarea:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
-  }
-
-  .probe-urls-textarea:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
   .message {
     padding: 10px 12px;
     font-size: 12px;
@@ -789,20 +766,6 @@
   }
 
   /* Modal content styles (layout provided by DraggableModal) */
-
-  :global(.kernel-channel-root) {
-    width: 100%;
-  }
-
-  :global(.channel-tabs) {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  :global(.channel-tab) {
-    width: 100%;
-  }
 
   /* Version list */
   .version-list {
@@ -818,6 +781,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
     padding: 8px 10px;
     border-radius: 6px;
     transition: background 0.12s ease;
@@ -836,10 +800,16 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 100px;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .version-tag {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 600;
@@ -847,13 +817,18 @@
   }
 
   .version-meta {
-    flex: 1;
+    flex: 0 1 auto;
     display: flex;
     gap: 10px;
     min-width: 0;
+    overflow: hidden;
   }
 
   .version-date {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 11px;
     color: var(--muted-foreground);
   }
@@ -919,6 +894,9 @@
     display: flex;
     align-items: flex-start;
     gap: 10px;
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
     padding: 12px;
     border-radius: 8px;
     background: rgba(34, 197, 94, 0.06);
@@ -929,33 +907,18 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    min-width: 0;
+    overflow: hidden;
     font-size: 13px;
   }
 
+  .install-success-text > :global(.text-xs) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   /* Link button */
-  .link-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: none;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 12px;
-    cursor: pointer;
-    padding: 4px 6px;
-    border-radius: 4px;
-    transition: color 0.12s ease, background 0.12s ease;
-  }
-
-  .link-btn:hover:not(:disabled) {
-    color: var(--foreground);
-    background: var(--muted);
-  }
-
-  .link-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
 
   :global(.sr-only) {
     position: absolute;

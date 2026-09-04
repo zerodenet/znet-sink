@@ -11,7 +11,7 @@ import {
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
-export type SettingsSection = 'general' | 'core' | 'tun' | 'config' | 'about';
+export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'dns' | 'config' | 'logs' | 'about';
 
 const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'settings']);
 const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config']);
@@ -37,6 +37,7 @@ class AppStateStore {
     features: new Map(),
   });
   private onboardingRequired = true;
+  private uiModeGeneration = 0;
 
   constructor() {
     if (browser) {
@@ -122,11 +123,12 @@ class AppStateStore {
     if (this.isSwitchingUiMode || mode === this.uiMode) return;
 
     this.isSwitchingUiMode = true;
-    const previousMode = this.uiMode;
-    const previousTab = this.activeTab;
-    const previousSettingsSection = this.settingsSection;
+    const generation = ++this.uiModeGeneration;
     console.time('[ZNet] switchUIMode');
 
+    // UI mode is a presentation preference. Apply it optimistically so a
+    // potentially slow macOS/Linux network handoff can never freeze the mode
+    // control or hold the WebView in the old layout.
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
@@ -139,26 +141,50 @@ class AppStateStore {
       this.settingsSection = 'general';
     }
 
+    // Persist in the background. The presentation switch must not stay
+    // disabled while an IPC call or an older backend is slow/unavailable.
+    void this.persistUiMode(mode)
+      .then(() => {
+        if (generation !== this.uiModeGeneration || this.uiMode !== mode) return;
+
+        // Interaction surfaces are advisory metadata; refresh them after the
+        // preference has been persisted and ignore stale responses.
+        void this.refreshInteractionSurface(mode);
+
+        // Entering Lite should preserve an existing capture session, but the
+        // OS-level handoff also remains outside the mode-switch interaction.
+        if (mode === 'lite' && guiState.isCaptureEnabled) {
+          void this.prepareLiteCaptureInBackground(generation);
+        }
+      })
+      .catch((e) => {
+        console.error('[ZNet] switchUIMode failed:', e);
+        // Keep the local choice usable even when persistence fails. The toast
+        // makes the durability issue visible without undoing the UI switch.
+        if (generation === this.uiModeGeneration && this.uiMode === mode) {
+          toastError(`已切换到${mode === 'lite' ? '简约' : '专业'}模式，但保存设置失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+      })
+      .finally(() => {
+        if (generation === this.uiModeGeneration) {
+          this.isSwitchingUiMode = false;
+        }
+        console.timeEnd('[ZNet] switchUIMode');
+      });
+
+    // Make the control interactive again immediately after scheduling IPC.
+    this.isSwitchingUiMode = false;
+  }
+
+  private async prepareLiteCaptureInBackground(generation: number) {
     try {
-      // Entering Lite does not invent a new active session. It only migrates
-      // an already-active GUI system-proxy capture to TUN; an existing TUN is
-      // reused and an entirely-off session remains off.
-      if (mode === 'lite') {
-        await guiState.prepareLiteCapture();
-      }
-
-      await this.persistUiMode(mode);
-      await this.refreshInteractionSurface();
-
-      const navItem = this.interactionSurface.navigation.get(this.activeTab);
-      if (!navItem?.visible) {
-        this.activeTab = 'overview';
-      }
-
-      console.timeEnd('[ZNet] switchUIMode');
+      await guiState.prepareLiteCapture();
     } catch (e) {
-      console.error('[ZNet] switchUIMode failed:', e);
-      console.timeEnd('[ZNet] switchUIMode');
+      // Network handoff failure does not invalidate the user's UI preference.
+      // Suppress stale feedback if the user has already left Lite mode while
+      // an OS-level TUN operation was still completing.
+      if (generation !== this.uiModeGeneration || this.uiMode !== 'lite') return;
+
       const failure = e as {
         code?: string;
         message?: string;
@@ -166,36 +192,32 @@ class AppStateStore {
       };
       const insufficientPrivilege = failure?.code === 'insufficient_os_privilege'
         || failure?.details?.error?.code === 'insufficient_os_privilege';
-      if (mode === 'lite' && insufficientPrivilege) {
-        toastError(`无法切换到简约模式：${failure.message ?? 'TUN 启动需要更高的系统权限。'}`);
-      }
-      this.uiMode = previousMode;
-      this.activeTab = previousTab;
-      this.settingsSection = previousSettingsSection;
-      if (browser) {
-        localStorage.setItem('znet-ui-mode', previousMode);
-      }
-      // If persistence succeeded but a later surface refresh failed, restore
-      // the backend mode as well instead of leaving frontend/backend split.
-      try {
-        await this.persistUiMode(previousMode);
-      } catch {
-        // Preserve the original mode-switch failure.
-      }
-    } finally {
-      this.isSwitchingUiMode = false;
+      const message = failure?.message
+        ?? (insufficientPrivilege
+          ? 'TUN 启动需要更高的系统权限。'
+          : '当前代理状态未能自动调整。');
+      toastError(`已切换到简约模式，但自动接管未完成：${message}`);
     }
   }
 
-  async refreshInteractionSurface() {
+  async refreshInteractionSurface(expectedMode?: UIMode) {
     try {
       console.time('[ZNet] refreshInteractionSurface');
       const surface = await getGuiInteractionSurfaceSnapshot();
+      if (expectedMode && this.uiMode !== expectedMode) {
+        console.timeEnd('[ZNet] refreshInteractionSurface');
+        return;
+      }
       this.interactionSurface = {
         navigation: new Map(surface.navigation.map((item) => [item.key, item])),
         actions: new Map(surface.actions.map((item) => [item.key, item])),
         features: new Map(surface.features.map((item) => [item.key, item])),
       };
+
+      const navItem = this.interactionSurface.navigation.get(this.activeTab);
+      if (!navItem?.visible) {
+        this.activeTab = 'overview';
+      }
       console.timeEnd('[ZNet] refreshInteractionSurface');
     } catch (e) {
       console.warn('[ZNet] refreshInteractionSurface failed:', e);
@@ -207,6 +229,11 @@ class AppStateStore {
   }
 
   isNavVisible(key: string): boolean {
+    // Apply the local mode boundary synchronously. The cached interaction
+    // surface still describes the previous mode until its background refresh
+    // completes, which can take seconds when the core is busy.
+    if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;
+
     const item = this.interactionSurface.navigation.get(key);
     if (item) return item.visible;
     return this.getFallbackNavVisible(key);

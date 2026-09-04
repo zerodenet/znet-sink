@@ -1,4 +1,4 @@
-use std::fs;
+use std::{collections::HashSet, fs};
 
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -8,10 +8,13 @@ use zero_rule::zrs::{verify, VerifyMode};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
+use crate::models::app_config::{AppConfig, AppDnsConfig};
 use crate::models::core_process::CoreProcessState;
+use crate::models::dns_config::CLIENT_DNS_DETOUR_ROUTE_FINAL;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
-    CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, RuleSetProfile,
+    CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
+    RuleSetProfile,
 };
 use crate::services::{
     app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
@@ -26,7 +29,38 @@ pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Val
         .routing
         .inject_common_rules;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_effective_with(state, base, enabled, &profiles)
+    compose_effective_with(state, base, enabled, &profiles, None, None)
+}
+
+pub(crate) fn compose_effective_config_with_dns(
+    state: &AppState,
+    base: &Value,
+    dns: &AppDnsConfig,
+) -> AppResult<Value> {
+    let enabled = common::lock(state.app_config(), "app_config")?
+        .routing
+        .inject_common_rules;
+    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
+    compose_effective_with(state, base, enabled, &profiles, Some(dns), None)
+}
+
+pub(crate) fn validate_app_config_candidate(
+    state: &AppState,
+    app_config: &AppConfig,
+) -> AppResult<()> {
+    let Some(base) = active_content(state)? else {
+        return Ok(());
+    };
+    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
+    let config = compose_with(&base, app_config.routing.inject_common_rules, &profiles)?.config;
+    finalize_effective_config(
+        state,
+        &base,
+        config,
+        Some(&app_config.dns),
+        Some(app_config.url_test.tolerance_ms),
+    )?;
+    Ok(())
 }
 
 fn compose_effective_with(
@@ -34,19 +68,29 @@ fn compose_effective_with(
     base: &Value,
     enabled: bool,
     profiles: &[RuleSetProfile],
+    dns_override: Option<&AppDnsConfig>,
+    tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
     let config = compose_with(base, enabled, profiles)?.config;
-    finalize_effective_config(state, base, config)
+    finalize_effective_config(state, base, config, dns_override, tolerance_override)
 }
 
 fn finalize_effective_config(
     state: &AppState,
     base: &Value,
     mut config: Value,
+    dns_override: Option<&AppDnsConfig>,
+    tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
-    let tolerance_ms = common::lock(state.app_config(), "app_config")?
-        .url_test
-        .tolerance_ms;
+    apply_global_dns(state, &mut config, dns_override)?;
+    let tolerance_ms = match tolerance_override {
+        Some(value) => value,
+        None => {
+            common::lock(state.app_config(), "app_config")?
+                .url_test
+                .tolerance_ms
+        }
+    };
     if url_test::supports_tolerance(state) {
         url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
     }
@@ -54,47 +98,281 @@ fn finalize_effective_config(
     Ok(config)
 }
 
+/// DNS/Fake-IP is a client-owned runtime concern rather than part of a proxy
+/// profile. Remove any legacy profile-owned value and inject the persisted
+/// global setting into the effective config sent to Zero.
+fn apply_global_dns(
+    state: &AppState,
+    config: &mut Value,
+    dns_override: Option<&AppDnsConfig>,
+) -> AppResult<()> {
+    let app_dns = match dns_override {
+        Some(dns) => dns.clone(),
+        None => common::lock(state.app_config(), "app_config")?.dns.clone(),
+    };
+    let resolved_dns = if app_dns.enabled {
+        let dns = app_dns.config.ok_or_else(|| {
+            AppError::invalid_argument("global DNS is enabled without a DNS configuration")
+        })?;
+        let mut dns = serde_json::to_value(dns).map_err(|error| {
+            AppError::internal(format!("failed to serialize global DNS config: {error}"))
+        })?;
+        resolve_dns_detours(config, &mut dns)?;
+        Some(dns)
+    } else {
+        None
+    };
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("proxy config must be a JSON object"))?;
+    let runtime = root
+        .entry("runtime".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let runtime = runtime
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("runtime must be a JSON object"))?;
+    runtime.remove("dns");
+
+    if let Some(dns) = resolved_dns {
+        runtime.insert("dns".to_string(), dns);
+    } else if runtime.is_empty() {
+        root.remove("runtime");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RouteFinalDnsDetour {
+    Direct,
+    Outbound(String),
+}
+
+fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
+    let route_targets = route_target_tags(config);
+    let servers = dns
+        .get_mut("servers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| AppError::invalid_argument("global DNS servers must be a JSON object"))?;
+    let follows_route_final = servers.values().any(|server| {
+        server.get("detour").and_then(Value::as_str) == Some(CLIENT_DNS_DETOUR_ROUTE_FINAL)
+    });
+    let route_final = follows_route_final
+        .then(|| route_final_dns_detour(config, &route_targets))
+        .transpose()?;
+
+    for (name, server) in servers {
+        let Some(server) = server.as_object_mut() else {
+            return Err(AppError::invalid_argument(format!(
+                "global DNS server `{name}` must be a JSON object"
+            )));
+        };
+        let Some(detour) = server
+            .get("detour")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        if detour.is_empty() {
+            return Err(AppError::invalid_argument(format!(
+                "global DNS server `{name}` has an empty detour"
+            )));
+        }
+        if detour == CLIENT_DNS_DETOUR_ROUTE_FINAL {
+            match route_final.as_ref().expect("route.final was resolved") {
+                RouteFinalDnsDetour::Direct => {
+                    server.remove("detour");
+                }
+                RouteFinalDnsDetour::Outbound(tag) => {
+                    server.insert("detour".to_string(), Value::String(tag.clone()));
+                }
+            }
+        } else if !route_targets.contains(&detour) {
+            return Err(AppError::invalid_argument(format!(
+                "global DNS server `{name}` references undefined detour `{detour}` in the target proxy config"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn route_target_tags(config: &Value) -> HashSet<String> {
+    let mut targets = HashSet::from(["direct".to_owned(), "block".to_owned()]);
+    targets.extend(
+        ["outbounds", "outbound_groups"]
+            .into_iter()
+            .filter_map(|key| config.get(key).and_then(Value::as_array))
+            .flatten()
+            .filter_map(|target| target.get("tag").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_owned),
+    );
+    targets
+}
+
+fn route_final_dns_detour(
+    config: &Value,
+    route_targets: &HashSet<String>,
+) -> AppResult<RouteFinalDnsDetour> {
+    let final_route = config
+        .pointer("/route/final")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            AppError::invalid_argument(
+                "global DNS detour follows route.final, but the target proxy config has no route.final",
+            )
+        })?;
+    match final_route.get("type").and_then(Value::as_str) {
+        Some("direct") => Ok(RouteFinalDnsDetour::Direct),
+        Some("route") => {
+            let outbound = final_route
+                .get("outbound")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .ok_or_else(|| {
+                    AppError::invalid_argument(
+                        "target proxy config route.final requires a non-empty outbound",
+                    )
+                })?;
+            if !route_targets.contains(outbound) {
+                return Err(AppError::invalid_argument(format!(
+                    "target proxy config route.final references undefined outbound `{outbound}`"
+                )));
+            }
+            Ok(RouteFinalDnsDetour::Outbound(outbound.to_owned()))
+        }
+        Some(kind) => Err(AppError::invalid_argument(format!(
+            "global DNS detour cannot follow target proxy config route.final of type `{kind}`"
+        ))),
+        None => Err(AppError::invalid_argument(
+            "target proxy config route.final requires a type",
+        )),
+    }
+}
+
+pub(crate) fn strip_profile_dns(config: &mut Value) {
+    let Some(root) = config.as_object_mut() else {
+        return;
+    };
+    let remove_runtime = root
+        .get_mut("runtime")
+        .and_then(Value::as_object_mut)
+        .map(|runtime| {
+            runtime.remove("dns");
+            runtime.is_empty()
+        })
+        .unwrap_or(false);
+    if remove_runtime {
+        root.remove("runtime");
+    }
+}
+
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let enabled = common::lock(state.app_config(), "app_config")?
         .routing
         .inject_common_rules;
-    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone());
-    let Some(base) = active else {
+    let eligible_count = {
+        let profiles = common::lock(state.rule_sets(), "rule_set")?;
+        eligible_profiles(&profiles).count()
+    };
+    let mode = {
+        let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
+        profiles
+            .iter()
+            .find(|profile| profile.active)
+            .and_then(|profile| profile.content.as_ref())
+            .and_then(proxy_mode::detect_route_mode)
+            .map(|detected| match detected.mode {
+                GuiProxyMode::Global => "global".to_string(),
+                GuiProxyMode::Rule => "rule".to_string(),
+                GuiProxyMode::Direct => "direct".to_string(),
+            })
+    };
+    let Some(mode) = mode else {
         return Ok(CommonRuleInjectionStatus {
             enabled,
             effective: false,
             mode: None,
-            eligible_count: eligible_profiles(&profiles).count(),
+            eligible_count,
             injected_count: 0,
             reason: Some("当前没有活动配置".to_string()),
         });
     };
-    match compose_with(&base, enabled, &profiles) {
-        Ok(result) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: result.injected_count > 0,
-            mode: result.mode,
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: result.injected_count,
-            reason: result.reason,
-        }),
-        Err(error) => Ok(CommonRuleInjectionStatus {
-            enabled,
-            effective: false,
-            mode: proxy_mode::detect_route_mode(&base).map(|detected| match detected.mode {
-                GuiProxyMode::Global => "global".to_string(),
-                GuiProxyMode::Rule => "rule".to_string(),
-                GuiProxyMode::Direct => "direct".to_string(),
-            }),
-            eligible_count: eligible_profiles(&profiles).count(),
-            injected_count: 0,
-            reason: Some(error.message),
-        }),
-    }
+    let effective = enabled && mode == "rule" && eligible_count > 0;
+    let reason = if !enabled {
+        Some("公共规则注入已关闭".to_string())
+    } else if mode != "rule" {
+        Some("等待活动配置切换到规则模式".to_string())
+    } else if eligible_count == 0 {
+        Some("尚未启用公共规则".to_string())
+    } else {
+        None
+    };
+    Ok(CommonRuleInjectionStatus {
+        enabled,
+        effective,
+        mode: Some(mode),
+        eligible_count,
+        injected_count: if effective { eligible_count } else { 0 },
+        reason,
+    })
+}
+
+pub fn effective_rule_set_options(state: &AppState) -> AppResult<Vec<EffectiveRuleSetOption>> {
+    let Some(config) = current_effective_config(state)? else {
+        return Ok(Vec::new());
+    };
+    let profiles = common::lock(state.rule_sets(), "rule_set")?;
+    let definitions = config
+        .pointer("/route/rule_sets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut options = definitions
+        .into_iter()
+        .filter_map(|definition| {
+            let tag = definition.get("tag")?.as_str()?.trim();
+            if tag.is_empty() || !seen.insert(tag.to_string()) {
+                return None;
+            }
+            let path = definition.get("path").and_then(Value::as_str);
+            let profile = profiles.iter().find(|profile| {
+                common_tag(&profile.id) == tag
+                    || path.is_some_and(|path| {
+                        profile
+                            .artifact
+                            .as_ref()
+                            .is_some_and(|artifact| artifact.path == path)
+                    })
+            });
+            let (name, source) = profile.map_or_else(
+                || (tag.to_string(), "profile".to_string()),
+                |profile| {
+                    let source = if profile.managed_by_subscription_id.is_some() {
+                        "subscription"
+                    } else if profile.built_in {
+                        "builtin"
+                    } else if profile.source.is_some() {
+                        "remote"
+                    } else {
+                        "local"
+                    };
+                    (profile.name.clone(), source.to_string())
+                },
+            );
+            Some(EffectiveRuleSetOption {
+                tag: tag.to_string(),
+                name,
+                source,
+            })
+        })
+        .collect::<Vec<_>>();
+    options.sort_by(|left, right| left.name.cmp(&right.name).then(left.tag.cmp(&right.tag)));
+    Ok(options)
 }
 
 pub async fn set_enabled(
@@ -119,12 +397,14 @@ pub async fn set_enabled(
                 base,
                 previous.routing.inject_common_rules,
                 &profiles,
+                None,
+                None,
             )
         })
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles))
+        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles, None, None))
         .transpose()?;
 
     apply_if_running(state.inner(), next_effective.clone()).await?;
@@ -181,11 +461,13 @@ pub async fn set_binding(
         .inject_common_rules;
     let old_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &previous))
+        .map(|base| {
+            compose_effective_with(state.inner(), base, inject_enabled, &previous, None, None)
+        })
         .transpose()?;
     let next_effective = base
         .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next))
+        .map(|base| compose_effective_with(state.inner(), base, inject_enabled, &next, None, None))
         .transpose()?;
     apply_if_running(state.inner(), next_effective).await?;
     if let Err(error) = domain_store::save_rule_sets(&next) {
@@ -237,11 +519,10 @@ fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
         .transpose()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 struct ComposeResult {
     config: Value,
     injected_count: usize,
-    mode: Option<String>,
-    reason: Option<String>,
 }
 
 fn compose_with(
@@ -261,16 +542,12 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("公共规则注入已关闭".to_string()),
         });
     }
     if mode.as_deref() != Some("rule") {
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("等待活动配置切换到规则模式".to_string()),
         });
     }
 
@@ -286,8 +563,6 @@ fn compose_with(
         return Ok(ComposeResult {
             config,
             injected_count: 0,
-            mode,
-            reason: Some("尚未启用公共规则".to_string()),
         });
     }
 
@@ -338,8 +613,6 @@ fn compose_with(
     Ok(ComposeResult {
         config,
         injected_count,
-        mode,
-        reason: None,
     })
 }
 
@@ -562,6 +835,155 @@ mod tests {
         );
     }
 
+    #[test]
+    fn global_dns_is_injected_and_profile_dns_is_discarded() {
+        let mut app_config = AppConfig::default();
+        app_config.dns.enabled = true;
+        app_config.dns.config = Some(
+            serde_json::from_value(json!({
+                "servers": { "system": { "type": "system" } },
+                "default_server": "system",
+                "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 60 }
+            }))
+            .unwrap(),
+        );
+        let state =
+            AppState::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let base = json!({
+            "mode": {"type": "global", "outbound": "proxy"},
+            "runtime": {
+                "dns": {"servers": {"stale": {"type": "system"}}, "default_server": "stale"},
+                "tun": {"dns_hijack": true}
+            }
+        });
+
+        let effective = compose_effective_config(&state, &base).unwrap();
+        assert_eq!(effective["runtime"]["dns"]["default_server"], "system");
+        assert_eq!(effective["runtime"]["dns"]["answer"]["type"], "fake_ip");
+        assert_eq!(effective["runtime"]["tun"]["dns_hijack"], true);
+        assert!(effective["runtime"]["dns"]["servers"]
+            .get("stale")
+            .is_none());
+    }
+
+    fn dns_with_detour(detour: &str) -> Value {
+        json!({
+            "servers": {
+                "cloudflare": {
+                    "type": "doh",
+                    "host": "cloudflare-dns.com",
+                    "port": 443,
+                    "path": "/dns-query",
+                    "bootstrap": ["1.1.1.1"],
+                    "detour": detour
+                }
+            },
+            "default_server": "cloudflare"
+        })
+    }
+
+    #[test]
+    fn dns_detour_follows_each_target_profiles_route_final() {
+        for outbound in ["节点选择", "Others"] {
+            let config = json!({
+                "outbound_groups": [{ "tag": outbound, "type": "selector", "outbounds": [] }],
+                "route": { "final": { "type": "route", "outbound": outbound } }
+            });
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
+
+            resolve_dns_detours(&config, &mut dns).unwrap();
+
+            assert_eq!(dns["servers"]["cloudflare"]["detour"], outbound);
+            assert_ne!(
+                dns["servers"]["cloudflare"]["detour"],
+                CLIENT_DNS_DETOUR_ROUTE_FINAL
+            );
+        }
+    }
+
+    #[test]
+    fn dns_detour_following_direct_route_final_is_omitted() {
+        let config = json!({ "route": { "final": { "type": "direct" } } });
+        let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
+
+        resolve_dns_detours(&config, &mut dns).unwrap();
+
+        assert!(dns["servers"]["cloudflare"].get("detour").is_none());
+    }
+
+    #[test]
+    fn fixed_dns_detour_must_exist_in_target_profile() {
+        let config = json!({
+            "outbounds": [{ "tag": "Proxy", "protocol": { "type": "direct" } }],
+            "route": { "final": { "type": "route", "outbound": "Proxy" } }
+        });
+        let mut valid = dns_with_detour("Proxy");
+        resolve_dns_detours(&config, &mut valid).unwrap();
+        assert_eq!(valid["servers"]["cloudflare"]["detour"], "Proxy");
+
+        let mut stale = dns_with_detour("节点选择");
+        let error = resolve_dns_detours(&config, &mut stale).unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        assert!(error.message.contains("undefined detour `节点选择`"));
+    }
+
+    #[test]
+    fn dns_detour_cannot_follow_rejecting_or_missing_route_final() {
+        for config in [
+            json!({ "route": { "final": { "type": "reject" } } }),
+            json!({ "route": { "rules": [] } }),
+        ] {
+            let mut dns = dns_with_detour(CLIENT_DNS_DETOUR_ROUTE_FINAL);
+            let error = resolve_dns_detours(&config, &mut dns).unwrap_err();
+            assert_eq!(error.code, "invalid_argument");
+            assert!(error.message.contains("route.final"));
+        }
+    }
+
+    #[test]
+    fn imported_app_config_is_composed_against_the_active_profile_before_persisting() {
+        let base = json!({
+            "outbounds": [{ "tag": "Proxy", "protocol": { "type": "direct" } }],
+            "route": { "final": { "type": "route", "outbound": "Proxy" } }
+        });
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".into(),
+                name: "Active".into(),
+                kernel: "zero".into(),
+                format: "zero-json".into(),
+                path: None,
+                content: Some(base),
+                active: true,
+                updated_at_unix_ms: 0,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut candidate = AppConfig::default();
+        candidate.dns.config = Some(
+            serde_json::from_value(dns_with_detour("Missing")).expect("valid client DNS shape"),
+        );
+
+        let error = validate_app_config_candidate(&state, &candidate).unwrap_err();
+
+        assert_eq!(error.code, "invalid_argument");
+        assert!(error.message.contains("undefined detour `Missing`"));
+    }
+
+    #[test]
+    fn built_in_dns_detours_do_not_require_profile_outbounds() {
+        let config = json!({ "route": { "final": { "type": "direct" } } });
+
+        for target in ["direct", "block"] {
+            let mut dns = dns_with_detour(target);
+            resolve_dns_detours(&config, &mut dns).unwrap();
+            assert_eq!(dns["servers"]["cloudflare"]["detour"], target);
+        }
+    }
     fn verified_profile(
         id: &str,
         order: u32,
@@ -669,6 +1091,52 @@ mod tests {
             effective["route"]["rules"][0]["condition"]["tag"],
             common_tag("new-default")
         );
+        let options = effective_rule_set_options(&state).unwrap();
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].tag, expected_tag);
+        assert_eq!(options[0].name, "new-default");
+        assert_eq!(options[0].source, "local");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn effective_options_keep_subscription_assets_read_only_but_selectable_by_real_tag() {
+        let (mut profile, path) = verified_profile("managed", 0, CommonRuleAction::Direct);
+        profile.name = "Airport / AI-Suite".into();
+        profile.managed_by_subscription_id = Some("subscription-1".into());
+        profile.common_binding = None;
+        let base = json!({
+            "mode":{"type":"rule"},
+            "route":{
+                "rule_sets":[{"tag":"AI-Suite","type":"file","path":path,"format":"zrs"}],
+                "rules":[],
+                "final":{"type":"direct"}
+            }
+        });
+        let state = AppState::with_domain_data(
+            AppConfig::default(),
+            vec![ProxyConfigProfile {
+                id: "active".into(),
+                name: "Active".into(),
+                kernel: "zero".into(),
+                format: "zero-json".into(),
+                path: None,
+                content: Some(base),
+                active: true,
+                updated_at_unix_ms: 0,
+                capabilities: ProxyConfigCapabilities::default(),
+            }],
+            Vec::new(),
+            vec![profile],
+            Vec::new(),
+        );
+
+        let options = effective_rule_set_options(&state).unwrap();
+
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].tag, "AI-Suite");
+        assert_eq!(options[0].name, "Airport / AI-Suite");
+        assert_eq!(options[0].source, "subscription");
         let _ = fs::remove_file(path);
     }
 

@@ -167,17 +167,19 @@
       ? overviewData.speedHistory[overviewData.speedHistory.length - 1].up
       : 0,
   );
-  const sessionTotalBytes = $derived(overviewData.proxySessionTotalBytes);
+  const sessionTotalBytes = $derived(overviewData.captureSessionTotalBytes);
   const sessionTotalLabel = $derived(formatBytes(sessionTotalBytes));
-  const sessionDownLabel = $derived(formatBytes(overviewData.proxySessionDownBytes));
-  const sessionUpLabel = $derived(formatBytes(overviewData.proxySessionUpBytes));
-  const sessionUpShare = $derived(trafficShare(overviewData.proxySessionUpBytes, sessionTotalBytes));
+  const sessionDownLabel = $derived(formatBytes(overviewData.captureSessionDownBytes));
+  const sessionUpLabel = $derived(formatBytes(overviewData.captureSessionUpBytes));
+  const sessionUpShare = $derived(trafficShare(overviewData.captureSessionUpBytes, sessionTotalBytes));
   const sessionDownShare = $derived(100 - sessionUpShare);
   const sessionRingStyle = $derived(
     `--traffic-up-share: ${sessionUpShare.toFixed(3)}%; --traffic-down-share: ${sessionDownShare.toFixed(3)}%;`,
   );
 
-  const proxyEnabled = $derived(guiState.isSystemProxyEnabled);
+  const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled);
+  const captureEnabled = $derived(guiState.isCaptureEnabled);
+  const liteConnected = $derived(guiState.isConnected);
   const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
@@ -326,13 +328,13 @@
     guiState.connection?.coreAvailable === true || guiState.connection?.processState === 'running',
   );
   const coreStateLabel = $derived(
-    proxyEnabled ? '服务中' :
+    captureEnabled ? '服务中' :
     guiState.isProcessRunning ? '监听中' :
     guiState.isStartingCore ? '启动中' :
     guiState.connection?.processState === 'failed' ? '失败' : '已停止',
   );
   const coreStateTone = $derived(
-    proxyEnabled ? 'on' :
+    captureEnabled ? 'on' :
     isCoreAvailable || guiState.isStartingCore ? 'listen' :
     guiState.connection?.processState === 'failed' ? 'error' : 'off',
   );
@@ -357,9 +359,9 @@
         <span class="strip-val">{coreStateLabel}</span>
       </div>
       <span class="strip-sep" aria-hidden="true"></span>
-      <div class="strip-item {proxyEnabled ? 'tone-on' : 'tone-off'}" title="系统代理">
+      <div class="strip-item {systemProxyEnabled ? 'tone-on' : 'tone-off'}" title="系统代理">
         <span class="strip-key">代理</span>
-        <span class="strip-val">{proxyEnabled ? '已开启' : '未开启'}</span>
+        <span class="strip-val">{systemProxyEnabled ? '已开启' : '未开启'}</span>
       </div>
       <span class="strip-sep" aria-hidden="true"></span>
       <div class="strip-item {guiState.isTunEnabled ? 'tone-on' : 'tone-off'}" title="TUN 虚拟网卡">
@@ -452,7 +454,7 @@
         {#if networkProbeLoading}
           <span class="network-status-badge loading">检测中…</span>
         {/if}
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="network-strip-trigger"
             onclick={() => void guiState.probeNetwork()}
@@ -482,7 +484,7 @@
     </div>
 
     <div class="overview-card flex-shrink-0">
-      <button class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
+      <button data-slot="surface-button" class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
         <span class="card-label">系统自测</span>
         <div class="flex items-center gap-2">
           {#if guiState.selfTest}
@@ -554,8 +556,8 @@
     <div class="lite-main">
       <div
         class="lite-power-orbit"
-        class:on={proxyEnabled}
-        class:idle={!proxyEnabled}
+        class:on={liteConnected}
+        class:idle={!liteConnected}
         class:unsupported={!guiState.supportsTrafficStats}
       >
         <div
@@ -568,7 +570,7 @@
 
         <div
           class="lite-traffic-ring"
-          class:flowing={proxyEnabled && (currentUp > 0.001 || currentDown > 0.001)}
+          class:flowing={currentUp > 0.001 || currentDown > 0.001}
           style={sessionRingStyle}
           aria-hidden="true"
         ></div>
@@ -592,14 +594,14 @@
           </span>
         </div>
 
-        <button
+        <button data-slot="surface-button"
           class="lite-power"
-          class:on={proxyEnabled}
+          class:on={liteConnected}
           class:connecting={isPowerBusy}
-          onclick={() => proxyEnabled ? guiState.disconnect() : guiState.connect()}
+          onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}
           disabled={isPowerBusy}
-          aria-label={proxyEnabled ? '关闭代理' : '开启代理'}
-          title={proxyEnabled ? '关闭代理' : '开启代理'}
+          aria-label={liteConnected ? '关闭代理' : '开启代理'}
+          title={liteConnected ? '关闭代理' : '开启代理'}
         >
           {#if isPowerBusy}
             <span class="lite-power-spin">⟳</span>
@@ -614,19 +616,19 @@
         <div class="lite-live-rates">
           <span
             class="lite-live-up lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${proxyEnabled ? formatSpeed(currentUp) : '0 KB/s'}` : '实时上传速率不可用'}
+            data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${formatSpeed(currentUp)}` : '实时上传速率不可用'}
           >
             <span class="sr-only">实时上传速率：</span>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 7 6 3 10 7"/></svg>
-            <span>{guiState.supportsTrafficStats && proxyEnabled ? formatSpeed(currentUp) : guiState.supportsTrafficStats ? '0 KB/s' : '—'}</span>
+            <span>{guiState.supportsTrafficStats ? formatSpeed(currentUp) : '—'}</span>
           </span>
           <span
             class="lite-live-down lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${proxyEnabled ? formatSpeed(currentDown) : '0 KB/s'}` : '实时下载速率不可用'}
+            data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${formatSpeed(currentDown)}` : '实时下载速率不可用'}
           >
             <span class="sr-only">实时下载速率：</span>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 5 6 9 10 5"/></svg>
-            <span>{guiState.supportsTrafficStats && proxyEnabled ? formatSpeed(currentDown) : guiState.supportsTrafficStats ? '0 KB/s' : '—'}</span>
+            <span>{guiState.supportsTrafficStats ? formatSpeed(currentDown) : '—'}</span>
           </span>
         </div>
       </div>
@@ -692,7 +694,7 @@
               </Select.Content>
             </Select.Root>
           {/if}
-          <button
+          <button data-slot="surface-button"
             type="button"
             class="lite-manage-source"
             onclick={() => (store.activeTab = 'subscriptions')}
@@ -703,7 +705,7 @@
       </div>
 
       {#if hasConfig || hasNodes}
-        <button
+        <button data-slot="surface-button"
           type="button"
           class="lite-entry"
           onclick={() => (store.activeTab = 'nodes')}

@@ -3,13 +3,15 @@ import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime 
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
+import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
-import type { GuiConnectionItem, PolicyProbeCompletedEvent } from '$lib/types/gui-api';
+import type { GuiConnectionItem, PolicyProbeCompletedEvent, TrafficRateSample } from '$lib/types/gui-api';
 
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
 const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
+const TRAFFIC_RATE_SAMPLE_EVENT = 'traffic:rate-sampled';
 
 // ── Exported types ──
 
@@ -61,6 +63,7 @@ class CoreEventsService {
   private _unlistenStatus: UnlistenFn | null = null;
   private _unlistenProcess: UnlistenFn | null = null;
   private _unlistenHostNetwork: UnlistenFn | null = null;
+  private _unlistenTrafficRate: UnlistenFn | null = null;
   private _activeGeneration: number | null = null;
   private _lifecycle = new EventLifecycleQueue();
 
@@ -80,6 +83,7 @@ class CoreEventsService {
       && this._unlistenStatus
       && this._unlistenProcess
       && this._unlistenHostNetwork
+      && this._unlistenTrafficRate
     ) {
       return;
     }
@@ -114,6 +118,12 @@ class CoreEventsService {
           },
         );
       }
+      if (!this._unlistenTrafficRate) {
+        this._unlistenTrafficRate = await listen<TrafficRateSample>(
+          TRAFFIC_RATE_SAMPLE_EVENT,
+          (event) => overviewData.applyTrafficRateSample(event.payload),
+        );
+      }
 
       const sub = await startGuiEvents(events);
       this._activeGeneration = sub.generation;
@@ -141,10 +151,12 @@ class CoreEventsService {
     this._unlistenStatus?.();
     this._unlistenProcess?.();
     this._unlistenHostNetwork?.();
+    this._unlistenTrafficRate?.();
     this._unlistenEvent = null;
     this._unlistenStatus = null;
     this._unlistenProcess = null;
     this._unlistenHostNetwork = null;
+    this._unlistenTrafficRate = null;
     this._pendingDeltas = [];
     this.activeConnections = [];
   }
@@ -226,7 +238,9 @@ class CoreEventsService {
     const subtype = typeof obj['subtype'] === 'string' ? obj['subtype'] : '';
 
     if (eventType === 'traffic.sampled') {
-      overviewData.applyStatsEvent(obj);
+      // The Rust traffic bridge emits one authoritative rate sample to both
+      // the overview and floating ball. Keep this normalized event available
+      // to other consumers without independently calculating another rate.
       return;
     }
 
@@ -511,6 +525,7 @@ class CoreEventsService {
       outboundTag: typeof o['outboundTag'] === 'string' ? o['outboundTag'] : undefined,
       outboundProtocol: typeof o['outboundProtocol'] === 'string' ? o['outboundProtocol'] : undefined,
       remoteDestination: typeof o['remoteDestination'] === 'string' ? o['remoteDestination'] : undefined,
+      networkContext: parseConnectionNetworkContext(o['networkContext']),
       policyTag: typeof o['policyTag'] === 'string' ? o['policyTag'] : undefined,
       routeMode: typeof o['routeMode'] === 'string' ? o['routeMode'] : undefined,
       routeAction: typeof o['routeAction'] === 'string' ? o['routeAction'] : undefined,

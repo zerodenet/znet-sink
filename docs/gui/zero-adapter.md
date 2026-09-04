@@ -15,7 +15,7 @@
 | 命令 | 模式 | 说明 |
 | --- | --- | --- |
 | `gui_connect` | 简约/专业 | 一键连接：导出配置、启动 Zero、等待 health、开启系统代理 |
-| `gui_disconnect` | 简约/专业 | 一键断开：关闭系统代理、停止 GUI 托管的 Zero |
+| `gui_disconnect` | 简约/专业 | 一键断开：关闭系统代理，保留 GUI 托管的 Zero 运行 |
 | `gui_connection_status` | 简约/专业 | 获取连接聚合状态 |
 | `gui_self_test_snapshot` | 简约/专业 | 获取自测准备状态与阻塞项 |
 | `gui_proxy_mode_status` | 简约/专业 | 获取代理模式：全局、规则、直连 |
@@ -75,8 +75,12 @@ await invoke('gui_select_policy', {
 `gui_disconnect` 执行顺序：
 
 1. 关闭系统代理。
-2. 停止 GUI 托管的 Zero 进程。
+2. 保留 GUI 托管的 Zero 进程，以便重新连接和继续查看内核状态。
 3. 返回聚合连接状态。
+
+当尚未导入代理配置时，内核仍可由 GUI 启动并进入“仅管理”状态。此时
+Zero 使用应用数据目录下的临时控制配置，不监听代理流量；系统代理、TUN
+和连接操作会继续要求用户先选择有效的活动配置。
 
 `gui_connection_status` 返回：
 

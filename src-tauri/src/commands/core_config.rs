@@ -1,7 +1,7 @@
 use tauri::State;
 
-use crate::errors::AppResult;
-use crate::models::core_config::{CoreConfigExportResult, CoreDownloadResult, CoreKernelInfo};
+use crate::errors::{AppError, AppResult};
+use crate::models::core_config::{CoreConfigExportResult, CoreKernelInfo};
 use crate::services::{core_config, interaction_mode};
 use crate::state::app_state::AppState;
 
@@ -17,13 +17,16 @@ pub fn core_config_export_active(state: State<'_, AppState>) -> AppResult<CoreCo
     core_config::export_active(state)
 }
 
+/// Compatibility tombstone for builds/frontends that still know the old
+/// command name. The duplicate downloader has been removed; all kernel
+/// installation must go through kernel_install_version / kernel_manager.
 #[tauri::command]
-pub async fn core_download_latest(
+pub fn core_download_latest(
     state: State<'_, AppState>,
-    install_dir: Option<String>,
-) -> AppResult<CoreDownloadResult> {
+    _install_dir: Option<String>,
+) -> AppResult<()> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
-    tauri::async_runtime::spawn_blocking(move || core_config::download_latest(install_dir))
-        .await
-        .map_err(|e| crate::errors::AppError::internal(format!("download thread panicked: {e}")))?
+    Err(AppError::invalid_argument(
+        "core_download_latest has been removed; use kernel version management",
+    ))
 }

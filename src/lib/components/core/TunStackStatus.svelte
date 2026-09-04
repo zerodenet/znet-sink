@@ -16,6 +16,7 @@
   // authoritative. Event state is deliberately not allowed to outrank it,
   // because an old event generation may still say "started" during restart.
   const tunLabel = $derived(
+    guiState.tunStatusError ? '状态未知' :
     !guiState.tunStatus ? '—' :
     guiState.isSwitchingTun ? '切换中' :
     guiState.tunStatus.enabled ? '活跃' :
@@ -24,6 +25,7 @@
   );
 
   const tunDotColor = $derived(
+    guiState.tunStatusError ? '#F59E0B' :
     guiState.tunStatus?.enabled ? '#22C55E' :
     guiState.tunStatus?.lastError ? '#EF4444' :
     guiState.tunStatus?.supported ? '#F59E0B' : 'var(--muted-foreground)'
@@ -56,6 +58,41 @@
       ? (tunRuntime.egressInterface ?? tunRuntime.egressInterfaceV4 ?? tunRuntime.egressInterfaceV6)
       : null;
     return [source, address, egress].filter(Boolean).join(' · ') || null;
+  });
+
+  function egressLabel(family: 'IPv4' | 'IPv6', egress: GuiManagedTunStatus['ipv4Egress']): string {
+    const state = egress.availability === 'available'
+      ? '可用'
+      : egress.availability === 'unavailable'
+        ? '不可用'
+        : '检测中';
+    const detail = egress.interface ?? egressReason(egress.reason);
+    return `${family} ${state}${detail ? `（${detail}）` : ''}`;
+  }
+
+  function egressReason(reason?: string): string | null {
+    if (!reason) return null;
+    const labels: Record<string, string> = {
+      no_default_route: '无默认路由',
+      no_usable_address: '无可用地址',
+      interface_down: '接口未连接',
+      route_lookup_failed: '路由探测失败',
+    };
+    return labels[reason] ?? reason;
+  }
+
+  const tunDiagnostics = $derived.by(() => {
+    if (!tunRuntime?.enabled) return [];
+    const values = [
+      egressLabel('IPv4', tunRuntime.ipv4Egress),
+      egressLabel('IPv6', tunRuntime.ipv6Egress),
+      tunRuntime.addressFamilyPolicy ? `策略 ${tunRuntime.addressFamilyPolicy}` : null,
+      `Gen ${tunRuntime.networkGeneration}`,
+      tunRuntime.ipv6ToIpv4Fallbacks > 0
+        ? `IPv6→IPv4 回退 ${tunRuntime.ipv6ToIpv4Fallbacks} 次`
+        : null,
+    ];
+    return values.filter((value): value is string => Boolean(value));
   });
 
   async function refresh() {
@@ -97,12 +134,26 @@
         {/if}
       </div>
       <Switch
-        checked={guiState.isTunEnabled}
+        checked={guiState.isTunSwitchOn}
         onCheckedChange={() => guiState.toggleTun()}
-        disabled={guiState.isTunEnabled ? !guiState.canDisableTun : !guiState.canEnableTun}
-        aria-label={guiState.isTunEnabled ? '关闭 TUN' : '开启 TUN'}
+        disabled={guiState.isTunSwitchOn ? !guiState.canDisableTun : !guiState.canEnableTun}
+        aria-label={guiState.isTunSwitchOn ? '关闭 TUN 并取消自动恢复' : '开启 TUN'}
       />
     </div>
+
+    {#if guiState.tunStatusError || (guiState.isTunDesiredEnabled && !guiState.isTunEnabled)}
+      <p class="feature-meta" role="status">
+        {guiState.tunStatusError ? '暂时无法确认 TUN 状态。' : 'TUN 尚未运行。'}
+        {guiState.isTunDesiredEnabled ? '已保存开启设置，重启后会尝试恢复；关闭开关可取消。' : '请刷新确认运行状态。'}
+      </p>
+    {/if}
+    {#if tunDiagnostics.length > 0}
+      <div class="tun-diagnostics" aria-label="TUN 出口诊断">
+        {#each tunDiagnostics as diagnostic}
+          <span class="diagnostic-chip" title={diagnostic}>{diagnostic}</span>
+        {/each}
+      </div>
+    {/if}
 
     <div class="feature-row">
       <div class="feature-dot" style="background: {stackDotColor};"></div>
@@ -153,5 +204,7 @@
   .feature-name { min-width: 68px; color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; }
   .feature-value { color: var(--foreground); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .feature-meta { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; opacity: .78; }
+  .tun-diagnostics { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 14px; }
+  .diagnostic-chip { max-width: 100%; overflow: hidden; padding: 2px 5px; color: var(--muted-foreground); background: color-mix(in srgb, var(--muted) 70%, transparent); border-radius: 4px; font-size: 9.5px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
   .feature-error { overflow: hidden; color: var(--destructive); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 </style>

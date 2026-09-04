@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { coreEvents } from './core-events.svelte';
 import { proxyConfigSignal } from './proxy-config-signal.svelte';
+import { ruleSetSignal } from './rule-set-signal.svelte';
 import {
   prepareGuiTunForProfileSwitch,
   reconcileGuiTunRuntime,
@@ -13,12 +14,16 @@ import type {
   SubscriptionProfile,
   SubscriptionUpsert,
   SubscriptionSyncAllOutcome,
+  SubscriptionRemovalPreview,
+  SubscriptionRemovalOutcome,
   RuleSetProfile,
+  RuleSetSummary,
   RuleSetUpsert,
   RuleSetKernelPayload,
   RuleSetSyncAllOutcome,
   CommonRuleBindingInput,
   CommonRuleInjectionStatus,
+  EffectiveRuleSetOption,
 } from '$lib/types/domain';
 
 export type {
@@ -26,6 +31,7 @@ export type {
   SubscriptionProfile,
   SubscriptionSyncAllOutcome,
   RuleSetProfile,
+  RuleSetSummary,
 };
 
 function reconcileTunAfterConfigMutation(context: string): Promise<void> {
@@ -58,6 +64,7 @@ export async function getProxyConfig(id: string): Promise<ProxyConfigProfile> {
 export async function upsertProxyConfig(input: ProxyConfigUpsert): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_upsert', { input });
   proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('profile upsert');
   return profile;
 }
@@ -65,6 +72,7 @@ export async function upsertProxyConfig(input: ProxyConfigUpsert): Promise<Proxy
 export async function importProxyConfig(input: ProxyConfigImport): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_import', { input });
   proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('profile import');
   return profile;
 }
@@ -88,6 +96,7 @@ export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfi
     await coreEvents.start();
 
     proxyConfigSignal.markChanged(true);
+    ruleSetSignal.markChanged();
     await reconcileTunAfterConfigMutation('profile activation');
     return profile;
   } catch (error) {
@@ -105,6 +114,7 @@ export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfi
 export async function removeProxyConfig(id: string): Promise<void> {
   await invoke('proxy_config_remove', { id });
   proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('profile removal');
 }
 
@@ -127,6 +137,7 @@ export async function syncSubscription(id: string): Promise<SubscriptionProfile>
   // A sync can create/update the generated proxy profile and may hot-refresh
   // the active target, so every config-backed surface must reconcile.
   proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('subscription sync');
   return subscription;
 }
@@ -134,18 +145,32 @@ export async function syncSubscription(id: string): Promise<SubscriptionProfile>
 export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome> {
   const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
   proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('subscription sync all');
   return outcome;
 }
 
-export async function removeSubscription(id: string): Promise<void> {
-  await invoke('subscription_remove', { id });
+export async function getSubscriptionRemovalPreview(id: string): Promise<SubscriptionRemovalPreview> {
+  return invoke('subscription_remove_preview', { id });
+}
+
+export async function removeSubscription(
+  id: string,
+  removeAssociatedConfig = false,
+): Promise<SubscriptionRemovalOutcome> {
+  const outcome = await invoke<SubscriptionRemovalOutcome>('subscription_remove', {
+    id,
+    removeAssociatedConfig,
+  });
+  if (outcome.removedProxyConfig) proxyConfigSignal.markChanged(true);
+  ruleSetSignal.markChanged();
   await reconcileTunAfterConfigMutation('subscription removal');
+  return outcome;
 }
 
 // ── Rule sets ──
 
-export async function listRuleSets(): Promise<RuleSetProfile[]> {
+export async function listRuleSets(): Promise<RuleSetSummary[]> {
   return invoke('rule_set_list');
 }
 
@@ -154,23 +179,41 @@ export async function getRuleSet(id: string): Promise<RuleSetProfile> {
 }
 
 export async function upsertRuleSet(input: RuleSetUpsert): Promise<RuleSetProfile> {
-  return invoke('rule_set_upsert', { input });
+  const result = await invoke<RuleSetProfile>('rule_set_upsert', { input });
+  ruleSetSignal.markChanged();
+  return result;
 }
 
 export async function removeRuleSet(id: string): Promise<void> {
-  return invoke('rule_set_remove', { id });
+  await invoke('rule_set_remove', { id });
+  ruleSetSignal.markChanged();
 }
 
 export async function updateRuleSet(id: string): Promise<RuleSetProfile> {
-  return invoke('rule_set_update', { id });
+  const result = await invoke<RuleSetProfile>('rule_set_update', { id });
+  ruleSetSignal.markChanged();
+  return result;
 }
 
 export async function updateAllRuleSets(): Promise<RuleSetSyncAllOutcome> {
-  return invoke('rule_set_update_all');
+  const result = await invoke<RuleSetSyncAllOutcome>('rule_set_update_all');
+  ruleSetSignal.markChanged();
+  return result;
+}
+
+export async function updateBuiltinRuleSets(): Promise<RuleSetSyncAllOutcome> {
+  const result = await invoke<RuleSetSyncAllOutcome>('rule_set_update_builtins');
+  ruleSetSignal.markChanged();
+  return result;
 }
 
 export async function getRuleSetKernelPayloads(): Promise<RuleSetKernelPayload[]> {
   return invoke('rule_set_kernel_payloads');
+}
+
+export async function getEffectiveRuleSetOptions(): Promise<EffectiveRuleSetOption[]> {
+  void ruleSetSignal.revision;
+  return invoke('rule_set_effective_options');
 }
 
 export async function getCommonRuleInjectionStatus(): Promise<CommonRuleInjectionStatus> {
@@ -178,9 +221,13 @@ export async function getCommonRuleInjectionStatus(): Promise<CommonRuleInjectio
 }
 
 export async function setCommonRuleInjectionEnabled(enabled: boolean): Promise<CommonRuleInjectionStatus> {
-  return invoke('rule_set_set_common_enabled', { enabled });
+  const result = await invoke<CommonRuleInjectionStatus>('rule_set_set_common_enabled', { enabled });
+  ruleSetSignal.markChanged();
+  return result;
 }
 
 export async function setCommonRuleBinding(input: CommonRuleBindingInput): Promise<RuleSetProfile> {
-  return invoke('rule_set_set_common_binding', { input });
+  const result = await invoke<RuleSetProfile>('rule_set_set_common_binding', { input });
+  ruleSetSignal.markChanged();
+  return result;
 }

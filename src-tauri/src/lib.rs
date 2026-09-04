@@ -375,16 +375,25 @@ pub fn run() {
     }
     crate::services::file_logger::line("lifecycle:   → app_state");
 
+    // 0 = running, 1 = graceful cleanup in progress, 2 = cleanup complete.
+    // The lifecycle fallback reads the same state after the event loop exits.
+    let shutdown_stage = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+
     // Register core-process shutdown guard: stop core on exit.
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
     let shutdown_flag = app_state.shutting_down_handle();
+    let fallback_shutdown_stage = shutdown_stage.clone();
     shutdown_coord.register(
         lifecycle::Phase::Runtime,
         "stop_core_process",
-        Box::new(|| {
+        Box::new(move || {
             // Explicitly kill the kernel so it exits with the GUI. Relying
             // on ManagedCoreProcess::Drop alone is unreliable — Drop may not
             // run (external kernel, or process exit without unwinding).
+            if fallback_shutdown_stage.load(std::sync::atomic::Ordering::SeqCst) == 2 {
+                eprintln!("[ZNet] shutdown: core already stopped gracefully");
+                return;
+            }
             eprintln!("[ZNet] shutdown: stopping core process");
             core_process::kill_core_default();
         }),
@@ -420,7 +429,7 @@ pub fn run() {
 
     crate::services::file_logger::line("runtime: entering register/runtime phase");
     // ── Phase 4–5: Register + Runtime (inside Tauri builder) ──
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(app_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -478,10 +487,17 @@ pub fn run() {
             gui_core_commands::gui_stack_status,
             gui_core_commands::gui_rule_status,
             gui_core_commands::gui_apply_config,
+            // DNS/Fake-IP is a client-global override applied to the effective Zero config.
+            gui_core_commands::gui_apply_dns_config,
             gui_core_commands::gui_validate_config,
+            gui_core_commands::gui_validate_dns_config,
+            gui_core_commands::gui_inspect_dns_effective_config,
             gui_core_commands::gui_set_mode,
             gui_core_commands::gui_probe_policy,
             gui_core_commands::gui_dns_lookup,
+            gui_core_commands::gui_dns_cache,
+            gui_core_commands::gui_fakeip_lookup,
+            gui_core_commands::gui_clear_fake_ip,
             gui_core_commands::gui_trace_route,
             gui_core_commands::gui_recent_connections,
             gui_core_commands::gui_sinks,
@@ -498,6 +514,9 @@ pub fn run() {
             proxy_mode_commands::gui_set_proxy_mode,
             app_config_commands::app_config_get,
             app_config_commands::app_config_update,
+            app_config_commands::app_config_apply_tun,
+            app_config_commands::app_config_export_kernel_settings,
+            app_config_commands::app_config_import_kernel_settings,
             app_update_commands::app_check_release,
             proxy_config_commands::proxy_config_list,
             proxy_config_commands::proxy_config_get,
@@ -510,6 +529,7 @@ pub fn run() {
             subscription_commands::subscription_upsert,
             subscription_commands::subscription_sync,
             subscription_commands::subscription_sync_all,
+            subscription_commands::subscription_remove_preview,
             subscription_commands::subscription_remove,
             rule_set_commands::rule_set_list,
             rule_set_commands::rule_set_get,
@@ -517,7 +537,9 @@ pub fn run() {
             rule_set_commands::rule_set_remove,
             rule_set_commands::rule_set_update,
             rule_set_commands::rule_set_update_all,
+            rule_set_commands::rule_set_update_builtins,
             rule_set_commands::rule_set_kernel_payloads,
+            rule_set_commands::rule_set_effective_options,
             rule_set_commands::rule_set_common_status,
             rule_set_commands::rule_set_set_common_enabled,
             rule_set_commands::rule_set_set_common_binding,
@@ -886,8 +908,36 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    let exit_shutdown_stage = shutdown_stage.clone();
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+            use std::sync::atomic::Ordering;
+
+            match exit_shutdown_stage.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => {
+                    api.prevent_exit();
+                    let cleanup_app = app_handle.clone();
+                    let cleanup_stage = exit_shutdown_stage.clone();
+                    tauri::async_runtime::spawn(async move {
+                        core_process::shutdown_managed_runtime(cleanup_app.clone()).await;
+                        cleanup_stage.store(2, Ordering::SeqCst);
+                        cleanup_app.exit(code.unwrap_or(0));
+                    });
+                }
+                Err(1) => {
+                    // Ignore repeated quit requests until TUN and the managed
+                    // child have both finished their first cleanup attempt.
+                    api.prevent_exit();
+                }
+                Err(_) => {
+                    // Stage 2 was set immediately before our own final exit.
+                }
+            }
+        }
+    });
 
     // ── Shutdown: runs after Tauri event loop exits ──
     lifecycle.shutdown();

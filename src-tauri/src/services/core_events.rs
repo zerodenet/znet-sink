@@ -64,6 +64,7 @@ pub fn start(
 
 const MIN_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
+const EVENT_RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn subscribe_and_forward_events(
     app: AppHandle,
@@ -102,15 +103,28 @@ fn subscribe_and_forward_events(
 
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
-            match receiver.blocking_recv() {
+            // Retiring a multiplexed connection does not close this receiver:
+            // this forwarder's connection handle keeps the broadcast sender
+            // alive. Poll both states so watchdog recovery actually rotates
+            // the event subscription instead of waiting forever on the old
+            // transport.
+            if !conn.is_alive() {
+                closed = true;
+                break;
+            }
+
+            match receiver.try_recv() {
                 Ok(event) => emit_core_event(&app, generation, event),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
                     // Slow consumer: some events were dropped. Keep going.
                     continue;
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
                     closed = true;
                     break;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    std::thread::sleep(EVENT_RECEIVER_POLL_INTERVAL);
                 }
             }
         }

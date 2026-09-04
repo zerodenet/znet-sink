@@ -8,10 +8,13 @@ use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::gui_core::{
-    GuiCapabilityEndpoint, GuiConfigImpactItem, GuiConfigPlanApplyResult, GuiConnection,
-    GuiConnectionCloseResult, GuiConnectionList, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability, GuiTargetProbeResult,
-    GuiTrafficStats, GuiZeroCapabilities,
+    GuiApiContractVersions, GuiCapabilityEndpoint, GuiCapabilityState, GuiConfigImpactItem,
+    GuiConfigPlanApplyResult, GuiConnection, GuiConnectionAddressFamilyFallback,
+    GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
+    GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
+    GuiConnectionSocketBinding, GuiContractVersionRange, GuiCoreHealth, GuiFakeIpClearResult,
+    GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult,
+    GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -113,6 +116,9 @@ pub fn parse_capabilities(value: &Value, error: Option<String>) -> GuiZeroCapabi
         available: error.is_none(),
         api_version: string_at(value, &["api_id", "api_version", "apiVersion"]),
         schema_version: string_at(value, &["schema_id", "schema_version", "schemaVersion"]),
+        contracts: parse_contract_versions(value),
+        error_codes: string_array_at(value, &["error_codes", "errorCodes"]),
+        global_limitations: string_array_at(value, &["global_limitations", "globalLimitations"]),
         features: string_array_at(value, &["features"]),
         permissions: string_array_at(value, &["permissions"]),
         adapters: endpoint_array_at(value, "adapters"),
@@ -120,6 +126,28 @@ pub fn parse_capabilities(value: &Value, error: Option<String>) -> GuiZeroCapabi
         protocols: protocol_array_at(value, "protocols"),
         build_features: string_array_at(value, &["build_features", "buildFeatures"]),
         error,
+    }
+}
+
+fn parse_contract_versions(value: &Value) -> Option<GuiApiContractVersions> {
+    let contracts = value.get("contracts")?;
+    Some(GuiApiContractVersions {
+        capabilities: parse_contract_version_range(contracts, &["capabilities"]),
+        control_api: parse_contract_version_range(contracts, &["control_api", "controlApi"]),
+        config_schema: parse_contract_version_range(contracts, &["config_schema", "configSchema"]),
+        error_codes: parse_contract_version_range(contracts, &["error_codes", "errorCodes"]),
+    })
+}
+
+fn parse_contract_version_range(value: &Value, keys: &[&str]) -> GuiContractVersionRange {
+    let range = keys.iter().find_map(|key| value.get(*key));
+    GuiContractVersionRange {
+        current: range
+            .and_then(|range| u64_at(range, &["current"]))
+            .unwrap_or(0),
+        minimum_supported: range
+            .and_then(|range| u64_at(range, &["minimum_supported", "minimumSupported"]))
+            .unwrap_or(0),
     }
 }
 
@@ -301,6 +329,9 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
     let route = nested_value(value, &["route"]);
     let result = nested_value(value, &["result"]);
     let failure = result.and_then(|result| nested_value(result, &["failure"]));
+    let network_context = path
+        .and_then(|path| path.get("network").or_else(|| path.get("networkContext")))
+        .and_then(parse_connection_network_context);
     let remote = path
         .and_then(|path| nested_value(path, &["remote"]))
         .or_else(|| failure.and_then(|failure| nested_value(failure, &["remote"])));
@@ -367,6 +398,11 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
             })
         }),
         target_port: port,
+        original_ip: target.and_then(|target| string_at(target, &["original_ip", "originalIp"])),
+        host_source: target.and_then(|target| string_at(target, &["host_source", "hostSource"])),
+        fake_ip_reverse_status: target.and_then(|target| {
+            string_at(target, &["fake_ip_reverse_status", "fakeIpReverseStatus"])
+        }),
         sniffed_host: target.and_then(|target| string_at(target, &["sniffed_host", "sniffedHost"])),
         inbound_tag: inbound
             .and_then(|inbound| string_at(inbound, &["tag", "protocol"]))
@@ -376,7 +412,12 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
             .and_then(|outbound| string_at(outbound, &["tag", "protocol"]))
             .or_else(|| string_at(value, &["outbound_tag", "outboundTag"])),
         outbound_protocol: outbound.and_then(|outbound| string_at(outbound, &["protocol", "type"])),
-        remote_destination: endpoint_display(remote_host.as_deref(), remote_port),
+        remote_destination: endpoint_display(remote_host.as_deref(), remote_port).or_else(|| {
+            network_context
+                .as_ref()
+                .and_then(|network| network.remote_address.clone())
+        }),
+        network_context,
         policy_tag: nested_value(value, &["policy"])
             .and_then(|policy| string_at(policy, &["tag", "policy_tag", "policyTag"]))
             .or_else(|| route.and_then(|route| string_at(route, &["target"])))
@@ -453,6 +494,159 @@ pub fn parse_connection(value: &Value) -> Option<GuiConnection> {
     })
 }
 
+fn parse_connection_network_context(value: &Value) -> Option<GuiConnectionNetworkContext> {
+    value.as_object()?;
+    let resolved_candidates = value
+        .get("resolved_candidates")
+        .or_else(|| value.get("resolvedCandidates"))
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(parse_network_address).collect())
+        .unwrap_or_default();
+    let connection_attempts = value
+        .get("connection_attempts")
+        .or_else(|| value.get("connectionAttempts"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|attempt| {
+                    let remote_address = attempt
+                        .get("remote_address")
+                        .or_else(|| attempt.get("remoteAddress"))
+                        .and_then(parse_network_address)?;
+                    Some(crate::models::gui_core::GuiConnectionAttempt {
+                        remote_address,
+                        local_address: attempt
+                            .get("local_address")
+                            .or_else(|| attempt.get("localAddress"))
+                            .and_then(parse_network_address),
+                        stage: string_at(attempt, &["stage"]).unwrap_or_default(),
+                        outcome: string_at(attempt, &["outcome"]).unwrap_or_default(),
+                        interface_bound: bool_at(attempt, &["interface_bound", "interfaceBound"])
+                            .unwrap_or(false),
+                        error_kind: string_at(attempt, &["error_kind", "errorKind"]),
+                        os_error: attempt
+                            .get("os_error")
+                            .or_else(|| attempt.get("osError"))
+                            .and_then(Value::as_i64),
+                        error: string_at(attempt, &["error"]),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let selected_interface = value
+        .get("selected_interface")
+        .or_else(|| value.get("selectedInterface"))
+        .and_then(parse_network_interface);
+    let egress = value.get("egress").and_then(|egress| {
+        egress.as_object()?;
+        Some(GuiConnectionEgressContext {
+            generation: u64_at(egress, &["generation"]),
+            address_family: string_at(egress, &["address_family", "addressFamily"]),
+            tun_active: bool_at(egress, &["tun_active", "tunActive"]),
+            configured_interface: egress
+                .get("configured_interface")
+                .or_else(|| egress.get("configuredInterface"))
+                .and_then(parse_network_interface),
+            unavailable_reason: string_at(egress, &["unavailable_reason", "unavailableReason"]),
+        })
+    });
+    let route_lookup = value
+        .get("route_lookup")
+        .or_else(|| value.get("routeLookup"))
+        .and_then(|lookup| {
+            lookup.as_object()?;
+            Some(GuiConnectionRouteLookup {
+                status: string_at(lookup, &["status"]),
+                source_address: string_at(lookup, &["source_address", "sourceAddress"]),
+                error: string_at(lookup, &["error"]),
+            })
+        });
+    let socket_binding = value
+        .get("socket_binding")
+        .or_else(|| value.get("socketBinding"))
+        .and_then(|binding| {
+            binding.as_object()?;
+            Some(GuiConnectionSocketBinding {
+                mode: string_at(binding, &["mode"]),
+                reason: string_at(binding, &["reason"]),
+                interface_bound: bool_at(binding, &["interface_bound", "interfaceBound"]),
+            })
+        });
+    let address_family_fallback = value
+        .get("address_family_fallback")
+        .or_else(|| value.get("addressFamilyFallback"))
+        .and_then(|fallback| {
+            fallback.as_object()?;
+            let fallback = GuiConnectionAddressFamilyFallback {
+                from: string_at(fallback, &["from"]),
+                to: string_at(fallback, &["to"]),
+                reason: string_at(fallback, &["reason"]),
+                trigger_egress_generation: u64_at(
+                    fallback,
+                    &["trigger_egress_generation", "triggerEgressGeneration"],
+                ),
+                unavailable_reason: string_at(
+                    fallback,
+                    &["unavailable_reason", "unavailableReason"],
+                ),
+            };
+            let populated = fallback.from.is_some()
+                || fallback.to.is_some()
+                || fallback.reason.is_some()
+                || fallback.trigger_egress_generation.is_some()
+                || fallback.unavailable_reason.is_some();
+            populated.then_some(fallback)
+        });
+
+    let context = GuiConnectionNetworkContext {
+        local_address: value
+            .get("local_address")
+            .or_else(|| value.get("localAddress"))
+            .and_then(parse_network_address),
+        remote_address: value
+            .get("remote_address")
+            .or_else(|| value.get("remoteAddress"))
+            .and_then(parse_network_address),
+        resolved_candidates,
+        connection_attempts,
+        address_family_policy: string_at(value, &["address_family_policy", "addressFamilyPolicy"]),
+        address_family_fallback,
+        selected_interface,
+        egress,
+        route_lookup,
+        socket_binding,
+        connect_stage: string_at(value, &["connect_stage", "connectStage"]),
+    };
+
+    let populated = context.local_address.is_some()
+        || context.remote_address.is_some()
+        || !context.resolved_candidates.is_empty()
+        || !context.connection_attempts.is_empty()
+        || context.address_family_policy.is_some()
+        || context.address_family_fallback.is_some()
+        || context.selected_interface.is_some()
+        || context.egress.is_some()
+        || context.route_lookup.is_some()
+        || context.socket_binding.is_some()
+        || context.connect_stage.is_some();
+    populated.then_some(context)
+}
+
+fn parse_network_interface(value: &Value) -> Option<GuiConnectionNetworkInterface> {
+    Some(GuiConnectionNetworkInterface {
+        name: string_at(value, &["name"])?,
+        index: u64_at(value, &["index"]),
+    })
+}
+
+fn parse_network_address(value: &Value) -> Option<String> {
+    let host = string_at(value, &["host", "address", "ip", "value"]);
+    let port = u64_at(value, &["port"]);
+    endpoint_display(host.as_deref(), port)
+}
+
 fn endpoint_display(host: Option<&str>, port: Option<u64>) -> Option<String> {
     match (host, port) {
         (Some(host), Some(port)) if host.contains(':') => Some(format!("[{host}]:{port}")),
@@ -468,6 +662,22 @@ pub fn parse_connection_close(value: &Value, flow_id: String) -> GuiConnectionCl
         flow_id: string_at(value, &["flow_id", "flowId"]).unwrap_or(flow_id),
         closed: bool_at(value, &["closed"]).unwrap_or(true),
         message: string_at(value, &["message"]),
+    }
+}
+
+pub fn parse_fake_ip_clear(value: &Value) -> GuiFakeIpClearResult {
+    let result = nested_value(value, &["result"]).unwrap_or(value);
+    GuiFakeIpClearResult {
+        core_instance_id: string_at(result, &["core_instance_id", "coreInstanceId"]),
+        config_revision: u64_at(result, &["config_revision", "configRevision"]),
+        enabled: bool_at(result, &["enabled"]).unwrap_or(false),
+        scope: string_at(result, &["scope"]).unwrap_or_else(|| "all".to_string()),
+        domain: string_at(result, &["domain"]),
+        ip: string_at(result, &["ip"]),
+        removed_mappings: u64_at(result, &["removed_mappings", "removedMappings"]).unwrap_or(0),
+        removed_addresses: u64_at(result, &["removed_addresses", "removedAddresses"]).unwrap_or(0),
+        live_mappings: u64_at(result, &["live_mappings", "liveMappings"]).unwrap_or(0),
+        retired_addresses: u64_at(result, &["retired_addresses", "retiredAddresses"]).unwrap_or(0),
     }
 }
 
@@ -678,21 +888,79 @@ fn protocol_array_at(value: &Value, key: &str) -> Vec<GuiProtocolCapability> {
             items
                 .iter()
                 .filter_map(|item| {
+                    let inbound_tcp_state = protocol_capability_state(
+                        item,
+                        &["inbound", "tcp"],
+                        &["inbound_tcp", "inboundTcp"],
+                    );
+                    let inbound_udp_state = protocol_capability_state(
+                        item,
+                        &["inbound", "udp"],
+                        &["inbound_udp", "inboundUdp"],
+                    );
+                    let outbound_tcp_state = protocol_capability_state(
+                        item,
+                        &["outbound", "tcp"],
+                        &["outbound_tcp", "outboundTcp"],
+                    );
+                    let outbound_udp_state = protocol_capability_state(
+                        item,
+                        &["outbound", "udp"],
+                        &["outbound_udp", "outboundUdp"],
+                    );
+                    let mux_state = protocol_capability_state(item, &["mux"], &["mux"]);
                     Some(GuiProtocolCapability {
                         name: string_at(item, &["name", "protocol"])?,
                         status: string_at(item, &["status"])
                             .unwrap_or_else(|| "supported".to_string()),
-                        inbound_tcp: bool_at(item, &["inbound_tcp", "inboundTcp"]).unwrap_or(false),
-                        inbound_udp: bool_at(item, &["inbound_udp", "inboundUdp"]).unwrap_or(false),
-                        outbound_tcp: bool_at(item, &["outbound_tcp", "outboundTcp"])
-                            .unwrap_or(false),
-                        outbound_udp: bool_at(item, &["outbound_udp", "outboundUdp"])
-                            .unwrap_or(false),
-                        mux: bool_at(item, &["mux"]).unwrap_or(false),
+                        inbound_tcp: inbound_tcp_state.supported,
+                        inbound_udp: inbound_udp_state.supported,
+                        outbound_tcp: outbound_tcp_state.supported,
+                        outbound_udp: outbound_udp_state.supported,
+                        mux: mux_state.supported,
+                        inbound_tcp_state,
+                        inbound_udp_state,
+                        outbound_tcp_state,
+                        outbound_udp_state,
+                        mux_state,
                         limitations: string_array_at(item, &["limitations"]),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn protocol_capability_state(
+    item: &Value,
+    nested_path: &[&str],
+    legacy_keys: &[&str],
+) -> GuiCapabilityState {
+    if let Some(state) = nested_value(item, nested_path).filter(|value| value.is_object()) {
+        let supported = bool_at(state, &["supported"]).unwrap_or(false);
+        return GuiCapabilityState {
+            supported,
+            level: string_at(state, &["level"]).unwrap_or_else(|| {
+                if supported {
+                    "supported"
+                } else {
+                    "unsupported"
+                }
+                .to_string()
+            }),
+            notes: string_array_at(state, &["notes"]),
+        };
+    }
+
+    let supported = bool_at(item, legacy_keys).unwrap_or(false);
+    GuiCapabilityState {
+        supported,
+        level: if supported {
+            "supported"
+        } else {
+            "unsupported"
+        }
+        .to_string(),
+        notes: Vec::new(),
+    }
 }

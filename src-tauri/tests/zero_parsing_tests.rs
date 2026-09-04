@@ -170,16 +170,28 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     let caps = parsing::parse_capabilities(
         &json!({
             "api_id": "zero.api.v1",
+            "contracts": {
+                "capabilities": { "current": 1, "minimum_supported": 1 },
+                "control_api": { "current": 1, "minimum_supported": 1 },
+                "config_schema": { "current": 1, "minimum_supported": 1 },
+                "error_codes": { "current": 1, "minimum_supported": 1 }
+            },
+            "error_codes": ["invalid_argument", "unsupported"],
+            "global_limitations": ["tun_nat64_unsupported"],
             "build_features": ["tun", "quic"],
             "protocols": [
                 {
-                    "name": "shadowsocks",
+                    "protocol": "shadowsocks",
                     "status": "supported",
-                    "inbound_tcp": true,
-                    "inbound_udp": true,
-                    "outbound_tcp": true,
-                    "outbound_udp": true,
-                    "mux": true,
+                    "inbound": {
+                        "tcp": { "supported": true, "level": "supported", "notes": [] },
+                        "udp": { "supported": true, "level": "experimental", "notes": ["udp_note"] }
+                    },
+                    "outbound": {
+                        "tcp": { "supported": true, "level": "supported", "notes": [] },
+                        "udp": { "supported": true, "level": "supported", "notes": [] }
+                    },
+                    "mux": { "supported": true, "level": "partial", "notes": ["mux_note"] },
                     "limitations": []
                 },
                 {
@@ -196,6 +208,11 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
         None,
     );
 
+    let contracts = caps.contracts.as_ref().expect("V1 contracts");
+    assert_eq!(contracts.capabilities.current, 1);
+    assert_eq!(contracts.control_api.minimum_supported, 1);
+    assert_eq!(caps.error_codes, vec!["invalid_argument", "unsupported"]);
+    assert_eq!(caps.global_limitations, vec!["tun_nat64_unsupported"]);
     assert_eq!(caps.build_features, vec!["tun", "quic"]);
     assert_eq!(caps.protocols.len(), 2);
     assert_eq!(caps.protocols[0].name, "shadowsocks");
@@ -205,6 +222,9 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     assert!(caps.protocols[0].outbound_tcp);
     assert!(caps.protocols[0].outbound_udp);
     assert!(caps.protocols[0].mux);
+    assert_eq!(caps.protocols[0].inbound_udp_state.level, "experimental");
+    assert_eq!(caps.protocols[0].inbound_udp_state.notes, vec!["udp_note"]);
+    assert_eq!(caps.protocols[0].mux_state.level, "partial");
     assert_eq!(caps.protocols[1].name, "vmess");
     assert_eq!(caps.protocols[1].status, "partial");
     assert!(caps.protocols[1].inbound_tcp);
@@ -212,6 +232,31 @@ fn parse_capabilities_maps_protocol_matrix_and_build_features() {
     assert!(caps.protocols[1].outbound_tcp);
     assert!(!caps.protocols[1].outbound_udp);
     assert_eq!(caps.protocols[1].limitations, vec!["no_udp_relay"]);
+}
+
+#[test]
+fn parse_capabilities_keeps_legacy_flat_protocol_compatibility() {
+    let caps = parsing::parse_capabilities(
+        &json!({
+            "protocols": [{
+                "name": "legacy",
+                "inbound_tcp": true,
+                "inbound_udp": false,
+                "outbound_tcp": true,
+                "outbound_udp": false,
+                "mux": true
+            }]
+        }),
+        None,
+    );
+
+    assert!(caps.contracts.is_none());
+    assert!(caps.error_codes.is_empty());
+    assert!(caps.global_limitations.is_empty());
+    assert!(caps.protocols[0].inbound_tcp);
+    assert!(!caps.protocols[0].inbound_udp);
+    assert!(caps.protocols[0].mux);
+    assert_eq!(caps.protocols[0].mux_state.level, "supported");
 }
 
 #[test]
@@ -285,7 +330,7 @@ fn unwrap_core_envelope_rejects_ok_false() {
     }))
     .unwrap_err();
 
-    assert_eq!(err.code, "core_error");
+    assert_eq!(err.code, "not_found");
 }
 
 #[test]
@@ -351,6 +396,58 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
             "path": {
                 "outbound": { "tag": "US-Lite", "protocol": "vmess" },
                 "remote": { "host": "8.163.113.57", "port": 443 },
+                "network": {
+                    "local_address": { "host": "192.168.50.10", "port": 52864 },
+                    "remote_address": { "host": "17.57.147.6", "port": 5223 },
+                    "resolved_candidates": [
+                        { "host": "17.57.147.6", "port": 5223 },
+                        { "host": "17.57.147.7", "port": 5223 }
+                    ],
+                    "connection_attempts": [
+                        {
+                            "remote_address": { "host": "17.57.147.6", "port": 5223 },
+                            "local_address": { "host": "192.168.50.10", "port": 52864 },
+                            "stage": "connect",
+                            "outcome": "failed",
+                            "interface_bound": true,
+                            "error_kind": "connection_refused",
+                            "os_error": 10061,
+                            "error": "connection refused"
+                        },
+                        {
+                            "remote_address": { "host": "17.57.147.7", "port": 5223 },
+                            "stage": "connect",
+                            "outcome": "connected",
+                            "interface_bound": true
+                        }
+                    ],
+                    "address_family_policy": "prefer_ipv4",
+                    "address_family_fallback": {
+                        "from": "ipv6",
+                        "to": "ipv4",
+                        "reason": "tun_ipv6_egress_unavailable",
+                        "trigger_egress_generation": 9,
+                        "unavailable_reason": "physical IPv6 route unavailable"
+                    },
+                    "selected_interface": { "name": "Ethernet", "index": 12 },
+                    "egress": {
+                        "generation": 9,
+                        "address_family": "ipv4",
+                        "tun_active": true,
+                        "configured_interface": { "name": "Ethernet", "index": 12 },
+                        "unavailable_reason": "route lease unavailable"
+                    },
+                    "route_lookup": {
+                        "status": "resolved",
+                        "source_address": "192.168.50.10"
+                    },
+                    "socket_binding": {
+                        "mode": "system",
+                        "reason": "tun_egress_unavailable",
+                        "interface_bound": false
+                    },
+                    "connect_stage": "select_egress"
+                },
                 "relay_chain": [
                     { "tag": "entry", "protocol": "shadowsocks" },
                     { "tag": "US-Lite", "protocol": "vmess" }
@@ -398,6 +495,65 @@ fn parse_connection_preserves_canonical_lifecycle_record() {
     assert_eq!(conn.selection_chain, vec!["Proxy", "US-Lite"]);
     assert_eq!(conn.relay_chain, vec!["entry", "US-Lite"]);
     assert_eq!(conn.remote_destination.as_deref(), Some("8.163.113.57:443"));
+    let network = conn.network_context.expect("network context");
+    assert_eq!(
+        network.local_address.as_deref(),
+        Some("192.168.50.10:52864")
+    );
+    assert_eq!(network.remote_address.as_deref(), Some("17.57.147.6:5223"));
+    assert_eq!(network.resolved_candidates.len(), 2);
+    assert_eq!(network.connection_attempts.len(), 2);
+    assert_eq!(network.connection_attempts[0].outcome, "failed");
+    assert_eq!(network.connection_attempts[0].os_error, Some(10061));
+    assert_eq!(
+        network.connection_attempts[1].remote_address,
+        "17.57.147.7:5223"
+    );
+    assert_eq!(
+        network.address_family_policy.as_deref(),
+        Some("prefer_ipv4")
+    );
+    let fallback = network
+        .address_family_fallback
+        .as_ref()
+        .expect("address family fallback");
+    assert_eq!(fallback.from.as_deref(), Some("ipv6"));
+    assert_eq!(fallback.to.as_deref(), Some("ipv4"));
+    assert_eq!(
+        fallback.reason.as_deref(),
+        Some("tun_ipv6_egress_unavailable")
+    );
+    assert_eq!(fallback.trigger_egress_generation, Some(9));
+    assert_eq!(
+        fallback.unavailable_reason.as_deref(),
+        Some("physical IPv6 route unavailable")
+    );
+    assert_eq!(
+        network
+            .selected_interface
+            .as_ref()
+            .map(|item| item.name.as_str()),
+        Some("Ethernet")
+    );
+    assert_eq!(
+        network.egress.as_ref().and_then(|item| item.tun_active),
+        Some(true)
+    );
+    assert_eq!(
+        network
+            .egress
+            .as_ref()
+            .and_then(|item| item.unavailable_reason.as_deref()),
+        Some("route lease unavailable")
+    );
+    assert_eq!(
+        network
+            .socket_binding
+            .as_ref()
+            .and_then(|item| item.interface_bound),
+        Some(false)
+    );
+    assert_eq!(network.connect_stage.as_deref(), Some("select_egress"));
     assert_eq!(conn.failure_stage.as_deref(), Some("relay"));
     assert_eq!(conn.failure_code.as_deref(), Some("io"));
     assert_eq!(conn.bytes_up, 12294);
@@ -413,6 +569,24 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
             "flow_id": "flow-1",
             "network": "tcp",
             "target": { "host": "example.com", "port": 443 },
+            "path": {
+                "network": {
+                    "address_family_policy": "prefer_ipv6",
+                    "address_family_fallback": {
+                        "from": "ipv6",
+                        "to": "ipv4",
+                        "reason": "tun_ipv6_egress_unavailable",
+                        "trigger_egress_generation": 4
+                    },
+                    "egress": {
+                        "generation": 4,
+                        "address_family": "ipv4",
+                        "tun_active": false,
+                        "unavailable_reason": "tun inactive"
+                    },
+                    "connect_stage": "select_egress"
+                }
+            },
             "traffic": { "bytes_up": 10, "bytes_down": 20 }
         }
     }));
@@ -423,6 +597,23 @@ fn boxed_connection_event_preserves_the_gui_json_contract() {
     assert_eq!(
         wire["payload"]["data"]["destination"],
         json!("example.com:443")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["connectStage"],
+        json!("select_egress")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["egress"]["tunActive"],
+        json!(false)
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["addressFamilyPolicy"],
+        json!("prefer_ipv6")
+    );
+    assert_eq!(
+        wire["payload"]["data"]["networkContext"]["addressFamilyFallback"]
+            ["triggerEgressGeneration"],
+        json!(4)
     );
 
     let GuiEventData::Connection(connection) = event.payload else {
@@ -598,7 +789,7 @@ fn unwrap_query_variant_rejects_ok_false() {
     )
     .unwrap_err();
 
-    assert_eq!(err.code, "core_error");
+    assert_eq!(err.code, "not_found");
 }
 
 #[test]

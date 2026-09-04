@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{BufRead, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -41,15 +41,19 @@ struct KernelInstallWorkspace {
 impl KernelInstallWorkspace {
     fn create() -> AppResult<Self> {
         let parent = data_dir()?.join("kernel-install");
-        fs::create_dir_all(&parent)
-            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace: {e}")))?;
+        fs::create_dir_all(&parent).map_err(|e| {
+            AppError::internal(format!("failed to create kernel install workspace: {e}"))
+        })?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace id: {e}")))?
+            .map_err(|e| {
+                AppError::internal(format!("failed to create kernel install workspace id: {e}"))
+            })?
             .as_nanos();
         let root = parent.join(format!("{}-{nonce}", std::process::id()));
-        fs::create_dir(&root)
-            .map_err(|e| AppError::internal(format!("failed to create kernel install workspace: {e}")))?;
+        fs::create_dir(&root).map_err(|e| {
+            AppError::internal(format!("failed to create kernel install workspace: {e}"))
+        })?;
         Ok(Self { root })
     }
 }
@@ -83,6 +87,13 @@ pub fn list_available_versions() -> AppResult<KernelVersionList> {
         .send()
         .map_err(|e| AppError::internal(format!("failed to fetch releases: {e}")))?;
 
+    if !resp.status().is_success() {
+        return Err(AppError::internal(format!(
+            "failed to fetch releases: HTTP {}",
+            resp.status()
+        )));
+    }
+
     let mut body = String::new();
     resp.read_to_string(&mut body)
         .map_err(|e| AppError::internal(format!("failed to read releases response: {e}")))?;
@@ -93,7 +104,7 @@ pub fn list_available_versions() -> AppResult<KernelVersionList> {
     let platform_asset = platform_asset_name();
     let mut versions: Vec<KernelRelease> = releases_json
         .into_iter()
-        .filter_map(|release| parse_release(&client, &release, platform_asset))
+        .filter_map(|release| parse_release(&release, platform_asset))
         .collect();
 
     versions.sort_by(|a, b| {
@@ -137,6 +148,16 @@ pub fn install_version(
     let temp_file = workspace.root.join(format!("zero-download.{ext}"));
 
     let client = build_http_client()?;
+    // Version listing is metadata-only. Resolve the checksum lazily for the
+    // single release the user actually installs instead of issuing one extra
+    // network request per release while opening the version manager.
+    let expected_sha256 = match expected_sha256
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(value),
+        None => fetch_checksum_for_download(&client, &download_url, platform_asset_name())?,
+    };
 
     let _ = crate::services::logs::append_entry(
         &app.state::<crate::state::app_state::AppState>(),
@@ -169,6 +190,21 @@ pub fn install_version(
         );
         AppError::internal(msg)
     })?;
+
+    if !response.status().is_success() {
+        let msg = format!(
+            "内核下载失败: HTTP {}（请检查版本资产和网络访问权限）",
+            response.status()
+        );
+        let _ = crate::services::logs::append_entry(
+            &app.state::<crate::state::app_state::AppState>(),
+            LogSource::App,
+            LogLevel::Error,
+            msg.clone(),
+            None,
+        );
+        return Err(AppError::internal(msg));
+    }
 
     let bytes_total = response
         .headers()
@@ -342,12 +378,8 @@ pub fn install_version(
     // example Windows `wintun.dll`) instead of deleting them with staging.
     // The core release remains the authority for which companions exist and
     // where they come from; ZNet-Sink only preserves the published bundle.
-    let companions = install_runtime_companions(
-        &staged_bundle_dir,
-        &dir,
-        executable_name,
-        &bundle_files,
-    )?;
+    let companions =
+        install_runtime_companions(&staged_bundle_dir, &dir, executable_name, &bundle_files)?;
     if !companions.is_empty() {
         let _ = crate::services::logs::append_entry(
             state.inner(),
@@ -495,7 +527,6 @@ fn extract_semver(raw: &str) -> Option<String> {
 }
 
 fn parse_release(
-    client: &reqwest::blocking::Client,
     release: &serde_json::Value,
     platform_asset: &'static str,
 ) -> Option<KernelRelease> {
@@ -525,8 +556,6 @@ fn parse_release(
 
     let release_notes_url = release["html_url"].as_str().map(|s| s.to_string());
 
-    let checksum_sha256 = fetch_checksums(client, assets, platform_asset);
-
     Some(KernelRelease {
         version,
         channel,
@@ -535,7 +564,9 @@ fn parse_release(
         asset_size_bytes,
         asset_download_url,
         release_notes_url,
-        checksum_sha256,
+        // Keep the wire shape compatible, but do not fetch checksums while
+        // listing releases. install_version resolves this lazily instead.
+        checksum_sha256: None,
     })
 }
 
@@ -573,29 +604,52 @@ fn platform_asset_name() -> &'static str {
     }
 }
 
-fn fetch_checksums(
+fn fetch_checksum_for_download(
     client: &reqwest::blocking::Client,
-    assets: &[serde_json::Value],
+    download_url: &str,
     platform_asset: &str,
-) -> Option<String> {
-    let checksums_url = assets.iter().find(|a| {
-        a["name"]
-            .as_str()
-            .map(|n| n == "checksums.txt")
-            .unwrap_or(false)
-    })?["browser_download_url"]
-        .as_str()?;
+) -> AppResult<Option<String>> {
+    let Some((release_root, _)) = download_url.rsplit_once('/') else {
+        return Ok(None);
+    };
+    // Current releases publish one checksum sidecar per asset. Keep the
+    // aggregate manifest as a fallback for older releases.
+    let checksum_urls = [
+        format!("{download_url}.sha256"),
+        format!("{release_root}/checksums.txt"),
+    ];
+    for checksum_url in checksum_urls {
+        let Ok(mut response) = client.get(&checksum_url).send() else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
 
-    let mut resp = client.get(checksums_url).send().ok()?;
-    let mut body = String::new();
-    resp.read_to_string(&mut body).ok()?;
+        let mut body = String::new();
+        if response.read_to_string(&mut body).is_err() {
+            continue;
+        }
+        if let Some(hash) = parse_checksum(&body, platform_asset) {
+            return Ok(Some(hash));
+        }
+    }
+    Ok(None)
+}
 
-    let reader = std::io::BufReader::new(body.as_bytes());
-    for line in reader.lines().map_while(Result::ok) {
-        let line = line.trim();
-        if line.contains(platform_asset) {
-            let hash = line.split_whitespace().next()?;
-            return Some(hash.to_string());
+fn parse_checksum(body: &str, platform_asset: &str) -> Option<String> {
+    for line in body.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let file_name = fields
+            .next()
+            .map(|value| value.trim_start_matches('*'))
+            .unwrap_or("");
+        let valid_hash = hash.len() == 64 && hash.chars().all(|ch| ch.is_ascii_hexdigit());
+        if valid_hash && (file_name.is_empty() || file_name == platform_asset) {
+            return Some(hash.to_ascii_lowercase());
         }
     }
     None
@@ -652,17 +706,21 @@ fn find_file_recursive(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn collect_runtime_bundle_files(bundle_dir: &Path, executable_name: &str) -> AppResult<Vec<String>> {
+fn collect_runtime_bundle_files(
+    bundle_dir: &Path,
+    executable_name: &str,
+) -> AppResult<Vec<String>> {
     let entries = fs::read_dir(bundle_dir)
         .map_err(|e| AppError::internal(format!("failed to read kernel runtime bundle: {e}")))?;
     let mut files = BTreeSet::new();
 
     for entry in entries {
-        let entry = entry
-            .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime bundle: {e}")))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime file: {e}")))?;
+        let entry = entry.map_err(|e| {
+            AppError::internal(format!("failed to inspect kernel runtime bundle: {e}"))
+        })?;
+        let file_type = entry.file_type().map_err(|e| {
+            AppError::internal(format!("failed to inspect kernel runtime file: {e}"))
+        })?;
         if !file_type.is_file() {
             continue;
         }
@@ -671,7 +729,9 @@ fn collect_runtime_bundle_files(bundle_dir: &Path, executable_name: &str) -> App
             .file_name()
             .to_str()
             .map(str::to_string)
-            .ok_or_else(|| AppError::internal("kernel runtime bundle contains a non-UTF-8 file name"))?;
+            .ok_or_else(|| {
+                AppError::internal("kernel runtime bundle contains a non-UTF-8 file name")
+            })?;
         if file_name == RUNTIME_MANIFEST_FILE {
             return Err(AppError::internal(format!(
                 "kernel runtime bundle uses reserved file name '{}'",
@@ -696,8 +756,9 @@ fn read_runtime_manifest(install_dir: &Path) -> AppResult<BTreeSet<String>> {
     if !path.exists() {
         return Ok(BTreeSet::new());
     }
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|e| AppError::internal(format!("failed to inspect kernel runtime manifest: {e}")))?;
+    let metadata = fs::symlink_metadata(&path).map_err(|e| {
+        AppError::internal(format!("failed to inspect kernel runtime manifest: {e}"))
+    })?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
         return Err(AppError::internal(format!(
             "kernel runtime manifest path is not a regular file: {}",
@@ -723,8 +784,9 @@ fn read_runtime_manifest(install_dir: &Path) -> AppResult<BTreeSet<String>> {
 
 fn write_runtime_manifest(install_dir: &Path, files: &BTreeSet<String>) -> AppResult<()> {
     let path = install_dir.join(RUNTIME_MANIFEST_FILE);
-    let payload = serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>())
-        .map_err(|e| AppError::internal(format!("failed to serialize kernel runtime manifest: {e}")))?;
+    let payload = serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>()).map_err(|e| {
+        AppError::internal(format!("failed to serialize kernel runtime manifest: {e}"))
+    })?;
     fs::write(&path, payload)
         .map_err(|e| AppError::internal(format!("failed to write kernel runtime manifest: {e}")))?;
     Ok(())
@@ -744,8 +806,9 @@ fn validate_runtime_bundle_targets(
         if !target.exists() {
             continue;
         }
-        let metadata = fs::symlink_metadata(&target)
-            .map_err(|e| AppError::internal(format!("failed to inspect '{}': {e}", target.display())))?;
+        let metadata = fs::symlink_metadata(&target).map_err(|e| {
+            AppError::internal(format!("failed to inspect '{}': {e}", target.display()))
+        })?;
         if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
             return Err(runtime_file_conflict(&target));
         }
@@ -756,7 +819,8 @@ fn validate_runtime_bundle_targets(
         }
 
         let tracked = previous_managed_files.contains(file_name);
-        let legacy_binary = file_name == executable_name && (managed_default_dir || target_is_current_core);
+        let legacy_binary =
+            file_name == executable_name && (managed_default_dir || target_is_current_core);
         let legacy_companion = known_legacy_runtime_companion(file_name)
             && (managed_default_dir || target_is_current_core);
         if tracked || legacy_binary || legacy_companion {
@@ -974,6 +1038,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_checksum_for_exact_platform_asset() {
+        let hash = "a".repeat(64);
+        let other_hash = "b".repeat(64);
+        let body =
+            format!("{other_hash}  zero-linux-x86_64.tar.gz\n{hash} *zero-darwin-aarch64.tar.gz\n");
+        assert_eq!(
+            parse_checksum(&body, "zero-darwin-aarch64.tar.gz"),
+            Some(hash)
+        );
+    }
+
+    #[test]
+    fn parses_checksum_sidecar_with_asset_name() {
+        let hash = "c".repeat(64);
+        let body = format!("{hash}  zero-darwin-x86_64.tar.gz\n");
+        assert_eq!(
+            parse_checksum(&body, "zero-darwin-x86_64.tar.gz"),
+            Some(hash)
+        );
+    }
+
+    #[test]
     fn preserves_runtime_companions_from_the_binary_directory() {
         let (root, bundle, install) = temp_runtime_dirs("bundle");
         fs::write(bundle.join("zero.exe"), b"exe").unwrap();
@@ -984,7 +1070,10 @@ mod tests {
         let installed =
             install_runtime_companions(&bundle, &install, "zero.exe", &bundle_files).unwrap();
 
-        assert_eq!(installed, vec!["NOTICE.txt".to_string(), "wintun.dll".to_string()]);
+        assert_eq!(
+            installed,
+            vec!["NOTICE.txt".to_string(), "wintun.dll".to_string()]
+        );
         assert_eq!(fs::read(install.join("wintun.dll")).unwrap(), b"dll");
         assert_eq!(fs::read(install.join("NOTICE.txt")).unwrap(), b"notice");
         assert!(!install.join("zero.exe").exists());

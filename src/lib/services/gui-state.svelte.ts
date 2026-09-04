@@ -47,6 +47,9 @@ class GuiStateStore {
   coreOverview = $state<CoreOverview | null>(null);
   policyGroups = $state<PolicyGroup[]>([]);
   tunStatus = $state<GuiManagedTunStatus | null>(null);
+  tunStatusError = $state<string | null>(null);
+  private savedTunEnabled = $state<boolean | undefined>(undefined);
+  private tunStatusRefreshGate = createLatestRequestGate();
   configNodes = $state<ConfigProxyNode[]>([]);
   configPolicyGroups = $state<PolicyGroup[]>([]);
   networkProbe = $state<NetworkProbeResult | null>(null);
@@ -269,11 +272,23 @@ class GuiStateStore {
   }
 
   async refreshTunStatus() {
+    const request = this.tunStatusRefreshGate.begin();
     try {
-      this.tunStatus = await getGuiTunStatus();
+      const status = await getGuiTunStatus();
+      if (!this.tunStatusRefreshGate.canApply(request)) return;
+      this.tunStatus = status;
+      this.savedTunEnabled = status.desiredEnabled;
+      this.tunStatusError = null;
       this.syncTrayStatus();
-    } catch {
-      // Keep the last trusted TUN state through a short kernel transition.
+    } catch (error) {
+      if (!this.tunStatusRefreshGate.canApply(request)) return;
+      this.tunStatusError = this.errorMessage(error);
+      // Preserve observations but expose their uncertainty. Read the saved
+      // intent separately so users can cancel ON while status is unavailable.
+      const config = await getAppConfig().catch(() => null);
+      if (this.tunStatusRefreshGate.canApply(request) && config) {
+        this.savedTunEnabled = config.tun.enabled;
+      }
     }
   }
 
@@ -404,7 +419,7 @@ class GuiStateStore {
     this.isDisconnecting = true;
     this.isSwitchingTun = true;
     try {
-      if (this.isTunEnabled) {
+      if (this.isTunSwitchOn) {
         this.tunStatus = await tracedOperation('proxy', 'tun.disable', () => disableGuiTun());
         if (this.tunStatus.enabled) throw new Error('Zero 未确认 TUN 已关闭');
       }
@@ -485,17 +500,27 @@ class GuiStateStore {
   async startCore() {
     if (!this.canStartCore) return;
     this.isStartingCore = true;
+    this.tunStatusRefreshGate.reset();
     try {
-      await tracedOperation('kernel', 'kernel.start', () => startCoreProcess());
-      toastSuccess('内核监听已启动');
+      const result = await tracedOperation('kernel', 'kernel.start', () => startCoreProcess());
+      this.tunStatusRefreshGate.reset();
+      if (result.tunRestoreError) toastWarning(`内核已启动，但 TUN 恢复失败：${result.tunRestoreError.message}`);
+      else toastSuccess('内核监听已启动');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {
       toastError(`启动内核失败: ${this.errorMessage(e)}`);
+      this.tunStatusRefreshGate.reset();
       await this.refreshRuntimeState();
     } finally {
       this.isStartingCore = false;
     }
+  }
+
+  invalidateTunObservation() {
+    this.tunStatusRefreshGate.reset();
+    this.tunStatus = null;
+    this.tunStatusError = '正在重启内核，等待确认 TUN 状态';
   }
 
   async restartCore() {
@@ -504,14 +529,17 @@ class GuiStateStore {
     // Runtime observations belong to the old Core instance. Drop the TUN
     // projection before the process generation changes, then rebuild it from
     // the new Core after restart.
-    this.tunStatus = null;
+    this.invalidateTunObservation();
     try {
-      await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess());
-      toastSuccess('内核已重启');
+      const result = await tracedOperation('kernel', 'kernel.restart', () => restartCoreProcess());
+      this.tunStatusRefreshGate.reset();
+      if (result.tunRestoreError) toastWarning(`内核已重启，但 TUN 恢复失败：${result.tunRestoreError.message}`);
+      else toastSuccess('内核已重启');
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
     } catch (e: any) {
       toastError(`重启内核失败: ${this.errorMessage(e)}`);
+      this.tunStatusRefreshGate.reset();
       await this.refreshRuntimeState();
     } finally {
       this.isStoppingCore = false;
@@ -560,12 +588,16 @@ class GuiStateStore {
   async enableTun() {
     if (!this.canEnableTun) return;
     this.isSwitchingTun = true;
+    this.tunStatusRefreshGate.reset();
     try {
-      this.tunStatus = await enableGuiTun();
+      const status = await enableGuiTun();
+      this.tunStatusRefreshGate.reset();
+      this.tunStatus = status;
       toastSuccess('TUN 已开启');
       await this.refreshRuntimeState();
     } catch (e: any) {
       toastError(`开启 TUN 失败: ${this.errorMessage(e)}`);
+      this.tunStatusRefreshGate.reset();
       await this.refreshTunStatus();
       await this.refreshConnectionStatus();
     } finally {
@@ -576,12 +608,16 @@ class GuiStateStore {
   async disableTun() {
     if (!this.canDisableTun) return;
     this.isSwitchingTun = true;
+    this.tunStatusRefreshGate.reset();
     try {
-      this.tunStatus = await disableGuiTun();
+      const status = await disableGuiTun();
+      this.tunStatusRefreshGate.reset();
+      this.tunStatus = status;
       toastSuccess('TUN 已关闭');
       await this.refreshTunStatus();
     } catch (e: any) {
       toastError(`关闭 TUN 失败: ${this.errorMessage(e)}`);
+      this.tunStatusRefreshGate.reset();
       await this.refreshTunStatus();
     } finally {
       this.isSwitchingTun = false;
@@ -589,7 +625,7 @@ class GuiStateStore {
   }
 
   async toggleTun() {
-    if (this.isTunEnabled) await this.disableTun();
+    if (this.isTunSwitchOn) await this.disableTun();
     else await this.enableTun();
   }
 
@@ -644,7 +680,11 @@ class GuiStateStore {
   }
 
   get isTunDesiredEnabled(): boolean {
-    return this.tunStatus?.desiredEnabled === true;
+    return (this.savedTunEnabled ?? this.tunStatus?.desiredEnabled) === true;
+  }
+
+  get isTunSwitchOn(): boolean {
+    return this.isTunEnabled || this.isTunDesiredEnabled;
   }
 
   get isProcessRunning(): boolean {
@@ -679,13 +719,20 @@ class GuiStateStore {
     return !this.isConnecting
       && !this.isDisconnecting
       && !this.isSwitchingTun
-      && (this.isTunEnabled || this.connection?.systemProxyEnabled === true);
+      && (this.isTunSwitchOn || this.connection?.systemProxyEnabled === true);
   }
 
   get canStartCore(): boolean {
     if (this.isInitializing) return false;
-    const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
-    return !selfTestBlocking
+    // A missing proxy profile must not prevent the user from starting the
+    // management-only kernel. System proxy/TUN actions keep their stricter
+    // profile guards; only launch-critical self-test failures block startup.
+    const launchBlocking = this.selfTest?.checks.some((check) =>
+      check.status === 'fail'
+      && check.key !== 'activeProxyConfig'
+      && check.key !== 'activeProxyContent'
+    ) ?? false;
+    return !launchBlocking
       && !this.isCoreBusy
       && !this.isConnecting
       && !this.isDisconnecting
@@ -693,7 +740,7 @@ class GuiStateStore {
   }
 
   get canRestartCore(): boolean {
-    return !this.isCoreBusy && !this.isConnecting && !this.isDisconnecting && this.isManagedProcessRunning;
+    return !this.isCoreBusy && !this.isSwitchingTun && !this.isConnecting && !this.isDisconnecting && this.isManagedProcessRunning;
   }
 
   get canEnableSystemProxy(): boolean {
@@ -715,6 +762,7 @@ class GuiStateStore {
   get canEnableTun(): boolean {
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
     return (!selfTestBlocking || this.isProcessRunning)
+      && !this.isCoreBusy
       && !this.isSwitchingTun
       && !this.isConnecting
       && !this.isDisconnecting
@@ -722,7 +770,7 @@ class GuiStateStore {
   }
 
   get canDisableTun(): boolean {
-    return !this.isSwitchingTun && !this.isConnecting && !this.isDisconnecting && this.isTunEnabled;
+    return !this.isCoreBusy && !this.isSwitchingTun && !this.isConnecting && !this.isDisconnecting && this.isTunSwitchOn;
   }
 
   get blockingIssues(): string[] {

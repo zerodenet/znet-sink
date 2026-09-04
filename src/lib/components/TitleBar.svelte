@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { getName, getVersion } from '@tauri-apps/api/app';
   import { store } from '$lib/services/store.svelte';
@@ -6,6 +7,8 @@
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import KernelStatusPill from '$lib/components/core/KernelStatusPill.svelte';
   import { updater } from '$lib/services/updater.svelte';
+  import { showTrafficBall } from '$lib/services/traffic-ball';
+  import { trafficBallPreference } from '$lib/services/traffic-ball-preference.svelte';
 
   let appWindow: ReturnType<typeof getCurrentWindow> | null = null;
   let appName = $state('ZNet Sink');
@@ -28,9 +31,48 @@
     return () => { mounted = false; };
   });
 
-  const handleMinimize = () => appWindow?.minimize().catch(() => {});
+  onMount(() => {
+    let mounted = true;
+    let unlistenClose: (() => void) | null = null;
+    try {
+      const current = getCurrentWindow();
+      void current.onCloseRequested((event) => {
+        if (!trafficBallPreference.enabled) return;
+        event.preventDefault();
+        void showTrafficBall(current);
+      }).then((unlisten) => {
+        if (mounted) unlistenClose = unlisten;
+        else unlisten();
+      }).catch(() => {});
+    } catch {
+      // Browser preview has no native close event.
+    }
+
+    return () => {
+      mounted = false;
+      unlistenClose?.();
+    };
+  });
+
+  const handleMinimize = () => {
+    if (!appWindow) return;
+    if (trafficBallPreference.enabled) {
+      void showTrafficBall(appWindow);
+    } else {
+      void appWindow.minimize().catch(() => {});
+    }
+  };
+
   const handleMaximize = () => appWindow?.toggleMaximize().catch(() => {});
-  const handleClose = () => appWindow?.close().catch(() => {});
+
+  const handleClose = () => {
+    if (!appWindow) return;
+    if (trafficBallPreference.enabled) {
+      void showTrafficBall(appWindow);
+    } else {
+      void appWindow.close().catch(() => {});
+    }
+  };
 </script>
 
 <!--
@@ -62,7 +104,7 @@
     </span>
     <!-- Version — opens About; yellow pulse dot when an update is available -->
     {#if appVersion}
-      <button
+      <button data-slot="surface-button"
         onclick={() => store.openSettings('about')}
         class="titlebar-version"
         title={updater.prominentUpdateAvailable
@@ -117,17 +159,17 @@
 
     <span class="titlebar-divider flex-shrink-0" aria-hidden="true"></span>
 
-    <button
+    <button data-slot="surface-button"
       onclick={handleMinimize}
       class="titlebar-btn"
-      aria-label="最小化"
-      title="最小化"
+      aria-label={trafficBallPreference.enabled ? '最小化为流量悬浮球' : '最小化'}
+      title={trafficBallPreference.enabled ? '最小化为流量悬浮球' : '最小化'}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
         <rect x="0" y="5" width="10" height="1" rx="0.5"/>
       </svg>
     </button>
-    <button
+    <button data-slot="surface-button"
       onclick={handleMaximize}
       class="titlebar-btn"
       aria-label="最大化"
@@ -137,11 +179,11 @@
         <rect x="0.5" y="0.5" width="9" height="9" rx="1"/>
       </svg>
     </button>
-    <button
+    <button data-slot="surface-button"
       onclick={handleClose}
       class="titlebar-btn titlebar-btn-close"
-      aria-label="关闭"
-      title="关闭"
+      aria-label={trafficBallPreference.enabled ? '关闭为流量悬浮球' : '关闭'}
+      title={trafficBallPreference.enabled ? '关闭为流量悬浮球' : '关闭'}
     >
       <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
         <line x1="2" y1="2" x2="8" y2="8"/>

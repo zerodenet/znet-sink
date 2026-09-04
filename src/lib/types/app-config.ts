@@ -1,5 +1,7 @@
 // Mirror of Rust models::app_config
 
+import type { DnsConfig } from './dns';
+
 export interface AppConfig {
   schemaVersion: string;
   core: AppCoreConfig;
@@ -7,6 +9,7 @@ export interface AppConfig {
   ui: AppUiConfig;
   localProxy: AppLocalProxyConfig;
   tun: AppTunConfig;
+  dns: AppDnsConfig;
   routing: AppRoutingConfig;
   urlTest: AppUrlTestConfig;
 }
@@ -34,6 +37,7 @@ export interface AppUiConfig {
   uiMode: string;       // "lite" | "pro"
   sidebarCollapsed: boolean;
   hiddenMenuKeys: string[];
+  trafficBallEnabled: boolean;
   defaultRoute?: string;
 }
 
@@ -53,7 +57,17 @@ export interface AppTunConfig {
   secondaryAddr?: string;
   tag: string;
   mtu: number;
+  /** Destination CIDRs captured by automatic TUN routes. Empty means full capture. */
+  includeCidrs: string[];
+  /** Destination CIDRs left on the host routing table instead of entering TUN. */
+  excludeCidrs: string[];
   dualStack: boolean;
+  dnsHijack: boolean;
+}
+
+export interface AppDnsConfig {
+  enabled: boolean;
+  config?: DnsConfig;
   dnsHijack: boolean;
 }
 
@@ -65,6 +79,11 @@ export interface AppUrlTestConfig {
   toleranceMs: number;
 }
 
+export interface KernelSettingsExportResult {
+  path: string;
+  schemaVersion: string;
+}
+
 // Patch types for partial updates
 
 export interface AppConfigPatch {
@@ -73,6 +92,7 @@ export interface AppConfigPatch {
   ui?: AppUiConfigPatch;
   localProxy?: AppLocalProxyConfigPatch;
   tun?: AppTunConfigPatch;
+  dns?: AppDnsConfigPatch;
   routing?: AppRoutingConfigPatch;
   urlTest?: AppUrlTestConfigPatch;
 }
@@ -100,6 +120,7 @@ export interface AppUiConfigPatch {
   uiMode?: string;
   sidebarCollapsed?: boolean;
   hiddenMenuKeys?: string[];
+  trafficBallEnabled?: boolean;
   defaultRoute?: string | null;
 }
 
@@ -118,7 +139,15 @@ export interface AppTunConfigPatch {
   secondaryAddr?: string | null;
   tag?: string;
   mtu?: number;
+  includeCidrs?: string[];
+  excludeCidrs?: string[];
   dualStack?: boolean;
+  dnsHijack?: boolean;
+}
+
+export interface AppDnsConfigPatch {
+  enabled?: boolean;
+  config?: DnsConfig | null;
   dnsHijack?: boolean;
 }
 

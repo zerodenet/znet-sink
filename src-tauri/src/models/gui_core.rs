@@ -147,6 +147,12 @@ pub struct GuiZeroCapabilities {
     pub available: bool,
     pub api_version: Option<String>,
     pub schema_version: Option<String>,
+    /// Independently versioned stable contracts published by Zero V1.
+    pub contracts: Option<GuiApiContractVersions>,
+    /// Stable machine-readable core error code catalog.
+    pub error_codes: Vec<String>,
+    /// Cross-protocol limitations that apply to the current kernel build.
+    pub global_limitations: Vec<String>,
     pub features: Vec<String>,
     pub permissions: Vec<String>,
     pub adapters: Vec<GuiCapabilityEndpoint>,
@@ -166,6 +172,30 @@ pub struct GuiCapabilityEndpoint {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiApiContractVersions {
+    pub capabilities: GuiContractVersionRange,
+    pub control_api: GuiContractVersionRange,
+    pub config_schema: GuiContractVersionRange,
+    pub error_codes: GuiContractVersionRange,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiContractVersionRange {
+    pub current: u64,
+    pub minimum_supported: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiCapabilityState {
+    pub supported: bool,
+    pub level: String,
+    pub notes: Vec<String>,
+}
+
 /// Protocol capability entry from the kernel's capabilities response.
 /// Reports whether a specific protocol is supported, partial, or experimental,
 /// along with TCP/UDP inbound/outbound support and any limitations.
@@ -181,6 +211,11 @@ pub struct GuiProtocolCapability {
     pub outbound_tcp: bool,
     pub outbound_udp: bool,
     pub mux: bool,
+    pub inbound_tcp_state: GuiCapabilityState,
+    pub inbound_udp_state: GuiCapabilityState,
+    pub outbound_tcp_state: GuiCapabilityState,
+    pub outbound_udp_state: GuiCapabilityState,
+    pub mux_state: GuiCapabilityState,
     /// Opaque limitation codes from the kernel (e.g. "no_udp_relay").
     pub limitations: Vec<String>,
 }
@@ -262,6 +297,78 @@ pub struct GuiConnectionList {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuiConnectionNetworkInterface {
+    pub name: String,
+    pub index: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionEgressContext {
+    pub generation: Option<u64>,
+    pub address_family: Option<String>,
+    pub tun_active: Option<bool>,
+    pub configured_interface: Option<GuiConnectionNetworkInterface>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionRouteLookup {
+    pub status: Option<String>,
+    pub source_address: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionSocketBinding {
+    pub mode: Option<String>,
+    pub reason: Option<String>,
+    pub interface_bound: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionAddressFamilyFallback {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub reason: Option<String>,
+    pub trigger_egress_generation: Option<u64>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionAttempt {
+    pub remote_address: String,
+    pub local_address: Option<String>,
+    pub stage: String,
+    pub outcome: String,
+    pub interface_bound: bool,
+    pub error_kind: Option<String>,
+    pub os_error: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiConnectionNetworkContext {
+    pub local_address: Option<String>,
+    pub remote_address: Option<String>,
+    pub resolved_candidates: Vec<String>,
+    pub connection_attempts: Vec<GuiConnectionAttempt>,
+    pub address_family_policy: Option<String>,
+    pub address_family_fallback: Option<GuiConnectionAddressFamilyFallback>,
+    pub selected_interface: Option<GuiConnectionNetworkInterface>,
+    pub egress: Option<GuiConnectionEgressContext>,
+    pub route_lookup: Option<GuiConnectionRouteLookup>,
+    pub socket_binding: Option<GuiConnectionSocketBinding>,
+    pub connect_stage: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuiConnection {
     pub flow_id: String,
     pub revision: Option<u64>,
@@ -277,12 +384,16 @@ pub struct GuiConnection {
     pub target_host: Option<String>,
     pub target_ip: Option<String>,
     pub target_port: Option<u64>,
+    pub original_ip: Option<String>,
+    pub host_source: Option<String>,
+    pub fake_ip_reverse_status: Option<String>,
     pub sniffed_host: Option<String>,
     pub inbound_tag: Option<String>,
     pub inbound_protocol: Option<String>,
     pub outbound_tag: Option<String>,
     pub outbound_protocol: Option<String>,
     pub remote_destination: Option<String>,
+    pub network_context: Option<GuiConnectionNetworkContext>,
     pub policy_tag: Option<String>,
     pub route_mode: Option<String>,
     pub route_action: Option<String>,
@@ -347,6 +458,28 @@ pub struct GuiFeatureStatus {
     pub enabled: bool,
     pub state: String,
     pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiFakeIpClearInput {
+    pub domain: Option<String>,
+    pub ip: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiFakeIpClearResult {
+    pub core_instance_id: Option<String>,
+    pub config_revision: Option<u64>,
+    pub enabled: bool,
+    pub scope: String,
+    pub domain: Option<String>,
+    pub ip: Option<String>,
+    pub removed_mappings: u64,
+    pub removed_addresses: u64,
+    pub live_mappings: u64,
+    pub retired_addresses: u64,
 }
 
 /// A single impact item from `config.plan_apply` — one section of config

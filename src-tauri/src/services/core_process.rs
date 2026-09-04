@@ -14,7 +14,9 @@ use crate::models::{
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
     logs::{LogLevel, LogSource},
 };
-use crate::services::{common::lock, core_config, local_proxy, logs, system_proxy_guard};
+use crate::services::{
+    app_config_store, common::lock, core_config, local_proxy, logs, system_proxy_guard,
+};
 use crate::state::app_state::AppState;
 
 pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
@@ -103,33 +105,109 @@ pub fn kill_core_default() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
+/// Gracefully tear down app-owned network capture before the GUI exits.
+///
+/// The shutdown event loop calls this while Tauri state and the async runtime
+/// are still alive. TUN is stopped first, then the managed child (or the
+/// matching external kernel) is stopped through the normal service path,
+/// which also restores the guarded system proxy.
+pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
+    let state = app_handle.state::<AppState>();
+    state
+        .shutting_down_handle()
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let _operation = state.proxy_config_operation().lock().await;
+    let mut options = state
+        .app_config()
+        .lock()
+        .map(|config| core_config::ipc_options_from_app_config(&config.core))
+        .unwrap_or_default();
+    options.timeout_ms = Some(options.timeout_ms.unwrap_or_default().max(3_000));
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        crate::kernel::zero::runtime::disable_tun(Some(options)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => crate::services::file_logger::line("shutdown: TUN stopped"),
+        Ok(Err(error)) => crate::services::file_logger::line(&format!(
+            "shutdown: TUN stop was unavailable; continuing with core stop: {}",
+            error.message
+        )),
+        Err(_) => crate::services::file_logger::line(
+            "shutdown: TUN stop timed out; continuing with core stop",
+        ),
+    }
+
+    let stop_app = app_handle.clone();
+    let stop_result = tauri::async_runtime::spawn_blocking(move || {
+        let stop_state = stop_app.state::<AppState>();
+        stop(stop_app.clone(), stop_state)
+    })
+    .await;
+    match stop_result {
+        Ok(Ok(_)) => crate::services::file_logger::line("shutdown: managed core stopped"),
+        Ok(Err(error)) => {
+            crate::services::file_logger::line(&format!(
+                "shutdown: managed core stop failed; using process fallback: {}",
+                error.message
+            ));
+            kill_core_default();
+        }
+        Err(error) => {
+            crate::services::file_logger::line(&format!(
+                "shutdown: managed core stop task failed; using process fallback: {error}"
+            ));
+            kill_core_default();
+        }
+    }
+}
+
 pub fn start(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
-    let has_active_proxy_config = lock(state.proxy_configs(), "proxy_config")?
+    // The kernel is a managed service, so it must also be startable before the
+    // user imports a proxy profile. In that state we launch a small, persistent
+    // control-plane config with no listeners or outbounds. System proxy enable
+    // and normal connection flows still require a usable active profile.
+    let has_active_profile = lock(state.proxy_configs(), "proxy_config")?
         .iter()
         .any(|profile| profile.active);
-    if has_active_proxy_config {
+    if has_active_profile {
+        // Exporting the selected profile is the single source of the managed
+        // core config path. Invalid active content still fails loudly here.
         core_config::export_active(state.clone())?;
+    } else {
+        let path = core_config::write_minimal_temp_config()?;
+        let config_path = path.to_string_lossy().into_owned();
+        {
+            let mut app_config = lock(state.app_config(), "app_config")?;
+            app_config.core.config_path = Some(config_path.clone());
+            app_config_store::save(&app_config_store::default_config_path()?, &app_config)?;
+        }
+        // `logs::append_entry` reads app_config.logs.max_entries, so the
+        // config mutex must be released before recording this lifecycle log.
+        let _ = logs::append_entry(
+            state.inner(),
+            LogSource::App,
+            LogLevel::Info,
+            "core process start: no active proxy config, using management-only config".to_string(),
+            Some(json!({ "configPath": config_path })),
+        );
     }
 
     let config = { lock(state.app_config(), "app_config")?.core.clone() };
     let snapshot = core_config::snapshot_from_config(&config)?;
-
-    // When no config_path exists, generate a minimal temp config so the
-    // kernel can start with its control plane enabled. The kernel enters
-    // a "waiting for config" state, and the GUI shows appropriate status.
-    let snapshot = if snapshot.config_path.is_none() {
-        let temp_path = core_config::write_minimal_temp_config()?;
-        {
-            let mut app_config = lock(state.app_config(), "app_config")?;
-            app_config.core.config_path = Some(temp_path.to_string_lossy().to_string());
-            let config_path = crate::services::app_config_store::default_config_path()?;
-            crate::services::app_config_store::save(&config_path, &app_config)?;
-        }
-        let config = { lock(state.app_config(), "app_config")?.core.clone() };
-        core_config::snapshot_from_config(&config)?
-    } else {
-        snapshot
-    };
+    if snapshot.config_path.is_none() || snapshot.config_exists != Some(true) {
+        return Err(AppError {
+            code: "core_config_required",
+            message: "当前配置尚未生成可用的内核配置文件，请重新同步或导入配置".to_string(),
+            details: Some(json!({
+                "configPath": snapshot.config_path,
+                "configExists": snapshot.config_exists,
+            })),
+        });
+    }
 
     if let Err(error) = snapshot.validate_launchable() {
         let message = format!("failed to start core process: {error}");

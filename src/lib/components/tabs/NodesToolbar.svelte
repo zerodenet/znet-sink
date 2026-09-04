@@ -1,5 +1,10 @@
 <script lang="ts">
+  import { Input } from '$lib/components/ui/input';
+  import { onMount } from 'svelte';
+  import { ArrowUpDown, EyeOff } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Button } from '$lib/components/ui/button';
+  import { nodesDisplayPreferences } from '$lib/components/tabs/nodes-display-preferences.svelte';
 
   type ViewMode = 'list' | 'grid';
 
@@ -17,6 +22,7 @@
     probing: boolean;
     probeProgress: ProbeProgress;
     canProbeAll: boolean;
+    canSortByDelay: boolean;
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
@@ -32,11 +38,19 @@
     probing,
     probeProgress,
     canProbeAll,
+    canSortByDelay,
     probeDisabledReason = null,
     onSearchQueryChange,
     onViewModeChange,
     onProbeAll,
   }: Props = $props();
+
+  const hideTimeout = $derived(nodesDisplayPreferences.hideTimeout);
+  const sortByDelay = $derived(nodesDisplayPreferences.sortByDelay);
+
+  onMount(() => {
+    nodesDisplayPreferences.load();
+  });
 </script>
 
 <div class="node-toolbar">
@@ -67,13 +81,37 @@
         <circle cx="11" cy="11" r="8"></circle>
         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
       </svg>
-      <input
+      <Input
         value={searchQuery}
         oninput={(event) => onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
         placeholder={'搜索节点'}
-        class="search-input"
+        class="w-full pl-8"
       />
     </div>
+
+    <Button
+      variant="outline"
+      size="icon-sm"
+      aria-pressed={hideTimeout}
+      aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
+      title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
+      onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
+    >
+      <EyeOff class="h-3.5 w-3.5" />
+    </Button>
+
+    {#if canSortByDelay}
+      <Button
+        variant="outline"
+        size="icon-sm"
+        aria-pressed={sortByDelay}
+        aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
+        title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
+        onclick={() => nodesDisplayPreferences.setSortByDelay(!sortByDelay)}
+      >
+        <ArrowUpDown class="h-3.5 w-3.5" />
+      </Button>
+    {/if}
 
     <SegmentedControl.Root
       value={viewMode}
@@ -110,8 +148,8 @@
       </SegmentedControl.Item>
     </SegmentedControl.Root>
 
-    <button
-      class="probe-all-btn"
+    <Button variant="default" size="sm"
+
       onclick={onProbeAll}
       disabled={!canProbeAll}
       title={probeDisabledReason ?? undefined}
@@ -131,7 +169,7 @@
         </svg>
         <span>{`测速`}</span>
       {/if}
-    </button>
+    </Button>
   </div>
 </div>
 
@@ -233,62 +271,6 @@
     pointer-events: none;
   }
 
-  .search-input {
-    width: 130px;
-    height: var(--control-height);
-    padding: 0 8px 0 26px;
-    border-radius: var(--control-radius);
-    border: 1px solid var(--input);
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 12px;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-    outline: none;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, width 0.2s ease;
-  }
-
-  .search-input::placeholder {
-    color: var(--muted-foreground);
-    opacity: 0.5;
-  }
-
-  .search-input:focus {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 18%, transparent);
-    width: 180px;
-  }
-
-  .probe-all-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: var(--control-height);
-    padding: 0 10px;
-    border-radius: var(--control-radius);
-    border: 1px solid transparent;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
-    white-space: nowrap;
-  }
-
-  .probe-all-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--primary) 88%, transparent);
-  }
-
-  .probe-all-btn:active:not(:disabled) {
-    transform: translateY(1px);
-  }
-
-  .probe-all-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
   .probe-progress-text {
     font-family: var(--font-mono);
     font-size: 11px;
@@ -302,12 +284,6 @@
   }
 
   @media (max-width: 700px) {
-    .search-input {
-      width: 100px;
-    }
 
-    .search-input:focus {
-      width: 140px;
-    }
   }
 </style>

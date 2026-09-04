@@ -50,7 +50,7 @@ async function testRootPageExclusivelyOwnsTheEventStream() {
 
   const inactiveBranch = page.slice(
     page.indexOf('if (!shouldInitialize)'),
-    page.indexOf('void guiState.initialize()'),
+    page.indexOf('const abortController = new AbortController()'),
   );
   assert.equal(inactiveBranch.includes('coreEvents.stop()'), false);
 }
@@ -97,10 +97,28 @@ async function testCoreWarningsStayOutOfTransientNotifications() {
   assert.equal(warningHandler.includes('showWarningToast('), false);
 }
 
+async function testRetiredIpcConnectionsRotateEventSubscriptions() {
+  const [connection, guiEvents, coreEvents] = await Promise.all([
+    readFile(new URL('../src-tauri/src/kernel/connection.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/services/gui_events.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/services/core_events.rs', import.meta.url), 'utf8'),
+  ]);
+
+  assert.ok(connection.includes('pub(crate) fn retire(&self)'));
+  assert.ok(guiEvents.includes('if !conn.is_alive()'));
+  assert.ok(guiEvents.includes('conn.retire();'));
+  assert.ok(guiEvents.includes('conn.has_pending_requests()'));
+  assert.ok(guiEvents.includes('conn.received_within('));
+  assert.ok(coreEvents.includes('if !conn.is_alive()'));
+  assert.equal(coreEvents.includes('receiver.blocking_recv()'), false);
+  assert.ok(connection.includes('conn.received_within(activity_window) || conn.has_pending_requests()'));
+}
+
 await testLifecycleOperationsStayOrdered();
 await testRejectedOperationDoesNotPoisonQueue();
 await testRootPageExclusivelyOwnsTheEventStream();
 await testProfileSwitchRotatesTheRuntimeEventGeneration();
 await testCoreWarningsStayOutOfTransientNotifications();
+await testRetiredIpcConnectionsRotateEventSubscriptions();
 
 console.log('core event lifecycle tests passed');

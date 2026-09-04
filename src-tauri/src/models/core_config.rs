@@ -30,9 +30,9 @@ pub struct CoreKernelInfo {
     pub size_bytes: Option<u64>,
     pub modified_at_unix_ms: Option<u64>,
     pub recommended_install_dir: Option<String>,
-    pub download_url: Option<String>,
     /// Whether an active proxy config exists (checked at call time).
-    /// Used by the frontend to gate the "Start Kernel" button.
+    /// Connection and system-proxy actions require this; kernel management
+    /// itself can still start a management-only runtime without one.
     pub has_active_config: bool,
     pub warnings: Vec<String>,
 }
@@ -43,15 +43,6 @@ pub struct CoreConfigExportResult {
     pub proxy_config_id: String,
     pub path: String,
     pub app_config: CoreConfigSnapshot,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreDownloadResult {
-    pub success: bool,
-    pub executable_path: String,
-    pub version: Option<String>,
-    pub message: String,
 }
 
 impl CoreConfigSnapshot {

@@ -4,23 +4,41 @@
 //! GUI model type. Stateless — receives `CoreIpcOptions` directly.
 
 use serde_json::{json, Map, Value};
+use std::time::Duration;
 
 use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult,
+    GuiConnectionCloseResult, GuiFakeIpClearResult, GuiFeatureStatus, GuiPolicySelectionResult,
+    GuiTargetProbeResult,
 };
 
 use super::parsing::{
-    normalize_non_empty, normalize_optional, parse_connection_close, parse_feature_runtime_status,
-    parse_policy_selection, parse_target_probe, unwrap_call_result,
+    normalize_non_empty, normalize_optional, parse_connection_close, parse_fake_ip_clear,
+    parse_feature_runtime_status, parse_policy_selection, parse_target_probe, unwrap_call_result,
 };
 
 /// Outbound diagnostics can legitimately queue behind other probes in the
 /// kernel and take tens of seconds. The process watchdog remains responsible
 /// for detecting a genuinely unresponsive IPC channel.
 const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
+
+/// Creating/removing the device and routes can exceed the ordinary two-second
+/// IPC budget. Keep this at the adapter command boundary: manual toggles,
+/// startup/restart restoration and legacy adapter callers all pass here.
+const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn command_response_timeout(method: &str) -> Option<Duration> {
+    match method {
+        "tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "commands/timeout_tests.rs"]
+mod timeout_tests;
 
 /// Switch the selected outbound in a policy group.
 pub async fn select_policy(
@@ -147,6 +165,9 @@ pub async fn close_connection(
 }
 
 fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {
+    if error.code == "not_found" {
+        return true;
+    }
     if error.code != "core_error" {
         return false;
     }
@@ -200,12 +221,89 @@ pub async fn set_mode(
 /// DNS lookup diagnostic.
 pub async fn dns_lookup(hostname: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     let hostname = normalize_non_empty(hostname, "hostname")?;
-    run_command(
+    let value = run_command(
         "diagnostics.dns_lookup",
         json!({ "hostname": hostname }),
         options,
     )
-    .await
+    .await?;
+    diagnostic_command_result(value)
+}
+
+pub async fn dns_cache(
+    domain: Option<String>,
+    limit: Option<usize>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<Value> {
+    let mut params = Map::new();
+    if let Some(domain) = normalize_optional(domain) {
+        params.insert("domain".to_string(), json!(domain));
+    }
+    if let Some(limit) = limit {
+        params.insert("limit".to_string(), json!(limit));
+    }
+    let value = run_command("diagnostics.dns_cache", Value::Object(params), options).await?;
+    diagnostic_command_result(value)
+}
+
+pub async fn fakeip_lookup(
+    domain: Option<String>,
+    ip: Option<String>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<Value> {
+    let domain = normalize_optional(domain);
+    let ip = normalize_optional(ip);
+    if domain.is_some() == ip.is_some() {
+        return Err(crate::errors::AppError::invalid_argument(
+            "exactly one of domain or ip is required for Fake-IP lookup",
+        ));
+    }
+    let mut params = Map::new();
+    if let Some(domain) = domain {
+        params.insert("domain".to_string(), json!(domain));
+    }
+    if let Some(ip) = ip {
+        params.insert("ip".to_string(), json!(ip));
+    }
+    let value = run_command("diagnostics.fakeip_lookup", Value::Object(params), options).await?;
+    diagnostic_command_result(value)
+}
+
+fn diagnostic_command_result(value: Value) -> AppResult<Value> {
+    if value.get("accepted").and_then(Value::as_bool) == Some(false) {
+        return Err(crate::errors::AppError::core_response(value));
+    }
+    Ok(value.get("result").cloned().unwrap_or(value))
+}
+
+/// Clear all Fake-IP mappings or one mapping selected by domain/address.
+pub async fn clear_fake_ip(
+    domain: Option<String>,
+    ip: Option<String>,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<GuiFakeIpClearResult> {
+    let params = fake_ip_clear_params(domain, ip)?;
+    let value = run_command("fakeip.clear", params, options).await?;
+    Ok(parse_fake_ip_clear(&value))
+}
+
+fn fake_ip_clear_params(domain: Option<String>, ip: Option<String>) -> AppResult<Value> {
+    let domain = normalize_optional(domain);
+    let ip = normalize_optional(ip);
+    if domain.is_some() && ip.is_some() {
+        return Err(crate::errors::AppError::invalid_argument(
+            "fake-IP clear accepts at most one of domain or ip",
+        ));
+    }
+
+    let mut params = Map::new();
+    if let Some(domain) = domain {
+        params.insert("domain".to_string(), json!(domain));
+    }
+    if let Some(ip) = ip {
+        params.insert("ip".to_string(), json!(ip));
+    }
+    Ok(Value::Object(params))
 }
 
 /// Route trace diagnostic.
@@ -279,7 +377,13 @@ pub(crate) async fn run_command(
     params: Value,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Value> {
-    let call = protocol::command(method.to_string(), Some(params), options).await?;
+    let call = protocol::command_with_response_timeout(
+        method.to_string(),
+        Some(params),
+        options,
+        command_response_timeout(method),
+    )
+    .await?;
     unwrap_call_result(call.response, call.error)
 }
 
@@ -301,11 +405,11 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_config_apply_accepted, is_flow_already_completed_error,
-        policy_probe_command_accepted, probe_ipc_options, trace_route_params,
-        PROBE_IPC_TIMEOUT_MS,
+        ensure_config_apply_accepted, fake_ip_clear_params, is_flow_already_completed_error,
+        policy_probe_command_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
     };
     use crate::errors::AppError;
+    use crate::kernel::zero::parsing::parse_fake_ip_clear;
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
@@ -325,6 +429,50 @@ mod tests {
                 "inbound_tag": "mixed-in"
             })
         );
+    }
+
+    #[test]
+    fn fake_ip_clear_params_support_full_and_targeted_management() {
+        assert_eq!(
+            fake_ip_clear_params(None, None).expect("clear all params"),
+            json!({})
+        );
+        assert_eq!(
+            fake_ip_clear_params(Some(" example.com ".to_string()), None).expect("domain params"),
+            json!({ "domain": "example.com" })
+        );
+        assert!(fake_ip_clear_params(
+            Some("example.com".to_string()),
+            Some("198.18.0.1".to_string())
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fake_ip_clear_response_is_normalized_for_the_gui() {
+        let result = parse_fake_ip_clear(&json!({
+            "accepted": true,
+            "result": {
+                "core_instance_id": "core-1",
+                "config_revision": 7,
+                "enabled": true,
+                "scope": "domain",
+                "domain": "example.com",
+                "removed_mappings": 1,
+                "removed_addresses": 2,
+                "live_mappings": 3,
+                "retired_addresses": 4
+            }
+        }));
+
+        assert_eq!(result.core_instance_id.as_deref(), Some("core-1"));
+        assert_eq!(result.config_revision, Some(7));
+        assert_eq!(result.scope, "domain");
+        assert_eq!(result.domain.as_deref(), Some("example.com"));
+        assert_eq!(result.removed_mappings, 1);
+        assert_eq!(result.removed_addresses, 2);
+        assert_eq!(result.live_mappings, 3);
+        assert_eq!(result.retired_addresses, 4);
     }
 
     #[test]
@@ -374,7 +522,15 @@ mod tests {
     }
 
     #[test]
-    fn flow_close_treats_only_already_completed_core_error_as_idempotent() {
+    fn flow_close_accepts_stable_and_legacy_already_completed_errors() {
+        let stable_not_found = AppError::core_response(json!({
+            "error": {
+                "code": "not_found",
+                "message": "flow `22397` not found or already completed"
+            }
+        }));
+        assert!(is_flow_already_completed_error(&stable_not_found));
+
         let already_completed = AppError::core_response(json!({
             "error": {
                 "message": "flow `22397` not found or already completed"
@@ -389,9 +545,7 @@ mod tests {
         }));
         assert!(!is_flow_already_completed_error(&unrelated_not_found));
 
-        let transport_failure = AppError::internal(
-            "flow `22397` not found or already completed",
-        );
+        let transport_failure = AppError::internal("flow `22397` not found or already completed");
         assert!(!is_flow_already_completed_error(&transport_failure));
     }
 }

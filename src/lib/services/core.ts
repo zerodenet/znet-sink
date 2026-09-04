@@ -1,20 +1,60 @@
 import { invoke } from '@tauri-apps/api/core';
 import { warning } from './toast.svelte';
 import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo } from '$lib/types/core';
-import type { AppConfig, AppConfigPatch } from '$lib/types/app-config';
+import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
-import type { DnsLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
+import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiFakeIpClearInput, GuiFakeIpClearResult, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
+import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
+import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
 
-export function getAppErrorMessage(error: unknown, fallbackMessage: string): string {
-  const appError = error as { code?: string; message?: string };
+export interface AppErrorInfo {
+  code?: string;
+  message: string;
+  fieldPath?: string;
+  diagnostics: string[];
+  cause?: string;
+}
+
+export function getAppErrorInfo(error: unknown, fallbackMessage: string): AppErrorInfo {
+  const appError = error as { code?: string; message?: string; details?: unknown };
   if (appError.code === 'mode_restricted') {
-    return `该功能仅在专业模式下可用：${appError.message || fallbackMessage}`;
+    return {
+      code: appError.code,
+      message: `该功能仅在专业模式下可用：${appError.message || fallbackMessage}`,
+      diagnostics: [],
+    };
   }
-  return appError.message || fallbackMessage;
+  const envelope = appError.details && typeof appError.details === 'object'
+    ? appError.details as Record<string, unknown>
+    : undefined;
+  const coreError = envelope?.error && typeof envelope.error === 'object'
+    ? envelope.error as Record<string, unknown>
+    : undefined;
+  const code = typeof coreError?.code === 'string' ? coreError.code : appError.code;
+  const message = appError.message || (typeof coreError?.message === 'string' ? coreError.message : fallbackMessage);
+  const diagnostics = Array.isArray(coreError?.details)
+    ? coreError.details
+        .filter((detail): detail is Record<string, unknown> => !!detail && typeof detail === 'object')
+        .map((detail) => {
+          const detailMessage = typeof detail.message === 'string' ? detail.message : '';
+          const fieldPath = typeof detail.field_path === 'string' ? detail.field_path : undefined;
+          return fieldPath ? `${fieldPath}：${detailMessage}` : detailMessage;
+        })
+        .filter(Boolean)
+    : [];
+  const fieldPath = typeof coreError?.field_path === 'string' ? coreError.field_path : undefined;
+  const cause = typeof coreError?.cause === 'string' ? coreError.cause : undefined;
+  return { code, message, fieldPath, diagnostics, cause };
+}
+
+export function getAppErrorMessage(error: unknown, fallbackMessage: string): string {
+  const info = getAppErrorInfo(error, fallbackMessage);
+  return [info.code ? `[${info.code}] ${info.message}` : info.message, info.fieldPath ? `字段：${info.fieldPath}` : '', ...info.diagnostics, info.cause ? `原因：${info.cause}` : '']
+    .filter(Boolean)
+    .join('；');
 }
 
 export function handleAppError(error: unknown, fallbackMessage: string): void {
@@ -51,11 +91,11 @@ export async function getCoreProcessStatus(): Promise<CoreProcessStatus> {
   return invoke('core_process_status');
 }
 
-export async function startCoreProcess(): Promise<CoreProcessStatus> {
+export async function startCoreProcess(): Promise<import('$lib/types/core').CoreProcessTransitionResult> {
   return invoke('core_process_start');
 }
 
-export async function restartCoreProcess(): Promise<CoreProcessStatus> {
+export async function restartCoreProcess(): Promise<import('$lib/types/core').CoreProcessTransitionResult> {
   return invoke('core_process_restart');
 }
 
@@ -228,6 +268,18 @@ export async function getAppConfig(): Promise<AppConfig> {
 
 export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig> {
   return invoke('app_config_update', { patch });
+}
+
+export async function applyTunSettings(tun: NonNullable<AppConfigPatch['tun']>): Promise<AppConfig> {
+  return invoke('app_config_apply_tun', { tun });
+}
+
+export async function exportClientKernelSettings(path: string): Promise<KernelSettingsExportResult> {
+  return invoke('app_config_export_kernel_settings', { path });
+}
+
+export async function importClientKernelSettings(path: string): Promise<AppConfig> {
+  return invoke('app_config_import_kernel_settings', { path });
 }
 
 // Logs
@@ -409,8 +461,38 @@ export async function guiApplyConfig(config: Record<string, unknown>): Promise<u
   return invoke('gui_apply_config', { config });
 }
 
+export async function guiApplyDnsConfig(input: DnsSettingsInput): Promise<unknown> {
+  return invoke('gui_apply_dns_config', { input });
+}
+
 export async function guiValidateConfig(config: Record<string, unknown>): Promise<unknown> {
   return invoke('gui_validate_config', { config });
+}
+
+export async function guiValidateDnsConfig(input: DnsSettingsInput): Promise<unknown> {
+  return invoke('gui_validate_dns_config', { input });
+}
+
+export interface EffectiveConfigSource {
+  id: string;
+  label: string;
+  paths: string[];
+  enabled: boolean;
+  count?: number;
+}
+
+export interface DnsEffectiveConfigInspection {
+  activeProfileName?: string;
+  baseConfig?: Record<string, unknown>;
+  effectiveConfig?: Record<string, unknown>;
+  sources: EffectiveConfigSource[];
+  reason?: string;
+}
+
+export async function guiInspectDnsEffectiveConfig(
+  input: DnsSettingsInput,
+): Promise<DnsEffectiveConfigInspection> {
+  return invoke('gui_inspect_dns_effective_config', { input });
 }
 
 /** Compatibility-only API. The current Zero IPC contract does not expose
@@ -558,6 +640,18 @@ export async function clearDebugFrames(): Promise<void> {
 
 export async function guiDnsLookup(hostname: string): Promise<DnsLookupResult> {
   return invoke<DnsLookupResult>('gui_dns_lookup', { hostname });
+}
+
+export async function guiDnsCache(domain?: string, limit?: number): Promise<DnsCacheResult> {
+  return invoke<DnsCacheResult>('gui_dns_cache', { domain, limit });
+}
+
+export async function guiFakeIpLookup(input: { domain?: string; ip?: string }): Promise<FakeIpLookupResult> {
+  return invoke<FakeIpLookupResult>('gui_fakeip_lookup', input);
+}
+
+export async function guiClearFakeIp(input?: GuiFakeIpClearInput): Promise<GuiFakeIpClearResult> {
+  return invoke<GuiFakeIpClearResult>('gui_clear_fake_ip', { input });
 }
 
 export async function guiTraceRoute(

@@ -11,8 +11,9 @@ use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
-    GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
+    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats,
+    GuiZeroCapabilities,
 };
 
 use serde_json::Value;
@@ -136,6 +137,30 @@ pub trait KernelAdapter {
 
     /// DNS lookup diagnostic.
     async fn dns_lookup(&self, hostname: String, options: CoreIpcOptions) -> AppResult<Value>;
+
+    /// Inspect the runtime DNS cache without mutating it.
+    async fn dns_cache(
+        &self,
+        domain: Option<String>,
+        limit: Option<usize>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value>;
+
+    /// Inspect a Fake-IP mapping and allocator counters without allocating.
+    async fn fakeip_lookup(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<Value>;
+
+    /// Clear all Fake-IP mappings or one mapping selected by domain/address.
+    async fn clear_fake_ip(
+        &self,
+        domain: Option<String>,
+        ip: Option<String>,
+        options: CoreIpcOptions,
+    ) -> AppResult<GuiFakeIpClearResult>;
 
     /// Route trace diagnostic.
     async fn trace_route(

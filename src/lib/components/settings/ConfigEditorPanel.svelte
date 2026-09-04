@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { Textarea } from '$lib/components/ui/textarea';
   import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-editor.svelte';
   import { Button } from '$lib/components/ui/button';
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
+  import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
 
   let textareaRef: HTMLTextAreaElement | undefined = $state();
   let tabSize = 2;
@@ -361,22 +363,24 @@
           <div class="line-number">{i + 1}</div>
         {/each}
       </div>
-      <textarea
-        bind:this={textareaRef}
-        class="editor-textarea"
+      <Textarea
+        bind:ref={textareaRef}
+        class="font-mono flex-1 resize-none whitespace-pre border-0 rounded-none bg-transparent py-2.5 px-3 text-[10.5px] leading-[1.55] [tab-size:2]"
         spellcheck="false"
         value={configEditor.draftJson}
         oninput={handleInput}
         onkeydown={handleKeyDown}
         disabled={isLoading}
         placeholder={'{}'}
-      ></textarea>
+      ></Textarea>
     </div>
   {:else}
     <div class="empty-editor">
       <span class="empty-text">点击刷新按钮加载当前活动配置</span>
     </div>
   {/if}
+
+  <KernelSettingsTransfer />
 </div>
 
 <style>
@@ -673,29 +677,6 @@
 
   .line-number {
     height: calc(10.5px * 1.55);
-  }
-
-  .editor-textarea {
-    flex: 1;
-    min-width: 0;
-    resize: none;
-    border: none;
-    outline: none;
-    padding: 10px 12px;
-    margin: 0;
-    background: transparent;
-    color: var(--foreground);
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-    font-size: 10.5px;
-    line-height: 1.55;
-    tab-size: 2;
-    white-space: pre;
-    overflow: auto;
-  }
-
-  .editor-textarea:disabled {
-    opacity: 0.6;
-    cursor: wait;
   }
 
   .empty-editor {

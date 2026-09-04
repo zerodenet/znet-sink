@@ -189,6 +189,11 @@ export interface TrafficStats {
   connectionCount: number;
 }
 
+export interface TrafficRateSample extends TrafficStats {
+  sampledAtUnixMs: number;
+  stable: boolean;
+}
+
 export interface ConfigProxyNode {
   tag: string;
   protocol: string;
@@ -254,6 +259,9 @@ export interface GuiZeroCapabilities {
   available: boolean;
   apiVersion?: string;
   schemaVersion?: string;
+  contracts?: GuiApiContractVersions;
+  errorCodes: string[];
+  globalLimitations: string[];
   features: string[];
   permissions: string[];
   adapters: GuiCapabilityEndpoint[];
@@ -268,14 +276,37 @@ export interface GuiCapabilityEndpoint {
   enabled: boolean;
 }
 
+export interface GuiContractVersionRange {
+  current: number;
+  minimumSupported: number;
+}
+
+export interface GuiApiContractVersions {
+  capabilities: GuiContractVersionRange;
+  controlApi: GuiContractVersionRange;
+  configSchema: GuiContractVersionRange;
+  errorCodes: GuiContractVersionRange;
+}
+
+export interface GuiCapabilityState {
+  supported: boolean;
+  level: string;
+  notes: string[];
+}
+
 export interface GuiProtocolCapability {
   name: string;
-  status: 'supported' | 'partial' | 'experimental';
+  status: 'supported' | 'partial' | 'experimental' | 'unsupported';
   inboundTcp: boolean;
   inboundUdp: boolean;
   outboundTcp: boolean;
   outboundUdp: boolean;
   mux: boolean;
+  inboundTcpState: GuiCapabilityState;
+  inboundUdpState: GuiCapabilityState;
+  outboundTcpState: GuiCapabilityState;
+  outboundUdpState: GuiCapabilityState;
+  muxState: GuiCapabilityState;
   limitations: string[];
 }
 
@@ -287,6 +318,32 @@ export interface GuiFeatureStatus {
   reason?: string;
 }
 
+export interface GuiFakeIpClearInput {
+  domain?: string;
+  ip?: string;
+}
+
+export interface GuiFakeIpClearResult {
+  coreInstanceId?: string;
+  configRevision?: number;
+  enabled: boolean;
+  scope: 'all' | 'domain' | 'ip';
+  domain?: string;
+  ip?: string;
+  removedMappings: number;
+  removedAddresses: number;
+  liveMappings: number;
+  retiredAddresses: number;
+}
+
+export type TunFamilyEgressAvailability = 'unknown' | 'available' | 'unavailable';
+
+export interface GuiTunFamilyEgress {
+  availability: TunFamilyEgressAvailability;
+  interface?: string;
+  reason?: string;
+}
+
 export interface GuiTunStatus extends GuiFeatureStatus {
   name?: string;
   addr?: string;
@@ -295,12 +352,19 @@ export interface GuiTunStatus extends GuiFeatureStatus {
   tag?: string;
   healthy: boolean;
   autoRoute: boolean;
+  includeCidrs?: string[] | null;
+  excludeCidrs?: string[] | null;
   dualStack: boolean;
   strictRoute: boolean;
   dnsHijack: boolean;
   egressInterface?: string;
   egressInterfaceV4?: string;
   egressInterfaceV6?: string;
+  ipv4Egress: GuiTunFamilyEgress;
+  ipv6Egress: GuiTunFamilyEgress;
+  networkGeneration: number;
+  addressFamilyPolicy?: string;
+  ipv6ToIpv4Fallbacks: number;
   lastError?: string;
   managedByConfig: boolean;
 }
@@ -322,6 +386,64 @@ export interface GuiTargetProbeResult {
   message?: string;
 }
 
+export interface GuiConnectionNetworkInterface {
+  name: string;
+  index?: number;
+}
+
+export interface GuiConnectionEgressContext {
+  generation?: number;
+  addressFamily?: string;
+  tunActive?: boolean;
+  configuredInterface?: GuiConnectionNetworkInterface;
+  unavailableReason?: string;
+}
+
+export interface GuiConnectionRouteLookup {
+  status?: string;
+  sourceAddress?: string;
+  error?: string;
+}
+
+export interface GuiConnectionSocketBinding {
+  mode?: string;
+  reason?: string;
+  interfaceBound?: boolean;
+}
+
+export interface GuiConnectionAddressFamilyFallback {
+  from?: string;
+  to?: string;
+  reason?: string;
+  triggerEgressGeneration?: number;
+  unavailableReason?: string;
+}
+
+export interface GuiConnectionAttempt {
+  remoteAddress: string;
+  localAddress?: string;
+  stage: string;
+  outcome: string;
+  interfaceBound: boolean;
+  errorKind?: string;
+  osError?: number;
+  error?: string;
+}
+
+export interface GuiConnectionNetworkContext {
+  localAddress?: string;
+  remoteAddress?: string;
+  resolvedCandidates: string[];
+  connectionAttempts: GuiConnectionAttempt[];
+  addressFamilyPolicy?: string;
+  addressFamilyFallback?: GuiConnectionAddressFamilyFallback;
+  selectedInterface?: GuiConnectionNetworkInterface;
+  egress?: GuiConnectionEgressContext;
+  routeLookup?: GuiConnectionRouteLookup;
+  socketBinding?: GuiConnectionSocketBinding;
+  connectStage?: string;
+}
+
 export interface GuiConnectionItem {
   flowId: string;
   revision?: number;
@@ -337,12 +459,16 @@ export interface GuiConnectionItem {
   targetHost?: string;
   targetIp?: string;
   targetPort?: number;
+  originalIp?: string;
+  hostSource?: string;
+  fakeIpReverseStatus?: string;
   sniffedHost?: string;
   inboundTag?: string;
   inboundProtocol?: string;
   outboundTag?: string;
   outboundProtocol?: string;
   remoteDestination?: string;
+  networkContext?: GuiConnectionNetworkContext;
   policyTag?: string;
   routeMode?: string;
   routeAction?: string;
@@ -405,3 +531,4 @@ export interface ConfigPlanApplyResult {
   /** Validation errors (present when `valid` is false). */
   errors: string[];
 }
+

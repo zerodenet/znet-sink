@@ -14,8 +14,8 @@ use crate::kernel::zero::{events, queries};
 use crate::kernel::{connection, protocol};
 use crate::models::core::{CoreEndpoint, CoreIpcOptions};
 use crate::models::gui_core::{
-    GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload, GuiEventStatus,
-    GuiEventSubscription,
+    GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload,
+    GuiEventStatus, GuiEventSubscription,
 };
 use crate::state::app_state::AppState;
 
@@ -67,6 +67,13 @@ const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 const EVENT_RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const ACTIVE_FLOW_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
+fn should_retire_after_reconcile_failure(
+    has_pending_requests: bool,
+    received_recently: bool,
+) -> bool {
+    !has_pending_requests && !received_recently
+}
+
 fn subscribe_and_forward_events(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
@@ -103,6 +110,16 @@ fn subscribe_and_forward_events(
 
         let mut closed = false;
         while active_generation.load(Ordering::SeqCst) == generation {
+            // This forwarder keeps the old connection (and therefore its
+            // broadcast sender) alive. The receiver cannot report `Closed`
+            // merely because the shared transport was retired by the watchdog
+            // or another failed IPC request. Observe transport liveness
+            // explicitly and move onto the replacement subscription.
+            if !conn.is_alive() {
+                closed = true;
+                break;
+            }
+
             let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
                     let event = events::normalize_event(&source_event);
@@ -122,6 +139,19 @@ fn subscribe_and_forward_events(
                                 state.client_core_snapshot(),
                             );
                         }
+                        GuiEventData::TrafficStats(stats) => {
+                            // Zero already emits `stats.sampled` every second.
+                            // Reuse the normalized typed payload for tray rates,
+                            // traffic-ball updates and the one-off snapshot baseline
+                            // instead of issuing a second periodic stats query.
+                            crate::services::traffic_sampler::handle_stats_sample(
+                                &app,
+                                stats,
+                                event
+                                    .occurred_at_unix_ms
+                                    .unwrap_or_else(crate::services::common::now_unix_ms),
+                            );
+                        }
                         _ => {}
                     }
                     emit_gui_event(&app, GuiEventPayload { generation, event });
@@ -133,8 +163,7 @@ fn subscribe_and_forward_events(
                     // silently leaving the live connection page stale.
                     let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
                     emit_status(&app, generation, "subscribed", None, snapshot);
-                    next_active_flow_reconcile =
-                        Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+                    next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
                     false
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
@@ -148,14 +177,33 @@ fn subscribe_and_forward_events(
                 // Flow pushes remain the low-latency path, but the active-flow
                 // query is the authoritative state. Reconcile it periodically
                 // so a dropped/quiet push stream cannot freeze the live page.
-                // The query also touches `get_or_connect`; if the shared reader
-                // died without closing this receiver, the dead manager is
-                // replaced and this receiver subsequently observes `Closed`.
-                if let Some(connections) = resync_active_connections(endpoint.clone(), timeout) {
-                    emit_connection_snapshot(&app, generation, connections);
+                match resync_active_connections(endpoint.clone(), timeout) {
+                    Ok(connections) => {
+                        emit_connection_snapshot(&app, generation, connections);
+                    }
+                    Err(error) if error.is_unavailable() => {
+                        // A kernel may serialize a long command such as
+                        // `tun.start`, causing this cheap read to hit its own
+                        // shorter deadline. Never close the shared transport
+                        // while another request is still legitimately pending,
+                        // or while events/responses have arrived recently.
+                        let received_recently =
+                            conn.received_within(ACTIVE_FLOW_RECONCILE_INTERVAL + timeout);
+                        if should_retire_after_reconcile_failure(
+                            conn.has_pending_requests(),
+                            received_recently,
+                        ) {
+                            conn.retire();
+                            closed = true;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // A supported kernel can still reject a particular
+                        // query. Keep event delivery alive in that case.
+                    }
                 }
-                next_active_flow_reconcile =
-                    Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+                next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
             }
 
             // Drain bursts without adding latency or an artificial events/sec
@@ -224,7 +272,7 @@ fn resync_snapshot(app: &AppHandle, endpoint: CoreEndpoint, timeout: Duration) -
 fn resync_active_connections(
     endpoint: CoreEndpoint,
     timeout: Duration,
-) -> Option<Vec<GuiConnection>> {
+) -> AppResult<Vec<GuiConnection>> {
     tauri::async_runtime::block_on(async move {
         let options = Some(CoreIpcOptions {
             socket: Some(endpoint.path),
@@ -239,7 +287,6 @@ fn resync_active_connections(
             options,
         )
         .await
-        .ok()
         .map(|connections| connections.items)
     })
 }
@@ -284,6 +331,9 @@ fn emit_status(
     error: Option<AppError>,
     response: Option<Value>,
 ) {
+    if status != "subscribed" {
+        crate::services::traffic_sampler::clear_runtime_traffic_state(app);
+    }
     emit_gui_event_status(
         app,
         GuiEventStatus {
@@ -293,4 +343,17 @@ fn emit_status(
             response,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_retire_after_reconcile_failure;
+
+    #[test]
+    fn reconcile_timeout_never_retires_a_busy_or_recent_connection() {
+        assert!(!should_retire_after_reconcile_failure(true, false));
+        assert!(!should_retire_after_reconcile_failure(false, true));
+        assert!(!should_retire_after_reconcile_failure(true, true));
+        assert!(should_retire_after_reconcile_failure(false, false));
+    }
 }
