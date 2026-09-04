@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   cleanupTagsForPublishedTag,
   formatReleaseTimestamp,
@@ -95,6 +96,25 @@ assert.deepEqual(
 assert.deepEqual(cleanupTagsForPublishedTag('v0.0.17-dev.202608181036', cleanupInput), []);
 assert.ok(!cleanupTagsForPublishedTag('v0.0.17', cleanupInput).includes('v0.0.16'));
 assert.ok(!cleanupTagsForPublishedTag('v0.0.17', cleanupInput).includes('v0.0.17'));
+
+const emptyCleanupCli = spawnSync(
+  process.execPath,
+  ['scripts/release-policy.mjs', 'cleanup', 'v0.0.17-rc.202608181100', 'v0.0.17-rc.202608181100'],
+  { encoding: 'utf8' },
+);
+assert.equal(emptyCleanupCli.status, 0, emptyCleanupCli.stderr);
+assert.equal(emptyCleanupCli.stdout, '');
+
+const populatedCleanupCli = spawnSync(
+  process.execPath,
+  ['scripts/release-policy.mjs', 'cleanup', 'v0.0.17-rc.202608181100', ...cleanupInput],
+  { encoding: 'utf8' },
+);
+assert.equal(populatedCleanupCli.status, 0, populatedCleanupCli.stderr);
+assert.equal(
+  populatedCleanupCli.stdout,
+  'v0.0.17-dev.202608181000\nv0.0.17-dev.202608181036\nv0.0.17-rc.202608181036\n',
+);
 
 assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181100', cleanupInput), 'v0.0.17-rc.202608181036');
 assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181036', ['v0.0.16', 'v0.0.17-dev.202608181000']), 'v0.0.16');

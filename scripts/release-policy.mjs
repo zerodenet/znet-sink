@@ -278,7 +278,10 @@ function runCli() {
     return;
   }
   if (command === 'cleanup' && value) {
-    console.log(cleanupTagsForPublishedTag(value, rest).join('\n'));
+    const cleanupTags = cleanupTagsForPublishedTag(value, rest);
+    if (cleanupTags.length > 0) {
+      process.stdout.write(`${cleanupTags.join('\n')}\n`);
+    }
     return;
   }
   if (command === 'previous' && value) {
