@@ -999,7 +999,11 @@ fn sanitize_structured_record(value: &mut serde_json::Value) {
 }
 
 fn is_sensitive_diagnostic_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase().replace('-', "_");
+    let key: String = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
     matches!(
         key.as_str(),
         "auth"
@@ -1010,17 +1014,19 @@ fn is_sensitive_diagnostic_key(key: &str) -> bool {
             | "credentials"
             | "headers"
             | "password"
-            | "private_key"
+            | "privatekey"
             | "psk"
             | "secret"
             | "token"
             | "uri"
             | "url"
             | "uuid"
-    ) || key.ends_with("_password")
-        || key.ends_with("_secret")
-        || key.ends_with("_token")
-        || key.ends_with("_url")
+    ) || key.ends_with("password")
+        || key.ends_with("secret")
+        || key.ends_with("token")
+        || key.ends_with("url")
+        || key.ends_with("privatekey")
+        || key.ends_with("apikey")
 }
 
 fn redact_urls(value: &str) -> String {
@@ -1087,6 +1093,18 @@ mod tests {
         assert!(!serialized.contains("secret"));
         assert!(serialized.contains("auto_sync"));
         assert_eq!(redact_urls("ok"), "ok");
+    }
+
+    #[test]
+    fn diagnostic_sanitizer_redacts_mixed_case_credentials_in_nested_records() {
+        let mut record = serde_json::json!({"fields": [{
+            "privateKey": "credential-a", "accessToken": "credential-b",
+            "api-key": "credential-c", "client_secret": "credential-d",
+            "proxyPassword": "credential-e", "operationId": "keep-me"
+        }]});
+        sanitize_structured_record(&mut record);
+        assert!(!record.to_string().contains("credential-"));
+        assert_eq!(record["fields"][0]["operationId"], "keep-me");
     }
 
     #[test]

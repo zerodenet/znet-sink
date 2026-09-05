@@ -57,8 +57,8 @@ assert.match(
 );
 assert.equal(
   updaterService.match(/\(\) => relaunch\(\)/g)?.length,
-  2,
-  'both immediate updates and version-manager installs must relaunch after installation',
+  3,
+  'restart retry and both immediate updates and version-manager installs must relaunch after installation',
 );
 
 const capability = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'));

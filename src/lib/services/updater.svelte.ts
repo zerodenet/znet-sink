@@ -11,7 +11,7 @@ import {
 } from '$lib/services/app-update-policy';
 import { RELEASE_CHECK_INTERVAL_MS } from '$lib/services/release-check-policy';
 
-export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready-to-install' | 'error' | 'unsupported';
+export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready-to-install' | 'error' | 'unsupported' | 'restart-required';
 
 export const UPDATE_CHECK_INTERVAL_MS = RELEASE_CHECK_INTERVAL_MS;
 const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
@@ -32,6 +32,12 @@ class UpdaterService {
   releaseNotes = $state<string | null>(null);
   checking = $state(false);
   downloading = $state(false);
+  installing = $state(false);
+  restartRequired = $state(false);
+
+  get busy(): boolean {
+    return this.checking || this.downloading || this.installing;
+  }
   readyToInstall = $state(false);
   lastError = $state<string | null>(null);
   /** Bytes downloaded so far in the current `downloadAndInstall` run. */
@@ -68,7 +74,7 @@ class UpdaterService {
 
   /** Check for updates — call on startup and manually from About panel. */
   async checkForUpdate(): Promise<boolean> {
-    if (this.checking) return false;
+    if (this.busy || this.readyToInstall || this.restartRequired) return false;
     this.checking = true;
     this.lastError = null;
     this.status = 'checking';
@@ -98,10 +104,6 @@ class UpdaterService {
         this.updateAvailable = false;
         this.latestVersion = null;
         this.selectedTag = null;
-        // Distinguish "no update needed" from "endpoint missing / dev mode".
-        // check() returns null both when up-to-date AND when the updater
-        // cannot reach the endpoint in some environments.  Log the
-        // current version so the user can tell which case it is.
         this.status = 'up-to-date';
         void appendLog({ source: 'app', level: 'info', message: `已是最新版本 v${this.currentVersion}` });
         return false;
@@ -109,29 +111,9 @@ class UpdaterService {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
 
-      // A malformed update manifest (e.g. missing `version` field, bad
-      // JSON) is not actionable for the user and would otherwise spam the
-      // log panel on every startup.  These errors come from the updater
-      // plugin's serde deserialization — detect them and treat as a
-      // benign "no update info" state instead of a hard failure.
-      if (isManifestUnavailable(msg)) {
-        this.replacePendingUpdate(null);
-        this.updateAvailable = false;
-        this.latestVersion = null;
-        this.selectedTag = null;
-        this.status = 'up-to-date';
-        // Keep the original error in the log (debug only) so we can
-        // diagnose why check() failed — without it this benign branch
-        // swallows the real cause and we're left guessing.
-        void appendLog({
-          source: 'app',
-          level: 'debug',
-          message: `更新清单暂不可用，跳过更新检查 (v${this.currentVersion}): ${msg}`,
-        });
-        return false;
-      }
-
-      this.lastError = msg;
+      this.lastError = isManifestUnavailable(msg)
+        ? `更新清单不可用，无法确认是否有新版本：${msg}`
+        : msg;
       this.status = 'error';
       void appendLog({ source: 'app', level: 'warn', message: `更新检查失败: ${msg}` });
       return false;
@@ -179,7 +161,7 @@ class UpdaterService {
   }
 
   private runScheduledCheck(force = false) {
-    if (this.checking || this.downloading || this.updateAvailable) return;
+    if (this.busy || this.updateAvailable || this.readyToInstall || this.restartRequired) return;
     if (!force && this.lastCheckAt > 0 && Date.now() - this.lastCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
     void this.checkForUpdate();
   }
@@ -194,10 +176,15 @@ class UpdaterService {
 
   /** Prepare a specific GitHub release, including prereleases and rollbacks. */
   async selectRelease(release: AppRelease): Promise<boolean> {
-    if (this.checking || this.downloading) return false;
+    if (this.busy || this.restartRequired) return false;
     this.checking = true;
     this.lastError = null;
     this.status = 'checking';
+    this.replacePendingUpdate(null);
+    this.updateAvailable = false;
+    this.latestVersion = null;
+    this.releaseNotes = null;
+    this.selectedTag = null;
 
     if (!this.currentVersion) await this.initVersion();
 
@@ -244,7 +231,7 @@ class UpdaterService {
 
   /** Download and install the update. */
   async downloadAndInstall(): Promise<boolean> {
-    if (this.downloading) return false;
+    if (this.busy || this.restartRequired) return false;
     this.downloading = true;
     this.status = 'downloading';
     this.downloaded = 0;
@@ -262,6 +249,7 @@ class UpdaterService {
         return false;
       }
 
+      this.replacePendingUpdate(update);
       await tracedOperation(
         'update',
         'update.download_install',
@@ -282,6 +270,10 @@ class UpdaterService {
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
 
+      this.restartRequired = true;
+      this.readyToInstall = false;
+      this.updateAvailable = false;
+      this.status = 'restart-required';
       await tracedOperation(
         'update',
         'update.relaunch',
@@ -290,31 +282,32 @@ class UpdaterService {
       );
 
       this.downloading = false;
-      this.status = 'up-to-date';
+      this.status = 'restart-required';
       return true;
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
       warning(`更新失败: ${this.lastError}`);
       this.downloading = false;
-      this.status = 'error';
+      this.status = this.restartRequired ? 'restart-required' : 'error';
       return false;
     }
   }
 
   /** Manually dismiss the update notification. */
   dismissUpdate() {
+    if (this.busy || this.restartRequired) return;
     this.replacePendingUpdate(null);
     this.updateAvailable = false;
     this.latestVersion = null;
     this.releaseNotes = null;
     this.selectedTag = null;
-    this.status = 'up-to-date';
+    this.status = 'idle';
     this.lastCheckAt = Date.now();
   }
 
   /** Download a selected release without installing it. */
   async downloadUpdate(): Promise<boolean> {
-    if (this.downloading || !this.pendingUpdate) return false;
+    if (this.busy || this.restartRequired || this.readyToInstall || !this.pendingUpdate) return false;
     this.downloading = true;
     this.readyToInstall = false;
     this.lastError = null;
@@ -346,7 +339,8 @@ class UpdaterService {
 
   /** Install a release previously downloaded with downloadUpdate(). */
   async installUpdate(): Promise<boolean> {
-    if (this.downloading || !this.pendingUpdate || !this.readyToInstall) return false;
+    if (this.busy || this.restartRequired || !this.pendingUpdate || !this.readyToInstall) return false;
+    this.installing = true;
     this.lastError = null;
     try {
       const update = this.pendingUpdate;
@@ -356,6 +350,10 @@ class UpdaterService {
         () => update.install(),
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
+      this.restartRequired = true;
+      this.readyToInstall = false;
+      this.updateAvailable = false;
+      this.status = 'restart-required';
       await tracedOperation(
         'update',
         'update.relaunch',
@@ -363,13 +361,30 @@ class UpdaterService {
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
       this.readyToInstall = false;
-      this.status = 'up-to-date';
+      this.status = 'restart-required';
       return true;
     } catch (error) {
       this.lastError = updaterErrorMessage(error, '版本安装失败');
       warning(`版本安装失败: ${this.lastError}`);
-      this.status = 'error';
+      this.status = this.restartRequired ? 'restart-required' : 'error';
       return false;
+    } finally {
+      this.installing = false;
+    }
+  }
+
+  async restartApp(): Promise<boolean> {
+    if (this.busy || !this.restartRequired) return false;
+    this.installing = true;
+    this.lastError = null;
+    try {
+      await tracedOperation('update', 'update.relaunch.retry', () => relaunch());
+      return true;
+    } catch (error) {
+      this.lastError = updaterErrorMessage(error, '重启失败，请退出后重新打开应用');
+      return false;
+    } finally {
+      this.installing = false;
     }
   }
 
@@ -409,9 +424,7 @@ export function formatBytes(bytes: number): string {
 
 /**
  * Detect updater errors that mean the published manifest is unusable —
- * rather than genuine transport/network failures.  The caller treats these
- * as a benign "no update info" state so they don't spam the log panel on
- * every startup.
+ * rather than transport/network failures. Neither proves the app is current.
  *
  * Two families fall under this:
  *  1. Malformed manifest — the updater plugin's serde fails with

@@ -29,13 +29,24 @@ export const getAppErrorMessage = (error: unknown, fallback: string) => (error a
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
 import { getTunConfig } from './tun-state.svelte';
 export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
-export const getAppConfig = async () => new URLSearchParams(location.search).get('panel') === 'kernel'
-  ? { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } }
-  : getTunConfig();
+const endpointConfig = () => ({ localProxy: {
+  host: '127.0.0.2', port: 8899,
+  sourceProxyConfigId: new URLSearchParams(location.search).has('custom') ? 'custom-profile' : null,
+} });
+export const getAppConfig = async () => {
+  const panel = new URLSearchParams(location.search).get('panel');
+  if (panel === 'endpoint') return endpointConfig();
+  if (panel === 'kernel') return { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } };
+  return getTunConfig();
+};
 export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ kernel:'zero', executableExists:true, executablePath:'/fixture/zero', recommendedInstallDir:'/fixture', hasActiveConfig:true, warnings:[] });
 export const getCoreProcessStatus = async () => ({ state:'running' });
 export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
-export const updateAppConfig = async () => {
+export const updateAppConfig = async (input?: unknown) => {
+  if (new URLSearchParams(location.search).get('panel') === 'endpoint') {
+    window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
+    return input;
+  }
   window.dispatchEvent(new Event('fixture-unexpected-config-write'));
   throw new Error('Install must not write app settings a second time');
 };

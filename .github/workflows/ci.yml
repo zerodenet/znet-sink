@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   frontend:
-    name: Frontend DNS and capability contract
+    name: Frontend product regression
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -40,6 +40,12 @@ jobs:
 
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
+
+      - name: Run app update ownership and restart regression
+        run: pnpm test:app-update
+
+      - name: Run application lifecycle contract
+        run: pnpm test:runtime-lifecycle
 
       - name: Validate release policy and stable evidence gate
         run: pnpm test:release-version

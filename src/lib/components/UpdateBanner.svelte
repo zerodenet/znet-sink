@@ -49,7 +49,7 @@
         <span class="update-current">（当前 v{updater.currentVersion}）</span>
       {/if}
     </div>
-    <Button variant="default" size="sm"  onclick={handleUpdate} disabled={updater.downloading}>
+    <Button variant="default" size="sm"  onclick={handleUpdate} disabled={updater.busy || updater.restartRequired}>
       {updater.downloading ? '下载中…' : '立即更新'}
     </Button>
     {#if !updater.downloading}

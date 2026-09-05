@@ -13,6 +13,7 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let saved = $state(false);
+  let profileOwned = $state(false);
 
   function resetDefault() {
     host = DEFAULT_HOST;
@@ -26,12 +27,9 @@
     error = null;
     try {
       const config = await getAppConfig();
-      if (config.localProxy.sourceProxyConfigId) {
-        resetDefault();
-      } else {
-        host = config.localProxy.host || DEFAULT_HOST;
-        port = String(config.localProxy.port || DEFAULT_PORT);
-      }
+      profileOwned = Boolean(config.localProxy.sourceProxyConfigId);
+      host = config.localProxy.host || DEFAULT_HOST;
+      port = String(config.localProxy.port || DEFAULT_PORT);
     } catch (cause) {
       error = getAppErrorMessage(cause, '加载代理端口配置失败');
     } finally {
@@ -40,8 +38,9 @@
   }
 
   async function saveEndpoint() {
+    if (profileOwned || saving) return;
     const normalizedHost = host.trim();
-    const normalizedPort = Number.parseInt(port, 10);
+    const normalizedPort = Number(port.trim());
     saved = false;
     error = null;
 
@@ -88,7 +87,7 @@
       <div class="config-row-label">
         <span class="label-text">代理监听</span>
         <span class="label-desc">
-          配置本地代理入口的监听地址和端口。当前用于自动补充 mixed 混合代理端口，默认使用 127.0.0.1:7890；订阅中完整定义的代理入站不会被覆盖。
+          {profileOwned ? '当前地址和端口由配置文件定义，请在配置编辑器修改入站设置。' : '修改客户端代理入口，运行中保存会同时更新监听端口和已开启的系统代理。默认使用 127.0.0.1:7890。'}
         </span>
       </div>
 
@@ -99,7 +98,7 @@
             type="text"
             bind:value={host}
             oninput={() => (saved = false)}
-            disabled={saving}
+            disabled={saving || profileOwned}
             spellcheck="false"
             aria-label="代理监听地址"
           />
@@ -110,16 +109,16 @@
             inputmode="numeric"
             bind:value={port}
             oninput={() => (saved = false)}
-            disabled={saving}
+            disabled={saving || profileOwned}
             aria-label="代理监听端口"
           />
         </div>
 
         <div class="endpoint-actions">
-          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving}>
+          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving || profileOwned}>
             恢复默认
           </Button>
-          <Button size="sm" onclick={saveEndpoint} disabled={saving}>
+          <Button size="sm" onclick={saveEndpoint} disabled={saving || profileOwned}>
             {saving ? '保存中...' : saved ? '已保存' : '保存'}
           </Button>
         </div>

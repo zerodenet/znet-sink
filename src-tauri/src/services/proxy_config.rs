@@ -232,6 +232,14 @@ pub async fn upsert_runtime(
 ) -> AppResult<ProxyConfigProfile> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
+    upsert_runtime_locked(app_handle.clone(), input).await
+}
+
+pub(crate) async fn upsert_runtime_locked(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
     let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
     let previous_active = previous.iter().find(|profile| profile.active).cloned();
     let (next, profile) = build_upsert_profiles(&previous, input)?;
@@ -244,7 +252,19 @@ pub async fn upsert_runtime(
 
     if !running || !runtime_changed {
         persist_profile_transition(state.inner(), &previous, next)?;
-        retarget_managed_system_proxy(state.inner())?;
+        if let Err(mut error) = export_and_retarget_active(state.clone()) {
+            append_recovery(
+                &mut error,
+                "profile storage",
+                restore_profiles(state.inner(), &previous),
+            );
+            append_recovery(
+                &mut error,
+                "export and system proxy",
+                export_and_retarget_active(state.clone()),
+            );
+            return Err(error);
+        }
         return Ok(profile);
     }
 
@@ -260,39 +280,41 @@ pub async fn upsert_runtime(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match adapter.apply_config(content, options).await {
+    match crate::services::config_apply::apply(content, options).await {
         Ok(_) => {
-            if let Err(error) = persist_profile_transition(state.inner(), &previous, next) {
+            if let Err(mut error) = persist_profile_transition(state.inner(), &previous, next) {
                 if let Some(previous_active) = previous_active.as_ref() {
-                    let _ = reapply_profile(state.inner(), previous_active).await;
+                    append_recovery(
+                        &mut error,
+                        "runtime",
+                        reapply_profile(state.inner(), previous_active).await,
+                    );
                 }
                 return Err(error);
             }
-            if let Err(error) = retarget_managed_system_proxy(state.inner()) {
-                let _ = restore_profiles(state.inner(), &previous);
+            if let Err(mut error) = export_and_retarget_active(state.clone()) {
+                append_recovery(
+                    &mut error,
+                    "profile storage",
+                    restore_profiles(state.inner(), &previous),
+                );
                 if let Some(previous_active) = previous_active.as_ref() {
-                    let _ = reapply_profile(state.inner(), previous_active).await;
+                    append_recovery(
+                        &mut error,
+                        "runtime",
+                        reapply_profile(state.inner(), previous_active).await,
+                    );
                 }
-                let _ = retarget_managed_system_proxy(state.inner());
+                append_recovery(
+                    &mut error,
+                    "export and system proxy",
+                    export_and_retarget_active(state.clone()),
+                );
                 return Err(error);
             }
             Ok(profile)
         }
-        Err(_) => {
-            let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-            persist_profile_transition(state.inner(), &previous, next)?;
-            if let Err(error) = restart_core(app_handle.clone()).await {
-                let _ = restore_profiles(state.inner(), &previous);
-                let _ = restart_core(app_handle.clone()).await;
-                let _ =
-                    restore_managed_system_proxy_if_needed(state.inner(), managed_proxy_enabled);
-                return Err(AppError::internal(format!(
-                    "failed to restart the kernel after saving proxy config: {}",
-                    error.message
-                )));
-            }
-            Ok(profile)
-        }
+        Err(error) => Err(error),
     }
 }
 
@@ -391,7 +413,7 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match adapter.apply_config(content, options).await {
+    match crate::services::config_apply::apply(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
                 if let Err(error) = export_and_retarget_active(state.clone()) {
@@ -405,24 +427,7 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
                 Err(error)
             }
         },
-        Err(_) => {
-            let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-            let active = set_active(state.clone(), id)?;
-            if let Err(error) = restart_core(app_handle.clone()).await {
-                rollback_restarted_activation(
-                    app_handle.clone(),
-                    state.clone(),
-                    previous_active.as_ref(),
-                    managed_proxy_enabled,
-                )
-                .await;
-                return Err(AppError::internal(format!(
-                    "failed to restart the kernel with proxy config '{}': {}",
-                    active.name, error.message
-                )));
-            }
-            Ok(active)
-        }
+        Err(error) => Err(error),
     }
 }
 
@@ -480,7 +485,7 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match adapter.apply_config(content, options).await {
+    match crate::services::config_apply::apply(content, options).await {
         Ok(_) => {
             if let Err(error) = remove(state.clone(), id) {
                 let _ = reapply_profile(state.inner(), &removed).await;
@@ -494,20 +499,16 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
             }
             Ok(())
         }
-        Err(_) => {
-            remove(state.clone(), id)?;
-            if let Err(error) = restart_core(app_handle.clone()).await {
-                let _ = restore_removed_profile(state.clone(), removed.clone());
-                let _ = restart_core(app_handle.clone()).await;
-                let _ =
-                    restore_managed_system_proxy_if_needed(state.inner(), managed_proxy_enabled);
-                return Err(AppError::internal(format!(
-                    "failed to restart the kernel after deleting proxy config: {}",
-                    error.message
-                )));
-            }
-            Ok(())
-        }
+        Err(error) => Err(error),
+    }
+}
+
+fn append_recovery(error: &mut AppError, component: &str, recovery: AppResult<()>) {
+    if let Err(rollback) = recovery {
+        error.message.push_str(&format!(
+            "; {component} rollback failed: {}",
+            rollback.message
+        ));
     }
 }
 
@@ -521,10 +522,7 @@ async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppR
         return Ok(());
     };
     let content = crate::services::rule_overlay::compose_effective_config(state, &content)?;
-    ZeroAdapter::new()
-        .apply_config(content, ipc_options(state)?)
-        .await
-        .map(|_| ())
+    crate::services::config_apply::apply(content, ipc_options(state)?).await
 }
 
 async fn rollback_hot_activation(
@@ -554,21 +552,6 @@ fn export_and_retarget_active(state: State<'_, AppState>) -> AppResult<()> {
     retarget_managed_system_proxy(state.inner())
 }
 
-async fn rollback_restarted_activation(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    previous: Option<&ProxyConfigProfile>,
-    managed_proxy_enabled: bool,
-) {
-    let Some(previous) = previous else {
-        return;
-    };
-    if set_active(state.clone(), previous.id.clone()).is_ok() {
-        let _ = restart_core(app_handle).await;
-        let _ = restore_managed_system_proxy_if_needed(state.inner(), managed_proxy_enabled);
-    }
-}
-
 fn restore_removed_profile(
     state: State<'_, AppState>,
     removed: ProxyConfigProfile,
@@ -592,9 +575,10 @@ fn restore_profiles(state: &AppState, previous: &[ProxyConfigProfile]) -> AppRes
 }
 
 async fn restart_core(app_handle: AppHandle) -> AppResult<()> {
-    tauri::async_runtime::spawn_blocking(move || core_process::restart(app_handle).map(|_| ()))
-        .await
-        .map_err(|error| AppError::internal(format!("core restart task failed: {error}")))?
+    crate::commands::core_process::restart_managed(app_handle)
+        .await?
+        .require_restored()
+        .map(|_| ())
 }
 
 async fn stop_core(app_handle: AppHandle) -> AppResult<()> {
@@ -751,9 +735,20 @@ pub(crate) fn sync_local_proxy_from_profile(
     let mut next = lock(state.app_config(), "app_config")?.clone();
     if let Some(endpoint) = profile.content.as_ref().and_then(extract_local_proxy) {
         app_config::validate_port(endpoint.port, "localProxy.port")?;
-        next.local_proxy.host = endpoint.host;
-        next.local_proxy.port = endpoint.port;
-        next.local_proxy.source_proxy_config_id = Some(profile.id.clone());
+        if profile
+            .content
+            .as_ref()
+            .is_some_and(super::has_managed_local_inbound)
+        {
+            let (host, port) = super::resolve_managed_endpoint(&next.local_proxy);
+            next.local_proxy.host = host;
+            next.local_proxy.port = port;
+            next.local_proxy.source_proxy_config_id = None;
+        } else {
+            next.local_proxy.host = endpoint.host;
+            next.local_proxy.port = endpoint.port;
+            next.local_proxy.source_proxy_config_id = Some(profile.id.clone());
+        }
     } else {
         next.local_proxy.source_proxy_config_id = None;
     }

@@ -19,7 +19,7 @@
     "test:async-state": "node scripts/test-latest-request-gate.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-node-state-reconcile.mjs",
     "test:core-events": "node --experimental-strip-types scripts/test-core-event-lifecycle.mjs",
     "test:release-version": "node scripts/test-version-manifests.mjs && node scripts/test-release-policy.mjs && node --test scripts/test-stable-readiness.mjs",
-    "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs",
+    "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs && node --experimental-vm-modules --test scripts/test-updater-lifecycle.mjs",
     "test:onboarding": "node --experimental-strip-types scripts/test-onboarding-state.mjs",
     "test:subscriptions": "node scripts/test-subscription-contract.mjs",
     "test:connections": "node --experimental-strip-types scripts/test-connection-delta-batcher.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-view.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-wire.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-connection-history.mjs",

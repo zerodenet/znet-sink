@@ -6,8 +6,6 @@ use tauri::{AppHandle, Manager};
 use zero_rule::zrs::{verify, VerifyMode};
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::adapter::KernelAdapter;
-use crate::kernel::zero::ZeroAdapter;
 use crate::models::app_config::{AppConfig, AppDnsConfig};
 use crate::models::core_process::CoreProcessState;
 use crate::models::dns_config::CLIENT_DNS_DETOUR_ROUTE_FINAL;
@@ -82,6 +80,10 @@ fn finalize_effective_config(
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
+    let local_proxy = common::lock(state.app_config(), "app_config")?
+        .local_proxy
+        .clone();
+    crate::services::proxy_config::project_managed_endpoint(&mut config, &local_proxy)?;
     apply_global_dns(state, &mut config, dns_override)?;
     let tolerance_ms = match tolerance_override {
         Some(value) => value,
@@ -532,7 +534,7 @@ fn compose_with(
 ) -> AppResult<ComposeResult> {
     let mut config = base.clone();
     strip_common_overlay(&mut config)?;
-    prune_undefined_rule_set_rules(&mut config)?;
+    crate::services::route_integrity::validate(&config)?;
     let mode = proxy_mode::detect_route_mode(base).map(|detected| match detected.mode {
         GuiProxyMode::Global => "global".to_string(),
         GuiProxyMode::Rule => "rule".to_string(),
@@ -693,47 +695,6 @@ fn strip_common_overlay(config: &mut Value) -> AppResult<()> {
     Ok(())
 }
 
-fn prune_undefined_rule_set_rules(config: &mut Value) -> AppResult<Vec<String>> {
-    let Some(root) = config.as_object_mut() else {
-        return Err(AppError::invalid_argument(
-            "proxy config must be a JSON object",
-        ));
-    };
-    let Some(route) = root.get_mut("route").and_then(Value::as_object_mut) else {
-        return Ok(Vec::new());
-    };
-    let defined = route
-        .get("rule_sets")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("tag").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut removed = std::collections::BTreeSet::new();
-    if let Some(rules) = route.get_mut("rules").and_then(Value::as_array_mut) {
-        rules.retain(|rule| {
-            let referenced = rule
-                .get("condition")
-                .filter(|condition| {
-                    condition.get("type").and_then(Value::as_str) == Some("rule_set")
-                })
-                .and_then(|condition| condition.get("tag"))
-                .and_then(Value::as_str);
-            let keep = referenced.is_none_or(|tag| defined.contains(tag));
-            if !keep {
-                removed.insert(
-                    referenced
-                        .expect("missing rule-set tag is retained")
-                        .to_string(),
-                );
-            }
-            keep
-        });
-    }
-    Ok(removed.into_iter().collect())
-}
-
 fn object_field<'a>(
     root: &'a mut Map<String, Value>,
     key: &str,
@@ -770,10 +731,8 @@ async fn apply_if_running(state: &AppState, config: Option<Value>) -> AppResult<
         AppError::invalid_argument("a running kernel requires an active proxy config")
     })?;
     let core = common::lock(state.app_config(), "app_config")?.core.clone();
-    ZeroAdapter::new()
-        .apply_config(config, core_config::ipc_options_from_app_config(&core))
+    crate::services::config_apply::apply(config, core_config::ipc_options_from_app_config(&core))
         .await
-        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1171,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn undefined_rule_set_references_are_removed_without_touching_valid_rules() {
+    fn undefined_rule_set_references_reject_the_candidate_without_changing_policy() {
         let base = json!({
             "mode":{"type":"rule"},
             "route":{
@@ -1183,10 +1142,7 @@ mod tests {
                 ]
             }
         });
-        let composed = compose_with(&base, false, &[]).unwrap();
-        let rules = composed.config["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0]["condition"]["tag"], "available");
-        assert_eq!(rules[1]["condition"]["type"], "domain");
+        assert!(compose_with(&base, false, &[]).is_err());
+        assert_eq!(base["route"]["rules"].as_array().unwrap().len(), 3);
     }
 }

@@ -231,7 +231,12 @@
         <span class="config-label">状态</span>
         <span class="config-value muted">检查中…</span>
       </div>
-    {:else if updater.updateAvailable}
+    {:else if updater.restartRequired}
+      <div class="config-row">
+        <span class="config-value">更新已安装，请重启应用。{updater.lastError ?? ''}</span>
+        <Button size="sm" onclick={() => updater.restartApp()} disabled={updater.busy}>重启应用</Button>
+      </div>
+    {:else if updater.updateAvailable && updater.status !== 'error'}
       <div class="update-banner">
         <div class="update-banner-header">
           <svg width="14" height="14" viewBox="0 0 10 10" fill="none" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -264,7 +269,7 @@
         <Button variant="default" size="sm"
 
           onclick={handleDownloadUpdate}
-          disabled={updater.downloading}
+          disabled={updater.busy || updater.restartRequired}
         >
           {updater.downloading ? '下载中…' : '下载并安装'}
         </Button>
@@ -272,11 +277,11 @@
     {:else}
       <div class="config-row">
         <span class="config-label">状态</span>
-        <span class="config-value">已是最新</span>
+        <span class="config-value">{updater.status === 'error' ? (updater.lastError ?? '更新检查失败，请重试') : updater.status === 'up-to-date' ? '已是最新' : '尚未检查更新'}</span>
       </div>
       <div class="config-row">
         <span class="config-label"></span>
-        <Button variant="outline" size="sm"  onclick={handleCheckUpdate} disabled={updater.checking}>
+        <Button variant="outline" size="sm"  onclick={handleCheckUpdate} disabled={updater.busy}>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="1 6 3 8 7 2"/>
             <path d="M11 6A5 5 0 1 1 9.6 2.4"/>

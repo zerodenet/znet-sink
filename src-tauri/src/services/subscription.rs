@@ -417,8 +417,7 @@ async fn sync_subscription(
         sources,
     )
     .await?;
-    let removed_tags =
-        inject_synced_rule_sets(&mut parsed.content, &managed_tags, outcome.artifacts)?;
+    let injection = inject_synced_rule_sets(&mut parsed.content, &managed_tags, outcome.artifacts);
     for failure in outcome.failures {
         logs::znet_log_fields(
             Some(state),
@@ -430,7 +429,7 @@ async fn sync_subscription(
                 if failure.used_previous_artifact {
                     "continuing with the last verified ZRS"
                 } else {
-                    "dropping its route rules"
+                    "configuration application is blocked until this dependency is available"
                 }
             ),
             json!({
@@ -440,12 +439,13 @@ async fn sync_subscription(
                 "subscriptionName": subscription.name,
                 "ruleSetTag": failure.tag,
                 "usedPreviousArtifact": failure.used_previous_artifact,
-                "routeReferencesRemoved": removed_tags.contains(&failure.tag),
+                "routeReferencesRemoved": false,
                 "errorMessage": failure.message,
             }),
         );
     }
 
+    injection?;
     ensure_subscription_unchanged(state, &subscription)?;
 
     upsert_synced_proxy_config(
@@ -478,7 +478,7 @@ fn inject_synced_rule_sets(
     content: &mut Value,
     managed_tags: &std::collections::BTreeSet<String>,
     artifacts: Vec<rule_set::ManagedRuleSetArtifact>,
-) -> AppResult<Vec<String>> {
+) -> AppResult<()> {
     let route = content
         .get_mut("route")
         .and_then(Value::as_object_mut)
@@ -502,33 +502,8 @@ fn inject_synced_rule_sets(
             "format": "zrs"
         })
     }));
-    let available_tags = definitions
-        .iter()
-        .filter_map(|definition| definition.get("tag").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut removed_tags = std::collections::BTreeSet::new();
-    if let Some(rules) = route.get_mut("rules").and_then(Value::as_array_mut) {
-        rules.retain(|rule| {
-            let referenced = rule
-                .get("condition")
-                .filter(|condition| {
-                    condition.get("type").and_then(Value::as_str) == Some("rule_set")
-                })
-                .and_then(|condition| condition.get("tag"))
-                .and_then(Value::as_str);
-            let keep = referenced.is_none_or(|tag| available_tags.contains(tag));
-            if !keep {
-                removed_tags.insert(
-                    referenced
-                        .expect("missing rule-set tag is retained")
-                        .to_string(),
-                );
-            }
-            keep
-        });
-    }
-    Ok(removed_tags.into_iter().collect())
+    crate::services::route_integrity::validate(content)?;
+    Ok(())
 }
 
 fn zero_url_rule_set_sources(
@@ -970,16 +945,37 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<(Value, Vec<ClashRuleProvid
         })
         .unwrap_or_default();
 
-    let mut rules = root
-        .get("rules")
-        .and_then(Value::as_array)
-        .map(|rules| {
-            rules
-                .iter()
-                .filter_map(|rule| convert_clash_rule(rule, &known_tags))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut rules = Vec::new();
+    if let Some(source_rules) = root.get("rules") {
+        let source_rules = source_rules
+            .as_array()
+            .ok_or_else(|| AppError::invalid_argument("subscription rules must be an array"))?;
+        for (index, rule) in source_rules.iter().enumerate() {
+            let parts = rule
+                .as_str()
+                .map(|raw| raw.split(',').map(str::trim).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let is_final = parts
+                .first()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("MATCH"));
+            if is_final
+                && parts.len() == 2
+                && index + 1 == source_rules.len()
+                && clash_match_outbound(rule, &known_tags).is_some()
+            {
+                continue;
+            }
+            if !is_final && parts.len() == 3 {
+                if let Some(converted) = convert_clash_rule(rule, &known_tags) {
+                    rules.push(converted);
+                    continue;
+                }
+            }
+            return Err(AppError::invalid_argument(format!(
+                "订阅第 {} 条规则无法完整转换：不支持的规则类型、参数或目标；已拒绝导入以保留原路由策略", index + 1
+            )));
+        }
+    }
     let referenced_rule_sets = rules
         .iter()
         .filter_map(|rule| {
@@ -996,15 +992,18 @@ fn convert_clash_to_zero(clash: &Value) -> AppResult<(Value, Vec<ClashRuleProvid
     let rule_providers = convert_clash_rule_providers(root, &referenced_rule_sets);
     let available_rule_sets = rule_providers
         .iter()
-        .map(|provider| provider.tag.as_str())
+        .map(|provider| provider.tag.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    rules.retain(|rule| {
-        rule.get("condition")
-            .filter(|condition| condition.get("type").and_then(Value::as_str) == Some("rule_set"))
-            .and_then(|condition| condition.get("tag"))
-            .and_then(Value::as_str)
-            .is_none_or(|tag| available_rule_sets.contains(tag))
-    });
+    let missing = referenced_rule_sets
+        .difference(&available_rule_sets)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(AppError::invalid_argument(format!(
+            "subscription rule provider definitions are missing or unsupported: {}",
+            missing.join(", ")
+        )));
+    }
 
     let final_outbound = root
         .get("rules")
@@ -2208,7 +2207,7 @@ rule-providers:
             }
         });
 
-        let removed = inject_synced_rule_sets(
+        inject_synced_rule_sets(
             &mut content,
             &std::collections::BTreeSet::from(["AI-Suite".to_string()]),
             vec![rule_set::ManagedRuleSetArtifact {
@@ -2218,7 +2217,6 @@ rule-providers:
         )
         .unwrap();
 
-        assert!(removed.is_empty());
         let definitions = content["route"]["rule_sets"].as_array().unwrap();
         assert_eq!(definitions.len(), 2);
         let local = definitions
@@ -2239,22 +2237,36 @@ rule-providers:
     }
 
     #[test]
-    fn clash_rule_set_without_provider_is_dropped_without_rejecting_subscription() {
-        let parsed = parse_subscription_content(
-            "proxies:\n  - {name: HK, type: ss, server: s, port: 1, password: p}\nrules:\n  - RULE-SET,Missing,DIRECT\n",
-            "clash",
-        )
-        .unwrap();
-
-        assert!(parsed.rule_providers.is_empty());
-        assert!(parsed.content["route"]["rules"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+    fn unsupported_or_invalid_clash_rules_never_silently_disappear() {
+        for rule in [
+            "PROCESS-NAME,example,REJECT",
+            "DOMAIN,example,Missing",
+            "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+            "MATCH,Missing",
+            "MATCH,DIRECT\n  - DOMAIN,example,REJECT",
+        ] {
+            let source = format!("proxies:\n  - {{name: HK, type: ss, server: s, port: 1, password: p}}\nrules:\n  - {rule}\n");
+            let error = parse_subscription_content(&source, "clash")
+                .err()
+                .expect("incomplete policy must fail");
+            assert!(
+                error.message.contains("规则无法完整转换"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[test]
-    fn unavailable_provider_drops_only_its_route_reference() {
+    fn clash_rule_set_without_provider_rejects_the_incomplete_subscription() {
+        assert!(parse_subscription_content(
+            "proxies:\n  - {name: HK, type: ss, server: s, port: 1, password: p}\nrules:\n  - RULE-SET,Missing,DIRECT\n",
+            "clash",
+        ).is_err());
+    }
+
+    #[test]
+    fn unavailable_provider_rejects_sync_without_deleting_reject_rules() {
         let mut content = json!({
             "route": {
                 "rules": [
@@ -2264,7 +2276,7 @@ rule-providers:
                 ]
             }
         });
-        let removed = inject_synced_rule_sets(
+        let error = inject_synced_rule_sets(
             &mut content,
             &std::collections::BTreeSet::from(["Missing".to_string(), "Available".to_string()]),
             vec![rule_set::ManagedRuleSetArtifact {
@@ -2272,13 +2284,11 @@ rule-providers:
                 path: "available.zrs".to_string(),
             }],
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(removed, vec!["Missing".to_string()]);
-        let rules = content["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0]["condition"]["tag"], "Available");
-        assert_eq!(rules[1]["condition"]["type"], "domain");
+        assert_eq!(error.code, "rule_set_dependency_unavailable");
+        assert_eq!(content["route"]["rules"].as_array().unwrap().len(), 3);
+        assert_eq!(content["route"]["rules"][0]["action"]["type"], "reject");
     }
 
     #[test]

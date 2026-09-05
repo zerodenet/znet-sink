@@ -4,7 +4,8 @@
   "kernelCommit": null,
   "blockers": [
     "Installed network and lifecycle evidence for the new paired candidate is pending on all four supported platforms.",
-    "Interrupted kernel update recovery requires qualification, including pending transaction handling."
+    "Interrupted kernel update recovery requires qualification, including pending transaction handling.",
+    "Cross-resource configuration and subscription recovery needs fault-injection evidence for storage failures, OS proxy failures, and process interruption."
   ],
   "platforms": {
     "darwin-x86_64": {

@@ -19,7 +19,7 @@ function loadService(file, dependencies) {
   return exports;
 }
 
-function tunService({ status, stop, profile = {} }) {
+function tunService({ status, stop, start = () => {}, profile = {} }) {
   const config = { tun: { enabled: true } };
   const calls = [];
   const service = loadService('tun.ts', {
@@ -27,12 +27,15 @@ function tunService({ status, stop, profile = {} }) {
       async invoke(command) {
         if (command === 'proxy_config_list') return [{ active: true, content: profile }];
         if (command === 'gui_tun_status') return status();
+        if (command === 'gui_tun_enable') { calls.push('start'); return start(); }
         if (command === 'gui_tun_disable') { calls.push('stop'); return stop(); }
         throw new Error(`unexpected command: ${command}`);
       },
     },
     './core': {
       async getAppConfig() { return config; },
+      async getGuiConnectionStatus() { return { coreAvailable: true }; },
+      async getGuiCoreHealth() { return { healthy: true }; },
       async updateAppConfig(patch) { calls.push(`save:${patch.tun.enabled}`); Object.assign(config.tun, patch.tun); },
     },
     '$lib/services/kernel-capabilities': {},
@@ -148,4 +151,22 @@ test('restart and TUN mutation guards prevent overlapping user actions', () => {
   state.isStoppingCore = true;
   assert.equal(state.canDisableTun, false);
   assert.equal(state.canEnableTun, false);
+});
+
+for (const profileOwned of [false, true]) {
+  test(`enabled but unhealthy TUN is never a successful enable (profile owned: ${profileOwned})`, async () => {
+    const { service } = tunService({
+      status: () => ({ ...snapshot(true), healthy: false }),
+      profile: profileOwned ? { runtime: { tun: {} } } : {},
+    });
+    await assert.rejects(service.enableGuiTun(), {
+      code: profileOwned ? 'tun_profile_runtime_inactive' : 'tun_start_unconfirmed',
+    });
+  });
+}
+
+test('healthy enabled TUN can confirm an explicit enable', async () => {
+  const { service, calls } = tunService({ status: () => ({ ...snapshot(true), healthy: true }) });
+  assert.equal((await service.enableGuiTun()).healthy, true);
+  assert.deepEqual(calls, ['save:true']);
 });

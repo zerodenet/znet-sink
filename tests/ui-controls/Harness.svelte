@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LocalProxyEndpointPanel from '$lib/components/settings/LocalProxyEndpointPanel.svelte';
   import CoreConfigPanel from '$lib/components/settings/CoreConfigPanel.svelte';
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import RulesTab from '$lib/components/tabs/RulesTab.svelte';
@@ -42,7 +43,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
@@ -7,6 +7,7 @@ use crate::services::kernel_settings::{self, KernelSettingsExportResult};
 use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
+mod effects;
 pub(crate) mod tun_settings;
 
 #[tauri::command]
@@ -146,56 +147,62 @@ pub async fn app_config_update(
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
 
-    // Apply the patch and persist.
-    let new_config = app_config::update(state.clone(), patch)?;
+    // Read legacy capture intent before replacing settings or stopping the process.
+    let was_running =
+        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let new_config = app_config::prepare_update(&old_config, patch)?;
+    let effects = effects::between(&old_config, &new_config);
+    let legacy_tun = if was_running && effects.restart && old_config.tun.enabled.is_none() {
+        Some(crate::commands::core_process::app_tun_runtime_enabled(state.inner()).await?)
+    } else {
+        None
+    };
+    if was_running && old_config.dns != new_config.dns {
+        return Err(AppError::invalid_argument(
+            "运行中 DNS 配置必须通过 DNS 应用事务修改，请使用 DNS 设置页的应用操作",
+        ));
+    }
+    let custom_endpoint = old_config.local_proxy.source_proxy_config_id.is_some();
+    if custom_endpoint
+        && (old_config.local_proxy.host != new_config.local_proxy.host
+            || old_config.local_proxy.port != new_config.local_proxy.port)
+    {
+        return Err(AppError::invalid_argument(
+            "当前代理入口由配置文件定义，请在配置编辑器修改入站地址和端口",
+        ));
+    }
+    if effects.restart || effects.recompose || old_config.dns != new_config.dns {
+        rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?;
+    }
+    app_config::replace(state.inner(), new_config.clone())?;
 
-    // Detect whether a restart-worthy field changed while the kernel is
-    // running.  We check the kernel state *after* the config update so the
-    // lock is released — `core_process::stop/start` acquire their own locks.
+    // Process transitions run without holding the settings mutex.
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-    let url_test_tolerance_changed =
-        old_config.url_test.tolerance_ms != new_config.url_test.tolerance_ms;
+    let runtime_config_changed = effects.recompose;
 
     if kernel_running {
-        let needs_restart = old_config.core.executable_path != new_config.core.executable_path
-            || old_config.core.socket != new_config.core.socket
-            || old_config.core.working_dir != new_config.core.working_dir
-            || old_config.core.config_path != new_config.core.config_path;
-
-        if needs_restart {
+        if effects.restart {
             // Drop the stale multiplexed connection so the next request
             // opens a fresh one against the (possibly new) endpoint.
             crate::kernel::connection::reset();
 
-            let transition_app = app_handle.clone();
-            let should_start = new_config.core.auto_start;
-            let transition = tauri::async_runtime::spawn_blocking(move || {
-                if should_start {
-                    core_process::restart(transition_app).map(|_| ())
-                } else {
-                    let transition_state = transition_app.state::<AppState>();
-                    core_process::stop(transition_app.clone(), transition_state).map(|_| ())
-                }
-            })
-            .await
-            .map_err(|error| AppError::internal(format!("core transition task failed: {error}")))
-            .and_then(|result| result);
+            // auto_start is a next-launch preference, not permission to stop
+            // a kernel the user already started manually.
+            let transition =
+                restart_core_and_restore_tun(app_handle.clone(), state.inner(), legacy_tun).await;
 
             if let Err(error) = transition {
                 let storage_rollback = app_config::replace(state.inner(), old_config.clone())
                     .err()
                     .map(|rollback| rollback.message);
                 crate::kernel::connection::reset();
-                let rollback_app = app_handle.clone();
-                let mut runtime_rollback = tauri::async_runtime::spawn_blocking(move || {
-                    core_process::restart(rollback_app).map(|_| ())
-                })
-                .await
-                .map_err(|join| join.to_string())
-                .and_then(|result| result.map_err(|rollback| rollback.message))
-                .err();
+                let mut runtime_rollback =
+                    restart_core_and_restore_tun(app_handle.clone(), state.inner(), legacy_tun)
+                        .await
+                        .err()
+                        .map(|error| error.message);
                 if managed_proxy_enabled
                     && runtime_rollback.is_none()
                     && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
@@ -223,24 +230,31 @@ pub async fn app_config_update(
                 }
                 return Err(AppError::internal(message));
             }
-        } else if url_test_tolerance_changed {
-            // URLTest tolerance is an effective-config preference: keep the
-            // stored subscription/profile source untouched and recompose the
-            // active configuration with the new default immediately.
+        } else if runtime_config_changed {
+            // Endpoint, routing and URLTest preferences change the effective
+            // runtime configuration without rewriting subscription sources.
             if let Err(error) =
                 rule_overlay::reconcile_current_config_locked(app_handle.clone()).await
             {
                 let storage_rollback = app_config::replace(state.inner(), old_config.clone())
                     .err()
                     .map(|rollback| rollback.message);
-                let runtime_rollback =
+                let runtime_rollback = if error.is_unavailable()
+                    || matches!(error.code, "conflict" | "config_apply_uncertain")
+                {
+                    Some(
+                        "configuration completion is uncertain; no competing apply was submitted"
+                            .to_owned(),
+                    )
+                } else {
                     rule_overlay::reconcile_current_config_locked(app_handle.clone())
                         .await
                         .err()
-                        .map(|rollback| rollback.message);
+                        .map(|rollback| rollback.message)
+                };
 
                 let mut message = format!(
-                    "failed to apply URLTest tolerance configuration: {}",
+                    "failed to apply effective client configuration: {}",
                     error.message
                 );
                 if let Some(storage_rollback) = storage_rollback {
@@ -256,20 +270,40 @@ pub async fn app_config_update(
         }
     }
 
-    if managed_proxy_enabled && old_config.local_proxy.bypass != new_config.local_proxy.bypass {
+    if managed_proxy_enabled && effects.retarget_proxy {
         if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(
             &new_config.local_proxy.host,
             new_config.local_proxy.port,
             &new_config.local_proxy.bypass,
         ) {
-            let _ = system_proxy_guard::enable_with_guard_and_bypass(
+            let mut error = error;
+            let storage = app_config::replace(state.inner(), old_config.clone());
+            if let Err(rollback) = storage {
+                error
+                    .message
+                    .push_str(&format!("; settings rollback failed: {}", rollback.message));
+            } else if kernel_running && (runtime_config_changed || effects.restart) {
+                let rollback = if effects.restart {
+                    restart_core_and_restore_tun(app_handle.clone(), state.inner(), legacy_tun)
+                        .await
+                } else {
+                    rule_overlay::reconcile_current_config_locked(app_handle.clone()).await
+                };
+                if let Err(rollback) = rollback {
+                    error
+                        .message
+                        .push_str(&format!("; runtime rollback failed: {}", rollback.message));
+                }
+            }
+            if let Err(rollback) = system_proxy_guard::enable_with_guard_and_bypass(
                 &old_config.local_proxy.host,
                 old_config.local_proxy.port,
                 &old_config.local_proxy.bypass,
-            );
-            let _ = app_config::replace(state.inner(), old_config.clone());
-            if kernel_running && url_test_tolerance_changed {
-                let _ = rule_overlay::reconcile_current_config_locked(app_handle.clone()).await;
+            ) {
+                error.message.push_str(&format!(
+                    "; system proxy rollback failed: {}",
+                    rollback.message
+                ));
             }
             return Err(error);
         }

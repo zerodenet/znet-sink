@@ -131,7 +131,7 @@ async function waitForTunStateAfterTransientIpcError(
 
   do {
     const status = await getGuiTunStatus().catch(() => null);
-    if (status?.enabled === expectedEnabled) return status;
+    if (status?.enabled === expectedEnabled && (!expectedEnabled || status.healthy)) return status;
     if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, TUN_STATE_RECONCILE_INTERVAL_MS));
   } while (true);
@@ -336,11 +336,11 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
       throw profileManagedError(policy, 'enable');
     }
     const enriched = enrichTunStatus(current, policy);
-    if (!current.enabled) {
+    if (!current.enabled || !current.healthy) {
       const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
       throw {
         code: 'tun_profile_runtime_inactive',
-        message: `${name} 已要求启用 TUN，但当前内核未运行该 TUN。请检查内核运行状态或配置错误。`,
+        message: `${name} 已要求启用 TUN，但当前内核未健康运行该 TUN。请检查内核运行状态或配置错误。`,
       };
     }
     return enriched;
@@ -359,7 +359,7 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
       await invoke('gui_tun_enable');
     }
     const confirmed = await getGuiTunStatus();
-    if (!confirmed.enabled) throw { code: 'tun_start_unconfirmed', message: 'Zero 未确认 TUN 已启动' };
+    if (!confirmed.enabled || !confirmed.healthy) throw { code: 'tun_start_unconfirmed', message: 'Zero 未确认 TUN 已健康启动' };
     return confirmed;
   } catch (error) {
     // tun.start can finish its platform route work after the IPC response

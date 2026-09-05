@@ -5,11 +5,8 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     core_process::CoreProcessState,
     gui_core::{GuiProxyMode, GuiProxyModeStatus, GuiSetProxyModeInput},
-    logs::LogLevel,
 };
-use crate::services::{
-    common, core_config, core_process, logs, proxy_config, system_proxy, system_proxy_guard,
-};
+use crate::services::{common, core_process, proxy_config, system_proxy};
 use crate::state::app_state::AppState;
 
 const GROUP_KEYS: &[&str] = &[
@@ -40,194 +37,70 @@ pub async fn set(
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    let requested_mode = input.mode;
-    let global_outbound = common::normalize_optional(input.global_outbound);
-    let restart_core = input.restart_core.unwrap_or(false);
-
     let core_was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-
-    // Build the next profile snapshot without mutating shared state. Persisting
-    // through the proxy-config transaction keeps the domain file, app config,
-    // and in-memory profiles on the same revision.
-    let previous_profiles = common::lock(state.proxy_configs(), "proxy_config")?.clone();
-    let mut next_profiles = previous_profiles.clone();
-    {
-        let active = next_profiles
-            .iter_mut()
-            .find(|profile| profile.active)
-            .ok_or_else(|| AppError::invalid_argument("no active proxy config"))?;
-        let content = active.content.as_mut().ok_or_else(|| {
-            AppError::invalid_argument("active proxy config does not contain JSON content")
-        })?;
-        if !content.is_object() {
-            return Err(AppError::invalid_argument(
-                "active proxy config content must be a JSON object",
-            ));
-        }
-
-        apply_route_mode(content, &requested_mode, global_outbound.as_deref())?;
-        active.capabilities = proxy_config::analyze_capabilities(Some(content));
-        active.updated_at_unix_ms = common::now_unix_ms();
-    }
-
-    proxy_config::persist_profile_transition(state.inner(), &previous_profiles, next_profiles)?;
-    if let Err(error) = core_config::export_active(state.clone()) {
-        let _ = restore_mode_profiles(state.clone(), &previous_profiles);
-        return Err(error);
-    }
-
-    let mut restarted_core = false;
-    let mut hot_switched = false;
-
-    if core_was_running {
-        // Try mode.set hot-switch first (no restart, no connection interruption)
-        let common_rules_enabled = common::lock(state.app_config(), "app_config")?
-            .routing
-            .inject_common_rules;
-        if !restart_core && !common_rules_enabled {
-            hot_switched =
-                try_hot_mode_set(&requested_mode, global_outbound.as_deref(), state.inner()).await;
-        }
-
-        // Fallback: restart kernel if hot-switch failed or user explicitly
-        // requested restart. `stop`/`start` are blocking operations
-        // (`child.wait`, stderr join, kill backoff, port probe), so run them
-        // on the blocking pool just like the dedicated restart command does.
-        if !hot_switched {
-            logs::znet_log(
-                Some(state.inner()),
-                LogLevel::Info,
-                format!(
-                    "proxy mode switch: restarting core for {:?}",
-                    requested_mode
-                ),
-            );
-            let restart_app = app_handle.clone();
-            let restart_result =
-                tauri::async_runtime::spawn_blocking(move || core_process::restart(restart_app))
-                    .await
-                    .map_err(|e| AppError::internal(format!("proxy mode restart task failed: {e}")))
-                    .and_then(|result| result);
-            match restart_result {
-                Ok(started) => {
-                    restarted_core = started.state == CoreProcessState::Running;
-                }
-                Err(error) => {
-                    let rollback_error = restore_mode_profiles(state.clone(), &previous_profiles)
-                        .err()
-                        .map(|rollback| rollback.message);
-                    let rollback_app = app_handle.clone();
-                    let runtime_rollback_error = tauri::async_runtime::spawn_blocking(move || {
-                        core_process::restart(rollback_app)
-                    })
-                    .await
-                    .map_err(|join| join.to_string())
-                    .and_then(|result| result.map_err(|rollback| rollback.message))
-                    .err();
-                    if managed_proxy_enabled
-                        && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+    let previous = active_proxy_config(state.inner())?
+        .ok_or_else(|| AppError::invalid_argument("no active proxy config"))?;
+    let mut candidate = previous.clone();
+    let content = candidate.content.as_mut().ok_or_else(|| {
+        AppError::invalid_argument("active proxy config does not contain JSON content")
+    })?;
+    apply_route_mode(
+        content,
+        &input.mode,
+        common::normalize_optional(input.global_outbound).as_deref(),
+    )?;
+    // The same confirmed apply-and-persist path owns profile edits, subscription
+    // updates and mode changes. A rejected/timed-out apply never implies restart.
+    proxy_config::upsert_runtime_locked(app_handle.clone(), profile_input(candidate)).await?;
+    let restart = core_was_running && input.restart_core.unwrap_or(false);
+    if restart {
+        let result = crate::commands::core_process::restart_managed(app_handle.clone())
+            .await
+            .and_then(|result| result.require_restored());
+        if let Err(mut error) = result {
+            match proxy_config::upsert_runtime_locked(app_handle.clone(), profile_input(previous))
+                .await
+            {
+                Err(rollback) => error
+                    .message
+                    .push_str(&format!("; mode rollback failed: {}", rollback.message)),
+                Ok(_) => {
+                    if let Err(rollback) =
+                        crate::commands::core_process::restart_managed(app_handle.clone())
+                            .await
+                            .and_then(|result| result.require_restored())
                     {
-                        let endpoint = common::lock(state.app_config(), "app_config")?
-                            .local_proxy
-                            .clone();
-                        let _ = system_proxy_guard::enable_with_guard_and_bypass(
-                            &endpoint.host,
-                            endpoint.port,
-                            &endpoint.bypass,
-                        );
+                        error
+                            .message
+                            .push_str(&format!("; runtime rollback failed: {}", rollback.message));
                     }
-                    let mut message = format!(
-                        "failed to restart the kernel after changing proxy mode: {}",
-                        error.message
-                    );
-                    if let Some(rollback_error) = rollback_error {
-                        message.push_str(&format!("; profile rollback failed: {rollback_error}"));
-                    }
-                    if let Some(runtime_rollback_error) = runtime_rollback_error {
-                        message.push_str(&format!(
-                            "; runtime rollback failed: {runtime_rollback_error}"
-                        ));
-                    }
-                    logs::znet_log(Some(state.inner()), LogLevel::Error, message.clone());
-                    return Err(AppError::internal(message));
                 }
             }
+            return Err(error);
         }
     }
-
-    let core_running =
-        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     Ok(build_status_from_active(
         active_proxy_config(state.inner())?.as_ref(),
         true,
-        core_running,
-        restarted_core,
-        hot_switched,
+        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running,
+        restart,
+        core_was_running && !restart,
         None,
     ))
 }
 
-fn restore_mode_profiles(
-    state: State<'_, AppState>,
-    previous_profiles: &[crate::models::proxy_config::ProxyConfigProfile],
-) -> AppResult<()> {
-    let current = common::lock(state.proxy_configs(), "proxy_config")?.clone();
-    proxy_config::persist_profile_transition(state.inner(), &current, previous_profiles.to_vec())?;
-    core_config::export_active(state)?;
-    Ok(())
-}
-
-/// Try the kernel's `mode.set` command for hot mode switching.
-/// Returns `true` if the command succeeded, `false` otherwise.
-/// Does not error — the caller falls back to kernel restart on failure.
-///
-/// `async` because `set_mode` is an async kernel-adapter call. A previous
-/// version used `tauri::async_runtime::block_on` here, which would panic
-/// with "Cannot start a runtime from within a runtime" if this code ever
-/// runs on a tokio worker (e.g. if an async Tauri command ends up in the
-/// call chain).
-async fn try_hot_mode_set(mode: &GuiProxyMode, outbound: Option<&str>, state: &AppState) -> bool {
-    let mode_str = match mode {
-        GuiProxyMode::Global => "global",
-        GuiProxyMode::Rule => "rule",
-        GuiProxyMode::Direct => "direct",
-    };
-
-    let opts = core_config::ipc_options_from_app_config(
-        &common::lock(state.app_config(), "app_config")
-            .map(|c| c.core.clone())
-            .unwrap_or_default(),
-    );
-
-    let adapter = crate::kernel::zero::ZeroAdapter::new();
-    match crate::kernel::adapter::KernelAdapter::set_mode(
-        &adapter,
-        mode_str.to_string(),
-        outbound.map(String::from),
-        opts,
-    )
-    .await
-    {
-        Ok(_) => {
-            logs::znet_log(
-                Some(state),
-                LogLevel::Info,
-                format!("proxy mode hot-switch succeeded: {mode_str}"),
-            );
-            eprintln!("[ZNet] mode.set hot-switch succeeded: {mode_str}");
-            true
-        }
-        Err(e) => {
-            logs::znet_log(
-                Some(state),
-                LogLevel::Warn,
-                format!("proxy mode hot-switch failed for {mode_str}, falling back to restart"),
-            );
-            eprintln!("[ZNet] mode.set failed, will restart kernel: {e:?}");
-            false
-        }
+fn profile_input(
+    profile: crate::models::proxy_config::ProxyConfigProfile,
+) -> crate::models::proxy_config::ProxyConfigUpsert {
+    crate::models::proxy_config::ProxyConfigUpsert {
+        id: Some(profile.id),
+        name: profile.name,
+        kernel: Some(profile.kernel),
+        format: Some(profile.format),
+        path: profile.path,
+        content: profile.content,
+        active: Some(profile.active),
     }
 }
 

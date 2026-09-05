@@ -4,6 +4,22 @@ use std::time::Duration;
 use crate::errors::{AppError, AppResult};
 use crate::models::zero_runtime::GuiTunStatus;
 
+pub(super) async fn restart_intent<Q, F>(
+    saved: Option<bool>,
+    running: bool,
+    query: Q,
+) -> AppResult<bool>
+where
+    Q: FnOnce() -> F,
+    F: Future<Output = AppResult<bool>>,
+{
+    match saved {
+        Some(value) => Ok(value),
+        None if running => query().await,
+        None => Ok(false),
+    }
+}
+
 // Submit at most one mutation. A lost reply is reconciled through status reads,
 // never by starting another overlapping platform operation.
 pub(super) async fn restore<Q, QF, E, EF>(

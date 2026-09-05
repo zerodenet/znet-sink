@@ -6,7 +6,7 @@ pub use original::{
     parse_config_content, remove, remove_runtime, set_active, update_active_content, upsert,
     LocalProxyEndpoint,
 };
-pub(crate) use original::{persist_profile_transition, retarget_managed_system_proxy};
+pub(crate) use original::{retarget_managed_system_proxy, upsert_runtime_locked};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -47,10 +47,11 @@ fn is_local_proxy_inbound(inbound: &Value) -> bool {
 }
 
 fn is_managed_local_inbound(inbound: &Value) -> bool {
-    inbound
-        .get("tag")
-        .and_then(Value::as_str)
-        .is_some_and(|tag| matches!(tag.trim(), MANAGED_MIXED_TAG | LEGACY_MANAGED_MIXED_TAG))
+    is_local_proxy_inbound(inbound)
+        && inbound
+            .get("tag")
+            .and_then(Value::as_str)
+            .is_some_and(|tag| matches!(tag.trim(), MANAGED_MIXED_TAG | LEGACY_MANAGED_MIXED_TAG))
 }
 
 fn local_inbound_is_usable(inbound: &Value) -> bool {
@@ -65,6 +66,29 @@ fn resolve_managed_endpoint(config: &AppLocalProxyConfig) -> (String, u16) {
         );
     }
     (config.host.clone(), config.port)
+}
+
+pub(crate) fn has_managed_local_inbound(content: &Value) -> bool {
+    content
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .is_some_and(|inbounds| inbounds.iter().any(is_managed_local_inbound))
+}
+
+pub(crate) fn project_managed_endpoint(
+    content: &mut Value,
+    settings: &AppLocalProxyConfig,
+) -> AppResult<()> {
+    let (host, port) = resolve_managed_endpoint(settings);
+    if let Some(inbounds) = content.get_mut("inbounds").and_then(Value::as_array_mut) {
+        for inbound in inbounds
+            .iter_mut()
+            .filter(|inbound| is_managed_local_inbound(inbound))
+        {
+            set_managed_endpoint(inbound, &host, port)?;
+        }
+    }
+    Ok(())
 }
 
 fn configured_managed_endpoint(state: &AppState) -> AppResult<(String, u16)> {
@@ -232,6 +256,22 @@ mod wrapper_tests {
             resolve_managed_endpoint(&config),
             ("127.0.0.2".to_string(), 8899)
         );
+    }
+
+    #[test]
+    fn effective_endpoint_changes_only_the_client_owned_inbound() {
+        let source = json!({"inbounds": [
+            {"tag": MANAGED_MIXED_TAG, "protocol":{"type":"mixed"}, "listen":{"address":"127.0.0.1","port":7890}},
+            {"tag": "custom-http", "protocol":{"type":"http"}, "listen":{"address":"127.0.0.2","port":8090}}
+        ]});
+        let mut effective = source.clone();
+        let mut settings = AppLocalProxyConfig::default();
+        settings.port = 8899;
+        super::project_managed_endpoint(&mut effective, &settings).unwrap();
+        assert_eq!(effective["inbounds"][0]["listen"]["port"], 8899);
+        assert_eq!(effective["inbounds"][1], source["inbounds"][1]);
+        assert_eq!(source["inbounds"][0]["listen"]["port"], 7890);
+        assert!(super::has_managed_local_inbound(&effective));
     }
 
     #[test]

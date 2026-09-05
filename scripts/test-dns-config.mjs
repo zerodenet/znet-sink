@@ -137,9 +137,11 @@ assert.doesNotMatch(selectContent, /--bits-select-/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
 assert.ok(
   activation.indexOf('validate_config(content.clone(), options.clone())')
-    < activation.indexOf('match adapter.apply_config(content, options).await'),
-  'profile activation must validate the composed target config before hot apply or restart fallback',
+    < activation.indexOf('match crate::services::config_apply::apply(content, options).await'),
+  'profile activation must validate the composed target config before confirmed hot apply',
 );
+
+assert.doesNotMatch(activation, /Err\(_\)\s*=>/);
 
 const features = projectClientKernelFeatures({
   available: true,

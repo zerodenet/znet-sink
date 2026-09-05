@@ -5,6 +5,7 @@ pub(crate) mod atomic_file;
 pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
+mod config_apply;
 pub mod connection_history_store;
 pub mod core_config;
 pub mod core_events;
@@ -35,6 +36,7 @@ pub(crate) mod profile_switch;
 #[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
 pub mod proxy_mode;
+mod route_integrity;
 pub mod rule_overlay;
 pub mod rule_set;
 #[path = "subscription_wrapper.rs"]

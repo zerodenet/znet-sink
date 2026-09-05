@@ -69,7 +69,7 @@
 
   async function handleReleaseAction(release: AppRelease) {
     const action = relation(release);
-    if (action === 'current' || workingTag || updater.downloading) return;
+    if (action === 'current' || workingTag || updater.busy || updater.restartRequired) return;
 
     installError = null;
 
@@ -152,6 +152,13 @@
       {/each}
     </Tabs.List>
 
+    {#if updater.restartRequired}
+      <div class="message" role="status">
+        更新已安装，请重启应用。{updater.lastError ?? ''}
+        <Button size="sm" onclick={() => updater.restartApp()} disabled={updater.busy}>重启应用</Button>
+      </div>
+    {/if}
+
     {#if installError}
       <div class="message error" role="alert">{installError}</div>
     {/if}
@@ -202,7 +209,7 @@
               size="sm"
               class="install"
               onclick={() => handleReleaseAction(release)}
-              disabled={action === 'current' || workingTag !== null || updater.downloading}
+              disabled={action === 'current' || workingTag !== null || updater.busy || updater.restartRequired}
             >
               {#if workingTag === release.tagName}
                 <LoaderCircle class="animate-spin" />

@@ -91,3 +91,34 @@ async fn stopped_acknowledgement_is_not_successful_restoration() {
     .await;
     assert_eq!(result.unwrap_err().code, "tun_restore_unconfirmed");
 }
+
+#[tokio::test]
+async fn restart_of_stopped_kernel_does_not_query_a_missing_runtime() {
+    assert!(!super::restart_intent(None, false, || async {
+        panic!("stopped kernel has no IPC")
+    })
+    .await
+    .unwrap());
+    assert!(super::restart_intent(Some(true), false, || async {
+        panic!("saved intent is authoritative")
+    })
+    .await
+    .unwrap());
+}
+
+#[tokio::test]
+async fn restart_preserves_legacy_live_tun_and_fails_before_stopping_if_unknown() {
+    assert!(super::restart_intent(None, true, || async { Ok(true) })
+        .await
+        .unwrap());
+    assert!(super::restart_intent(None, true, || async {
+        Err(crate::errors::AppError::internal("cannot inspect TUN"))
+    })
+    .await
+    .is_err());
+    assert!(!super::restart_intent(Some(false), true, || async {
+        panic!("explicit disabled intent is authoritative")
+    })
+    .await
+    .unwrap());
+}

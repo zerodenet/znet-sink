@@ -147,14 +147,40 @@ pub async fn core_process_restart(
 ) -> AppResult<CoreProcessTransitionResponse> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
+    restart_managed(app_handle.clone()).await
+}
+
+/// Caller holds the shared operation lock. Every product restart path must
+/// preserve capture intent and expose a failed restoration to its caller.
+pub(crate) async fn restart_managed(
+    app_handle: AppHandle,
+) -> AppResult<CoreProcessTransitionResponse> {
+    let state = app_handle.state::<AppState>();
+    let saved = common::lock(state.app_config(), "app_config")?.tun.enabled;
+    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    let desired =
+        tun_restore::restart_intent(saved, running, || app_tun_runtime_enabled(state.inner()))
+            .await?;
     let restart_app = app_handle.clone();
     let status = tauri::async_runtime::spawn_blocking(move || core_process::restart(restart_app))
         .await
         .map_err(|e| AppError::internal(format!("core restart task failed: {e}")))??;
 
-    let tun_restore_error = restore_app_tun_best_effort(state.inner(), "restart").await;
+    let tun_restore_error =
+        restore_app_tun_after_core_transition_with_desired(state.inner(), Some(desired))
+            .await
+            .err();
     Ok(CoreProcessTransitionResponse {
         status,
         tun_restore_error,
     })
+}
+
+impl CoreProcessTransitionResponse {
+    pub(crate) fn require_restored(self) -> AppResult<CoreProcessStatus> {
+        if let Some(error) = self.tun_restore_error {
+            return Err(error);
+        }
+        Ok(self.status)
+    }
 }
