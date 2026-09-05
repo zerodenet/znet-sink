@@ -8,6 +8,8 @@ on:
   push:
     branches:
       - develop
+      - main
+  workflow_dispatch:
 
 concurrency:
   group: znet-sink-ci-${{ github.ref }}
@@ -38,6 +40,9 @@ jobs:
 
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
+
+      - name: Validate release policy and stable evidence gate
+        run: pnpm test:release-version
 
       - name: Run TUN state and restart recovery regression
         run: pnpm test:tun-recovery
@@ -313,4 +318,3 @@ jobs:
           } finally {
             Stop-Zero $process
           }
-
