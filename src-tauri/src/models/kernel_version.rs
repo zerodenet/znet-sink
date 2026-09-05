@@ -36,6 +36,23 @@ pub struct KernelDownloadProgress {
     pub percent: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelInstallStage {
+    Preparing,
+    Validating,
+    BackingUp,
+    Installing,
+    Starting,
+    RollingBack,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct KernelInstallProgress<'a> {
+    pub version: &'a str,
+    pub stage: KernelInstallStage,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelInstallResult {

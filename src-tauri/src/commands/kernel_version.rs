@@ -1,13 +1,12 @@
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::errors::AppResult;
 use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::services::{
-    app_config, common, core_process, interaction_mode, kernel_manager, network_probe,
-    system_proxy_guard,
-};
+use crate::services::{common, interaction_mode, kernel_manager};
 use crate::state::app_state::AppState;
+
+mod upgrade;
 
 #[tauri::command]
 pub async fn kernel_list_versions() -> AppResult<KernelVersionList> {
@@ -30,10 +29,15 @@ pub async fn kernel_install_version(
 ) -> AppResult<KernelInstallResult> {
     interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
     let _operation = state.proxy_config_operation().lock().await;
+    kernel_manager::report_install_stage(
+        &app,
+        &version,
+        crate::models::kernel_version::KernelInstallStage::Preparing,
+    );
 
     let install_app = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        kernel_manager::install_version(
+        kernel_manager::prepare_version(
             version,
             download_url,
             expected_sha256,
@@ -44,49 +48,7 @@ pub async fn kernel_install_version(
     .await
     .map_err(|e| crate::errors::AppError::internal(format!("install thread panicked: {e}")))??;
 
-    // Persist the new executable path so subsequent starts and version
-    // detection pick up the freshly installed binary.
-    let executable_path = outcome.result.executable_path.clone();
-    let mut next_config = common::lock(state.app_config(), "app_config")?.clone();
-    next_config.core.executable_path = Some(executable_path);
-    app_config::replace(state.inner(), next_config)?;
-
-    if outcome.restart_core {
-        let restart_app = app.clone();
-        let restore_system_proxy = outcome.restore_system_proxy;
-        tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-            let restart_state = restart_app.state::<AppState>();
-            let proxy_endpoint = if restore_system_proxy {
-                let config = common::lock(restart_state.app_config(), "app_config")?;
-                Some((
-                    config.local_proxy.host.clone(),
-                    config.local_proxy.port,
-                    config.local_proxy.bypass.clone(),
-                ))
-            } else {
-                None
-            };
-
-            core_process::start(restart_app.clone(), restart_state)?;
-            if let Some((host, port, bypass)) = proxy_endpoint {
-                system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|error| {
-            crate::errors::AppError::internal(format!("kernel restart task panicked: {error}"))
-        })?
-        .map_err(|error| {
-            crate::errors::AppError::internal(format!(
-                "kernel installed but failed to restart: {}",
-                error.message
-            ))
-        })?;
-        network_probe::emit_host_network_changed(&app, "core.version_restarted");
-    }
-
-    Ok(outcome.result)
+    upgrade::apply(app, state.inner(), outcome).await
 }
 
 #[tauri::command]

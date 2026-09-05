@@ -1,5 +1,11 @@
 export type ReleaseChannel = 'stable' | 'beta' | 'nightly';
 
+export type KernelInstallStage = 'preparing' | 'validating' | 'backing_up' | 'installing' | 'starting' | 'rolling_back';
+export interface KernelInstallProgress {
+  version: string;
+  stage: KernelInstallStage;
+}
+
 export interface KernelRelease {
   version: string;
   channel: ReleaseChannel;

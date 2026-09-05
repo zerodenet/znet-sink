@@ -1,12 +1,15 @@
 # Current Integration Status
 
-Updated: 2026-08-21
+Lifecycle/storage update: 2026-09-05. Other sections retain their earlier integration scope.
 
 ## Kernel Lifecycle
 
 - `gui_disconnect` disables system proxy only and leaves the managed kernel running.
 - Routine UI actions expose start and restart, not ordinary stop. `core_process_stop` is not registered as a Tauri command; internal stop remains for restart, shutdown, config change, and maintenance paths.
 - Starting the kernel without an active proxy config uses a minimal temporary control-plane config where possible. Enabling system proxy still requires active proxy config content.
+
+- Kernel startup confirms healthy IPC and the exact spawned PID, with a bounded stabilization window. Connect/disconnect and upgrades share the configuration operation lock.
+- Kernel upgrades preserve old files and app settings, then roll back on installation/startup/capture restoration errors. See [core](./core.md) and [storage](./storage.md) for recovery limits.
 
 ## IPC Contracts
 
@@ -17,8 +20,8 @@ Updated: 2026-08-21
 ## Endpoints
 
 - External Unix daemon default: `~/.zero/control.sock`.
-- GUI-managed Unix kernel: executable-adjacent `zero-control.sock`, passed explicitly with `--control-socket`.
-- Windows uses the configured named-pipe endpoint.
+- GUI-managed Unix kernel: process-private `zero-control-<GUI PID>.sock`, passed explicitly with `--control-socket`.
+- Windows defaults to a process-private named-pipe endpoint. Explicit socket overrides remain unchanged on all platforms.
 
 ## Runtime Controls
 

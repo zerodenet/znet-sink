@@ -74,15 +74,15 @@
 
 ## 平台约定
 
-Windows 下 `socket = null` 表示使用 zero 默认 named pipe：`\\.\pipe\zero-control`。
-
-非 Windows 下 `socket = null` 时，Rust 会把 socket 解析为 zero 可执行文件同目录的 `zero-control.sock`，并在 `core_process_start` 时追加：
+GUI 为每个客户端进程生成独立 IPC 地址，并显式传给内核：Unix 使用 `zero-control-<GUI PID>.sock`，Windows 使用带 GUI PID 的 named pipe。显式 socket 配置保留原路径作为诊断覆盖；界面返回的 `endpoint` 和 `launchArgs` 是实际启动依据。
 
 ```text
-zero run --control-socket <zero-dir>/zero-control.sock <configPath>
+zero run --parent-lifetime-stdin --control-socket <private-endpoint> <configPath>
 ```
 
-如果用户在 `AppConfig.core.socket` 中显式配置路径，则所有平台都使用该路径。
+客户端持有子进程 stdin 写端。正常退出会先清理托管 TUN 和系统代理，再停止子进程；客户端意外退出时 stdin EOF 也会触发支持该参数的内核退出。客户端只管理自身启动的子进程，不接管或终止历史遗留实例。
+
+下面的 JSON 仅示意字段结构；实际 endpoint 包含客户端 PID。
 
 ## 进程托管
 
@@ -128,7 +128,21 @@ zero run --control-socket <zero-dir>/zero-control.sock <configPath>
 | `exited` | 已退出 |
 | `failed` | 启动、停止或轮询失败 |
 
-进程托管不依赖 IPC。
+启动成功要求私有 IPC 的 `health.healthy = true`，且 `runtime.pid` 等于本次启动的子进程 PID。后端最多等待 15 秒，并要求连续健康响应至少 300 毫秒，以捕获监听初始化阶段的立即退出。超时或提前退出会清理本次子进程并返回失败。这个检查证明控制面及进程存活；连接系统代理前另行等待本地代理端口可连接。
+
+连接、断开、启动和升级共用配置操作锁。状态轮询在操作进行中不会撤销刻意保留的系统代理。
+
+首次无代理配置启动依赖支持 management-only 待命的内核；本次配套内核已移除空配置启动的 `NoInbounds` 限制。旧内核可能通过配置校验却在运行时退出，不能用短暂 IPC 响应判断成功。
+
+## 内核升级事务
+
+下载、校验和、版本及生命周期参数兼容性检查、现有配置验证均在停止当前内核前完成。替换前保留旧文件和应用配置，随后停止自身托管进程、原子替换文件、更新路径；原先运行时，重新启动并确认 IPC 就绪，恢复原有 TUN 意图及托管系统代理后才提交成功。原先停止时保持停止。
+
+失败时先停止候选进程，再恢复旧文件、旧应用配置和运行状态。自动恢复不完整会保留备份并返回 `kernel_upgrade_failed`，其详情包含 `rollbackRestored`、`rollbackErrors` 和 `backupPath`；无法恢复运行状态时尝试解除自身托管系统代理，避免继续指向不可用端口。备份及强制中断边界见 [本地存储](./storage.md)。
+
+版本管理界面同时订阅 `kernel:download-progress` 和 `kernel:install-progress`。后者为 `{ version, stage }`，阶段包括 `preparing`、`validating`、`backing_up`、`installing`、`starting`、`rolling_back`。下载 100% 只表示下载完成，直到安装命令返回才允许关闭或重试；失败消息保留在窗口中。命令成功后前端仅刷新状态，不能再次保存可执行文件路径触发第二次运行时切换。
+
+稳定版更新提示按语义版本比较，旧稳定版不会被提示为较新 RC 的升级。同版本重装仍替换可执行文件并修复 Unix 执行权限；回退也恢复原文件权限，即使文件内容没有变化。
 
 业务前端通常不应直接串联 `core_config_export_active`、`core_process_start`、`system_proxy_enable`。总览页的一键连接/断开应使用 [Zero 适配层接口](./zero-adapter.md) 中的 `gui_connect`、`gui_disconnect` 和 `gui_connection_status`。
 

@@ -87,7 +87,11 @@ const cleanupInput = [
 ];
 assert.deepEqual(
   cleanupTagsForPublishedTag('v0.0.17-rc.202608181100', cleanupInput),
-  ['v0.0.17-dev.202608181000', 'v0.0.17-dev.202608181036', 'v0.0.17-rc.202608181036'],
+  ['v0.0.17-dev.202608181000', 'v0.0.17-dev.202608181036'],
+);
+assert.ok(
+  !cleanupTagsForPublishedTag('v0.0.17-rc.202608181100', cleanupInput)
+    .includes('v0.0.17-rc.202608181036'),
 );
 assert.deepEqual(
   cleanupTagsForPublishedTag('v0.0.17', cleanupInput),
@@ -113,7 +117,7 @@ const populatedCleanupCli = spawnSync(
 assert.equal(populatedCleanupCli.status, 0, populatedCleanupCli.stderr);
 assert.equal(
   populatedCleanupCli.stdout,
-  'v0.0.17-dev.202608181000\nv0.0.17-dev.202608181036\nv0.0.17-rc.202608181036\n',
+  'v0.0.17-dev.202608181000\nv0.0.17-dev.202608181036\n',
 );
 
 assert.equal(selectPreviousReleaseTag('v0.0.17-rc.202608181100', cleanupInput), 'v0.0.17-rc.202608181036');

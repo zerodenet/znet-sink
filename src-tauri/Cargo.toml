@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
 tokio = { version = "1", features = ["sync", "time"] }
 sha2 = "0.10"
+tempfile = "3"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",

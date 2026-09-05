@@ -5,6 +5,7 @@ import type {
   KernelInstallResult,
   KernelDownloadProgress,
   KernelVersionDetect,
+  KernelInstallProgress,
 } from '$lib/types/kernel-version';
 import {
   RELEASE_CHECK_FAILURE_RETRY_MS,
@@ -83,4 +84,8 @@ export function onDownloadProgress(
   return listen<KernelDownloadProgress>('kernel:download-progress', (event) => {
     callback(event.payload);
   });
+}
+
+export function onInstallProgress(callback: (progress: KernelInstallProgress) => void): Promise<UnlistenFn> {
+  return listen<KernelInstallProgress>('kernel:install-progress', (event) => callback(event.payload));
 }

@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -11,13 +10,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppCoreConfig;
-use crate::models::core_process::CoreProcessState;
 use crate::models::kernel_version::{
     KernelDownloadProgress, KernelInstallResult, KernelRelease, KernelVersionDetect,
     KernelVersionList, ReleaseChannel,
 };
 use crate::models::logs::{LogLevel, LogSource};
-use crate::services::{common, core_config, core_process, system_proxy_guard};
+use crate::services::{common, core_config};
 
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/zerodenet/core/releases?per_page=30";
@@ -28,10 +26,20 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600); // 10 min for large archives
 const RUNTIME_MANIFEST_FILE: &str = ".znet-sink-zero-runtime.json";
 
-pub struct KernelInstallOutcome {
-    pub result: KernelInstallResult,
-    pub restart_core: bool,
-    pub restore_system_proxy: bool,
+mod install;
+mod preflight;
+pub(crate) mod transaction;
+pub use install::PreparedKernelInstall;
+
+pub fn report_install_stage(
+    app: &AppHandle,
+    version: &str,
+    stage: crate::models::kernel_version::KernelInstallStage,
+) {
+    let _ = app.emit(
+        "kernel:install-progress",
+        crate::models::kernel_version::KernelInstallProgress { version, stage },
+    );
 }
 
 struct KernelInstallWorkspace {
@@ -116,13 +124,13 @@ pub fn list_available_versions() -> AppResult<KernelVersionList> {
     Ok(KernelVersionList { versions })
 }
 
-pub fn install_version(
+pub fn prepare_version(
     version: String,
     download_url: String,
     expected_sha256: Option<String>,
     install_dir: Option<String>,
     app: AppHandle,
-) -> AppResult<KernelInstallOutcome> {
+) -> AppResult<PreparedKernelInstall> {
     let dir = resolve_install_dir(install_dir)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
@@ -262,6 +270,11 @@ pub fn install_version(
         },
     );
 
+    report_install_stage(
+        &app,
+        &version,
+        crate::models::kernel_version::KernelInstallStage::Validating,
+    );
     // Checksum verification
     let hash_hex = format!("{:x}", hasher.finalize());
     let checksum_verified = if let Some(expected) = &expected_sha256 {
@@ -305,9 +318,12 @@ pub fn install_version(
     // Target path in the install directory.
     let executable_path = dir.join(executable_name);
     let state = app.state::<crate::state::app_state::AppState>();
-    let current_executable_path = {
+    let (current_executable_path, current_config_path) = {
         let app_config = common::lock(state.app_config(), "app_config")?;
-        core_config::resolve_executable_path(&app_config.core)
+        (
+            core_config::resolve_executable_path(&app_config.core),
+            app_config.core.config_path.clone().map(PathBuf::from),
+        )
     };
     let default_install_dir = data_dir()?.join("core");
     let managed_default_dir = same_path(&dir, &default_install_dir);
@@ -331,122 +347,23 @@ pub fn install_version(
         target_is_current_core,
     )?;
 
-    let restart_core =
-        core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let restore_system_proxy =
-        restart_core && system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
-    let _ = crate::services::logs::append_entry(
-        state.inner(),
-        LogSource::App,
-        LogLevel::Info,
-        format!("kernel upgrade: stopping core before swapping in v{version}"),
-        None,
-    );
+    preflight::validate(&staged_binary, &version, current_config_path.as_deref())?;
 
-    // Keep the kernel running during the network transfer so environments
-    // that depend on the kernel's mixed-port can still reach the release
-    // asset. We only stop it immediately before replacing the executable.
-    // This is a short in-place replacement and the restarted kernel keeps the
-    // same local endpoint. Preserve the guarded OS proxy so macOS does not ask
-    // for authorization once to disable it and again to re-enable it.
-    core_process::stop_preserving_system_proxy(app.clone(), state.clone())?;
-
-    let _ = crate::services::logs::append_entry(
-        state.inner(),
-        LogSource::App,
-        LogLevel::Info,
-        format!(
-            "kernel upgrade: replacing binary at {}",
-            executable_path.display()
-        ),
-        None,
-    );
-
-    // Remove old binary.  The kernel was killed before we got here but
-    // Windows may hold the file handle briefly.  Retry a few times.
-    if executable_path.exists() {
-        remove_file_with_retry(&executable_path, 5)?;
-    }
-
-    // Move the new binary into place
-    if fs::rename(&staged_binary, &executable_path).is_err() {
-        // Cross-device or other rename failure — fall back to copy
-        fs::copy(&staged_binary, &executable_path).map_err(|e| {
-            AppError::internal(format!("failed to copy binary to install dir: {e}"))
-        })?;
-    }
-
-    // Zero release archives are runtime bundles, not just executable
-    // containers. Preserve any files shipped adjacent to the binary (for
-    // example Windows `wintun.dll`) instead of deleting them with staging.
-    // The core release remains the authority for which companions exist and
-    // where they come from; ZNet-Sink only preserves the published bundle.
-    let companions =
-        install_runtime_companions(&staged_bundle_dir, &dir, executable_name, &bundle_files)?;
-    if !companions.is_empty() {
-        let _ = crate::services::logs::append_entry(
-            state.inner(),
-            LogSource::App,
-            LogLevel::Info,
-            format!(
-                "kernel install: preserved runtime companions: {}",
-                companions.join(", ")
-            ),
-            None,
-        );
-    }
-
-    // Keep ownership records across downgrade/legacy bundles that may omit a
-    // previously installed companion. We do not delete absent companions
-    // implicitly; doing so could make an older Zero build unusable when its
-    // historical release archive omitted a required runtime file.
-    let mut next_managed_files = previous_managed_files;
-    next_managed_files.extend(bundle_files.iter().cloned());
-    write_runtime_manifest(&dir, &next_managed_files)?;
-
-    if !executable_path.is_file() {
-        return Err(AppError::internal(format!(
-            "binary missing after install: {}",
-            executable_path.display()
-        )));
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&executable_path)
-            .map_err(|e| AppError::internal(format!("failed to read permissions: {e}")))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&executable_path, perms).map_err(|e| {
-            AppError::internal(format!("failed to set executable permissions: {e}"))
-        })?;
-    }
-
-    let channel = classify_channel(&version, false);
-
-    let _ = crate::services::logs::append_entry(
-        state.inner(),
-        LogSource::App,
-        LogLevel::Info,
-        format!(
-            "kernel install complete: v{version} → {}",
-            executable_path.display()
-        ),
-        None,
-    );
-
-    Ok(KernelInstallOutcome {
+    Ok(PreparedKernelInstall {
         result: KernelInstallResult {
             success: true,
             executable_path: path_to_string(&executable_path),
             version: version.clone(),
-            channel,
+            channel: classify_channel(&version, false),
             checksum_verified,
             message: format!("zero {} installed to {}", version, path_to_string(&dir)),
         },
-        restart_core,
-        restore_system_proxy,
+        dir,
+        staged_bundle_dir,
+        executable_name: executable_name.to_owned(),
+        bundle_files,
+        previous_managed_files,
+        _workspace: workspace,
     })
 }
 
@@ -482,19 +399,8 @@ pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersi
 fn detect_cli_version(path: &Path) -> Option<String> {
     let program = path.to_str()?;
     for args in [["--version"].as_slice(), ["version"].as_slice()] {
-        let output = common::background_command(program)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
-
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if let Some(version) = extract_semver(&stdout) {
-                return Some(version);
-            }
-            if let Some(version) = extract_semver(&stderr) {
+        if let Ok(output) = preflight::run(Path::new(program), args, Duration::from_secs(5)) {
+            if let Some(version) = extract_semver(&output) {
                 return Some(version);
             }
         }
@@ -568,7 +474,7 @@ fn parse_release(
         asset_download_url,
         release_notes_url,
         // Keep the wire shape compatible, but do not fetch checksums while
-        // listing releases. install_version resolves this lazily instead.
+        // listing releases. prepare_version resolves this lazily instead.
         checksum_sha256: None,
     })
 }
@@ -790,7 +696,7 @@ fn write_runtime_manifest(install_dir: &Path, files: &BTreeSet<String>) -> AppRe
     let payload = serde_json::to_vec_pretty(&files.iter().collect::<Vec<_>>()).map_err(|e| {
         AppError::internal(format!("failed to serialize kernel runtime manifest: {e}"))
     })?;
-    fs::write(&path, payload)
+    super::atomic_file::write(&path, &payload)
         .map_err(|e| AppError::internal(format!("failed to write kernel runtime manifest: {e}")))?;
     Ok(())
 }
@@ -882,64 +788,6 @@ fn files_are_identical(left: &Path, right: &Path) -> AppResult<bool> {
     let right_bytes = fs::read(right)
         .map_err(|e| AppError::internal(format!("failed to read '{}': {e}", right.display())))?;
     Ok(left_bytes == right_bytes)
-}
-
-/// Copy files published next to the Zero binary into the managed install
-/// directory. The release archive is authoritative for runtime companions;
-/// ZNet-Sink does not independently download or synthesize them.
-fn install_runtime_companions(
-    bundle_dir: &Path,
-    install_dir: &Path,
-    executable_name: &str,
-    bundle_files: &[String],
-) -> AppResult<Vec<String>> {
-    let mut installed = Vec::new();
-
-    for file_name in bundle_files {
-        if file_name == executable_name {
-            continue;
-        }
-        let source = bundle_dir.join(file_name);
-        let target = install_dir.join(file_name);
-
-        if target.exists() && files_are_identical(&source, &target)? {
-            installed.push(file_name.clone());
-            continue;
-        }
-        if target.exists() {
-            remove_file_with_retry(&target, 5)?;
-        }
-        fs::copy(&source, &target).map_err(|e| {
-            AppError::internal(format!(
-                "failed to install kernel runtime companion '{}' to '{}': {e}",
-                source.display(),
-                target.display()
-            ))
-        })?;
-        installed.push(file_name.clone());
-    }
-
-    installed.sort();
-    Ok(installed)
-}
-
-/// Try to remove a file, retrying with short sleeps between attempts.
-/// On Windows the OS may briefly hold a file handle after the process
-/// that used it has been killed.
-fn remove_file_with_retry(path: &Path, max_attempts: u32) -> AppResult<()> {
-    for attempt in 0..max_attempts {
-        if fs::remove_file(path).is_ok() {
-            return Ok(());
-        }
-        if attempt + 1 < max_attempts {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-    }
-    Err(AppError::internal(format!(
-        "failed to remove '{}' after {} attempts — is the kernel still running?",
-        path.display(),
-        max_attempts
-    )))
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -1070,16 +918,41 @@ mod tests {
         fs::write(bundle.join("NOTICE.txt"), b"notice").unwrap();
 
         let bundle_files = collect_runtime_bundle_files(&bundle, "zero.exe").unwrap();
-        let installed =
-            install_runtime_companions(&bundle, &install, "zero.exe", &bundle_files).unwrap();
-
-        assert_eq!(
-            installed,
-            vec!["NOTICE.txt".to_string(), "wintun.dll".to_string()]
-        );
+        let prepared = PreparedKernelInstall {
+            result: KernelInstallResult {
+                success: true,
+                executable_path: path_to_string(&install.join("zero.exe")),
+                version: "1.2.3".into(),
+                channel: ReleaseChannel::Stable,
+                checksum_verified: true,
+                message: String::new(),
+            },
+            dir: install.clone(),
+            staged_bundle_dir: bundle.clone(),
+            executable_name: "zero.exe".into(),
+            bundle_files,
+            previous_managed_files: BTreeSet::new(),
+            _workspace: KernelInstallWorkspace {
+                root: bundle.clone(),
+            },
+        };
+        prepared.install().unwrap();
+        assert_eq!(fs::read(install.join("zero.exe")).unwrap(), b"exe");
         assert_eq!(fs::read(install.join("wintun.dll")).unwrap(), b"dll");
         assert_eq!(fs::read(install.join("NOTICE.txt")).unwrap(), b"notice");
-        assert!(!install.join("zero.exe").exists());
+        assert!(install.join(RUNTIME_MANIFEST_FILE).is_file());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let binary = install.join("zero.exe");
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o600)).unwrap();
+            prepared.install().unwrap();
+            assert_eq!(
+                fs::metadata(binary).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
 
         let _ = fs::remove_dir_all(root);
     }

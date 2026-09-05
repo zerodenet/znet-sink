@@ -189,7 +189,7 @@ export function cleanupTagsForPublishedTag(publishedTag, tags) {
     .filter((item) => item.baseVersion === published.baseVersion)
     .filter((item) => item.tag !== published.tag)
     .filter((item) => item.channel !== 'stable')
-    .filter((item) => published.channel === 'stable' || item.channel === 'dev' || item.channel === 'rc')
+    .filter((item) => published.channel === 'stable' || item.channel === 'dev')
     .map((item) => item.tag)
     .sort();
 

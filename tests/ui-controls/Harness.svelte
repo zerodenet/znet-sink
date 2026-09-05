@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CoreConfigPanel from '$lib/components/settings/CoreConfigPanel.svelte';
+  import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import RulesTab from '$lib/components/tabs/RulesTab.svelte';
   import TunSettingsPanel from '$lib/components/settings/TunSettingsPanel.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -15,6 +17,7 @@
   let choice = $state('0');
   let radio = $state('keep');
   let checked = $state(false);
+  const selectedPanel = new URLSearchParams(window.location.search).get('panel');
   const tunPanel = new URLSearchParams(window.location.search).get('panel') === 'tun';
   const options = Array.from({ length: 80 }, (_, index) => ({ value: String(index), label: `选项 ${index}` }));
   $effect(() => { document.documentElement.classList.toggle('dark', dark); });
@@ -39,7 +42,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

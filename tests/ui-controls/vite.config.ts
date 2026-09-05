@@ -7,6 +7,7 @@ export default defineConfig({
   root: absolute('./'),
   plugins: [tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '$lib/services/kernel-version', replacement: absolute('./kernel-version.ts') },
     { find: '$lib/services/gui-state.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/store.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/tun', replacement: absolute('./tun-state.svelte.ts') },

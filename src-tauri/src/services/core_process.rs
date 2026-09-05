@@ -19,6 +19,8 @@ use crate::services::{
 };
 use crate::state::app_state::AppState;
 
+mod readiness;
+
 pub fn status(state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     refresh_status(state.inner())
 }
@@ -317,19 +319,16 @@ fn spawn_core_child(
         }
     });
 
-    // `spawn()` only proves that the OS created a process. Configuration
-    // validation happens inside Zero and can terminate it immediately. Give
-    // those deterministic startup failures a short window to surface before
-    // reporting Running to the UI or starting the restart watchdog.
-    std::thread::sleep(Duration::from_millis(300));
-    if let Some(exit_status) = child
-        .try_wait()
-        .map_err(|error| AppError::internal(format!("failed to inspect core startup: {error}")))?
-    {
+    // Running means the IPC endpoint is healthy and belongs to this exact
+    // child, including when starting after an upgrade or watchdog recovery.
+    if let Err(readiness_error) = readiness::wait_for_ready(&mut child, &snapshot.endpoint) {
+        let _ = child.kill();
+        let exit_status = child.wait().ok();
         let _ = stderr_handle.join();
-        let exit_code = exit_status.code();
+        let exit_code = exit_status.and_then(|status| status.code());
         let message = format!(
-            "core process exited during startup (code={})",
+            "core process failed startup readiness: {} (code={})",
+            readiness_error.message,
             exit_code
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "unknown".to_string())

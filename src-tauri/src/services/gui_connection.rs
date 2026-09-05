@@ -1,5 +1,5 @@
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
@@ -36,7 +36,13 @@ pub async fn connect(
     if managed_running {
         // We already manage a running core — no need to start another one.
     } else {
-        let process = core_process::start(app_handle.clone(), state.clone())?;
+        let start_app = app_handle.clone();
+        let process = tauri::async_runtime::spawn_blocking(move || {
+            let state = start_app.state::<AppState>();
+            core_process::start(start_app.clone(), state)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("core start task failed: {error}")))??;
         if process.state != CoreProcessState::Running {
             return Err(AppError::internal(
                 "core process did not enter running state",
@@ -109,6 +115,7 @@ pub async fn disconnect(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<GuiConnectionStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
     // Disconnect is intentionally proxy-only. The managed kernel remains
     // available so Lite can reconnect quickly; kernel lifecycle is not tied
     // to the big proxy switch.
@@ -145,13 +152,24 @@ async fn build_status(
     let mut system_proxy = system_proxy::status().ok();
     let mut system_proxy_owned = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
 
-    // If our guarded system proxy survives while the local core is no longer
-    // available, restore the user's previous proxy immediately. A raw OS proxy
-    // that the user configured independently is never treated as ours here.
+    // Status polling must not undo an in-flight start/restart/upgrade that
+    // deliberately preserves the owned proxy while its endpoint is replaced.
     if !core_available && system_proxy_owned {
-        let _ = system_proxy_guard::disable_with_guard();
-        system_proxy = system_proxy::status().ok();
-        system_proxy_owned = false;
+        match restore_idle_proxy(
+            state,
+            &process.state,
+            system_proxy_guard::disable_with_guard,
+        ) {
+            Ok(true) => {
+                system_proxy = system_proxy::status().ok();
+                system_proxy_owned = system_proxy_guard::is_enabled_by_guard().unwrap_or(true);
+            }
+            Ok(false) => {}
+            Err(error) => crate::services::file_logger::line(&format!(
+                "failed to restore unavailable proxy: {}",
+                error.message
+            )),
+        }
     }
 
     let connected = core_available
@@ -180,6 +198,36 @@ async fn build_status(
         last_error: error,
     })
 }
+
+fn restore_idle_proxy(
+    state: &AppState,
+    process: &CoreProcessState,
+    restore: impl FnOnce() -> AppResult<()>,
+) -> AppResult<bool> {
+    if matches!(
+        process,
+        CoreProcessState::Starting | CoreProcessState::Running
+    ) {
+        return Ok(false);
+    }
+    let Ok(_operation) = state.proxy_config_operation().try_lock() else {
+        return Ok(false);
+    };
+    // Recheck after acquiring the operation lock: the status read may have
+    // raced with a new start before we acquired it.
+    if matches!(
+        lock(state.core_process(), "core_process")?.status.state,
+        CoreProcessState::Starting | CoreProcessState::Running
+    ) {
+        return Ok(false);
+    }
+    restore()?;
+    Ok(true)
+}
+
+#[cfg(test)]
+#[path = "gui_connection_tests.rs"]
+mod tests;
 
 fn cleanup_failed_connect(_state: State<'_, AppState>) {
     let _ = system_proxy_guard::disable_with_guard();

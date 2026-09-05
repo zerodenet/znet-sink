@@ -1,24 +1,18 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
   import { detectKernelVersion, listKernelVersions } from '$lib/services/kernel-version';
-  import { getGuiCoreHealth } from '$lib/services/core';
+  import { getGuiCoreHealth, getAppErrorMessage } from '$lib/services/core';
+  import { newestStableKernel, isKernelUpdate } from '$lib/services/kernel-version-policy';
   import type { KernelRelease } from '$lib/types/kernel-version';
   import { store } from '$lib/services/store.svelte';
 
   let currentVersion = $state<string | null>(null);
   let latestStable = $state<KernelRelease | null>(null);
-  let updateAvailable = $state(false);
+  const updateAvailable = $derived(isKernelUpdate(currentVersion, latestStable?.version ?? null));
   let installed = $state(false);
   let checking = $state(false);
   let error = $state<string | null>(null);
   let mounted = $state(false);
-
-  /** Ensure we never render an object as text. */
-  function safeStr(v: unknown): string {
-    if (typeof v === 'string') return v;
-    if (v && typeof v === 'object') return JSON.stringify(v);
-    return String(v ?? '');
-  }
 
   /** Strip leading 'v' so all version comparisons are prefix-free. */
   function stripV(v: string): string {
@@ -32,12 +26,13 @@
   async function checkVersion() {
     checking = true;
     error = null;
+    latestStable = null;
     try {
       const detect = await detectKernelVersion();
       currentVersion = detect.version ? stripV(detect.version) : null;
       installed = detect.executableExists;
     } catch (e) {
-      error = `版本检测失败: ${e instanceof Error ? e.message : String(e)}`;
+      error = getAppErrorMessage(e, '版本检测失败');
       currentVersion = null;
       installed = false;
     }
@@ -48,22 +43,14 @@
       if (health.engineVersion) {
         currentVersion = stripV(health.engineVersion);
         installed = true;
+        error = null;
       }
     } catch { /* health API may be unavailable if core not running */ }
 
     // Fetch latest stable from GitHub
     try {
       const list = await listKernelVersions();
-      const stable = list.versions
-        .filter(v => v.channel === 'stable')
-        .sort((a, b) => (b.publishedAtUnixMs ?? 0) - (a.publishedAtUnixMs ?? 0));
-      if (stable.length > 0) {
-        const top = stable[0];
-        latestStable = top;
-        if (currentVersion && top.version !== currentVersion) {
-          updateAvailable = true;
-        }
-      }
+      latestStable = newestStableKernel(list.versions);
     } catch {
       // Network may not be available — silent fallback
     } finally {
@@ -116,7 +103,7 @@
           <span class="update-text">v{latestVersion} 可用</span>
         </div>
       {:else if latestStable}
-        <div class="up-to-date">已是最新</div>
+        <div class="up-to-date">暂无稳定版更新</div>
       {:else}
         <div class="update-unavailable">更新信息暂不可用</div>
       {/if}

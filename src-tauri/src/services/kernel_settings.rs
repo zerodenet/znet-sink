@@ -153,9 +153,7 @@ fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> 
         ));
     }
     if network_mask_prefix(tun_mask) != Some(tun_prefix) {
-        return Err(AppError::invalid_argument(
-            "tun.addr prefix and tun.mask must describe the same network",
-        ));
+        super::app_config::normalize_tun_mask(&mut settings.tun);
     }
     if settings.tun.tag.is_empty() {
         return Err(AppError::invalid_argument("tun.tag must not be empty"));
@@ -392,6 +390,23 @@ mod tests {
         assert_eq!(imported.tun.secondary_addr.as_deref(), Some("fd66::1/64"));
         assert_eq!(imported.tun.include_cidrs, vec!["0.0.0.0/0"]);
         assert_eq!(imported.tun.exclude_cidrs, vec!["16.0.0.0/8"]);
+    }
+
+    #[test]
+    fn imported_tun_mask_is_reconciled_to_the_authoritative_cidr() {
+        let current = AppConfig::default();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&current),
+        };
+        bundle.settings.tun.addr = "10.0.0.1/24".to_string();
+        bundle.settings.tun.mask = "255.255.255.252".to_string();
+
+        let imported = import_from_str(&current, &serde_json::to_string(&bundle).unwrap()).unwrap();
+
+        assert_eq!(imported.tun.addr, "10.0.0.1/24");
+        assert_eq!(imported.tun.mask, "255.255.255.0");
     }
 
     #[test]

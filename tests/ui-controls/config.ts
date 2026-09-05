@@ -1,5 +1,6 @@
 // In-memory fixture only: the UI suite must never call Tauri, DNS or a kernel.
 import type { CommonRuleBindingInput, RuleSetSummary, RuleSetUpsert } from '../../src/lib/types/domain';
+import type { CoreKernelInfo } from '../../src/lib/types/core';
 
 const names = ['私有网络地址', '中国大陆域名', '中国大陆 IP', 'GFW 域名'];
 let items: RuleSetSummary[] = names.map((name, index) => ({
@@ -26,6 +27,17 @@ export const updateBuiltinRuleSets = updateAllRuleSets;
 export const updateRuleSet = async () => items[0];
 export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
-export { getTunConfig as getAppConfig, applyFixtureTun as applyTunSettings } from './tun-state.svelte';
+import { getTunConfig } from './tun-state.svelte';
+export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
+export const getAppConfig = async () => new URLSearchParams(location.search).get('panel') === 'kernel'
+  ? { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } }
+  : getTunConfig();
+export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ kernel:'zero', executableExists:true, executablePath:'/fixture/zero', recommendedInstallDir:'/fixture', hasActiveConfig:true, warnings:[] });
+export const getCoreProcessStatus = async () => ({ state:'running' });
+export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
+export const updateAppConfig = async () => {
+  window.dispatchEvent(new Event('fixture-unexpected-config-write'));
+  throw new Error('Install must not write app settings a second time');
+};
 export const guiExportDiagnostics = async () => ({ path: 'fixture' });
 export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };

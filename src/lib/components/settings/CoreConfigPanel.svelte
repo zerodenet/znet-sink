@@ -14,12 +14,14 @@
     getCoreProcessStatus,
     updateAppConfig,
     getGuiCoreHealth,
+    getAppErrorMessage,
   } from '$lib/services/core';
   import {
     listKernelVersions,
     installKernelVersion,
     detectKernelVersion,
     onDownloadProgress,
+    onInstallProgress,
   } from '$lib/services/kernel-version';
   import type { AppConfig } from '$lib/types/app-config';
   import type { CoreKernelInfo } from '$lib/types/core';
@@ -29,9 +31,12 @@
     KernelVersionList,
     KernelDownloadProgress,
     KernelInstallResult,
+    KernelInstallStage,
   } from '$lib/types/kernel-version';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
+
+  import { installStageLabels } from '$lib/services/kernel-version-policy';
 
   const FALLBACK_DOWNLOAD_URL = 'https://github.com/zerodenet/core/releases/latest';
   const CHANNEL_LABELS: Record<ReleaseChannel, string> = {
@@ -57,6 +62,9 @@
   let activeChannel = $state<ReleaseChannel>('stable');
   let downloadProgress = $state<KernelDownloadProgress | null>(null);
   let installBusy = $state(false);
+  let installStage = $state<KernelInstallStage>('preparing');
+  let installError = $state<string | null>(null);
+  let versionListError = $state<string | null>(null);
   let installingVersion = $state<string | null>(null);
   let installResult = $state<KernelInstallResult | null>(null);
 
@@ -183,7 +191,9 @@
   }
 
   async function openVersionManager() {
+    if (installBusy) return;
     versionManagerOpen = true;
+    installError = null;
     installResult = null;
     downloadProgress = null;
     await loadVersions();
@@ -198,32 +208,42 @@
   }
 
   async function loadVersions(force = false) {
+    if (versionListLoading || installBusy) return;
     versionListLoading = true;
+    versionListError = null;
     try {
       versionList = await listKernelVersions({ force });
     } catch (error) {
-      warning(error instanceof Error ? error.message : '获取版本列表失败');
+      versionListError = getAppErrorMessage(error, '获取版本列表失败');
+      warning(versionListError);
     } finally {
       versionListLoading = false;
     }
   }
 
   async function handleInstallVersion(release: KernelRelease) {
+    if (installBusy) return;
     if (!release.assetDownloadUrl) {
       warning('该版本没有当前平台的安装包');
       return;
     }
 
     installBusy = true;
+    installStage = 'preparing';
+    installError = null;
     installingVersion = release.version;
     downloadProgress = null;
     installResult = null;
 
     let unlisten: UnlistenFn | null = null;
+    let unlistenStage: UnlistenFn | null = null;
 
     try {
       unlisten = await onDownloadProgress((progress) => {
-        downloadProgress = progress;
+        if (progress.version === release.version) downloadProgress = progress;
+      });
+      unlistenStage = await onInstallProgress((progress) => {
+        if (progress.version === release.version) installStage = progress.stage;
       });
       const result = await installKernelVersion(
         release.version,
@@ -236,14 +256,19 @@
         installedVersion = stripV(result.version);
         runningVersion = null;
         executablePathDraft = result.executablePath;
-        await saveExecutablePath();
+        // The backend transaction has already persisted the path and restored runtime.
+        // Writing it again can cause an unnecessary second core transition.
         success(`内核 ${result.version} 安装成功`);
         await refresh();
+      } else {
+        installError = result.message || '安装未完成，请重试';
       }
     } catch (error) {
-      warning(error instanceof Error ? error.message : '安装失败');
+      installError = getAppErrorMessage(error, '安装失败，请重试或导出诊断信息');
+      warning(installError);
     } finally {
       unlisten?.();
+      unlistenStage?.();
       installBusy = false;
       installingVersion = null;
     }
@@ -310,15 +335,15 @@
     </div>
 
     <div class="actions">
-      <Button variant={hasExecutable ? 'outline' : 'default'} size="sm" onclick={openVersionManager} disabled={loading || saving}>
+      <Button variant={hasExecutable ? 'outline' : 'default'} size="sm" onclick={openVersionManager} disabled={loading || saving || installBusy}>
         <Download class="h-3.5 w-3.5" />
         <span>版本管理</span>
       </Button>
-      <Button variant="outline" size="sm" onclick={chooseExecutablePath} disabled={loading || saving}>
+      <Button variant="outline" size="sm" onclick={chooseExecutablePath} disabled={loading || saving || installBusy}>
         <FolderOpen class="h-3.5 w-3.5" />
         <span>选择文件</span>
       </Button>
-      <Button variant="ghost" size="icon-sm" onclick={refresh} disabled={loading}>
+      <Button variant="ghost" size="icon-sm" aria-label="刷新内核信息" onclick={refresh} disabled={loading || saving || installBusy}>
         <RefreshCcw class="h-3.5 w-3.5" />
       </Button>
     </div>
@@ -336,11 +361,11 @@
         通过版本管理安装内核，或手动选择已有的可执行文件。
       </div>
       <div class="empty-actions">
-        <Button onclick={openVersionManager} disabled={loading || saving}>
+        <Button onclick={openVersionManager} disabled={loading || saving || installBusy}>
           <Download class="h-3.5 w-3.5" />
           <span>版本管理</span>
         </Button>
-        <Button variant="outline" onclick={chooseExecutablePath} disabled={loading || saving}>
+        <Button variant="outline" onclick={chooseExecutablePath} disabled={loading || saving || installBusy}>
           <FolderOpen class="h-3.5 w-3.5" />
           <span>选择文件</span>
         </Button>
@@ -362,12 +387,12 @@
         <div class="field">
           <div class="field-label">可执行文件</div>
           <div class="path-row">
-            <Input bind:value={executablePathDraft} class="mono" placeholder="请选择内核可执行文件" />
-            <Button variant="outline" size="sm" onclick={chooseExecutablePath} disabled={loading || saving}>
+            <Input bind:value={executablePathDraft} class="mono" placeholder="请选择内核可执行文件" disabled={loading || saving || installBusy} />
+            <Button variant="outline" size="sm" onclick={chooseExecutablePath} disabled={loading || saving || installBusy}>
               <FolderOpen class="h-3.5 w-3.5" />
               <span>选择</span>
             </Button>
-            <Button size="sm" onclick={saveExecutablePath} disabled={loading || saving || !pathDirty}>
+            <Button size="sm" onclick={saveExecutablePath} disabled={loading || saving || installBusy || !pathDirty}>
               <Save class="h-3.5 w-3.5" />
               <span>保存</span>
             </Button>
@@ -425,7 +450,7 @@
           class="font-mono"
           rows={4}
           spellcheck="false"
-          disabled={loading || saving}
+          disabled={loading || saving || installBusy}
           placeholder="https://ipinfo.io/json"
         ></Textarea>
       </div>
@@ -445,7 +470,7 @@
   width="min(560px, 90vw)"
 >
   {#snippet headerActions()}
-    <Button variant="ghost" size="icon-sm" onclick={() => loadVersions(true)} disabled={versionListLoading || installBusy}>
+    <Button variant="ghost" size="icon-sm" aria-label="刷新内核版本列表" onclick={() => loadVersions(true)} disabled={versionListLoading || installBusy}>
       <RefreshCcw class="h-3.5 w-3.5" />
     </Button>
   {/snippet}
@@ -468,6 +493,12 @@
     </Tabs.List>
     <Tabs.Content value={activeChannel}>
 
+    {#if installError}
+      <div role="alert" class="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm whitespace-pre-wrap break-words">{installError}</div>
+    {/if}
+    {#if versionListError}
+      <div role="alert" class="rounded-md border border-destructive/40 p-3 text-sm">{versionListError}，可点击刷新重试。</div>
+    {/if}
     {#if installResult?.success}
       <div class="install-success">
         <svg width="16" height="16" viewBox="0 0 10 10" fill="none" stroke="#22C55E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
@@ -480,8 +511,13 @@
           {/if}
         </div>
       </div>
+    {:else if installBusy && (installStage !== 'preparing' || !downloadProgress || (downloadProgress.percent ?? 0) >= 100)}
+      <div class="progress-container" role="status" aria-live="polite">
+        <div class="progress-label">{installStage === 'preparing' && (downloadProgress?.percent ?? 0) >= 100 ? '下载完成，正在校验并安装…' : installStageLabels[installStage]}</div>
+        <div class="progress-detail">请等待操作完成，结果将在这里保留。</div>
+      </div>
     {:else if downloadProgress && installBusy}
-      <div class="progress-container">
+      <div class="progress-container" role="status" aria-live="polite">
         <div class="progress-label">
           下载中 v{downloadProgress.version}...
           {downloadProgress.percent ? `${downloadProgress.percent.toFixed(1)}%` : ''}
@@ -496,6 +532,8 @@
       </div>
     {:else if versionListLoading}
       <div class="loading">获取版本列表中...</div>
+    {:else if versionListError}
+      <div class="empty-versions">刷新版本列表后可继续安装。</div>
     {:else if channelFilteredVersions.length === 0}
       <div class="empty-versions">该渠道暂无可用版本</div>
     {:else}

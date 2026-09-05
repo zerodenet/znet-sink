@@ -33,7 +33,7 @@
     "test:ui-controls": "node scripts/test-ui-controls.mjs",
     "test:ui-browser": "playwright test",
     "test:runtime-lifecycle": "node scripts/test-runtime-lifecycle.mjs",
-    "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:release-version && pnpm test:app-update && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
+    "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:release-version && pnpm test:app-update && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
     "verify:backend": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets -j 1 && cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1",
     "verify": "pnpm verify:frontend && pnpm verify:backend && git diff --check",
     "verify:bundle": "pnpm verify && pnpm tauri build --no-sign",
@@ -44,7 +44,8 @@
     "commit": "git-cz",
     "lint:commit": "commitlint --edit",
     "test:nodes-probe-state": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-probe-state.mjs",
-    "test:tun-recovery": "node --test scripts/test-tun-recovery.mjs"
+    "test:tun-recovery": "node --test scripts/test-tun-recovery.mjs",
+    "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs"
   },
   "config": {
     "commitizen": {

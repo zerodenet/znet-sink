@@ -101,12 +101,13 @@ impl OnPhase for ConfigPhase {
             app_config::migrate_legacy_dns(&mut app_config, &mut domain_data.proxy_configs);
         let migrated_node_dns = app_config::migrate_legacy_recommended_node_dns(&mut app_config);
         let migrated_domestic_dns = app_config::migrate_builtin_domestic_resolvers(&mut app_config);
-        if migrated_profile_dns || migrated_node_dns || migrated_domestic_dns {
+        let migrated_tun_mask = app_config::normalize_tun_mask(&mut app_config.tun);
+        if migrated_profile_dns || migrated_node_dns || migrated_domestic_dns || migrated_tun_mask {
             if let Err(error) = app_config_store::save(&config_path, &app_config) {
                 crate::services::logs::znet_log(
                     None,
                     crate::models::logs::LogLevel::Warn,
-                    format!("failed to persist migrated global DNS settings: {error:?}"),
+                    format!("failed to persist migrated app settings: {error:?}"),
                 );
             }
             if migrated_profile_dns {

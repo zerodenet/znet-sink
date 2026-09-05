@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tauri::State;
 
 use crate::errors::{AppError, AppResult};
-use crate::models::app_config::{AppConfig, AppConfigPatch};
+use crate::models::app_config::{AppConfig, AppConfigPatch, AppTunConfig};
 use crate::models::dns_config::ClientDnsConfig;
 use crate::models::proxy_config::ProxyConfigProfile;
 use crate::services::app_config_store;
@@ -24,6 +25,44 @@ pub fn update(state: State<'_, AppState>, patch: AppConfigPatch) -> AppResult<Ap
     replace(state.inner(), config.clone())?;
     eprintln!("[ZNet] app_config_update: took {:?}", start.elapsed());
     Ok(config)
+}
+
+/// Keep the legacy mask projection consistent with the CIDR address. The UI
+/// exposes only `addr`, so its prefix is the authoritative subnet definition.
+pub(crate) fn normalize_tun_mask(tun: &mut AppTunConfig) -> bool {
+    let Some(mask) = tun_mask_from_cidr(&tun.addr) else {
+        return false;
+    };
+    if tun.mask == mask {
+        return false;
+    }
+    tun.mask = mask;
+    true
+}
+
+fn tun_mask_from_cidr(value: &str) -> Option<String> {
+    let (address, prefix) = value.trim().split_once('/')?;
+    let address = address.parse::<IpAddr>().ok()?;
+    let prefix = prefix.parse::<u8>().ok()?;
+    match address {
+        IpAddr::V4(_) if prefix <= 32 => {
+            let bits = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            Some(Ipv4Addr::from(bits).to_string())
+        }
+        IpAddr::V6(_) if prefix <= 128 => {
+            let bits = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            Some(Ipv6Addr::from(bits).to_string())
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppResult<AppConfig> {
@@ -233,6 +272,7 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
         }
     }
 
+    normalize_tun_mask(&mut config.tun);
     Ok(config)
 }
 
@@ -492,10 +532,9 @@ mod tests {
     use super::{
         migrate_builtin_domestic_resolvers, migrate_legacy_dns,
         migrate_legacy_recommended_node_dns, normalize_network_probe_urls, normalize_proxy_bypass,
-        normalize_tun_cidrs,
+        normalize_tun_cidrs, normalize_tun_mask, prepare_update,
     };
-    use crate::models::app_config::default_network_probe_urls;
-    use crate::models::app_config::AppConfig;
+    use crate::models::app_config::{default_network_probe_urls, AppConfig, AppConfigPatch};
     use crate::models::proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile};
     use serde_json::json;
 
@@ -515,6 +554,31 @@ mod tests {
                 "https://httpbin.org/ip".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn legacy_tun_mask_is_derived_from_the_authoritative_cidr() {
+        let mut config = AppConfig::default();
+        config.tun.addr = "10.0.0.1/24".to_owned();
+        config.tun.mask = "255.255.255.252".to_owned();
+
+        assert!(normalize_tun_mask(&mut config.tun));
+        assert_eq!(config.tun.mask, "255.255.255.0");
+        assert!(!normalize_tun_mask(&mut config.tun));
+    }
+
+    #[test]
+    fn changing_tun_cidr_updates_its_compatibility_mask() {
+        let current = AppConfig::default();
+        let patch: AppConfigPatch = serde_json::from_value(serde_json::json!({
+            "tun": { "addr": "10.88.0.1/24" }
+        }))
+        .unwrap();
+
+        let updated = prepare_update(&current, patch).unwrap();
+
+        assert_eq!(updated.tun.addr, "10.88.0.1/24");
+        assert_eq!(updated.tun.mask, "255.255.255.0");
     }
 
     #[test]
