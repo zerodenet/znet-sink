@@ -140,12 +140,14 @@
     return `${path} L ${lastX.toFixed(2)} ${PLOT_BOTTOM} L ${firstX.toFixed(2)} ${PLOT_BOTTOM} Z`;
   }
 
-  const { history, unsupported = false }: {
+  const { history, unsupported = false, unavailableReason = null }: {
     history: TrafficPoint[];
     unsupported?: boolean;
+    unavailableReason?: string | null;
   } = $props();
 
-  const displayHistory = $derived(history.slice(-DISPLAY_HISTORY));
+  const unavailable = $derived(unsupported || !!unavailableReason);
+  const displayHistory = $derived(unavailable ? [] : history.slice(-DISPLAY_HISTORY));
   const scale = $derived(buildScale(displayHistory));
   const scaleLabel = $derived(formatScaleLabel(scale));
   const downLine = $derived(linePath(displayHistory, 'down', scale));
@@ -171,12 +173,12 @@
     <div class="chart-speeds">
       <div class="speed-item down">
         <span class="speed-dot" class:pulse={hasTraffic}></span>
-        <span class="speed-val">{formatSpeed(currentDown)}</span>
+        <span class="speed-val">{unavailable ? '—' : formatSpeed(currentDown)}</span>
         <span class="speed-label">↓</span>
       </div>
       <div class="speed-item up">
         <span class="speed-dot" class:pulse={hasTraffic}></span>
-        <span class="speed-val">{formatSpeed(currentUp)}</span>
+        <span class="speed-val">{unavailable ? '—' : formatSpeed(currentUp)}</span>
         <span class="speed-label">↑</span>
       </div>
     </div>
@@ -184,18 +186,18 @@
 
   <div class="chart-stats">
     <div class="stat-item">
-      <span class="stat-label">下行总计</span>
-      <span class="stat-val down">{formatTraffic(overviewData.totalDownMB)}</span>
+      <span class="stat-label">内核累计下行</span>
+      <span class="stat-val down">{unavailable ? '—' : formatTraffic(overviewData.totalDownMB)}</span>
     </div>
     <div class="stat-divider"></div>
     <div class="stat-item">
-      <span class="stat-label">上行总计</span>
-      <span class="stat-val up">{formatTraffic(overviewData.totalUpMB)}</span>
+      <span class="stat-label">内核累计上行</span>
+      <span class="stat-val up">{unavailable ? '—' : formatTraffic(overviewData.totalUpMB)}</span>
     </div>
     <div class="stat-divider"></div>
     <div class="stat-item">
       <span class="stat-label">并发连接</span>
-      <span class="stat-val">{overviewData.activeConnections}</span>
+      <span class="stat-val">{unavailable ? '—' : overviewData.activeConnections}</span>
     </div>
   </div>
 
@@ -248,7 +250,9 @@
       </defs>
     </svg>
 
-    {#if !hasTraffic && !unsupported}
+    {#if unavailable}
+      <div class="chart-empty">{unavailableReason ?? '内核不支持流量查询'}</div>
+    {:else if !hasTraffic && !unsupported}
       <div class="chart-empty">等待网络数据…</div>
     {:else if !hasTraffic && unsupported}
       <div class="chart-empty">内核不支持流量查询</div>

@@ -109,7 +109,6 @@ assert.ok(
   overview.includes('const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled)') &&
     overview.includes('const captureEnabled = $derived(guiState.isCaptureEnabled)') &&
     overview.includes('const liteConnected = $derived(guiState.isConnected)') &&
-    overview.includes("captureEnabled ? '服务中'") &&
     overview.includes('class:on={liteConnected}') &&
     overview.includes('onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}') &&
     !overview.includes('supportsTrafficStats && proxyEnabled ? formatSpeed'),

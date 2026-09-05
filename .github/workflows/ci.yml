@@ -44,6 +44,9 @@ jobs:
       - name: Run app update ownership and restart regression
         run: pnpm test:app-update
 
+      - name: Run professional overview state regression
+        run: pnpm test:overview
+
       - name: Run application lifecycle contract
         run: pnpm test:runtime-lifecycle
 
@@ -324,3 +327,34 @@ jobs:
           } finally {
             Stop-Zero $process
           }
+
+  download-contracts:
+    name: Resumable downloads (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # Windows runs these same cases in the full windows-client-core job.
+      - name: Verify download recovery and updater signatures
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib download -j 2

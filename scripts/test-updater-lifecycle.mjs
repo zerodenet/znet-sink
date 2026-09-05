@@ -29,7 +29,14 @@ async function fixture(overrides = {}) {
       Update: class { constructor() { return update; } },
     },
     '@tauri-apps/api/app': { getVersion: async () => '1.0.0' },
-    '@tauri-apps/api/core': { invoke: async () => { calls.select++; return overrides.select ? overrides.select() : {}; } },
+     '@tauri-apps/api/core': {
+      Channel: class {},
+      invoke: async (command, args) => {
+        if (command === 'app_download_update') { calls.download++; await overrides.download?.(args.onEvent); return; }
+        if (command === 'app_install_update') { calls.install++; await overrides.install?.(); return; }
+        calls.select++; return overrides.select ? overrides.select() : {};
+      },
+    },
     '@tauri-apps/plugin-process': { relaunch: async () => { calls.relaunch++; await overrides.relaunch?.(); } },
     '$lib/services/toast.svelte': { info() {}, warning() {} },
     '$lib/services/core': { appendLog: async () => {} },
@@ -131,4 +138,31 @@ test('unusable manifest is a visible check failure, never an up-to-date result',
   assert.equal(await updater.checkForUpdate(), false);
   assert.equal(updater.status, 'error');
   assert.match(updater.lastError, /无法确认/);
+});
+
+test('resumed progress is absolute and full-download fallback resets it', async () => {
+  const { updater } = await fixture({ download: (channel) => {
+    channel.onmessage({ bytesDownloaded: 400, bytesTotal: 1000, state: 'downloading', attempt: 1 });
+    assert.equal(updater.downloaded, 400);
+    channel.onmessage({ bytesDownloaded: 400, bytesTotal: 1000, state: 'retrying', attempt: 1 });
+    assert.match(updater.downloadLabel, /重试/);
+    channel.onmessage({ bytesDownloaded: 0, bytesTotal: 2000, state: 'downloading', attempt: 2 });
+    assert.equal(updater.downloaded, 0);
+    assert.equal(updater.total, 2000);
+  } });
+  await updater.checkForUpdate();
+  assert.equal(await updater.downloadUpdate(), true);
+});
+
+test('download interruption keeps selected release available for resume and never installs', async () => {
+  let interrupted = true;
+  const { updater, calls } = await fixture({ download: () => { if (interrupted) throw new Error('下载中断，已保留进度'); } });
+  await updater.checkForUpdate();
+  assert.equal(await updater.downloadUpdate(), false);
+  assert.equal(updater.updateAvailable, true);
+  assert.equal(updater.readyToInstall, false);
+  assert.equal(calls.install, 0);
+  interrupted = false;
+  assert.equal(await updater.downloadUpdate(), true);
+  assert.equal(calls.check, 1);
 });

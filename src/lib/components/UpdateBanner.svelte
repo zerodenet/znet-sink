@@ -38,7 +38,7 @@
       {#if updater.downloading}
         <span class="update-label">下载更新中</span>
         <span class="update-progress-text">
-          {updater.progressPct != null ? `${updater.progressPct}%` : '下载中'}
+          {updater.downloadLabel} · {updater.progressPct != null ? `${updater.progressPct}%` : '计算大小中'}
           <span class="update-bytes">
             · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}
           </span>

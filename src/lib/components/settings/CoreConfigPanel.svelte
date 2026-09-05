@@ -519,7 +519,7 @@
     {:else if downloadProgress && installBusy}
       <div class="progress-container" role="status" aria-live="polite">
         <div class="progress-label">
-          下载中 v{downloadProgress.version}...
+          {downloadProgress.state === 'retrying' ? `网络中断，正在重试（${Math.min((downloadProgress.attempt ?? 1) + 1, 4)}/4）` : `下载中 v${downloadProgress.version} · 支持断点续传`}
           {downloadProgress.percent ? `${downloadProgress.percent.toFixed(1)}%` : ''}
         </div>
         <div class="progress-track">

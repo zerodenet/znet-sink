@@ -52,3 +52,5 @@ export const updateAppConfig = async (input?: unknown) => {
 };
 export const guiExportDiagnostics = async () => ({ path: 'fixture' });
 export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };
+
+export const getCorePolicies = async () => ({ groups: [] });

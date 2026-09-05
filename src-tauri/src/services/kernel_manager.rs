@@ -20,8 +20,6 @@ use crate::services::{common, core_config};
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/zerodenet/core/releases?per_page=30";
 const PROGRESS_EVENT: &str = "kernel:download-progress";
-const CHUNK_SIZE: usize = 8 * 1024;
-const PROGRESS_INTERVAL: u64 = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600); // 10 min for large archives
 const RUNTIME_MANIFEST_FILE: &str = ".znet-sink-zero-runtime.json";
@@ -167,133 +165,62 @@ pub fn prepare_version(
         None => fetch_checksum_for_download(&client, &download_url, platform_asset_name())?,
     };
 
-    let _ = crate::services::logs::append_entry(
-        &app.state::<crate::state::app_state::AppState>(),
-        LogSource::App,
-        LogLevel::Info,
-        format!("kernel download: GET {download_url}"),
-        None,
+    let identity = format!(
+        "kernel:{version}:{}:{}",
+        platform_asset_name(),
+        expected_sha256.as_deref().unwrap_or("unverified")
     );
-
-    let _ = app.emit(
-        PROGRESS_EVENT,
-        KernelDownloadProgress {
-            version: version.clone(),
-            bytes_downloaded: 0,
-            bytes_total: None,
-            percent: None,
-        },
-    );
-
-    let mut response = client.get(&download_url).send().map_err(|e| {
-        let msg = format!(
-            "内核下载失败: {e}（网络访问遵循应用进程环境；需要代理时请检查 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）"
+    let download = super::download::fetch(&client, &download_url, &identity, |progress| {
+        let _ = app.emit(
+            PROGRESS_EVENT,
+            KernelDownloadProgress {
+                version: version.clone(),
+                bytes_downloaded: progress.bytes_downloaded,
+                bytes_total: progress.bytes_total,
+                percent: progress
+                    .bytes_total
+                    .filter(|total| *total > 0)
+                    .map(|total| progress.bytes_downloaded as f64 / total as f64 * 100.0),
+                state: progress.state,
+                attempt: progress.attempt,
+            },
         );
-        let _ = crate::services::logs::append_entry(
-            &app.state::<crate::state::app_state::AppState>(),
-            LogSource::App,
-            LogLevel::Error,
-            msg.clone(),
-            None,
-        );
-        AppError::internal(msg)
     })?;
-
-    if !response.status().is_success() {
-        let msg = format!(
-            "内核下载失败: HTTP {}（请检查版本资产和网络访问权限）",
-            response.status()
-        );
-        let _ = crate::services::logs::append_entry(
-            &app.state::<crate::state::app_state::AppState>(),
-            LogSource::App,
-            LogLevel::Error,
-            msg.clone(),
-            None,
-        );
-        return Err(AppError::internal(msg));
-    }
-
-    let bytes_total = response
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
-
-    let mut hasher = Sha256::new();
-    let mut all_bytes = Vec::new();
-    let mut bytes_downloaded: u64 = 0;
-    let mut last_progress_at: u64 = 0;
-    let mut chunk = vec![0u8; CHUNK_SIZE];
-
-    loop {
-        let n = response
-            .read(&mut chunk)
-            .map_err(|e| AppError::internal(format!("failed to read download chunk: {e}")))?;
-        if n == 0 {
-            break;
-        }
-
-        hasher.update(&chunk[..n]);
-        all_bytes.extend_from_slice(&chunk[..n]);
-        bytes_downloaded += n as u64;
-
-        if bytes_downloaded - last_progress_at >= PROGRESS_INTERVAL || n < CHUNK_SIZE {
-            last_progress_at = bytes_downloaded;
-            let percent = bytes_total.map(|total| {
-                if total > 0 {
-                    (bytes_downloaded as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                }
-            });
-            let _ = app.emit(
-                PROGRESS_EVENT,
-                KernelDownloadProgress {
-                    version: version.clone(),
-                    bytes_downloaded,
-                    bytes_total,
-                    percent,
-                },
-            );
-        }
-    }
-
-    // Final progress event at 100%
-    let _ = app.emit(
-        PROGRESS_EVENT,
-        KernelDownloadProgress {
-            version: version.clone(),
-            bytes_downloaded,
-            bytes_total: Some(bytes_downloaded),
-            percent: Some(100.0),
-        },
-    );
-
     report_install_stage(
         &app,
         &version,
         crate::models::kernel_version::KernelInstallStage::Validating,
     );
-    // Checksum verification
+    let mut file = fs::File::open(&download.path).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut hasher = Sha256::new();
+    let mut chunk = [0; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut chunk)
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&chunk[..count]);
+    }
+    drop(file);
     let hash_hex = format!("{:x}", hasher.finalize());
     let checksum_verified = if let Some(expected) = &expected_sha256 {
         if !hash_hex.eq_ignore_ascii_case(expected) {
-            return Err(AppError::internal(format!(
-                "SHA256 mismatch: expected {}, got {}",
-                expected, hash_hex
-            )));
+            download.discard()?;
+            return Err(AppError::internal(
+                "内核包校验失败，已清除损坏缓存，请重新下载",
+            ));
         }
         true
     } else {
         false
     };
-
-    // Write the downloaded archive only inside ZNet-Sink's private install
-    // workspace. User-selected kernel directories never receive temporary
-    // files such as zero-download.zip or .staging.
-    fs::write(&temp_file, &all_bytes)
-        .map_err(|e| AppError::internal(format!("failed to write download: {e}")))?;
+    fs::copy(&download.path, &temp_file)
+        .map_err(|e| AppError::internal(format!("failed to stage download: {e}")))?;
+    // Verified cache survives an interrupted installation. Its identity includes
+    // version/platform/checksum and it is validated again before every install.
+    drop(download);
 
     let staging = workspace.root.join("staging");
     fs::create_dir(&staging)

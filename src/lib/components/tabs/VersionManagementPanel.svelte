@@ -166,7 +166,7 @@
     {#if updater.downloading && updater.selectedTag}
       <div class="download-progress" role="status" aria-live="polite">
         <div class="progress-copy">
-          <span>正在下载 {updater.latestVersion ? `v${updater.latestVersion}` : '所选版本'}</span>
+          <span>{updater.downloadLabel}</span>
           <span>{updater.progressPct != null ? `${updater.progressPct}%` : '计算大小中'} · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}</span>
         </div>
         <div

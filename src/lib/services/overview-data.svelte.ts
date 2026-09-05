@@ -201,6 +201,7 @@ class OverviewDataStore {
   proxyNodes = $state<ProxyNode[]>([]);
   activeConnections = $state(0);
   isLive = $state(false);
+  lastSampleAtUnixMs = $state(0);
   totalUpBytes = $state(0);
   totalDownBytes = $state(0);
 
@@ -289,6 +290,7 @@ class OverviewDataStore {
    */
   applyStatsEvent(data: Record<string, unknown>) {
     this.isLive = true;
+    this.lastSampleAtUnixMs = Date.now();
 
     // Primary keys (GuiTrafficStats from event stream)
     const bytesUp = pickNumber(data, ['bytesUp', 'bytes_up', 'upload', 'tx']);
@@ -340,6 +342,7 @@ class OverviewDataStore {
   /** Apply the rate sample calculated once by the Rust traffic bridge. */
   applyTrafficRateSample(sample: TrafficRateSample) {
     this.isLive = sample.stable;
+    this.lastSampleAtUnixMs = sample.sampledAtUnixMs;
     this.speedHistory.push({
       up: Math.max(0, sample.uploadBytesPerSec) / 1_000_000,
       down: Math.max(0, sample.downloadBytesPerSec) / 1_000_000,

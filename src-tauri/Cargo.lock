@@ -1554,6 +1554,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs",
  "libc",
+ "minisign-verify",
  "reqwest 0.12.28",
  "rusqlite",
  "semver",

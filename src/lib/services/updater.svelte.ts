@@ -1,6 +1,6 @@
-import { check, Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
+import { check, Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, Channel } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { info, warning } from '$lib/services/toast.svelte';
 import { appendLog } from '$lib/services/core';
@@ -15,6 +15,13 @@ export type UpdaterStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | '
 
 export const UPDATE_CHECK_INTERVAL_MS = RELEASE_CHECK_INTERVAL_MS;
 const INITIAL_UPDATE_CHECK_DELAY_MS = 3000;
+
+interface DownloadProgress {
+  bytesDownloaded: number;
+  bytesTotal: number | null;
+  state: string;
+  attempt: number;
+}
 
 interface AppUpdateMetadata {
   rid: number;
@@ -32,6 +39,13 @@ class UpdaterService {
   releaseNotes = $state<string | null>(null);
   checking = $state(false);
   downloading = $state(false);
+  downloadState = $state('downloading');
+  downloadAttempt = $state(1);
+  get downloadLabel(): string {
+    if (this.downloadState === 'retrying') return `网络中断，正在重试（${Math.min(this.downloadAttempt + 1, 4)}/4）`;
+    if (this.downloadState === 'verifying') return '下载完成，正在校验签名…';
+    return '下载中 · 支持断点续传';
+  }
   installing = $state(false);
   restartRequired = $state(false);
 
@@ -229,68 +243,12 @@ class UpdaterService {
     }
   }
 
-  /** Download and install the update. */
+  /** Both entry points share the resumable download and verified install path. */
   async downloadAndInstall(): Promise<boolean> {
     if (this.busy || this.restartRequired) return false;
-    this.downloading = true;
-    this.status = 'downloading';
-    this.downloaded = 0;
-    this.total = null;
-    try {
-      const update = this.pendingUpdate ?? await tracedOperation(
-        'update',
-        'update.install.prepare',
-        () => check(),
-        { currentVersion: this.currentVersion },
-      );
-      if (!update) {
-        this.downloading = false;
-        this.status = 'up-to-date';
-        return false;
-      }
-
-      this.replacePendingUpdate(update);
-      await tracedOperation(
-        'update',
-        'update.download_install',
-        () => update.downloadAndInstall((event) => {
-          switch (event.event) {
-            case 'Started':
-              this.total = event.data.contentLength ?? null;
-              info('开始下载更新…');
-              break;
-            case 'Progress':
-              this.downloaded += event.data.chunkLength;
-              break;
-            case 'Finished':
-              info('下载完成，应用即将重启…');
-              break;
-          }
-        }),
-        { fromVersion: this.currentVersion, toVersion: update.version },
-      );
-
-      this.restartRequired = true;
-      this.readyToInstall = false;
-      this.updateAvailable = false;
-      this.status = 'restart-required';
-      await tracedOperation(
-        'update',
-        'update.relaunch',
-        () => relaunch(),
-        { fromVersion: this.currentVersion, toVersion: update.version },
-      );
-
-      this.downloading = false;
-      this.status = 'restart-required';
-      return true;
-    } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
-      warning(`更新失败: ${this.lastError}`);
-      this.downloading = false;
-      this.status = this.restartRequired ? 'restart-required' : 'error';
-      return false;
-    }
+    if (!this.pendingUpdate && !await this.checkForUpdate()) return false;
+    if (!this.readyToInstall && !await this.downloadUpdate()) return false;
+    return this.installUpdate();
   }
 
   /** Manually dismiss the update notification. */
@@ -312,6 +270,8 @@ class UpdaterService {
     this.readyToInstall = false;
     this.lastError = null;
     this.status = 'downloading';
+    this.downloadState = 'downloading';
+    this.downloadAttempt = 1;
     this.downloaded = 0;
     this.total = null;
 
@@ -320,7 +280,11 @@ class UpdaterService {
       await tracedOperation(
         'update',
         'update.download',
-        () => update.download((event) => this.applyDownloadEvent(event)),
+        () => {
+          const onEvent = new Channel<DownloadProgress>();
+          onEvent.onmessage = (event) => this.applyDownloadEvent(event);
+          return invoke('app_download_update', { rid: update.rid, onEvent });
+        },
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
       this.readyToInstall = true;
@@ -347,7 +311,7 @@ class UpdaterService {
       await tracedOperation(
         'update',
         'update.install',
-        () => update.install(),
+        () => invoke('app_install_update', { rid: update.rid }),
         { fromVersion: this.currentVersion, toVersion: update.version },
       );
       this.restartRequired = true;
@@ -397,18 +361,15 @@ class UpdaterService {
     if (previous && previous !== update) void previous.close().catch(() => {});
   }
 
-  private applyDownloadEvent(event: DownloadEvent) {
-    switch (event.event) {
-      case 'Started':
-        this.total = event.data.contentLength ?? null;
-        break;
-      case 'Progress':
-        this.downloaded += event.data.chunkLength;
-        break;
-      case 'Finished':
-        break;
-    }
+  private applyDownloadEvent(event: DownloadProgress) {
+    // Native progress is absolute, including bytes restored from disk. A server
+    // that ignores Range may legitimately reset it; never sum retry chunks.
+    this.downloaded = event.bytesDownloaded;
+    this.total = event.bytesTotal;
+    this.downloadState = event.state;
+    this.downloadAttempt = event.attempt;
   }
+
 }
 
 export const updater = new UpdaterService();

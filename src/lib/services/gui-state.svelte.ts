@@ -43,6 +43,9 @@ const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
 class GuiStateStore {
   selfTest = $state<SelfTestSnapshot | null>(null);
   connection = $state<ConnectionStatus | null>(null);
+  connectionUpdatedAt = $state(0);
+  connectionError = $state<string | null>(null);
+  selfTestUpdatedAt = $state(0);
   proxyMode = $state<ProxyModeStatus | null>(null);
   coreOverview = $state<CoreOverview | null>(null);
   policyGroups = $state<PolicyGroup[]>([]);
@@ -161,6 +164,7 @@ class GuiStateStore {
     try {
       const snapshot = await getGuiSelfTestSnapshot();
       this.selfTest = snapshot;
+      this.selfTestUpdatedAt = Date.now();
       const internetSharingWarning = snapshot.checks.some(
         (check) => check.key === 'internetSharing' && check.status === 'warn',
       );
@@ -176,8 +180,11 @@ class GuiStateStore {
   async refreshConnectionStatus() {
     try {
       this.connection = await getGuiConnectionStatus();
+      this.connectionUpdatedAt = Date.now();
+      this.connectionError = null;
       this.syncTrayStatus();
-    } catch {
+    } catch (error) {
+      this.connectionError = this.errorMessage(error);
       // Preserve the last trusted ownership snapshot through a transient IPC
       // failure instead of making PID/proxy state flicker.
     }

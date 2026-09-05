@@ -15,22 +15,11 @@
   import { parseNodeName } from '$lib/services/node-utils';
   import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import * as toast from '$lib/services/toast.svelte';
+  import ProfessionalOverview from '$lib/components/overview/ProfessionalOverview.svelte';
+  import { buildOverview, type Destination } from '$lib/components/overview/model';
   import TrafficChart from '$lib/components/TrafficChart.svelte';
-  import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
-  import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
-  import TunStackStatus from '$lib/components/core/TunStackStatus.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Select from '$lib/components/ui/select';
-
-  function formatUptime(ms?: number): string {
-    if (!ms) return '—';
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
-  }
 
   function formatSpeed(speed: number): string {
     if (speed >= 1) return `${speed.toFixed(2)} MB/s`;
@@ -83,7 +72,7 @@
     return typeof outbound === 'string' && outbound.trim() ? outbound : null;
   }
 
-  let testExpanded = $state(false);
+  let refreshingOverview = $state(false);
   let uptimeNowMs = $state(Date.now());
   let subscriptions = $state<SubscriptionProfile[]>([]);
   let proxyConfigs = $state<ProxyConfigProfile[]>([]);
@@ -308,247 +297,43 @@
   });
 
   $effect(() => {
-    const startedAt = guiState.connection?.startedAtUnixMs;
-    if (!startedAt || store.uiMode !== 'pro') return;
-
+    if (store.uiMode !== 'pro') return;
     uptimeNowMs = Date.now();
-    const timer = window.setInterval(() => {
-      uptimeNowMs = Date.now();
-    }, 1000);
-
+    const timer = window.setInterval(() => { uptimeNowMs = Date.now(); }, 1000);
     return () => window.clearInterval(timer);
   });
-
-  const modeLabel = $derived(
-    guiState.proxyMode?.currentMode === 'global' ? '全局' :
-    guiState.proxyMode?.currentMode === 'direct' ? '直连' :
-    guiState.proxyMode?.currentMode === 'rule' ? '规则' : '—',
-  );
-  const isCoreAvailable = $derived(
-    guiState.connection?.coreAvailable === true || guiState.connection?.processState === 'running',
-  );
-  const coreStateLabel = $derived(
-    captureEnabled ? '服务中' :
-    guiState.isProcessRunning ? '监听中' :
-    guiState.isStartingCore ? '启动中' :
-    guiState.connection?.processState === 'failed' ? '失败' : '已停止',
-  );
-  const coreStateTone = $derived(
-    captureEnabled ? 'on' :
-    isCoreAvailable || guiState.isStartingCore ? 'listen' :
-    guiState.connection?.processState === 'failed' ? 'error' : 'off',
-  );
-  const liveUptimeMs = $derived.by(() => {
-    const startedAt = guiState.connection?.startedAtUnixMs;
-    if (startedAt) {
-      return Math.max(0, uptimeNowMs - startedAt);
-    }
-    return guiState.connection?.uptimeMs;
-  });
-  const uptimeLabel = $derived(formatUptime(liveUptimeMs));
+  const professionalModel = $derived(buildOverview({
+    now: uptimeNowMs, connection: guiState.connection,
+    connectionAt: guiState.connectionUpdatedAt, connectionError: guiState.connectionError,
+    core: guiState.coreOverview, tun: guiState.tunStatus, tunError: guiState.tunStatusError,
+    selfTest: guiState.selfTest, selfTestAt: guiState.selfTestUpdatedAt,
+    mode: guiState.proxyMode, groups: guiState.policyGroups,
+  }));
+  const trafficUnavailable = $derived(!guiState.supportsTrafficStats ? '内核不支持流量查询'
+    : !professionalModel.ready ? '内核未就绪，暂停展示实时速率'
+    : !overviewData.lastSampleAtUnixMs ? '等待第一份流量采样'
+    : uptimeNowMs - overviewData.lastSampleAtUnixMs > 10_000 ? '流量采样已过期，等待恢复'
+    : !overviewData.isLive ? '正在建立流量采样基线' : null);
+  function navigateOverview(target: Destination) {
+    if (target === 'nodes' || target === 'profiles' || target === 'connections') store.activeTab = target;
+    else store.openSettings(target);
+  }
+  async function refreshOverview() {
+    if (refreshingOverview) return;
+    refreshingOverview = true;
+    try { await guiState.refreshAll(); } finally { refreshingOverview = false; }
+  }
 
 </script>
 
 {#if store.uiMode === 'pro'}
-  <!-- ============ PRO MODE ============ -->
-  <div class="flex-1 w-full flex flex-col gap-3 overflow-y-auto overflow-x-hidden animate-fade-in min-h-0 pr-0.5">
-    <div class="status-strip flex-shrink-0" role="status" aria-label="运行状态概览">
-      <div class="strip-item tone-{coreStateTone}" title="内核状态">
-        <span class="strip-dot" class:pulse={guiState.isStartingCore || guiState.isConnecting}></span>
-        <span class="strip-key">内核</span>
-        <span class="strip-val">{coreStateLabel}</span>
-      </div>
-      <span class="strip-sep" aria-hidden="true"></span>
-      <div class="strip-item {systemProxyEnabled ? 'tone-on' : 'tone-off'}" title="系统代理">
-        <span class="strip-key">代理</span>
-        <span class="strip-val">{systemProxyEnabled ? '已开启' : '未开启'}</span>
-      </div>
-      <span class="strip-sep" aria-hidden="true"></span>
-      <div class="strip-item {guiState.isTunEnabled ? 'tone-on' : 'tone-off'}" title="TUN 虚拟网卡">
-        <span class="strip-key">TUN</span>
-        <span class="strip-val">{guiState.isTunEnabled ? '已开启' : '未开启'}</span>
-      </div>
-      <span class="strip-sep" aria-hidden="true"></span>
-      <div class="strip-item" title="路由模式">
-        <span class="strip-key">模式</span>
-        <span class="strip-val">{modeLabel}</span>
-      </div>
-      <span class="strip-sep" aria-hidden="true"></span>
-      <div class="strip-item down" title="实时下载速度">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 5 6 9 10 5"/></svg>
-        <span class="strip-val">{formatSpeed(currentDown)}</span>
-      </div>
-      <div class="strip-item up" title="实时上传速度">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 7 6 3 10 7"/></svg>
-        <span class="strip-val">{formatSpeed(currentUp)}</span>
-      </div>
-      <div class="strip-spacer"></div>
-      <div class="strip-item muted" title="内核运行时长">
-        <span class="strip-key">在线</span>
-        <span class="strip-val">{uptimeLabel}</span>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 flex-shrink-0">
-      <CoreStatusCard />
-
-      <div class="overview-card flex flex-col gap-2 overflow-hidden" style="min-height: 96px;">
-        <div class="flex items-center justify-between flex-shrink-0">
-          <span class="card-label">代理模式</span>
-          {#if guiState.proxyMode?.currentMode}
-            <span class="mode-indicator">{guiState.proxyMode.currentMode === 'global' ? '全局' : guiState.proxyMode.currentMode === 'rule' ? '规则' : '直连'}</span>
-          {/if}
-        </div>
-
-        <div class="mt-auto">
-          <SegmentedControl.Root
-            value={guiState.proxyMode?.currentMode ?? ''}
-            onValueChange={(value) => {
-              if (value === 'global' || value === 'rule' || value === 'direct') {
-                void guiState.setProxyMode(value);
-              }
-            }}
-            disabled={guiState.isSwitchingMode}
-            class="proxy-segment"
-            aria-label="选择代理模式"
-          >
-            {#each PROXY_MODES as mode}
-              <SegmentedControl.Item value={mode.value} style="flex: 1;">
-                {mode.label}
-              </SegmentedControl.Item>
-            {/each}
-          </SegmentedControl.Root>
-        </div>
-      </div>
-
-      <KernelVersionCard />
-
-      {#if store.isFeatureVisible('tun') || store.isFeatureVisible('systemStack')}
-        <TunStackStatus />
-      {/if}
-    </div>
-
-    <div class="network-strip">
-        <span class="card-label network-strip-label">本地网络</span>
-        <div class="network-strip-content">
-          {#if networkProbeResult}
-          {#if networkProbeFlagUrl}
-            <img src={networkProbeFlagUrl} alt="" class="network-strip-flag" width="20" height="15" loading="lazy" />
-          {/if}
-          <span class="network-strip-ip font-mono">{networkProbeResult.ip}</span>
-          <span class="network-strip-sep"></span>
-          <span class="network-strip-loc" title={formatProbeLocation(networkProbeResult)}>
-            {formatProbeLocation(networkProbeResult)}
-          </span>
-          {#if networkProbeResult.isp || networkProbeResult.org}
-            <span class="network-strip-sep"></span>
-            <span class="network-strip-isp" title={networkProbeResult.isp || networkProbeResult.org}>
-              {networkProbeResult.isp || networkProbeResult.org}
-            </span>
-          {/if}
-          {:else}
-            <span class="network-strip-empty" title={networkProbeError ?? undefined}>{networkProbePlaceholder}</span>
-          {/if}
-        </div>
-        <div class="network-strip-actions">
-        {#if networkProbeLoading}
-          <span class="network-status-badge loading">检测中…</span>
-        {/if}
-          <button data-slot="surface-button"
-            type="button"
-            class="network-strip-trigger"
-            onclick={() => void guiState.probeNetwork()}
-            disabled={networkProbeLoading}
-            title={networkProbeLoading ? '检测中' : '重新检测本地网络'}
-            aria-label={networkProbeLoading ? '检测中' : '重新检测本地网络'}
-          >
-            <svg
-              class="network-strip-trigger-icon"
-              class:spinning={networkProbeLoading}
-              width="12"
-              height="12"
-              viewBox="0 0 12 12"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M10 6A4 4 0 1 1 8.83 3.17" />
-              <polyline points="10 2 10 6 6 6" />
-            </svg>
-            手动测试
-          </button>
-        </div>
-    </div>
-
-    <div class="overview-card flex-shrink-0">
-      <button data-slot="surface-button" class="flex items-center justify-between w-full cursor-pointer" onclick={() => testExpanded = !testExpanded} style="background: none; border: none; padding: 0; color: inherit;">
-        <span class="card-label">系统自测</span>
-        <div class="flex items-center gap-2">
-          {#if guiState.selfTest}
-            {#if guiState.selfTest.ready}
-              <span class="inline-flex items-center gap-1 text-success" style="font-size: 12px; font-weight: 600;">
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
-                就绪
-              </span>
-            {:else}
-              <span class="inline-flex items-center gap-1 text-destructive" style="font-size: 12px; font-weight: 600;">
-                <svg width="12" height="12" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
-                未就绪
-              </span>
-            {/if}
-            {#if guiState.selfTest.warningCount > 0}
-              <span class="text-warning" style="font-size: 11px;">{guiState.selfTest.warningCount} 警告</span>
-            {/if}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" class="expand-chevron" class:expanded={testExpanded}>
-              <polyline points="3 5 7 9 11 5"/>
-            </svg>
-          {:else}
-            <span style="font-size: 11px; color: var(--muted-foreground);">检测中…</span>
-          {/if}
-        </div>
-      </button>
-
-      {#if guiState.selfTest?.blockingIssues?.length}
-        <div class="mt-2 space-y-0.5">
-          {#each guiState.selfTest.blockingIssues as issue}
-            <div class="text-destructive" style="font-size: 12px;">• {issue}</div>
-          {/each}
-        </div>
-      {/if}
-
-      {#if testExpanded && guiState.selfTest?.checks?.length}
-        <div class="test-checks">
-          {#each guiState.selfTest.checks as check}
-            <div class="test-check-row">
-              {#if check.status === 'pass'}
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="#22C55E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="flex-shrink-0 mt-0.5"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
-              {:else if check.status === 'warn'}
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="#F59E0B" stroke-width="1.6" stroke-linecap="round" class="flex-shrink-0 mt-0.5"><path d="M5 1.2L9 8.8H1Z"/><line x1="5" y1="4" x2="5" y2="6"/><circle cx="5" cy="7.5" r="0.4" fill="#F59E0B"/></svg>
-              {:else}
-                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="#EF4444" stroke-width="1.6" stroke-linecap="round" class="flex-shrink-0 mt-0.5"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
-              {/if}
-              <div class="test-check-info">
-                <span class="test-check-name">{check.key}</span>
-                {#if check.message}
-                  <span class="test-check-msg">{check.message}</span>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <div class="traffic-panel">
-      <div class="w-full h-full overflow-hidden">
-        <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} />
-      </div>
-    </div>
-
-  </div>
+  <ProfessionalOverview model={professionalModel} busy={guiState.isStartingCore || guiState.isSwitchingMode || guiState.isStoppingCore}
+    refreshing={refreshingOverview} navigate={navigateOverview} refresh={() => void refreshOverview()}
+    start={() => void guiState.startCore()} restart={() => void guiState.restartCore()} setMode={(mode) => void guiState.setProxyMode(mode)}>
+    {#snippet traffic()}
+      <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} unavailableReason={trafficUnavailable} />
+    {/snippet}
+  </ProfessionalOverview>
 
 {:else}
   <!-- ============ LITE MODE ============ -->
@@ -742,257 +527,6 @@
 {/if}
 
 <style>
-  .status-strip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .status-strip::-webkit-scrollbar { display: none; }
-
-  .strip-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  .strip-item.up { color: #22C55E; }
-  .strip-item.down { color: #3B82F6; }
-  .strip-item.muted { color: var(--muted-foreground); }
-
-  :global(.dark) .strip-item.up { color: #4ADE80; }
-  :global(.dark) .strip-item.down { color: #60A5FA; }
-
-  .strip-item.tone-on .strip-val { color: #16A34A; }
-  .strip-item.tone-listen .strip-val { color: #D97706; }
-  .strip-item.tone-error .strip-val { color: var(--destructive); }
-  .strip-item.tone-off .strip-val { color: var(--muted-foreground); }
-
-  :global(.dark) .strip-item.tone-on .strip-val { color: #4ADE80; }
-  :global(.dark) .strip-item.tone-listen .strip-val { color: #FBBF24; }
-
-  .strip-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: var(--muted-foreground);
-    opacity: 0.5;
-    transition: background 0.2s ease, opacity 0.2s ease;
-  }
-
-  .strip-item.tone-on .strip-dot { background: #22C55E; opacity: 1; }
-  .strip-item.tone-listen .strip-dot { background: #F59E0B; opacity: 1; }
-  .strip-item.tone-error .strip-dot { background: #EF4444; opacity: 1; }
-
-  .strip-dot.pulse { animation: pulse-dot 1.4s ease-in-out infinite; }
-
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  .strip-key {
-    font-size: 10.5px;
-    font-weight: 600;
-    color: var(--muted-foreground);
-    opacity: 0.7;
-    letter-spacing: 0.01em;
-  }
-
-  .strip-val {
-    font-size: 12px;
-    font-weight: 600;
-    font-family: var(--font-mono, monospace);
-    font-variant-numeric: tabular-nums;
-    color: var(--foreground);
-  }
-
-  .strip-sep {
-    display: block;
-    width: 1px;
-    height: 13px;
-    background: var(--border);
-    border-radius: 1px;
-    flex-shrink: 0;
-  }
-
-  .strip-spacer { flex: 1; min-width: 8px; }
-
-  .overview-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
-  }
-
-  .overview-card:hover {
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.07);
-    transform: translateY(-0.5px);
-  }
-
-  :global(.dark) .overview-card { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22); }
-  :global(.dark) .overview-card:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32); }
-
-  .card-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); letter-spacing: 0.01em; }
-
-  .mode-indicator { font-size: 11px; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-
-  :global(.proxy-segment) { width: 100%; }
-
-  .expand-chevron { transition: transform 0.2s ease; opacity: 0.5; flex-shrink: 0; }
-  .expand-chevron.expanded { transform: rotate(180deg); }
-
-  .test-checks { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-  .test-check-row { display: flex; align-items: flex-start; gap: 6px; font-size: 11.5px; }
-  .test-check-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .test-check-name { font-weight: 600; color: var(--foreground); }
-  .test-check-msg { color: var(--muted-foreground); font-size: 11px; line-height: 1.4; word-break: break-all; }
-
-  .traffic-panel {
-    width: 100%;
-    min-height: 240px;
-    flex: 1 0 240px;
-    overflow: hidden;
-  }
-
-  .network-strip {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: 12px;
-    overflow: hidden;
-    flex-shrink: 0;
-  }
-  .network-strip-label,
-  .network-strip-ip,
-  .network-strip-sep {
-    flex-shrink: 0;
-  }
-  .network-strip-label {
-    justify-self: start;
-    white-space: nowrap;
-  }
-  .network-strip-flag {
-    width: 20px;
-    height: 15px;
-    border-radius: 2px;
-    object-fit: cover;
-    flex-shrink: 0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  }
-  .network-strip-content {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-  }
-  .network-strip-sep {
-    width: 1px;
-    height: 12px;
-    background: var(--border);
-  }
-  .network-strip-ip {
-    font-weight: 600;
-    color: var(--foreground);
-  }
-  .network-strip-loc,
-  .network-strip-isp {
-    color: var(--muted-foreground);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .network-strip-isp { opacity: 0.8; }
-  .network-strip-empty {
-    color: var(--muted-foreground);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .network-strip-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    min-width: 0;
-  }
-  .network-strip-trigger {
-    appearance: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 24px;
-    width: 24px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 0;
-    font-weight: 600;
-    line-height: 0;
-    cursor: pointer;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
-  }
-  .network-strip-trigger-icon { flex-shrink: 0; }
-  .network-strip-trigger-icon.spinning { animation: network-trigger-spin 0.8s linear infinite; }
-  .network-strip-trigger:hover:not(:disabled) {
-    background: var(--muted);
-    border-color: rgba(0, 0, 0, 0.18);
-  }
-  :global(.dark) .network-strip-trigger:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.16); }
-  .network-strip-trigger:focus-visible {
-    outline: none;
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
-  }
-  .network-strip-trigger:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
-  @keyframes network-trigger-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  .network-status-badge {
-    flex-shrink: 0;
-    height: 18px;
-    padding: 0 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    color: var(--muted-foreground);
-    background: var(--muted);
-  }
-  .network-status-badge.loading { animation: network-pulse 1.5s ease-in-out infinite; }
-  @keyframes network-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-
   @property --traffic-up-share {
     syntax: '<percentage>';
     inherits: false;

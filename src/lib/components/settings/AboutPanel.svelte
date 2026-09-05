@@ -261,7 +261,7 @@
               ></div>
             </div>
             <span class="update-progress-text">
-              {updater.progressPct != null ? `${updater.progressPct}%` : '下载中'}
+              {updater.downloadLabel} · {updater.progressPct != null ? `${updater.progressPct}%` : '计算大小中'}
               · {formatBytes(updater.downloaded)}{updater.total != null ? ` / ${formatBytes(updater.total)}` : ''}
             </span>
           </div>

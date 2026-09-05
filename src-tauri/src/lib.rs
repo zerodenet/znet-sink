@@ -530,6 +530,8 @@ pub fn run() {
             app_config_commands::app_config_export_kernel_settings,
             app_config_commands::app_config_import_kernel_settings,
             app_update_commands::app_check_release,
+            app_update_commands::download::app_download_update,
+            app_update_commands::download::app_install_update,
             proxy_config_commands::proxy_config_list,
             proxy_config_commands::proxy_config_get,
             proxy_config_commands::proxy_config_upsert,

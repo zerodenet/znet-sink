@@ -1,3 +1,4 @@
+pub mod download;
 use semver::Version;
 use serde::Serialize;
 use serde_json::Value;

@@ -24,6 +24,8 @@ export interface KernelVersionList {
 export interface KernelDownloadProgress {
   version: string;
   bytesDownloaded: number;
+  state?: 'downloading' | 'retrying' | 'verifying';
+  attempt?: number;
   bytesTotal?: number;
   percent?: number;
 }

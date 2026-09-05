@@ -34,6 +34,8 @@ pub struct KernelDownloadProgress {
     pub bytes_downloaded: u64,
     pub bytes_total: Option<u64>,
     pub percent: Option<f64>,
+    pub state: &'static str,
+    pub attempt: usize,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

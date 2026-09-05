@@ -55,11 +55,8 @@ assert.match(
   /import \{ relaunch \} from '@tauri-apps\/plugin-process';/,
   'the updater must import the supported Tauri process relaunch API',
 );
-assert.equal(
-  updaterService.match(/\(\) => relaunch\(\)/g)?.length,
-  3,
-  'restart retry and both immediate updates and version-manager installs must relaunch after installation',
-);
+// Download/install/relaunch ordering is exercised with native boundaries in
+// test-updater-lifecycle.mjs; counting source occurrences rejects shared paths.
 
 const capability = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'));
 assert.ok(

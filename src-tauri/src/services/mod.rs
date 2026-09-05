@@ -13,6 +13,7 @@ pub mod core_process;
 pub mod debug_store;
 pub mod diagnostic_storage;
 pub mod domain_store;
+pub(crate) mod download;
 pub mod file_logger;
 pub mod gui_connection;
 pub mod gui_events;
