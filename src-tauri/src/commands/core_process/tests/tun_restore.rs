@@ -5,6 +5,7 @@ use std::future::ready;
 fn status(enabled: bool) -> GuiTunStatus {
     GuiTunStatus {
         enabled,
+        healthy: enabled,
         supported: true,
         ..Default::default()
     }
@@ -16,6 +17,28 @@ fn timeout() -> AppError {
         message: "lost reply".into(),
         details: None,
     }
+}
+
+#[tokio::test]
+async fn enabled_but_unhealthy_tun_is_never_reported_as_restored() {
+    let starts = Cell::new(0);
+    let result = restore(
+        || {
+            ready(Ok(GuiTunStatus {
+                healthy: false,
+                ..status(true)
+            }))
+        },
+        || {
+            starts.set(starts.get() + 1);
+            ready(Ok(status(true)))
+        },
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await;
+    assert_eq!(result.unwrap_err().code, "tun_restore_unconfirmed");
+    assert_eq!(starts.get(), 0);
 }
 
 #[tokio::test]

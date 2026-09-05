@@ -40,6 +40,8 @@ CHANNEL=$(read_json channel)
 BUILD_NUMBER=$(read_json buildNumber)
 BRANCH=$(read_json branch)
 
+if [ "$CHANNEL" = stable ]; then node scripts/check-stable-readiness.mjs; fi
+
 [ "$CURRENT_VERSION" != "$VERSION" ] || die "release version $VERSION is already current; release tags are immutable"
 node scripts/version-manifests.mjs assert-newer "$VERSION" "$CURRENT_VERSION" >/dev/null
 

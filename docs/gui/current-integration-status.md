@@ -9,7 +9,8 @@ Lifecycle/storage update: 2026-09-05. Other sections retain their earlier integr
 - Starting the kernel without an active proxy config uses a minimal temporary control-plane config where possible. Enabling system proxy still requires active proxy config content.
 
 - Kernel startup confirms healthy IPC and the exact spawned PID, with a bounded stabilization window. Connect/disconnect and upgrades share the configuration operation lock.
-- Kernel upgrades preserve old files and app settings, then roll back on installation/startup/capture restoration errors. See [core](./core.md) and [storage](./storage.md) for recovery limits.
+- Kernel upgrades preserve old files and app settings, then roll back on installation/startup/capture restoration errors. Interrupted transaction records block launching or overwriting an unverified installation. See [core](./core.md) and [storage](./storage.md) for recovery limits.
+- DNS settings synchronize app-owned running TUN interception and verify healthy runtime parameters before saving. See [first stable readiness](./first-stable-readiness.md) for the qualification matrix and stable release evidence gate.
 
 ## IPC Contracts
 

@@ -1,0 +1,455 @@
+{
+  "schemaVersion": 1,
+  "sourceFingerprint": null,
+  "kernelCommit": null,
+  "blockers": [
+    "Installed network and lifecycle evidence for the new paired candidate is pending on all four supported platforms.",
+    "Interrupted kernel update recovery requires qualification, including pending transaction handling."
+  ],
+  "platforms": {
+    "darwin-x86_64": {
+      "clientArtifactSha256": null,
+      "kernelArtifactSha256": null,
+      "cases": {
+        "network/disabled/off/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/off/ipv4": {
+          "status": "pending"
+        },
+        "network/real/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "journey/first-install-import-connect": {
+          "status": "pending"
+        },
+        "journey/profile-and-node-switch": {
+          "status": "pending"
+        },
+        "journey/dns-live-transitions": {
+          "status": "pending"
+        },
+        "journey/capture-mode-transitions": {
+          "status": "pending"
+        },
+        "journey/restart-restore": {
+          "status": "pending"
+        },
+        "journey/kernel-upgrade-success-and-failure": {
+          "status": "pending"
+        },
+        "journey/client-upgrade-and-interruption": {
+          "status": "pending"
+        },
+        "journey/normal-exit-cleanup": {
+          "status": "pending"
+        },
+        "journey/forced-exit-recovery": {
+          "status": "pending"
+        },
+        "journey/invalid-config-and-network-recovery": {
+          "status": "pending"
+        },
+        "journey/diagnostics-and-state-consistency": {
+          "status": "pending"
+        }
+      }
+    },
+    "darwin-aarch64": {
+      "clientArtifactSha256": null,
+      "kernelArtifactSha256": null,
+      "cases": {
+        "network/disabled/off/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/off/ipv4": {
+          "status": "pending"
+        },
+        "network/real/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "journey/first-install-import-connect": {
+          "status": "pending"
+        },
+        "journey/profile-and-node-switch": {
+          "status": "pending"
+        },
+        "journey/dns-live-transitions": {
+          "status": "pending"
+        },
+        "journey/capture-mode-transitions": {
+          "status": "pending"
+        },
+        "journey/restart-restore": {
+          "status": "pending"
+        },
+        "journey/kernel-upgrade-success-and-failure": {
+          "status": "pending"
+        },
+        "journey/client-upgrade-and-interruption": {
+          "status": "pending"
+        },
+        "journey/normal-exit-cleanup": {
+          "status": "pending"
+        },
+        "journey/forced-exit-recovery": {
+          "status": "pending"
+        },
+        "journey/invalid-config-and-network-recovery": {
+          "status": "pending"
+        },
+        "journey/diagnostics-and-state-consistency": {
+          "status": "pending"
+        }
+      }
+    },
+    "windows-x86_64": {
+      "clientArtifactSha256": null,
+      "kernelArtifactSha256": null,
+      "cases": {
+        "network/disabled/off/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/off/ipv4": {
+          "status": "pending"
+        },
+        "network/real/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "journey/first-install-import-connect": {
+          "status": "pending"
+        },
+        "journey/profile-and-node-switch": {
+          "status": "pending"
+        },
+        "journey/dns-live-transitions": {
+          "status": "pending"
+        },
+        "journey/capture-mode-transitions": {
+          "status": "pending"
+        },
+        "journey/restart-restore": {
+          "status": "pending"
+        },
+        "journey/kernel-upgrade-success-and-failure": {
+          "status": "pending"
+        },
+        "journey/client-upgrade-and-interruption": {
+          "status": "pending"
+        },
+        "journey/normal-exit-cleanup": {
+          "status": "pending"
+        },
+        "journey/forced-exit-recovery": {
+          "status": "pending"
+        },
+        "journey/invalid-config-and-network-recovery": {
+          "status": "pending"
+        },
+        "journey/diagnostics-and-state-consistency": {
+          "status": "pending"
+        }
+      }
+    },
+    "linux-x86_64": {
+      "clientArtifactSha256": null,
+      "kernelArtifactSha256": null,
+      "cases": {
+        "network/disabled/off/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/disabled/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/off/ipv4": {
+          "status": "pending"
+        },
+        "network/real/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/real/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/off/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/tun/dual-stack": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/ipv4": {
+          "status": "pending"
+        },
+        "network/fake-ip/system-proxy-and-tun/dual-stack": {
+          "status": "pending"
+        },
+        "journey/first-install-import-connect": {
+          "status": "pending"
+        },
+        "journey/profile-and-node-switch": {
+          "status": "pending"
+        },
+        "journey/dns-live-transitions": {
+          "status": "pending"
+        },
+        "journey/capture-mode-transitions": {
+          "status": "pending"
+        },
+        "journey/restart-restore": {
+          "status": "pending"
+        },
+        "journey/kernel-upgrade-success-and-failure": {
+          "status": "pending"
+        },
+        "journey/client-upgrade-and-interruption": {
+          "status": "pending"
+        },
+        "journey/normal-exit-cleanup": {
+          "status": "pending"
+        },
+        "journey/forced-exit-recovery": {
+          "status": "pending"
+        },
+        "journey/invalid-config-and-network-recovery": {
+          "status": "pending"
+        },
+        "journey/diagnostics-and-state-consistency": {
+          "status": "pending"
+        }
+      }
+    }
+  }
+}

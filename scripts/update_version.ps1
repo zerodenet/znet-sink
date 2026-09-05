@@ -33,6 +33,10 @@ $Channel = [string]$Plan.channel
 $BuildNumber = [int]$Plan.buildNumber
 $Branch = [string]$Plan.branch
 
+if ($Channel -eq "stable") {
+    Invoke-Checked { node scripts/check-stable-readiness.mjs } "stable qualification is incomplete"
+}
+
 if ($CurrentVersion -eq $ReleaseVersion) { Die "release version $ReleaseVersion is already current; release tags are immutable" }
 Invoke-Checked { node scripts/version-manifests.mjs assert-newer $ReleaseVersion $CurrentVersion } "release version must advance from $CurrentVersion"
 

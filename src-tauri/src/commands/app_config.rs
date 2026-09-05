@@ -7,7 +7,7 @@ use crate::services::kernel_settings::{self, KernelSettingsExportResult};
 use crate::services::{app_config, core_process, rule_overlay, system_proxy_guard};
 use crate::state::app_state::AppState;
 
-mod tun_settings;
+pub(crate) mod tun_settings;
 
 #[tauri::command]
 pub async fn app_config_apply_tun(

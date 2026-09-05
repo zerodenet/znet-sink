@@ -8,7 +8,7 @@ use crate::state::app_state::AppState;
 
 #[cfg(test)]
 mod tests;
-mod transaction;
+pub(crate) mod transaction;
 mod validation;
 
 use transaction::{Backend, Snapshot};

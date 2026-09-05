@@ -18,7 +18,7 @@
     "test:diagnostic-copy": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-diagnostic-copy.mjs",
     "test:async-state": "node scripts/test-latest-request-gate.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-node-state-reconcile.mjs",
     "test:core-events": "node --experimental-strip-types scripts/test-core-event-lifecycle.mjs",
-    "test:release-version": "node scripts/test-version-manifests.mjs && node scripts/test-release-policy.mjs",
+    "test:release-version": "node scripts/test-version-manifests.mjs && node scripts/test-release-policy.mjs && node --test scripts/test-stable-readiness.mjs",
     "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs",
     "test:onboarding": "node --experimental-strip-types scripts/test-onboarding-state.mjs",
     "test:subscriptions": "node scripts/test-subscription-contract.mjs",
@@ -45,7 +45,8 @@
     "lint:commit": "commitlint --edit",
     "test:nodes-probe-state": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-probe-state.mjs",
     "test:tun-recovery": "node --test scripts/test-tun-recovery.mjs",
-    "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs"
+    "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs",
+    "verify:stable": "node scripts/check-stable-readiness.mjs"
   },
   "config": {
     "commitizen": {

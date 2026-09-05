@@ -118,10 +118,10 @@ assert.match(tunPanel, /features\?\.tunDualStack\.state === 'unsupported'/);
 assert.match(recoveryActions, /guiExportDiagnostics/);
 assert.match(guiCore, /pub fn gui_inspect_dns_effective_config/);
 assert.match(guiCore, /compose_effective_config_with_dns/);
-assert.match(guiCore, /rollback_runtime_if_owned/);
+assert.match(guiCore, /dns_apply::apply/);
 assert.match(dnsTransaction, /dnsRollback/);
 assert.match(dnsTransaction, /restored_last_known_good/);
-assert.match(dnsTransaction, /dnsStorageRollback/);
+// DNS/TUN/storage failure behavior is exercised by the Rust transaction tests.
 assert.match(configService, /ruleSetSignal\.markChanged\(\)/);
 assert.match(runtime, /json!\(tun\.dns_hijack\)/);
 assert.match(parsing, /"original_ip", "originalIp"/);

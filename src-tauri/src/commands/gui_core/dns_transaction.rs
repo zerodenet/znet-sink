@@ -1,9 +1,5 @@
 use crate::errors::{AppError, AppResult};
-use crate::kernel::adapter::KernelAdapter;
-use crate::kernel::zero::{self, ZeroAdapter};
-use crate::state::app_state::AppState;
-
-use super::default_opts;
+use crate::kernel::zero;
 
 pub(super) fn validate_apply_scope(
     before: &zero::queries::KernelRuntimeIdentity,
@@ -35,81 +31,12 @@ pub(super) fn validate_apply_scope(
     })
 }
 
+#[cfg(test)]
 pub(super) fn rollback_scope_owned(
     expected: &zero::queries::KernelRuntimeIdentity,
     current: &zero::queries::KernelRuntimeIdentity,
 ) -> bool {
     expected == current
-}
-
-pub(super) async fn rollback_runtime_if_owned(
-    state: &AppState,
-    previous_effective: &serde_json::Value,
-    expected: &zero::queries::KernelRuntimeIdentity,
-    error: AppError,
-) -> AppError {
-    let current = match zero::queries::runtime_identity(Some(default_opts(state))).await {
-        Ok(current) => current,
-        Err(scope_error) => {
-            return with_rollback_status(
-                error,
-                false,
-                false,
-                "current_scope_unavailable",
-                Some(scope_error),
-            );
-        }
-    };
-    if !rollback_scope_owned(expected, &current) {
-        return with_rollback_status(error, false, false, "current_scope_changed", None);
-    }
-
-    let response = match ZeroAdapter::new()
-        .apply_config(previous_effective.clone(), default_opts(state))
-        .await
-    {
-        Ok(response) => response,
-        Err(rollback_error) => {
-            return with_rollback_status(error, true, false, "apply_failed", Some(rollback_error));
-        }
-    };
-    let rollback_applied = match zero::queries::config_apply_identity(&response) {
-        Ok(identity) => identity,
-        Err(rollback_error) => {
-            return with_rollback_status(
-                error,
-                true,
-                false,
-                "rollback_identity_unavailable",
-                Some(rollback_error),
-            );
-        }
-    };
-    let rollback_current = match zero::queries::runtime_identity(Some(default_opts(state))).await {
-        Ok(identity) => identity,
-        Err(rollback_error) => {
-            return with_rollback_status(
-                error,
-                true,
-                false,
-                "rollback_scope_unavailable",
-                Some(rollback_error),
-            );
-        }
-    };
-    if let Err(rollback_error) =
-        validate_apply_scope(expected, &rollback_applied, &rollback_current)
-    {
-        return with_rollback_status(
-            error,
-            true,
-            false,
-            "rollback_scope_changed",
-            Some(rollback_error),
-        );
-    }
-
-    with_rollback_status(error, true, true, "restored_last_known_good", None)
 }
 
 pub(super) fn with_rollback_status(
@@ -158,37 +85,6 @@ pub(super) fn with_rollback_status(
             "; runtime rollback was skipped because ownership of the current core revision could not be proven",
         );
     }
-    error
-}
-
-pub(super) fn with_storage_rollback_failure(
-    mut error: AppError,
-    stage: &'static str,
-    rollback_error: AppError,
-) -> AppError {
-    let mut details = match error.details.take() {
-        Some(serde_json::Value::Object(details)) => details,
-        Some(details) => {
-            let mut object = serde_json::Map::new();
-            object.insert("cause".to_owned(), details);
-            object
-        }
-        None => serde_json::Map::new(),
-    };
-    details.insert(
-        "dnsStorageRollback".to_owned(),
-        serde_json::json!({
-            "succeeded": false,
-            "stage": stage,
-            "code": rollback_error.code,
-            "message": rollback_error.message,
-            "details": rollback_error.details,
-        }),
-    );
-    error
-        .message
-        .push_str("; persisted DNS rollback failed and requires manual recovery");
-    error.details = Some(serde_json::Value::Object(details));
     error
 }
 

@@ -7,12 +7,12 @@ use crate::models::app_config::{AppConfig, AppTunConfig};
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::kernel_settings::validate_cidr;
 
-pub(super) struct Snapshot {
+pub(crate) struct Snapshot {
     pub identity: KernelRuntimeIdentity,
     pub status: GuiTunStatus,
 }
 
-pub(super) trait Backend: Sync {
+pub(crate) trait Backend: Sync {
     fn snapshot(&self) -> impl Future<Output = AppResult<Snapshot>> + Send;
     fn stop(&self) -> impl Future<Output = AppResult<()>> + Send;
     fn start(&self, tun: &AppTunConfig) -> impl Future<Output = AppResult<()>> + Send;
@@ -23,7 +23,7 @@ fn conflict(message: &str) -> AppError {
     AppError::conflict("tun", "runtime", message)
 }
 
-pub(super) fn matches(status: &GuiTunStatus, tun: &AppTunConfig) -> bool {
+pub(crate) fn matches(status: &GuiTunStatus, tun: &AppTunConfig) -> bool {
     status.enabled
         && status.healthy
         && !status.managed_by_config
@@ -87,7 +87,7 @@ fn transient(error: &AppError) -> bool {
 
 // A timed-out command may still be executing. Observe its result, never resend
 // the mutation or start a competing rollback while completion remains unknown.
-async fn transition(
+pub(crate) async fn transition(
     backend: &impl Backend,
     identity: &KernelRuntimeIdentity,
     expected: Option<&AppTunConfig>,

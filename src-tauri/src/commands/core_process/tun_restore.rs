@@ -23,16 +23,16 @@ where
     loop {
         let result = query().await;
         let error = match result {
-            Ok(status) if status.enabled => return Ok(()),
+            Ok(status) if status.enabled && status.healthy => return Ok(()),
             Ok(status) if !status.supported => {
                 return Err(AppError::invalid_argument(
                     "the current Zero runtime does not support TUN",
                 ));
             }
-            Ok(_) if !submitted => {
+            Ok(status) if !status.enabled && !submitted => {
                 submitted = true;
                 match enable().await {
-                    Ok(status) if status.enabled => return Ok(()),
+                    Ok(status) if status.enabled && status.healthy => return Ok(()),
                     Err(error) if !transient(&error) => return Err(error),
                     Err(error) => Some(error),
                     Ok(_) => None,

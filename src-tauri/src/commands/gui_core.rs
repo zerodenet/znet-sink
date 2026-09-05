@@ -26,17 +26,12 @@ use crate::models::gui_core::{
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
 use crate::services::{
-    app_config, core_config, core_process, diagnostic_storage, interaction_mode, probe,
-    proxy_config,
+    core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
 };
 use crate::state::app_state::AppState;
 
+mod dns_apply;
 mod dns_transaction;
-
-use dns_transaction::{
-    rollback_runtime_if_owned, rollback_scope_owned, validate_apply_scope, with_rollback_status,
-    with_storage_rollback_failure,
-};
 
 const CORE_READY_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
 const CORE_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
@@ -431,136 +426,7 @@ pub async fn gui_apply_dns_config(
 ) -> AppResult<serde_json::Value> {
     validate_dns_settings(&input)?;
     let _operation = state.proxy_config_operation().lock().await;
-    let previous_app = common::lock(state.app_config(), "app_config")?.clone();
-    let mut next_app = previous_app.clone();
-    next_app.dns = AppDnsConfig {
-        enabled: input.enabled,
-        config: input.config.clone(),
-        dns_hijack: input.enabled && input.dns_hijack,
-    };
-    next_app.tun.dns_hijack = next_app.dns.dns_hijack;
-
-    let active_content = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone());
-    let previous_effective = active_content
-        .as_ref()
-        .map(|content| {
-            crate::services::rule_overlay::compose_effective_config_with_dns(
-                state.inner(),
-                content,
-                &previous_app.dns,
-            )
-        })
-        .transpose()?;
-    let next_effective = active_content
-        .as_ref()
-        .map(|content| {
-            crate::services::rule_overlay::compose_effective_config_with_dns(
-                state.inner(),
-                content,
-                &next_app.dns,
-            )
-        })
-        .transpose()?;
-    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let mut applied_identity = None;
-    let result = if let Some(effective) = next_effective.clone().filter(|_| running) {
-        let before = zero::queries::runtime_identity(Some(default_opts(state.inner()))).await?;
-        let result = ZeroAdapter::new()
-            .apply_config(effective, default_opts(state.inner()))
-            .await?;
-        let applied = match zero::queries::config_apply_identity(&result) {
-            Ok(applied) => applied,
-            Err(error) => {
-                return Err(with_rollback_status(
-                    error,
-                    false,
-                    false,
-                    "apply_identity_unavailable",
-                    None,
-                ));
-            }
-        };
-        let current = match zero::queries::runtime_identity(Some(default_opts(state.inner()))).await
-        {
-            Ok(current) => current,
-            Err(error) => {
-                let Some(previous) = previous_effective.as_ref() else {
-                    return Err(with_rollback_status(
-                        error,
-                        false,
-                        false,
-                        "previous_effective_unavailable",
-                        None,
-                    ));
-                };
-                return Err(
-                    rollback_runtime_if_owned(state.inner(), previous, &applied, error).await,
-                );
-            }
-        };
-        if let Err(error) = validate_apply_scope(&before, &applied, &current) {
-            if rollback_scope_owned(&applied, &current) {
-                let Some(previous) = previous_effective.as_ref() else {
-                    return Err(with_rollback_status(
-                        error,
-                        false,
-                        false,
-                        "previous_effective_unavailable",
-                        None,
-                    ));
-                };
-                return Err(
-                    rollback_runtime_if_owned(state.inner(), previous, &applied, error).await,
-                );
-            }
-            return Err(with_rollback_status(
-                error,
-                false,
-                false,
-                "current_scope_changed",
-                None,
-            ));
-        }
-        applied_identity = Some(applied);
-        Some(result)
-    } else {
-        None
-    };
-
-    if let Err(error) = app_config::replace(state.inner(), next_app) {
-        if let (Some(previous), Some(applied)) =
-            (previous_effective.as_ref(), applied_identity.as_ref())
-        {
-            return Err(rollback_runtime_if_owned(state.inner(), previous, applied, error).await);
-        }
-        return Err(error);
-    }
-    if active_content.is_some() {
-        if let Err(error) = core_config::export_active(state.clone()) {
-            let storage_rollback = match app_config::replace(state.inner(), previous_app.clone()) {
-                Ok(()) => core_config::export_active(state.clone())
-                    .err()
-                    .map(|error| ("active_config_export", error)),
-                Err(error) => Some(("app_config", error)),
-            };
-            let mut error = error;
-            if let (Some(previous), Some(applied)) =
-                (previous_effective.as_ref(), applied_identity.as_ref())
-            {
-                error = rollback_runtime_if_owned(state.inner(), previous, applied, error).await;
-            }
-            if let Some((stage, storage_rollback)) = storage_rollback {
-                error = with_storage_rollback_failure(error, stage, storage_rollback);
-            }
-            return Err(error);
-        }
-    }
-    Ok(result.unwrap_or_else(
-        || serde_json::json!({ "ok": true, "applied": false, "reason": "no_active_proxy_profile" }),
-    ))
+    dns_apply::apply(state.clone(), input).await
 }
 
 async fn apply_config_transaction(

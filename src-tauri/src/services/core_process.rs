@@ -235,6 +235,16 @@ fn spawn_core_child(
 ) -> AppResult<CoreProcessStatus> {
     let executable_path = snapshot.executable_path.as_deref().unwrap_or_default();
 
+    if let Err(error) = super::kernel_manager::transaction::ensure_no_interrupted_upgrade(
+        &super::data_dir()?.join("kernel-rollback"),
+    ) {
+        let mut process = lock(state.core_process(), "core_process")?;
+        process.status.state = CoreProcessState::Failed;
+        process.status.last_error = Some(error.message.clone());
+        process.status.exited_at_unix_ms = Some(common::now_unix_ms());
+        return Err(error);
+    }
+
     let _ = logs::append_entry(
         state,
         LogSource::App,

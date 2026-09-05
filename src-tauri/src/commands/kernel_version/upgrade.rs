@@ -39,7 +39,15 @@ pub(super) async fn apply(
     );
     let backup_source = Arc::clone(&prepared);
     let mut transaction = blocking(move || backup_source.backup()).await?;
-    transaction.preserve_config(&previous)?;
+    if let Err(mut error) = transaction.preserve_config(&previous) {
+        if let Err(cancel_error) = transaction.cancel_prepared() {
+            error.message.push_str(&format!(
+                "; preparation cancellation failed: {}",
+                cancel_error.message
+            ));
+        }
+        return Err(error);
+    }
     let backup_path = transaction.backup_path().to_owned();
 
     let result: AppResult<()> = async {

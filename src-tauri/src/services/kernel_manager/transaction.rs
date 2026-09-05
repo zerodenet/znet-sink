@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +29,68 @@ pub struct BundleTransaction {
     receipt: Receipt,
 }
 
+static ACTIVE: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+
+fn active() -> &'static Mutex<BTreeSet<PathBuf>> {
+    ACTIVE.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+impl Drop for BundleTransaction {
+    fn drop(&mut self) {
+        if let Ok(mut active) = active().lock() {
+            active.remove(&self.backup);
+        }
+    }
+}
+
+/// Only an in-memory live transaction may launch its uncommitted candidate.
+/// PID equality is insufficient after an interrupted upgrade or PID reuse.
+pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
+    let directories = match fs::read_dir(backup_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(storage_error(error)),
+    };
+    for entry in directories {
+        let backup = entry.map_err(storage_error)?.path();
+        if active()
+            .lock()
+            .map_err(|_| AppError::internal("kernel transaction lock poisoned"))?
+            .contains(&backup)
+        {
+            continue;
+        }
+        let receipt_path = backup.join("receipt.json");
+        let bytes = match fs::read(&receipt_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(storage_error(error)),
+        };
+        let receipt: Receipt = serde_json::from_slice(&bytes).map_err(|_| AppError {
+            code: "kernel_upgrade_recovery_required",
+            message: format!("内核升级记录无法读取，请先检查备份：{}", backup.display()),
+            details: Some(serde_json::json!({"backupPath": backup})),
+        })?;
+        if !matches!(
+            receipt.state.as_str(),
+            "committed" | "rolled_back" | "cancelled"
+        ) {
+            return Err(AppError {
+                code: "kernel_upgrade_recovery_required",
+                message: format!(
+                    "检测到未完成的内核升级，已暂停启动和再次升级；请先从备份恢复：{}",
+                    backup.display()
+                ),
+                details: Some(serde_json::json!({"backupPath": backup, "state": receipt.state})),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl BundleTransaction {
     pub fn prepare(target: &Path, backup_root: &Path, names: &[String]) -> AppResult<Self> {
+        ensure_no_interrupted_upgrade(backup_root)?;
         fs::create_dir_all(backup_root).map_err(storage_error)?;
         let workspace = tempfile::Builder::new()
             .prefix("upgrade-")
@@ -65,10 +126,12 @@ impl BundleTransaction {
             entries,
         };
         write_receipt(workspace.path(), &receipt)?;
-        Ok(Self {
-            backup: workspace.keep(),
-            receipt,
-        })
+        let backup = workspace.keep();
+        active()
+            .lock()
+            .map_err(|_| AppError::internal("kernel transaction lock poisoned"))?
+            .insert(backup.clone());
+        Ok(Self { backup, receipt })
     }
 
     pub fn backup_path(&self) -> &Path {
@@ -84,6 +147,13 @@ impl BundleTransaction {
 
     pub fn commit(&mut self) -> AppResult<()> {
         self.receipt.state = "committed".into();
+        write_receipt(&self.backup, &self.receipt)
+    }
+
+    /// Cancel preparation before any install/stop mutation. Never rewrite a
+    /// binary that may still be running just because saving its config failed.
+    pub fn cancel_prepared(&mut self) -> AppResult<()> {
+        self.receipt.state = "cancelled".into();
         write_receipt(&self.backup, &self.receipt)
     }
 
