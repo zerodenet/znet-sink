@@ -358,3 +358,6 @@ jobs:
       # Windows runs these same cases in the full windows-client-core job.
       - name: Verify download recovery and updater signatures
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib download -j 2
+
+      - name: Verify kernel preflight isolation
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib preflight -j 2

@@ -1,3 +1,4 @@
+use crate::services::common::strip_ansi;
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -891,33 +892,6 @@ fn refresh_locked_status(
 
 /// Remove ANSI escape codes (CSI sequences) from stderr output.
 /// Matches patterns like ESC[...m, ESC[...K, etc.
-fn strip_ansi(raw: &str) -> String {
-    let mut result = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut i = 0;
-    let mut segment_start = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-            // ESC is ASCII and therefore always a UTF-8 boundary. Preserve
-            // the complete UTF-8 slice before it instead of rebuilding the
-            // string one byte at a time (`byte as char` corrupts CJK/emoji).
-            result.push_str(&raw[segment_start..i]);
-            // Skip ESC[ ... until a terminal byte (letter A-Z or a-z)
-            i += 2;
-            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-            if i < bytes.len() {
-                i += 1; // skip the terminal byte
-            }
-            segment_start = i;
-        } else {
-            i += 1;
-        }
-    }
-    result.push_str(&raw[segment_start..]);
-    result
-}
 
 /// Classify a core stderr line into a log level based on content heuristics.
 fn classify_stderr_level(line: &str) -> LogLevel {

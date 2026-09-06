@@ -39,11 +39,18 @@ pub(super) fn validate(binary: &Path, version: &str, config: Option<&Path>) -> A
 /// hung candidate cannot deadlock on a full pipe or freeze the installer.
 pub(super) fn run(binary: &Path, args: &[&str], timeout: Duration) -> AppResult<String> {
     let mut output = tempfile::tempfile().map_err(io_error)?;
+    // Older kernels construct DNS during `validate`. Keep their Fake-IP lease
+    // private to this probe while preserving the original config's base path.
+    // Retain the directory until the child has exited and been reaped.
+    let dns_state = tempfile::tempdir().map_err(io_error)?;
     let program = binary
         .to_str()
         .ok_or_else(|| AppError::invalid_argument("kernel path is not UTF-8"))?;
     let mut child = common::background_command(program)
         .args(args)
+        .env("ZERO_DNS_STATE_DIR", dns_state.path())
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb")
         .stdin(Stdio::null())
         .stdout(Stdio::from(output.try_clone().map_err(io_error)?))
         .stderr(Stdio::from(output.try_clone().map_err(io_error)?))
@@ -66,7 +73,7 @@ pub(super) fn run(binary: &Path, args: &[&str], timeout: Duration) -> AppResult<
             .take(64 * 1024)
             .read_to_end(&mut bytes)
             .map_err(io_error)?;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text = common::strip_ansi(&String::from_utf8_lossy(&bytes));
         if !status.success() {
             return Err(AppError::internal(format!(
                 "内核预检查失败（{status}），当前内核保持不变：{}",
