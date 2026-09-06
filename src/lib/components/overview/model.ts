@@ -1,4 +1,4 @@
-import type { ConnectionStatus, CoreOverview, PolicyGroup, ProxyModeStatus, SelfTestSnapshot } from '$lib/types/gui-api';
+import type { ConnectionStatus, CoreOverview, PolicyGroup, PolicyOutbound, ProxyModeStatus, SelfTestSnapshot } from '$lib/types/gui-api';
 import type { GuiManagedTunStatus } from '$lib/types/tun';
 
 export type Destination = 'core' | 'tun' | 'dns' | 'network' | 'logs' | 'nodes' | 'profiles' | 'connections';
@@ -15,17 +15,26 @@ export interface OverviewInput {
   selfTestAt: number;
   mode: ProxyModeStatus | null;
   groups: PolicyGroup[];
+  groupsAt?: number;
+  groupsError?: string | null;
 }
 export function ageLabel(at: number, now: number): string {
   if (!at) return '尚未取得';
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   return seconds < 5 ? '刚刚更新' : seconds < 60 ? `${seconds} 秒前` : `${Math.floor(seconds / 60)} 分钟前`;
 }
+export function policyProbeLabel(outbound: PolicyOutbound, now: number, ready: boolean): string {
+  const fresh = ready && outbound.lastCheckedUnixMs != null && now - outbound.lastCheckedUnixMs <= 300_000;
+  if (!fresh) return '待探测';
+  if (outbound.alive === false) return '探测失败';
+  return outbound.alive === true && outbound.delayMs != null ? `${outbound.delayMs} ms` : '结果未知';
+}
 export function buildOverview(input: OverviewInput) {
   const { connection: c, tun, now } = input;
   const stale = !input.connectionAt || now - input.connectionAt > 15_000 || !!input.connectionError;
   const running = c?.processState === 'running';
   const ready = !stale && c?.coreAvailable === true;
+  const groupsReady = ready && !input.groupsError && (input.groupsAt === undefined || (input.groupsAt > 0 && now - input.groupsAt <= 15_000));
   const findings: Finding[] = [];
   const add = (title: string, detail: string, target: Destination, severity: Finding['severity'] = 'warning') => {
     if (!findings.some((f) => f.detail === detail)) findings.push({ title, detail, target, severity });
@@ -49,14 +58,18 @@ export function buildOverview(input: OverviewInput) {
       if (check.status === 'warn') add('就绪检查提醒', check.message || check.key, check.key === 'internetSharing' ? 'network' : 'logs');
     }
   }
+  if (ready && !groupsReady && (input.groupsError || input.groups.length)) add('策略状态待确认', input.groupsError || '策略选择状态已过期，请重新检查。', 'nodes');
   const groups = input.groups.map((g) => {
     const selected = g.outbounds.find((o) => o.tag === g.selected);
-    const fresh = ready && selected?.lastCheckedUnixMs != null && now - selected.lastCheckedUnixMs <= 5 * 60_000;
+    const fresh = groupsReady && selected?.lastCheckedUnixMs != null && now - selected.lastCheckedUnixMs <= 5 * 60_000;
     return {
-      name: g.name, kind: g.kind ?? '策略组', selected: ready ? g.selected ?? '等待选择' : '待内核确认',
+      name: g.name, kind: g.kind ?? '策略组', selected: groupsReady ? g.selected ?? '等待选择' : '待内核确认',
       health: !fresh ? '未取得近期探测' : selected?.alive === false ? '最近探测失败' : selected?.alive === true ? '最近探测成功' : '探测结果未知',
       delay: fresh && selected?.alive === true && selected.delayMs != null ? `${selected.delayMs} ms` : '—',
       failed: fresh && selected?.alive === false,
+      selectedTag: groupsReady ? g.selected ?? '' : '',
+      switchable: g.kind?.toLowerCase() === 'selector',
+      options: g.outbounds.map((outbound) => ({ value: outbound.tag, label: `${outbound.tag} · ${policyProbeLabel(outbound, now, groupsReady)}` })),
     };
   }).sort((a, b) => Number(b.failed) - Number(a.failed));
   const failed = groups.filter((g) => g.failed);
@@ -72,7 +85,10 @@ export function buildOverview(input: OverviewInput) {
     return egress?.availability === 'available' ? egress.interface ?? '可用' : egress?.availability === 'unavailable' ? '不可用' : '尚未确认';
   };
   return {
-    ready, running, stale, title, tone, findings, groups,
+    ready, running, stale, title, tone, findings, groups, groupsReady,
+    tunSnapshot: tun,
+    tunConfirmed: ready && !!tun && !input.tunError,
+    availableModes: input.mode?.availableModes ?? [],
     freshness: ageLabel(input.connectionAt, now),
     source: input.selfTest?.activeProxyConfigName ? `${input.selfTest.activeProxyConfigName}${!input.selfTestAt || now - input.selfTestAt > 60_000 ? '（上次检查）' : ''}` : '尚未确认活动配置',
     mode: input.mode?.currentMode ?? '',
@@ -86,6 +102,7 @@ export function buildOverview(input: OverviewInput) {
     selfTest: input.selfTest,
     selfTestAge: ageLabel(input.selfTestAt, now),
     selfTestStale: !input.selfTestAt || now - input.selfTestAt > 60_000,
+    selfTestPassed: ready && !!input.selfTest?.ready && !!input.selfTestAt && now - input.selfTestAt <= 60_000 && !findings.length && input.selfTest.checks.every((check) => check.status === 'pass'),
   };
 }
 export type OverviewModel = ReturnType<typeof buildOverview>;

@@ -47,7 +47,7 @@
     "test:tun-recovery": "node --test scripts/test-tun-recovery.mjs",
     "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs",
     "verify:stable": "node scripts/check-stable-readiness.mjs",
-    "test:overview": "node --experimental-strip-types --test scripts/test-professional-overview.mjs"
+    "test:overview": "node --experimental-strip-types --test scripts/test-professional-overview.mjs && node --experimental-vm-modules --test scripts/test-overview-commands.mjs"
   },
   "config": {
     "commitizen": {

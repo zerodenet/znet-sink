@@ -1,111 +1,89 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import type { Destination, OverviewModel } from './model';
+  import { ChevronRight, CircleCheck, RefreshCw, TriangleAlert } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
-  let { model, busy = false, refreshing = false, traffic, navigate, refresh, start, restart, setMode }: {
-    model: OverviewModel; busy?: boolean; refreshing?: boolean; traffic: Snippet;
-    navigate: (destination: Destination) => void; refresh: () => void;
-    start: () => void; restart: () => void; setMode: (mode: 'global' | 'rule' | 'direct') => void;
+  import type { OverviewModel } from './model';
+  import type { OverviewActions, OverviewFeedback, OverviewNetwork, OverviewProfiles } from './types';
+  import OperationFeedback from './OperationFeedback.svelte';
+  import OverviewDialogs from './OverviewDialogs.svelte';
+  let { model, profiles, network, feedback, actions, busy = false, refreshing = false, canDisableTun = false, core, tun, traffic }: {
+    model: OverviewModel; profiles: OverviewProfiles; network: OverviewNetwork; feedback: OverviewFeedback; actions: OverviewActions;
+    busy?: boolean; refreshing?: boolean; canDisableTun?: boolean; core: Snippet; tun: Snippet; traffic: Snippet;
   } = $props();
-  const modes = [{ value: 'rule', label: '规则' }, { value: 'global', label: '全局' }, { value: 'direct', label: '直连' }] as const;
+  let inspect = $state(false);
+  let policies = $state(false);
+  let version = $state(false);
+  let detailTab = $state('capture');
+  const visiblePolicy = $derived(model.groups[0]);
+  const issue = $derived(model.findings.find((finding) => finding.severity === 'error') ?? model.findings[0]);
+  const attentionCount = $derived(new Set(model.findings.map((finding) => finding.target)).size);
+  const tunIssue = $derived(model.findings.some((finding) => finding.target === 'tun'));
+  function openChecks(tab = 'capture') { detailTab = tab; inspect = true; }
+  export function showTunDetails() { openChecks('capture'); }
+  function handleIssue() {
+    if (issue?.target === 'nodes') policies = true;
+    else openChecks(issue?.target === 'tun' ? 'capture' : 'checks');
+  }
 </script>
 
 <div class="professional-overview" aria-label="专业运行概览">
-  <header class="overview-heading">
-    <div><div class="eyebrow">运行诊断</div><h2 class={model.tone}>{model.title}</h2><p>状态响应 · {model.freshness}。控制面就绪不代表每个网站均可访问。</p></div>
-    <div class="actions">
-      <Button variant="outline" size="sm" disabled={refreshing} onclick={refresh}>{refreshing ? '检查中…' : '重新检查'}</Button>
-      <Button variant="outline" size="sm" onclick={() => navigate('logs')}>查看日志</Button>
+  <div class="overview-toolbar">
+    <div class="profile-area">
+      <div class="profile-control"><span class="label">当前配置</span><FieldSelect bind:value={() => profiles.selected, actions.chooseProfile} options={profiles.options} aria-label="当前配置" placeholder={profiles.loading ? '加载中…' : '未选择配置'} disabled={busy || profiles.loading || !profiles.options.length} /></div>
+      {#if profiles.error}<p class="load-error" role="alert">{profiles.error} <button data-slot="surface-button" onclick={actions.refresh}>重试</button></p>{:else if !profiles.loading && !profiles.options.length}<button data-slot="surface-button" class="empty-link" onclick={() => actions.navigate('profiles')}>添加代理配置 →</button>{/if}
+      <OperationFeedback {feedback} target="profile" pendingLabel="正在应用配置，等待确认…" />
     </div>
-  </header>
-
-  {#if model.findings.length}
-    <section class="findings" aria-label="需要关注">
-      {#each model.findings as finding}
-        <div class="finding"><span class="signal {finding.severity}" aria-hidden="true"></span><div><strong>{finding.title}</strong><p>{finding.detail}</p></div><Button variant="ghost" size="sm" onclick={() => navigate(finding.target)}>去处理</Button></div>
-      {/each}
+    <div class="toolbar-end"><span class="uptime" title="内核运行时长">运行 {model.uptime}</span><Button variant="ghost" size="sm" onclick={() => version = true} title={model.version}>内核版本<ChevronRight size={12}/></Button></div>
+  </div>
+  <div class="control-grid">
+    <div class="core-controls">{@render core()}<OperationFeedback {feedback} target="system-proxy" /></div>
+    <section class="mode-card" aria-label="代理模式与策略">
+      <header><span class="label">代理模式</span></header>
+      <SegmentedControl.Root bind:value={() => model.mode, (value) => { if (value === 'global' || value === 'rule' || value === 'direct') actions.setMode(value); }} disabled={!model.ready || busy} aria-label="选择代理模式" class="mode-segment">
+        {#each [{value:'global',label:'全局'},{value:'rule',label:'规则'},{value:'direct',label:'直连'}] as mode}<SegmentedControl.Item value={mode.value} disabled={!model.availableModes.includes(mode.value as 'global' | 'rule' | 'direct')} style="flex:1;">{mode.label}</SegmentedControl.Item>{/each}
+      </SegmentedControl.Root>
+      <p class="mode-explanation">{!model.ready || !model.mode ? '等待内核确认代理模式' : model.mode === 'rule' ? '按规则选择直连或代理' : model.mode === 'global' ? '使用全局代理出口' : '直接连接目标服务器'}</p>
+      <OperationFeedback {feedback} target="mode" />
+      <button data-slot="surface-button" class="policy-shortcut" onclick={() => policies = true} aria-label="查看与切换策略组">
+        <span class="policy-heading"><span>{visiblePolicy?.name ?? '策略组'}{model.groups.length > 1 ? ` · 共 ${model.groups.length} 组` : ''}</span><span>{visiblePolicy?.switchable ? '切换' : '查看'}<ChevronRight size={12}/></span></span>
+        <span class="policy-selection"><strong title={visiblePolicy?.selected}>{visiblePolicy?.selected ?? (model.ready ? '尚未配置策略组' : '等待内核确认')}</strong><span class:danger={visiblePolicy?.failed} title={visiblePolicy?.health}>{feedback.pending.startsWith('policy:') ? '切换中…' : model.mode === 'direct' && model.ready ? '直连模式' : visiblePolicy?.failed ? '探测失败' : visiblePolicy && visiblePolicy.delay !== '—' ? visiblePolicy.delay : '待探测'}</span></span>
+      </button>
+    </section>
+    {@render tun()}
+  </div>
+  {#if issue}
+    <section class="issue-bar" aria-label="需要处理">
+      <TriangleAlert size={15}/><div><strong>{issue.title}{attentionCount > 1 ? ` · 共 ${attentionCount} 项需关注` : ''}</strong><span>{issue.detail}</span></div>
+      <Button variant="outline" size="sm" onclick={handleIssue}>{issue.target === 'nodes' ? '切换策略' : '查看原因'}</Button>
+      {#if tunIssue && canDisableTun}<Button variant="ghost" size="sm" disabled={busy} onclick={actions.toggleTun}>关闭 TUN</Button>{/if}
     </section>
   {/if}
-
-  <section class="runtime-card" aria-label="当前运行上下文">
-    <div class="runtime-main"><div><span class="label">活动配置</span><strong class="config-name">{model.source}</strong></div><Button variant="ghost" size="sm" onclick={() => navigate('profiles')}>管理配置</Button></div>
-    <div class="runtime-controls">
-      <dl class="runtime-meta"><div><dt>内核版本</dt><dd>{model.version}</dd></div><div><dt>PID</dt><dd>{model.pid}</dd></div><div><dt>运行时长</dt><dd>{model.uptime}</dd></div></dl>
-      <SegmentedControl.Root value={model.mode} disabled={busy || !model.ready} aria-label="路由模式" onValueChange={(value) => { if (value === 'global' || value === 'rule' || value === 'direct') setMode(value); }}>
-        {#each modes as mode}<SegmentedControl.Item value={mode.value}>{mode.label}</SegmentedControl.Item>{/each}
-      </SegmentedControl.Root>
-      <Button size="sm" variant="outline" disabled={busy || model.stale} onclick={() => model.running ? restart() : start()}>{model.running ? '重启内核' : '启动内核'}</Button>
-    </div>
-  </section>
-
-  <div class="detail-grid">
-    <section class="panel" aria-label="流量接管与解析">
-      <header><h3>流量接管与解析</h3><Button variant="ghost" size="sm" onclick={() => navigate('network')}>代理设置</Button></header>
-      <dl class="facts">
-        <div><dt>系统代理</dt><dd>{model.proxy}<small>{model.endpoint}</small></dd></div>
-        <div><dt><button data-slot="surface-button" type="button" onclick={() => navigate('tun')}>TUN ↗</button></dt><dd>{model.tunLabel}<small>{model.tunDetails}</small></dd></div>
-        <div><dt><button data-slot="surface-button" type="button" onclick={() => navigate('dns')}>DNS 路径 ↗</button></dt><dd>{model.dns}</dd></div>
-        <div><dt>IPv4 / IPv6 出口</dt><dd>{model.ipv4} / {model.ipv6}<small>网络代次 {model.networkGeneration}</small></dd></div>
-      </dl>
-    </section>
-    <section class="panel" aria-label="策略实际选择">
-      <header><h3>策略实际选择 <span class="count">{model.groups.length}</span></h3><Button variant="ghost" size="sm" onclick={() => navigate('nodes')}>节点与测速</Button></header>
-      <p class="hint">按策略组显示内核选择；规则模式可能同时使用多个出口。</p>
-      {#if model.groups.length}
-        <div class="policy-list">
-          {#each model.groups.slice(0, 4) as group}
-            <div class="policy-row"><div><strong>{group.name}</strong><small>{group.kind} → {group.selected}</small></div><div class:error={group.failed}><strong>{group.delay}</strong><small>{group.health}</small></div></div>
-          {/each}
-        </div>
-        {#if model.groups.length > 4}<button data-slot="surface-button" type="button" class="more" onclick={() => navigate('nodes')}>查看全部 {model.groups.length} 个策略组 →</button>{/if}
-      {:else}<p class="empty">尚无运行策略组；静态直连出站不会生成策略组。</p>{/if}
-    </section>
+  <div class="network-line" aria-label="网络检查摘要">
+    <div class="network-summary"><span class="label">本地网络</span><strong class="mono" title={network.error ?? network.description}>{network.loading ? '检测中…' : network.error ? '检测失败' : network.ip || '待检测'}</strong><span class="separator"></span><button data-slot="surface-button" class="dns-link" onclick={() => openChecks('dns')}>{!model.tunConfirmed ? 'DNS 待确认' : !model.tunSnapshot?.enabled ? 'TUN DNS 未接管' : model.tunSnapshot.dnsHijack ? model.tunSnapshot.fakeIpEnabled ? 'Fake-IP' : 'Real DNS' : '系统 DNS'}<ChevronRight size={11}/></button></div>
+    <div class="check-actions"><button data-slot="surface-button" class="checks-link" class:warning={!model.selfTestPassed} onclick={() => openChecks('checks')}>{#if model.findings.length}<TriangleAlert size={12}/>{attentionCount} 项需关注{:else if model.selfTestPassed}<CircleCheck size={12}/>自测通过{:else}<RefreshCw size={12}/>自测待确认{/if}</button><Button variant="ghost" size="sm" onclick={actions.refresh} disabled={refreshing || busy || network.loading}><RefreshCw size={12} class={refreshing ? 'animate-spin' : ''}/>{refreshing ? '检测中' : '检查网络'}</Button></div>
   </div>
-
-  <section class="traffic-section" aria-label="流量观测">
-    <div class="section-heading"><h3>流量观测</h3><Button variant="ghost" size="sm" onclick={() => navigate('connections')}>查看连接 →</Button></div>
-    <div class="traffic-chart">{@render traffic()}</div>
-  </section>
-
-  <details class="panel checks">
-    <summary>就绪检查明细 <span>{model.selfTest ? `${model.selfTest.checks.length} 项 · ${model.selfTestAge}${model.selfTestStale ? ' · 结果待刷新' : ''}` : '尚未取得结果'}</span></summary>
-    {#each model.selfTest?.checks ?? [] as check}
-      <div class="check-row"><span class="check-status">{check.status === 'pass' ? '通过' : check.status === 'warn' ? '警告' : '失败'}</span><div><strong>{check.key}</strong><p>{check.message}</p></div></div>
-    {/each}
-  </details>
+  <OperationFeedback {feedback} target="checks" pendingLabel="正在读取运行状态与检测本地网络…" />
+  <section class="traffic-panel" aria-label="实时流量">{@render traffic()}</section>
 </div>
-
+<OverviewDialogs {model} {network} {feedback} {actions} {busy} {refreshing} {canDisableTun} bind:inspect bind:policies bind:version bind:detailTab />
 <style>
-  .professional-overview { width: 100%; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 2px 3px 16px 0; }
-  .overview-heading, .actions, .runtime-main, .runtime-controls, .section-heading, header, .finding { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .overview-heading { align-items: flex-start; flex-wrap: wrap; }
-  .eyebrow, .label, dt, small, .hint, .empty, summary span { font-size: 11px; color: var(--muted-foreground); }
-  .eyebrow { letter-spacing: .08em; margin-bottom: 4px; }
-  h2 { font-size: 20px; line-height: 1.3; font-weight: 650; margin: 0; }
-  h3 { margin: 0; font-size: 12px; font-weight: 650; }
-  p { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--muted-foreground); overflow-wrap: anywhere; }
-  .error { color: var(--destructive); } .warning { color: var(--warning); } .good { color: var(--success, #16a34a); }
-  .panel, .runtime-card, .findings { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 12px 14px; min-width: 0; }
-  .findings { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); background: color-mix(in srgb, var(--warning) 5%, var(--card)); }
-  .finding + .finding { border-top: 1px solid var(--border); margin-top: 9px; padding-top: 9px; }
-  .finding > div { flex: 1; min-width: 0; } .finding strong { font-size: 12px; } .signal { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
-  .config-name { display: block; margin-top: 3px; font-size: 14px; overflow-wrap: anywhere; }
-  .runtime-main { padding-bottom: 10px; border-bottom: 1px solid var(--border); } .runtime-main > div { min-width: 0; }
-  .runtime-controls { flex-wrap: wrap; padding-top: 10px; }
-  .runtime-meta { display: flex; flex-wrap: wrap; gap: 8px 20px; flex: 1; min-width: 180px; margin: 0; }
-  dd { margin: 2px 0 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-  .facts { margin: 3px 0 0; } .facts > div { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); }
-  .facts > div:last-child { border-bottom: 0; padding-bottom: 0; } small { display: block; margin-top: 3px; overflow-wrap: anywhere; }
-  dt button, .more { color: var(--primary); background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
-  button:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
-  .count { color: var(--muted-foreground); font-weight: 400; margin-left: 5px; }
-  .policy-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding: 9px 0; }
-  .policy-row > div { min-width: 0; } .policy-row > div:last-child { text-align: right; flex-shrink: 0; } .policy-row strong { font-size: 11px; overflow-wrap: anywhere; }
-  .more { font-size: 11px; margin-top: 9px; } .empty { padding: 24px 0; }
-  .traffic-section { min-width: 0; } .section-heading { margin-bottom: 6px; } .traffic-chart { height: 230px; }
-  summary { cursor: pointer; font-size: 12px; font-weight: 600; } summary span { margin-left: 10px; font-weight: 400; }
-  .check-row { display: flex; gap: 12px; padding-top: 12px; font-size: 11px; } .check-status { flex-shrink: 0; color: var(--muted-foreground); } .check-row p { margin: 2px 0 0; }
-  @media (max-width: 700px) { .detail-grid { grid-template-columns: minmax(0, 1fr); } .overview-heading .actions { width: 100%; justify-content: flex-end; } }
+  .professional-overview { width:100%; flex:1; min-height:0; display:flex; flex-direction:column; gap:12px; overflow:auto; padding-right:2px; }
+  .overview-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-shrink:0; }
+  .profile-area { min-width:0; flex:1; }.profile-control, .toolbar-end { display:flex; align-items:center; gap:8px; min-width:0; }.profile-control > :global(*) { max-width:210px; }.profile-control .label { white-space:nowrap; }.toolbar-end { flex-shrink:0; }.uptime { font-size:11px; color:var(--muted-foreground); }
+  .label { font-size:12px; font-weight:500; color:var(--muted-foreground); }
+  .control-grid { display:grid; grid-template-columns:1.15fr .88fr 1.1fr; gap:12px; flex-shrink:0; align-items:stretch; }
+  .mode-card { display:flex; flex-direction:column; gap:9px; min-height:96px; min-width:0; padding:11px 13px; background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.04); transition:box-shadow .15s,transform .15s; }.mode-card:hover { box-shadow:0 2px 6px rgba(0,0,0,.07); transform:translateY(-.5px); }.mode-card header { display:flex; align-items:center; justify-content:space-between; }:global(.mode-segment) { width:100%; }.mode-explanation { font-size:11px; color:var(--muted-foreground); margin:0; }
+  .core-controls { min-width:0; display:flex; flex-direction:column; }.core-controls > :global(.core-card) { width:100%; flex:1; }
+  .core-controls :global(.core-meta-row:nth-child(1)) { grid-column:1/-1; grid-row:1; }
+  .core-controls :global(.core-meta-row:nth-child(2)) { grid-column:1/-1; grid-row:2; }
+  .policy-shortcut { display:flex; flex-direction:column; text-align:left; gap:4px; min-width:0; font-size:11px; border-top:1px solid var(--border); margin-top:auto; padding-top:8px; cursor:pointer; }.policy-heading, .policy-selection { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-width:0; }.policy-heading { color:var(--muted-foreground); font-size:10px; }.policy-heading > span:last-child { display:flex; align-items:center; gap:2px; }.policy-selection strong { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.policy-selection > span { color:var(--muted-foreground); flex-shrink:0; font-variant-numeric:tabular-nums; }.policy-shortcut .danger, .danger { color:var(--destructive); }
+  .network-line { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 12px; background:var(--card); border:1px solid var(--border); border-radius:8px; font-size:11px; flex-shrink:0; }.network-summary, .check-actions { display:flex; align-items:center; gap:10px; }.network-summary strong { font-size:12px; font-weight:600; }.mono { font-family:var(--font-mono); }.separator { height:13px; width:1px; background:var(--border); }.dns-link, .checks-link { display:flex; align-items:center; gap:4px; cursor:pointer; }.dns-link { color:var(--muted-foreground); }.checks-link { color:var(--success); }.checks-link.warning { color:var(--warning); }
+  .traffic-panel { min-height:220px; height:250px; flex:1 0 220px; }
+  .issue-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; border:1px solid color-mix(in srgb,var(--warning) 30%,var(--border)); background:color-mix(in srgb,var(--warning) 6%,var(--card)); font-size:11px; flex-shrink:0; }.issue-bar > :global(svg) { color:var(--warning); flex-shrink:0; }.issue-bar > div { flex:1; min-width:0; }.issue-bar strong { display:block; font-weight:600; }.issue-bar span { display:block; color:var(--muted-foreground); margin-top:3px; }
+  .load-error, .empty-link { margin:4px 0 0; font-size:11px; color:var(--destructive); }.empty-link, .load-error button { color:var(--primary); cursor:pointer; }
+  button:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
+  @media(max-width:760px) { .control-grid { grid-template-columns:1fr 1fr; }.control-grid > :global(.feature-card) { grid-column:1/-1; }.profile-control > :global(*) { max-width:150px; }.uptime { display:none; }.network-summary { flex-wrap:wrap; gap:7px; }.issue-bar { flex-wrap:wrap; } }
+  @media(max-width:480px) { .control-grid { grid-template-columns:1fr; }.profile-control > :global(*) { max-width:120px; }.profile-control .label { display:none; } }
 </style>

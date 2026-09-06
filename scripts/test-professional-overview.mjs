@@ -47,3 +47,25 @@ test('stale self-test failures retain their timestamp without overriding current
   const model = buildOverview({ ...baseline(), selfTest, selfTestAt: now - 61000 });
   assert.equal(model.selfTestStale, true); assert.equal(model.tone, 'good');
 });
+
+test('missing or expired self test never claims it passed', () => {
+  assert.equal(buildOverview(baseline()).selfTestPassed, false);
+  const selfTest = { ready: true, checks: [{status:'pass'}], blockingIssues: [] };
+  assert.equal(buildOverview({ ...baseline(), selfTest, selfTestAt: now }).selfTestPassed, true);
+  assert.equal(buildOverview({ ...baseline(), selfTest, selfTestAt: now - 61000 }).selfTestPassed, false);
+});
+test('selector members alone are manually switchable and stale latency is not repeated in options', () => {
+  const groups = ['selector','urltest'].map((kind) => ({name:kind,kind,selected:'n',outbounds:[{tag:'n',alive:true,delayMs:42,lastCheckedUnixMs:now-400000}]}));
+  const model = buildOverview({...baseline(),groups});
+  assert.equal(model.groups[0].switchable,true); assert.equal(model.groups[1].switchable,false);
+  assert.equal(model.groups[0].options[0].label,'n · 待探测');
+});
+test('failed policy reads invalidate selection even while connection reads remain fresh', () => {
+  const groups = [{name:'p',kind:'selector',selected:'n',outbounds:[{tag:'n',alive:true,delayMs:42,lastCheckedUnixMs:now}]}];
+  for (const observation of [{groupsAt:now,groupsError:'IPC timeout'},{groupsAt:now-16000}]) {
+    const model=buildOverview({...baseline(),groups,...observation});
+    assert.equal(model.ready,true); assert.equal(model.groupsReady,false);
+    assert.equal(model.groups[0].selectedTag,''); assert.equal(model.groups[0].delay,'—');
+    assert.ok(model.findings.some(finding=>finding.target==='nodes'));
+  }
+});

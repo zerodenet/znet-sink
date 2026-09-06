@@ -4,6 +4,9 @@
   import { store } from '$lib/services/store.svelte';
   import { getRuntimePerformanceSnapshot } from '$lib/services/runtime-performance';
   import type { RuntimePerformanceSnapshot } from '$lib/types/runtime-performance';
+  let { busy = false, stateUnknown = false, onToggleSystemProxy = () => { void guiState.toggleSystemProxy(); } }: {
+    busy?: boolean; stateUnknown?: boolean; onToggleSystemProxy?: () => void;
+  } = $props();
 
   const RUNTIME_REFRESH_INTERVAL_MS = 2000;
 
@@ -98,7 +101,7 @@
   const coreRuntime = $derived(runtimeSnapshot?.core ?? null);
 
   const stateLabel = $derived(
-    guiState.isInitializing
+    stateUnknown ? '状态待确认' : guiState.isInitializing
       ? '初始化中'
       : guiState.isConnecting
         ? '连接中'
@@ -109,7 +112,7 @@
             : guiState.isStoppingCore
               ? '停止中'
               : isSystemProxyEnabled
-                ? '服务中'
+                ? c?.coreAvailable ? '服务中' : '未就绪'
                 : isCoreAvailable
                   ? '监听中'
                   : isProcessStarting
@@ -122,7 +125,7 @@
   );
 
   const dotColor = $derived(
-    isSystemProxyEnabled
+    stateUnknown ? '#F59E0B' : isSystemProxyEnabled && c?.coreAvailable
       ? '#22C55E'
       : isCoreAvailable
         ? '#F59E0B'
@@ -248,7 +251,7 @@
     <div class="core-actions">
       <Button variant="outline" size="sm"
         onclick={() => isProcessRunning ? guiState.restartCore() : guiState.startCore()}
-        disabled={isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : !guiState.canStartCore}
+        disabled={busy || stateUnknown || (isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : !guiState.canStartCore)}
 
         class="min-w-0 overflow-hidden"
 
@@ -257,8 +260,8 @@
         {coreActionLabel}
       </Button>
       <Button variant="outline" size="sm"
-        onclick={() => guiState.toggleSystemProxy()}
-        disabled={isSystemProxyEnabled ? !guiState.canDisableSystemProxy : !guiState.canEnableSystemProxy}
+        onclick={onToggleSystemProxy}
+        disabled={busy || (isSystemProxyEnabled ? !guiState.canDisableSystemProxy : stateUnknown || !guiState.canEnableSystemProxy)}
 
         aria-pressed={isSystemProxyEnabled}
         title={isSystemProxyEnabled

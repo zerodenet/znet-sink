@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
@@ -15,9 +14,7 @@
   import { parseNodeName } from '$lib/services/node-utils';
   import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import * as toast from '$lib/services/toast.svelte';
-  import ProfessionalOverview from '$lib/components/overview/ProfessionalOverview.svelte';
-  import { buildOverview, type Destination } from '$lib/components/overview/model';
-  import TrafficChart from '$lib/components/TrafficChart.svelte';
+  import OverviewController from '$lib/components/overview/OverviewController.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Select from '$lib/components/ui/select';
 
@@ -72,8 +69,6 @@
     return typeof outbound === 'string' && outbound.trim() ? outbound : null;
   }
 
-  let refreshingOverview = $state(false);
-  let uptimeNowMs = $state(Date.now());
   let subscriptions = $state<SubscriptionProfile[]>([]);
   let proxyConfigs = $state<ProxyConfigProfile[]>([]);
   let sourceLoading = $state(true);
@@ -141,8 +136,8 @@
     sourceLoading = false;
   }
 
-  onMount(() => {
-    void refreshLiteSource();
+  $effect(() => {
+    if (store.uiMode === 'lite') void refreshLiteSource();
   });
 
   // Speed derived from history
@@ -296,44 +291,11 @@
     return '暂无订阅来源';
   });
 
-  $effect(() => {
-    if (store.uiMode !== 'pro') return;
-    uptimeNowMs = Date.now();
-    const timer = window.setInterval(() => { uptimeNowMs = Date.now(); }, 1000);
-    return () => window.clearInterval(timer);
-  });
-  const professionalModel = $derived(buildOverview({
-    now: uptimeNowMs, connection: guiState.connection,
-    connectionAt: guiState.connectionUpdatedAt, connectionError: guiState.connectionError,
-    core: guiState.coreOverview, tun: guiState.tunStatus, tunError: guiState.tunStatusError,
-    selfTest: guiState.selfTest, selfTestAt: guiState.selfTestUpdatedAt,
-    mode: guiState.proxyMode, groups: guiState.policyGroups,
-  }));
-  const trafficUnavailable = $derived(!guiState.supportsTrafficStats ? '内核不支持流量查询'
-    : !professionalModel.ready ? '内核未就绪，暂停展示实时速率'
-    : !overviewData.lastSampleAtUnixMs ? '等待第一份流量采样'
-    : uptimeNowMs - overviewData.lastSampleAtUnixMs > 10_000 ? '流量采样已过期，等待恢复'
-    : !overviewData.isLive ? '正在建立流量采样基线' : null);
-  function navigateOverview(target: Destination) {
-    if (target === 'nodes' || target === 'profiles' || target === 'connections') store.activeTab = target;
-    else store.openSettings(target);
-  }
-  async function refreshOverview() {
-    if (refreshingOverview) return;
-    refreshingOverview = true;
-    try { await guiState.refreshAll(); } finally { refreshingOverview = false; }
-  }
 
 </script>
 
 {#if store.uiMode === 'pro'}
-  <ProfessionalOverview model={professionalModel} busy={guiState.isStartingCore || guiState.isSwitchingMode || guiState.isStoppingCore}
-    refreshing={refreshingOverview} navigate={navigateOverview} refresh={() => void refreshOverview()}
-    start={() => void guiState.startCore()} restart={() => void guiState.restartCore()} setMode={(mode) => void guiState.setProxyMode(mode)}>
-    {#snippet traffic()}
-      <TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} unavailableReason={trafficUnavailable} />
-    {/snippet}
-  </ProfessionalOverview>
+  <OverviewController />
 
 {:else}
   <!-- ============ LITE MODE ============ -->
