@@ -83,8 +83,8 @@ assert.ok(
   overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次总流量 ${sessionTotalLabel}`') &&
     overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次上传 ${sessionUpLabel}`') &&
     overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次下载 ${sessionDownLabel}`') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${formatSpeed(currentUp)}`') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${formatSpeed(currentDown)}`') &&
+    overview.includes('data-tooltip={trafficUnavailable ?? `实时上传速率 ${formatSpeed(currentUp)}`') &&
+    overview.includes('data-tooltip={trafficUnavailable ?? `实时下载速率 ${formatSpeed(currentDown)}`') &&
     overview.includes('<span class="sr-only">本次总流量：</span>') &&
     overview.includes('<span class="sr-only">本次上传：</span>') &&
     overview.includes('<span class="sr-only">本次下载：</span>') &&
@@ -108,9 +108,9 @@ assert.ok(
 assert.ok(
   overview.includes('const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled)') &&
     overview.includes('const captureEnabled = $derived(guiState.isCaptureEnabled)') &&
-    overview.includes('const liteConnected = $derived(guiState.isConnected)') &&
+    overview.includes('const liteConnected = $derived(capture.healthy)') &&
     overview.includes('class:on={liteConnected}') &&
-    overview.includes('onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}') &&
+    overview.includes('onclick={() => powerOn ? guiState.disconnect() : guiState.connect()}') &&
     !overview.includes('supportsTrafficStats && proxyEnabled ? formatSpeed'),
   'system-proxy status, any-capture activity, Lite combined power and kernel rates should keep distinct semantics',
 );

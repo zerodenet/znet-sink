@@ -85,7 +85,7 @@
     switch (action) {
       case 'toggle_proxy':
         if (store.uiMode === 'lite') {
-          if (guiState.isCaptureEnabled) {
+          if (guiState.isCaptureEnabled || guiState.isTunDesiredEnabled) {
             await guiState.disconnect();
             break;
           }

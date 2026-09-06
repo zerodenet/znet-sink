@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
@@ -15,8 +16,20 @@
   import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import * as toast from '$lib/services/toast.svelte';
   import OverviewController from '$lib/components/overview/OverviewController.svelte';
+  import { buildOverview, capturePresentation, trafficUnavailableReason } from '$lib/components/overview/model';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Select from '$lib/components/ui/select';
+
+  let now = $state(Date.now());
+  const model = $derived(buildOverview({ now, connection: guiState.connection, connectionAt: guiState.connectionUpdatedAt,
+    connectionError: guiState.connectionError, core: guiState.coreOverview, tun: guiState.tunStatus,
+    tunError: guiState.tunStatusError, selfTest: guiState.selfTest, selfTestAt: guiState.selfTestUpdatedAt,
+    mode: guiState.proxyMode, groups: guiState.policyGroups, groupsAt: guiState.policyGroupsUpdatedAt, groupsError: guiState.policyGroupsError }));
+  const trafficUnavailable = $derived(trafficUnavailableReason(model, guiState.supportsTrafficStats, overviewData.lastSampleAtUnixMs, overviewData.isLive, now));
+  onMount(() => {
+    const clock = window.setInterval(() => { now = Date.now(); }, 1000);
+    return () => { sourceRequest++; window.clearInterval(clock); };
+  });
 
   function formatSpeed(speed: number): string {
     if (speed >= 1) return `${speed.toFixed(2)} MB/s`;
@@ -72,7 +85,10 @@
   let subscriptions = $state<SubscriptionProfile[]>([]);
   let proxyConfigs = $state<ProxyConfigProfile[]>([]);
   let sourceLoading = $state(true);
+  let sourceError = $state<string | null>(null);
+  let modeError = $state<string | null>(null);
   let activatingSourceId = $state<string | null>(null);
+  let sourceRequest = 0;
 
   const PROXY_MODES = [
     { value: 'global', label: '全局' },
@@ -126,13 +142,17 @@
   }
 
   async function refreshLiteSource() {
+    const request = ++sourceRequest;
     sourceLoading = true;
     const [subscriptionResult, configResult] = await Promise.allSettled([
       listSubscriptions(),
       listProxyConfigs(),
     ]);
-    subscriptions = subscriptionResult.status === 'fulfilled' ? subscriptionResult.value : [];
-    proxyConfigs = configResult.status === 'fulfilled' ? configResult.value : [];
+    if (request !== sourceRequest) return;
+    sourceError = configResult.status === 'rejected' ? getAppErrorMessage(configResult.reason, '读取配置来源失败')
+      : subscriptionResult.status === 'rejected' ? getAppErrorMessage(subscriptionResult.reason, '读取订阅来源失败') : null;
+    if (subscriptionResult.status === 'fulfilled') subscriptions = subscriptionResult.value;
+    if (configResult.status === 'fulfilled') proxyConfigs = configResult.value;
     sourceLoading = false;
   }
 
@@ -142,12 +162,12 @@
 
   // Speed derived from history
   const currentDown = $derived(
-    overviewData.speedHistory.length > 0
+    !trafficUnavailable && overviewData.speedHistory.length > 0
       ? overviewData.speedHistory[overviewData.speedHistory.length - 1].down
       : 0,
   );
   const currentUp = $derived(
-    overviewData.speedHistory.length > 0
+    !trafficUnavailable && overviewData.speedHistory.length > 0
       ? overviewData.speedHistory[overviewData.speedHistory.length - 1].up
       : 0,
   );
@@ -163,8 +183,10 @@
 
   const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled);
   const captureEnabled = $derived(guiState.isCaptureEnabled);
-  const liteConnected = $derived(guiState.isConnected);
-  const isPowerBusy = $derived(guiState.isConnecting || guiState.isDisconnecting);
+  const isPowerBusy = $derived(guiState.isInitializing || guiState.isCoreBusy || guiState.isConnecting || guiState.isDisconnecting || guiState.isSwitchingTun || guiState.isSwitchingSystemProxy || guiState.isSwitchingMode || guiState.isSelectingPolicy);
+  const capture = $derived(capturePresentation(model, systemProxyEnabled, guiState.isTunEnabled, guiState.isTunDesiredEnabled, isPowerBusy));
+  const liteConnected = $derived(capture.healthy);
+  const powerOn = $derived(capture.powerOn);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
   const networkProbePlaceholder = $derived(
@@ -225,6 +247,8 @@
   // selectors and URLTest groups, so follow them recursively and never infer a
   // winner from latency. This stays aligned with the Nodes page's runtime model.
   const activeNodeSummary = $derived.by(() => {
+    if (!model.groupsReady) return { name: '节点状态待确认', meta: '等待内核确认当前选择', flagCode: undefined, emoji: undefined };
+    if (model.mode === 'direct') return { name: '直连', meta: '直接连接目标服务器', flagCode: undefined, emoji: undefined };
     const groups = guiState.policyGroups;
     const finalOutbound = routeFinalOutbound(activeProxyConfig?.content);
     const rootTag = finalOutbound
@@ -274,12 +298,14 @@
 
   const sourceName = $derived.by(() => {
     if (sourceLoading) return '正在加载…';
+    if (sourceError) return '配置来源待确认';
     if (activeSubscription) return activeSubscription.name;
     if (activeProxyConfig) return activeProxyConfig.name;
     return subscriptions.length > 0 ? '选择订阅' : '添加订阅';
   });
   const sourceMeta = $derived.by(() => {
     if (sourceLoading) return '正在读取当前配置来源';
+    if (sourceError) return sourceError;
     if (activeSubscription) {
       const nodeCount = activeSubscription.nodeCount != null ? `${activeSubscription.nodeCount} 个节点` : '节点数未知';
       return `${formatSubscriptionFormat(activeSubscription.format)} · ${nodeCount} · ${formatRelativeTime(activeSubscription.lastSyncAtUnixMs)}`;
@@ -295,7 +321,7 @@
 </script>
 
 {#if store.uiMode === 'pro'}
-  <OverviewController />
+  <OverviewController {model} {trafficUnavailable} />
 
 {:else}
   <!-- ============ LITE MODE ============ -->
@@ -305,6 +331,7 @@
         class="lite-power-orbit"
         class:on={liteConnected}
         class:idle={!liteConnected}
+        class:partial={capture.warning && powerOn}
         class:unsupported={!guiState.supportsTrafficStats}
       >
         <div
@@ -344,11 +371,13 @@
         <button data-slot="surface-button"
           class="lite-power"
           class:on={liteConnected}
+          class:partial={capture.warning && powerOn}
+          class:failed={capture.failed}
           class:connecting={isPowerBusy}
-          onclick={() => liteConnected ? guiState.disconnect() : guiState.connect()}
-          disabled={isPowerBusy}
-          aria-label={liteConnected ? '关闭代理' : '开启代理'}
-          title={liteConnected ? '关闭代理' : '开启代理'}
+          onclick={() => powerOn ? guiState.disconnect() : guiState.connect()}
+          disabled={isPowerBusy || (powerOn ? !guiState.canDisconnect : model.stale || !guiState.canConnect)}
+          aria-label={powerOn ? '关闭代理' : '开启代理'}
+          title={powerOn ? '关闭系统代理与 TUN，并取消自动恢复' : '开启系统代理与 TUN'}
         >
           {#if isPowerBusy}
             <span class="lite-power-spin">⟳</span>
@@ -363,43 +392,49 @@
         <div class="lite-live-rates">
           <span
             class="lite-live-up lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `实时上传速率 ${formatSpeed(currentUp)}` : '实时上传速率不可用'}
+            data-tooltip={trafficUnavailable ?? `实时上传速率 ${formatSpeed(currentUp)}`}
           >
             <span class="sr-only">实时上传速率：</span>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 7 6 3 10 7"/></svg>
-            <span>{guiState.supportsTrafficStats ? formatSpeed(currentUp) : '—'}</span>
+            <span>{!trafficUnavailable ? formatSpeed(currentUp) : '—'}</span>
           </span>
           <span
             class="lite-live-down lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `实时下载速率 ${formatSpeed(currentDown)}` : '实时下载速率不可用'}
+            data-tooltip={trafficUnavailable ?? `实时下载速率 ${formatSpeed(currentDown)}`}
           >
             <span class="sr-only">实时下载速率：</span>
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 5 6 9 10 5"/></svg>
-            <span>{guiState.supportsTrafficStats ? formatSpeed(currentDown) : '—'}</span>
+            <span>{!trafficUnavailable ? formatSpeed(currentDown) : '—'}</span>
           </span>
         </div>
       </div>
     </div>
 
+    <div class="lite-capture-state" class:warning={capture.warning} class:failed={capture.failed} role="status" aria-label="代理运行状态">
+      <span>{capture.label}</span>
+      {#if capture.warning}<small>{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
+    </div>
+
     <div class="lite-mode-block">
       <span class="lite-section-label">代理模式</span>
       <SegmentedControl.Root
-        value={guiState.proxyMode?.currentMode ?? ''}
-        onValueChange={(value) => {
+        bind:value={() => guiState.proxyMode?.currentMode ?? '', (value) => {
           if (value === 'global' || value === 'rule' || value === 'direct') {
-            void guiState.setProxyMode(value);
+            modeError = null;
+            void guiState.setProxyMode(value).then(result => { if (!result.ok) modeError = result.message; });
           }
         }}
-        disabled={guiState.isSwitchingMode || !guiState.proxyMode}
+        disabled={isPowerBusy || guiState.isSwitchingMode || guiState.isSelectingPolicy || !model.ready || !guiState.proxyMode}
         class="lite-proxy-segment"
         aria-label="选择代理模式"
       >
         {#each PROXY_MODES as mode}
-          <SegmentedControl.Item value={mode.value} style="flex: 1;">
+          <SegmentedControl.Item value={mode.value} disabled={!model.availableModes.includes(mode.value)} style="flex: 1;">
             {mode.label}
           </SegmentedControl.Item>
         {/each}
       </SegmentedControl.Root>
+      {#if modeError}<p class="lite-mode-error" role="alert">{modeError}</p>{/if}
     </div>
 
     <div class="lite-entry-list">
@@ -418,10 +453,9 @@
           {#if subscriptions.length > 0}
             <Select.Root
               type="single"
-              value={activeSubscription?.id ?? ''}
               items={sourceOptions}
-              disabled={sourceLoading || activatingSourceId !== null}
-              onValueChange={(value) => {
+              disabled={sourceLoading || !!sourceError || activatingSourceId !== null}
+              bind:value={() => activeSubscription?.id ?? '', (value) => {
                 if (typeof value === 'string' && value) void activateSource(value);
               }}
             >
@@ -489,6 +523,11 @@
 {/if}
 
 <style>
+  .lite-capture-state { display:flex; flex-direction:column; gap:3px; text-align:center; font-size:11px; color:var(--muted-foreground); }
+  .lite-capture-state.warning { color:var(--warning, #d97706); }
+  .lite-capture-state.failed { color:var(--destructive); }
+  .lite-capture-state small { font-size:10px; overflow-wrap:anywhere; }
+  .lite-mode-error { margin:0; font-size:11px; color:var(--destructive); }
   @property --traffic-up-share {
     syntax: '<percentage>';
     inherits: false;
@@ -663,6 +702,10 @@
     color: var(--destructive, #EF4444);
     box-shadow: 0 6px 22px rgba(239, 68, 68, 0.08);
   }
+
+  .lite-power.partial { color:var(--warning, #d97706); border-color:var(--warning, #d97706); background:color-mix(in srgb,var(--warning, #d97706) 8%,var(--card)); }
+  .lite-power.failed { color:var(--destructive); border-color:var(--destructive); background:color-mix(in srgb,var(--destructive) 8%,var(--card)); }
+  .lite-power-orbit.partial .lite-traffic-ring { opacity:0.65; }
 
   :global(.dark) .lite-power {
     box-shadow: 0 6px 22px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.025);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildOverview } from '../src/lib/components/overview/model.ts';
+import { buildOverview, capturePresentation, trafficUnavailableReason } from '../src/lib/components/overview/model.ts';
 const now = 1000000;
 const baseline = () => ({ now, connectionAt: now, connectionError: null, connection: { processState: 'running', coreAvailable: true, systemProxyEnabled: false, processPid: 42 }, tun: null, tunError: null, core: null, selfTest: null, selfTestAt: 0, mode: null, groups: [] });
 test('process existence alone never reports control-plane readiness', () => {
@@ -68,4 +68,35 @@ test('failed policy reads invalidate selection even while connection reads remai
     assert.equal(model.groups[0].selectedTag,''); assert.equal(model.groups[0].delay,'—');
     assert.ok(model.findings.some(finding=>finding.target==='nodes'));
   }
+});
+
+test('Lite shares the professional freshness, partial capture and cleanup semantics', () => {
+  for (const proxy of [false, true]) for (const enabled of [false, true]) for (const desired of [false, true]) {
+    const input = { ...baseline(), connection: { ...baseline().connection, systemProxyEnabled: proxy }, tun: { enabled, desiredEnabled: desired, healthy: true, supported: true } };
+    const model = buildOverview(input);
+    const lite = capturePresentation(model, proxy, enabled, desired, false);
+    assert.equal(lite.powerOn, proxy || enabled || desired);
+    assert.equal(lite.healthy, proxy && enabled);
+    const stale = buildOverview({ ...input, connectionAt: now - 16000 });
+    assert.equal(capturePresentation(stale, proxy, enabled, desired, false).healthy, false);
+    assert.equal(capturePresentation(stale, proxy, enabled, desired, false).label, '运行状态待确认');
+    assert.equal(capturePresentation(stale, proxy, enabled, desired, false).powerOn, lite.powerOn);
+  }
+});
+
+test('TUN failure never becomes a healthy Lite power indication', () => {
+  const model = buildOverview({ ...baseline(), tun: { enabled: true, healthy: false, lastError: 'route failed' } });
+  const lite = capturePresentation(model, true, true, true, false);
+  assert.equal(lite.healthy, false); assert.equal(lite.powerOn, true);
+  assert.equal(lite.label, 'TUN 运行异常'); assert.equal(lite.warning, true);
+});
+
+test('both overview modes share one traffic availability boundary', () => {
+  const model = buildOverview(baseline());
+  assert.equal(trafficUnavailableReason(model, true, now, true, now), null);
+  assert.equal(trafficUnavailableReason(model, true, now - 11000, true, now), '流量采样已过期，等待恢复');
+  assert.equal(trafficUnavailableReason(model, true, 0, true, now), '等待第一份流量采样');
+  assert.equal(trafficUnavailableReason(model, true, now, false, now), '正在建立流量采样基线');
+  assert.equal(trafficUnavailableReason(model, false, now, true, now), '内核不支持流量查询');
+  assert.equal(trafficUnavailableReason(buildOverview({ ...baseline(), connectionAt: 0 }), true, now, true, now), '内核未就绪，暂停展示实时速率');
 });

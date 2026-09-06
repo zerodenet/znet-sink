@@ -2,12 +2,13 @@ import type { AppConfig, AppTunConfigPatch } from '../../src/lib/types/app-confi
 
 const mode = new URLSearchParams(window.location.search).get('mode');
 export const guiState = $state({
+  blockingIssues: [] as string[],
   isTunEnabled: mode !== 'stopped',
   isSwitchingTun: false,
   tunStatus: { configSource: mode === 'profile' ? 'profile' : 'app', configSourceName: '测试配置' },
   refreshTunStatus: async () => {},
 });
-export const store = $state({ activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
+export const store = $state({ uiMode: 'pro' as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
 export type TunDnsHijackReadiness = {
   state: string; code?: string; message: string;
   features: { tunDualStack: { state: string }; tunDnsHijack: { state: string } };

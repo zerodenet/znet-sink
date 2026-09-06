@@ -54,3 +54,24 @@ export const guiExportDiagnostics = async () => ({ path: 'fixture' });
 export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };
 
 export const getCorePolicies = async () => ({ groups: [] });
+export const getRuntimePerformanceSnapshot = async () => ({ core: null });
+export const getGuiStackStatus = async () => ({ key: 'stack', supported: true, enabled: true });
+
+import { proxyConfigSignal } from '../../src/lib/services/proxy-config-signal.svelte';
+import type { ProxyConfigProfile, SubscriptionProfile } from '../../src/lib/types/domain';
+const profiles: ProxyConfigProfile[] = ['main', 'work'].map((id, i) => ({
+  id, name: i ? '工作配置' : '日常网络配置', active: !i, kernel: 'zero', format: 'zero', updatedAtUnixMs: 1,
+  content: { route: { final: { type: 'outbound', outbound: 'proxy' } } },
+  capabilities: {} as ProxyConfigProfile['capabilities'],
+}));
+export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
+export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => new URLSearchParams(location.search).get('mode') === 'source-failure'
+  ? profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}))
+  : [];
+export const setActiveProxyConfig = async (id: string) => {
+  if (new URLSearchParams(location.search).get('mode') === 'source-failure' && id === 'work') throw new Error('配置未通过校验');
+  for (const profile of profiles) profile.active = profile.id === id;
+  proxyConfigSignal.markChanged(true);
+  return structuredClone(profiles.find(profile => profile.id === id)!);
+};
+export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };

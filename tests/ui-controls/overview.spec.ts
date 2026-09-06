@@ -51,14 +51,23 @@ test('failed profile, mode and TUN requests preserve confirmed control values', 
   await expect(page.getByRole('switch', { name: '关闭 TUN 并取消自动恢复' })).toBeChecked();
 });
 
-test('stale state suppresses live traffic and disables mode changes without blocking capture cleanup', async ({ page }) => {
+test('stale state protects traffic and mode changes while preserving managed restart and capture cleanup', async ({ page }) => {
   await page.goto('/?panel=overview&mode=stale');
   await expect(page.getByText('流量采样已过期，等待恢复')).toBeVisible();
   await expect(page.getByRole('region', { name: 'TUN 与网络栈' })).toContainText('状态待确认');
-  await expect(page.getByRole('button', { name: '重启内核' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '重启内核' })).toBeEnabled();
+  await page.getByRole('button', { name: '重启内核' }).click();
+  await expect(page.getByLabel('概览操作')).toHaveText('restart');
   await expect(page.getByRole('radio', { name: '全局', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: '关闭系统代理' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '自测通过' })).toHaveCount(0);
+});
+
+test('real core card blocks duplicate operations and never restarts an external kernel', async ({ page }) => {
+  await page.goto('/?panel=overview&mode=busy');
+  await expect(page.getByRole('button', { name: '重启内核' })).toBeDisabled();
+  await page.goto('/?panel=overview&mode=external');
+  await expect(page.getByRole('button', { name: '外部内核' })).toBeDisabled();
 });
 
 test('empty configuration and missing self test stay actionable without green success claims', async ({ page }) => {

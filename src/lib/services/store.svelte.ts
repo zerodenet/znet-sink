@@ -1,7 +1,6 @@
 import { browser } from '$app/environment';
 import type { ThemeMode } from './theme.svelte';
 import { getAppConfig, updateAppConfig, getGuiInteractionSurfaceSnapshot } from './core';
-import { guiState } from './gui-state.svelte';
 import { error as toastError } from './toast.svelte';
 import {
   completeOnboarding,
@@ -38,6 +37,7 @@ class AppStateStore {
   });
   private onboardingRequired = true;
   private uiModeGeneration = 0;
+  private uiModePersistence: Promise<unknown> = Promise.resolve();
 
   constructor() {
     if (browser) {
@@ -126,9 +126,8 @@ class AppStateStore {
     const generation = ++this.uiModeGeneration;
     console.time('[ZNet] switchUIMode');
 
-    // UI mode is a presentation preference. Apply it optimistically so a
-    // potentially slow macOS/Linux network handoff can never freeze the mode
-    // control or hold the WebView in the old layout.
+    // UI mode changes presentation only; keep the current capture session.
+    // Persist the preference without holding the WebView in the old layout.
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
@@ -150,12 +149,6 @@ class AppStateStore {
         // Interaction surfaces are advisory metadata; refresh them after the
         // preference has been persisted and ignore stale responses.
         void this.refreshInteractionSurface(mode);
-
-        // Entering Lite should preserve an existing capture session, but the
-        // OS-level handoff also remains outside the mode-switch interaction.
-        if (mode === 'lite' && guiState.isCaptureEnabled) {
-          void this.prepareLiteCaptureInBackground(generation);
-        }
       })
       .catch((e) => {
         console.error('[ZNet] switchUIMode failed:', e);
@@ -174,30 +167,6 @@ class AppStateStore {
 
     // Make the control interactive again immediately after scheduling IPC.
     this.isSwitchingUiMode = false;
-  }
-
-  private async prepareLiteCaptureInBackground(generation: number) {
-    try {
-      await guiState.prepareLiteCapture();
-    } catch (e) {
-      // Network handoff failure does not invalidate the user's UI preference.
-      // Suppress stale feedback if the user has already left Lite mode while
-      // an OS-level TUN operation was still completing.
-      if (generation !== this.uiModeGeneration || this.uiMode !== 'lite') return;
-
-      const failure = e as {
-        code?: string;
-        message?: string;
-        details?: { error?: { code?: string } };
-      };
-      const insufficientPrivilege = failure?.code === 'insufficient_os_privilege'
-        || failure?.details?.error?.code === 'insufficient_os_privilege';
-      const message = failure?.message
-        ?? (insufficientPrivilege
-          ? 'TUN 启动需要更高的系统权限。'
-          : '当前代理状态未能自动调整。');
-      toastError(`已切换到简约模式，但自动接管未完成：${message}`);
-    }
   }
 
   async refreshInteractionSurface(expectedMode?: UIMode) {
@@ -256,8 +225,12 @@ class AppStateStore {
     return liteModeFeatures.includes(key);
   }
 
-  private async persistUiMode(mode: UIMode) {
-    await updateAppConfig({ ui: { uiMode: mode } });
+  private persistUiMode(mode: UIMode) {
+    // Serialize writes while keeping layout changes immediate. A slow older
+    // request must not become the preference loaded at the next launch.
+    const pending = this.uiModePersistence.catch(() => {}).then(() => updateAppConfig({ ui: { uiMode: mode } }));
+    this.uiModePersistence = pending;
+    return pending;
   }
 
   resetOnboarding() {

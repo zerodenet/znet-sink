@@ -106,3 +106,23 @@ export function buildOverview(input: OverviewInput) {
   };
 }
 export type OverviewModel = ReturnType<typeof buildOverview>;
+
+export function trafficUnavailableReason(model: OverviewModel, supported: boolean, sampledAt: number, live: boolean, now: number): string | null {
+  return !supported ? '内核不支持流量查询' : !model.ready ? '内核未就绪，暂停展示实时速率'
+    : !sampledAt ? '等待第一份流量采样' : now - sampledAt > 10_000 ? '流量采样已过期，等待恢复'
+    : !live ? '正在建立流量采样基线' : null;
+}
+
+export function capturePresentation(model: OverviewModel, systemProxy: boolean, tunEnabled: boolean, tunDesired: boolean, busy: boolean) {
+  const powerOn = systemProxy || tunEnabled || tunDesired;
+  const healthy = model.ready && model.tunConfirmed && systemProxy && tunEnabled && model.tunSnapshot?.healthy === true;
+  const label = busy ? '正在更新代理状态'
+    : model.stale || (model.ready && !model.tunConfirmed) ? '运行状态待确认'
+    : powerOn && !model.ready ? '内核未就绪'
+    : tunEnabled && model.tunSnapshot?.healthy !== true ? 'TUN 运行异常'
+    : healthy ? '系统代理与 TUN 已开启'
+    : systemProxy ? '仅系统代理已开启'
+    : tunEnabled ? '仅 TUN 已开启'
+    : tunDesired ? 'TUN 等待恢复' : '代理已关闭';
+  return { powerOn, healthy, label, warning: !busy && (model.stale || powerOn && !healthy), failed: model.tunConfirmed && tunEnabled && model.tunSnapshot?.healthy === false };
+}

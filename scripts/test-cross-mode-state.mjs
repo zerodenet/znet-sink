@@ -103,30 +103,15 @@ assert.ok(
   'Lite default auto-connect should run only after the first trusted snapshot and after UI action guards are unlocked',
 );
 
-const handoffSystemProxy = guiState.indexOf("tracedOperation('proxy', 'lite.system_proxy.handoff', () => guiConnect())");
-const handoffTun = guiState.indexOf("tracedOperation('proxy', 'lite.tun.handoff', () => enableGuiTun())");
 assert.ok(
-  guiState.includes('async prepareLiteCapture()')
-    && guiState.includes('const systemProxyOwned = this.connection?.systemProxyEnabled === true')
-    && guiState.includes('const tunEnabled = this.isTunEnabled')
-    && guiState.includes('if (!systemProxyOwned && !tunEnabled) return;')
-    && guiState.includes('if (systemProxyOwned && tunEnabled)')
-    && handoffSystemProxy >= 0
-    && handoffTun >= 0
-    && !guiState.includes('lite.system_proxy.release')
-    && guiState.includes('if (tunStarted)')
-    && guiState.includes('if (systemProxyStarted)'),
-  'Pro -> Lite should preserve an existing capture path, reconcile the missing side, and never release a working system proxy merely because TUN is active',
-);
-
-assert.ok(
-  appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
-    && appStore.includes("if (mode === 'lite' && guiState.isCaptureEnabled)")
-    && appStore.includes('void this.prepareLiteCaptureInBackground(generation)')
+  !appStore.includes('prepareLiteCapture')
+    && !appStore.includes("from './gui-state.svelte'")
+    && !guiState.includes('async prepareLiteCapture()')
+    && appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
     && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
-  'TUN configuration and navigation must switch to Lite synchronously while capture reconciliation runs in the background',
+  'mode switching must preserve capture state and synchronously apply only the presentation boundary',
 );
 
 assert.ok(

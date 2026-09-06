@@ -88,6 +88,7 @@ function storeHarness({ status, desired = true, restart = async () => ({}) }) {
     './toast.svelte': Object.fromEntries(['error', 'success', 'warning'].map((level) => [level, (message) => notifications.push({ level, message })])),
     './telemetry': { tracedOperation: async (_area, _operation, operation) => operation() },
     './latest-request-gate.js': { createLatestRequestGate },
+    './runtime-status-observer': loadService('runtime-status-observer.ts', {}),
     './node-state-reconcile': {},
   });
   guiState.isInitializing = false;

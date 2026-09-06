@@ -251,7 +251,7 @@
     <div class="core-actions">
       <Button variant="outline" size="sm"
         onclick={() => isProcessRunning ? guiState.restartCore() : guiState.startCore()}
-        disabled={busy || stateUnknown || (isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : !guiState.canStartCore)}
+        disabled={busy || (isCoreAvailable ? !isProcessRunning || !guiState.canRestartCore : stateUnknown || !guiState.canStartCore)}
 
         class="min-w-0 overflow-hidden"
 

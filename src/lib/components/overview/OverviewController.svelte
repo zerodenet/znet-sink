@@ -13,12 +13,12 @@
   import TrafficChart from '$lib/components/TrafficChart.svelte';
   import ProfessionalOverview from './ProfessionalOverview.svelte';
   import TunControl from './TunControl.svelte';
-  import { buildOverview, type Destination } from './model';
+  import type { OverviewModel, Destination } from './model';
   import { OverviewOperations } from './operations.svelte';
   import type { OverviewActions } from './types';
 
   const operations = new OverviewOperations();
-  let now = $state(Date.now());
+  let { model, trafficUnavailable }: { model: OverviewModel; trafficUnavailable: string | null } = $props();
   let profiles = $state<ProxyConfigProfile[]>([]);
   let profilesLoading = $state(true);
   let profilesError = $state<string | null>(null);
@@ -27,17 +27,12 @@
   let profileRequest = 0;
   let stackRequest = 0;
   let disposed = false;
-  const model = $derived(buildOverview({ now, connection: guiState.connection, connectionAt: guiState.connectionUpdatedAt,
-    connectionError: guiState.connectionError, core: guiState.coreOverview, tun: guiState.tunStatus,
-    tunError: guiState.tunStatusError, selfTest: guiState.selfTest, selfTestAt: guiState.selfTestUpdatedAt,
-    mode: guiState.proxyMode, groups: guiState.policyGroups, groupsAt: guiState.policyGroupsUpdatedAt, groupsError: guiState.policyGroupsError }));
   const ready = $derived(model.ready);
   const externalBusy = $derived(guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isSwitchingSystemProxy || guiState.isSwitchingMode || guiState.isSelectingPolicy || guiState.isConnecting || guiState.isDisconnecting || guiState.isInitializing);
   const busy = $derived(!!operations.feedback.pending || externalBusy);
   const selectedProfile = $derived(profiles.find((profile) => profile.active)?.id ?? '');
   const profileView = $derived({ selected: selectedProfile, loading: profilesLoading, error: profilesError, options: profiles.map((profile) => ({ value: profile.id, label: profile.name })) });
   const network = $derived({ ip: guiState.networkProbe?.ip ?? '', description: [guiState.networkProbe?.country, guiState.networkProbe?.region, guiState.networkProbe?.city, guiState.networkProbe?.isp ?? guiState.networkProbe?.org].filter(Boolean).join(' · '), loading: guiState.networkProbeLoading, error: guiState.networkProbeError });
-  const trafficUnavailable = $derived(!guiState.supportsTrafficStats ? '内核不支持流量查询' : !model.ready ? '内核未就绪，暂停展示实时速率' : !overviewData.lastSampleAtUnixMs ? '等待第一份流量采样' : now - overviewData.lastSampleAtUnixMs > 10_000 ? '流量采样已过期，等待恢复' : !overviewData.isLive ? '正在建立流量采样基线' : null);
   const canDisableTun = $derived(guiState.isTunSwitchOn && guiState.canDisableTun);
   const stackReady = $derived(model.ready && stack?.enabled === true);
   const stackLabel = $derived(!model.ready || !stack ? '待确认' : !stack.supported ? '不支持' : stack.enabled ? coreEvents.stackMode ?? '已启动' : stack.reason || '未启动');
@@ -63,9 +58,8 @@
     void loadProfiles();
     void guiState.refreshSelfTest();
     const unsubscribe = proxyConfigSignal.onActiveChanged(() => { void loadProfiles(); });
-    const clock = window.setInterval(() => { now = Date.now(); }, 1000);
     const checks = window.setInterval(() => { if (document.visibilityState !== 'hidden') void guiState.refreshSelfTest(); }, 30_000);
-    return () => { disposed = true; profileRequest++; stackRequest++; operations.destroy(); unsubscribe(); window.clearInterval(clock); window.clearInterval(checks); };
+    return () => { disposed = true; profileRequest++; stackRequest++; operations.destroy(); unsubscribe(); window.clearInterval(checks); };
   });
   $effect(() => { void coreEvents.statusTick; if (ready) void loadStack(); else stack = null; });
 
@@ -80,7 +74,6 @@
       await Promise.all([guiState.refreshAll(), guiState.probeNetwork(), loadProfiles(), loadStack()]);
       const errors = [guiState.connectionError, guiState.tunStatusError, guiState.policyGroupsError, guiState.networkProbeError, profilesError, !guiState.selfTest ? '未取得就绪检查结果' : null].filter(Boolean);
       if (errors.length) throw new Error(errors.join('；'));
-      now = Date.now();
       return '检查已完成，请以最新状态与异常提示为准';
     }),
     chooseProfile: (id) => {
@@ -115,7 +108,7 @@
 </script>
 
 <ProfessionalOverview bind:this={view} {model} profiles={profileView} {network} feedback={operations.feedback} {actions} {busy} refreshing={operations.feedback.pending === 'checks'} {canDisableTun}>
-  {#snippet core()}<CoreStatusCard busy={!!operations.feedback.pending} stateUnknown={model.stale} onToggleSystemProxy={toggleSystemProxy} />{/snippet}
+  {#snippet core()}<CoreStatusCard {busy} stateUnknown={model.stale} onToggleSystemProxy={toggleSystemProxy} />{/snippet}
   {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={guiState.isTunSwitchOn} canToggle={!busy && (guiState.isTunSwitchOn ? guiState.canDisableTun : model.tunConfirmed && guiState.canEnableTun)} switching={guiState.isSwitchingTun} {stackLabel} {stackReady} feedback={operations.feedback} />{/snippet}
   {#snippet traffic()}<TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} unavailableReason={trafficUnavailable} />{/snippet}
 </ProfessionalOverview>

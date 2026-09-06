@@ -5,14 +5,16 @@
   import TunControl from '$lib/components/overview/TunControl.svelte';
   import { OverviewOperations } from '$lib/components/overview/operations.svelte';
   import type { OverviewActions } from '$lib/components/overview/types';
-  import { Button } from '$lib/components/ui/button';
+  import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
+  import { guiState } from '$lib/services/gui-state.svelte';
+  import { store } from '$lib/services/store.svelte';
   import { onDestroy } from 'svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   const scenario = new URLSearchParams(window.location.search).get('mode');
   const now = Date.now();
   let input = $state<OverviewInput>({
     now, connectionAt: scenario === 'stale' ? now - 20000 : now, connectionError: null,
-    connection: { state: 'connected', processState: scenario === 'stopped' ? 'stopped' : 'running', coreAvailable: scenario !== 'stopped', processPid: 321, startedAtUnixMs: now - 3800000, systemProxyEnabled: true, localProxyHost: '127.0.0.1', localProxyPort: 7890 },
+    connection: { state: 'connected', processState: scenario === 'stopped' || scenario === 'external' ? 'stopped' : 'running', coreAvailable: scenario !== 'stopped', processPid: 321, startedAtUnixMs: now - 3800000, systemProxyEnabled: true, localProxyHost: '127.0.0.1', localProxyPort: 7890 },
     core: { coreState: 'running', version: '0.0.16-rc.202609051609' },
     tun: { key: 'tun', supported: true, enabled: true, state: 'running', healthy: scenario !== 'failure', desiredEnabled: true, name: 'tun0', mtu: 1500, addresses: ['10.66.0.1/24'], autoRoute: true, dualStack: true, strictRoute: false, dnsHijack: false, fakeIpEnabled: false, dnsHijackedQueries: 0, ipv4Egress: { availability: 'available', interface: 'eth0' }, ipv6Egress: { availability: 'available', interface: 'eth0' }, networkGeneration: 4, ipv6ToIpv4Fallbacks: 0, managedByConfig: false, lastError: scenario === 'failure' ? '默认路由已变化，出口恢复失败' : undefined },
     tunError: null, mode: { currentMode: 'rule', availableModes: ['rule', 'global', 'direct'] },
@@ -27,7 +29,16 @@
   let selected = $state('main');
   let view = $state<{ showTunDetails: () => void }>();
   const operations = new OverviewOperations();
-  const busy = $derived(!!operations.feedback.pending);
+  const busy = $derived(!!operations.feedback.pending || scenario === 'busy');
+  // Mount the production card. Only its state/command boundary is simulated.
+  $effect(() => {
+    Object.assign(guiState, { connection:input.connection, selfTest:input.selfTest,
+      isInitializing:false,isStartingCore:false,isStoppingCore:false,isConnecting:false,isDisconnecting:false,isSwitchingSystemProxy:false,
+      canRestartCore:true,canStartCore:true,canDisableSystemProxy:true,canEnableSystemProxy:true,
+      restartCore:async()=>{action='restart';},startCore:async()=>{action='start';},
+    });
+    store.uiMode='pro';
+  });
   const profiles = $derived({ selected: scenario === 'empty' ? '' : selected, loading: false, error: null, options: scenario === 'empty' ? [] : [{value:'main',label:'日常网络配置'},{value:'work',label:'工作配置'}] });
   const network = { ip:'192.0.2.18', description:'测试网络', loading:false, error:null };
   async function change(effect: () => void) {
@@ -46,9 +57,8 @@
   onDestroy(() => operations.destroy());
 </script>
 <ProfessionalOverview bind:this={view} {model} {profiles} {network} feedback={operations.feedback} {actions} {busy} refreshing={operations.feedback.pending === 'checks'} canDisableTun={input.tun?.enabled}>
-  {#snippet core()}<section class="fixture-core"><span>内核状态</span><strong>{model.stale ? '状态待确认' : model.ready ? '服务中' : '已停止'}</strong><p>PID {model.pid} · {model.endpoint}</p><Button variant="outline" size="sm" disabled={busy || model.stale} onclick={() => action = 'restart'}>重启内核</Button><Button variant="outline" size="sm" disabled={busy} onclick={() => action = 'system-proxy'}>关闭系统代理</Button></section>{/snippet}
+  {#snippet core()}<CoreStatusCard {busy} stateUnknown={model.stale} onToggleSystemProxy={()=>{action='system-proxy';}} />{/snippet}
   {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={input.tun?.enabled ?? false} canToggle={!busy} switching={operations.feedback.pending === 'tun'} stackLabel={model.ready ? 'Zero Stack' : '待确认'} stackReady={model.ready} feedback={operations.feedback} />{/snippet}
   {#snippet traffic()}<TrafficChart {history} unavailableReason={scenario === 'stale' ? '流量采样已过期，等待恢复' : scenario === 'stopped' ? '内核未就绪，暂停展示实时速率' : null} />{/snippet}
 </ProfessionalOverview>
 <output aria-label="概览操作">{action}</output>
-<style>.fixture-core { display:flex; flex-direction:column; gap:5px; padding:11px 13px; background:var(--card); border:1px solid var(--border); border-radius:10px; font-size:11px; flex:1; }.fixture-core p { margin:0; }</style>

@@ -7,7 +7,10 @@ export default defineConfig({
   root: absolute('./'),
   plugins: [tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '$lib/services/toast.svelte', replacement: absolute('./toast.ts') },
+    { find: '$lib/services/core-events.svelte', replacement: absolute('./overview-events.ts') },
     { find: '$lib/services/kernel-version', replacement: absolute('./kernel-version.ts') },
+    { find: '$lib/services/runtime-performance', replacement: absolute('./config.ts') },
     { find: '$lib/services/gui-state.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/store.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/tun', replacement: absolute('./tun-state.svelte.ts') },

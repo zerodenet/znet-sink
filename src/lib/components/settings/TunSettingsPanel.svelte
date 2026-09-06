@@ -320,7 +320,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">DNS 劫持</span>
-        <span class="label-desc">接管 TUN 的 53 端口查询。启用前必须先保存有效的 DNS 配置；应用自带的 DoH/DoT/DoQ 与 ECH 不在此范围内。</span>
+        <span class="label-desc">TUN 可独立使用系统 DNS。开启劫持需先保存 Real DNS 或 Fake-IP，再接管 53 端口查询；应用自带的 DoH/DoT/DoQ 与 ECH 不在此范围内。</span>
       </div>
       <Switch
         checked={dnsHijack}

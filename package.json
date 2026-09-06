@@ -28,7 +28,7 @@
     "test:dns-config": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-dns-config.mjs",
     "test:kernel-settings": "node scripts/test-kernel-settings.mjs",
     "test:lite-session": "node scripts/test-lite-session-traffic.mjs",
-    "test:cross-mode-state": "node scripts/test-cross-mode-state.mjs",
+    "test:cross-mode-state": "node scripts/test-cross-mode-state.mjs && node --test scripts/test-ui-mode-state.mjs",
     "test:desktop-shell": "node --experimental-strip-types scripts/test-desktop-shell.mjs",
     "test:ui-controls": "node scripts/test-ui-controls.mjs",
     "test:ui-browser": "playwright test",

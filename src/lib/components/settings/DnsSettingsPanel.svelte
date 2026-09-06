@@ -115,7 +115,7 @@
   const addressFamilyPolicy = $derived(draft ? getDnsAddressFamilyPolicy(draft.dns) : 'prefer_ipv4');
   const modeDescription = $derived(draft
     ? ({
-        disabled: '不接管域名解析。',
+        disabled: '停用 Zero DNS，跟随系统解析；TUN 可继续运行。',
         real: '返回真实 IP，适合常规代理和内网。',
         fake_ip: '返回合成地址，由内核恢复域名并分流。',
       }[draft.mode] ?? '')
@@ -870,7 +870,7 @@
     </div>
     <SegmentedControl.Root value={draft.mode} onValueChange={(value) => changeMode(value as DnsMode)} aria-label="DNS 基础模式">
       {#each [
-        ['disabled', '关闭'],
+        ['disabled', '系统 DNS'],
         ['real', 'Real DNS'],
         ['fake_ip', 'Fake-IP'],
       ] as item}
@@ -880,10 +880,10 @@
   </section>
 
   {#if draft.mode === 'disabled'}
-    <div class="disabled-note">DNS 配置已停用，当前设置会保留。</div>
+    <div class="disabled-note">保存并应用后将停用 Zero DNS，同时关闭 DNS 劫持，保留原有 DNS 设置。若客户端托管的 TUN 正在运行，会自动重建并改用系统 DNS，期间网络可能短暂中断。</div>
   {:else}
     <section class="section row-section">
-      <div><strong>DNS 劫持</strong><span>让 TUN 模式统一处理 DNS 请求。</span></div>
+      <div><strong>DNS 劫持</strong><span>让 TUN 的 53 端口查询交给 Zero DNS。关闭劫持时，TUN 仍可使用系统 DNS。</span></div>
       <Switch checked={draft.dnsHijack} onCheckedChange={(checked) => { if (draft) { draft.dnsHijack = checked; touch(); } }} disabled={compatibility.features?.tunDnsHijack.state === 'unsupported'} aria-label="DNS 劫持" />
     </section>
   {/if}
