@@ -38,7 +38,7 @@ import type {
   ProxyMode,
 } from '$lib/types/gui-api';
 import type { GuiManagedTunStatus } from '$lib/types/tun';
-import type { CommandResult } from './command-result';
+import type { CommandResult, CommandOptions } from './command-result';
 import { RuntimeStatusObserver } from './runtime-status-observer';
 
 const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
@@ -548,22 +548,22 @@ class GuiStateStore {
     }
   }
 
-  private reportCommandConfirmation(confirmed: boolean, success: string, unconfirmed: string): CommandResult {
-    if (confirmed) { toastSuccess(success); return { ok: true }; }
-    toastWarning(unconfirmed);
+  private reportCommandConfirmation(confirmed: boolean, success: string, unconfirmed: string, notify = true): CommandResult {
+    if (confirmed) { if (notify) toastSuccess(success); return { ok: true }; }
+    if (notify) toastWarning(unconfirmed);
     return { ok: false, message: unconfirmed };
   }
 
-  async enableSystemProxy(): Promise<CommandResult> {
+  async enableSystemProxy({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (!this.canEnableSystemProxy) return { ok: false, message: '当前无法开启系统代理，请检查内核与配置状态' };
     this.isSwitchingSystemProxy = true;
     try {
       await tracedOperation('proxy', 'system_proxy.enable', () => enableSystemProxyCommand());
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
-      return this.reportCommandConfirmation(!this.connectionError && this.isSystemProxyEnabled, '系统代理已开启', '开启请求已完成，但尚未确认系统代理状态，请重新检查');
+      return this.reportCommandConfirmation(!this.connectionError && this.isSystemProxyEnabled, '系统代理已开启', '开启请求已完成，但尚未确认系统代理状态，请重新检查', notify);
     } catch (e: any) {
-      toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
+      if (notify) toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
       return { ok: false, message: this.errorMessage(e) };
     } finally {
@@ -571,15 +571,15 @@ class GuiStateStore {
     }
   }
 
-  async disableSystemProxy(): Promise<CommandResult> {
+  async disableSystemProxy({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (!this.canDisableSystemProxy) return { ok: false, message: '系统代理正在切换，请稍后重试' };
     this.isSwitchingSystemProxy = true;
     try {
       await tracedOperation('proxy', 'system_proxy.disable', () => disableSystemProxyCommand());
       await this.refreshConnectionStatus();
-      return this.reportCommandConfirmation(!this.connectionError && !this.isSystemProxyEnabled, '系统代理已关闭', '关闭请求已完成，但尚未确认系统代理状态，请重新检查');
+      return this.reportCommandConfirmation(!this.connectionError && !this.isSystemProxyEnabled, '系统代理已关闭', '关闭请求已完成，但尚未确认系统代理状态，请重新检查', notify);
     } catch (e: any) {
-      toastError(`关闭系统代理失败: ${this.errorMessage(e)}`);
+      if (notify) toastError(`关闭系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshConnectionStatus();
       return { ok: false, message: this.errorMessage(e) };
     } finally {
@@ -587,15 +587,15 @@ class GuiStateStore {
     }
   }
 
-  async toggleSystemProxy() {
+  async toggleSystemProxy({ notify = true }: CommandOptions = {}) {
     if (this.connection?.systemProxyEnabled === true) {
-      return this.disableSystemProxy();
+      return this.disableSystemProxy({ notify });
     } else {
-      return this.enableSystemProxy();
+      return this.enableSystemProxy({ notify });
     }
   }
 
-  async enableTun(): Promise<CommandResult> {
+  async enableTun({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (!this.canEnableTun) return { ok: false, message: '当前无法开启 TUN，请检查内核、配置与权限' };
     this.isSwitchingTun = true;
     this.tunStatusRefreshGate.reset();
@@ -604,9 +604,9 @@ class GuiStateStore {
       this.tunStatusRefreshGate.reset();
       this.tunStatus = status;
       await this.refreshRuntimeState();
-      return this.reportCommandConfirmation(!this.tunStatusError && this.isTunEnabled && this.tunStatus?.healthy === true, 'TUN 已开启', this.tunStatus?.lastError || '开启请求已完成，但尚未确认 TUN 健康接管，请重新检查');
+      return this.reportCommandConfirmation(!this.tunStatusError && this.isTunEnabled && this.tunStatus?.healthy === true, 'TUN 已开启', this.tunStatus?.lastError || '开启请求已完成，但尚未确认 TUN 健康接管，请重新检查', notify);
     } catch (e: any) {
-      toastError(`开启 TUN 失败: ${this.errorMessage(e)}`);
+      if (notify) toastError(`开启 TUN 失败: ${this.errorMessage(e)}`);
       this.tunStatusRefreshGate.reset();
       await this.refreshTunStatus();
       await this.refreshConnectionStatus();
@@ -616,7 +616,7 @@ class GuiStateStore {
     }
   }
 
-  async disableTun(): Promise<CommandResult> {
+  async disableTun({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (!this.canDisableTun) return { ok: false, message: '当前无法关闭 TUN，请等待正在进行的操作完成' };
     this.isSwitchingTun = true;
     this.tunStatusRefreshGate.reset();
@@ -625,9 +625,9 @@ class GuiStateStore {
       this.tunStatusRefreshGate.reset();
       this.tunStatus = status;
       await this.refreshTunStatus();
-      return this.reportCommandConfirmation(!this.tunStatusError && !this.isTunSwitchOn, 'TUN 已关闭', '关闭请求已完成，但尚未确认 TUN 与自动恢复设置，请重新检查');
+      return this.reportCommandConfirmation(!this.tunStatusError && !this.isTunSwitchOn, 'TUN 已关闭', '关闭请求已完成，但尚未确认 TUN 与自动恢复设置，请重新检查', notify);
     } catch (e: any) {
-      toastError(`关闭 TUN 失败: ${this.errorMessage(e)}`);
+      if (notify) toastError(`关闭 TUN 失败: ${this.errorMessage(e)}`);
       this.tunStatusRefreshGate.reset();
       await this.refreshTunStatus();
       return { ok: false, message: this.errorMessage(e) };
@@ -636,12 +636,12 @@ class GuiStateStore {
     }
   }
 
-  async toggleTun() {
-    if (this.isTunSwitchOn) return this.disableTun();
-    else return this.enableTun();
+  async toggleTun({ notify = true }: CommandOptions = {}) {
+    if (this.isTunSwitchOn) return this.disableTun({ notify });
+    else return this.enableTun({ notify });
   }
 
-  async setProxyMode(mode: ProxyMode): Promise<CommandResult> {
+  async setProxyMode(mode: ProxyMode, { notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (this.isSwitchingMode || this.isCoreBusy || !this.connection?.coreAvailable || !this.proxyMode?.availableModes.includes(mode)) {
       return { ok: false, message: '当前无法切换代理模式，请检查内核状态与支持的模式' };
     }
@@ -655,7 +655,7 @@ class GuiStateStore {
         ? { ok: true }
         : { ok: false, message: '模式请求已提交，但尚未确认生效，请重新检查' };
     } catch (e: any) {
-      toastError(`切换代理模式失败: ${this.errorMessage(e)}`);
+      if (notify) toastError(`切换代理模式失败: ${this.errorMessage(e)}`);
       await this.refreshModeState();
       return { ok: false, message: this.errorMessage(e) };
     } finally {

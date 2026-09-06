@@ -7,6 +7,8 @@ export default defineConfig({
   root: absolute('./'),
   plugins: [tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '$lib/services/theme.svelte', replacement: absolute('./presentation-state.svelte.ts') },
+    { find: '$lib/services/traffic-ball-preference.svelte', replacement: absolute('./presentation-state.svelte.ts') },
     { find: '$lib/services/toast.svelte', replacement: absolute('./toast.ts') },
     { find: '$lib/services/core-events.svelte', replacement: absolute('./overview-events.ts') },
     { find: '$lib/services/kernel-version', replacement: absolute('./kernel-version.ts') },

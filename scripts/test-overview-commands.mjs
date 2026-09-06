@@ -214,3 +214,19 @@ test('mode command acknowledgement cannot be replaced by an older periodic query
   state.modeWait=null;assert.equal((await gui.setProxyMode('global')).ok,true);
   finish();await old;assert.equal(gui.proxyMode.currentMode,'global');
 });
+
+test('view-owned notifications preserve command and readback semantics without duplicate toasts', async () => {
+  for (const method of ['toggleSystemProxy','toggleTun','setProxyMode']) {
+    for (const reject of [false,true]) {
+      const {gui,state}=await harness(); state.reject=reject;
+      const result = method === 'setProxyMode' ? await gui.setProxyMode('global',{notify:false}) : await gui[method]({notify:false});
+      assert.equal(result.ok,!reject); assert.deepEqual(state.notifications,[]);
+      if (method==='toggleSystemProxy') assert.equal(gui.isSystemProxyEnabled,reject);
+      if (method==='toggleTun') assert.equal(gui.isTunSwitchOn,reject);
+      if (method==='setProxyMode') assert.equal(gui.proxyMode.currentMode,reject ? 'rule' : 'global');
+    }
+  }
+  const {gui,state}=await harness();state.connectionReadFailure=true;
+  const result=await gui.toggleSystemProxy({notify:false});
+  assert.equal(result.ok,false);assert.match(result.message,/尚未确认/);assert.deepEqual(state.notifications,[]);
+});

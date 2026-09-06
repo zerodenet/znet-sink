@@ -3,6 +3,7 @@
   import type { Component } from 'svelte';
   import { Spinner } from '$lib/components/ui/Spinner';
   import SectionWorkspace from '$lib/components/SectionWorkspace.svelte';
+  import UiErrorBoundary from './UiErrorBoundary.svelte';
 
   let activeSection = $state(store.settingsSection);
   let ActivePanel = $state<Component | null>(null);
@@ -94,7 +95,11 @@
   {#if panelLoadError}
     <div class="panel-loading error">设置页面加载失败：{panelLoadError}</div>
   {:else if ActivePanel}
-    <ActivePanel />
+    {#key activeSection}
+      <UiErrorBoundary context={{ tab: 'settings', settingsSection: activeSection, uiMode: store.uiMode }}>
+        <ActivePanel />
+      </UiErrorBoundary>
+    {/key}
   {:else}
     <div class="panel-loading"><Spinner size="sm" color="default" />正在加载…</div>
   {/if}

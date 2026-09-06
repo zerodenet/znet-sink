@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import { onMount, untrack } from 'svelte';
+  import { onMount, untrack, tick } from 'svelte';
   import {
     Check,
     ChevronDown,
@@ -23,6 +23,7 @@
     serializeLogForClipboard,
     serializeLogsForClipboard,
   } from '$lib/services/diagnostic-copy';
+  import { logWindow } from '$lib/services/log-window';
   import { mergeLogPage } from '$lib/services/log-page';
   import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
@@ -35,7 +36,7 @@
     message: string;
   }
 
-  let logs = $state<LogEntry[]>([]);
+  let logs = $state.raw<LogEntry[]>([]);
   let loading = $state(true);
   let refreshing = $state(false);
   let loadingMore = $state(false);
@@ -54,6 +55,17 @@
   let copyFeedback = $state<CopyFeedback | null>(null);
   let clearArmed = $state(false);
 
+  let viewportTop = $state(0);
+  let viewportHeight = $state(500);
+  let viewportWidth = $state(0);
+  const searchTexts = new WeakMap<LogEntry, string>();
+  let rowHeights = $state.raw(new Map<number, number>());
+  let disposed = false;
+  let signalTimer: ReturnType<typeof setTimeout> | null = null;
+  let rowObserver: ResizeObserver | null = null;
+  const rowIds = new Map<Element, number>();
+  const pendingMeasurements = new Map<number, number>();
+  let measurementFrame = 0;
   let queryGeneration = 0;
   let backgroundRefreshInFlight = false;
   const refreshGate = createLatestRequestGate();
@@ -88,6 +100,8 @@
     if (!normalizedSearch) return orderedLogs;
     return orderedLogs.filter((log) => logSearchText(log).includes(normalizedSearch));
   });
+  const windowed = $derived(logWindow(visibleLogs.map(log => log.id), rowHeights, viewportTop, viewportHeight));
+  const renderedLogs = $derived(visibleLogs.slice(windowed.start, windowed.end));
   const errorCount = $derived(logs.filter((log) => log.level === 'error').length);
   const warningCount = $derived(logs.filter((log) => log.level === 'warn').length);
 
@@ -129,7 +143,14 @@
         (count, entry) => count + (knownIds.has(entry.id) ? 0 : 1),
         0,
       );
+      const anchor = !followLatest && visibleLogs[windowed.start]
+        ? { id: visibleLogs[windowed.start].id, offset: viewportTop - windowed.top } : null;
       logs = nextLogs;
+      if (anchor) void tick().then(() => {
+        if (disposed || !logBodyEl || followLatest) return;
+        const index = visibleLogs.findIndex(log => log.id === anchor.id);
+        if (index >= 0) logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+      });
       syncHasMore(page, logs);
       loadError = '';
 
@@ -151,7 +172,7 @@
   }
 
   async function refreshLogsInBackground() {
-    if (backgroundRefreshInFlight || loading || refreshing || loadingMore || clearing) return;
+    if (disposed || document.visibilityState === 'hidden' || backgroundRefreshInFlight || loading || refreshing || loadingMore || clearing) return;
     backgroundRefreshInFlight = true;
     try {
       await refreshLogs();
@@ -274,13 +295,17 @@
   }
 
   function logSearchText(log: LogEntry): string {
-    return [
+    const cached = searchTexts.get(log);
+    if (cached !== undefined) return cached;
+    const text = [
       String(log.id),
       log.source,
       log.level,
       displayMessage(log),
       formattedFields(log),
     ].join('\n').toLocaleLowerCase();
+    searchTexts.set(log, text);
+    return text;
   }
 
   function levelLabel(level: LogLevel): string {
@@ -288,6 +313,7 @@
   }
 
   function showFeedback(tone: FeedbackTone, message: string) {
+    if (disposed) return;
     copyFeedback = { tone, message };
     if (feedbackTimer) clearTimeout(feedbackTimer);
     feedbackTimer = setTimeout(() => {
@@ -341,15 +367,53 @@
   function scrollToLatest() {
     if (!logBodyEl || !followLatest || !shouldScrollToLatest) return;
     requestAnimationFrame(() => {
-      if (!logBodyEl) return;
+      if (disposed || !logBodyEl) return;
       logBodyEl.scrollTop = 0;
       shouldScrollToLatest = false;
       unseenCount = 0;
     });
   }
 
+  function measureRow(node: HTMLElement, id: number) {
+    if (!rowObserver) rowObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const key = rowIds.get(entry.target);
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.target.getBoundingClientRect().height;
+        if (key !== undefined && height > 0) pendingMeasurements.set(key, height);
+      }
+      // Updating the virtual window inside ResizeObserver itself can resize
+      // another observed row in the same delivery and trigger a WebView loop.
+      if (!measurementFrame) measurementFrame = requestAnimationFrame(() => {
+        measurementFrame = 0;
+        if (disposed) return;
+        const next = new Map(rowHeights);
+        let changed = false;
+        for (const [id, height] of pendingMeasurements) {
+          if (Math.abs((next.get(id) ?? 36) - height) > .5) {
+            next.set(id, height); changed = true;
+          }
+        }
+        pendingMeasurements.clear();
+        if (changed) {
+          const anchor = !followLatest && visibleLogs[windowed.start]
+            ? { id: visibleLogs[windowed.start].id, offset: viewportTop - windowed.top } : null;
+          rowHeights = next;
+          if (anchor) void tick().then(() => {
+            if (disposed || !logBodyEl || followLatest) return;
+            const index = visibleLogs.findIndex(log => log.id === anchor.id);
+            if (index >= 0) logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+          });
+        }
+      });
+    });
+    rowIds.set(node, id);
+    rowObserver.observe(node);
+    return { destroy() { rowObserver?.unobserve(node); rowIds.delete(node); } };
+  }
+
   function handleLogScroll(event: Event) {
     const target = event.currentTarget as HTMLDivElement;
+    viewportTop = target.scrollTop;
     const atLatest = target.scrollTop <= 24;
     if (atLatest) {
       unseenCount = 0;
@@ -374,9 +438,19 @@
         searchEl?.blur();
       }
     };
+    const refreshWhenVisible = () => { if (liveUpdates) void refreshLogsInBackground(); };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('keydown', handleKeydown);
 
     return () => {
+      disposed = true;
+      refreshGate.reset();
+      rowObserver?.disconnect();
+      rowIds.clear();
+      pendingMeasurements.clear();
+      if (measurementFrame) cancelAnimationFrame(measurementFrame);
+      if (signalTimer) clearTimeout(signalTimer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('keydown', handleKeydown);
       if (feedbackTimer) clearTimeout(feedbackTimer);
       if (clearArmTimer) clearTimeout(clearArmTimer);
@@ -395,6 +469,9 @@
       loading = true;
       loadingMore = false;
       logs = [];
+      rowHeights = new Map();
+      viewportTop = 0;
+      followLatest = true;
       hasMore = false;
       unseenCount = 0;
       expandedLogId = null;
@@ -417,10 +494,25 @@
     const isNewSignal = lastLogTick >= 0;
     lastLogTick = tick;
     if (liveUpdates) {
-      void refreshLogsInBackground();
+      if (!signalTimer) signalTimer = setTimeout(() => {
+        signalTimer = null;
+        if (liveUpdates) void refreshLogsInBackground();
+      }, 1_000);
     } else if (isNewSignal) {
       pendingSignals += 1;
     }
+  });
+
+  $effect(() => {
+    void wrapMessages;
+    void viewportWidth;
+    rowHeights = new Map();
+  });
+
+  $effect(() => {
+    void normalizedSearch;
+    if (logBodyEl) logBodyEl.scrollTop = 0;
+    viewportTop = 0;
   });
 
   $effect(() => {
@@ -600,6 +692,8 @@
     class="log-body"
     class:wrap={wrapMessages}
     bind:this={logBodyEl}
+    bind:clientHeight={viewportHeight}
+    bind:clientWidth={viewportWidth}
     onscroll={handleLogScroll}
   >
     {#if loading && visibleLogs.length === 0}
@@ -623,12 +717,15 @@
         </div>
       </div>
     {:else}
-      {#each visibleLogs as log (log.id)}
+      <div aria-hidden="true" style:height={`${windowed.top}px`}></div>
+      {#each renderedLogs as log (log.id)}
         {@const fields = structuredFields(log)}
         {@const previewFields = fields.slice(0, 3)}
         <article
           class="log-row level-{log.level}"
+          data-log-id={log.id}
           class:expanded={expandedLogId === log.id}
+          use:measureRow={log.id}
         >
           <button data-slot="surface-button"
             type="button"
@@ -681,6 +778,7 @@
           {/if}
         </article>
       {/each}
+      <div aria-hidden="true" style:height={`${windowed.bottom}px`}></div>
 
       {#if hasMore}
         <div class="log-more">
@@ -877,6 +975,7 @@
     background: color-mix(in srgb, var(--card) 97%, var(--muted));
     font-family: var(--font-mono, "JetBrains Mono", monospace);
     scrollbar-gutter: stable;
+    overflow-anchor: none;
   }
 
   .log-empty {

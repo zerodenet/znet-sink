@@ -1,4 +1,5 @@
 import { appendLog } from '$lib/services/core';
+import { describeUiError } from '$lib/services/ui-error';
 
 export type TelemetryLevel = 'debug' | 'info' | 'warn' | 'error';
 export type TelemetryArea = 'startup' | 'kernel' | 'ipc' | 'proxy' | 'config' | 'subscription' | 'update' | 'ui';
@@ -21,7 +22,8 @@ function safeContext(context?: Record<string, unknown>): Record<string, unknown>
     if (['password', 'secret', 'token', 'authorization', 'content'].some((part) => normalized.includes(part))) {
       return [key, '[redacted]'];
     }
-    if (typeof value === 'string' && value.length > 500) return [key, `${value.slice(0, 500)}…`];
+    const limit = key === 'stack' ? 4000 : 500;
+    if (typeof value === 'string' && value.length > limit) return [key, `${value.slice(0, limit)}…`];
     return [key, value];
   }));
 }
@@ -91,31 +93,34 @@ export async function tracedOperation<T>(
 
 let globalHandlersInstalled = false;
 
-export function installGlobalErrorTelemetry(): () => void {
+export function installGlobalErrorTelemetry(getContext: () => Record<string, unknown> = () => ({})): () => void {
   if (globalHandlersInstalled) return () => {};
   globalHandlersInstalled = true;
   const onError = (event: ErrorEvent) => {
+    const { message, ...details } = describeUiError(event.error, event.message || 'Unhandled frontend error');
     void recordTelemetry({
       level: 'error',
       area: 'ui',
       operation: 'window.error',
-      message: event.message || 'Unhandled frontend error',
+      message,
       context: {
+        ...getContext(),
+        ...details,
         filename: event.filename,
         line: event.lineno,
         column: event.colno,
-        stack: event.error instanceof Error ? event.error.stack : undefined,
+        opaque: !event.error && !event.filename && !event.lineno,
       },
     });
   };
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    const reason = event.reason;
+    const { message, ...details } = describeUiError(event.reason, String(event.reason));
     void recordTelemetry({
       level: 'error',
       area: 'ui',
       operation: 'window.unhandledrejection',
-      message: reason instanceof Error ? reason.message : String(reason),
-      context: { stack: reason instanceof Error ? reason.stack : undefined },
+      message,
+      context: { ...getContext(), ...details },
     });
   };
   window.addEventListener('error', onError);

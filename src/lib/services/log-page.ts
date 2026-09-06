@@ -1,5 +1,16 @@
 import type { LogEntry, LogPage } from '$lib/types/logs';
 
+const fieldKeys = new WeakMap<LogEntry, string | undefined>();
+function fieldsKey(entry: LogEntry) {
+  if (!fieldKeys.has(entry)) fieldKeys.set(entry, JSON.stringify(entry.fields));
+  return fieldKeys.get(entry);
+}
+function sameEntry(left: LogEntry, right: LogEntry) {
+  return left.id === right.id && left.source === right.source && left.level === right.level
+    && left.message === right.message && left.occurredAtUnixMs === right.occurredAtUnixMs
+    && fieldsKey(left) === fieldsKey(right);
+}
+
 /**
  * Merge log pages into a unique, ascending ID sequence.
  *
@@ -17,8 +28,10 @@ export function mergeLogPage(current: LogEntry[], page: LogPage): LogEntry[] {
     }
   }
   for (const entry of page.items) {
-    merged.set(entry.id, entry);
+    const existing = merged.get(entry.id);
+    merged.set(entry.id, existing && sameEntry(existing, entry) ? existing : entry);
   }
 
-  return Array.from(merged.values()).sort((a, b) => a.id - b.id);
+  const next = Array.from(merged.values()).sort((a, b) => a.id - b.id);
+  return next.length === current.length && next.every((entry, index) => entry === current[index]) ? current : next;
 }

@@ -121,7 +121,13 @@
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
     let unlistenTrayAction: UnlistenFn | null = null;
-    const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry();
+    const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry(() => ({
+      tab: store.activeTab,
+      renderedTab,
+      settingsSection: store.activeTab === 'settings' ? store.settingsSection : undefined,
+      uiMode: store.uiMode,
+      visibility: document.visibilityState,
+    }));
     const uninstallDesktopWebviewGuards = installDesktopWebviewGuards();
     initTheme();
     void store.loadFromBackend();

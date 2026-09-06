@@ -2,14 +2,11 @@
   import { ChevronRight } from '@lucide/svelte';
   import { Switch } from '$lib/components/ui/switch';
   import type { OverviewModel } from '$lib/components/overview/model';
-  import type { OverviewFeedback } from './types';
-  import OperationFeedback from './OperationFeedback.svelte';
 
-  let { model, onInspect, onToggle, switchOn, canToggle, switching, stackLabel, stackReady, feedback }: { model: OverviewModel; onInspect: () => void; onToggle: () => void; switchOn: boolean; canToggle: boolean; switching: boolean; stackLabel: string; stackReady: boolean; feedback: OverviewFeedback } = $props();
+  let { model, onInspect, onToggle, switchOn, canToggle, switching, stackLabel, stackReady }: { model: OverviewModel; onInspect: () => void; onToggle: () => void; switchOn: boolean; canToggle: boolean; switching: boolean; stackLabel: string; stackReady: boolean } = $props();
   const tun = $derived(model.tunSnapshot);
-  const failed = $derived(model.tunConfirmed && tun?.enabled && !tun.healthy);
-  const healthy = $derived(model.tunConfirmed && tun?.enabled && tun.healthy);
-  const egressReady = $derived(model.tunConfirmed && tun?.enabled && tun.ipv4Egress.availability === 'available' && (!tun.dualStack || tun.ipv6Egress.availability === 'available'));
+  const failed = $derived(model.tunConfirmed && tun?.enabled && (!tun.healthy || !!model.egress.issue));
+  const healthy = $derived(model.tunConfirmed && tun?.enabled && tun.healthy && !model.egress.issue);
 </script>
 
 <section class="feature-card" aria-label="TUN 与网络栈">
@@ -20,8 +17,7 @@
     <Switch bind:checked={() => switchOn, onToggle} disabled={!canToggle} aria-label={switchOn ? '关闭 TUN 并取消自动恢复' : '开启 TUN'} />
   </div>
   <div class="feature-row"><span class="feature-dot" class:healthy={stackReady}></span><span class="feature-name">内核网络栈</span><strong>{stackLabel}</strong></div>
-  <div class="egress-summary" class:danger={failed}>{!model.tunConfirmed ? '等待内核确认接管状态' : !tun?.enabled ? 'TUN 未接管流量' : failed ? '出口异常 · 下方可查看原因' : egressReady ? `${tun.dualStack ? 'IPv4 / IPv6' : 'IPv4'} 出口可用` : '出口状态待确认'}</div>
-  <OperationFeedback {feedback} target="tun" />
+  <div class="egress-summary" class:danger={failed}>{!model.tunConfirmed ? '等待内核确认接管状态' : !tun?.enabled ? 'TUN 未接管流量' : failed ? '出口异常 · 下方可查看原因' : model.egress.summary}</div>
 </section>
 
 <style>

@@ -74,3 +74,15 @@ test('rejected Lite source selection keeps the actual active source and Pro conf
   await page.getByRole('button', {name:'专业视图',exact:true}).click();
   await expect(page.getByRole('button', {name:'当前配置',exact:true})).toContainText('日常网络配置');
 });
+
+test('both views agree on optional IPv6 and required IPv6 failure', async ({page}) => {
+  for (const required of [false,true]) {
+    await page.goto(`/?panel=mode-overview&mode=${required ? 'ipv6-required' : 'ipv4-only-network'}`);
+    await expect(page.getByRole('status',{name:'代理运行状态'})).toContainText(required ? 'TUN 运行异常' : '系统代理与 TUN 已开启');
+    await page.getByRole('button',{name:'专业视图',exact:true}).click();
+    if (required) await expect(page.getByRole('region',{name:'需要处理'})).toContainText('IPv6 出口不可用');
+    else { await expect(page.getByRole('region',{name:'需要处理'})).toHaveCount(0); await expect(page.locator('.egress-summary')).toHaveText('IPv4 出口可用'); }
+    await page.getByRole('button',{name:'简约视图',exact:true}).click();
+    await expect(page.getByRole('status',{name:'代理运行状态'})).toContainText(required ? 'TUN 运行异常' : '系统代理与 TUN 已开启');
+  }
+});

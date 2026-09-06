@@ -96,51 +96,6 @@
     { value: 'direct', label: '直连' },
   ] as const;
 
-  const networkProbeResult = $derived(guiState.networkProbe);
-  const networkProbeLoading = $derived(guiState.networkProbeLoading);
-  const networkProbeError = $derived(guiState.networkProbeError);
-
-  const COUNTRY_CODES: Record<string, string> = {
-    '中国': 'CN', '美国': 'US', '日本': 'JP', '韩国': 'KR', '新加坡': 'SG',
-    '香港': 'HK', '台湾': 'TW', '澳门': 'MO', '英国': 'GB', '德国': 'DE',
-    '法国': 'FR', '加拿大': 'CA', '澳大利亚': 'AU', '俄罗斯': 'RU', '印度': 'IN',
-    '巴西': 'BR', '荷兰': 'NL', '瑞典': 'SE', '瑞士': 'CH', '芬兰': 'FI',
-    '挪威': 'NO', '丹麦': 'DK', '波兰': 'PL', '捷克': 'CZ', '奥地利': 'AT',
-    '比利时': 'BE', '意大利': 'IT', '西班牙': 'ES', '葡萄牙': 'PT', '爱尔兰': 'IE',
-    '新西兰': 'NZ', '墨西哥': 'MX', '阿根廷': 'AR', '智利': 'CL', '南非': 'ZA',
-    '泰国': 'TH', '越南': 'VN', '马来西亚': 'MY', '印度尼西亚': 'ID', '菲律宾': 'PH',
-    '阿联酋': 'AE', '沙特阿拉伯': 'SA', '以色列': 'IL', '土耳其': 'TR', '乌克兰': 'UA',
-    'china': 'CN', 'united states': 'US', 'usa': 'US', 'japan': 'JP',
-    'south korea': 'KR', 'korea': 'KR', 'singapore': 'SG', 'hong kong': 'HK',
-    'taiwan': 'TW', 'united kingdom': 'GB', 'uk': 'GB', 'germany': 'DE',
-    'france': 'FR', 'canada': 'CA', 'australia': 'AU', 'russia': 'RU',
-    'india': 'IN', 'brazil': 'BR', 'netherlands': 'NL', 'sweden': 'SE',
-    'switzerland': 'CH', 'finland': 'FI', 'norway': 'NO', 'denmark': 'DK',
-    'poland': 'PL', 'czech republic': 'CZ', 'czechia': 'CZ', 'austria': 'AT',
-    'belgium': 'BE', 'italy': 'IT', 'spain': 'ES', 'portugal': 'PT',
-    'ireland': 'IE', 'new zealand': 'NZ', 'mexico': 'MX', 'argentina': 'AR',
-    'chile': 'CL', 'south africa': 'ZA', 'thailand': 'TH', 'vietnam': 'VN',
-    'malaysia': 'MY', 'indonesia': 'ID', 'philippines': 'PH',
-    'united arab emirates': 'AE', 'saudi arabia': 'SA', 'israel': 'IL',
-    'turkey': 'TR', 'ukraine': 'UA', 'macao': 'MO', 'macau': 'MO',
-  };
-
-  function getFlagUrl(country?: string): string | null {
-    if (!country) return null;
-    const value = country.trim();
-    const code = value.length === 2
-      ? value.toUpperCase()
-      : COUNTRY_CODES[value.toLowerCase()] ?? COUNTRY_CODES[value];
-    return code ? `https://flagcdn.com/w40/${code.toLowerCase()}.png` : null;
-  }
-
-  const networkProbeFlagUrl = $derived(getFlagUrl(networkProbeResult?.country));
-
-  function formatProbeLocation(result: { country?: string; region?: string; city?: string }): string {
-    const parts = [result.country, result.region, result.city].filter(Boolean);
-    return parts.length > 0 ? parts.join(' · ') : '未知地区';
-  }
-
   async function refreshLiteSource() {
     const request = ++sourceRequest;
     sourceLoading = true;
@@ -189,12 +144,6 @@
   const powerOn = $derived(capture.powerOn);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
-  const networkProbePlaceholder = $derived(
-    networkProbeLoading ? '正在检测本地网络环境…' :
-    networkProbeError ? '网络检测失败，请检查当前网络后重试' :
-    '等待网络检测结果',
-  );
-
   const activeProxyConfig = $derived(proxyConfigs.find((profile) => profile.active) ?? null);
   const activeSubscription = $derived.by(() => {
     const activeId = activeProxyConfig?.id;
@@ -412,7 +361,7 @@
 
     <div class="lite-capture-state" class:warning={capture.warning} class:failed={capture.failed} role="status" aria-label="代理运行状态">
       <span>{capture.label}</span>
-      {#if capture.warning}<small>{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
+      {#if capture.warning}<small>{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || model.egress.issue?.detail || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
     </div>
 
     <div class="lite-mode-block">

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Toast from '$lib/components/Toast.svelte';
+  import SettingsLogsFixture from './SettingsLogsFixture.svelte';
   import OverviewFixture from './OverviewFixture.svelte';
   import ModeOverviewFixture from './ModeOverviewFixture.svelte';
   import LocalProxyEndpointPanel from '$lib/components/settings/LocalProxyEndpointPanel.svelte';
@@ -31,6 +33,7 @@
   });
 </script>
 
+<div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
 <main class="flex min-h-screen flex-col gap-4 p-4">
   <section class="flex flex-wrap items-center gap-3" aria-label="基础控件">
     <Button onclick={() => dark = !dark}>切换主题</Button>
@@ -45,7 +48,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

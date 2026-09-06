@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildOverview, capturePresentation, trafficUnavailableReason } from '../src/lib/components/overview/model.ts';
+import { buildOverview, capturePresentation, trafficUnavailableReason, formatUptime } from '../src/lib/components/overview/model.ts';
 const now = 1000000;
 const baseline = () => ({ now, connectionAt: now, connectionError: null, connection: { processState: 'running', coreAvailable: true, systemProxyEnabled: false, processPid: 42 }, tun: null, tunError: null, core: null, selfTest: null, selfTestAt: 0, mode: null, groups: [] });
 test('process existence alone never reports control-plane readiness', () => {
@@ -99,4 +99,50 @@ test('both overview modes share one traffic availability boundary', () => {
   assert.equal(trafficUnavailableReason(model, true, now, false, now), '正在建立流量采样基线');
   assert.equal(trafficUnavailableReason(model, false, now, true, now), '内核不支持流量查询');
   assert.equal(trafficUnavailableReason(buildOverview({ ...baseline(), connectionAt: 0 }), true, now, true, now), '内核未就绪，暂停展示实时速率');
+});
+
+
+test('uptime advances in seconds, carries units and keeps the process start across observations', () => {
+  for (const [ms, expected] of [[-1000,'0 秒'],[999,'0 秒'],[1000,'1 秒'],[59999,'59 秒'],[60000,'1 分 0 秒'],[3599999,'59 分 59 秒'],[3600000,'1 小时 0 分 0 秒'],[90061000,'1 天 1 小时 1 分 1 秒'],[NaN,'—']]) assert.equal(formatUptime(ms),expected);
+  const input = baseline(); input.connection.startedAtUnixMs = now - 59999;
+  assert.equal(buildOverview(input).uptime, '59 秒');
+  assert.equal(buildOverview({...input, now:now+1000}).uptime, '1 分 0 秒');
+  assert.equal(buildOverview({...input, connectionAt:now+1000, now:now+1000}).uptime, '1 分 0 秒');
+  assert.equal(buildOverview({...input, connection:{processState:'stopped'}}).uptime, '—');
+});
+
+test('address preference permits either usable family without duplicate capability warnings', () => {
+  for (const policy of ['prefer_ipv4', 'prefer_ipv6', undefined]) {
+    for (const [ipv4, ipv6, summary] of [['available','unavailable','IPv4 出口可用'], ['unavailable','available','IPv6 出口可用'], ['available','available','IPv4 / IPv6 出口可用']]) {
+      const tun = { enabled:true, healthy:true, supported:true, dualStack:true, addressFamilyPolicy:policy, ipv4Egress:{availability:ipv4}, ipv6Egress:{availability:ipv6} };
+      const model = buildOverview({...baseline(), tun});
+      assert.equal(model.tone, 'good'); assert.deepEqual(model.findings, []);
+      assert.equal(model.egress.summary, summary);
+      assert.equal(capturePresentation(model, true, true, true, false).healthy, true);
+      if (ipv6 === 'unavailable') assert.equal(model.ipv6, '不可用', 'keep the factual capability in details');
+    }
+  }
+});
+
+test('required or completely missing egress remains actionable in both modes', () => {
+  for (const [policy, dualStack, ipv4, ipv6] of [['ipv4_only',true,'unavailable','available'], ['ipv6_only',true,'available','unavailable'], ['ipv6_only',false,'available','available'], ['prefer_ipv4',true,'unavailable','unavailable'], ['prefer_ipv6',false,'unavailable','available']]) {
+    const model = buildOverview({...baseline(), tun:{enabled:true,healthy:true,supported:true,dualStack,addressFamilyPolicy:policy,ipv4Egress:{availability:ipv4},ipv6Egress:{availability:ipv6}}});
+    assert.equal(model.findings.length, 1); assert.equal(model.findings[0].target, 'tun');
+    assert.equal(model.egress.summary, '没有可用出口');
+    const lite = capturePresentation(model, true, true, true, false);
+    assert.equal(lite.healthy, false); assert.equal(lite.label, 'TUN 运行异常');
+  }
+});
+
+test('optional, unknown, stopped and stale egress do not invent required-family failures', () => {
+  const tun = {enabled:true,healthy:true,supported:true,dualStack:true,addressFamilyPolicy:'ipv4_only',ipv4Egress:{availability:'available'},ipv6Egress:{availability:'unavailable'}};
+  assert.equal(buildOverview({...baseline(),tun}).egress.summary,'IPv4 出口可用');
+  const unknown = {...tun, ipv4Egress:{availability:'unknown'}};
+  assert.equal(buildOverview({...baseline(),tun:unknown}).egress.summary,'出口状态待确认');
+  assert.equal(buildOverview({...baseline(),tun:unknown}).findings.length,0);
+  const missing = {...tun,ipv4Egress:{availability:'unavailable'}};
+  assert.equal(buildOverview({...baseline(),tun:{...missing,enabled:false}}).findings.length,0);
+  assert.equal(buildOverview({...baseline(),connectionAt:now-16000,tun:missing}).findings.some(f=>f.target==='tun'),false);
+  const unhealthy = buildOverview({...baseline(),tun:{...missing,healthy:false,lastError:'路由恢复失败'}});
+  assert.equal(unhealthy.findings.length,1); assert.equal(unhealthy.findings[0].detail,'路由恢复失败');
 });

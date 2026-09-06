@@ -21,6 +21,7 @@ pub mod gui_self_test;
 pub mod interaction_mode;
 pub mod internet_sharing;
 pub mod ipc_observability;
+pub(crate) mod kernel_command;
 pub mod kernel_manager;
 pub mod kernel_settings;
 pub mod local_proxy;

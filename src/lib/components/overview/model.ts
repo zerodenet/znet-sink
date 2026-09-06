@@ -23,6 +23,15 @@ export function ageLabel(at: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   return seconds < 5 ? '刚刚更新' : seconds < 60 ? `${seconds} 秒前` : `${Math.floor(seconds / 60)} 分钟前`;
 }
+export function formatUptime(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs)) return '—';
+  const total = Math.max(0, Math.floor(elapsedMs / 1000));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor(total / 3600) % 24;
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  return [days ? `${days} 天` : '', days || hours ? `${hours} 小时` : '', total >= 60 ? `${minutes} 分` : '', `${seconds} 秒`].filter(Boolean).join(' ');
+}
 export function policyProbeLabel(outbound: PolicyOutbound, now: number, ready: boolean): string {
   const fresh = ready && outbound.lastCheckedUnixMs != null && now - outbound.lastCheckedUnixMs <= 300_000;
   if (!fresh) return '待探测';
@@ -35,6 +44,7 @@ export function buildOverview(input: OverviewInput) {
   const running = c?.processState === 'running';
   const ready = !stale && c?.coreAvailable === true;
   const groupsReady = ready && !input.groupsError && (input.groupsAt === undefined || (input.groupsAt > 0 && now - input.groupsAt <= 15_000));
+  const egress = presentEgress(tun);
   const findings: Finding[] = [];
   const add = (title: string, detail: string, target: Destination, severity: Finding['severity'] = 'warning') => {
     if (!findings.some((f) => f.detail === detail)) findings.push({ title, detail, target, severity });
@@ -48,8 +58,7 @@ export function buildOverview(input: OverviewInput) {
   else if (tun?.enabled && !tun.healthy) add('TUN 已开启但不健康', tun.lastError || '检查路由、权限和实际出口。', 'tun', 'error');
   else if (ready && tun?.desiredEnabled && !tun.enabled) add('TUN 尚未按预期启动', tun.lastError || '期望开启，内核尚未确认接管。', 'tun', 'error');
   if (ready && tun?.enabled && !input.tunError) {
-    if (tun.ipv4Egress?.availability === 'unavailable') add('IPv4 出口不可用', tun.ipv4Egress.reason || '当前没有可用 IPv4 出口。', 'tun');
-    if (tun.dualStack && tun.ipv6Egress?.availability === 'unavailable') add('IPv6 出口不可用', tun.ipv6Egress.reason || '检查 IPv6 网络或地址族策略。', 'tun');
+    if (egress.issue && tun.healthy) add(egress.issue.title, egress.issue.detail, 'tun');
   }
   // Self-test is a separate observation: only fresh failures affect the header.
   if (input.selfTestAt && now - input.selfTestAt <= 60_000) {
@@ -77,7 +86,7 @@ export function buildOverview(input: OverviewInput) {
   const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : ready ? 'good' : 'neutral';
   const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
   const proxy = stale ? '状态待确认' : c?.systemProxyEnabled ? '已开启' : '未开启';
-  const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy ? '已开启 · 健康' : '已开启 · 异常' : '未开启';
+  const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy && !egress.issue ? '已开启 · 健康' : '已开启 · 异常' : '未开启';
   const endpoint = c?.localProxyHost && c.localProxyPort ? `${c.localProxyHost.includes(':') ? `[${c.localProxyHost}]` : c.localProxyHost}:${c.localProxyPort}` : '尚未取得';
   const family = (key: 'ipv4Egress' | 'ipv6Egress') => {
     if (!ready || input.tunError || !tun?.enabled) return '—';
@@ -85,7 +94,7 @@ export function buildOverview(input: OverviewInput) {
     return egress?.availability === 'available' ? egress.interface ?? '可用' : egress?.availability === 'unavailable' ? '不可用' : '尚未确认';
   };
   return {
-    ready, running, stale, title, tone, findings, groups, groupsReady,
+    ready, running, stale, title, tone, findings, groups, groupsReady, egress,
     tunSnapshot: tun,
     tunConfirmed: ready && !!tun && !input.tunError,
     availableModes: input.mode?.availableModes ?? [],
@@ -93,7 +102,7 @@ export function buildOverview(input: OverviewInput) {
     source: input.selfTest?.activeProxyConfigName ? `${input.selfTest.activeProxyConfigName}${!input.selfTestAt || now - input.selfTestAt > 60_000 ? '（上次检查）' : ''}` : '尚未确认活动配置',
     mode: input.mode?.currentMode ?? '',
     version: input.core?.version ?? '—', pid: c?.processPid == null ? '—' : String(c.processPid),
-    uptime: !stale && running && c?.startedAtUnixMs ? `${Math.floor(Math.max(0, now - c.startedAtUnixMs) / 60000)} 分钟` : '—',
+    uptime: !stale && running && c?.startedAtUnixMs != null ? formatUptime(now - c.startedAtUnixMs) : '—',
     proxy, endpoint, tunLabel,
     tunDetails: tun?.enabled && ready && !input.tunError ? [tun.name, `MTU ${tun.mtu ?? '—'}`, tun.autoRoute ? '自动路由' : '手动路由', tun.strictRoute ? '严格路由' : null].filter(Boolean).join(' · ') : '接管状态由内核确认',
     dns: !ready || input.tunError || !tun?.enabled ? 'TUN 未确认接管' : !tun.dnsHijack ? '不拦截 · 跟随系统 DNS' : tun.fakeIpEnabled ? 'Fake-IP 拦截' : 'Real DNS 拦截',
@@ -115,14 +124,35 @@ export function trafficUnavailableReason(model: OverviewModel, supported: boolea
 
 export function capturePresentation(model: OverviewModel, systemProxy: boolean, tunEnabled: boolean, tunDesired: boolean, busy: boolean) {
   const powerOn = systemProxy || tunEnabled || tunDesired;
-  const healthy = model.ready && model.tunConfirmed && systemProxy && tunEnabled && model.tunSnapshot?.healthy === true;
+  const tunFailed = model.tunSnapshot?.healthy === false || !!model.egress.issue;
+  const healthy = model.ready && model.tunConfirmed && systemProxy && tunEnabled && model.tunSnapshot?.healthy === true && !tunFailed;
   const label = busy ? '正在更新代理状态'
     : model.stale || (model.ready && !model.tunConfirmed) ? '运行状态待确认'
     : powerOn && !model.ready ? '内核未就绪'
-    : tunEnabled && model.tunSnapshot?.healthy !== true ? 'TUN 运行异常'
+    : tunEnabled && (model.tunSnapshot?.healthy !== true || tunFailed) ? 'TUN 运行异常'
     : healthy ? '系统代理与 TUN 已开启'
     : systemProxy ? '仅系统代理已开启'
     : tunEnabled ? '仅 TUN 已开启'
     : tunDesired ? 'TUN 等待恢复' : '代理已关闭';
-  return { powerOn, healthy, label, warning: !busy && (model.stale || powerOn && !healthy), failed: model.tunConfirmed && tunEnabled && model.tunSnapshot?.healthy === false };
+  return { powerOn, healthy, label, warning: !busy && (model.stale || powerOn && !healthy), failed: model.tunConfirmed && tunEnabled && tunFailed };
+}
+
+
+/** Address preference permits fallback; a missing optional family is information. */
+export function presentEgress(tun: GuiManagedTunStatus | null) {
+  const v4 = tun?.ipv4Egress?.availability;
+  const v6 = tun?.dualStack ? tun.ipv6Egress?.availability : 'unavailable';
+  const policy = tun?.addressFamilyPolicy;
+  const allowed4 = policy !== 'ipv6_only';
+  const allowed6 = policy !== 'ipv4_only';
+  const available = [allowed4 && v4 === 'available' ? 'IPv4' : '', allowed6 && v6 === 'available' ? 'IPv6' : ''].filter(Boolean);
+  const unavailable = tun?.enabled && (!allowed4 || v4 === 'unavailable') && (!allowed6 || v6 === 'unavailable');
+  const required = policy === 'ipv4_only' ? 'IPv4' : policy === 'ipv6_only' ? 'IPv6' : null;
+  const issue = unavailable ? {
+    title: required ? `${required} 出口不可用` : 'TUN 没有可用出口',
+    detail: required === 'IPv4' ? tun.ipv4Egress?.reason || '当前策略仅使用 IPv4，但没有可用 IPv4 出口。'
+      : required === 'IPv6' ? !tun.dualStack ? '当前策略仅使用 IPv6，但 TUN 未启用双栈。' : tun.ipv6Egress?.reason || '当前策略仅使用 IPv6，但没有可用 IPv6 出口。'
+      : '当前没有可用出口，请检查本地网络、路由与地址族策略。',
+  } : null;
+  return { issue, summary: available.length ? `${available.join(' / ')} 出口可用` : unavailable ? '没有可用出口' : '出口状态待确认' };
 }

@@ -257,7 +257,7 @@ fn spawn_core_child(
         None,
     );
 
-    let mut command = common::background_command(executable_path);
+    let mut command = super::kernel_command::command(executable_path);
     command.args(&snapshot.launch_args);
     if let Some(working_dir) = snapshot.working_dir.as_deref() {
         command.current_dir(working_dir);

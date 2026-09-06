@@ -1,1 +1,1 @@
-export const coreEvents = { statusTick: 0, stackMode: 'Zero Stack' };
+export const coreEvents = { logTick: 0, statusTick: 0, stackMode: 'Zero Stack' };

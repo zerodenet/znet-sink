@@ -46,7 +46,7 @@ pub(super) fn run(binary: &Path, args: &[&str], timeout: Duration) -> AppResult<
     let program = binary
         .to_str()
         .ok_or_else(|| AppError::invalid_argument("kernel path is not UTF-8"))?;
-    let mut child = common::background_command(program)
+    let mut child = crate::services::kernel_command::command(program)
         .args(args)
         .env("ZERO_DNS_STATE_DIR", dns_state.path())
         .env("NO_COLOR", "1")

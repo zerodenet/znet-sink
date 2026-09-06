@@ -73,3 +73,10 @@ function entry(id, message) {
 }
 
 console.log('log page tests passed');
+
+const current = [{...entry(1, 'same'), fields:{nested:{value:1}}}, entry(2,'second')];
+const identical = {items:structuredClone(current),hasMore:false,oldestAvailableId:1};
+assert.equal(mergeLogPage(current, identical),current,'unchanged refresh must preserve array and row identity');
+const changed = structuredClone(identical); changed.items[0].fields.nested.value = 2;
+const updated = mergeLogPage(current,changed);
+assert.notEqual(updated,current); assert.notEqual(updated[0],current[0]); assert.equal(updated[1],current[1]);

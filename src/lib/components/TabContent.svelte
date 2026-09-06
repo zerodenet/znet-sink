@@ -5,6 +5,7 @@
   import RuntimePerformance from '$lib/components/RuntimePerformance.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Spinner } from '$lib/components/ui/Spinner';
+  import UiErrorBoundary from './UiErrorBoundary.svelte';
 
   let { tab }: { tab: string } = $props();
 
@@ -77,6 +78,7 @@
     <Button variant="outline" size="sm" onclick={reloadApplication}>重新加载</Button>
   </div>
 {:else if ActiveComponent}
+  <UiErrorBoundary context={{ tab, uiMode: store.uiMode }}>
   {#if tab === 'overview' && store.uiMode === 'lite'}
     <div class="overview-runtime-shell">
       <RuntimePerformance mode="lite" />
@@ -87,6 +89,7 @@
   {:else}
     <ActiveComponent {...activeProps} />
   {/if}
+  </UiErrorBoundary>
 {:else}
   <div class="tab-load-state">
     <Spinner size="sm" color="default" />

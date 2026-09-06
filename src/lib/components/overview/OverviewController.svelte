@@ -14,6 +14,7 @@
   import ProfessionalOverview from './ProfessionalOverview.svelte';
   import TunControl from './TunControl.svelte';
   import type { OverviewModel, Destination } from './model';
+  import { networkLocation } from '$lib/services/network-location';
   import { OverviewOperations } from './operations.svelte';
   import type { OverviewActions } from './types';
 
@@ -32,7 +33,7 @@
   const busy = $derived(!!operations.feedback.pending || externalBusy);
   const selectedProfile = $derived(profiles.find((profile) => profile.active)?.id ?? '');
   const profileView = $derived({ selected: selectedProfile, loading: profilesLoading, error: profilesError, options: profiles.map((profile) => ({ value: profile.id, label: profile.name })) });
-  const network = $derived({ ip: guiState.networkProbe?.ip ?? '', description: [guiState.networkProbe?.country, guiState.networkProbe?.region, guiState.networkProbe?.city, guiState.networkProbe?.isp ?? guiState.networkProbe?.org].filter(Boolean).join(' · '), loading: guiState.networkProbeLoading, error: guiState.networkProbeError });
+  const network = $derived({ ...networkLocation(guiState.networkProbe), ip: guiState.networkProbe?.ip ?? '', description: [guiState.networkProbe?.country, guiState.networkProbe?.region, guiState.networkProbe?.city, guiState.networkProbe?.isp ?? guiState.networkProbe?.org].filter(Boolean).join(' · '), loading: guiState.networkProbeLoading, error: guiState.networkProbeError });
   const canDisableTun = $derived(guiState.isTunSwitchOn && guiState.canDisableTun);
   const stackReady = $derived(model.ready && stack?.enabled === true);
   const stackLabel = $derived(!model.ready || !stack ? '待确认' : !stack.supported ? '不支持' : stack.enabled ? coreEvents.stackMode ?? '已启动' : stack.reason || '未启动');
@@ -100,15 +101,15 @@
     },
     setMode: (mode) => {
       if (!model.ready || model.mode === mode) return;
-      run('mode', async () => { requireCommandSuccess(await guiState.setProxyMode(mode)); return '代理模式已生效'; });
+      run('mode', async () => { requireCommandSuccess(await guiState.setProxyMode(mode, { notify: false })); return '代理模式已生效'; });
     },
-    toggleTun: () => run('tun', async () => { requireCommandSuccess(await guiState.toggleTun()); return guiState.isTunSwitchOn ? 'TUN 已开启，请查看接管健康状态' : 'TUN 与自动恢复已关闭'; }),
+    toggleTun: () => run('tun', async () => { requireCommandSuccess(await guiState.toggleTun({ notify: false })); return guiState.isTunSwitchOn ? 'TUN 已开启，请查看接管健康状态' : 'TUN 与自动恢复已关闭'; }),
   };
-  function toggleSystemProxy() { run('system-proxy', async () => { requireCommandSuccess(await guiState.toggleSystemProxy()); return guiState.isSystemProxyEnabled ? '系统代理已开启' : '系统代理已关闭'; }); }
+  function toggleSystemProxy() { run('system-proxy', async () => { requireCommandSuccess(await guiState.toggleSystemProxy({ notify: false })); return guiState.isSystemProxyEnabled ? '系统代理已开启' : '系统代理已关闭'; }); }
 </script>
 
 <ProfessionalOverview bind:this={view} {model} profiles={profileView} {network} feedback={operations.feedback} {actions} {busy} refreshing={operations.feedback.pending === 'checks'} {canDisableTun}>
   {#snippet core()}<CoreStatusCard {busy} stateUnknown={model.stale} onToggleSystemProxy={toggleSystemProxy} />{/snippet}
-  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={guiState.isTunSwitchOn} canToggle={!busy && (guiState.isTunSwitchOn ? guiState.canDisableTun : model.tunConfirmed && guiState.canEnableTun)} switching={guiState.isSwitchingTun} {stackLabel} {stackReady} feedback={operations.feedback} />{/snippet}
+  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={guiState.isTunSwitchOn} canToggle={!busy && (guiState.isTunSwitchOn ? guiState.canDisableTun : model.tunConfirmed && guiState.canEnableTun)} switching={guiState.isSwitchingTun} {stackLabel} {stackReady} />{/snippet}
   {#snippet traffic()}<TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} unavailableReason={trafficUnavailable} />{/snippet}
 </ProfessionalOverview>

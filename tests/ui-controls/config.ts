@@ -35,6 +35,7 @@ const endpointConfig = () => ({ localProxy: {
 } });
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
+  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { toleranceMs: 50 } };
   if (panel === 'endpoint') return endpointConfig();
   if (panel === 'kernel') return { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } };
   return getTunConfig();
@@ -75,3 +76,28 @@ export const setActiveProxyConfig = async (id: string) => {
   return structuredClone(profiles.find(profile => profile.id === id)!);
 };
 export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
+
+export const guiLogPaths = async () => ({ logFile: '/fixture/logs/gui.log.jsonl', coreLogFile: '/fixture/logs/core.log.jsonl', logsDir: '/fixture/logs', dataDir: '/fixture' });
+export const appendLog = async (_input: unknown) => {};
+import type { LogEntry, LogQuery } from '../../src/lib/types/logs';
+let logFixture: LogEntry[] | undefined;
+const makeLogs = (): LogEntry[] => Array.from({length:5000},(_,i)=>({id:i+1,occurredAtUnixMs:1788697000000+i*10,source:i%3?'core':'app',level:i%10?'info':'error',message:`日志 ${i+1} session finished`,fields:{session_id:i+1,stage:'relay',context:{detail:'示例日志字段'.repeat(80)},bytes_up:500,bytes_down:12000}}));
+export const getLogs = async (query: LogQuery = {}) => {
+  window.dispatchEvent(new CustomEvent('fixture-log-query', {detail:query}));
+  logFixture ??= makeLogs();
+  const matching=logFixture.filter(e=>(!query.source||e.source===query.source)&&(!query.level||e.level===query.level));
+  const items=matching.filter(e=>e.id<(query.beforeId??Infinity)).slice(-(query.limit??400));
+  return structuredClone({items,hasMore:!!items.length&&items[0].id>matching[0].id,oldestAvailableId:matching[0]?.id});
+};
+export const clearLogs = async () => { logFixture = []; };
+window.addEventListener('fixture-append-log', () => {
+  logFixture ??= makeLogs();
+  const id = (logFixture.at(-1)?.id ?? 0) + 1;
+  logFixture.push({ id, occurredAtUnixMs: Date.now(), source: 'app', level: 'info', message: `新日志 ${id}`, fields: {stage:'new'} });
+});
+export const getEffectiveRuleSetOptions = async () => [];
+export const getConfigPolicyGroups = async () => [];
+export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
+export const getGuiZeroCapabilities = async () => ({ available: false, globalLimitations: [] });
+export const guiApplyDnsConfig = async () => { throw new Error('No kernel in UI fixture'); };
+export const guiValidateDnsConfig = async () => ({valid: true});

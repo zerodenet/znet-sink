@@ -14,7 +14,7 @@
   let updatedAt = $state(Date.now());
   let connection = $state<ConnectionStatus>({ state:'connected', processState:'running', coreAvailable:true, systemProxyEnabled:scenario !== 'partial', processPid:321, localProxyHost:'127.0.0.1', localProxyPort:7890 });
   let tun = $state<GuiManagedTunStatus>({ key:'tun', supported:true, enabled:scenario !== 'desired', desiredEnabled:true, healthy:scenario !== 'failure', state:'running', addresses:[], lastError:scenario === 'failure' ? '出口恢复失败' : undefined,
-    autoRoute:true,dualStack:true,strictRoute:true,dnsHijack:false,fakeIpEnabled:false,dnsHijackedQueries:0,networkGeneration:1,ipv6ToIpv4Fallbacks:0,managedByConfig:false,ipv4Egress:{availability:'available'},ipv6Egress:{availability:'available'},
+    autoRoute:true,dualStack:true,strictRoute:true,dnsHijack:false,fakeIpEnabled:false,dnsHijackedQueries:0,networkGeneration:1,ipv6ToIpv4Fallbacks:0,managedByConfig:false,ipv4Egress:{availability:'available'},addressFamilyPolicy:scenario === 'ipv6-required' ? 'ipv6_only' : 'prefer_ipv4',ipv6Egress:{availability:scenario === 'ipv4-only-network' || scenario === 'ipv6-required' ? 'unavailable' : 'available'},
   });
   const selfTest = { ready:true, activeProxyConfigId:'main', activeProxyConfigName:'日常网络配置', checks:[], blockingIssues:[], warningCount:0, suggestedFlow:'ready' };
   const groups = [{ name:'proxy', kind:'selector', selected:'测试节点', outbounds:[{ tag:'测试节点', alive:true, delayMs:25, lastCheckedUnixMs:Date.now() }] }];
