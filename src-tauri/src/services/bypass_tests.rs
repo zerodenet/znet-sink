@@ -90,9 +90,8 @@ fn inactive_tun_family_is_omitted_without_losing_the_authoritative_rules() {
 }
 
 #[test]
-fn version_one_portable_settings_migrate_both_legacy_lists() {
+fn version_one_portable_tun_exclusions_merge_with_current_proxy_bypass() {
     let mut legacy = AppConfig::default();
-    legacy.local_proxy.bypass = vec!["*.example.org".into()];
     legacy.tun.exclude_cidrs = vec!["16.0.0.0/8".into()];
     let mut settings =
         serde_json::to_value(ClientKernelSettings::from_app_config(&legacy)).unwrap();
@@ -102,11 +101,12 @@ fn version_one_portable_settings_migrate_both_legacy_lists() {
         "exportedAtUnixMs": 1,
         "settings": settings
     });
-    let imported = crate::services::kernel_settings::import_from_str(
-        &AppConfig::default(),
-        &input.to_string(),
-    )
-    .unwrap();
+    // Version one portable settings did not include localProxy. Migration
+    // combines the imported TUN exclusions with this machine's proxy list.
+    let mut current = AppConfig::default();
+    current.local_proxy.bypass = vec!["*.example.org".into()];
+    let imported =
+        crate::services::kernel_settings::import_from_str(&current, &input.to_string()).unwrap();
     let policy = imported.bypass.unwrap();
     assert!(!policy.local_networks);
     assert_eq!(policy.rules, ["*.example.org", "16.0.0.0/8"]);
