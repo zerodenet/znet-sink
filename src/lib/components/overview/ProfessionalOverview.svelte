@@ -47,7 +47,7 @@
 
       <button data-slot="surface-button" class="policy-shortcut" onclick={() => policies = true} aria-label="查看与切换策略组">
         <span class="policy-heading"><span>{visiblePolicy?.name ?? '策略组'}{model.groups.length > 1 ? ` · 共 ${model.groups.length} 组` : ''}</span><span>{visiblePolicy?.switchable ? '切换' : '查看'}<ChevronRight size={12}/></span></span>
-        <span class="policy-selection"><strong title={visiblePolicy?.selected}>{visiblePolicy?.selected ?? (model.ready ? '尚未配置策略组' : '等待内核确认')}</strong><span class:danger={visiblePolicy?.failed} title={visiblePolicy?.health}>{feedback.pending.startsWith('policy:') ? '切换中…' : model.mode === 'direct' && model.ready ? '直连模式' : visiblePolicy?.failed ? '探测失败' : visiblePolicy && visiblePolicy.delay !== '—' ? visiblePolicy.delay : '待探测'}</span></span>
+        <span class="policy-selection"><strong title={visiblePolicy?.selectionLabel}>{visiblePolicy?.selectionLabel ?? (model.ready ? '尚未配置策略组' : '等待内核确认')}</strong><span class:danger={visiblePolicy?.failed} title={visiblePolicy?.health}>{feedback.pending.startsWith('policy:') ? '切换中…' : model.mode === 'direct' && model.ready ? '直连模式' : visiblePolicy?.failed ? '探测失败' : visiblePolicy && visiblePolicy.delay !== '—' ? visiblePolicy.delay : '待探测'}</span></span>
       </button>
     </section>
     {@render tun()}

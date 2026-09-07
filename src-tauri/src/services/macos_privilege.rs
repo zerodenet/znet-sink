@@ -316,6 +316,13 @@ fn validate_networksetup_command(arguments: &[String]) -> io::Result<()> {
     };
     let valid = match operation {
         "-setwebproxy" | "-setsecurewebproxy" | "-setsocksfirewallproxy" => arguments.len() == 4,
+        "-setproxybypassdomains" => {
+            arguments.len() >= 3
+                && arguments
+                    .iter()
+                    .skip(1)
+                    .all(|value| !value.is_empty() && !value.contains(['\0', '\n', '\r']))
+        }
         "-setwebproxystate" | "-setsecurewebproxystate" | "-setsocksfirewallproxystate" => {
             arguments.len() == 3
         }
@@ -434,6 +441,29 @@ mod tests {
             "off".into(),
         ])
         .is_ok());
+        assert!(validate_networksetup_command(&[
+            "-setproxybypassdomains".into(),
+            "USB LAN".into(),
+            "192.168.*".into(),
+            "*.example.org".into(),
+        ])
+        .is_ok());
+        assert!(validate_networksetup_command(&[
+            "-setproxybypassdomains".into(),
+            "Wi-Fi".into(),
+            "Empty".into(),
+        ])
+        .is_ok());
+        assert!(
+            validate_networksetup_command(&["-setproxybypassdomains".into(), "Wi-Fi".into(),])
+                .is_err()
+        );
+        assert!(validate_networksetup_command(&[
+            "-setproxybypassdomains".into(),
+            "Wi-Fi".into(),
+            "localhost\ninvalid".into(),
+        ])
+        .is_err());
         assert!(validate_networksetup_command(&["-listallnetworkservices".into()]).is_err());
         assert!(validate_networksetup_command(&["-setwebproxy".into(), "Wi-Fi".into(),]).is_err());
     }

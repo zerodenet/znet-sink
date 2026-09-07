@@ -12,6 +12,7 @@ export interface AppConfig {
   dns: AppDnsConfig;
   routing: AppRoutingConfig;
   urlTest: AppUrlTestConfig;
+  bypass?: AppBypassConfig | null;
 }
 
 export interface AppCoreConfig {
@@ -95,6 +96,7 @@ export interface AppConfigPatch {
   dns?: AppDnsConfigPatch;
   routing?: AppRoutingConfigPatch;
   urlTest?: AppUrlTestConfigPatch;
+  bypass?: AppBypassConfig;
 }
 
 export interface AppCoreConfigPatch {
@@ -157,4 +159,9 @@ export interface AppRoutingConfigPatch {
 
 export interface AppUrlTestConfigPatch {
   toleranceMs?: number;
+}
+
+export interface AppBypassConfig {
+  localNetworks: boolean;
+  rules: string[];
 }

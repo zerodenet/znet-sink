@@ -69,6 +69,18 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
     // Validate a detached snapshot so callers can apply runtime changes before
     // publishing it. A rejected field never mutates the current configuration.
     let mut config = current.clone();
+    let legacy_bypass_patch = patch.bypass.is_none()
+        && (patch
+            .local_proxy
+            .as_ref()
+            .is_some_and(|p| p.bypass.is_some())
+            || patch
+                .tun
+                .as_ref()
+                .is_some_and(|p| p.exclude_cidrs.is_some()));
+    if let Some(bypass) = patch.bypass {
+        config.bypass = Some(bypass);
+    }
 
     if let Some(core) = patch.core {
         if let Some(kernel) = core.kernel {
@@ -272,6 +284,10 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
         }
     }
 
+    if legacy_bypass_patch {
+        config.bypass = None;
+    }
+    super::bypass::normalize(&mut config)?;
     normalize_tun_mask(&mut config.tun);
     Ok(config)
 }

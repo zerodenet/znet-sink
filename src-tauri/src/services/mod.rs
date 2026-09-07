@@ -93,3 +93,5 @@ pub(crate) fn data_dir() -> AppResult<PathBuf> {
         "cannot determine data directory: set ZNET_SINK_DATA_DIR or ensure APPDATA/HOME is available",
     ))
 }
+
+pub mod bypass;

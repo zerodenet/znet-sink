@@ -3,6 +3,37 @@ import { test } from 'node:test';
 import { buildOverview, capturePresentation, trafficUnavailableReason, formatUptime } from '../src/lib/components/overview/model.ts';
 const now = 1000000;
 const baseline = () => ({ now, connectionAt: now, connectionError: null, connection: { processState: 'running', coreAvailable: true, systemProxyEnabled: false, processPid: 42 }, tun: null, tunError: null, core: null, selfTest: null, selfTestAt: 0, mode: null, groups: [] });
+test('nested selections display the confirmed path and the selected leaf probe', () => {
+  const groups = [
+    {name:'Proxy',kind:'selector',selected:'Auto',outbounds:[{tag:'Auto'}]},
+    {name:'Auto',kind:'urltest',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:441,lastCheckedUnixMs:now},{tag:'Japan',alive:true,delayMs:1,lastCheckedUnixMs:now}]},
+  ];
+  let model = buildOverview({...baseline(),groups});
+  assert.equal(model.groups[0].selectedTag,'Auto');
+  assert.equal(model.groups[0].selectionLabel,'Auto → US');
+  assert.equal(model.groups[0].delay,'441 ms');
+  assert.equal(model.groups[0].options[0].label,'Auto → US · 441 ms');
+  groups[1].outbounds[0].alive = false;
+  model = buildOverview({...baseline(),groups});
+  assert.equal(model.groups[0].failed,true);
+  assert.equal(model.groups[0].delay,'—');
+  groups[1].outbounds[0].lastCheckedUnixMs = now - 400000;
+  model = buildOverview({...baseline(),groups});
+  assert.equal(model.groups[0].failed,false);
+  assert.equal(model.groups[0].delay,'—');
+});
+test('missing members, cycles and multi-exit groups never invent a leaf probe', () => {
+  for (const child of [
+    {name:'Auto',kind:'urltest',selected:'missing',outbounds:[]},
+    {name:'Auto',kind:'selector',selected:'Proxy',outbounds:[{tag:'Proxy'}]},
+    {name:'Auto',kind:'loadbalance',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:1,lastCheckedUnixMs:now}]},
+  ]) {
+    const groups=[{name:'Proxy',kind:'selector',selected:'Auto',outbounds:[{tag:'Auto'}]},child];
+    const model=buildOverview({...baseline(),groups});
+    assert.equal(model.groups[0].delay,'—');
+    assert.equal(model.groups[0].failed,false);
+  }
+});
 test('process existence alone never reports control-plane readiness', () => {
   const input = baseline(); input.connection.coreAvailable = false;
   const model = buildOverview(input);

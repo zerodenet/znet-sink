@@ -64,6 +64,9 @@ pub async fn app_config_import_kernel_settings(
 
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    if kernel_running && old_config.bypass != new_config.bypass {
+        crate::services::bypass::require_core_support(&new_config).await?;
+    }
     let legacy_tun_runtime_enabled = if kernel_running
         && (old_config.tun.enabled.is_none() || new_config.tun.enabled.is_none())
     {
@@ -151,6 +154,9 @@ pub async fn app_config_update(
     let was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let new_config = app_config::prepare_update(&old_config, patch)?;
+    if was_running && old_config.bypass != new_config.bypass {
+        crate::services::bypass::require_core_support(&new_config).await?;
+    }
     let effects = effects::between(&old_config, &new_config);
     let legacy_tun = if was_running && effects.restart && old_config.tun.enabled.is_none() {
         Some(crate::commands::core_process::app_tun_runtime_enabled(state.inner()).await?)

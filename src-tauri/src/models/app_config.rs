@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub routing: AppRoutingConfig,
     #[serde(default)]
     pub url_test: AppUrlTestConfig,
+    #[serde(default)]
+    pub bypass: Option<AppBypassConfig>,
 }
 
 impl Default for AppConfig {
@@ -37,6 +39,7 @@ impl Default for AppConfig {
             dns: AppDnsConfig::recommended_default(),
             routing: AppRoutingConfig::default(),
             url_test: AppUrlTestConfig::default(),
+            bypass: None,
         }
     }
 }
@@ -257,7 +260,7 @@ impl Default for AppTunConfig {
     }
 }
 
-pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v1";
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v2";
 
 /// Portable client-owned settings projected onto every active proxy profile.
 /// Machine-bound executable paths, runtime sockets, UI state, logs, and
@@ -278,6 +281,8 @@ pub struct ClientKernelSettings {
     pub dns: AppDnsConfig,
     pub routing: AppRoutingConfig,
     pub url_test: AppUrlTestConfig,
+    #[serde(default)]
+    pub bypass: Option<AppBypassConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -302,6 +307,7 @@ impl ClientKernelSettings {
             dns: config.dns.clone(),
             routing: config.routing.clone(),
             url_test: config.url_test.clone(),
+            bypass: config.bypass.clone(),
         }
     }
 
@@ -314,6 +320,7 @@ impl ClientKernelSettings {
         config.dns = self.dns;
         config.routing = self.routing;
         config.url_test = self.url_test;
+        config.bypass = self.bypass;
     }
 }
 
@@ -353,6 +360,7 @@ pub struct AppConfigPatch {
     pub dns: Option<AppDnsConfigPatch>,
     pub routing: Option<AppRoutingConfigPatch>,
     pub url_test: Option<AppUrlTestConfigPatch>,
+    pub bypass: Option<AppBypassConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -685,4 +693,14 @@ mod tests {
         .unwrap();
         assert_eq!(custom.tun.tag, "custom-tun-in");
     }
+}
+
+/// One user-owned policy; legacy proxy/TUN fields are generated projections.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppBypassConfig {
+    #[serde(default = "default_true")]
+    pub local_networks: bool,
+    #[serde(default)]
+    pub rules: Vec<String>,
 }

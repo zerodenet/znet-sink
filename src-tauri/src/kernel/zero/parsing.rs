@@ -185,21 +185,46 @@ fn parse_policy_group(value: Value) -> Option<GuiPolicyGroup> {
 }
 
 fn parse_policy_members(value: &Value, selected: Option<&str>) -> Vec<GuiPolicyMember> {
-    values_from_container(
-        value,
-        &[
-            "url_test_members",
-            "members",
-            "targets",
-            "children",
-            "proxies",
-            "outbounds",
-            "items",
-        ],
-    )
-    .into_iter()
-    .filter_map(|member| parse_policy_member(member, selected))
-    .collect()
+    // Membership and probe observations are separate parts of the Zero API.
+    // An empty url_test_members must never hide a selector's outbounds.
+    let member_keys = [
+        "outbounds",
+        "members",
+        "targets",
+        "children",
+        "proxies",
+        "items",
+    ];
+    let members = member_keys
+        .iter()
+        .find_map(|key| value.get(*key).filter(|v| v.is_array() || v.is_object()));
+    let probes = value
+        .get("url_test_members")
+        .filter(|v| v.is_array() || v.is_object());
+    let Some(source) = members.or(probes) else {
+        return Vec::new();
+    };
+    let observations: Vec<_> = probes
+        .map(|v| values_from_container(v, &[]))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| parse_policy_member(v, selected))
+        .collect();
+    values_from_container(source, &[])
+        .into_iter()
+        .filter_map(|v| parse_policy_member(v, selected))
+        .map(|mut member| {
+            if let Some(probe) = observations.iter().find(|probe| probe.tag == member.tag) {
+                member.kind = probe.kind.clone().or(member.kind);
+                member.alive = probe.alive.or(member.alive);
+                member.delay_ms = probe.delay_ms.or(member.delay_ms);
+                member.last_checked_unix_ms =
+                    probe.last_checked_unix_ms.or(member.last_checked_unix_ms);
+                member.last_error = probe.last_error.clone().or(member.last_error);
+            }
+            member
+        })
+        .collect()
 }
 
 fn parse_policy_member(value: Value, selected: Option<&str>) -> Option<GuiPolicyMember> {
@@ -964,3 +989,7 @@ fn protocol_capability_state(
         notes: Vec::new(),
     }
 }
+
+#[cfg(test)]
+#[path = "parsing_policy_tests.rs"]
+mod policy_tests;

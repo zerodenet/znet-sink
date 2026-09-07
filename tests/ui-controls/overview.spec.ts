@@ -1,5 +1,15 @@
 import { test, expect } from '@playwright/test';
 
+test('nested policy selection agrees between overview, selector and confirmed details', async ({ page }) => {
+  await page.goto('/?panel=overview&mode=nested-policy');
+  const shortcut = page.getByRole('button', { name: '查看与切换策略组' });
+  await expect(shortcut).toContainText('自动选择 → 新加坡 01');
+  await expect(shortcut).toContainText('38 ms');
+  await shortcut.click();
+  await expect(page.getByRole('button', { name: '节点选择 当前出口' })).toContainText('自动选择 → 新加坡 01 · 38 ms');
+  await expect(page.getByRole('dialog')).toContainText('已确认：自动选择 → 新加坡 01 · 最近探测成功');
+});
+
 test('professional overview keeps capture controls and one traffic chart with useful details', async ({ page }) => {
   await page.goto('/?panel=overview');
   await expect(page.getByRole('button', { name: '当前配置', exact: true })).toContainText('日常网络配置');

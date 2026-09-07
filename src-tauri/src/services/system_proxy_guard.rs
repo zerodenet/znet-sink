@@ -44,6 +44,8 @@ struct ProxyMarker {
     previous: system_proxy::ProxyBackup,
     #[serde(default)]
     bypass: Vec<String>,
+    #[serde(default)]
+    bypass_version: u8,
 }
 
 fn marker_path() -> AppResult<PathBuf> {
@@ -158,10 +160,17 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
     // 127.0.0.1:<port> instead of the user's real pre-ZNet settings.
     if path.exists() {
         match read_marker(&path) {
-            Ok(marker) => {
+            Ok(mut marker) => {
                 let status = system_proxy::status()?;
                 if status.enabled && status.host == marker.host && status.port == marker.port {
-                    if marker.host == host && marker.port == port && marker.bypass == bypass {
+                    let extended = system_proxy::complete_bypass_backup(&mut marker.previous)?;
+                    if marker.host == host
+                        && marker.port == port
+                        && marker.bypass == bypass
+                        && marker.bypass_version == 1
+                        && !extended
+                        && system_proxy::bypass_matches(bypass)?
+                    {
                         return Ok(());
                     }
 
@@ -390,6 +399,7 @@ fn write_marker(
         enabled_at_unix_ms: crate::services::common::now_unix_ms(),
         previous,
         bypass: bypass.to_vec(),
+        bypass_version: 1,
     };
     let json = serde_json::to_string_pretty(&marker).map_err(|e| {
         crate::errors::AppError::internal(format!("failed to serialize proxy marker: {e}"))

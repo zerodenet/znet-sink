@@ -25,7 +25,6 @@
   let secondaryAddr = $state('');
   let mtu = $state('1500');
   let includeCidrs = $state('');
-  let excludeCidrs = $state('');
   let dualStack = $state(true);
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
@@ -53,7 +52,6 @@
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
       includeCidrs = (config.tun.includeCidrs ?? []).join('\n');
-      excludeCidrs = (config.tun.excludeCidrs ?? []).join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       dnsReadiness = await inspectTunDnsHijackReadiness(config.dns);
@@ -112,7 +110,6 @@
         secondaryAddr: normalizedSecondary || null,
         mtu: normalizedMtu,
         includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
-        excludeCidrs: excludeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
         dualStack,
         dnsHijack,
       });
@@ -122,7 +119,6 @@
       secondaryAddr = config.tun.secondaryAddr ?? '';
       mtu = String(config.tun.mtu);
       includeCidrs = config.tun.includeCidrs.join('\n');
-      excludeCidrs = config.tun.excludeCidrs.join('\n');
       dualStack = config.tun.dualStack;
       dnsHijack = config.tun.dnsHijack;
       saved = true;
@@ -283,7 +279,7 @@
       />
     </div>
 
-    <div class="config-row config-row-top">
+    <div class="config-row config-row-editor">
       <div class="config-row-label">
         <span class="label-text">TUN 接管网段</span>
         <span class="label-desc">每行一个 CIDR。留空表示接管全部地址；填写后只为这些目标安装 TUN 路由。</span>
@@ -300,21 +296,12 @@
       ></Textarea>
     </div>
 
-    <div class="config-row config-row-top">
+    <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">TUN 排除网段</span>
-        <span class="label-desc">每行一个 CIDR。匹配目标保留系统原有路由，不进入 TUN；例如 WireGuard 内网可填写 16.0.0.0/8。</span>
+        <span class="label-text">绕过规则</span>
+        <span class="label-desc">与系统代理共用同一份规则，在网络设置中统一管理。</span>
       </div>
-      <Textarea
-        class="font-mono"
-        bind:value={excludeCidrs}
-        oninput={markDirty}
-        disabled={locked}
-        rows={4}
-        placeholder="例如 16.0.0.0/8"
-        spellcheck="false"
-        aria-label="TUN 排除网段"
-      ></Textarea>
+      <Button variant="outline" size="sm" onclick={() => store.openSettings('network')}>管理绕过规则</Button>
     </div>
 
     <div class="config-row">
@@ -403,8 +390,13 @@
     border-bottom: none;
   }
 
-  .config-row-top {
-    align-items: flex-start;
+  .config-row-editor {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .config-row-editor .label-desc {
+    max-width: none;
   }
 
   .config-row-label {

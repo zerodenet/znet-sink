@@ -57,6 +57,7 @@ pub(crate) fn validate_app_config_candidate(
         config,
         Some(&app_config.dns),
         Some(app_config.url_test.tolerance_ms),
+        Some(app_config),
     )?;
     Ok(())
 }
@@ -70,7 +71,7 @@ fn compose_effective_with(
     tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
     let config = compose_with(base, enabled, profiles)?.config;
-    finalize_effective_config(state, base, config, dns_override, tolerance_override)
+    finalize_effective_config(state, base, config, dns_override, tolerance_override, None)
 }
 
 fn finalize_effective_config(
@@ -79,10 +80,13 @@ fn finalize_effective_config(
     mut config: Value,
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
+    app_override: Option<&AppConfig>,
 ) -> AppResult<Value> {
-    let local_proxy = common::lock(state.app_config(), "app_config")?
-        .local_proxy
-        .clone();
+    let app = match app_override {
+        Some(app) => app.clone(),
+        None => common::lock(state.app_config(), "app_config")?.clone(),
+    };
+    let local_proxy = app.local_proxy.clone();
     crate::services::proxy_config::project_managed_endpoint(&mut config, &local_proxy)?;
     apply_global_dns(state, &mut config, dns_override)?;
     let tolerance_ms = match tolerance_override {
@@ -97,6 +101,7 @@ fn finalize_effective_config(
         url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
     }
     policy_selection::apply_saved_selections(state, base, &mut config)?;
+    crate::services::bypass::apply(&mut config, &app)?;
     Ok(config)
 }
 

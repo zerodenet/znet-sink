@@ -21,6 +21,7 @@
     selfTestAt: now, selfTest: { ready: true, blockingIssues: [], warningCount: 0, activeProxyConfigId: 'main', activeProxyConfigName: '日常网络配置', suggestedFlow: 'ready', checks: [{ key: 'control', status: 'pass', message: '控制接口已响应' }] },
     groups: [{ name: '自动选择', kind: 'urltest', selected: '新加坡 01', outbounds: [{ tag: '新加坡 01', type: 'vless', alive: true, delayMs: 38, lastCheckedUnixMs: now }] }, { name: '工作网络', kind: 'selector', selected: '日本 02', outbounds: [{ tag: '日本 02', type: 'trojan', alive: scenario !== 'failure', delayMs: 72, lastCheckedUnixMs: now }, { tag: '备用节点', type: 'trojan', alive: true, delayMs: 52, lastCheckedUnixMs: now }] }],
   });
+  if (scenario === 'nested-policy') input.groups.unshift({ name: '节点选择', kind: 'selector', selected: '自动选择', outbounds: [{tag:'自动选择',type:'urltest'}] });
   if (scenario === 'empty') { input.groups = []; input.selfTest = null; }
   if (scenario === 'ipv4-only-network' || scenario === 'ipv6-required') { input.tun!.ipv6Egress = { availability:'unavailable' }; input.tun!.addressFamilyPolicy = scenario === 'ipv6-required' ? 'ipv6_only' : 'prefer_ipv4'; }
   const model = $derived(buildOverview(input));

@@ -81,7 +81,7 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
             AppError::invalid_argument("client kernel settings requires schemaVersion")
         })?;
     let mut settings = match schema {
-        CLIENT_KERNEL_SETTINGS_SCHEMA => {
+        CLIENT_KERNEL_SETTINGS_SCHEMA | "znet.client-kernel-settings.v1" => {
             serde_json::from_value::<ClientKernelSettingsBundle>(value)
                 .map_err(|error| {
                     AppError::invalid_argument(format!(
@@ -91,9 +91,10 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
                 .settings
         }
         "gui.app.v1" => {
-            let legacy = serde_json::from_value::<AppConfig>(value).map_err(|error| {
+            let mut legacy = serde_json::from_value::<AppConfig>(value).map_err(|error| {
                 AppError::invalid_argument(format!("invalid legacy app configuration: {error}"))
             })?;
+            super::bypass::normalize(&mut legacy)?;
             ClientKernelSettings::from_app_config(&legacy)
         }
         unsupported => {
@@ -105,6 +106,7 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
     normalize_and_validate(&mut settings)?;
     let mut next = current.clone();
     settings.apply_to(&mut next);
+    super::bypass::normalize(&mut next)?;
     Ok(next)
 }
 
@@ -346,7 +348,7 @@ mod tests {
         assert!(import_from_str(&current, "{not-json").is_err());
         assert!(import_from_str(
             &current,
-            r#"{"schemaVersion":"znet.client-kernel-settings.v2","settings":{}}"#,
+            r#"{"schemaVersion":"znet.client-kernel-settings.v999","settings":{}}"#,
         )
         .is_err());
     }
@@ -389,7 +391,16 @@ mod tests {
         assert_eq!(imported.tun.tag, "tun-in");
         assert_eq!(imported.tun.secondary_addr.as_deref(), Some("fd66::1/64"));
         assert_eq!(imported.tun.include_cidrs, vec!["0.0.0.0/0"]);
-        assert_eq!(imported.tun.exclude_cidrs, vec!["16.0.0.0/8"]);
+        assert_eq!(imported.bypass.as_ref().unwrap().rules, vec!["16.0.0.0/8"]);
+        assert_eq!(
+            imported
+                .tun
+                .exclude_cidrs
+                .iter()
+                .filter(|cidr| *cidr == "16.0.0.0/8")
+                .count(),
+            1
+        );
     }
 
     #[test]

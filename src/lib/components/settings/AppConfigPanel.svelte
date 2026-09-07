@@ -28,13 +28,9 @@
   let copiedField = $state<string | null>(null);
   let pathActionError = $state<string | null>(null);
   let proxyBypassDraft = $state('');
+  let bypassLocalNetworks = $state(true);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
   let configRequestGeneration = 0;
-
-  const DEFAULT_PROXY_BYPASS = [
-    '<local>', 'localhost', '127.*', '[::1]', '10.*', '192.168.*',
-    ...Array.from({ length: 16 }, (_, index) => `172.${index + 16}.*`),
-  ];
 
   const menuTabs = NAV_TABS.filter((tab) => tab.id !== 'settings');
 
@@ -57,7 +53,8 @@
       const next = await getAppConfig();
       if (generation !== configRequestGeneration) return;
       config = next;
-      proxyBypassDraft = (next.localProxy.bypass ?? DEFAULT_PROXY_BYPASS).join('\n');
+      proxyBypassDraft = (next.bypass?.rules ?? []).join('\n');
+      bypassLocalNetworks = next.bypass?.localNetworks ?? true;
     } catch (error) {
       if (generation === configRequestGeneration) {
         configError = getAppErrorMessage(error, '加载应用配置失败');
@@ -101,10 +98,11 @@
     updateError = null;
     try {
       const updated = await updateAppConfig({
-        localProxy: { bypass: parseProxyBypass(proxyBypassDraft) },
+        bypass: { localNetworks: bypassLocalNetworks, rules: parseProxyBypass(proxyBypassDraft) },
       });
       config = updated;
-      proxyBypassDraft = updated.localProxy.bypass.join('\n');
+      proxyBypassDraft = (updated.bypass?.rules ?? []).join('\n');
+      bypassLocalNetworks = updated.bypass?.localNetworks ?? true;
     } catch (error) {
       updateError = getAppErrorMessage(error, '更新本地地址绕过配置失败');
     } finally {
@@ -437,8 +435,12 @@
 
       <div class="proxy-bypass-editor">
         <div class="config-row-label">
-          <span class="label-text">系统代理绕过</span>
-          <span class="label-desc">每行一项，仅作用于系统代理，不等于 TUN 排除。支持 localhost、域名和 16.* 这类主机模式；整字节 IPv4 CIDR（如 16.0.0.0/8）保存时会自动转换。</span>
+          <span class="label-text">绕过规则</span>
+          <span class="label-desc">系统代理与 TUN 共用，规则和全局模式均生效。匹配目标通过本机网络直接访问。每行填写一个 IP、CIDR 或域名（例如 *.example.com）；留空表示没有自定义规则。</span>
+        </div>
+        <div class="config-row">
+          <div class="config-row-label"><span class="label-text">自动绕过局域网</span><span class="label-desc">包含本机、常用私有网段和链路本地地址，保留系统原有网络与 VPN 路由。</span></div>
+          <Switch bind:checked={bypassLocalNetworks} disabled={loading} aria-label="自动绕过局域网" />
         </div>
         <Textarea
           class="font-mono"
@@ -451,10 +453,10 @@
         <div class="bypass-actions">
           <Button variant="outline" size="sm"
 
-            onclick={() => (proxyBypassDraft = DEFAULT_PROXY_BYPASS.join('\n'))}
+            onclick={() => { proxyBypassDraft = ''; bypassLocalNetworks = true; }}
             disabled={loading}
           >恢复默认</Button>
-          <Button variant="default" size="sm"  onclick={saveProxyBypass} disabled={loading}>保存</Button>
+          <Button variant="default" size="sm"  onclick={saveProxyBypass} disabled={loading}>保存并应用</Button>
         </div>
       </div>
     {/if}

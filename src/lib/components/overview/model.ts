@@ -38,6 +38,27 @@ export function policyProbeLabel(outbound: PolicyOutbound, now: number, ready: b
   if (outbound.alive === false) return '探测失败';
   return outbound.alive === true && outbound.delayMs != null ? `${outbound.delayMs} ms` : '结果未知';
 }
+
+// Follow only confirmed single selections. A relay/load-balancer cannot be
+// represented by one member's latency, and a cycle must not invent an exit.
+export function selectedPolicyPath(group: PolicyGroup, groups: PolicyGroup[]): { path: string[]; probe?: PolicyOutbound } {
+  const path: string[] = [];
+  const seen = new Set<string>();
+  let current = group;
+  while (!seen.has(current.name)) {
+    seen.add(current.name);
+    if (!current.selected) return { path };
+    path.push(current.selected);
+    const member = current.outbounds.find((outbound) => outbound.tag === current.selected);
+    if (!member) return { path };
+    const child = groups.find((candidate) => candidate.name === member.tag);
+    if (!child) return { path, probe: member };
+    if (!['selector', 'urltest', 'url_test'].includes(child.kind?.toLowerCase() ?? '')) return { path };
+    current = child;
+  }
+  return { path };
+}
+
 export function buildOverview(input: OverviewInput) {
   const { connection: c, tun, now } = input;
   const stale = !input.connectionAt || now - input.connectionAt > 15_000 || !!input.connectionError;
@@ -69,16 +90,21 @@ export function buildOverview(input: OverviewInput) {
   }
   if (ready && !groupsReady && (input.groupsError || input.groups.length)) add('策略状态待确认', input.groupsError || '策略选择状态已过期，请重新检查。', 'nodes');
   const groups = input.groups.map((g) => {
-    const selected = g.outbounds.find((o) => o.tag === g.selected);
+    const resolved = selectedPolicyPath(g, input.groups);
+    const selected = resolved.probe;
     const fresh = groupsReady && selected?.lastCheckedUnixMs != null && now - selected.lastCheckedUnixMs <= 5 * 60_000;
     return {
       name: g.name, kind: g.kind ?? '策略组', selected: groupsReady ? g.selected ?? '等待选择' : '待内核确认',
       health: !fresh ? '未取得近期探测' : selected?.alive === false ? '最近探测失败' : selected?.alive === true ? '最近探测成功' : '探测结果未知',
       delay: fresh && selected?.alive === true && selected.delayMs != null ? `${selected.delayMs} ms` : '—',
       failed: fresh && selected?.alive === false,
+      selectionLabel: groupsReady ? resolved.path.join(' → ') || '等待选择' : '待内核确认',
       selectedTag: groupsReady ? g.selected ?? '' : '',
       switchable: g.kind?.toLowerCase() === 'selector',
-      options: g.outbounds.map((outbound) => ({ value: outbound.tag, label: `${outbound.tag} · ${policyProbeLabel(outbound, now, groupsReady)}` })),
+      options: g.outbounds.map((outbound) => {
+        const resolved = selectedPolicyPath({ ...g, selected: outbound.tag }, input.groups);
+        return { value: outbound.tag, label: `${resolved.path.join(' → ') || outbound.tag} · ${resolved.probe ? policyProbeLabel(resolved.probe, now, groupsReady) : '待探测'}` };
+      }),
     };
   }).sort((a, b) => Number(b.failed) - Number(a.failed));
   const failed = groups.filter((g) => g.failed);

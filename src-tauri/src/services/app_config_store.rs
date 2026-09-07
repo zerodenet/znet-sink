@@ -21,11 +21,13 @@ fn backup_path(path: &Path) -> PathBuf {
 
 fn read(path: &Path) -> AppResult<AppConfig> {
     let content = fs::read(path).map_err(|error| io_error(path, "read", error))?;
-    serde_json::from_slice(&content).map_err(|error| AppError {
+    let mut config: AppConfig = serde_json::from_slice(&content).map_err(|error| AppError {
         code: "invalid_argument",
         message: format!("failed to parse app config: {error}"),
         details: Some(serde_json::json!({ "path": path })),
-    })
+    })?;
+    super::bypass::normalize(&mut config)?;
+    Ok(config)
 }
 
 pub fn load_or_default(path: &Path) -> AppResult<AppConfig> {
@@ -34,7 +36,9 @@ pub fn load_or_default(path: &Path) -> AppResult<AppConfig> {
         .map_err(|_| AppError::internal("app config store lock poisoned"))?;
     let backup = backup_path(path);
     if !path.exists() && !backup.exists() {
-        return Ok(AppConfig::default());
+        let mut config = AppConfig::default();
+        super::bypass::normalize(&mut config)?;
+        return Ok(config);
     }
     match read(path) {
         Ok(config) => Ok(config),

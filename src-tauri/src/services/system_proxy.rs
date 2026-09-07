@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "macos", test))]
+#[path = "system_proxy_macos_bypass.rs"]
+mod macos_bypass;
+
 use crate::services::common;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -53,6 +57,9 @@ pub struct ProxyBackup {
     /// Windows `AutoConfigURL` (PAC script), if configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_config_url: Option<String>,
+    /// Original bypass entries per macOS network service, including empty lists.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub macos_bypass: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
@@ -199,7 +206,7 @@ fn set_proxy_platform(
     port: u16,
     enable: bool,
     socks_enabled: bool,
-    _bypass: &[String],
+    bypass: &[String],
 ) -> AppResult<()> {
     let services = active_network_services()?;
     if services.is_empty() {
@@ -210,7 +217,18 @@ fn set_proxy_platform(
 
     let web_proxy = enable.then_some((host, port));
     let socks_proxy = (enable && socks_enabled).then_some((host, port));
-    run_networksetup_commands(&macos_proxy_commands(&services, web_proxy, socks_proxy))
+    let mut commands = macos_proxy_commands(&services, web_proxy, socks_proxy);
+    if enable {
+        let bypass: Vec<_> = bypass
+            .iter()
+            .filter(|value| value.as_str() != "<local>")
+            .map(|value| value.trim_matches(['[', ']']).to_string())
+            .collect();
+        for service in &services {
+            commands.push(macos_bypass::command(service, &bypass));
+        }
+    }
+    run_networksetup_commands(&commands)
 }
 
 #[cfg(target_os = "macos")]
@@ -258,7 +276,7 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
 #[cfg(target_os = "macos")]
 fn capture_backup_platform() -> AppResult<ProxyBackup> {
     let status = status_platform()?;
-    Ok(ProxyBackup {
+    let mut backup = ProxyBackup {
         enabled: status.enabled,
         host: status.host.clone(),
         port: status.port,
@@ -268,24 +286,27 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         raw_server: None,
         override_bypass: None,
         auto_config_url: None,
-    })
+        macos_bypass: Default::default(),
+    };
+    macos_bypass::capture_missing(&mut backup)?;
+    Ok(backup)
 }
 
 #[cfg(target_os = "macos")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
-    if backup.enabled {
-        let services = active_network_services()?;
-        let socks_proxy = backup
-            .socks_enabled
-            .then_some((backup.socks_host.as_str(), backup.socks_port));
-        run_networksetup_commands(&macos_proxy_commands(
-            &services,
-            Some((backup.host.as_str(), backup.port)),
-            socks_proxy,
-        ))
-    } else {
-        set_proxy_platform("", 0, false, false, &[])
+    let services = active_network_services()?;
+    let web = backup
+        .enabled
+        .then_some((backup.host.as_str(), backup.port));
+    let socks = (backup.enabled && backup.socks_enabled)
+        .then_some((backup.socks_host.as_str(), backup.socks_port));
+    let mut commands = macos_proxy_commands(&services, web, socks);
+    for service in &services {
+        if let Some(bypass) = backup.macos_bypass.get(service) {
+            commands.push(macos_bypass::command(service, bypass));
+        }
     }
+    run_networksetup_commands(&commands)
 }
 
 #[cfg(target_os = "macos")]
@@ -556,6 +577,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         raw_server: (!server.trim().is_empty()).then_some(server),
         override_bypass: query_internet_setting("ProxyOverride"),
         auto_config_url: query_internet_setting("AutoConfigURL"),
+        macos_bypass: Default::default(),
     })
 }
 
@@ -877,6 +899,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         raw_server: None,
         override_bypass: None,
         auto_config_url: None,
+        macos_bypass: Default::default(),
     })
 }
 
@@ -985,5 +1008,46 @@ mod tests {
             windows_restore_server(&backup).as_deref(),
             Some("127.0.0.1:1080")
         );
+    }
+}
+
+/// Capture only previously untouched service lists before extending ownership.
+pub fn complete_bypass_backup(backup: &mut ProxyBackup) -> AppResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_bypass::capture_missing(backup)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = backup;
+        Ok(false)
+    }
+}
+
+/// Read native exceptions before taking the idempotent-enable fast path.
+pub fn bypass_matches(bypass: &[String]) -> AppResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let expected: std::collections::BTreeSet<_> = bypass
+            .iter()
+            .filter(|v| v.as_str() != "<local>")
+            .map(|v| v.trim_matches(['[', ']']).to_ascii_lowercase())
+            .collect();
+        for service in active_network_services()? {
+            let output = run_networksetup_output(&["-getproxybypassdomains", &service])?;
+            let actual: std::collections::BTreeSet<_> = macos_bypass::parse(&output)
+                .into_iter()
+                .map(|v| v.to_ascii_lowercase())
+                .collect();
+            if actual != expected {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bypass;
+        Ok(true)
     }
 }

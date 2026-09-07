@@ -24,8 +24,8 @@
       {#each model.groups as group (group.name)}
         <div class="policy-edit">
           <div class="policy-name"><strong>{group.name}</strong><span>{group.switchable ? '手动选择' : ['urltest', 'url_test'].includes(group.kind.toLowerCase()) ? '自动测速' : '策略管理'}</span></div>
-          {#if group.switchable}<FieldSelect aria-label={`${group.name} 当前出口`} bind:value={() => group.selectedTag, (value) => actions.choosePolicy(group.name, value)} disabled={busy || !model.groupsReady} options={group.options} placeholder="等待选择" />{:else}<p class="automatic-choice">{group.selected} · {group.delay}</p>{/if}
-          <p>已确认：{group.selected} · {group.health}</p><OperationFeedback {feedback} target={`policy:${group.name}`} />
+          {#if group.switchable}<FieldSelect aria-label={`${group.name} 当前出口`} bind:value={() => group.selectedTag, (value) => actions.choosePolicy(group.name, value)} disabled={busy || !model.groupsReady} options={group.options} placeholder="等待选择" />{:else}<p class="automatic-choice">{group.selectionLabel} · {group.delay}</p>{/if}
+          <p>已确认：{group.selectionLabel} · {group.health}</p><OperationFeedback {feedback} target={`policy:${group.name}`} />
         </div>
       {:else}<p class="hint">{model.ready ? '当前没有运行策略组。静态直连出站不会生成策略组。' : '内核未就绪，暂时无法取得实际策略选择。'}</p>{/each}
     </Dialog.Body>
