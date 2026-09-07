@@ -94,8 +94,14 @@ fn version_one_portable_settings_migrate_both_legacy_lists() {
     let mut legacy = AppConfig::default();
     legacy.local_proxy.bypass = vec!["*.example.org".into()];
     legacy.tun.exclude_cidrs = vec!["16.0.0.0/8".into()];
-    let settings = ClientKernelSettings::from_app_config(&legacy);
-    let input = json!({"schemaVersion":"znet.client-kernel-settings.v1", "settings": settings});
+    let mut settings =
+        serde_json::to_value(ClientKernelSettings::from_app_config(&legacy)).unwrap();
+    settings.as_object_mut().unwrap().remove("bypass");
+    let input = json!({
+        "schemaVersion": "znet.client-kernel-settings.v1",
+        "exportedAtUnixMs": 1,
+        "settings": settings
+    });
     let imported = crate::services::kernel_settings::import_from_str(
         &AppConfig::default(),
         &input.to_string(),
