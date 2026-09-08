@@ -47,7 +47,11 @@ fn version_supports_tolerance(version: &str) -> bool {
     };
     let minimum = semver::Version::parse(URLTEST_TOLERANCE_MIN_VERSION)
         .expect("URLTest tolerance minimum version is valid semver");
-    version >= minimum
+    // Core's historical releases start at 0.0.4. The reset release line
+    // preserves current capabilities without reclassifying those old builds.
+    let reset_minimum = semver::Version::new(0, 0, 1);
+    let legacy_start = semver::Version::parse("0.0.4-0").unwrap();
+    version >= minimum || (version >= reset_minimum && version < legacy_start)
 }
 
 /// Apply the client product default to URLTest groups that did not explicitly
@@ -131,6 +135,12 @@ mod tests {
 
     #[test]
     fn tolerance_version_gate_starts_at_dev3() {
+        assert!(version_supports_tolerance("0.0.1"));
+        assert!(version_supports_tolerance("v0.0.1"));
+        assert!(version_supports_tolerance("0.0.2-dev.202609080000"));
+        assert!(!version_supports_tolerance("0.0.1-rc.1"));
+        assert!(!version_supports_tolerance("0.0.4"));
+        assert!(!version_supports_tolerance("invalid"));
         assert!(!version_supports_tolerance("0.0.16-dev.2"));
         assert!(version_supports_tolerance("0.0.16-dev.3"));
         assert!(version_supports_tolerance("0.0.16-rc.1"));
