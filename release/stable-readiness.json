@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceFingerprint": null,
-  "kernelCommit": "6a3927c71a4a8136b41ebb682c1c2e017b145b37",
+  "sourceFingerprint": "3eb924bed89c391ec258d5aa70e759d9b5c5f44284b616674ca59e9b9e8df507",
+  "kernelCommit": "503229562ef5854e3be6be3a9c8e7cbc5efffc61",
   "blockers": [
     "Installed network and lifecycle evidence for the new paired candidate is pending on all four supported platforms.",
     "Interrupted kernel update recovery requires qualification, including pending transaction handling.",
