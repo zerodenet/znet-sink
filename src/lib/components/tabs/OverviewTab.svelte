@@ -361,6 +361,9 @@
 
     <div class="lite-capture-state" class:warning={capture.warning} class:failed={capture.failed} role="status" aria-label="代理运行状态">
       <span>{capture.label}</span>
+      {#if guiState.isTunEnabled}
+        <button data-slot="surface-button" onclick={() => guiState.recoverTun()} disabled={isPowerBusy || guiState.isSwitchingTun} aria-label="立即重试 TUN 网络恢复">{guiState.isSwitchingTun ? '处理中…' : '立即重试'}</button>
+      {/if}
       {#if capture.warning}<small>{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || model.egress.issue?.detail || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
     </div>
 

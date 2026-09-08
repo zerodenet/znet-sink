@@ -177,3 +177,14 @@ test('optional, unknown, stopped and stale egress do not invent required-family 
   const unhealthy = buildOverview({...baseline(),tun:{...missing,healthy:false,lastError:'路由恢复失败'}});
   assert.equal(unhealthy.findings.length,1); assert.equal(unhealthy.findings[0].detail,'路由恢复失败');
 });
+
+
+test('stopped TUN cleanup errors stay visible in both overview modes', () => {
+  const model = buildOverview({...baseline(), tun:{enabled:false,desiredEnabled:false,supported:true,healthy:false,lastError:'route cleanup failed'}});
+  assert.equal(model.tunLabel, '已停止 · 待处理');
+  assert.equal(model.findings[0].detail, 'route cleanup failed');
+  const lite = capturePresentation(model,false,false,false,false);
+  assert.equal(lite.failed,true);
+  assert.equal(lite.warning,true);
+  assert.equal(lite.label,'TUN 停止后仍有错误');
+});

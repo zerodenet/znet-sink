@@ -496,6 +496,7 @@ pub fn run() {
             gui_core_commands::gui_tun_status,
             gui_core_commands::gui_tun_enable,
             gui_core_commands::gui_tun_disable,
+            gui_core_commands::gui_tun_recover,
             gui_core_commands::gui_stack_status,
             gui_core_commands::gui_rule_status,
             gui_core_commands::gui_apply_config,

@@ -18,7 +18,7 @@
   });
   const selfTest = { ready:true, activeProxyConfigId:'main', activeProxyConfigName:'日常网络配置', checks:[], blockingIssues:[], warningCount:0, suggestedFlow:'ready' };
   const groups = [{ name:'proxy', kind:'selector', selected:'测试节点', outbounds:[{ tag:'测试节点', alive:true, delayMs:25, lastCheckedUnixMs:Date.now() }] }];
-  async function disconnect() { action='disconnect'; connection.systemProxyEnabled=false; tun.enabled=false; tun.desiredEnabled=false; updatedAt=Date.now(); }
+  async function disconnect() { action='disconnect'; connection.systemProxyEnabled=false; tun.enabled=false; tun.desiredEnabled=false; tun.lastError=undefined; updatedAt=Date.now(); }
   async function connect() { action='connect'; connection.systemProxyEnabled=true; tun.enabled=true; tun.desiredEnabled=true; updatedAt=Date.now(); }
   async function setProxyMode(next: ProxyMode) {
     if (scenario === 'mode-failure') return {ok:false as const,message:'模式请求已提交，但尚未确认生效，请重新检查'};
@@ -40,6 +40,7 @@
       refreshSelfTest:async()=>{},refreshNodeStateAfterConfigChange:async()=>{},refreshAll:async()=>{},
       restartCore:async()=>{action='restart';},startCore:async()=>{action='start';},
       toggleSystemProxy:async()=>{connection.systemProxyEnabled=!connection.systemProxyEnabled;return {ok:true};},
+      recoverTun:async()=>{tun.healthy=true;tun.lastError=undefined;action='tun-recover';return {ok:true};},
       toggleTun:async()=>{tun.enabled=!tun.enabled;tun.desiredEnabled=tun.enabled;return {ok:true};},
     });
     ready=true;

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 #[test]
 fn tun_commands_share_a_long_response_budget_without_delaying_connection_or_queries() {
-    for method in ["tun.start", "tun.stop"] {
+    for method in ["tun.start", "tun.stop", "tun.recover"] {
         let options = CoreIpcOptions {
             socket: Some("isolated-test-pipe".to_string()),
             timeout_ms: Some(2_000),
@@ -74,7 +74,7 @@ fn five_second_tun_response_succeeds_but_missing_response_still_times_out() {
         .build()
         .unwrap()
         .block_on(async {
-            for method in ["tun.start", "tun.stop"] {
+            for method in ["tun.start", "tun.stop", "tun.recover"] {
                 let budget =
                     response_timeout_from_options(None, command_response_timeout(method)).unwrap();
                 let (tx, rx) = tokio::sync::oneshot::channel();

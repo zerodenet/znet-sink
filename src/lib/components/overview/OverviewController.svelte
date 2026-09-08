@@ -103,6 +103,7 @@
       if (!model.ready || model.mode === mode) return;
       run('mode', async () => { requireCommandSuccess(await guiState.setProxyMode(mode, { notify: false })); return '代理模式已生效'; });
     },
+    recoverTun: () => run('tun', async () => { requireCommandSuccess(await guiState.recoverTun({ notify: false })); return 'TUN 路由检查通过'; }),
     toggleTun: () => run('tun', async () => { requireCommandSuccess(await guiState.toggleTun({ notify: false })); return guiState.isTunSwitchOn ? 'TUN 已开启，请查看接管健康状态' : 'TUN 与自动恢复已关闭'; }),
   };
   function toggleSystemProxy() { run('system-proxy', async () => { requireCommandSuccess(await guiState.toggleSystemProxy({ notify: false })); return guiState.isSystemProxyEnabled ? '系统代理已开启' : '系统代理已关闭'; }); }
@@ -110,6 +111,6 @@
 
 <ProfessionalOverview bind:this={view} {model} profiles={profileView} {network} feedback={operations.feedback} {actions} {busy} refreshing={operations.feedback.pending === 'checks'} {canDisableTun}>
   {#snippet core()}<CoreStatusCard {busy} stateUnknown={model.stale} onToggleSystemProxy={toggleSystemProxy} />{/snippet}
-  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={guiState.isTunSwitchOn} canToggle={!busy && (guiState.isTunSwitchOn ? guiState.canDisableTun : model.tunConfirmed && guiState.canEnableTun)} switching={guiState.isSwitchingTun} {stackLabel} {stackReady} />{/snippet}
+  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} onRecover={actions.recoverTun} switchOn={guiState.isTunSwitchOn} canToggle={!busy && (guiState.isTunSwitchOn ? guiState.canDisableTun : model.tunConfirmed && guiState.canEnableTun)} switching={guiState.isSwitchingTun} {stackLabel} {stackReady} />{/snippet}
   {#snippet traffic()}<TrafficChart history={overviewData.speedHistory} unsupported={!guiState.supportsTrafficStats} unavailableReason={trafficUnavailable} />{/snippet}
 </ProfessionalOverview>

@@ -131,7 +131,7 @@ async function waitForTunStateAfterTransientIpcError(
 
   do {
     const status = await getGuiTunStatus().catch(() => null);
-    if (status?.enabled === expectedEnabled && (!expectedEnabled || status.healthy)) return status;
+    if (status?.enabled === expectedEnabled && (expectedEnabled ? status.healthy : !status.lastError)) return status;
     if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, TUN_STATE_RECONCILE_INTERVAL_MS));
   } while (true);
@@ -377,6 +377,15 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
   }
 }
 
+export async function recoverGuiTun(): Promise<GuiManagedTunStatus> {
+  await invoke('gui_tun_recover');
+  const confirmed = await getGuiTunStatus();
+  if (!confirmed.enabled || !confirmed.healthy || confirmed.lastError) {
+    throw { code: 'tun_recovery_unconfirmed', message: confirmed.lastError || '网络重检已完成，但 TUN 尚未恢复；自动恢复将继续尝试' };
+  }
+  return confirmed;
+}
+
 export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
 
@@ -403,6 +412,6 @@ export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
     }
   }
   const confirmed = await getGuiTunStatus();
-  if (confirmed.enabled) throw { code: 'tun_stop_unconfirmed', message: 'Zero 未确认 TUN 已关闭；已取消自动恢复' };
+  if (confirmed.enabled || confirmed.lastError) throw { code: 'tun_stop_unconfirmed', message: confirmed.lastError ? `TUN 关闭未完成：${confirmed.lastError}；已取消自动恢复` : 'Zero 未确认 TUN 已关闭；已取消自动恢复' };
   return confirmed;
 }

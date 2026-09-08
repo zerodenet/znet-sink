@@ -43,6 +43,11 @@ pub async fn enable_tun(
     tun_status(options).await
 }
 
+pub async fn recover_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
+    commands::run_command("tun.recover", json!({}), options.clone()).await?;
+    tun_status(options).await
+}
+
 pub async fn disable_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
     if let Ok(status) = tun_status(options.clone()).await {
         if !status.enabled {

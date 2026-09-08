@@ -54,13 +54,14 @@
     chooseProfile: id => { if (id !== selected) void operations.run('profile', () => change(() => { selected = id; })); },
     choosePolicy: (name, target) => { void operations.run(`policy:${name}`, () => change(() => { input.groups.find(group => group.name === name)!.selected = target; })); },
     setMode: mode => { if (input.mode!.currentMode !== mode) void operations.run('mode', () => change(() => { input.mode!.currentMode = mode; })); },
+    recoverTun: () => { void operations.run('tun', () => change(() => { input.tun!.healthy = true; input.tun!.lastError = undefined; action = 'tun-recover'; })); },
     toggleTun: () => { void operations.run('tun', () => change(() => { input.tun!.enabled = !input.tun!.enabled; input.tun!.desiredEnabled = input.tun!.enabled; })); },
   };
   onDestroy(() => operations.destroy());
 </script>
 <ProfessionalOverview bind:this={view} {model} {profiles} {network} feedback={operations.feedback} {actions} {busy} refreshing={operations.feedback.pending === 'checks'} canDisableTun={input.tun?.enabled}>
   {#snippet core()}<CoreStatusCard {busy} stateUnknown={model.stale} onToggleSystemProxy={()=>{void operations.run('system-proxy', () => change(() => { input.connection!.systemProxyEnabled = !input.connection!.systemProxyEnabled; action='system-proxy'; }));}} />{/snippet}
-  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} switchOn={input.tun?.enabled ?? false} canToggle={!busy} switching={operations.feedback.pending === 'tun'} stackLabel={model.ready ? 'Zero Stack' : '待确认'} stackReady={model.ready} />{/snippet}
+  {#snippet tun()}<TunControl {model} onInspect={() => view?.showTunDetails()} onToggle={actions.toggleTun} onRecover={actions.recoverTun} switchOn={input.tun?.enabled ?? false} canToggle={!busy} switching={operations.feedback.pending === 'tun'} stackLabel={model.ready ? 'Zero Stack' : '待确认'} stackReady={model.ready} />{/snippet}
   {#snippet traffic()}<TrafficChart {history} unavailableReason={scenario === 'stale' ? '流量采样已过期，等待恢复' : scenario === 'stopped' ? '内核未就绪，暂停展示实时速率' : null} />{/snippet}
 </ProfessionalOverview>
 <output aria-label="概览操作" style="height:24px;flex-shrink:0">{action}</output>

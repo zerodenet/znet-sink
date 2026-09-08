@@ -19,7 +19,7 @@ function loadService(file, dependencies) {
   return exports;
 }
 
-function tunService({ status, stop, start = () => {}, profile = {} }) {
+function tunService({ status, stop, start = () => {}, recover = () => {}, profile = {} }) {
   const config = { tun: { enabled: true } };
   const calls = [];
   const service = loadService('tun.ts', {
@@ -27,6 +27,7 @@ function tunService({ status, stop, start = () => {}, profile = {} }) {
       async invoke(command) {
         if (command === 'proxy_config_list') return [{ active: true, content: profile }];
         if (command === 'gui_tun_status') return status();
+        if (command === 'gui_tun_recover') { calls.push('recover'); return recover(); }
         if (command === 'gui_tun_enable') { calls.push('start'); return start(); }
         if (command === 'gui_tun_disable') { calls.push('stop'); return stop(); }
         throw new Error(`unexpected command: ${command}`);
@@ -170,4 +171,34 @@ test('healthy enabled TUN can confirm an explicit enable', async () => {
   const { service, calls } = tunService({ status: () => ({ ...snapshot(true), healthy: true }) });
   assert.equal((await service.enableGuiTun()).healthy, true);
   assert.deepEqual(calls, ['save:true']);
+});
+
+
+test('stopped TUN with a cleanup error must not be reported as successfully disabled', async () => {
+  const { service, config } = tunService({
+    status: () => ({ ...snapshot(false), lastError: 'route cleanup failed' }), stop: () => {},
+  });
+  await assert.rejects(service.disableGuiTun(), error => error.code === 'tun_stop_unconfirmed');
+  assert.equal(config.tun.enabled, false);
+});
+
+test('manual recovery waits for the command and preserves desired TUN state', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const { service, calls, config } = tunService({
+    status: () => ({ ...snapshot(true), healthy: true }), recover: () => pending,
+  });
+  let completed = false;
+  const result = service.recoverGuiTun().then(value => { completed = true; return value; });
+  await Promise.resolve();
+  assert.equal(completed, false);
+  release();
+  assert.equal((await result).healthy, true);
+  assert.equal(config.tun.enabled, true);
+  assert.deepEqual(calls, ['recover']);
+});
+
+test('manual recovery cannot claim success while egress remains unhealthy', async () => {
+  const { service } = tunService({ status: () => ({ ...snapshot(true), healthy: false, lastError: 'no default route' }) });
+  await assert.rejects(service.recoverGuiTun(), error => error.message === 'no default route');
 });

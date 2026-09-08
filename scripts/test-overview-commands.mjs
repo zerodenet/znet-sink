@@ -37,6 +37,7 @@ async function harness(environment = {}) {
   };
   const tun = {
     getGuiTunStatus:async()=>copy(state.tun),
+    recoverGuiTun:async()=>{await command('tun-recover',()=>{state.tun.healthy=true;});return copy(state.tun);},
     enableGuiTun:async()=>{await command('tun-on',()=>{state.tun.enabled=state.tun.desiredEnabled=true;});return copy(state.tun);},
     disableGuiTun:async()=>{await command('tun-off',()=>{state.tun.enabled=state.tun.desiredEnabled=false;});return copy(state.tun);},
   };
@@ -229,4 +230,13 @@ test('view-owned notifications preserve command and readback semantics without d
   const {gui,state}=await harness();state.connectionReadFailure=true;
   const result=await gui.toggleSystemProxy({notify:false});
   assert.equal(result.ok,false);assert.match(result.message,/尚未确认/);assert.deepEqual(state.notifications,[]);
+});
+
+ test('manual TUN recovery preserves the enabled intent and reports completion', async()=>{
+  const {gui,state}=await harness();state.tun.healthy=false;
+  assert.equal((await gui.recoverTun()).ok,true);
+  assert.equal(gui.isTunEnabled,true);
+  assert.equal(gui.isTunSwitchOn,true);
+  assert.equal(gui.isSwitchingTun,false);
+  assert.deepEqual(state.calls,['tun-recover']);
 });

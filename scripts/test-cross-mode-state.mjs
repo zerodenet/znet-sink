@@ -193,7 +193,7 @@ assert.ok(
 );
 
 assert.ok(
-  zeroCommands.includes('"tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT)')
+  zeroCommands.includes('"tun.start" | "tun.stop" | "tun.recover" => Some(TUN_RESPONSE_TIMEOUT)')
     && zeroCommands.includes('protocol::command_with_response_timeout(')
     && zeroCommands.includes('command_response_timeout(method),')
     && ipcProtocol.includes('connection::get_or_connect(connect_endpoint, timeout)')

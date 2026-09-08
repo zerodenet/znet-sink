@@ -86,3 +86,12 @@ test('both views agree on optional IPv6 and required IPv6 failure', async ({page
     await expect(page.getByRole('status',{name:'代理运行状态'})).toContainText(required ? 'TUN 运行异常' : '系统代理与 TUN 已开启');
   }
 });
+
+
+test('Lite can retry a failed TUN without turning capture off', async ({page}) => {
+  await page.goto('/?panel=mode-overview&mode=failure');
+  await page.getByRole('button',{name:'立即重试 TUN 网络恢复'}).click();
+  await expect(page.getByLabel('模式操作')).toHaveText('tun-recover');
+  await expect(page.getByRole('status',{name:'代理运行状态'})).toContainText('系统代理与 TUN 已开启');
+  await expect(page.getByRole('button',{name:'关闭代理',exact:true})).toBeEnabled();
+});

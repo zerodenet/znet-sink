@@ -31,7 +31,7 @@ const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn command_response_timeout(method: &str) -> Option<Duration> {
     match method {
-        "tun.start" | "tun.stop" => Some(TUN_RESPONSE_TIMEOUT),
+        "tun.start" | "tun.stop" | "tun.recover" => Some(TUN_RESPONSE_TIMEOUT),
         _ => None,
     }
 }

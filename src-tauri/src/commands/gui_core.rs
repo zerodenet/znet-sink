@@ -325,6 +325,12 @@ pub async fn gui_tun_enable(
 }
 
 #[tauri::command]
+pub async fn gui_tun_recover(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
+    zero::runtime::recover_tun(Some(default_opts(state.inner()))).await
+}
+
+#[tauri::command]
 pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     let opts = default_opts(state.inner());

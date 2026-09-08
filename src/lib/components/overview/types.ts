@@ -11,4 +11,5 @@ export interface OverviewActions {
   choosePolicy: (group: string, target: string) => void;
   setMode: (mode: ProxyMode) => void;
   toggleTun: () => void;
+  recoverTun: () => void;
 }

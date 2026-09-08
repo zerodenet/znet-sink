@@ -20,7 +20,7 @@ import {
   trayUpdateStatus,
 } from './core';
 import { getAppConfig } from './core';
-import { getGuiTunStatus, enableGuiTun, disableGuiTun } from './tun';
+import { getGuiTunStatus, enableGuiTun, disableGuiTun, recoverGuiTun } from './tun';
 import { error as toastError, success as toastSuccess, warning as toastWarning } from './toast.svelte';
 import { tracedOperation } from './telemetry';
 import { createLatestRequestGate } from './latest-request-gate.js';
@@ -616,6 +616,26 @@ class GuiStateStore {
     }
   }
 
+  async recoverTun({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
+    if (this.isSwitchingTun || this.isCoreBusy || !this.isTunEnabled) return { ok: false, message: '请在 TUN 运行时重试网络恢复' };
+    this.isSwitchingTun = true;
+    this.tunStatusRefreshGate.reset();
+    try {
+      const status = await recoverGuiTun();
+      this.tunStatusRefreshGate.reset();
+      this.tunStatus = status;
+      await this.refreshRuntimeState();
+      return this.reportCommandConfirmation(!this.tunStatusError && this.isTunEnabled && this.tunStatus?.healthy === true && !this.tunStatus.lastError, 'TUN 路由检查通过', this.tunStatus?.lastError || '尚未确认 TUN 路由就绪', notify);
+    } catch (e: any) {
+      if (notify) toastError(`TUN 路由恢复失败: ${this.errorMessage(e)}`);
+      this.tunStatusRefreshGate.reset();
+      await this.refreshTunStatus();
+      return { ok: false, message: this.errorMessage(e) };
+    } finally {
+      this.isSwitchingTun = false;
+    }
+  }
+
   async disableTun({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
     if (!this.canDisableTun) return { ok: false, message: '当前无法关闭 TUN，请等待正在进行的操作完成' };
     this.isSwitchingTun = true;
@@ -625,7 +645,7 @@ class GuiStateStore {
       this.tunStatusRefreshGate.reset();
       this.tunStatus = status;
       await this.refreshTunStatus();
-      return this.reportCommandConfirmation(!this.tunStatusError && !this.isTunSwitchOn, 'TUN 已关闭', '关闭请求已完成，但尚未确认 TUN 与自动恢复设置，请重新检查', notify);
+      return this.reportCommandConfirmation(!this.tunStatusError && !this.isTunSwitchOn && !this.tunStatus?.lastError, 'TUN 已关闭', '关闭请求已完成，但尚未确认 TUN 与自动恢复设置，请重新检查', notify);
     } catch (e: any) {
       if (notify) toastError(`关闭 TUN 失败: ${this.errorMessage(e)}`);
       this.tunStatusRefreshGate.reset();

@@ -142,3 +142,14 @@ for (const failed of [false,true]) test(`system proxy feedback never moves cards
   await expect(page.getByLabel('应用提示')).toHaveCount(0);
   await unchanged();
 });
+
+
+test('manual network recovery keeps TUN enabled and does not restart the kernel', async ({page}) => {
+  await page.goto('/?panel=overview&mode=failure');
+  const retry = page.getByRole('button', {name:'立即重试 TUN 网络恢复'});
+  await retry.click();
+  await expect(retry).toBeDisabled();
+  await expect(page.getByLabel('应用提示')).toContainText('设置已生效');
+  await expect(page.getByRole('switch', {name:'关闭 TUN 并取消自动恢复'})).toBeChecked();
+  await expect(page.getByLabel('TUN 与网络栈').locator('.feature-main')).toContainText('已开启 · 健康');
+});

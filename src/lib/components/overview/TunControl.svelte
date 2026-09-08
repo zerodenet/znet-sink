@@ -3,14 +3,14 @@
   import { Switch } from '$lib/components/ui/switch';
   import type { OverviewModel } from '$lib/components/overview/model';
 
-  let { model, onInspect, onToggle, switchOn, canToggle, switching, stackLabel, stackReady }: { model: OverviewModel; onInspect: () => void; onToggle: () => void; switchOn: boolean; canToggle: boolean; switching: boolean; stackLabel: string; stackReady: boolean } = $props();
+  let { model, onInspect, onToggle, onRecover, switchOn, canToggle, switching, stackLabel, stackReady }: { model: OverviewModel; onInspect: () => void; onToggle: () => void; onRecover: () => void; switchOn: boolean; canToggle: boolean; switching: boolean; stackLabel: string; stackReady: boolean } = $props();
   const tun = $derived(model.tunSnapshot);
   const failed = $derived(model.tunConfirmed && tun?.enabled && (!tun.healthy || !!model.egress.issue));
   const healthy = $derived(model.tunConfirmed && tun?.enabled && tun.healthy && !model.egress.issue);
 </script>
 
 <section class="feature-card" aria-label="TUN 与网络栈">
-  <header><span class="feature-label">高级功能</span><button data-slot="surface-button" onclick={onInspect} aria-label="查看 TUN 接管详情">详情<ChevronRight size={11}/></button></header>
+  <header><span class="feature-label">高级功能</span><button data-slot="surface-button" onclick={onRecover} disabled={!tun?.enabled || switching} aria-label="立即重试 TUN 网络恢复">{switching ? '处理中…' : '立即重试'}</button><button data-slot="surface-button" onclick={onInspect} aria-label="查看 TUN 接管详情">详情<ChevronRight size={11}/></button></header>
   <div class="feature-row">
     <span class="feature-dot" class:healthy class:failed></span>
     <div class="feature-copy"><div class="feature-main"><span class="feature-name">TUN 网卡</span><strong class:danger={failed}>{switching ? '切换中…' : model.tunLabel}</strong></div><span class="feature-meta">{model.tunConfirmed && tun?.enabled ? `${tun.name} · ${tun.autoRoute ? '自动路由' : '手动路由'}` : '接管系统网络流量'}</span></div>

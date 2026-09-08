@@ -77,6 +77,7 @@ export function buildOverview(input: OverviewInput) {
   if (!stale && !c?.coreAvailable && c?.systemProxyEnabled) add('系统代理已开启但内核未就绪', '代理请求可能无法转发；请启动内核或在代理设置中关闭系统代理。', 'network', 'error');
   if (input.tunError) add('TUN 状态无法确认', input.tunError, 'tun');
   else if (tun?.enabled && !tun.healthy) add('TUN 已开启但不健康', tun.lastError || '检查路由、权限和实际出口。', 'tun', 'error');
+  else if (tun && !tun.enabled && tun.lastError) add('TUN 停止后仍有错误', tun.lastError, 'tun', 'error');
   else if (ready && tun?.desiredEnabled && !tun.enabled) add('TUN 尚未按预期启动', tun.lastError || '期望开启，内核尚未确认接管。', 'tun', 'error');
   if (ready && tun?.enabled && !input.tunError) {
     if (egress.issue && tun.healthy) add(egress.issue.title, egress.issue.detail, 'tun');
@@ -112,7 +113,7 @@ export function buildOverview(input: OverviewInput) {
   const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : ready ? 'good' : 'neutral';
   const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
   const proxy = stale ? '状态待确认' : c?.systemProxyEnabled ? '已开启' : '未开启';
-  const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy && !egress.issue ? '已开启 · 健康' : '已开启 · 异常' : '未开启';
+  const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy && !egress.issue ? '已开启 · 健康' : '已开启 · 异常' : tun.lastError ? '已停止 · 待处理' : '未开启';
   const endpoint = c?.localProxyHost && c.localProxyPort ? `${c.localProxyHost.includes(':') ? `[${c.localProxyHost}]` : c.localProxyHost}:${c.localProxyPort}` : '尚未取得';
   const family = (key: 'ipv4Egress' | 'ipv6Egress') => {
     if (!ready || input.tunError || !tun?.enabled) return '—';
@@ -150,17 +151,19 @@ export function trafficUnavailableReason(model: OverviewModel, supported: boolea
 
 export function capturePresentation(model: OverviewModel, systemProxy: boolean, tunEnabled: boolean, tunDesired: boolean, busy: boolean) {
   const powerOn = systemProxy || tunEnabled || tunDesired;
+  const stopError = model.tunConfirmed && !tunEnabled && !!model.tunSnapshot?.lastError;
   const tunFailed = model.tunSnapshot?.healthy === false || !!model.egress.issue;
   const healthy = model.ready && model.tunConfirmed && systemProxy && tunEnabled && model.tunSnapshot?.healthy === true && !tunFailed;
   const label = busy ? '正在更新代理状态'
     : model.stale || (model.ready && !model.tunConfirmed) ? '运行状态待确认'
+    : stopError ? 'TUN 停止后仍有错误'
     : powerOn && !model.ready ? '内核未就绪'
     : tunEnabled && (model.tunSnapshot?.healthy !== true || tunFailed) ? 'TUN 运行异常'
     : healthy ? '系统代理与 TUN 已开启'
     : systemProxy ? '仅系统代理已开启'
     : tunEnabled ? '仅 TUN 已开启'
     : tunDesired ? 'TUN 等待恢复' : '代理已关闭';
-  return { powerOn, healthy, label, warning: !busy && (model.stale || powerOn && !healthy), failed: model.tunConfirmed && tunEnabled && tunFailed };
+  return { powerOn, healthy, label, warning: !busy && (model.stale || stopError || powerOn && !healthy), failed: stopError || model.tunConfirmed && tunEnabled && tunFailed };
 }
 
 
