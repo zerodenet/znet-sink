@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "sourceFingerprint": null,
-  "kernelCommit": null,
+  "kernelCommit": "6a3927c71a4a8136b41ebb682c1c2e017b145b37",
   "blockers": [
     "Installed network and lifecycle evidence for the new paired candidate is pending on all four supported platforms.",
     "Interrupted kernel update recovery requires qualification, including pending transaction handling.",
@@ -452,5 +452,12 @@
         }
       }
     }
+  },
+  "initialReleaseWaiver": {
+    "tag": "v0.0.1",
+    "scope": "installed-e2e",
+    "approvedBy": "repository owner",
+    "approvedAt": "2026-09-08",
+    "disclosure": "docs/releases/v0.0.1.md"
   }
 }

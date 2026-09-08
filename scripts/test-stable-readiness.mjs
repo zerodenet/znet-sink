@@ -4,9 +4,31 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cases, platforms, validateRecord, normalizeManifest } from './stable-readiness.mjs';
+import { cases, platforms, validateRecord, normalizeManifest, validateInitialReleaseWaiver } from './stable-readiness.mjs';
 
 const fingerprint = 'a1'.repeat(32);
+
+test('initial installation waiver is bound to its owner, source, tag, and public disclosure', () => {
+  const record = {
+    sourceFingerprint: fingerprint, kernelCommit: 'a1'.repeat(20),
+    initialReleaseWaiver: {
+      tag: 'v0.0.1', scope: 'installed-e2e', approvedBy: 'repository owner',
+      approvedAt: '2026-09-08', disclosure: 'docs/releases/v0.0.1.md',
+    },
+  };
+  assert.deepEqual(validateInitialReleaseWaiver(record, fingerprint, 'v0.0.1'), []);
+  assert.ok(validateRecord(record, fingerprint).length, 'waiver must not qualify installed evidence');
+  for (const tag of ['v0.0.2', 'v0.0.1-rc.1', undefined]) {
+    assert.ok(validateInitialReleaseWaiver(record, fingerprint, tag).length);
+  }
+  assert.ok(validateInitialReleaseWaiver(record, 'b2'.repeat(32), 'v0.0.1').length);
+  for (const key of ['tag', 'scope', 'approvedBy', 'approvedAt', 'disclosure']) {
+    const invalid = structuredClone(record);
+    delete invalid.initialReleaseWaiver[key];
+    assert.ok(validateInitialReleaseWaiver(invalid, fingerprint, 'v0.0.1').length);
+  }
+  assert.ok(validateInitialReleaseWaiver(null, fingerprint, 'v0.0.1').length);
+});
 function qualified() {
   return {
     schemaVersion: 1, sourceFingerprint: fingerprint, kernelCommit: 'a1'.repeat(20), blockers: [],

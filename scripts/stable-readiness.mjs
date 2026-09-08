@@ -93,3 +93,16 @@ export function validateRecord(record, fingerprint) {
   }
   return errors;
 }
+
+// The owner authorized a single history reset, not a new general release mode.
+export function validateInitialReleaseWaiver(record, fingerprint, tag) {
+  const waiver = record?.initialReleaseWaiver;
+  const errors = [];
+  if (tag !== 'v0.0.1' || waiver?.tag !== tag) errors.push('waiver applies only to v0.0.1');
+  if (record?.sourceFingerprint !== fingerprint) errors.push('waiver source fingerprint changed');
+  if (!/^[a-f0-9]{40}$/.test(record?.kernelCommit ?? '')) errors.push('paired kernel commit is missing');
+  if (waiver?.scope !== 'installed-e2e' || waiver?.approvedBy !== 'repository owner'
+      || waiver?.approvedAt !== '2026-09-08') errors.push('owner installation waiver is missing');
+  if (waiver?.disclosure !== 'docs/releases/v0.0.1.md') errors.push('public installation waiver disclosure is missing');
+  return errors;
+}

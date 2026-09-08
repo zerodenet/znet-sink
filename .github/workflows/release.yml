@@ -54,7 +54,11 @@ jobs:
             process.stdin.on("end", () => process.stdout.write(JSON.parse(body).version));
           ')
           TAGS+=("v$PARENT_VERSION")
-          node scripts/release-policy.mjs validate-published "$EXPECTED_BRANCH" "$TAG" "${TAGS[@]}" >/dev/null
+          if [ "$TAG" = v0.0.1 ]; then
+            node scripts/check-stable-readiness.mjs --initial-release
+          else
+            node scripts/release-policy.mjs validate-published "$EXPECTED_BRANCH" "$TAG" "${TAGS[@]}" >/dev/null
+          fi
 
           EXPECTED_COMMIT="chore(release): $VERSION"
           ACTUAL_COMMIT=$(git show -s --format=%s "$GITHUB_SHA")
@@ -66,7 +70,9 @@ jobs:
       - name: Require installed platform evidence for stable
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [ "$GITHUB_REF_NAME" = v0.0.1 ]; then
+            node scripts/check-stable-readiness.mjs --initial-release
+          elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             node scripts/check-stable-readiness.mjs --release
           fi
 
@@ -137,6 +143,9 @@ jobs:
             fi
           fi
 
+          if [ "$GITHUB_REF_NAME" = v0.0.1 ]; then
+            cp docs/releases/v0.0.1.md /tmp/release-notes.md
+          fi
           cat /tmp/release-notes.md
           {
             echo 'body<<EOF_NOTES'
