@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
 #[path = "readiness_real_tests.rs"]
 mod real;
 
@@ -34,7 +33,12 @@ fn alive_process_without_ipc_is_not_ready() {
         Duration::from_millis(1),
         Duration::ZERO,
     );
-    assert!(result.unwrap_err().message.contains("timed out"));
+    let error = result.unwrap_err();
+    assert!(error.message.contains("timed out: no IPC"));
+    assert_eq!(
+        error.details.unwrap()["lastProbeError"]["message"],
+        "no IPC"
+    );
 }
 
 #[test]

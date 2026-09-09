@@ -66,6 +66,7 @@ fn wait(
 ) -> AppResult<()> {
     let deadline = Instant::now() + timeout;
     let mut healthy_since = None;
+    let mut last_probe_error = None;
     loop {
         if !alive()? {
             return Err(AppError::internal(
@@ -74,10 +75,11 @@ fn wait(
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(AppError::internal("core IPC readiness timed out"));
+            return Err(readiness_timeout(last_probe_error));
         }
         match probe(remaining.min(Duration::from_millis(500))) {
             Ok(()) => {
+                last_probe_error = None;
                 if !alive()? {
                     return Err(AppError::internal(
                         "core process exited during IPC readiness check",
@@ -91,15 +93,24 @@ fn wait(
                 }
             }
             Err(error) if Instant::now() >= deadline => {
-                return Err(AppError::internal(format!(
-                    "core IPC readiness timed out: {}",
-                    error.message
-                )));
+                return Err(readiness_timeout(Some(error)));
             }
-            Err(_) => healthy_since = None,
+            Err(error) => {
+                healthy_since = None;
+                last_probe_error = Some(error);
+            }
         }
         std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
     }
+}
+
+fn readiness_timeout(cause: Option<AppError>) -> AppError {
+    let mut error = AppError::internal(match &cause {
+        Some(cause) => format!("core IPC readiness timed out: {}", cause.message),
+        None => "core IPC readiness timed out".into(),
+    });
+    error.details = cause.map(|cause| json!({"lastProbeError": cause}));
+    error
 }
 
 #[cfg(test)]

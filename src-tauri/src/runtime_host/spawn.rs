@@ -158,6 +158,8 @@ pub(super) fn spawn_core_child(
                 "pid": pid,
                 "exitCode": exit_code,
                 "configPath": snapshot.config_path,
+                "endpoint": snapshot.endpoint,
+                "readinessError": readiness_error,
             })),
         );
         return Err(AppError::internal(message));

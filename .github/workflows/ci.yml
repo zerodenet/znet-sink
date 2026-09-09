@@ -185,6 +185,24 @@ jobs:
       - name: Run client core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1
 
+      - name: Verify readiness against released Windows kernel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'zero-v0.0.1-windows.zip'
+          Invoke-WebRequest -Uri 'https://github.com/zerodenet/core/releases/download/v0.0.1/zero-windows-x86_64.zip' -OutFile $archive
+          $expected = 'b43354ff63ea11fca3c566ea05ce6efdd9d009b068f9c40f3db1cc246ef2061c'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Released kernel archive checksum mismatch'
+          }
+          $destination = Join-Path $env:RUNNER_TEMP 'zero-readiness-v0.0.1'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binaries = @(Get-ChildItem -LiteralPath $destination -Recurse -File -Filter 'zero.exe')
+          if ($binaries.Count -ne 1) { throw 'Expected one released zero.exe' }
+          $env:ZNET_TEST_ZERO_BINARY = $binaries[0].FullName
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib runtime_host::readiness::tests::real -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-zero-dns-contract:
     name: Windows Zero DNS contract
     runs-on: windows-2025
