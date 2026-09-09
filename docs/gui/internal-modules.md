@@ -314,6 +314,24 @@ pnpm product build desktop-route
 - 日志：`/tmp/znet-final-front2.log`、`/tmp/znet-final-build-desktop*.log`、`/tmp/znet-final-browser2.log`、`/tmp/znet-final-base-browser.log`、`/tmp/znet-final-rust3.log`、`/tmp/znet-final-lib-rerun.log`、`/tmp/znet-preflight-after-build.log`。Rust 仍有平台条件代码和裁剪后未引用的通用错误构造器警告。
 - 未提交、未推送，未修改 Zero 工作区；安装包及真实授权/TUN 接管未验证。
 
+### P4B 第一批：测速执行资源归实例所有（2026-09-09）
+
+`services/probe/runtime.rs` 的 `ProbeRuntime` 现在由各自的 `AppState` 持有，
+取代进程全局的测速并发池和策略操作记录。手动节点测速与策略测速共用该实例
+的 8 个并发额度；完成事件匹配、取消和超时清理均访问同一个 owner。
+`tool-node-probe` 未选中时，owner、字段和访问入口一起裁掉。
+
+本批只收敛执行资源的所有权，不宣称工具自治全部完成。任务账本仍由 Client Core
+管理；已提交内核请求的取消、排队任务的即时释放、执行任务的销毁和预算诊断
+仍待下一批迁移，不把忽略迟到结果等同于中止内核执行。
+
+模块诊断页同时调整为最多三列、受限宽度的卡片布局，显示状态计数，长配置路径
+单独占行；当前错误展开、历史错误折叠。读取仍不触发内核或网络操作。
+
+验证包括测速与历史记录的 15 项 Rust 测试（含独立实例预算、相同任务 ID
+隔离及 IPC 测速地址覆盖），`desktop-base` 无工具构建检查、3 项产品组合测试，
+以及模块状态页的响应式、明暗主题、滚动访问和刷新失败快照保留检查。
+
 ## 参考
 
 - [Surge 运行模型](https://manual.nssurge.com/getting-started/how-surge-works.html)

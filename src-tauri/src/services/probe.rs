@@ -1,4 +1,6 @@
 //! Passive kernel policy observations remain available in every product.
+#[cfg(feature = "tool-node-probe")]
+pub(crate) mod runtime;
 use crate::client_core::{ProbeJobKind, ProbeObservation, ProbeObservationSource};
 use crate::models::gui_core::{GuiPolicyGroup, GuiPolicyMember, GuiPolicyProbeCompletedEvent};
 use crate::services::common;

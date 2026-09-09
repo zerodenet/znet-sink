@@ -1,13 +1,13 @@
 use super::{
-    expected_policy_probe_operation, forget_policy_probe_job, forget_policy_probe_operation,
-    normalize_outbound_probe_failure, policy_completion_is_fresh, policy_completion_matches_job,
-    policy_probe_summary, policy_probe_timeout_ms, remember_policy_probe_operation,
+    forget_policy_probe_job, normalize_outbound_probe_failure, policy_completion_is_fresh,
+    policy_completion_matches_job, policy_probe_summary, policy_probe_timeout_ms,
 };
 use crate::client_core::{
     ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
     ProbeJobState, ProfileId,
 };
 use crate::models::gui_core::{GuiPolicyMember, GuiPolicyProbeCompletedEvent};
+use crate::state::app_state::AppState;
 
 fn job(started_at: u64) -> ProbeJobSnapshot {
     ProbeJobSnapshot {
@@ -58,28 +58,36 @@ fn event(
 
 #[test]
 fn manual_policy_completion_requires_the_acknowledged_operation() {
+    let state = AppState::default();
     let job = job(1_000);
     let mut completion = event(Some(1_000), Some(1_100), Some(1_050));
-    remember_policy_probe_operation(job.id, "auto", "manual-op".to_owned());
+    state
+        .probe_runtime()
+        .remember(job.id, "auto", "manual-op".to_owned());
 
     completion.operation_id = Some("scheduled-op".to_owned());
-    assert!(!policy_completion_matches_job(&completion, &job));
+    assert!(!policy_completion_matches_job(&state, &completion, &job));
     completion.operation_id = Some("manual-op".to_owned());
-    assert!(policy_completion_matches_job(&completion, &job));
+    assert!(policy_completion_matches_job(&state, &completion, &job));
 
-    forget_policy_probe_operation(job.id, "auto");
+    state.probe_runtime().forget(job.id, "auto");
 }
 
 #[test]
 fn terminal_policy_job_forgets_every_target_operation() {
+    let state = AppState::default();
     let job_id = ProbeJobId(999);
-    remember_policy_probe_operation(job_id, "auto-a", "manual-a".to_owned());
-    remember_policy_probe_operation(job_id, "auto-b", "manual-b".to_owned());
+    state
+        .probe_runtime()
+        .remember(job_id, "auto-a", "manual-a".to_owned());
+    state
+        .probe_runtime()
+        .remember(job_id, "auto-b", "manual-b".to_owned());
 
-    forget_policy_probe_job(job_id);
+    forget_policy_probe_job(&state, job_id);
 
-    assert_eq!(expected_policy_probe_operation(job_id, "auto-a"), None);
-    assert_eq!(expected_policy_probe_operation(job_id, "auto-b"), None);
+    assert_eq!(state.probe_runtime().expected(job_id, "auto-a"), None);
+    assert_eq!(state.probe_runtime().expected(job_id, "auto-b"), None);
 }
 
 #[test]

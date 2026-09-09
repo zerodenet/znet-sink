@@ -20,6 +20,8 @@ use crate::models::{
 };
 
 pub struct AppState {
+    #[cfg(feature = "tool-node-probe")]
+    probe_runtime: crate::services::probe::runtime::ProbeRuntime,
     client_core: Mutex<ClientCore>,
     core_event_generation: Arc<AtomicU64>,
     observations: znet_engine_client::SubscriptionOwner,
@@ -73,6 +75,8 @@ impl AppState {
         let config_revision = config_revision(active_profile);
 
         Self {
+            #[cfg(feature = "tool-node-probe")]
+            probe_runtime: crate::services::probe::runtime::ProbeRuntime::default(),
             client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
             core_event_generation: Arc::new(AtomicU64::default()),
             observations: znet_engine_client::SubscriptionOwner::default(),
@@ -91,6 +95,11 @@ impl AppState {
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[cfg(feature = "tool-node-probe")]
+    pub(crate) fn probe_runtime(&self) -> &crate::services::probe::runtime::ProbeRuntime {
+        &self.probe_runtime
     }
 
     pub(crate) fn next_core_event_generation(&self) -> u64 {

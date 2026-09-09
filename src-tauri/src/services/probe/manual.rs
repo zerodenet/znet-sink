@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -18,51 +16,10 @@ use crate::state::app_state::AppState;
 
 use super::policy_probe_summary;
 
-/// Maximum concurrent probe requests to the core.
-pub const MAX_CONCURRENT_PROBES: usize = 8;
 pub const PROBE_JOB_UPDATED_EVENT: &str = "client-core:probe-job-updated";
 
-static PROBE_CONCURRENCY: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-static POLICY_PROBE_OPERATIONS: OnceLock<Mutex<HashMap<(ProbeJobId, String), String>>> =
-    OnceLock::new();
-
-fn policy_probe_operations() -> &'static Mutex<HashMap<(ProbeJobId, String), String>> {
-    POLICY_PROBE_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn remember_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str, operation_id: String) {
-    policy_probe_operations()
-        .lock()
-        .expect("policy probe operation lock poisoned")
-        .insert((job_id, policy_tag.to_owned()), operation_id);
-}
-
-fn expected_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str) -> Option<String> {
-    policy_probe_operations()
-        .lock()
-        .expect("policy probe operation lock poisoned")
-        .get(&(job_id, policy_tag.to_owned()))
-        .cloned()
-}
-
-fn forget_policy_probe_operation(job_id: ProbeJobId, policy_tag: &str) {
-    policy_probe_operations()
-        .lock()
-        .expect("policy probe operation lock poisoned")
-        .remove(&(job_id, policy_tag.to_owned()));
-}
-
-pub(crate) fn forget_policy_probe_job(job_id: ProbeJobId) {
-    policy_probe_operations()
-        .lock()
-        .expect("policy probe operation lock poisoned")
-        .retain(|(registered_job_id, _), _| *registered_job_id != job_id);
-}
-
-fn probe_semaphore() -> Arc<tokio::sync::Semaphore> {
-    PROBE_CONCURRENCY
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES)))
-        .clone()
+pub(crate) fn forget_policy_probe_job(state: &AppState, job_id: ProbeJobId) {
+    state.probe_runtime().forget_job(job_id);
 }
 
 const MIN_POLICY_PROBE_TIMEOUT_MS: u64 = 60_000;
@@ -380,7 +337,13 @@ async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
         let scope = job.scope.clone();
         let job_id = job.id;
         handles.push(tauri::async_runtime::spawn(async move {
-            let Ok(_permit) = probe_semaphore().acquire_owned().await else {
+            let Ok(_permit) = app
+                .state::<AppState>()
+                .probe_runtime()
+                .semaphore()
+                .acquire_owned()
+                .await
+            else {
                 return;
             };
             let state = app.state::<AppState>();
@@ -416,7 +379,13 @@ async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
 
 async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
     for policy_tag in job.target_tags.clone() {
-        let Ok(_permit) = probe_semaphore().acquire_owned().await else {
+        let Ok(_permit) = app_handle
+            .state::<AppState>()
+            .probe_runtime()
+            .semaphore()
+            .acquire_owned()
+            .await
+        else {
             return;
         };
         let state = app_handle.state::<AppState>();
@@ -434,7 +403,9 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
             }
         };
         let requested_operation_id = format!("gui-manual-policy-{}", job.id.0);
-        remember_policy_probe_operation(job.id, &policy_tag, requested_operation_id.clone());
+        state
+            .probe_runtime()
+            .remember(job.id, &policy_tag, requested_operation_id.clone());
         let command = commands::probe_policy_with_operation_id(
             policy_tag.clone(),
             Some(requested_operation_id),
@@ -448,13 +419,15 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
             }
             Ok(response) => {
                 if let Some(operation_id) = commands::policy_probe_operation_id(&response) {
-                    remember_policy_probe_operation(job.id, &policy_tag, operation_id.to_owned());
+                    state
+                        .probe_runtime()
+                        .remember(job.id, &policy_tag, operation_id.to_owned());
                 }
                 None
             }
         };
         if let Some(message) = rejection {
-            forget_policy_probe_operation(job.id, &policy_tag);
+            state.probe_runtime().forget(job.id, &policy_tag);
             record_policy_job_failure(&app_handle, &job, policy_tag, message);
         } else {
             wait_for_policy_target(&app_handle, job.id, &policy_tag).await;
@@ -504,6 +477,7 @@ fn record_policy_job_failure(
 }
 
 fn policy_completion_matches_job(
+    state: &AppState,
     event: &GuiPolicyProbeCompletedEvent,
     job: &ProbeJobSnapshot,
 ) -> bool {
@@ -518,7 +492,7 @@ fn policy_completion_matches_job(
         return false;
     }
     if let (Some(expected), Some(actual)) = (
-        expected_policy_probe_operation(job.id, &event.policy_tag),
+        state.probe_runtime().expected(job.id, &event.policy_tag),
         event.operation_id.as_deref(),
     ) {
         return expected == actual;
@@ -556,7 +530,7 @@ pub fn spawn_probe_timeout(app_handle: AppHandle, job: &ProbeJobSnapshot) {
         let state = app_handle.state::<AppState>();
         if let Some(update) = state.timeout_client_probe(job_id) {
             if update.state == ProbeJobState::TimedOut {
-                forget_policy_probe_job(job_id);
+                forget_policy_probe_job(state.inner(), job_id);
                 let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
             }
         }
@@ -595,7 +569,7 @@ pub(super) fn complete_policy_jobs(app_handle: &AppHandle, event: &GuiPolicyProb
                 && job.kind == ProbeJobKind::ManualPolicy
                 && job.scope == current_scope
                 && job.target_tags.contains(&event.policy_tag)
-                && policy_completion_matches_job(event, job)
+                && policy_completion_matches_job(state.inner(), event, job)
         })
         .collect();
 
@@ -615,6 +589,6 @@ pub(super) fn complete_policy_jobs(app_handle: &AppHandle, event: &GuiPolicyProb
         if let Some(update) = update {
             let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
         }
-        forget_policy_probe_operation(job.id, &event.policy_tag);
+        state.probe_runtime().forget(job.id, &event.policy_tag);
     }
 }
