@@ -230,6 +230,8 @@ impl Default for AppRoutingConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUrlTestConfig {
+    #[serde(default = "default_url_test_url")]
+    pub url: String,
     #[serde(default = "default_url_test_tolerance_ms")]
     pub tolerance_ms: u64,
 }
@@ -237,6 +239,7 @@ pub struct AppUrlTestConfig {
 impl Default for AppUrlTestConfig {
     fn default() -> Self {
         Self {
+            url: default_url_test_url(),
             tolerance_ms: default_url_test_tolerance_ms(),
         }
     }
@@ -449,6 +452,7 @@ pub struct AppRoutingConfigPatch {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUrlTestConfigPatch {
+    pub url: Option<String>,
     pub tolerance_ms: Option<u64>,
 }
 
@@ -517,6 +521,10 @@ where
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+pub fn default_url_test_url() -> String {
+    "http://www.gstatic.com/generate_204".to_owned()
 }
 
 pub fn default_url_test_tolerance_ms() -> u64 {

@@ -10,12 +10,7 @@ pub struct CoreIpcOptions {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreEndpoint {
-    pub transport: &'static str,
-    pub path: String,
-}
+pub use znet_engine_client::Endpoint as CoreEndpoint;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

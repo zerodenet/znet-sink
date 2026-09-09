@@ -26,7 +26,7 @@
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
-    onProbeAll: () => void | Promise<void>;
+    onProbeAll?: () => void | Promise<void>;
   }
 
   let {
@@ -148,8 +148,8 @@
       </SegmentedControl.Item>
     </SegmentedControl.Root>
 
-    <Button variant="default" size="sm"
-
+    {#if onProbeAll}
+      <Button variant="default" size="sm"
       onclick={onProbeAll}
       disabled={!canProbeAll}
       title={probeDisabledReason ?? undefined}
@@ -170,6 +170,7 @@
         <span>{`测速`}</span>
       {/if}
     </Button>
+    {/if}
   </div>
 </div>
 

@@ -23,11 +23,7 @@ use super::parsing::{
 const DEFAULT_CONNECTION_LIMIT: u32 = 100;
 const MAX_CONNECTION_LIMIT: u32 = 500;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KernelRuntimeIdentity {
-    pub core_instance_id: String,
-    pub config_revision: u64,
-}
+pub use znet_engine_client::configuration::RuntimeIdentity as KernelRuntimeIdentity;
 
 /// Read the authoritative identity of the currently reachable Zero runtime.
 pub async fn runtime_identity(options: Option<CoreIpcOptions>) -> AppResult<KernelRuntimeIdentity> {
@@ -40,7 +36,7 @@ pub fn config_apply_identity(value: &Value) -> AppResult<KernelRuntimeIdentity> 
     parse_runtime_identity(value.get("result").unwrap_or(value))
 }
 
-fn parse_runtime_identity(value: &Value) -> AppResult<KernelRuntimeIdentity> {
+pub(crate) fn parse_runtime_identity(value: &Value) -> AppResult<KernelRuntimeIdentity> {
     let core_instance_id = string_at(value, &["core_instance_id", "coreInstanceId"])
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| AppError::internal("core response omitted core_instance_id"))?;

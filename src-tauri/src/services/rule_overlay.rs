@@ -1,26 +1,27 @@
-use std::{collections::HashSet, fs};
+#[cfg(test)]
+use crate::models::rule_set::CommonRuleAction;
+use std::fs;
 
-use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use zero_rule::zrs::{verify, VerifyMode};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppDnsConfig};
 use crate::models::core_process::CoreProcessState;
+#[cfg(test)]
 use crate::models::dns_config::CLIENT_DNS_DETOUR_ROUTE_FINAL;
 use crate::models::gui_core::GuiProxyMode;
 use crate::models::rule_set::{
-    CommonRuleAction, CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption,
-    RuleSetProfile,
+    CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption, RuleSetProfile,
 };
 use crate::services::{
     app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
     rule_set, url_test,
 };
 use crate::state::app_state::AppState;
-
-const COMMON_TAG_PREFIX: &str = "gui-common-";
 
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
     let enabled = common::lock(state.app_config(), "app_config")?
@@ -77,205 +78,37 @@ fn compose_effective_with(
 fn finalize_effective_config(
     state: &AppState,
     base: &Value,
-    mut config: Value,
+    config: Value,
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
     app_override: Option<&AppConfig>,
 ) -> AppResult<Value> {
-    let app = match app_override {
+    let mut app = match app_override {
         Some(app) => app.clone(),
         None => common::lock(state.app_config(), "app_config")?.clone(),
     };
-    let local_proxy = app.local_proxy.clone();
-    crate::services::proxy_config::project_managed_endpoint(&mut config, &local_proxy)?;
-    apply_global_dns(state, &mut config, dns_override)?;
-    let tolerance_ms = match tolerance_override {
-        Some(value) => value,
-        None => {
-            common::lock(state.app_config(), "app_config")?
-                .url_test
-                .tolerance_ms
-        }
+    if let Some(dns) = dns_override {
+        app.dns = dns.clone();
+    }
+    if let Some(tolerance) = tolerance_override {
+        app.url_test.tolerance_ms = tolerance;
+    }
+    let (source_profile_id, selections) = policy_selection::saved_selections(state, base)?;
+    let inputs = crate::configuration::composition::Inputs {
+        source_profile_id,
+        app,
+        supports_tolerance: url_test::supports_tolerance(state),
+        selections,
     };
-    if url_test::supports_tolerance(state) {
-        url_test::apply_default_tolerance(&mut config, tolerance_ms)?;
-    }
-    policy_selection::apply_saved_selections(state, base, &mut config)?;
-    crate::services::bypass::apply(&mut config, &app)?;
-    Ok(config)
+    let candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
+    state.configuration().record(candidate.report.clone());
+    Ok(candidate.config)
 }
 
-/// DNS/Fake-IP is a client-owned runtime concern rather than part of a proxy
-/// profile. Remove any legacy profile-owned value and inject the persisted
-/// global setting into the effective config sent to Zero.
-fn apply_global_dns(
-    state: &AppState,
-    config: &mut Value,
-    dns_override: Option<&AppDnsConfig>,
-) -> AppResult<()> {
-    let app_dns = match dns_override {
-        Some(dns) => dns.clone(),
-        None => common::lock(state.app_config(), "app_config")?.dns.clone(),
-    };
-    let resolved_dns = if app_dns.enabled {
-        let dns = app_dns.config.ok_or_else(|| {
-            AppError::invalid_argument("global DNS is enabled without a DNS configuration")
-        })?;
-        let mut dns = serde_json::to_value(dns).map_err(|error| {
-            AppError::internal(format!("failed to serialize global DNS config: {error}"))
-        })?;
-        resolve_dns_detours(config, &mut dns)?;
-        Some(dns)
-    } else {
-        None
-    };
-    let root = config
-        .as_object_mut()
-        .ok_or_else(|| AppError::invalid_argument("proxy config must be a JSON object"))?;
-    let runtime = root
-        .entry("runtime".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let runtime = runtime
-        .as_object_mut()
-        .ok_or_else(|| AppError::invalid_argument("runtime must be a JSON object"))?;
-    runtime.remove("dns");
-
-    if let Some(dns) = resolved_dns {
-        runtime.insert("dns".to_string(), dns);
-    } else if runtime.is_empty() {
-        root.remove("runtime");
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum RouteFinalDnsDetour {
-    Direct,
-    Outbound(String),
-}
-
-fn resolve_dns_detours(config: &Value, dns: &mut Value) -> AppResult<()> {
-    let route_targets = route_target_tags(config);
-    let servers = dns
-        .get_mut("servers")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| AppError::invalid_argument("global DNS servers must be a JSON object"))?;
-    let follows_route_final = servers.values().any(|server| {
-        server.get("detour").and_then(Value::as_str) == Some(CLIENT_DNS_DETOUR_ROUTE_FINAL)
-    });
-    let route_final = follows_route_final
-        .then(|| route_final_dns_detour(config, &route_targets))
-        .transpose()?;
-
-    for (name, server) in servers {
-        let Some(server) = server.as_object_mut() else {
-            return Err(AppError::invalid_argument(format!(
-                "global DNS server `{name}` must be a JSON object"
-            )));
-        };
-        let Some(detour) = server
-            .get("detour")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .map(str::to_owned)
-        else {
-            continue;
-        };
-        if detour.is_empty() {
-            return Err(AppError::invalid_argument(format!(
-                "global DNS server `{name}` has an empty detour"
-            )));
-        }
-        if detour == CLIENT_DNS_DETOUR_ROUTE_FINAL {
-            match route_final.as_ref().expect("route.final was resolved") {
-                RouteFinalDnsDetour::Direct => {
-                    server.remove("detour");
-                }
-                RouteFinalDnsDetour::Outbound(tag) => {
-                    server.insert("detour".to_string(), Value::String(tag.clone()));
-                }
-            }
-        } else if !route_targets.contains(&detour) {
-            return Err(AppError::invalid_argument(format!(
-                "global DNS server `{name}` references undefined detour `{detour}` in the target proxy config"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn route_target_tags(config: &Value) -> HashSet<String> {
-    let mut targets = HashSet::from(["direct".to_owned(), "block".to_owned()]);
-    targets.extend(
-        ["outbounds", "outbound_groups"]
-            .into_iter()
-            .filter_map(|key| config.get(key).and_then(Value::as_array))
-            .flatten()
-            .filter_map(|target| target.get("tag").and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|tag| !tag.is_empty())
-            .map(str::to_owned),
-    );
-    targets
-}
-
-fn route_final_dns_detour(
-    config: &Value,
-    route_targets: &HashSet<String>,
-) -> AppResult<RouteFinalDnsDetour> {
-    let final_route = config
-        .pointer("/route/final")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            AppError::invalid_argument(
-                "global DNS detour follows route.final, but the target proxy config has no route.final",
-            )
-        })?;
-    match final_route.get("type").and_then(Value::as_str) {
-        Some("direct") => Ok(RouteFinalDnsDetour::Direct),
-        Some("route") => {
-            let outbound = final_route
-                .get("outbound")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|tag| !tag.is_empty())
-                .ok_or_else(|| {
-                    AppError::invalid_argument(
-                        "target proxy config route.final requires a non-empty outbound",
-                    )
-                })?;
-            if !route_targets.contains(outbound) {
-                return Err(AppError::invalid_argument(format!(
-                    "target proxy config route.final references undefined outbound `{outbound}`"
-                )));
-            }
-            Ok(RouteFinalDnsDetour::Outbound(outbound.to_owned()))
-        }
-        Some(kind) => Err(AppError::invalid_argument(format!(
-            "global DNS detour cannot follow target proxy config route.final of type `{kind}`"
-        ))),
-        None => Err(AppError::invalid_argument(
-            "target proxy config route.final requires a type",
-        )),
-    }
-}
-
-pub(crate) fn strip_profile_dns(config: &mut Value) {
-    let Some(root) = config.as_object_mut() else {
-        return;
-    };
-    let remove_runtime = root
-        .get_mut("runtime")
-        .and_then(Value::as_object_mut)
-        .map(|runtime| {
-            runtime.remove("dns");
-            runtime.is_empty()
-        })
-        .unwrap_or(false);
-    if remove_runtime {
-        root.remove("runtime");
-    }
-}
+#[cfg(test)]
+use crate::configuration::dns::resolve_dns_detours;
+pub(crate) use crate::configuration::dns::strip_profile_dns;
+use crate::configuration::rules::{common_tag, eligible_profiles};
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     let enabled = common::lock(state.app_config(), "app_config")?
@@ -526,114 +359,12 @@ fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
         .transpose()
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-struct ComposeResult {
-    config: Value,
-    injected_count: usize,
-}
-
 fn compose_with(
     base: &Value,
     enabled: bool,
     profiles: &[RuleSetProfile],
-) -> AppResult<ComposeResult> {
-    let mut config = base.clone();
-    strip_common_overlay(&mut config)?;
-    crate::services::route_integrity::validate(&config)?;
-    let mode = proxy_mode::detect_route_mode(base).map(|detected| match detected.mode {
-        GuiProxyMode::Global => "global".to_string(),
-        GuiProxyMode::Rule => "rule".to_string(),
-        GuiProxyMode::Direct => "direct".to_string(),
-    });
-    if !enabled {
-        return Ok(ComposeResult {
-            config,
-            injected_count: 0,
-        });
-    }
-    if mode.as_deref() != Some("rule") {
-        return Ok(ComposeResult {
-            config,
-            injected_count: 0,
-        });
-    }
-
-    let mut selected = eligible_profiles(profiles).collect::<Vec<_>>();
-    selected.sort_by_key(|profile| {
-        let binding = profile
-            .common_binding
-            .as_ref()
-            .expect("eligible profile has binding");
-        (binding.order, profile.id.as_str())
-    });
-    if selected.is_empty() {
-        return Ok(ComposeResult {
-            config,
-            injected_count: 0,
-        });
-    }
-
-    let root = config
-        .as_object_mut()
-        .ok_or_else(|| AppError::invalid_argument("proxy config must be a JSON object"))?;
-    let route = object_field(root, "route")?;
-    let final_action = route
-        .get("final")
-        .cloned()
-        .unwrap_or_else(|| json!({ "type": "direct" }));
-    let rule_sets = array_field(route, "rule_sets")?;
-    let mut definitions = Vec::with_capacity(selected.len());
-    let mut rules = Vec::with_capacity(selected.len());
-    for profile in selected {
-        let artifact = profile
-            .artifact
-            .as_ref()
-            .expect("eligible profile has artifact");
-        verify_artifact(profile, artifact)?;
-        let tag = common_tag(&profile.id);
-        definitions
-            .push(json!({ "tag": tag, "type": "file", "path": artifact.path, "format": "zrs" }));
-        let action = match &profile
-            .common_binding
-            .as_ref()
-            .expect("eligible profile has binding")
-            .action
-        {
-            CommonRuleAction::Final => final_action.clone(),
-            CommonRuleAction::Proxy => json!({
-                "type": "route",
-                "outbound": proxy_mode::resolve_global_outbound(base, None)
-            }),
-            CommonRuleAction::Direct => json!({ "type": "direct" }),
-            CommonRuleAction::Reject => json!({ "type": "reject" }),
-        };
-        rules.push(json!({ "condition": { "type": "rule_set", "tag": tag }, "action": action }));
-    }
-    let injected_count = rules.len();
-    rule_sets.extend(definitions);
-    let existing_rules = array_field(route, "rules")?;
-    // Subscription rules are usually more specific than GUI-wide rules
-    // (for example, an AI service group versus the broad built-in GFW
-    // domain set). Preserve those semantics by evaluating the subscription
-    // first and using common rules only as a fallback before `route.final`.
-    existing_rules.extend(rules);
-    Ok(ComposeResult {
-        config,
-        injected_count,
-    })
-}
-
-fn eligible_profiles(profiles: &[RuleSetProfile]) -> impl Iterator<Item = &RuleSetProfile> {
-    profiles.iter().filter(|profile| {
-        profile.enabled
-            && profile.managed_by_subscription_id.is_none()
-            && !rule_set::is_managed_subscription_rule_set_id(&profile.id)
-            && profile.artifact.is_some()
-            && profile
-                .common_binding
-                .as_ref()
-                .is_some_and(|binding| binding.enabled)
-    })
+) -> AppResult<crate::configuration::rules::ComposeResult> {
+    crate::configuration::rules::compose_with(base, enabled, profiles, verify_artifact)
 }
 
 fn verify_artifact(
@@ -659,66 +390,6 @@ fn verify_artifact(
         )));
     }
     Ok(())
-}
-
-fn common_tag(id: &str) -> String {
-    let digest = Sha256::digest(id.as_bytes());
-    let suffix = digest
-        .iter()
-        .take(8)
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("{COMMON_TAG_PREFIX}{suffix}")
-}
-
-fn strip_common_overlay(config: &mut Value) -> AppResult<()> {
-    let Some(root) = config.as_object_mut() else {
-        return Err(AppError::invalid_argument(
-            "proxy config must be a JSON object",
-        ));
-    };
-    let Some(route) = root.get_mut("route").and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    if let Some(items) = route.get_mut("rule_sets").and_then(Value::as_array_mut) {
-        items.retain(|item| {
-            !item
-                .get("tag")
-                .and_then(Value::as_str)
-                .is_some_and(|tag| tag.starts_with(COMMON_TAG_PREFIX))
-        });
-    }
-    if let Some(items) = route.get_mut("rules").and_then(Value::as_array_mut) {
-        items.retain(|item| {
-            !item
-                .get("condition")
-                .and_then(|condition| condition.get("tag"))
-                .and_then(Value::as_str)
-                .is_some_and(|tag| tag.starts_with(COMMON_TAG_PREFIX))
-        });
-    }
-    Ok(())
-}
-
-fn object_field<'a>(
-    root: &'a mut Map<String, Value>,
-    key: &str,
-) -> AppResult<&'a mut Map<String, Value>> {
-    if !root.get(key).is_some_and(Value::is_object) {
-        root.insert(key.to_string(), Value::Object(Map::new()));
-    }
-    root.get_mut(key)
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| AppError::invalid_argument(format!("{key} must be an object")))
-}
-
-fn array_field<'a>(root: &'a mut Map<String, Value>, key: &str) -> AppResult<&'a mut Vec<Value>> {
-    if !root.contains_key(key) {
-        root.insert(key.to_string(), Value::Array(Vec::new()));
-    }
-    root.get_mut(key)
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| AppError::invalid_argument(format!("route.{key} must be an array")))
 }
 
 fn active_content(state: &AppState) -> AppResult<Option<Value>> {
@@ -824,7 +495,7 @@ mod tests {
         let effective = compose_effective_config(&state, &base).unwrap();
         assert_eq!(effective["runtime"]["dns"]["default_server"], "system");
         assert_eq!(effective["runtime"]["dns"]["answer"]["type"], "fake_ip");
-        assert_eq!(effective["runtime"]["tun"]["dns_hijack"], true);
+        assert!(effective.pointer("/runtime/tun").is_none());
         assert!(effective["runtime"]["dns"]["servers"]
             .get("stale")
             .is_none());

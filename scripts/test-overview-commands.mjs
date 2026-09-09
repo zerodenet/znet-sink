@@ -54,6 +54,10 @@ async function harness(environment = {}) {
         const exports=adapters[specifier];
         return new SyntheticModule(Object.keys(exports),function(){for(const [key,value] of Object.entries(exports))this.setExport(key,value);},{context});
       }
+      if (specifier.startsWith('$lib/')) {
+        const path = specifier.slice(5);
+        return load(new URL(`../src/lib/${path.match(/\.(ts|js)$/) ? path : `${path}.ts`}`, import.meta.url).href);
+      }
       return load(new URL(specifier.match(/\.(ts|js)$/)?specifier:`${specifier}.ts`,ref.identifier).href);
     });
     return module;

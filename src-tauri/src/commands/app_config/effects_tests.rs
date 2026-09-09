@@ -66,3 +66,12 @@ fn network_changes_rebuild_profile_owned_tun_even_if_its_family_differs_from_app
     assert_eq!(old.tun.exclude_cidrs, next.tun.exclude_cidrs);
     assert!(between(&old, &next).restart);
 }
+
+#[test]
+fn changing_public_probe_url_recomposes_without_restarting_or_retargeting_proxy() {
+    let old = AppConfig::default();
+    let mut next = old.clone();
+    next.url_test.url = "https://probe.example/204".into();
+    let effects = between(&old, &next);
+    assert!(effects.recompose && !effects.restart && !effects.retarget_proxy);
+}

@@ -13,10 +13,7 @@ use crate::models::proxy_config::{
 use crate::services::common::{
     generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
-use crate::services::domain_store;
-use crate::services::{
-    app_config, app_config_store, core_config, core_process, system_proxy_guard,
-};
+use crate::services::{app_config_store, core_config, core_process, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 fn normalize_config_format(input: Option<String>) -> AppResult<String> {
@@ -126,71 +123,7 @@ fn build_upsert_profiles(
     Ok((profiles, profile))
 }
 
-pub(crate) fn persist_profile_transition(
-    state: &AppState,
-    previous: &[ProxyConfigProfile],
-    next: Vec<ProxyConfigProfile>,
-) -> AppResult<()> {
-    let mut next = next;
-    for profile in &mut next {
-        if let Some(content) = profile.content.as_mut() {
-            crate::services::rule_overlay::strip_profile_dns(content);
-        }
-    }
-    let previous_active = previous.iter().find(|profile| profile.active);
-    let next_active = next.iter().find(|profile| profile.active);
-    let active_config_changed = match (previous_active, next_active) {
-        (Some(previous), Some(next)) => {
-            previous.id != next.id
-                || previous.kernel != next.kernel
-                || previous.format != next.format
-                || previous.path != next.path
-                || previous.content != next.content
-        }
-        (None, None) => false,
-        _ => true,
-    };
-    let next_active_profile = next_active.cloned();
-
-    if let Some(active) = next.iter().find(|profile| profile.active) {
-        ensure_managed_system_proxy_compatible(active.content.as_ref())?;
-    }
-    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
-    let mut next_subscriptions = previous_subscriptions.clone();
-    let mut subscriptions_changed = false;
-    let profile_ids = next
-        .iter()
-        .map(|profile| profile.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    for subscription in &mut next_subscriptions {
-        if subscription
-            .target_proxy_config_id
-            .as_deref()
-            .is_some_and(|id| !profile_ids.contains(id))
-        {
-            subscription.target_proxy_config_id = None;
-            subscriptions_changed = true;
-        }
-    }
-    domain_store::save_relational_data(&next, &next_subscriptions)?;
-    let local_proxy_result = if let Some(active) = next.iter().find(|profile| profile.active) {
-        sync_local_proxy_from_profile(state, active)
-    } else {
-        clear_local_proxy_source(state)
-    };
-    if let Err(error) = local_proxy_result {
-        let _ = domain_store::save_relational_data(previous, &previous_subscriptions);
-        return Err(error);
-    }
-    *lock(state.proxy_configs(), "proxy_config")? = next;
-    if subscriptions_changed {
-        *lock(state.subscriptions(), "subscription")? = next_subscriptions;
-    }
-    if active_config_changed {
-        state.client_core_configuration_committed(next_active_profile.as_ref());
-    }
-    Ok(())
-}
+pub(crate) use crate::configuration::persistence::commit as persist_profile_transition;
 
 pub fn import(
     state: State<'_, AppState>,
@@ -384,6 +317,19 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
     let id = normalize_required(id, "id")?;
+    let boundary = crate::services::profile_switch::capture(state.inner(), &id).await?;
+    let active = activate_runtime_locked(app_handle.clone(), id).await?;
+    if let Some((options, boundary)) = boundary {
+        crate::services::profile_switch::reconcile(state.inner(), options, boundary).await;
+    }
+    Ok(active)
+}
+
+async fn activate_runtime_locked(
+    app_handle: AppHandle,
+    id: String,
+) -> AppResult<ProxyConfigProfile> {
+    let state = app_handle.state::<AppState>();
     let (previous_active, target) = {
         let profiles = lock(state.proxy_configs(), "proxy_config")?;
         let target = profiles
@@ -416,14 +362,15 @@ pub async fn activate_runtime(app_handle: AppHandle, id: String) -> AppResult<Pr
     match crate::services::config_apply::apply(content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
-                if let Err(error) = export_and_retarget_active(state.clone()) {
-                    rollback_hot_activation(state.clone(), previous_active.as_ref()).await;
+                if let Err(mut error) = export_and_retarget_active(state.clone()) {
+                    rollback_hot_activation(state.clone(), previous_active.as_ref(), &mut error)
+                        .await;
                     return Err(error);
                 }
                 Ok(active)
             }
-            Err(error) => {
-                rollback_hot_activation(state.clone(), previous_active.as_ref()).await;
+            Err(mut error) => {
+                rollback_hot_activation(state.clone(), previous_active.as_ref(), &mut error).await;
                 Err(error)
             }
         },
@@ -487,14 +434,30 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
         .await?;
     match crate::services::config_apply::apply(content, options).await {
         Ok(_) => {
-            if let Err(error) = remove(state.clone(), id) {
-                let _ = reapply_profile(state.inner(), &removed).await;
+            if let Err(mut error) = remove(state.clone(), id) {
+                append_recovery(
+                    &mut error,
+                    "runtime",
+                    reapply_profile(state.inner(), &removed).await,
+                );
                 return Err(error);
             }
-            if let Err(error) = retarget_managed_system_proxy(state.inner()) {
-                let _ = restore_removed_profile(state.clone(), removed.clone());
-                let _ = reapply_profile(state.inner(), &removed).await;
-                let _ = retarget_managed_system_proxy(state.inner());
+            if let Err(mut error) = retarget_managed_system_proxy(state.inner()) {
+                append_recovery(
+                    &mut error,
+                    "profile storage",
+                    restore_removed_profile(state.clone(), removed.clone()),
+                );
+                append_recovery(
+                    &mut error,
+                    "runtime",
+                    reapply_profile(state.inner(), &removed).await,
+                );
+                append_recovery(
+                    &mut error,
+                    "system proxy",
+                    retarget_managed_system_proxy(state.inner()),
+                );
                 return Err(error);
             }
             Ok(())
@@ -509,6 +472,11 @@ fn append_recovery(error: &mut AppError, component: &str, recovery: AppResult<()
             "; {component} rollback failed: {}",
             rollback.message
         ));
+        if component == "runtime" {
+            error.code = "config_apply_uncertain";
+        }
+        error.details = Some(serde_json::json!({"cause":error.details,
+            "recovery":{"component":component,"code":rollback.code,"message":rollback.message}}));
     }
 }
 
@@ -528,13 +496,26 @@ async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppR
 async fn rollback_hot_activation(
     state: State<'_, AppState>,
     previous: Option<&ProxyConfigProfile>,
+    error: &mut AppError,
 ) {
     let Some(previous) = previous else {
         return;
     };
-    let _ = reapply_profile(state.inner(), previous).await;
-    let _ = set_active(state.clone(), previous.id.clone());
-    let _ = retarget_managed_system_proxy(state.inner());
+    append_recovery(
+        error,
+        "runtime",
+        reapply_profile(state.inner(), previous).await,
+    );
+    append_recovery(
+        error,
+        "profile storage",
+        set_active(state.clone(), previous.id.clone()).map(|_| ()),
+    );
+    append_recovery(
+        error,
+        "export and system proxy",
+        export_and_retarget_active(state),
+    );
 }
 
 fn rollback_stopped_activation(state: State<'_, AppState>, previous: Option<&ProxyConfigProfile>) {
@@ -616,7 +597,7 @@ fn restore_managed_system_proxy_if_needed(state: &AppState, was_enabled: bool) -
     Ok(())
 }
 
-fn clear_local_proxy_source(state: &AppState) -> AppResult<()> {
+pub(crate) fn clear_local_proxy_source(state: &AppState) -> AppResult<()> {
     let mut next = lock(state.app_config(), "app_config")?.clone();
     next.local_proxy.source_proxy_config_id = None;
     app_config_store::save(&app_config_store::default_config_path()?, &next)?;
@@ -730,34 +711,17 @@ fn extract_inbound_endpoint(inbound: &Value) -> Option<LocalProxyEndpoint> {
 
 pub(crate) fn sync_local_proxy_from_profile(
     state: &AppState,
-    profile: &ProxyConfigProfile,
+    _profile: &ProxyConfigProfile,
 ) -> AppResult<()> {
     let mut next = lock(state.app_config(), "app_config")?.clone();
-    if let Some(endpoint) = profile.content.as_ref().and_then(extract_local_proxy) {
-        app_config::validate_port(endpoint.port, "localProxy.port")?;
-        if profile
-            .content
-            .as_ref()
-            .is_some_and(super::has_managed_local_inbound)
-        {
-            let (host, port) = super::resolve_managed_endpoint(&next.local_proxy);
-            next.local_proxy.host = host;
-            next.local_proxy.port = port;
-            next.local_proxy.source_proxy_config_id = None;
-        } else {
-            next.local_proxy.host = endpoint.host;
-            next.local_proxy.port = endpoint.port;
-            next.local_proxy.source_proxy_config_id = Some(profile.id.clone());
-        }
-    } else {
-        next.local_proxy.source_proxy_config_id = None;
-    }
+    // Profile activation never replaces the client-owned listener settings.
+    next.local_proxy.source_proxy_config_id = None;
     app_config_store::save(&app_config_store::default_config_path()?, &next)?;
     *lock(state.app_config(), "app_config")? = next;
     Ok(())
 }
 
-fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {
+pub(crate) fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {
     if system_proxy_guard::is_enabled_by_guard()? && content.and_then(extract_local_proxy).is_none()
     {
         return Err(AppError::invalid_argument(

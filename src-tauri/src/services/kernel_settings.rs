@@ -111,6 +111,7 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
 }
 
 fn normalize_and_validate(settings: &mut ClientKernelSettings) -> AppResult<()> {
+    settings.url_test.url = super::url_test::normalize_url(&settings.url_test.url)?;
     settings.core.network_probe_urls =
         super::app_config::normalize_network_probe_urls(settings.core.network_probe_urls.clone())?;
 

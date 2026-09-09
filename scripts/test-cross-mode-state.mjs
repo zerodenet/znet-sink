@@ -9,8 +9,8 @@ const configService = read('src/lib/services/config.ts');
 const configSignal = read('src/lib/services/proxy-config-signal.svelte.ts');
 const profilesTab = read('src/lib/components/tabs/ProfilesTab.svelte');
 const configEditor = read('src/lib/services/config-editor.svelte.ts');
-const guiConnection = read('src-tauri/src/services/gui_connection.rs');
-const coreProcessCommand = read('src-tauri/src/commands/core_process.rs');
+const guiConnection = read('src-tauri/src/capture/connection.rs');
+const coreProcessCommand = read('src-tauri/src/commands/core_process.rs') + read('src-tauri/src/capture/tun.rs');
 const appConfigCommand = read('src-tauri/src/commands/app_config.rs');
 const guiState = read('src/lib/services/gui-state.svelte.ts');
 const appStore = read('src/lib/services/store.svelte.ts');
@@ -37,9 +37,8 @@ assert.ok(
     && configService.includes('proxyConfigSignal.markChanged(true)')
     && configService.includes("invoke<SubscriptionProfile>('subscription_sync'")
     && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
-    && configService.includes('prepareGuiTunForProfileSwitch(target.content)')
     && configService.includes("reconcileTunAfterConfigMutation('profile activation')")
-    && configService.includes('restoreGuiTunAfterFailedProfileSwitch(transition)'),
+    && !configService.includes('prepareGuiTunForProfileSwitch'),
   'profile activation/subscription updates must invalidate config-backed surfaces and reconcile client-owned TUN around source changes',
 );
 
@@ -125,10 +124,10 @@ assert.ok(
     && tunSettings.includes('checked={dnsHijack}')
     && tunSettings.includes('<span class="label-text">DNS 劫持</span>')
     && tunSettings.includes('dnsHijack,')
-    && tunSettings.includes('已显式定义 <code>runtime.tun</code>')
+    && !tunSettings.includes('保存缺省值')
     && !tunSettings.includes('autoRoute')
     && !tunSettings.includes('strictRoute'),
-  'Pro TUN settings should expose local defaults and persist DNS hijack only through the completed DNS configuration surface',
+  'Pro TUN settings should expose client-owned settings and persist DNS hijack only through the completed DNS configuration surface',
 );
 
 assert.ok(
@@ -146,12 +145,9 @@ assert.ok(
     && tunService.includes("await invoke('gui_tun_enable')")
     && tunService.includes("await invoke('gui_tun_disable')")
     && tunService.includes('export async function reconcileGuiTunRuntime()')
-    && tunService.includes('export async function prepareGuiTunForProfileSwitch(content: unknown)')
-    && tunService.includes('restoreGuiTunAfterFailedProfileSwitch')
     && tunService.includes('if (desired === undefined)')
-    && tunService.includes('profileDesiredEnabled: runtime.tun !== null')
-    && tunService.includes("code: 'tun_managed_by_profile'"),
-  'GUI TUN actions must persist desired state while controlling app-owned TUN through tun.start/tun.stop and handing profile ownership off explicitly',
+    && !tunService.includes('profileManaged'),
+  'GUI TUN actions must persist desired state while controlling app-owned TUN through tun.start/tun.stop without allowing profile declarations to override client intent',
 );
 
 assert.ok(
@@ -185,11 +181,11 @@ assert.ok(
 assert.ok(
   coreProcessCommand.includes('restore_app_tun_after_core_transition')
     && coreProcessCommand.includes('desired_enabled.unwrap_or(app_config.tun.enabled == Some(true))')
-    && coreProcessCommand.includes('if !should_enable || active_profile_defines_tun(state)?')
-    && coreProcessCommand.includes('active_profile_defines_tun(state)?')
+    && coreProcessCommand.includes('if !should_enable')
+    && !coreProcessCommand.includes('active_profile_defines_tun')
     && coreProcessCommand.includes('tun_restore::restore(')
     && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone()))'),
-  'managed Core start/restart must replay persisted app-owned TUN only when the active profile does not own runtime.tun',
+  'managed Core start/restart must replay persisted app-owned TUN independently of source runtime.tun',
 );
 
 assert.ok(

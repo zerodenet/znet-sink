@@ -4,6 +4,10 @@
 //! and return parsed GUI model types. This separation makes the
 //! parsing logic trivially testable without kernel IPC.
 
+#[cfg(feature = "tool-dns")]
+use crate::models::gui_core::GuiFakeIpClearResult;
+#[cfg(feature = "tool-node-probe")]
+use crate::models::gui_core::GuiTargetProbeResult;
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
@@ -12,9 +16,9 @@ use crate::models::gui_core::{
     GuiConfigPlanApplyResult, GuiConnection, GuiConnectionAddressFamilyFallback,
     GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
     GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
-    GuiConnectionSocketBinding, GuiContractVersionRange, GuiCoreHealth, GuiFakeIpClearResult,
-    GuiFeatureStatus, GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult,
-    GuiProtocolCapability, GuiTargetProbeResult, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionSocketBinding, GuiContractVersionRange, GuiCoreHealth, GuiFeatureStatus,
+    GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability,
+    GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -282,6 +286,7 @@ pub fn parse_policy_selection(
     }
 }
 
+#[cfg(feature = "tool-node-probe")]
 pub fn parse_target_probe(value: &Value, target_tag: String) -> GuiTargetProbeResult {
     let result = nested_value(value, &["result"]).unwrap_or(value);
     GuiTargetProbeResult {
@@ -690,6 +695,7 @@ pub fn parse_connection_close(value: &Value, flow_id: String) -> GuiConnectionCl
     }
 }
 
+#[cfg(feature = "tool-dns")]
 pub fn parse_fake_ip_clear(value: &Value) -> GuiFakeIpClearResult {
     let result = nested_value(value, &["result"]).unwrap_or(value);
     GuiFakeIpClearResult {

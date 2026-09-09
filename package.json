@@ -17,7 +17,7 @@
     "test:notifications": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-notification-logging.mjs",
     "test:diagnostic-copy": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-diagnostic-copy.mjs",
     "test:async-state": "node scripts/test-latest-request-gate.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-node-state-reconcile.mjs",
-    "test:core-events": "node --experimental-strip-types scripts/test-core-event-lifecycle.mjs",
+    "test:core-events": "node --experimental-strip-types scripts/test-core-event-lifecycle.mjs && node --experimental-vm-modules --test scripts/test-observation-state.mjs",
     "test:release-version": "node scripts/test-version-manifests.mjs && node scripts/test-release-policy.mjs && node --test scripts/test-stable-readiness.mjs",
     "test:app-update": "node --experimental-strip-types scripts/test-app-update-policy.mjs && node --experimental-vm-modules --test scripts/test-updater-lifecycle.mjs",
     "test:onboarding": "node --experimental-strip-types scripts/test-onboarding-state.mjs",
@@ -33,8 +33,8 @@
     "test:ui-controls": "node scripts/test-ui-controls.mjs",
     "test:ui-browser": "playwright test",
     "test:runtime-lifecycle": "node scripts/test-runtime-lifecycle.mjs",
-    "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:release-version && pnpm test:app-update && pnpm test:overview && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
-    "verify:backend": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets -j 1 && cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1",
+    "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:product-composition && pnpm test:feature-owners && pnpm test:config-workspace && pnpm test:release-version && pnpm test:app-update && pnpm test:overview && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
+    "verify:backend": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo check --manifest-path src-tauri/Cargo.toml --workspace --locked --all-targets -j 1 && cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1",
     "verify": "pnpm verify:frontend && pnpm verify:backend && git diff --check",
     "verify:bundle": "pnpm verify && pnpm tauri build --no-sign",
     "verify:release": "pnpm verify && pnpm tauri build --ci",
@@ -47,7 +47,11 @@
     "test:tun-recovery": "node --test scripts/test-tun-recovery.mjs",
     "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs",
     "verify:stable": "node scripts/check-stable-readiness.mjs",
-    "test:overview": "node --experimental-strip-types --test scripts/test-professional-overview.mjs && node --experimental-vm-modules --test scripts/test-overview-commands.mjs"
+    "test:overview": "node --experimental-strip-types --test scripts/test-professional-overview.mjs && node --experimental-vm-modules --test scripts/test-overview-commands.mjs",
+    "test:config-workspace": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-profile-activation.mjs",
+    "test:feature-owners": "node --test scripts/test-feature-owners.mjs",
+    "product": "node scripts/product.mjs",
+    "test:product-composition": "node --test scripts/test-product-composition.mjs"
   },
   "config": {
     "commitizen": {

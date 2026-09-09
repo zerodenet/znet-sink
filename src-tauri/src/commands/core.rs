@@ -152,6 +152,7 @@ pub async fn core_select_policy(
     ipc::select_policy(policy_tag, target_tag, resolve_options(&state, options)?).await
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[tauri::command]
 pub async fn core_probe_policy(
     state: State<'_, AppState>,

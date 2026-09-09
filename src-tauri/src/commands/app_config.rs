@@ -168,15 +168,6 @@ pub async fn app_config_update(
             "运行中 DNS 配置必须通过 DNS 应用事务修改，请使用 DNS 设置页的应用操作",
         ));
     }
-    let custom_endpoint = old_config.local_proxy.source_proxy_config_id.is_some();
-    if custom_endpoint
-        && (old_config.local_proxy.host != new_config.local_proxy.host
-            || old_config.local_proxy.port != new_config.local_proxy.port)
-    {
-        return Err(AppError::invalid_argument(
-            "当前代理入口由配置文件定义，请在配置编辑器修改入站地址和端口",
-        ));
-    }
     if effects.restart || effects.recompose || old_config.dns != new_config.dns {
         rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?;
     }

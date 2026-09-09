@@ -4,6 +4,9 @@
   import { Input } from '$lib/components/ui/input';
   import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
 
+  const DEFAULT_URL = 'http://www.gstatic.com/generate_204';
+  let url = $state(DEFAULT_URL);
+
   const DEFAULT_TOLERANCE_MS = 50;
 
   let tolerance = $state(String(DEFAULT_TOLERANCE_MS));
@@ -13,6 +16,7 @@
   let saved = $state(false);
 
   function resetDefault() {
+    url = DEFAULT_URL;
     tolerance = String(DEFAULT_TOLERANCE_MS);
     saved = false;
     error = null;
@@ -23,9 +27,10 @@
     error = null;
     try {
       const config = await getAppConfig();
+      url = config.urlTest?.url || DEFAULT_URL;
       tolerance = String(config.urlTest?.toleranceMs ?? DEFAULT_TOLERANCE_MS);
     } catch (cause) {
-      error = getAppErrorMessage(cause, '加载 URLTest 延迟容差失败');
+      error = getAppErrorMessage(cause, '加载测速设置失败');
     } finally {
       loading = false;
     }
@@ -41,15 +46,24 @@
       return;
     }
 
+    let normalizedUrl: URL;
+    try {
+      normalizedUrl = new URL(url.trim());
+      if (!['http:', 'https:'].includes(normalizedUrl.protocol) || !normalizedUrl.hostname || normalizedUrl.username || normalizedUrl.password || normalizedUrl.hash) throw new Error();
+    } catch {
+      error = '公共测速地址必须是完整的 HTTP(S) URL，不能包含账号密码或片段';
+      return;
+    }
     saving = true;
     try {
       const config = await updateAppConfig({
-        urlTest: { toleranceMs: normalized },
+        urlTest: { url: normalizedUrl.toString(), toleranceMs: normalized },
       });
+      url = config.urlTest.url;
       tolerance = String(config.urlTest.toleranceMs);
       saved = true;
     } catch (cause) {
-      error = getAppErrorMessage(cause, '保存 URLTest 延迟容差失败');
+      error = getAppErrorMessage(cause, '保存测速设置失败');
     } finally {
       saving = false;
     }
@@ -61,16 +75,23 @@
 </script>
 
 <div class="config-section">
-  <div class="config-section-title">自动选择</div>
+  <div class="config-section-title">公共测速与自动选择</div>
 
   {#if loading}
     <div class="config-loading">加载配置中...</div>
   {:else}
     <div class="config-row">
       <div class="config-row-label">
+        <span class="label-text">公共测速地址</span>
+        <span class="label-desc">手动节点测速和自动 URLTest 统一使用此地址，覆盖订阅／配置文件的测速地址。保存后应用到当前内核，后续测速使用新值。</span>
+      </div>
+      <Input class="w-full max-w-sm font-mono" bind:value={url} oninput={() => (saved = false)} disabled={saving} aria-label="公共测速地址" placeholder="http://www.gstatic.com/generate_204" />
+    </div>
+    <div class="config-row">
+      <div class="config-row-label">
         <span class="label-text">URLTest 延迟容差</span>
         <span class="label-desc">
-          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；Zero 配置显式设置的 tolerance_ms 优先。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
+          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；客户端设置覆盖配置文件中的 tolerance_ms。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
         </span>
       </div>
 

@@ -1,0 +1,17 @@
+{
+  "desktop": [
+    "tool-dns",
+    "tool-route",
+    "tool-node-probe"
+  ],
+  "desktop-dns": [
+    "tool-dns"
+  ],
+  "desktop-route": [
+    "tool-route"
+  ],
+  "desktop-base": [],
+  "desktop-node-probe": [
+    "tool-node-probe"
+  ]
+}

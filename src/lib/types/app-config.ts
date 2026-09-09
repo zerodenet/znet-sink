@@ -77,6 +77,7 @@ export interface AppRoutingConfig {
 }
 
 export interface AppUrlTestConfig {
+  url: string;
   toleranceMs: number;
 }
 
@@ -158,6 +159,7 @@ export interface AppRoutingConfigPatch {
 }
 
 export interface AppUrlTestConfigPatch {
+  url?: string;
   toleranceMs?: number;
 }
 

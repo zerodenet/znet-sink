@@ -30,8 +30,11 @@
 
 pub mod adapter;
 pub mod connection;
+pub mod observation;
 pub mod protocol;
 pub mod transport;
 pub mod zero;
 
 pub use adapter::KernelAdapter;
+
+pub(crate) mod configuration;

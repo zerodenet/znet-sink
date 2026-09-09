@@ -499,12 +499,10 @@ fn validate_subscribe_ack(frame: &Value) -> AppResult<()> {
 
 // ── Global connection manager ───────────────────────────────────────
 
-struct ManagedConnection {
-    endpoint_path: String,
-    conn: MultiplexedConnection,
-}
+type EndpointKey = (&'static str, String);
 
-static MANAGER: LazyLock<Mutex<Option<ManagedConnection>>> = LazyLock::new(|| Mutex::new(None));
+static MANAGER: LazyLock<Mutex<HashMap<EndpointKey, MultiplexedConnection>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Serializes cold connects without holding [`MANAGER`] across blocking pipe
 /// I/O. Dropping a losing `MultiplexedConnection` is not sufficient to close
 /// its pipe because the reader thread owns another `Arc`, so concurrent cold
@@ -512,7 +510,7 @@ static MANAGER: LazyLock<Mutex<Option<ManagedConnection>>> = LazyLock::new(|| Mu
 static CONNECT_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Return the live multiplexed connection for `endpoint`, creating one if
-/// none exists, the cached one is dead, or it is bound to a different path.
+/// none exists for this transport/path pair, or the cached one is dead.
 ///
 /// The fast path (cache hit) holds the manager lock only long enough to clone
 /// the cached connection. The slow path is serialized by [`CONNECT_GATE`]
@@ -523,14 +521,14 @@ pub fn get_or_connect(
     endpoint: CoreEndpoint,
     connect_timeout: Duration,
 ) -> AppResult<MultiplexedConnection> {
-    let path = endpoint.path.clone();
+    let key = (endpoint.transport, endpoint.path.clone());
 
     // ── Fast path: check the cache without blocking on connect ──
     {
         let guard = recover_lock(&MANAGER);
-        if let Some(managed) = guard.as_ref() {
-            if managed.endpoint_path == path && managed.conn.is_alive() {
-                return Ok(managed.conn.clone());
+        if let Some(conn) = guard.get(&key) {
+            if conn.is_alive() {
+                return Ok(conn.clone());
             }
         }
     }
@@ -542,9 +540,9 @@ pub fn get_or_connect(
     // A caller may have populated the cache while we waited for the gate.
     {
         let guard = recover_lock(&MANAGER);
-        if let Some(managed) = guard.as_ref() {
-            if managed.endpoint_path == path && managed.conn.is_alive() {
-                return Ok(managed.conn.clone());
+        if let Some(conn) = guard.get(&key) {
+            if conn.is_alive() {
+                return Ok(conn.clone());
             }
         }
     }
@@ -554,22 +552,28 @@ pub fn get_or_connect(
     // Publish while the connect gate is still held, so no concurrent cold
     // caller can create a second reader/subscription.
     let mut guard = recover_lock(&MANAGER);
-    *guard = Some(ManagedConnection {
-        endpoint_path: path,
-        conn: conn.clone(),
-    });
+    guard.retain(|_, cached| cached.is_alive());
+    guard.insert(key, conn.clone());
     Ok(conn)
 }
 
-/// Drop the cached connection, if any. Called when the kernel is stopped so
+/// Retire all cached connections. Called when the kernel is stopped so
 /// the next request reconnects cleanly instead of reusing a dead handle.
 pub fn reset() {
     // Wait for an in-flight connect to finish before clearing the cache. This
     // prevents an old-endpoint connection from being published after reset.
     let _connect_guard = recover_lock(&CONNECT_GATE);
     let mut guard = recover_lock(&MANAGER);
-    if let Some(managed) = guard.take() {
-        managed.conn.retire();
+    for (_, conn) in guard.drain() {
+        conn.retire();
+    }
+}
+
+pub fn reset_endpoint(endpoint: &CoreEndpoint) {
+    let _connect_guard = recover_lock(&CONNECT_GATE);
+    let mut guard = recover_lock(&MANAGER);
+    if let Some(conn) = guard.remove(&(endpoint.transport, endpoint.path.clone())) {
+        conn.retire();
     }
 }
 

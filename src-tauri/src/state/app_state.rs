@@ -1,43 +1,40 @@
+#[cfg(feature = "tool-node-probe")]
+use crate::client_core::{
+    ClientCoreError, ProbeJobId, ProbeTargetResult, StartProbeOutcome, StartProbeRequest,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use std::thread::JoinHandle;
 
 use crate::client_core::{
-    ClientCore, ClientCoreError, ClientCoreSnapshot, ClientScope, ProbeJobId, ProbeJobSnapshot,
-    ProbeObservation, ProbeTargetResult, ProfileId, SourceStatus, StartProbeOutcome,
-    StartProbeRequest,
+    ClientCore, ClientCoreSnapshot, ClientScope, ProbeJobSnapshot, ProbeObservation, ProfileId,
+    SourceStatus,
 };
 use crate::kernel::zero::adapter::TrafficSample;
 use crate::models::{
-    app_config::AppConfig,
-    core_process::{CoreProcessState, CoreProcessStatus},
-    logs::LogEntry,
-    proxy_config::ProxyConfigProfile,
-    rule_set::RuleSetProfile,
-    subscription::SubscriptionProfile,
+    app_config::AppConfig, logs::LogEntry, proxy_config::ProxyConfigProfile,
+    rule_set::RuleSetProfile, subscription::SubscriptionProfile,
 };
 
 pub struct AppState {
     client_core: Mutex<ClientCore>,
     core_event_generation: Arc<AtomicU64>,
-    gui_event_generation: Arc<AtomicU64>,
-    core_process_monitor_generation: Arc<AtomicU64>,
+    observations: znet_engine_client::SubscriptionOwner,
     next_record_id: AtomicU64,
     app_config: Mutex<AppConfig>,
     proxy_configs: Mutex<Vec<ProxyConfigProfile>>,
     subscriptions: Mutex<Vec<SubscriptionProfile>>,
     rule_sets: Mutex<Vec<RuleSetProfile>>,
-    proxy_config_operation: tokio::sync::Mutex<()>,
+    configuration: crate::configuration::Workspace,
+    runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
     logs: Mutex<Vec<LogEntry>>,
     traffic_sample: Mutex<Option<TrafficSample>>,
-    core_process: Mutex<ManagedCoreProcess>,
+    runtime_host: crate::runtime_host::Host,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
     /// Set to `true` the moment shutdown begins. Long-lived background
     /// tasks (core-process watchdog, event streams) poll this to stop
@@ -49,41 +46,6 @@ pub struct AppState {
 pub(crate) struct ZeroFeaturesCache {
     pub features: Vec<String>,
     pub cached_at_unix_ms: u64,
-}
-
-pub(crate) struct ManagedCoreProcess {
-    pub child: Option<Child>,
-    pub stderr_handle: Option<JoinHandle<()>>,
-    pub status: CoreProcessStatus,
-}
-
-impl Drop for ManagedCoreProcess {
-    fn drop(&mut self) {
-        if let Some(ref mut child) = self.child {
-            eprintln!(
-                "[ZNet] shutdown: closing core lifetime pipe (pid={})",
-                child.id()
-            );
-            child.stdin.take();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                    _ => {
-                        // This is still scoped to the exact child owned by
-                        // this state; never kill processes by executable name.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                }
-            }
-        }
-        self.stderr_handle.take().map(|h| h.join());
-    }
 }
 
 impl Default for AppState {
@@ -113,19 +75,19 @@ impl AppState {
         Self {
             client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
             core_event_generation: Arc::new(AtomicU64::default()),
-            gui_event_generation: Arc::new(AtomicU64::default()),
-            core_process_monitor_generation: Arc::new(AtomicU64::default()),
+            observations: znet_engine_client::SubscriptionOwner::default(),
             next_record_id: AtomicU64::new(next_record_id),
             app_config: Mutex::new(app_config),
             proxy_configs: Mutex::new(proxy_configs),
             subscriptions: Mutex::new(subscriptions),
             rule_sets: Mutex::new(rule_sets),
-            proxy_config_operation: tokio::sync::Mutex::new(()),
+            configuration: crate::configuration::Workspace::default(),
+            runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
             logs: Mutex::new(logs),
             traffic_sample: Mutex::new(None),
-            core_process: Mutex::new(ManagedCoreProcess::default()),
+            runtime_host: crate::runtime_host::Host::default(),
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
@@ -139,12 +101,8 @@ impl AppState {
         Arc::clone(&self.core_event_generation)
     }
 
-    pub(crate) fn next_gui_event_generation(&self) -> u64 {
-        self.gui_event_generation.fetch_add(1, Ordering::SeqCst) + 1
-    }
-
-    pub(crate) fn gui_event_generation(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.gui_event_generation)
+    pub(crate) fn observations(&self) -> &znet_engine_client::SubscriptionOwner {
+        &self.observations
     }
 
     pub(crate) fn client_core_snapshot(&self) -> ClientCoreSnapshot {
@@ -189,6 +147,7 @@ impl AppState {
             .set_source_status(status);
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn start_client_probe(
         &self,
         request: StartProbeRequest,
@@ -199,6 +158,7 @@ impl AppState {
             .start_probe(request, crate::services::common::now_unix_ms())
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn record_client_probe_result(
         &self,
         id: ProbeJobId,
@@ -253,6 +213,7 @@ impl AppState {
             .restore_observations(observations);
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn get_client_probe_job(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
         self.client_core
             .lock()
@@ -271,6 +232,7 @@ impl AppState {
             .list_probe_jobs(profile_id.as_ref())
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn cancel_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
         self.client_core
             .lock()
@@ -278,6 +240,7 @@ impl AppState {
             .cancel_probe(id, crate::services::common::now_unix_ms())
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn timeout_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
         let (updated, observations) = {
             let mut core = self
@@ -298,13 +261,11 @@ impl AppState {
     }
 
     pub(crate) fn next_core_process_monitor_generation(&self) -> u64 {
-        self.core_process_monitor_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1
+        self.runtime_host.advance_generation()
     }
 
     pub(crate) fn core_process_monitor_generation(&self) -> u64 {
-        self.core_process_monitor_generation.load(Ordering::SeqCst)
+        self.runtime_host.generation()
     }
 
     pub(crate) fn next_record_id(&self) -> u64 {
@@ -327,8 +288,12 @@ impl AppState {
         &self.rule_sets
     }
 
+    pub(crate) fn configuration(&self) -> &crate::configuration::Workspace {
+        &self.configuration
+    }
+
     pub(crate) fn proxy_config_operation(&self) -> &tokio::sync::Mutex<()> {
-        &self.proxy_config_operation
+        &self.runtime_operation
     }
 
     pub(crate) fn subscription_syncs(&self) -> &Mutex<HashSet<String>> {
@@ -347,8 +312,8 @@ impl AppState {
         &self.traffic_sample
     }
 
-    pub(crate) fn core_process(&self) -> &Mutex<ManagedCoreProcess> {
-        &self.core_process
+    pub(crate) fn runtime_host(&self) -> &crate::runtime_host::Host {
+        &self.runtime_host
     }
 
     pub(crate) fn zero_features_cache(&self) -> &Mutex<Option<ZeroFeaturesCache>> {
@@ -384,29 +349,6 @@ fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyCo
     }
 
     profiles
-}
-
-impl Default for ManagedCoreProcess {
-    fn default() -> Self {
-        Self {
-            child: None,
-            stderr_handle: None,
-            status: CoreProcessStatus {
-                state: CoreProcessState::NotStarted,
-                pid: None,
-                kernel: "zero".to_string(),
-                executable_path: None,
-                working_dir: None,
-                config_path: None,
-                endpoint_path: String::new(),
-                started_at_unix_ms: None,
-                exited_at_unix_ms: None,
-                exit_code: None,
-                exit_reason: None,
-                last_error: None,
-            },
-        }
-    }
 }
 
 fn config_revision(profile: Option<&ProxyConfigProfile>) -> crate::client_core::ConfigRevision {

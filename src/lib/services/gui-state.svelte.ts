@@ -1,3 +1,6 @@
+import { NetworkProbeState } from '$lib/features/probes/network.svelte';
+import { PolicyState } from '$lib/features/policies/state.svelte';
+import { RuntimeObservation } from '$lib/features/runtime/observation.svelte';
 import {
   getGuiSelfTestSnapshot,
   getGuiConnectionStatus,
@@ -23,11 +26,6 @@ import { getAppConfig } from './core';
 import { getGuiTunStatus, enableGuiTun, disableGuiTun, recoverGuiTun } from './tun';
 import { error as toastError, success as toastSuccess, warning as toastWarning } from './toast.svelte';
 import { tracedOperation } from './telemetry';
-import { createLatestRequestGate } from './latest-request-gate.js';
-import {
-  retainConfiguredPolicyGroups,
-  shouldApplyPolicyProbeEvent,
-} from './node-state-reconcile';
 import type {
   ConfigProxyNode,
   SelfTestSnapshot,
@@ -41,30 +39,51 @@ import type { GuiManagedTunStatus } from '$lib/types/tun';
 import type { CommandResult, CommandOptions } from './command-result';
 import { RuntimeStatusObserver } from './runtime-status-observer';
 
-const NETWORK_PROBE_INTERVAL_MS = 5 * 60_000;
 
 class GuiStateStore {
-  selfTest = $state<SelfTestSnapshot | null>(null);
-  connection = $state<ConnectionStatus | null>(null);
-  connectionUpdatedAt = $state(0);
-  connectionError = $state<string | null>(null);
-  selfTestUpdatedAt = $state(0);
-  proxyMode = $state<ProxyModeStatus | null>(null);
-  coreOverview = $state<CoreOverview | null>(null);
-  policyGroups = $state<PolicyGroup[]>([]);
-  policyGroupsUpdatedAt = $state(0);
-  policyGroupsError = $state<string | null>(null);
-  tunStatus = $state<GuiManagedTunStatus | null>(null);
-  tunStatusError = $state<string | null>(null);
-  private savedTunEnabled = $state<boolean | undefined>(undefined);
-  private tunStatusRefreshGate = createLatestRequestGate();
-  configNodes = $state<ConfigProxyNode[]>([]);
-  configPolicyGroups = $state<PolicyGroup[]>([]);
-  networkProbe = $state<NetworkProbeResult | null>(null);
-  networkProbeLoading = $state(false);
-  networkProbeError = $state<string | null>(null);
+  private networkState = new NetworkProbeState({query: guiNetworkProbe, changed: () => { void this.refreshSelfTest(); }, error: (error) => this.errorMessage(error)});
+  private policyState = new PolicyState({getGuiProxyModeStatus, getConfigProxyNodes, getConfigPolicyGroups, getGuiPolicyGroups, errorMessage: (error) => this.errorMessage(error)});
+  private runtimeObservation = new RuntimeObservation();
+  get selfTest() { return this.runtimeObservation.selfTest; }
+  set selfTest(value: SelfTestSnapshot | null) { this.runtimeObservation.selfTest = value; }
+  get connection() { return this.runtimeObservation.connection; }
+  set connection(value: ConnectionStatus | null) { this.runtimeObservation.connection = value; }
+  get connectionUpdatedAt() { return this.runtimeObservation.connectionUpdatedAt; }
+  set connectionUpdatedAt(value: number) { this.runtimeObservation.connectionUpdatedAt = value; }
+  get connectionError() { return this.runtimeObservation.connectionError; }
+  set connectionError(value: string | null) { this.runtimeObservation.connectionError = value; }
+  get selfTestUpdatedAt() { return this.runtimeObservation.selfTestUpdatedAt; }
+  set selfTestUpdatedAt(value: number) { this.runtimeObservation.selfTestUpdatedAt = value; }
+  get proxyMode() { return this.policyState.proxyMode; }
+  set proxyMode(value: ProxyModeStatus | null) { this.policyState.proxyMode = value; }
+  get coreOverview() { return this.runtimeObservation.coreOverview; }
+  set coreOverview(value: CoreOverview | null) { this.runtimeObservation.coreOverview = value; }
+  get policyGroups() { return this.policyState.policyGroups; }
+  set policyGroups(value: PolicyGroup[]) { this.policyState.policyGroups = value; }
+  get policyGroupsUpdatedAt() { return this.policyState.policyGroupsUpdatedAt; }
+  set policyGroupsUpdatedAt(value: number) { this.policyState.policyGroupsUpdatedAt = value; }
+  get policyGroupsError() { return this.policyState.policyGroupsError; }
+  set policyGroupsError(value: string | null) { this.policyState.policyGroupsError = value; }
+  get tunStatus() { return this.runtimeObservation.tunStatus; }
+  set tunStatus(value: GuiManagedTunStatus | null) { this.runtimeObservation.tunStatus = value; }
+  get tunStatusError() { return this.runtimeObservation.tunStatusError; }
+  set tunStatusError(value: string | null) { this.runtimeObservation.tunStatusError = value; }
+  get savedTunEnabled() { return this.runtimeObservation.savedTunEnabled; }
+  set savedTunEnabled(value: boolean | undefined) { this.runtimeObservation.savedTunEnabled = value; }
+  private tunStatusRefreshGate = this.runtimeObservation.tunGate;
+  get configNodes() { return this.policyState.configNodes; }
+  set configNodes(value: ConfigProxyNode[]) { this.policyState.configNodes = value; }
+  get configPolicyGroups() { return this.policyState.configPolicyGroups; }
+  set configPolicyGroups(value: PolicyGroup[]) { this.policyState.configPolicyGroups = value; }
+  get networkProbe() { return this.networkState.result; }
+  set networkProbe(value: NetworkProbeResult | null) { this.networkState.result = value; }
+  get networkProbeLoading() { return this.networkState.loading; }
+  set networkProbeLoading(value: boolean) { this.networkState.loading = value; }
+  get networkProbeError() { return this.networkState.error; }
+  set networkProbeError(value: string | null) { this.networkState.error = value; }
 
-  supportsTrafficStats = $state(true);
+  get supportsTrafficStats() { return this.runtimeObservation.supportsTrafficStats; }
+  set supportsTrafficStats(value: boolean) { this.runtimeObservation.supportsTrafficStats = value; }
 
   isInitializing = $state(true);
   isLoading = $state(false);
@@ -79,14 +98,9 @@ class GuiStateStore {
 
   private isInitialized = false;
   private lastStatusTick = -1;
-  private networkProbeTimer: ReturnType<typeof setInterval> | null = null;
-  private networkProbePending = false;
   private internetSharingWarningShown = false;
-  private configNodesRefreshGate = createLatestRequestGate();
-  private configPolicyGroupsRefreshGate = createLatestRequestGate();
-  private policyGroupsRefreshGate = createLatestRequestGate();
-  private connectionRefreshGate = createLatestRequestGate();
-  private proxyModeRefreshGate = createLatestRequestGate();
+  private connectionRefreshGate = this.runtimeObservation.connectionGate;
+  private proxyModeRefreshGate = this.policyState.proxyModeRefreshGate;
   private runtimeStatusObserver = new RuntimeStatusObserver(async () => {
     // Commands own their readback. Background observation resumes afterwards;
     // do not gate on an observed process state, which may itself be stale.
@@ -180,8 +194,11 @@ class GuiStateStore {
   }
 
   async refreshSelfTest() {
+    const gate = this.runtimeObservation.selfTestGate;
+    const request = gate.begin();
     try {
       const snapshot = await getGuiSelfTestSnapshot();
+      if (!gate.canApply(request)) return;
       this.selfTest = snapshot;
       this.selfTestUpdatedAt = Date.now();
       const internetSharingWarning = snapshot.checks.some(
@@ -192,6 +209,7 @@ class GuiStateStore {
       }
       this.internetSharingWarningShown = internetSharingWarning;
     } catch {
+      if (!gate.canApply(request)) return;
       this.selfTest = null;
     }
   }
@@ -213,16 +231,6 @@ class GuiStateStore {
     }
   }
 
-  async refreshProxyMode() {
-    const request = this.proxyModeRefreshGate.begin();
-    try {
-      const mode = await getGuiProxyModeStatus();
-      if (this.proxyModeRefreshGate.canApply(request)) this.proxyMode = mode;
-    } catch {
-      if (this.proxyModeRefreshGate.canApply(request)) this.proxyMode = null;
-    }
-  }
-
   private acceptConnectionCommand(connection: ConnectionStatus) {
     // A command acknowledgement supersedes reads started before that command.
     this.connectionRefreshGate.reset();
@@ -241,90 +249,23 @@ class GuiStateStore {
   }
 
   async refreshCoreOverview() {
+    const gate = this.runtimeObservation.overviewGate;
+    const request = gate.begin();
     try {
-      this.coreOverview = await getGuiCoreOverview();
+      const overview = await getGuiCoreOverview();
+      if (gate.canApply(request)) this.coreOverview = overview;
     } catch {
+      if (!gate.canApply(request)) return;
       this.coreOverview = null;
     }
   }
 
-  async refreshConfigNodes() {
-    const request = this.configNodesRefreshGate.begin();
-    try {
-      const nodes = await getConfigProxyNodes();
-      if (this.configNodesRefreshGate.canApply(request)) {
-        this.configNodes = nodes;
-      }
-    } catch {
-      // Keep the last known-good config snapshot during a config reload.
-    }
-  }
-
-  async refreshConfigPolicyGroups() {
-    const request = this.configPolicyGroupsRefreshGate.begin();
-    try {
-      const groups = await getConfigPolicyGroups();
-      if (this.configPolicyGroupsRefreshGate.canApply(request)) {
-        this.configPolicyGroups = groups;
-      }
-    } catch {
-      // Preserve the previous snapshot until a newer request succeeds.
-    }
-  }
-
-  async refreshPolicyGroups() {
-    const request = this.policyGroupsRefreshGate.begin();
-    try {
-      const groups = await getGuiPolicyGroups();
-      if (this.policyGroupsRefreshGate.canApply(request)) {
-        this.policyGroups = groups;
-        this.policyGroupsUpdatedAt = Date.now();
-        this.policyGroupsError = null;
-        return true;
-      }
-    } catch (e: any) {
-      if (this.policyGroupsRefreshGate.canApply(request)) this.policyGroupsError = this.errorMessage(e);
-      console.warn('[gui-state] policy groups failed:', this.errorMessage(e));
-    }
-    return false;
-  }
-
-  async refreshNodeStateAfterConfigChange() {
-    this.policyGroupsUpdatedAt = 0;
-    this.configNodesRefreshGate.reset();
-    this.configPolicyGroupsRefreshGate.reset();
-    this.policyGroupsRefreshGate.reset();
-
-    await Promise.allSettled([
-      this.refreshConfigNodes(),
-      this.refreshConfigPolicyGroups(),
-    ]);
-
-    this.policyGroups = retainConfiguredPolicyGroups(this.policyGroups, this.configPolicyGroups);
-    await this.refreshPolicyGroups();
-  }
-
-  applyPolicyProbeCompleted(event: import('$lib/types/gui-api').PolicyProbeCompletedEvent) {
-    const existing = this.policyGroups.find((group) => group.name === event.policyTag);
-    if (!shouldApplyPolicyProbeEvent(this.configPolicyGroups, this.policyGroups, event.policyTag)) return;
-    this.policyGroupsRefreshGate.reset();
-    const previousMembers = new Map(existing?.outbounds.map((member) => [member.tag, member]) ?? []);
-    const outbounds = event.members.map((member) => ({
-      ...previousMembers.get(member.tag),
-      ...member,
-      lastCheckedUnixMs: member.lastCheckedUnixMs ?? event.completedAtUnixMs,
-    }));
-    const updated = {
-      ...existing,
-      name: event.policyTag,
-      kind: existing?.kind ?? 'url_test',
-      selected: event.selected ?? existing?.selected,
-      outbounds,
-    };
-    this.policyGroups = existing
-      ? this.policyGroups.map((group) => group.name === event.policyTag ? updated : group)
-      : [...this.policyGroups, updated];
-  }
+  refreshProxyMode() { return this.policyState.refreshProxyMode(); }
+  refreshConfigNodes() { return this.policyState.refreshConfigNodes(); }
+  refreshConfigPolicyGroups() { return this.policyState.refreshConfigPolicyGroups(); }
+  refreshPolicyGroups() { return this.policyState.refreshPolicyGroups(); }
+  refreshNodeStateAfterConfigChange() { return this.policyState.refreshNodeStateAfterConfigChange(); }
+  applyPolicyProbeCompleted(event: import('$lib/types/gui-api').PolicyProbeCompletedEvent) { this.policyState.applyPolicyProbeCompleted(event); }
 
   async refreshTunStatus() {
     const request = this.tunStatusRefreshGate.begin();
@@ -348,12 +289,16 @@ class GuiStateStore {
   }
 
   async refreshCapabilities() {
+    const gate = this.runtimeObservation.capabilitiesGate;
+    const request = gate.begin();
     try {
       const caps = await getGuiZeroCapabilities();
+      if (!gate.canApply(request)) return;
       const features = caps?.features ?? [];
       this.supportsTrafficStats =
         caps.available && (features.includes('query') || features.includes('runtime_snapshot'));
     } catch {
+      if (!gate.canApply(request)) return;
       // Kernel not connected yet; keep the optimistic default.
     }
   }
@@ -389,7 +334,7 @@ class GuiStateStore {
   }
 
   private errorMessage(e: any): string {
-    return e?.message ?? e ?? '未知错误';
+    return typeof e?.message === 'string' ? e.message : typeof e === 'string' ? e : '未知错误';
   }
 
   private syncTrayStatus() {
@@ -400,27 +345,7 @@ class GuiStateStore {
     ).catch(() => {});
   }
 
-  async probeNetwork() {
-    if (this.networkProbeLoading) {
-      this.networkProbePending = true;
-      return;
-    }
-    this.networkProbeLoading = true;
-    this.networkProbePending = false;
-    this.networkProbeError = null;
-    try {
-      this.networkProbe = await guiNetworkProbe();
-    } catch (error) {
-      this.networkProbe = null;
-      this.networkProbeError = this.errorMessage(error);
-    } finally {
-      this.networkProbeLoading = false;
-      void this.refreshSelfTest();
-      if (this.networkProbePending && this.isInitialized) {
-        void this.probeNetwork();
-      }
-    }
-  }
+  probeNetwork() { return this.networkState.run(); }
 
   /** Compact-mode power lifecycle: system proxy + Zero TUN; Zero process stays alive. */
   async connect() {
@@ -706,23 +631,27 @@ class GuiStateStore {
   destroy() {
     this.isInitialized = false;
     this.runtimeStatusObserver.stop();
+    this.runtimeObservation.invalidate();
+    this.policyState.invalidate();
     this.connectionRefreshGate.reset();
     this.proxyModeRefreshGate.reset();
-    this.networkProbePending = false;
     this.stopPeriodicNetworkProbe();
   }
 
-  private startPeriodicNetworkProbe() {
-    if (this.networkProbeTimer) return;
-    this.networkProbeTimer = setInterval(() => {
-      if (this.isInitialized) void this.probeNetwork();
-    }, NETWORK_PROBE_INTERVAL_MS);
-  }
+  private startPeriodicNetworkProbe() { this.networkState.start(); }
+  private stopPeriodicNetworkProbe() { this.networkState.stop(); }
 
-  private stopPeriodicNetworkProbe() {
-    if (!this.networkProbeTimer) return;
-    clearInterval(this.networkProbeTimer);
-    this.networkProbeTimer = null;
+  moduleDiagnostics() {
+    return [
+      {id: 'observation', title: '连接与接管观测', state: this.connectionError || this.tunStatusError ? 'error' : this.connectionUpdatedAt ? 'ready' : 'idle',
+        summary: this.connection?.coreAvailable ? '内核可用' : '尚未确认内核可用',
+        error: this.connectionError || this.tunStatusError, updatedAt: this.connectionUpdatedAt,
+        facts: [{label: '系统代理', value: this.isSystemProxyEnabled ? '开启' : '关闭'}, {label: 'TUN 保存意图', value: this.savedTunEnabled === undefined ? '未设置' : this.savedTunEnabled ? '开启' : '关闭'}]},
+      {id: 'policies', title: '策略与配置节点', state: this.isSelectingPolicy || this.isSwitchingMode ? 'busy' : this.policyState.lastError ? 'error' : this.policyGroupsUpdatedAt ? 'ready' : 'idle',
+        summary: `${this.policyGroups.length} 个运行策略组 · ${this.configNodes.length} 个配置节点`, error: this.policyState.lastError, updatedAt: this.policyGroupsUpdatedAt, facts: []},
+      {id: 'network-probe', title: '网络探测', state: this.networkProbeLoading ? 'busy' : this.networkProbeError ? 'error' : this.networkState.updatedAt ? 'ready' : 'idle',
+        summary: this.networkProbeLoading ? '探测进行中' : '由探测模块管理刷新与合并请求', error: this.networkProbeError, updatedAt: this.networkState.updatedAt, facts: []},
+    ] as import('$lib/features/diagnostics/model').ModuleStatus[];
   }
 
   get isCaptureEnabled(): boolean {

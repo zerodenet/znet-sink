@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { startGuiEvents, stopGuiEvents, appendLog, getCoreStats, getCoreRuntime } from '$lib/services/core';
+import { startGuiEvents, stopGuiEvents, appendLog, getGuiObservationSnapshot } from '$lib/services/core';
 import { overviewData } from '$lib/services/overview-data.svelte';
 import { guiState } from '$lib/services/gui-state.svelte';
 import { EventLifecycleQueue } from '$lib/services/event-lifecycle';
@@ -8,6 +8,10 @@ import { warning as showWarningToast } from '$lib/services/toast.svelte';
 import type { CoreEventStatus, GuiEventPayload, TunStatusEvent, StackStatusEvent } from '$lib/types/core';
 import type { GuiConnectionItem, PolicyProbeCompletedEvent, TrafficRateSample } from '$lib/types/gui-api';
 
+import { connectionObservations, type ConnectionDelta } from '$lib/features/observations/connections.svelte';
+
+type Incoming = { kind: 'event'; payload: GuiEventPayload } | { kind: 'status'; payload: CoreEventStatus };
+
 const EVENT_NAME = 'gui:event';
 const STATUS_NAME = 'gui:event-status';
 const HOST_NETWORK_CHANGED_EVENT = 'host-network:changed';
@@ -15,11 +19,7 @@ const TRAFFIC_RATE_SAMPLE_EVENT = 'traffic:rate-sampled';
 
 // ── Exported types ──
 
-export type ConnectionDelta =
-  | { type: 'started'; connection: GuiConnectionItem }
-  | { type: 'updated'; connection: GuiConnectionItem }
-  | { type: 'completed'; connection: GuiConnectionItem }
-  | { type: 'snapshot'; connections: GuiConnectionItem[] };
+export type { ConnectionDelta } from '$lib/features/observations/connections.svelte';
 
 export interface CoreWarning {
   code?: string;
@@ -32,8 +32,8 @@ class CoreEventsService {
   status = $state<'idle' | 'subscribed' | 'reconnecting' | 'offline' | 'error' | 'disconnected'>('idle');
   lastError = $state<string | null>(null);
   connectionTick = $state(0);
-  activeConnections = $state<GuiConnectionItem[]>([]);
-  connectionHistory = $state<GuiConnectionItem[]>([]);
+  get activeConnections() { return connectionObservations.activeConnections; }
+  get connectionHistory() { return connectionObservations.connectionHistory; }
 
   // 日志刷新计数器（LogPanel 响应）
   logTick = $state(0);
@@ -54,10 +54,10 @@ class CoreEventsService {
   stackMode = $state<string | null>(null);
 
   // 连接增量事件
-  private _deltaSeq = $state(0);
-  private _pendingDeltas: ConnectionDelta[] = [];
-
-  get deltaSeq() { return this._deltaSeq; }
+  get deltaSeq() { return connectionObservations.deltaSeq; }
+  private _scope = 0;
+  private _starting: Incoming[] | null = null;
+  private _startOverflow = false;
 
   private _unlistenEvent: UnlistenFn | null = null;
   private _unlistenStatus: UnlistenFn | null = null;
@@ -88,6 +88,10 @@ class CoreEventsService {
       return;
     }
     this._stopped = false;
+    this._scope++;
+    this._activeGeneration = null;
+    this._starting = [];
+    this._startOverflow = false;
 
     try {
       // Listen before starting subscription so we don't miss status events.
@@ -96,12 +100,12 @@ class CoreEventsService {
       // rejection that can tear down the page lifecycle.
       if (!this._unlistenEvent) {
         this._unlistenEvent = await listen<GuiEventPayload>(EVENT_NAME, (event) => {
-          this._routeEvent(event.payload);
+          this._receive({ kind: 'event', payload: event.payload });
         });
       }
       if (!this._unlistenStatus) {
         this._unlistenStatus = await listen<CoreEventStatus>(STATUS_NAME, (event) => {
-          this._handleStatus(event.payload);
+          this._receive({ kind: 'status', payload: event.payload });
         });
       }
       if (!this._unlistenProcess) {
@@ -126,8 +130,13 @@ class CoreEventsService {
       }
 
       const sub = await startGuiEvents(events);
+      if (this._startOverflow) throw new Error('Observation startup event buffer overflow; retry subscription');
       this._activeGeneration = sub.generation;
+      const pending = this._starting;
+      this._starting = null;
+      for (const incoming of pending ?? []) this._receive(incoming);
     } catch (e) {
+      await this._stop();
       this.status = 'error';
       this.lastError = String(e);
     }
@@ -139,6 +148,9 @@ class CoreEventsService {
 
   private async _stop() {
     this._stopped = true;
+    this._scope++;
+    this._starting = null;
+    connectionObservations.reset();
     try {
       await stopGuiEvents();
     } catch {
@@ -157,15 +169,11 @@ class CoreEventsService {
     this._unlistenProcess = null;
     this._unlistenHostNetwork = null;
     this._unlistenTrafficRate = null;
-    this._pendingDeltas = [];
-    this.activeConnections = [];
   }
 
   /** 获取并清空待处理的连接增量事件 */
   drainDeltas(): ConnectionDelta[] {
-    const deltas = this._pendingDeltas;
-    this._pendingDeltas = [];
-    return deltas;
+    return connectionObservations.drainDeltas();
   }
 
   /** 清除所有警告（用户确认后调用） */
@@ -173,12 +181,22 @@ class CoreEventsService {
     this.warnings = [];
   }
 
-  private _handleStatus(status: CoreEventStatus) {
+  private _receive(incoming: Incoming) {
     if (this._stopped) return;
-    // The backend can emit the first status before the invoke response carries
-    // its generation back to JavaScript. Accept it while start() is in flight;
-    // once active, reject stale generations normally.
-    if (this._activeGeneration !== null && status.generation !== this._activeGeneration) return;
+    if (this._starting) {
+      if (this._starting.length < 2_000) this._starting.push(incoming);
+      else this._startOverflow = true;
+      return;
+    }
+    if (incoming.payload.generation !== this._activeGeneration) return;
+    if (incoming.kind === 'event') this._routeEvent(incoming.payload);
+    else this._handleStatus(incoming.payload);
+  }
+
+  private _handleStatus(status: CoreEventStatus) {
+    if (this._stopped || status.generation !== this._activeGeneration) return;
+    this._scope++;
+    if (status.status !== 'subscribed') connectionObservations.reset();
 
     switch (status.status) {
       case 'subscribed':
@@ -226,9 +244,10 @@ class CoreEventsService {
     const { generation: _gen, event } = payload;
     if (this._stopped) return;
     if (!event || typeof event !== 'object') return;
-    if (this._activeGeneration !== null && _gen !== this._activeGeneration) return;
+    if (_gen !== this._activeGeneration) return;
 
     const eventType = event.eventType;
+    if (eventType.startsWith('connection.') && !this.isSubscribed) return;
     const eventPayload = event.payload;
     const data = this._eventData(eventPayload);
     const obj = data && typeof data === 'object'
@@ -261,6 +280,7 @@ class CoreEventsService {
     }
 
     if (eventType === 'core.configChanged') {
+      this._scope++;
       awaitIgnore(this._refreshAfterConfigChanged());
       this.statusTick++;
       return;
@@ -463,39 +483,7 @@ class CoreEventsService {
   // ── 连接增量 ──
 
   private _pushDelta(delta: ConnectionDelta) {
-    this._projectConnectionDelta(delta);
-    this._pendingDeltas.push(delta);
-    if (this._pendingDeltas.length > 2_000) {
-      this._pendingDeltas.splice(0, this._pendingDeltas.length - 2_000);
-    }
-    this._deltaSeq++;
-  }
-
-  private _projectConnectionDelta(delta: ConnectionDelta) {
-    if (delta.type === 'snapshot') {
-      this.activeConnections = delta.connections.slice(0, 500);
-      return;
-    }
-
-    if (delta.type === 'completed') {
-      const active = this.activeConnections.find((item) => item.flowId === delta.connection.flowId);
-      if (active && isOlderRevision(active, delta.connection)) return;
-      this.activeConnections = this.activeConnections.filter((item) => item.flowId !== delta.connection.flowId);
-      this.connectionHistory = [
-        delta.connection,
-        ...this.connectionHistory.filter((item) => item.flowId !== delta.connection.flowId),
-      ].slice(0, 500);
-      return;
-    }
-
-    const index = this.activeConnections.findIndex((item) => item.flowId === delta.connection.flowId);
-    const current = index >= 0 ? this.activeConnections[index] : undefined;
-    if (current && isOlderRevision(current, delta.connection)) return;
-    const connection = mergeGuiConnection(current, delta.connection);
-    this.activeConnections = [
-      connection,
-      ...this.activeConnections.filter((item) => item.flowId !== connection.flowId),
-    ].slice(0, 500);
+    connectionObservations.apply(delta);
   }
 
   private _parseConnectionEvent(data: unknown): GuiConnectionItem | null {
@@ -588,9 +576,9 @@ class CoreEventsService {
 
   // ── Auto-reconnect with exponential backoff ──
 
-  private async _applyResyncSnapshot(snapshot: unknown) {
+  private async _applyResyncSnapshot(snapshot: unknown, includeConnections = true) {
     if (!snapshot || typeof snapshot !== 'object') {
-      await this._fetchInitialState();
+      if (includeConnections) await this._fetchInitialState();
       return;
     }
 
@@ -606,11 +594,15 @@ class CoreEventsService {
     if (runtime && typeof runtime === 'object') {
       overviewData.applyRuntimeEvent(runtime as Record<string, unknown>);
     }
-    if (policies) {
-      overviewData.applyPolicyEvent(policies);
-      await guiState.refreshPolicyGroups();
+    if (policies) overviewData.applyPolicyEvent(policies);
+    // Apply the baseline synchronously. Awaiting another feature here lets
+    // its delayed response overwrite connection deltas that arrived meanwhile.
+    if (includeConnections && runtime && typeof runtime === 'object') {
+      const identity = runtime as Record<string, unknown>;
+      const runtimeId = identity['core_instance_id'] ?? identity['coreInstanceId'];
+      if (typeof runtimeId === 'string') connectionObservations.bindRuntime(runtimeId);
     }
-    if (connectionSnapshot && typeof connectionSnapshot === 'object') {
+    if (includeConnections && connectionSnapshot && typeof connectionSnapshot === 'object') {
       const items = (connectionSnapshot as Record<string, unknown>)['items'];
       if (Array.isArray(items)) {
         const connections = items
@@ -621,23 +613,19 @@ class CoreEventsService {
       }
     }
 
-    if (!stats || !runtime || !policies) {
-      await this._fetchInitialState();
-    }
+    if (policies) await guiState.refreshPolicyGroups();
   }
 
   private async _fetchInitialState() {
+    const scope = this._scope;
     try {
-      const [statsResult, runtimeResult] = await Promise.all([
-        getCoreStats(),
-        getCoreRuntime(),
-      ]);
-      overviewData.applyStatsEvent(statsResult);
-      overviewData.applyRuntimeEvent(runtimeResult);
-      await overviewData.refreshPolicyNodes();
-      await guiState.refreshPolicyGroups();
+      const snapshot = await getGuiObservationSnapshot();
+      if (this._stopped || scope !== this._scope) return;
+      // Connection baselines are owned by the ordered subscription stream.
+      // A concurrent read must never replace newer connection events.
+      await this._applyResyncSnapshot(snapshot, false);
     } catch {
-      // Best-effort initial fetch
+      // The subscription owner retries the authoritative baseline on failure.
     }
   }
 
@@ -645,29 +633,10 @@ class CoreEventsService {
     // Config-derived nodes/groups establish the identity boundary first;
     // runtime snapshots fetched afterwards can no longer overwrite the new
     // profile with responses that began before configChanged.
+    const scope = this._scope;
     await guiState.refreshNodeStateAfterConfigChange();
-    await this._fetchInitialState();
+    if (!this._stopped && scope === this._scope) await this._fetchInitialState();
   }
-}
-
-function isOlderRevision(current: GuiConnectionItem, incoming: GuiConnectionItem): boolean {
-  return current.revision !== undefined
-    && incoming.revision !== undefined
-    && incoming.revision < current.revision;
-}
-
-function mergeGuiConnection(
-  current: GuiConnectionItem | undefined,
-  incoming: GuiConnectionItem,
-): GuiConnectionItem {
-  if (!current) return incoming;
-  const merged = { ...current } as Record<string, unknown>;
-  for (const [key, value] of Object.entries(incoming)) {
-    if (value !== undefined) merged[key] = value;
-  }
-  if (incoming.selectionChain.length === 0) merged['selectionChain'] = current.selectionChain;
-  if (incoming.relayChain.length === 0) merged['relayChain'] = current.relayChain;
-  return merged as unknown as GuiConnectionItem;
 }
 
 function awaitIgnore(promise: Promise<unknown>) {

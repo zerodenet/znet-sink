@@ -13,9 +13,11 @@ const URLTEST_TOLERANCE_MIN_VERSION: &str = "0.0.16-dev.3";
 /// fresh process has been queried, fall back to the installed binary version
 /// so startup config export remains compatible with older kernels.
 pub fn supports_tolerance(state: &AppState) -> bool {
-    let started_at = common::lock(state.core_process(), "core_process")
+    let started_at = state
+        .runtime_host()
+        .process_status()
         .ok()
-        .and_then(|process| process.status.started_at_unix_ms);
+        .and_then(|process| process.started_at_unix_ms);
 
     if let Ok(cache) = common::lock(state.zero_features_cache(), "zero_features_cache") {
         if let Some(cached) = cache.as_ref() {
@@ -54,11 +56,7 @@ fn version_supports_tolerance(version: &str) -> bool {
     version >= minimum || (version >= reset_minimum && version < legacy_start)
 }
 
-/// Apply the client product default to URLTest groups that did not explicitly
-/// configure a tolerance. The base profile is never mutated; this runs only on
-/// the effective configuration passed to Zero.
-///
-/// Explicit values, including `0`, always win over the client default.
+/// Client settings take precedence over explicit profile values, including zero.
 pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResult<usize> {
     let root = config
         .as_object_mut()
@@ -81,7 +79,7 @@ pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResu
             .is_some_and(|kind| {
                 kind.eq_ignore_ascii_case("url_test") || kind.eq_ignore_ascii_case("urltest")
             });
-        if !is_url_test || group.contains_key("tolerance_ms") {
+        if !is_url_test {
             continue;
         }
 
@@ -90,6 +88,59 @@ pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResu
     }
 
     Ok(applied)
+}
+
+/// One validation boundary for settings, imports, composition and manual requests.
+pub fn normalize_url(raw: &str) -> AppResult<String> {
+    let url = reqwest::Url::parse(raw.trim())
+        .map_err(|_| AppError::invalid_argument("公共测速地址必须是完整的 HTTP(S) URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::invalid_argument(
+            "公共测速地址需要 HTTP(S) 协议和主机，不能包含账号密码或片段",
+        ));
+    }
+    Ok(url.to_string())
+}
+
+#[cfg(feature = "tool-node-probe")]
+pub fn configured_url(state: &AppState) -> AppResult<String> {
+    let config = common::lock(state.app_config(), "app_config")?;
+    normalize_url(&config.url_test.url)
+}
+
+pub fn apply_url(config: &mut Value, url: &str) -> AppResult<()> {
+    let url = normalize_url(url)?;
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("Zero config must be an object"))?;
+    let runtime = root
+        .entry("runtime")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("runtime must be an object"))?;
+    runtime.insert("latency_test_url".into(), json!(url));
+    if let Some(groups) = root
+        .get_mut("outbound_groups")
+        .and_then(Value::as_array_mut)
+    {
+        for group in groups {
+            let is_urltest = group
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("url_test") || kind.eq_ignore_ascii_case("urltest")
+                });
+            if is_urltest {
+                group["url"] = json!(url);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -120,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_tolerance_including_zero_is_preserved() {
+    fn explicit_profile_tolerance_is_overridden_by_the_client() {
         let mut config = json!({
             "outbound_groups": [
                 {"tag": "Strict", "type": "url_test", "outbounds": ["HK"], "tolerance_ms": 0},
@@ -128,9 +179,9 @@ mod tests {
             ]
         });
 
-        assert_eq!(apply_default_tolerance(&mut config, 50).unwrap(), 0);
-        assert_eq!(config["outbound_groups"][0]["tolerance_ms"], 0);
-        assert_eq!(config["outbound_groups"][1]["tolerance_ms"], 120);
+        assert_eq!(apply_default_tolerance(&mut config, 50).unwrap(), 2);
+        assert_eq!(config["outbound_groups"][0]["tolerance_ms"], 50);
+        assert_eq!(config["outbound_groups"][1]["tolerance_ms"], 50);
     }
 
     #[test]

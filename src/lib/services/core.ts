@@ -4,8 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobSnapshot, StartProbeRequest, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiFakeIpClearInput, GuiFakeIpClearResult, GuiPolicySelectionResult, GuiTargetProbeResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
-import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult, TraceRouteResult } from '$lib/types/diagnostics';
+import type { ClientCoreSnapshot, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -69,22 +68,6 @@ export async function getClientCoreSnapshot(): Promise<ClientCoreSnapshot> {
 
 export async function getNodeScreenSnapshot(reason?: string): Promise<NodeScreenSnapshot> {
   return invoke('gui_node_screen_snapshot', { reason });
-}
-
-export async function startProbeJob(request: StartProbeRequest): Promise<ProbeJobSnapshot> {
-  return invoke('gui_probe_job_start', { request });
-}
-
-export async function getProbeJob(jobId: number): Promise<ProbeJobSnapshot> {
-  return invoke('gui_probe_job_get', { jobId });
-}
-
-export async function listProbeJobs(profileId?: string): Promise<ProbeJobSnapshot[]> {
-  return invoke('gui_probe_job_list', { profileId });
-}
-
-export async function cancelProbeJob(jobId: number): Promise<ProbeJobSnapshot> {
-  return invoke('gui_probe_job_cancel', { jobId });
 }
 
 export async function getCoreProcessStatus(): Promise<CoreProcessStatus> {
@@ -151,9 +134,7 @@ export async function selectPolicy(policyTag: string, targetTag: string, options
   return invoke('core_select_policy', { policyTag, targetTag, options });
 }
 
-export async function probePolicy(policyTag: string, options?: CoreIpcOptions): Promise<CoreCallResult> {
-  return invoke('core_probe_policy', { policyTag, options });
-}
+
 
 // Flows
 
@@ -237,6 +218,11 @@ export async function startGuiEvents(events?: string[], options?: CoreIpcOptions
 
 export async function stopGuiEvents(): Promise<number> {
   return invoke('gui_events_stop');
+}
+
+/** Read a coherent baseline from the endpoint selected by the observation owner. */
+export async function getGuiObservationSnapshot(): Promise<Record<string, unknown>> {
+  return invoke('gui_observation_snapshot');
 }
 
 // Core config
@@ -401,9 +387,7 @@ export async function guiSelectPolicy(policyTag: string, targetTag: string): Pro
   return invoke('gui_select_policy', { policyTag, targetTag });
 }
 
-export async function guiProbeTarget(targetTag: string): Promise<GuiTargetProbeResult> {
-  return invoke('gui_probe_target', { targetTag });
-}
+
 
 // Feature status (TUN / DNS / Rules)
 
@@ -509,17 +493,7 @@ export async function guiSetMode(mode: string, outbound?: string): Promise<unkno
 
 // Policy probe
 
-export async function guiProbePolicy(policyTag: string): Promise<import('$lib/types/gui-api').PolicyProbeAccepted> {
-  const raw = await invoke<Record<string, unknown>>('gui_probe_policy', { policyTag });
-  const result = objectFrom(raw, ['result']);
-  return {
-    accepted: boolFrom(raw, ['accepted']) ?? false,
-    result: Object.keys(result).length > 0 ? {
-      policyTag: stringFrom(result, ['policyTag', 'policy_tag']),
-      probeTriggered: boolFrom(result, ['probeTriggered', 'probe_triggered']),
-    } : undefined,
-  };
-}
+
 
 // System tray status sync
 
@@ -641,31 +615,6 @@ export async function clearDebugFrames(): Promise<void> {
 }
 
 // Diagnostics
-
-export async function guiDnsLookup(hostname: string): Promise<DnsLookupResult> {
-  return invoke<DnsLookupResult>('gui_dns_lookup', { hostname });
-}
-
-export async function guiDnsCache(domain?: string, limit?: number): Promise<DnsCacheResult> {
-  return invoke<DnsCacheResult>('gui_dns_cache', { domain, limit });
-}
-
-export async function guiFakeIpLookup(input: { domain?: string; ip?: string }): Promise<FakeIpLookupResult> {
-  return invoke<FakeIpLookupResult>('gui_fakeip_lookup', input);
-}
-
-export async function guiClearFakeIp(input?: GuiFakeIpClearInput): Promise<GuiFakeIpClearResult> {
-  return invoke<GuiFakeIpClearResult>('gui_clear_fake_ip', { input });
-}
-
-export async function guiTraceRoute(
-  target: string,
-  port?: number,
-  protocol?: string,
-  inboundTag?: string,
-): Promise<TraceRouteResult> {
-  return invoke<TraceRouteResult>('gui_trace_route', { target, port, protocol, inboundTag });
-}
 
 export async function getGuiSinks(): Promise<unknown> {
   return invoke('gui_sinks');

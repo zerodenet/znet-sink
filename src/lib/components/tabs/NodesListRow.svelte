@@ -19,7 +19,7 @@
     probeDisabled: boolean;
     selectDisabled: boolean;
     onSelectNode: (node: ProxyNode) => void | Promise<void>;
-    onProbeNode: (node: ProxyNode) => void | Promise<void>;
+    onProbeNode?: (node: ProxyNode) => void | Promise<void>;
     onShowPopover: (event: MouseEvent, node: ProxyNode) => void;
     onHidePopover: () => void;
   }
@@ -111,9 +111,10 @@
           <div class="delay-bar-fill" style="width: {delayBarWidth(node.delay)}; background: {delayState.bar};"></div>
         </div>
 
-        <button data-slot="surface-button"
+        {#if onProbeNode}
+          <button data-slot="surface-button"
           class="probe-btn"
-          onclick={() => onProbeNode(node)}
+          onclick={() => onProbeNode?.(node)}
           disabled={probeDisabled || isProbing || probingAll}
           title="测试延迟"
           aria-label="测试 {node.name} 延迟"
@@ -128,6 +129,7 @@
             </svg>
           {/if}
         </button>
+    {/if}
   </div>
 </div>
 

@@ -1,4 +1,4 @@
-//! Application lifecycle: phased startup, coordinated shutdown, future plugin hooks.
+//! Application lifecycle: phased startup and coordinated subsystem shutdown.
 //!
 //! # Phases
 //!
@@ -11,7 +11,7 @@
 //!
 //! # Extensibility
 //!
-//! Future plugin systems implement [`OnPhase`] and register via [`Lifecycle::add_hook`].
+//! Internal subsystems implement [`OnPhase`] and register via [`Lifecycle::add_hook`].
 
 pub mod phases;
 pub mod shutdown;
@@ -68,11 +68,11 @@ impl fmt::Display for Phase {
     }
 }
 
-// ── Hook trait (future plugin interface) ──
+// ── Internal subsystem hook ──
 
 /// A unit of work bound to a specific lifecycle phase.
 ///
-/// Built-in subsystems and future plugins implement this trait
+/// Built-in subsystems implement this trait
 /// and register themselves with [`Lifecycle::add_hook`].
 pub trait OnPhase: Send + Sync {
     /// Which phase this hook runs in.

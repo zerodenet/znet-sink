@@ -131,19 +131,9 @@ pub fn apply(config: &mut Value, app: &AppConfig) -> AppResult<()> {
     let route = route
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_argument("route must be an object"))?;
-    // Profile-owned explicit exceptions are additive; source config is never edited.
-    if !conditions.is_empty() {
-        let bypass = route
-            .entry("bypass")
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or_else(|| AppError::invalid_argument("route.bypass must be an array"))?;
-        for condition in conditions {
-            if !bypass.contains(&condition) {
-                bypass.push(condition);
-            }
-        }
-    }
+    // The client's exception policy replaces the source's dedicated bypass slot.
+    // Ordinary profile route rules remain part of the source configuration.
+    route.insert("bypass".into(), json!(conditions));
     if let Some(tun) = root
         .get_mut("runtime")
         .and_then(|v| v.get_mut("tun"))

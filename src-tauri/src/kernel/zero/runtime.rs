@@ -91,7 +91,7 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     Value::Object(params)
 }
 
-fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
+pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
     let running = bool_at(value, &["running", "enabled"])
         .ok_or_else(|| AppError::internal("TUN status response is missing its running state"))?;
     let healthy = bool_at(value, &["healthy"]).unwrap_or(running);

@@ -4,7 +4,16 @@ export type CoreProcessState = 'notStarted' | 'starting' | 'running' | 'exited' 
 
 export type CoreProcessExitReason = 'stopped' | 'exited' | 'crashed';
 
+export interface RuntimeHostSnapshot {
+  desiredRunning: boolean;
+  operation: string | null;
+  generation: number;
+  lastError: string | null;
+}
+
 export interface CoreProcessStatus {
+  /** Local owner diagnostics; this is separate from observed kernel health. */
+  host?: RuntimeHostSnapshot;
   state: CoreProcessState;
   pid?: number;
   kernel: string;

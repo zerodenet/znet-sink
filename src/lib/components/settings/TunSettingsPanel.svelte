@@ -29,8 +29,6 @@
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
 
-  const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
-  const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
   const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
   const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
@@ -137,11 +135,7 @@
   });
 </script>
 
-{#if profileManaged}
-  <div class="settings-notice" role="status">
-    {profileSourceName} 已显式定义 <code>runtime.tun</code>，当前运行时优先使用该配置。下方内容仅作为 ZNet-Sink 缺省值，在活动配置未定义 TUN 时生效。
-  </div>
-{:else if guiState.isTunEnabled}
+{#if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
     保存后会自动重建 TUN 并应用新参数，期间连接可能短暂中断，客户端和内核保持运行。
   </div>
@@ -334,7 +328,7 @@
 {#if !loading}
   <div class="settings-actions">
     <Button size="sm" onclick={save} disabled={locked}>
-      {saving ? '应用中...' : saved ? '已保存' : profileManaged ? '保存缺省值' : guiState.isTunEnabled ? '保存并应用' : '保存'}
+      {saving ? '应用中...' : saved ? '已保存' : guiState.isTunEnabled ? '保存并应用' : '保存'}
     </Button>
   </div>
 {/if}

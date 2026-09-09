@@ -1,11 +1,10 @@
+import { ProfileActivation } from '$lib/features/configuration/profile-activation';
 import { invoke } from '@tauri-apps/api/core';
 import { coreEvents } from './core-events.svelte';
 import { proxyConfigSignal } from './proxy-config-signal.svelte';
 import { ruleSetSignal } from './rule-set-signal.svelte';
 import {
-  prepareGuiTunForProfileSwitch,
   reconcileGuiTunRuntime,
-  restoreGuiTunAfterFailedProfileSwitch,
 } from './tun';
 import type {
   ProxyConfigProfile,
@@ -77,38 +76,22 @@ export async function importProxyConfig(input: ProxyConfigImport): Promise<Proxy
   return profile;
 }
 
-export async function setActiveProxyConfig(id: string): Promise<ProxyConfigProfile> {
-  const target = await getProxyConfig(id);
-  const transition = await prepareGuiTunForProfileSwitch(target.content);
+const profileActivation = new ProfileActivation({
+  load: getProxyConfig,
+  commit: (id: string) => invoke<ProxyConfigProfile>('proxy_config_set_active', { id }),
+  restartObservation: async () => { await coreEvents.stop(); await coreEvents.start(); },
+  changed: () => { proxyConfigSignal.markChanged(true); ruleSetSignal.markChanged(); },
+  reconcile: () => reconcileTunAfterConfigMutation('profile activation'),
+  warn: (context: string, error: unknown) => console.warn(`[config] ${context} failed`, error),
+});
 
-  try {
-    const profile = await invoke<ProxyConfigProfile>('proxy_config_set_active', { id });
+export function setActiveProxyConfig(id: string): Promise<ProxyConfigProfile> {
+  return profileActivation.activate(id);
+}
 
-    // Zero can replace the active engine/event source during config.apply while
-    // keeping the multiplexed IPC connection itself alive. In that case the old
-    // broadcast receiver never reports Closed, so ZNet-Sink would stay attached
-    // to the pre-switch event source and stop seeing new connection deltas until
-    // the app restarted. Rotate the GUI event generation explicitly after a
-    // successful profile switch. start() establishes an authoritative active-flow
-    // snapshot after registering the new receiver, so connections created during
-    // the handoff are recovered rather than lost.
-    await coreEvents.stop();
-    await coreEvents.start();
-
-    proxyConfigSignal.markChanged(true);
-    ruleSetSignal.markChanged();
-    await reconcileTunAfterConfigMutation('profile activation');
-    return profile;
-  } catch (error) {
-    // Restore the exact command-managed runtime that was stopped only to make
-    // room for a target profile's config-managed TUN. This also preserves the
-    // historical `enabled: undefined` migration state instead of treating it
-    // as an implicit OFF during rollback.
-    await restoreGuiTunAfterFailedProfileSwitch(transition).catch((restoreError) => {
-      console.warn('[config] failed to restore TUN after profile activation rollback', restoreError);
-    });
-    throw error;
-  }
+/** Latest composition metadata, not proof of a successful kernel apply. */
+export function getConfigCompositionReport(): Promise<{sourceProfileId: string | null; layers: {source: string; changedPaths: string[]}[]} | null> {
+  return invoke('proxy_config_composition_report');
 }
 
 export async function removeProxyConfig(id: string): Promise<void> {

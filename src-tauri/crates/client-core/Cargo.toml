@@ -1,0 +1,13 @@
+[package]
+name = "znet-client-core"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Platform-independent ZNet Sink client state and workflow contracts"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

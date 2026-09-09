@@ -35,7 +35,8 @@ const endpointConfig = () => ({ localProxy: {
 } });
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
-  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { toleranceMs: 50 } };
+  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
+  if (panel === 'url-test') return {urlTest: {url: 'http://www.gstatic.com/generate_204', toleranceMs: 50}};
   if (panel === 'endpoint') return endpointConfig();
   if (panel === 'kernel') return { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } };
   return getTunConfig();
@@ -44,7 +45,7 @@ export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ ker
 export const getCoreProcessStatus = async () => ({ state:'running' });
 export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
-  if (new URLSearchParams(location.search).get('panel') === 'endpoint') {
+  if (['endpoint', 'url-test'].includes(new URLSearchParams(location.search).get('panel') ?? '')) {
     window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
     return input;
   }
@@ -101,3 +102,20 @@ export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No ke
 export const getGuiZeroCapabilities = async () => ({ available: false, globalLimitations: [] });
 export const guiApplyDnsConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const guiValidateDnsConfig = async () => ({valid: true});
+
+export const getConfigCompositionReport = async () => null;
+
+// Node browsing and scheduled observations remain usable when manual probes are trimmed.
+let selectedNode = 'node-a';
+export const guiSelectPolicy = async (_policy: string, tag: string) => {
+  selectedNode = tag;
+  window.dispatchEvent(new CustomEvent('fixture-save', {detail: {selected: tag}}));
+  return {accepted: true};
+};
+export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
+  const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
+  return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs: [],
+    groups: [{id: {profileId:'fixture', configRevision:1, tag:'proxy'}, tag:'proxy', kind:'selector', selected:selectedNode, memberTags:['node-a','node-b'], runtimeAvailable:true, available:true}],
+    nodes: ['node-a','node-b'].map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:['proxy'], selectedIn:tag === selectedNode ? ['proxy'] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
+      history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
+};

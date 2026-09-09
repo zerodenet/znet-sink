@@ -6,7 +6,10 @@ pub use original::{
     parse_config_content, remove, remove_runtime, set_active, update_active_content, upsert,
     LocalProxyEndpoint,
 };
-pub(crate) use original::{retarget_managed_system_proxy, upsert_runtime_locked};
+pub(crate) use original::{
+    clear_local_proxy_source, ensure_managed_system_proxy_compatible,
+    retarget_managed_system_proxy, sync_local_proxy_from_profile, upsert_runtime_locked,
+};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -19,8 +22,6 @@ use crate::state::app_state::AppState;
 
 const MANAGED_MIXED_TAG: &str = "znet-sink-mixed-in";
 const LEGACY_MANAGED_MIXED_TAG: &str = "mixed-in";
-const DEFAULT_MANAGED_MIXED_HOST: &str = "127.0.0.1";
-const DEFAULT_MANAGED_MIXED_PORT: u16 = 7890;
 
 fn is_subscription_source(input: &ProxyConfigUpsert) -> bool {
     input
@@ -59,16 +60,11 @@ fn local_inbound_is_usable(inbound: &Value) -> bool {
 }
 
 fn resolve_managed_endpoint(config: &AppLocalProxyConfig) -> (String, u16) {
-    if config.source_proxy_config_id.is_some() {
-        return (
-            DEFAULT_MANAGED_MIXED_HOST.to_string(),
-            DEFAULT_MANAGED_MIXED_PORT,
-        );
-    }
     (config.host.clone(), config.port)
 }
 
-pub(crate) fn has_managed_local_inbound(content: &Value) -> bool {
+#[cfg(test)]
+fn has_managed_local_inbound(content: &Value) -> bool {
     content
         .get("inbounds")
         .and_then(Value::as_array)
@@ -81,11 +77,20 @@ pub(crate) fn project_managed_endpoint(
 ) -> AppResult<()> {
     let (host, port) = resolve_managed_endpoint(settings);
     if let Some(inbounds) = content.get_mut("inbounds").and_then(Value::as_array_mut) {
-        for inbound in inbounds
+        // The first usable local proxy is the public entry, matching extract_local_proxy.
+        // Keep its tag and protocol so inbound-bound routing and credentials remain valid.
+        if let Some(inbound) = inbounds
             .iter_mut()
-            .filter(|inbound| is_managed_local_inbound(inbound))
+            .find(|value| local_inbound_is_usable(value))
         {
-            set_managed_endpoint(inbound, &host, port)?;
+            let listen = inbound
+                .get_mut("listen")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| {
+                    AppError::invalid_argument("local inbound listen must be an object")
+                })?;
+            listen.insert("address".into(), json!(host));
+            listen.insert("port".into(), json!(port));
         }
     }
     Ok(())
@@ -234,14 +239,14 @@ mod wrapper_tests {
     use serde_json::json;
 
     #[test]
-    fn derived_runtime_endpoint_falls_back_to_7890() {
+    fn legacy_source_marker_cannot_replace_the_persisted_client_endpoint() {
         let mut config = AppLocalProxyConfig::default();
         config.port = 15581;
         config.source_proxy_config_id = Some("legacy-profile".to_string());
 
         assert_eq!(
             resolve_managed_endpoint(&config),
-            ("127.0.0.1".to_string(), 7890)
+            ("127.0.0.1".to_string(), 15581)
         );
     }
 

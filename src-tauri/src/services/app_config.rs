@@ -279,6 +279,9 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
     }
 
     if let Some(url_test) = patch.url_test {
+        if let Some(url) = url_test.url {
+            config.url_test.url = super::url_test::normalize_url(&url)?;
+        }
         if let Some(tolerance_ms) = url_test.tolerance_ms {
             config.url_test.tolerance_ms = tolerance_ms;
         }
@@ -287,6 +290,7 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
     if legacy_bypass_patch {
         config.bypass = None;
     }
+    config.local_proxy.source_proxy_config_id = None;
     super::bypass::normalize(&mut config)?;
     normalize_tun_mask(&mut config.tun);
     Ok(config)

@@ -1,3 +1,4 @@
+import { productComposition } from '../../scripts/product-composition.mjs';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
@@ -5,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 const absolute = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 export default defineConfig({
   root: absolute('./'),
-  plugins: [tailwindcss(), svelte({ configFile: false })],
+  plugins: [productComposition(), tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '@tauri-apps/api/event', replacement: absolute('./tauri-events.ts') },
     { find: '$lib/services/theme.svelte', replacement: absolute('./presentation-state.svelte.ts') },
     { find: '$lib/services/traffic-ball-preference.svelte', replacement: absolute('./presentation-state.svelte.ts') },
     { find: '$lib/services/toast.svelte', replacement: absolute('./toast.ts') },

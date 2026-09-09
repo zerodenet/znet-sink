@@ -19,6 +19,50 @@ permissions:
   contents: read
 
 jobs:
+  shared-client-core:
+    name: Shared client modules without desktop dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Test platform-independent client workflows
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked -p znet-client-core -p znet-engine-client
+
+  product-composition:
+    name: Product composition (${{ matrix.product }})
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [desktop, desktop-dns, desktop-route, desktop-node-probe, desktop-base]
+    env:
+      ZNET_PRODUCT: ${{ matrix.product }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:product-composition
+      - run: pnpm build
+      - run: node scripts/check-product-artifact.mjs "$ZNET_PRODUCT"
+      - run: pnpm product check "$ZNET_PRODUCT"
+      - run: pnpm exec playwright install chromium
+      - run: pnpm exec playwright test product-composition.spec.ts --project=chromium
+
   frontend:
     name: Frontend product regression
     runs-on: ubuntu-latest
@@ -37,6 +81,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Run feature ownership and diagnostics regression
+        run: pnpm test:feature-owners
 
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
@@ -64,6 +111,9 @@ jobs:
 
       - name: Check TUN lifecycle and mode contract
         run: pnpm test:cross-mode-state
+
+      - name: Check observation lifecycle and connection projection
+        run: pnpm test:core-events && pnpm test:connections && pnpm test:config-workspace
 
       - name: Check Svelte and TypeScript
         run: pnpm check
@@ -130,10 +180,10 @@ jobs:
           workspaces: src-tauri
 
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Run client core tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1
 
   windows-zero-dns-contract:
     name: Windows Zero DNS contract

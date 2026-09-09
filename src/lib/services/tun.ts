@@ -8,7 +8,6 @@ import {
   updateAppConfig,
 } from './core';
 import type { AppConfig } from '$lib/types/app-config';
-import type { ProxyConfigProfile } from '$lib/types/domain';
 import type { GuiTunStatus } from '$lib/types/gui-api';
 import type { GuiManagedTunStatus, TunConfigSource } from '$lib/types/tun';
 import {
@@ -23,9 +22,7 @@ const TUN_STATE_RECONCILE_INTERVAL_MS = 250;
 
 interface TunPolicy {
   appConfig: AppConfig;
-  profile?: ProxyConfigProfile;
-  profileManaged: boolean;
-  profileDesiredEnabled: boolean;
+
 }
 
 export interface TunDnsHijackReadiness {
@@ -35,55 +32,19 @@ export interface TunDnsHijackReadiness {
   features?: ClientKernelFeatures;
 }
 
-export interface TunProfileTransition {
-  stoppedAppRuntime: boolean;
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function profileTunPolicy(content: unknown): Pick<TunPolicy, 'profileManaged' | 'profileDesiredEnabled'> {
-  if (!isObject(content) || !isObject(content.runtime)) {
-    return { profileManaged: false, profileDesiredEnabled: false };
-  }
-  const runtime = content.runtime;
-  if (!Object.prototype.hasOwnProperty.call(runtime, 'tun')) {
-    return { profileManaged: false, profileDesiredEnabled: false };
-  }
-  // `runtime.tun: null` is an explicit profile-owned disabled state. Any
-  // non-null value remains profile-owned and is left for Zero to validate;
-  // ZNet-Sink must not silently replace source intent with local runtime state.
-  return {
-    profileManaged: true,
-    profileDesiredEnabled: runtime.tun !== null,
-  };
-}
-
-async function listProfiles(): Promise<ProxyConfigProfile[]> {
-  // Keep TUN lifecycle independent from config.ts so config mutations can call
-  // back into runtime reconciliation without creating a module cycle.
-  return invoke('proxy_config_list');
-}
-
 async function resolveTunPolicy(): Promise<TunPolicy> {
-  const [appConfig, profiles] = await Promise.all([getAppConfig(), listProfiles()]);
-  const profile = profiles.find((item) => item.active);
-  return {
-    appConfig,
-    profile,
-    ...profileTunPolicy(profile?.content),
-  };
+  return {appConfig: await getAppConfig()};
 }
 
 function enrichTunStatus(status: GuiTunStatus, policy: TunPolicy): GuiManagedTunStatus {
   let configSource: TunConfigSource | undefined;
   let configSourceName: string | undefined;
 
-  if (policy.profileManaged) {
-    configSource = 'profile';
-    configSourceName = policy.profile?.name;
-  } else if (policy.appConfig.tun.enabled === true) {
+  if (policy.appConfig.tun.enabled === true) {
     configSource = 'app';
     configSourceName = 'ZNet-Sink';
   } else if (status.enabled) {
@@ -92,10 +53,8 @@ function enrichTunStatus(status: GuiTunStatus, policy: TunPolicy): GuiManagedTun
     configSource = 'runtime';
   }
 
-  const desiredEnabled = policy.profileManaged
-    ? policy.profileDesiredEnabled
-    : policy.appConfig.tun.enabled === true
-      || (policy.appConfig.tun.enabled === undefined && status.enabled);
+  const desiredEnabled = policy.appConfig.tun.enabled === true
+    || (policy.appConfig.tun.enabled === undefined && status.enabled);
 
   return {
     ...status,
@@ -160,19 +119,10 @@ async function ensureCoreReady(): Promise<void> {
   throw new Error(message);
 }
 
-function profileManagedError(policy: TunPolicy, action: 'enable' | 'disable'): { code: string; message: string } {
-  const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
-  const state = policy.profileDesiredEnabled ? '启用' : '关闭';
-  return {
-    code: 'tun_managed_by_profile',
-    message: `${name} 已显式定义 runtime.tun（期望${state}），该配置优先于 ZNet-Sink 的本地 TUN 设置。请编辑或切换该配置后再${action === 'enable' ? '开启' : '关闭'} TUN。`,
-  };
-}
-
 function runtimeOwnershipError(): { code: string; message: string } {
   return {
     code: 'tun_runtime_ownership_mismatch',
-    message: 'Zero 当前仍报告配置托管的 TUN，但活动配置未声明 runtime.tun。请重新应用当前配置或重启内核后再操作。',
+    message: 'Zero 当前仍运行旧配置托管的 TUN，尚未切换为客户端接管。请重新应用当前配置或重启内核后再操作。',
   };
 }
 
@@ -252,46 +202,8 @@ export async function getGuiTunStatus(): Promise<GuiManagedTunStatus> {
 }
 
 /**
- * Stop an app-owned command TUN before activating a profile that explicitly
- * owns runtime.tun. Core intentionally rejects configured TUN activation while
- * a command-managed TUN is still running, so the client owns this handoff.
- *
- * The persisted AppConfig desired state is not changed. `stoppedAppRuntime`
- * records the exact pre-switch runtime so a failed profile transition can put
- * it back even for legacy configs that do not yet have an explicit desired bit.
- */
-export async function prepareGuiTunForProfileSwitch(content: unknown): Promise<TunProfileTransition> {
-  const target = profileTunPolicy(content);
-  if (!target.profileManaged) return { stoppedAppRuntime: false };
-
-  const current = await rawTunStatus().catch(() => null);
-  if (!current?.enabled || current.managedByConfig) {
-    return { stoppedAppRuntime: false };
-  }
-
-  await invoke('gui_tun_disable');
-  return { stoppedAppRuntime: true };
-}
-
-/** Restore the exact app-owned runtime stopped only for a failed profile handoff. */
-export async function restoreGuiTunAfterFailedProfileSwitch(
-  transition: TunProfileTransition,
-): Promise<void> {
-  if (!transition.stoppedAppRuntime) return;
-
-  const policy = await resolveTunPolicy();
-  if (policy.profileManaged) return;
-
-  const current = await rawTunStatus();
-  if (current.enabled) return;
-  await validateAppDnsHijackPrecondition(policy);
-  await ensureCoreReady();
-  await invoke('gui_tun_enable');
-}
-
-/**
  * Reconcile the current Core instance with the persisted local desired state.
- * Profile/static runtime.tun always wins; otherwise the local preference is
+ * Profile/static runtime.tun is removed by composition; the local preference is
  * replayed through tun.start/tun.stop and never through config.apply.
  *
  * `enabled: undefined` is a migration state, not an implicit OFF. Until the
@@ -301,10 +213,6 @@ export async function restoreGuiTunAfterFailedProfileSwitch(
 export async function reconcileGuiTunRuntime(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
   let current = await rawTunStatus();
-
-  if (policy.profileManaged) {
-    return enrichTunStatus(current, policy);
-  }
 
   if (current.enabled && current.managedByConfig) {
     throw runtimeOwnershipError();
@@ -330,21 +238,6 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
   await ensureCoreReady();
   const policy = await resolveTunPolicy();
   const current = await rawTunStatus();
-
-  if (policy.profileManaged) {
-    if (!policy.profileDesiredEnabled) {
-      throw profileManagedError(policy, 'enable');
-    }
-    const enriched = enrichTunStatus(current, policy);
-    if (!current.enabled || !current.healthy) {
-      const name = policy.profile?.name ? `“${policy.profile.name}”` : '当前配置';
-      throw {
-        code: 'tun_profile_runtime_inactive',
-        message: `${name} 已要求启用 TUN，但当前内核未健康运行该 TUN。请检查内核运行状态或配置错误。`,
-      };
-    }
-    return enriched;
-  }
 
   await validateAppDnsHijackPrecondition(policy);
   if (current.enabled && current.managedByConfig) {
@@ -389,9 +282,6 @@ export async function recoverGuiTun(): Promise<GuiManagedTunStatus> {
 export async function disableGuiTun(): Promise<GuiManagedTunStatus> {
   const policy = await resolveTunPolicy();
 
-  if (policy.profileManaged) {
-    throw profileManagedError(policy, 'disable');
-  }
   // Cancelling a saved ON intent must work even while the runtime is
   // unreachable. Failure to confirm the stop remains an error, not an OFF
   // snapshot, but the next Core generation must not replay the old intent.

@@ -1,18 +1,15 @@
-use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use serde_json::Value;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
+use znet_engine_client::Subscription;
 
 use crate::errors::{AppError, AppResult};
 use crate::events::emitter::{
     emit_gui_event, emit_gui_event_status, GUI_EVENT_NAME, GUI_EVENT_STATUS_NAME,
 };
-use crate::kernel::zero::{events, queries};
-use crate::kernel::{connection, protocol};
-use crate::models::core::{CoreEndpoint, CoreIpcOptions};
+use crate::kernel::connection;
+use crate::kernel::observation::FlowObservation;
+use crate::kernel::zero::events;
 use crate::models::gui_core::{
     GuiConnection, GuiConnectionListOptions, GuiEvent, GuiEventData, GuiEventPayload,
     GuiEventStatus, GuiEventSubscription,
@@ -21,23 +18,18 @@ use crate::state::app_state::AppState;
 
 pub fn start(
     app: AppHandle,
-    active_generation: Arc<AtomicU64>,
-    generation: u64,
+    subscription: Subscription,
     // See `core_events::start`: per-type filtering is currently unused because
     // the shared multiplexed connection subscribes to every event.
     _event_types: Option<Vec<String>>,
-    options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiEventSubscription> {
-    let endpoint = protocol::endpoint_from_options(options.as_ref())?;
-    let timeout = protocol::timeout_from_options(options.as_ref())?;
-
-    let gen = Arc::clone(&active_generation);
+    let generation = subscription.generation;
     tauri::async_runtime::spawn_blocking(move || {
-        let result = subscribe_and_forward_events(app.clone(), gen, generation, endpoint, timeout);
+        let result = subscribe_and_forward_events(app.clone(), &subscription);
 
         match result {
             Ok(()) => {
-                let status = if active_generation.load(Ordering::SeqCst) == generation {
+                let status = if subscription.is_current() {
                     "disconnected"
                 } else {
                     "stopped"
@@ -74,20 +66,17 @@ fn should_retire_after_reconcile_failure(
     !has_pending_requests && !received_recently
 }
 
-fn subscribe_and_forward_events(
-    app: AppHandle,
-    active_generation: Arc<AtomicU64>,
-    generation: u64,
-    endpoint: CoreEndpoint,
-    timeout: Duration,
-) -> AppResult<()> {
+fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> AppResult<()> {
+    let generation = subscription.generation;
+    let endpoint = subscription.binding.endpoint.clone();
+    let timeout = subscription.binding.timeout;
     let mut backoff = MIN_RECONNECT_BACKOFF;
 
     // Reconnect loop — see `core_events::subscribe_and_forward_events` for
     // the rationale. Lets the GUI event stream self-heal after the watchdog
     // restarts the kernel.
     loop {
-        if active_generation.load(Ordering::SeqCst) != generation {
+        if !subscription.is_current() {
             return Ok(());
         }
 
@@ -95,21 +84,39 @@ fn subscribe_and_forward_events(
             Ok(conn) => conn,
             Err(error) => {
                 emit_status(&app, generation, "offline", Some(error), None);
-                sleep_interruptible(&active_generation, generation, backoff);
+                sleep_interruptible(subscription, backoff);
                 backoff = next_reconnect_backoff(backoff);
                 continue;
             }
         };
-        backoff = MIN_RECONNECT_BACKOFF;
         // Register before snapshot queries so events arriving during resync
         // remain buffered for this consumer instead of being dropped.
         let mut receiver = conn.subscribe_events();
-        let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
-        emit_status(&app, generation, "subscribed", None, snapshot);
+        let observer = FlowObservation::from_connection(subscription.binding.clone(), conn.clone());
+        let snapshot = match resync_snapshot(&app, subscription, &observer) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if error.is_unavailable()
+                    && should_retire_after_reconcile_failure(
+                        conn.has_pending_requests(),
+                        conn.received_within(ACTIVE_FLOW_RECONCILE_INTERVAL + timeout),
+                    )
+                {
+                    conn.retire();
+                }
+                emit_status(&app, generation, "reconnecting", Some(error), None);
+                sleep_interruptible(subscription, backoff);
+                backoff = next_reconnect_backoff(backoff);
+                continue;
+            }
+        };
+        let mut runtime = snapshot.get("runtime").cloned().unwrap_or_default();
+        backoff = MIN_RECONNECT_BACKOFF;
+        emit_status(&app, generation, "subscribed", None, Some(snapshot));
         let mut next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
 
         let mut closed = false;
-        while active_generation.load(Ordering::SeqCst) == generation {
+        while subscription.is_current() {
             // This forwarder keeps the old connection (and therefore its
             // broadcast sender) alive. The receiver cannot report `Closed`
             // merely because the shared transport was retired by the watchdog
@@ -122,6 +129,15 @@ fn subscribe_and_forward_events(
 
             let receiver_idle = match receiver.try_recv() {
                 Ok(source_event) => {
+                    if !subscription.is_current() {
+                        return Ok(());
+                    }
+                    if !event_matches_runtime(&source_event, &runtime) {
+                        // A peer can replace its runtime without closing IPC.
+                        // Acquire a new baseline before forwarding that instance.
+                        closed = true;
+                        break;
+                    }
                     let event = events::normalize_event(&source_event);
                     match &event.payload {
                         GuiEventData::PolicyProbeCompleted(probe) => {
@@ -161,8 +177,17 @@ fn subscribe_and_forward_events(
                     // A lagged receiver has lost one or more flow deltas.
                     // Re-establish an authoritative baseline instead of
                     // silently leaving the live connection page stale.
-                    let snapshot = resync_snapshot(&app, endpoint.clone(), timeout);
-                    emit_status(&app, generation, "subscribed", None, snapshot);
+                    match resync_snapshot(&app, subscription, &observer) {
+                        Ok(snapshot) => {
+                            runtime = snapshot.get("runtime").cloned().unwrap_or_default();
+                            emit_status(&app, generation, "subscribed", None, Some(snapshot))
+                        }
+                        Err(error) => {
+                            emit_status(&app, generation, "reconnecting", Some(error), None);
+                            closed = true;
+                            break;
+                        }
+                    }
                     next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
                     false
                 }
@@ -177,7 +202,7 @@ fn subscribe_and_forward_events(
                 // Flow pushes remain the low-latency path, but the active-flow
                 // query is the authoritative state. Reconcile it periodically
                 // so a dropped/quiet push stream cannot freeze the live page.
-                match resync_active_connections(endpoint.clone(), timeout) {
+                match resync_active_connections(&observer) {
                     Ok(connections) => {
                         emit_connection_snapshot(&app, generation, connections);
                     }
@@ -213,14 +238,30 @@ fn subscribe_and_forward_events(
             }
         }
 
-        if active_generation.load(Ordering::SeqCst) != generation {
+        if !subscription.is_current() {
             return Ok(());
         }
         if closed {
             emit_status(&app, generation, "reconnecting", None, None);
-            sleep_interruptible(&active_generation, generation, backoff);
+            sleep_interruptible(subscription, backoff);
             backoff = next_reconnect_backoff(backoff);
         }
+    }
+}
+
+fn event_matches_runtime(event: &Value, runtime: &Value) -> bool {
+    let instance = |value: &Value| {
+        value
+            .get("core_instance_id")
+            .or_else(|| value.get("coreInstanceId"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    match instance(event) {
+        Some(id) => instance(runtime).as_deref() == Some(id.as_str()),
+        // Older event envelopes lack identity; the pinned transport is then
+        // the available isolation boundary, until the next baseline read.
+        None => true,
     }
 }
 
@@ -228,70 +269,38 @@ fn next_reconnect_backoff(current: Duration) -> Duration {
     (current * 2).min(MAX_RECONNECT_BACKOFF)
 }
 
-fn resync_snapshot(app: &AppHandle, endpoint: CoreEndpoint, timeout: Duration) -> Option<Value> {
-    // Safe to block_on here: this runs on a `spawn_blocking` thread (see
-    // `start` above), not a tokio worker — so we don't nest runtimes.
-    let app = app.clone();
-    tauri::async_runtime::block_on(async move {
-        let options = Some(CoreIpcOptions {
-            socket: Some(endpoint.path),
-            timeout_ms: Some(timeout.as_millis() as u64),
-        });
-
-        let runtime =
-            queries::query_value(json!({"runtime": {}}), "runtime", options.clone()).await;
-        let stats = queries::query_value(json!({"stats": {}}), "stats", options.clone()).await;
-        let policies =
-            queries::query_value(json!({"policies": {}}), "policies", options.clone()).await;
-        if let Ok(value) = &policies {
-            let groups = crate::kernel::zero::parsing::parse_policy_groups(value);
-            crate::services::probe::reconcile_policy_snapshot(&app, &groups);
+fn resync_snapshot(
+    app: &AppHandle,
+    subscription: &Subscription,
+    observer: &FlowObservation,
+) -> AppResult<Value> {
+    let snapshot = tauri::async_runtime::block_on(observer.snapshot())?;
+    if subscription.is_current() {
+        if let Some(policies) = snapshot.get("policies").filter(|v| !v.is_null()) {
+            let groups = crate::kernel::zero::parsing::parse_policy_groups(policies);
+            crate::services::probe::reconcile_policy_snapshot(app, &groups);
         }
-        // Query active flows last. Events are already buffered by the receiver,
-        // so this snapshot becomes the baseline and subsequent buffered deltas
-        // apply on top without a reconnect gap.
-        let connections = queries::connections(
-            Some(GuiConnectionListOptions {
-                limit: Some(500),
-                inbound_tag: None,
-                principal_key: None,
-            }),
-            options,
-        )
-        .await;
-
-        Some(json!({
-            "runtime": runtime.ok(),
-            "stats": stats.ok(),
-            "policies": policies.ok(),
-            "connections": connections.ok(),
-        }))
-    })
+    }
+    Ok(snapshot)
 }
 
-fn resync_active_connections(
-    endpoint: CoreEndpoint,
-    timeout: Duration,
-) -> AppResult<Vec<GuiConnection>> {
-    tauri::async_runtime::block_on(async move {
-        let options = Some(CoreIpcOptions {
-            socket: Some(endpoint.path),
-            timeout_ms: Some(timeout.as_millis() as u64),
-        });
-        queries::connections(
-            Some(GuiConnectionListOptions {
-                limit: Some(500),
-                inbound_tag: None,
-                principal_key: None,
-            }),
-            options,
-        )
-        .await
-        .map(|connections| connections.items)
-    })
+fn resync_active_connections(observer: &FlowObservation) -> AppResult<Vec<GuiConnection>> {
+    tauri::async_runtime::block_on(observer.active(Some(GuiConnectionListOptions {
+        limit: Some(500),
+        inbound_tag: None,
+        principal_key: None,
+    })))
+    .map(|connections| connections.items)
 }
 
 fn emit_connection_snapshot(app: &AppHandle, generation: u64, connections: Vec<GuiConnection>) {
+    if !app
+        .state::<AppState>()
+        .observations()
+        .is_current(generation)
+    {
+        return;
+    }
     emit_gui_event(
         app,
         GuiEventPayload {
@@ -311,11 +320,11 @@ fn emit_connection_snapshot(app: &AppHandle, generation: u64, connections: Vec<G
 /// Sleep for `total`, waking early if the subscription generation is
 /// superseded — so `stop` takes effect promptly instead of waiting out the
 /// full reconnect backoff.
-fn sleep_interruptible(active_generation: &AtomicU64, generation: u64, total: Duration) {
+fn sleep_interruptible(subscription: &Subscription, total: Duration) {
     let step = Duration::from_millis(200);
     let mut waited = Duration::ZERO;
     while waited < total {
-        if active_generation.load(Ordering::SeqCst) != generation {
+        if !subscription.is_current() {
             return;
         }
         let sleep = step.min(total - waited);
@@ -331,6 +340,13 @@ fn emit_status(
     error: Option<AppError>,
     response: Option<Value>,
 ) {
+    if !app
+        .state::<AppState>()
+        .observations()
+        .is_current(generation)
+    {
+        return;
+    }
     if status != "subscribed" {
         crate::services::traffic_sampler::clear_runtime_traffic_state(app);
     }
@@ -347,7 +363,29 @@ fn emit_status(
 
 #[cfg(test)]
 mod tests {
-    use super::should_retire_after_reconcile_failure;
+    use super::{event_matches_runtime, should_retire_after_reconcile_failure};
+    use serde_json::json;
+
+    #[test]
+    fn event_identity_must_match_the_bound_runtime_when_present() {
+        let runtime = json!({"core_instance_id":"current"});
+        assert!(event_matches_runtime(
+            &json!({"core_instance_id":"current"}),
+            &runtime
+        ));
+        assert!(!event_matches_runtime(
+            &json!({"core_instance_id":"old"}),
+            &runtime
+        ));
+        assert!(event_matches_runtime(
+            &json!({"coreInstanceId":"current"}),
+            &runtime
+        ));
+        assert!(event_matches_runtime(
+            &json!({"event_type":"legacy"}),
+            &runtime
+        ));
+    }
 
     #[test]
     fn reconcile_timeout_never_retires_a_busy_or_recent_connection() {

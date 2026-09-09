@@ -5,7 +5,7 @@ pub(crate) mod atomic_file;
 pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
-mod config_apply;
+pub(crate) use crate::configuration::apply as config_apply;
 pub mod connection_history_store;
 pub mod core_config;
 pub mod core_events;
@@ -15,6 +15,7 @@ pub mod diagnostic_storage;
 pub mod domain_store;
 pub(crate) mod download;
 pub mod file_logger;
+pub(crate) mod flow_observation;
 pub mod gui_connection;
 pub mod gui_events;
 pub mod gui_self_test;
@@ -38,7 +39,7 @@ pub(crate) mod profile_switch;
 #[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
 pub mod proxy_mode;
-mod route_integrity;
+pub(crate) use crate::configuration::route_integrity;
 pub mod rule_overlay;
 pub mod rule_set;
 #[path = "subscription_wrapper.rs"]

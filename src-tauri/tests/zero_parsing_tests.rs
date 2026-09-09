@@ -1081,6 +1081,7 @@ fn plan_accepts_alternative_item_key_names() {
 
 // ── probe target parsing ──
 
+#[cfg(feature = "tool-node-probe")]
 #[test]
 fn target_probe_accepts_diagnostics_probe_target_response() {
     let result = parsing::parse_target_probe(
@@ -1101,6 +1102,7 @@ fn target_probe_accepts_diagnostics_probe_target_response() {
     assert_eq!(result.port, Some(443));
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[test]
 fn target_probe_handles_unreachable() {
     let result = parsing::parse_target_probe(
@@ -1117,6 +1119,7 @@ fn target_probe_handles_unreachable() {
     assert_eq!(result.message.as_deref(), Some("connection refused"));
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[test]
 fn target_probe_uses_fallback_tag_when_missing() {
     let result =
@@ -1125,6 +1128,7 @@ fn target_probe_uses_fallback_tag_when_missing() {
     assert_eq!(result.target_tag, "fallback-tag");
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[test]
 fn target_probe_accepts_latency_ms_field() {
     let result = parsing::parse_target_probe(
@@ -1139,6 +1143,7 @@ fn target_probe_accepts_latency_ms_field() {
     assert_eq!(result.latency_ms, Some(50));
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[test]
 fn target_probe_accepts_delay_ms_field() {
     let result = parsing::parse_target_probe(

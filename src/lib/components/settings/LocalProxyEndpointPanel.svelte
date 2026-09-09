@@ -13,7 +13,6 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let saved = $state(false);
-  let profileOwned = $state(false);
 
   function resetDefault() {
     host = DEFAULT_HOST;
@@ -27,7 +26,6 @@
     error = null;
     try {
       const config = await getAppConfig();
-      profileOwned = Boolean(config.localProxy.sourceProxyConfigId);
       host = config.localProxy.host || DEFAULT_HOST;
       port = String(config.localProxy.port || DEFAULT_PORT);
     } catch (cause) {
@@ -38,7 +36,7 @@
   }
 
   async function saveEndpoint() {
-    if (profileOwned || saving) return;
+    if (saving) return;
     const normalizedHost = host.trim();
     const normalizedPort = Number(port.trim());
     saved = false;
@@ -87,7 +85,7 @@
       <div class="config-row-label">
         <span class="label-text">代理监听</span>
         <span class="label-desc">
-          {profileOwned ? '当前地址和端口由配置文件定义，请在配置编辑器修改入站设置。' : '修改客户端代理入口，运行中保存会同时更新监听端口和已开启的系统代理。默认使用 127.0.0.1:7890。'}
+          客户端设置覆盖订阅和配置文件中的主代理入口，运行中保存会同步更新监听和已开启的系统代理。其他独立入站保留原配置。
         </span>
       </div>
 
@@ -98,7 +96,7 @@
             type="text"
             bind:value={host}
             oninput={() => (saved = false)}
-            disabled={saving || profileOwned}
+            disabled={saving}
             spellcheck="false"
             aria-label="代理监听地址"
           />
@@ -109,16 +107,16 @@
             inputmode="numeric"
             bind:value={port}
             oninput={() => (saved = false)}
-            disabled={saving || profileOwned}
+            disabled={saving}
             aria-label="代理监听端口"
           />
         </div>
 
         <div class="endpoint-actions">
-          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving || profileOwned}>
+          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving}>
             恢复默认
           </Button>
-          <Button size="sm" onclick={saveEndpoint} disabled={saving || profileOwned}>
+          <Button size="sm" onclick={saveEndpoint} disabled={saving}>
             {saving ? '保存中...' : saved ? '已保存' : '保存'}
           </Button>
         </div>

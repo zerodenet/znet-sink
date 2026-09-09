@@ -3,9 +3,9 @@
 export class EventLifecycleQueue {
   private tail: Promise<void> = Promise.resolve();
 
-  enqueue(operation: () => Promise<void>): Promise<void> {
+  enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.tail.then(operation, operation);
-    this.tail = next.catch(() => {});
+    this.tail = next.then(() => {}, () => {});
     return next;
   }
 }
