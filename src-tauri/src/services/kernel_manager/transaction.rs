@@ -158,12 +158,13 @@ impl BundleTransaction {
     }
 
     pub fn rollback(&mut self) -> AppResult<()> {
+        let _files = super::install::lock_installed_files()?;
         let mut failures = Vec::new();
         for entry in &self.receipt.entries {
             let target = self.receipt.target.join(&entry.name);
             let result = if entry.existed {
                 let source = self.backup.join("files").join(&entry.name);
-                replace_file(&source, &target)
+                restore_file(&source, &target)
             } else {
                 match fs::remove_file(&target) {
                     Ok(()) => Ok(()),
@@ -188,17 +189,49 @@ impl BundleTransaction {
 }
 
 pub(super) fn replace_file(source: &Path, target: &Path) -> AppResult<()> {
-    let mut last_error = None;
-    for attempt in 0..5 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
         match atomic_file::copy(source, target) {
             Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-        if attempt < 4 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            Err(error) => {
+                // Windows may briefly retain an image/scanner handle after
+                // child exit. Never retry unrelated errors or remove the old
+                // executable to force a replacement through an active lock.
+                let retryable = cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33));
+                if !retryable || std::time::Instant::now() >= deadline {
+                    return Err(AppError {
+                        code: "kernel_upgrade_storage_failed",
+                        message: format!(
+                            "无法替换内核文件 '{}'（来源 '{}'）：{error}",
+                            target.display(),
+                            source.display()
+                        ),
+                        details: Some(serde_json::json!({
+                            "operation": "replace", "sourcePath": source,
+                            "targetPath": target, "osError": error.raw_os_error(),
+                        })),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
     }
-    Err(storage_error(last_error.unwrap()))
+}
+
+fn restore_file(source: &Path, target: &Path) -> AppResult<()> {
+    // Failed atomic publication leaves the old generation intact. In
+    // particular, a locked Windows executable must not turn an unchanged
+    // installation into a failed rollback. Still restore changed permissions.
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if metadata.is_file()
+            && !metadata.file_type().is_symlink()
+            && metadata.permissions() == fs::metadata(source).map_err(storage_error)?.permissions()
+            && super::files_are_identical(source, target)?
+        {
+            return Ok(());
+        }
+    }
+    replace_file(source, target)
 }
 
 fn write_receipt(backup: &Path, receipt: &Receipt) -> AppResult<()> {
@@ -214,3 +247,7 @@ fn storage_error(error: std::io::Error) -> AppError {
 #[cfg(test)]
 #[path = "transaction_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "transaction_windows_tests.rs"]
+mod windows_tests;

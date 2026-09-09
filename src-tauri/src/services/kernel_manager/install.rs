@@ -1,6 +1,17 @@
 use super::transaction::BundleTransaction;
 use super::*;
 
+// CLI version probes briefly execute the installed binary. Serialize them
+// with replacement/rollback so Windows never sees an app-owned probe holding
+// the executable open during publication. Runtime lifecycle has its own owner.
+static INSTALLED_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(super) fn lock_installed_files() -> AppResult<std::sync::MutexGuard<'static, ()>> {
+    INSTALLED_FILES
+        .lock()
+        .map_err(|_| AppError::internal("kernel installation lock poisoned"))
+}
+
 /// Downloaded and validated assets. Dropping this before installation only
 /// removes the private staging directory; the running kernel is untouched.
 pub struct PreparedKernelInstall {
@@ -23,6 +34,7 @@ impl PreparedKernelInstall {
     /// The caller owns the stop/install/start transaction and only commits
     /// its backup after the new process and its capture settings are ready.
     pub fn install(&self) -> AppResult<()> {
+        let _files = lock_installed_files()?;
         for name in &self.bundle_files {
             let source = self.staged_bundle_dir.join(name);
             let target = self.dir.join(name);
