@@ -432,3 +432,6 @@ jobs:
 
       - name: Verify kernel upgrade rollback
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib kernel_manager::transaction -j 2
+
+      - name: Verify kernel startup readiness
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib runtime_host::readiness -j 2

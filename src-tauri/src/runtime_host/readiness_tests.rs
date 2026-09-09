@@ -67,6 +67,9 @@ fn healthy_ipc_for_another_pid_is_rejected() {
     let server = UnixListener::bind(&path).unwrap();
     let worker = std::thread::spawn(move || {
         let (mut stream, _) = server.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut request = String::new();
         reader.read_line(&mut request).unwrap();
@@ -96,6 +99,10 @@ fn healthy_ipc_for_another_pid_is_rejected() {
             )
             .unwrap();
         }
+        // Rejecting the peer must also close the dedicated subscription;
+        // otherwise its reader thread retains a live socket after startup.
+        request.clear();
+        assert_eq!(reader.read_line(&mut request).unwrap(), 0);
     });
     let endpoint = CoreEndpoint {
         transport: "unix-socket".into(),
