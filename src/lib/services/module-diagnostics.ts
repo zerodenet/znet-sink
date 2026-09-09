@@ -4,6 +4,11 @@ import { getCoreProcessStatus } from './core';
 import { getConfigCompositionReport } from './config';
 import { guiState } from './gui-state.svelte';
 import { collectModules, type ModuleStatus } from '$lib/features/diagnostics/model';
+const layerLabels: Record<string, string> = {
+  common_rules: '通用规则', local_listener: '本地监听', client_tun: '流量接管',
+  global_dns: '全局 DNS', urltest_override: '公共测速设置',
+  saved_selections: '保存的节点选择', bypass: '本地绕过',
+};
 export function getModuleDiagnostics() {
   return collectModules([
     {id: 'runtime-host', title: '内核托管', async read(): Promise<ModuleStatus> {
@@ -16,7 +21,7 @@ export function getModuleDiagnostics() {
     {id: 'configuration', title: '配置组合', async read(): Promise<ModuleStatus> {
       const report = await getConfigCompositionReport();
       return {id: 'configuration', title: '配置组合', state: report ? 'ready' : 'idle', summary: report ? '最近一次成功组合；不代表已在内核生效' : '本次运行尚无组合记录',
-        facts: report?.layers.map((layer) => ({label: layer.source, value: layer.changedPaths.length ? layer.changedPaths.join('、') : '未改变'})) ?? []};
+        facts: report?.layers.map((layer) => ({label: layerLabels[layer.source] ?? layer.source, value: layer.changedPaths.length ? layer.changedPaths.join('、') : '未改变'})) ?? []};
     }},
   ], [{id: 'product', title: '产品组合', state: 'ready', summary: productName, facts: moduleCatalog.map(tool => ({label: tool.title, value: '已编译'}))}, ...guiState.moduleDiagnostics(), ...readRegisteredModules(moduleCatalog)]);
 }
