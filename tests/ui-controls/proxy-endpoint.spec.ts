@@ -7,7 +7,7 @@ test('client endpoint remains editable when a legacy profile source marker exist
   await expect(page.getByRole('textbox', { name: '代理监听端口' })).toHaveValue('8899');
   await expect(page.getByRole('textbox', { name: '代理监听端口' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
-  await expect(page.getByText('客户端设置覆盖订阅和配置文件中的主代理入口', {exact:false})).toBeVisible();
+  await expect(page.getByText('配置已有监听地址和端口时优先使用配置', {exact:false})).toBeVisible();
 });
 
 test('managed endpoint rejects partial numbers and saves an exact numeric port', async ({ page }) => {

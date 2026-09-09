@@ -149,20 +149,3 @@ fn route_final_dns_detour(
         )),
     }
 }
-
-pub(crate) fn strip_profile_dns(config: &mut Value) {
-    let Some(root) = config.as_object_mut() else {
-        return;
-    };
-    let remove_runtime = root
-        .get_mut("runtime")
-        .and_then(Value::as_object_mut)
-        .map(|runtime| {
-            runtime.remove("dns");
-            runtime.is_empty()
-        })
-        .unwrap_or(false);
-    if remove_runtime {
-        root.remove("runtime");
-    }
-}

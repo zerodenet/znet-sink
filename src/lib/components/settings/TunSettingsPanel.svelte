@@ -193,8 +193,8 @@
   {:else}
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">主地址</span>
-        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。</span>
+        <span class="label-text">缺省主地址</span>
+        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。配置已有 TUN 参数时优先保留；可在网络设置中查看来源或开启覆盖。</span>
       </div>
       <div class="field-control">
         <Input

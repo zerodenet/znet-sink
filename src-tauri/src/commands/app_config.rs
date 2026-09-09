@@ -20,8 +20,11 @@ pub async fn app_config_apply_tun(
 }
 
 #[tauri::command]
-pub fn app_config_get(state: State<'_, AppState>) -> AppResult<AppConfig> {
-    app_config::get(state)
+pub fn app_config_get(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let config = app_config::get(state.clone())?;
+    let mut view = serde_json::to_value(&config).map_err(|e| AppError::internal(e.to_string()))?;
+    view["resolved"] = crate::configuration::preferences::describe(state.inner(), &config)?;
+    Ok(view)
 }
 
 #[tauri::command]
@@ -109,11 +112,7 @@ pub async fn app_config_import_kernel_settings(
                 && runtime_rollback.is_none()
                 && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
             {
-                if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
-                    &old_config.local_proxy.host,
-                    old_config.local_proxy.port,
-                    &old_config.local_proxy.bypass,
-                ) {
+                if let Err(proxy_error) = restore_proxy_settings(state.inner(), &old_config) {
                     runtime_rollback = Some(format!(
                         "system proxy rollback failed: {}",
                         proxy_error.message
@@ -204,11 +203,7 @@ pub async fn app_config_update(
                     && runtime_rollback.is_none()
                     && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
                 {
-                    if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
-                        &old_config.local_proxy.host,
-                        old_config.local_proxy.port,
-                        &old_config.local_proxy.bypass,
-                    ) {
+                    if let Err(proxy_error) = restore_proxy_settings(state.inner(), &old_config) {
                         runtime_rollback = Some(format!(
                             "system proxy rollback failed: {}",
                             proxy_error.message
@@ -268,11 +263,7 @@ pub async fn app_config_update(
     }
 
     if managed_proxy_enabled && effects.retarget_proxy {
-        if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(
-            &new_config.local_proxy.host,
-            new_config.local_proxy.port,
-            &new_config.local_proxy.bypass,
-        ) {
+        if let Err(error) = restore_proxy_settings(state.inner(), &new_config) {
             let mut error = error;
             let storage = app_config::replace(state.inner(), old_config.clone());
             if let Err(rollback) = storage {
@@ -292,11 +283,7 @@ pub async fn app_config_update(
                         .push_str(&format!("; runtime rollback failed: {}", rollback.message));
                 }
             }
-            if let Err(rollback) = system_proxy_guard::enable_with_guard_and_bypass(
-                &old_config.local_proxy.host,
-                old_config.local_proxy.port,
-                &old_config.local_proxy.bypass,
-            ) {
+            if let Err(rollback) = restore_proxy_settings(state.inner(), &old_config) {
                 error.message.push_str(&format!(
                     "; system proxy rollback failed: {}",
                     rollback.message
@@ -307,4 +294,9 @@ pub async fn app_config_update(
     }
 
     Ok(new_config)
+}
+
+fn restore_proxy_settings(state: &AppState, app: &AppConfig) -> AppResult<()> {
+    let (host, port, bypass) = crate::configuration::preferences::proxy_settings_for(state, app)?;
+    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
 }

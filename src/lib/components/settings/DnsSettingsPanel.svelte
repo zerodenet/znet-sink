@@ -1173,7 +1173,8 @@
       <ErrorRecoveryActions code={errorCode} context="dns" onretry={save} />
     </div>
   {/if}
-  <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存并应用' : '保存并应用'}</Button></div>
+  <p class="state compact">此处编辑客户端缺省 DNS。配置已有 DNS 时保存不会替换来源；请在网络设置的“配置优先级”查看来源或显式开启覆盖。</p>
+  <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 
 <Dialog.Root bind:open={serverDialogOpen}>
@@ -1412,7 +1413,7 @@
   <Dialog.Content class="sm:max-w-[1000px]">
     <Dialog.Header>
       <Dialog.Title>最终有效配置解释</Dialog.Title>
-      <Dialog.Description>只读预览，不会保存或应用；用于核对基础配置经过客户端覆盖后实际交给当前内核的内容。</Dialog.Description>
+      <Dialog.Description>只读预览，不会保存或应用；用于核对基础配置按优先级组合后交给内核的内容；配置已有 DNS 时默认保留。</Dialog.Description>
     </Dialog.Header>
     <Dialog.Body class="effective-dialog-body">
       {#if effectiveLoading}
@@ -1441,7 +1442,7 @@
               {/each}
             </div>
           {:else}
-            <div class="state compact">客户端覆盖没有改变当前基础配置。</div>
+            <div class="state compact">本次组合没有改变当前基础配置。</div>
           {/if}
         </section>
         <div class="config-preview-grid">

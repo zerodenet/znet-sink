@@ -303,7 +303,7 @@ pnpm product build desktop-route
 
 构建拒绝未知产品、前后端功能不一致，以及 release 嵌入旧组合的前端产物。切换开发组合需重启 dev server；不同组合不能同时写同一份 `build` / `.svelte-kit`。CI 覆盖五组合的前端构建、产物核对、Rust 编译及工具/节点页面浏览器验证。
 
-配置覆盖规则见 [客户端配置优先级](./config-precedence.md)。工具自治、独占第三方依赖样例、Android 托管、安装包真实授权/TUN 和长期稳定性仍需后续推进。
+配置优先级已调整为来源优先、缺失补齐、显式选择才覆盖，见 [客户端配置优先级](./config-precedence.md)。工具自治、独占第三方依赖样例、Android 托管、安装包真实授权/TUN 和长期稳定性仍需后续推进。
 
 本轮验证（macOS，2026-09-09）：
 
@@ -312,7 +312,7 @@ pnpm product build desktop-route
 - Chrome：完整组合的工具/节点、端口和公共 URL 设置 5 项通过；全裁剪组合的工具/节点与 TUN 设置 9 项通过。
 - Rust 工作区各套件合计 530 项通过、6 项忽略。其中工作区完整调用曾在旧内核预检查的临时 shell 启动阶段超时（529 通过、1 失败），随后该用例单测和整个 GUI lib 套件重跑均通过（398 通过、4 忽略）。此前一次 TUN 关闭确认失败也在后续套件中通过；未增加超时或跳过断言。不能将这记录成首轮完整命令一次通过。
 - 日志：`/tmp/znet-final-front2.log`、`/tmp/znet-final-build-desktop*.log`、`/tmp/znet-final-browser2.log`、`/tmp/znet-final-base-browser.log`、`/tmp/znet-final-rust3.log`、`/tmp/znet-final-lib-rerun.log`、`/tmp/znet-preflight-after-build.log`。Rust 仍有平台条件代码和裁剪后未引用的通用错误构造器警告。
-- 未提交、未推送，未修改 Zero 工作区；安装包及真实授权/TUN 接管未验证。
+- 该阶段验证时未提交、未推送，未修改 Zero 工作区；安装包及真实授权/TUN 接管未验证。
 
 ### P4B 第一批：测速执行资源归实例所有（2026-09-09）
 
@@ -331,6 +331,20 @@ pnpm product build desktop-route
 验证包括测速与历史记录的 15 项 Rust 测试（含独立实例预算、相同任务 ID
 隔离及 IPC 测速地址覆盖），`desktop-base` 无工具构建检查、3 项产品组合测试，
 以及模块状态页的响应式、明暗主题、滚动访问和刷新失败快照保留检查。
+
+### 来源配置优先与逐项覆盖（2026-09-09）
+
+来源配置、客户端缺省值和显式覆盖分别保存，六项覆盖选择默认关闭。
+端口、系统代理、测速、DNS、TUN 和规则组合使用统一解析语义；详情见
+[配置优先级](./config-precedence.md)。切换配置若改变已开启的 TUN 参数，
+当前要求先关闭 TUN，避免静态配置成功而设备仍使用旧参数。
+
+本批 macOS 验证：Rust 工作区串行完整调用 538 项通过、6 项忽略，无过滤用例。
+之前并发调用出现临时子进程预检查超时和 TUN 清理 IPC 关闭；最终串行调用中
+这些用例均通过，未改变超时或删除断言。新增优先级、空值、源规则保留及设置
+可移植性测试通过；基础裁剪 Rust 编译、产品组合、工具 owner、DNS 和设置
+导入导出检查通过。浏览器验证覆盖逐项切换、端口、测速地址、窄屏和设置布局。
+Svelte/TypeScript 检查通过。未运行本地生产安装或真实 TUN/系统代理变更。
 
 ## 参考
 

@@ -26,9 +26,10 @@ pub(crate) async fn restore_app_tun_after_core_transition_with_desired(
     }
 
     let options = core_config::ipc_options_from_app_config(&app_config.core);
+    let params = crate::configuration::preferences::tun_params(state, app_config.tun.clone())?;
     tun_restore::restore(
         || zero::runtime::tun_status(Some(options.clone())),
-        || zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone())),
+        || zero::runtime::enable_tun_params(params.clone(), Some(options.clone())),
         TUN_RESTORE_TIMEOUT,
         TUN_RESTORE_INTERVAL,
     )

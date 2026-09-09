@@ -207,6 +207,7 @@ pub(crate) async fn upsert_runtime_locked(
     let content = next_active.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
+    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
@@ -353,6 +354,7 @@ async fn activate_runtime_locked(
     let content = target.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot activate a proxy config without parsed content")
     })?;
+    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
@@ -426,6 +428,7 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     let content = replacement.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot promote a proxy config without parsed content")
     })?;
+    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
     let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
@@ -572,17 +575,15 @@ async fn stop_core(app_handle: AppHandle) -> AppResult<()> {
 }
 
 fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16, Vec<String>)> {
-    let config = lock(state.app_config(), "app_config")?;
-    Ok((
-        config.local_proxy.host.clone(),
-        config.local_proxy.port,
-        config.local_proxy.bypass.clone(),
-    ))
+    crate::configuration::preferences::proxy_settings(state)
 }
 
 pub(crate) fn retarget_managed_system_proxy(state: &AppState) -> AppResult<()> {
-    let (host, port, _) = local_proxy_endpoint(state)?;
-    system_proxy_guard::retarget_if_enabled(&host, port)
+    if !system_proxy_guard::is_enabled_by_guard()? {
+        return Ok(());
+    }
+    let (host, port, bypass) = local_proxy_endpoint(state)?;
+    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
 }
 
 fn enable_managed_system_proxy(state: &AppState) -> AppResult<()> {
@@ -722,7 +723,8 @@ pub(crate) fn sync_local_proxy_from_profile(
 }
 
 pub(crate) fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {
-    if system_proxy_guard::is_enabled_by_guard()? && content.and_then(extract_local_proxy).is_none()
+    if system_proxy_guard::is_enabled_by_guard()?
+        && content.is_none_or(|v| v.get("inbounds").is_some() && extract_local_proxy(v).is_none())
     {
         return Err(AppError::invalid_argument(
             "disable the GUI-managed system proxy before activating a config without a local proxy inbound",

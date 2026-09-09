@@ -22,9 +22,12 @@ fn composition_preserves_source_and_reports_order_without_values() {
     let original = base.clone();
     let candidate = finalize(&base, base.clone(), &inputs()).unwrap();
     assert_eq!(base, original);
-    assert!(candidate.config.pointer("/runtime/dns").is_none());
+    assert_eq!(
+        candidate.config.pointer("/runtime/dns"),
+        base.pointer("/runtime/dns")
+    );
     assert_eq!(candidate.config["outbound_groups"][0]["selected"], "b");
-    assert_eq!(candidate.config["outbound_groups"][1]["tolerance_ms"], 50);
+    assert_eq!(candidate.config["outbound_groups"][1]["tolerance_ms"], 0);
     assert_eq!(
         candidate
             .report
@@ -42,10 +45,7 @@ fn composition_preserves_source_and_reports_order_without_values() {
             "bypass"
         ]
     );
-    assert_eq!(
-        candidate.report.layers[3].changed_paths,
-        vec!["/runtime/dns"]
-    );
+    assert_eq!(candidate.report.layers[3].changed_paths, Vec::<&str>::new());
     assert!(!serde_json::to_string(&candidate.report)
         .unwrap()
         .contains("must-not-appear"));
@@ -75,7 +75,7 @@ fn invalid_candidate_does_not_publish_a_partial_report() {
 }
 
 #[test]
-fn client_capabilities_override_conflicting_subscription_values_without_editing_source() {
+fn explicit_client_overrides_replace_selected_capabilities_without_editing_source() {
     let source = json!({
         "inbounds": [
             {"tag":"subscription-entry", "protocol":{"type":"mixed"}, "listen":{"address":"127.0.0.2", "port":7891}},
@@ -86,6 +86,14 @@ fn client_capabilities_override_conflicting_subscription_values_without_editing_
         "outbound_groups":[{"tag":"auto","type":"url_test","outbounds":["a"],"url":"https://group.test/check","tolerance_ms":120}]
     });
     let mut settings = inputs();
+    settings.app.overrides = crate::models::app_config::ConfigOverrides {
+        listener: true,
+        dns: true,
+        tun: true,
+        url_test: true,
+        bypass: true,
+        rules: true,
+    };
     settings.app.local_proxy.port = 7890;
     settings.app.local_proxy.source_proxy_config_id = Some("legacy-source".into());
     settings.app.url_test.url = "https://client.test/204".into();

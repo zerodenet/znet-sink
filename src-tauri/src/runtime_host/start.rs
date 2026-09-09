@@ -113,11 +113,12 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
     // already occupies it (another proxy, a stale process), the kernel
     // will fail to bind and die immediately — which previously cascaded
     // into a destructive system-proxy disable. Surface the conflict now.
-    let (proxy_host, proxy_port) = {
-        let config = lock(state.app_config(), "app_config")?;
-        (config.local_proxy.host.clone(), config.local_proxy.port)
-    };
-    if let Err(error) = local_proxy::check_port_available(&proxy_host, proxy_port) {
+    let endpoint = crate::configuration::preferences::endpoint(state.inner());
+    let port_check = endpoint
+        .as_ref()
+        .map(|(host, port)| local_proxy::check_port_available(host, *port));
+    if let Ok(Err(error)) = port_check {
+        let (proxy_host, proxy_port) = endpoint.as_ref().unwrap();
         let message = error.message.clone();
         let _ = logs::append_entry(
             state.inner(),

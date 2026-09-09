@@ -71,13 +71,7 @@ pub(super) fn proxy_environment_command(host: &str, port: u16, bypass: &[String]
 
 pub(super) fn tray_copy_proxy_environment(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let endpoint = state.app_config().lock().map(|config| {
-        (
-            config.local_proxy.host.clone(),
-            config.local_proxy.port,
-            config.local_proxy.bypass.clone(),
-        )
-    });
+    let endpoint = crate::configuration::preferences::proxy_settings(state.inner());
     if let Ok((host, port, bypass)) = endpoint {
         let _ = app
             .clipboard()
@@ -157,13 +151,7 @@ pub(super) fn tray_open_proxy_terminal(app: tauri::AppHandle) {
         }
         crate::services::file_logger::line("tray: core is ready for terminal");
 
-        let endpoint = state.app_config().lock().map(|config| {
-            (
-                config.local_proxy.host.clone(),
-                config.local_proxy.port,
-                config.local_proxy.bypass.clone(),
-            )
-        });
+        let endpoint = crate::configuration::preferences::proxy_settings(state.inner());
         let Ok((host, port, bypass)) = endpoint else {
             crate::services::file_logger::line(
                 "tray: failed to read local proxy endpoint for terminal",

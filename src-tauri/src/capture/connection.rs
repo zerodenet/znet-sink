@@ -65,11 +65,7 @@ pub async fn connect(
         return Err(AppError::internal("core health check reported unhealthy"));
     }
 
-    let (host, port) = local_proxy_endpoint(state.inner())?;
-    let bypass = lock(state.app_config(), "app_config")?
-        .local_proxy
-        .bypass
-        .clone();
+    let (host, port, bypass) = crate::configuration::preferences::proxy_settings(state.inner())?;
     if let Err(error) = tauri::async_runtime::spawn_blocking({
         let host = host.clone();
         move || local_proxy::wait_until_listening(&host, port)
@@ -274,8 +270,7 @@ fn active_proxy_config_id(state: &AppState) -> AppResult<Option<String>> {
 }
 
 fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16)> {
-    let config = lock(state.app_config(), "app_config")?;
-    Ok((config.local_proxy.host.clone(), config.local_proxy.port))
+    crate::configuration::preferences::endpoint(state)
 }
 
 fn default_ipc_opts(state: &AppState) -> crate::models::core::CoreIpcOptions {

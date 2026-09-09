@@ -29,6 +29,10 @@ pub(super) async fn apply(state: &AppState, patch: AppTunConfigPatch) -> AppResu
         },
     )?;
     validation::validate(&mut candidate)?;
+    if crate::configuration::preferences::owns_tun(state)? {
+        app_config::replace(state, candidate.clone())?;
+        return Ok(candidate);
+    }
     let running = core_process::refresh_status(state)?.state == CoreProcessState::Running;
     let backend = LiveBackend {
         state,

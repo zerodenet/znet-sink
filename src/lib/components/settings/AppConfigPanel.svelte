@@ -436,7 +436,7 @@
       <div class="proxy-bypass-editor">
         <div class="config-row-label">
           <span class="label-text">绕过规则</span>
-          <span class="label-desc">系统代理与 TUN 共用，规则和全局模式均生效。匹配目标通过本机网络直接访问。</span>
+          <span class="label-desc">此处保存客户端缺省绕过规则。配置已有 route.bypass 时保留来源规则；开启绕过规则覆盖后才使用此处设置。</span>
         </div>
         <div class="config-row">
           <div class="config-row-label"><span class="label-text">自动绕过局域网</span><span class="label-desc">包含本机、常用私有网段和链路本地地址，保留系统原有网络与 VPN 路由。</span></div>
@@ -464,7 +464,7 @@
           spellcheck="false"
           placeholder="没有额外的自定义规则"
         ></Textarea>
-        <p class="label-desc">默认设置为开启内置局域网规则、自定义规则为空。恢复默认后，请点击“保存并应用”使其生效。</p>
+        <p class="label-desc">默认设置为开启内置局域网规则、自定义规则为空。恢复默认后请保存；当前是否采用这些规则，由上方配置优先级决定。</p>
         <div class="bypass-actions">
           <Button variant="outline" size="sm"
 

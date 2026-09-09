@@ -71,29 +71,53 @@ fn has_managed_local_inbound(content: &Value) -> bool {
         .is_some_and(|inbounds| inbounds.iter().any(is_managed_local_inbound))
 }
 
+pub(crate) fn project_endpoint(
+    content: &mut Value,
+    settings: &AppLocalProxyConfig,
+    force: bool,
+) -> AppResult<()> {
+    let root = content
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("config must be an object"))?;
+    if !root.contains_key("inbounds") {
+        root.insert("inbounds".into(), json!([{
+            "tag": MANAGED_MIXED_TAG, "listen": {"address": settings.host, "port": settings.port},
+            "protocol": {"type": "mixed"}
+        }]));
+        return Ok(());
+    }
+    let inbounds = root
+        .get_mut("inbounds")
+        .unwrap()
+        .as_array_mut()
+        .ok_or_else(|| AppError::invalid_argument("inbounds must be an array"))?;
+    if let Some(inbound) = inbounds.iter_mut().find(|v| is_local_proxy_inbound(v)) {
+        let listen = inbound
+            .as_object_mut()
+            .unwrap()
+            .entry("listen")
+            .or_insert_with(|| json!({}));
+        let listen = listen
+            .as_object_mut()
+            .ok_or_else(|| AppError::invalid_argument("listen must be an object"))?;
+        for (key, value) in [
+            ("address", json!(settings.host)),
+            ("port", json!(settings.port)),
+        ] {
+            if force || !listen.contains_key(key) {
+                listen.insert(key.into(), value);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn project_managed_endpoint(
     content: &mut Value,
     settings: &AppLocalProxyConfig,
 ) -> AppResult<()> {
-    let (host, port) = resolve_managed_endpoint(settings);
-    if let Some(inbounds) = content.get_mut("inbounds").and_then(Value::as_array_mut) {
-        // The first usable local proxy is the public entry, matching extract_local_proxy.
-        // Keep its tag and protocol so inbound-bound routing and credentials remain valid.
-        if let Some(inbound) = inbounds
-            .iter_mut()
-            .find(|value| local_inbound_is_usable(value))
-        {
-            let listen = inbound
-                .get_mut("listen")
-                .and_then(Value::as_object_mut)
-                .ok_or_else(|| {
-                    AppError::invalid_argument("local inbound listen must be an object")
-                })?;
-            listen.insert("address".into(), json!(host));
-            listen.insert("port".into(), json!(port));
-        }
-    }
-    Ok(())
+    project_endpoint(content, settings, true)
 }
 
 fn configured_managed_endpoint(state: &AppState) -> AppResult<(String, u16)> {
@@ -105,18 +129,17 @@ fn set_managed_endpoint(inbound: &mut Value, host: &str, port: u16) -> AppResult
     let object = inbound.as_object_mut().ok_or_else(|| {
         AppError::invalid_argument("subscription local inbound must be an object")
     })?;
-    object.insert(
-        "tag".to_string(),
-        Value::String(MANAGED_MIXED_TAG.to_string()),
-    );
+    object
+        .entry("tag")
+        .or_insert_with(|| json!(MANAGED_MIXED_TAG));
     let listen = object
         .entry("listen".to_string())
         .or_insert_with(|| json!({}));
     let listen = listen.as_object_mut().ok_or_else(|| {
         AppError::invalid_argument("subscription local inbound listen must be an object")
     })?;
-    listen.insert("address".to_string(), Value::String(host.to_string()));
-    listen.insert("port".to_string(), json!(port));
+    listen.entry("address").or_insert_with(|| json!(host));
+    listen.entry("port").or_insert_with(|| json!(port));
     Ok(())
 }
 
@@ -126,6 +149,7 @@ fn ensure_subscription_local_inbound(
     host: &str,
     port: u16,
 ) -> AppResult<bool> {
+    let explicit_inbounds = content.get("inbounds").is_some();
     let object = content
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_argument("subscription must produce a JSON object"))?;
@@ -137,12 +161,15 @@ fn ensure_subscription_local_inbound(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| AppError::invalid_argument("subscription inbounds must be an array"))?;
 
+    if explicit_inbounds && inbounds.is_empty() {
+        return Ok(false);
+    }
     let mut incomplete_local_index = None;
     for (index, inbound) in inbounds.iter_mut().enumerate() {
         if !is_local_proxy_inbound(inbound) {
             continue;
         }
-        if is_managed_local_inbound(inbound) {
+        if is_managed_local_inbound(inbound) && !local_inbound_is_usable(inbound) {
             set_managed_endpoint(inbound, host, port)?;
             return Ok(true);
         }
@@ -313,7 +340,7 @@ mod wrapper_tests {
     }
 
     #[test]
-    fn overrides_legacy_managed_port() {
+    fn preserves_source_port_even_with_legacy_managed_tag() {
         let mut content = json!({
             "inbounds": [{
                 "tag": "mixed-in",
@@ -325,9 +352,9 @@ mod wrapper_tests {
         let managed =
             ensure_subscription_local_inbound(&mut content, None, "127.0.0.1", 7890).unwrap();
 
-        assert!(managed);
-        assert_eq!(content["inbounds"][0]["tag"], MANAGED_MIXED_TAG);
-        assert_eq!(content["inbounds"][0]["listen"]["port"], 7890);
+        assert!(!managed);
+        assert_eq!(content["inbounds"][0]["tag"], "mixed-in");
+        assert_eq!(content["inbounds"][0]["listen"]["port"], 15581);
     }
 
     #[test]
@@ -343,7 +370,7 @@ mod wrapper_tests {
             ensure_subscription_local_inbound(&mut content, None, "127.0.0.1", 7890).unwrap();
 
         assert!(managed);
-        assert_eq!(content["inbounds"][0]["tag"], MANAGED_MIXED_TAG);
+        assert_eq!(content["inbounds"][0]["tag"], "custom-mixed");
         assert_eq!(content["inbounds"][0]["listen"]["address"], "127.0.0.1");
         assert_eq!(content["inbounds"][0]["listen"]["port"], 7890);
     }

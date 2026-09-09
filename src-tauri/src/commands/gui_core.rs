@@ -349,7 +349,11 @@ pub async fn gui_tun_enable(
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
     let opts = default_opts(state.inner());
-    zero::runtime::enable_tun(tun, Some(opts)).await
+    zero::runtime::enable_tun_params(
+        crate::configuration::preferences::tun_params(state.inner(), tun)?,
+        Some(opts),
+    )
+    .await
 }
 
 #[tauri::command]

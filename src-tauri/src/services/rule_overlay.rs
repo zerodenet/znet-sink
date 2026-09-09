@@ -51,7 +51,9 @@ pub(crate) fn validate_app_config_candidate(
         return Ok(());
     };
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let config = compose_with(&base, app_config.routing.inject_common_rules, &profiles)?.config;
+    let enabled = app_config.routing.inject_common_rules
+        && (app_config.overrides.rules || base.pointer("/route/rules").is_none());
+    let config = compose_rules_for(&base, enabled, &profiles, app_config.overrides.rules)?;
     finalize_effective_config(
         state,
         &base,
@@ -71,7 +73,10 @@ fn compose_effective_with(
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
-    let config = compose_with(base, enabled, profiles)?.config;
+    let force = common::lock(state.app_config(), "app_config")?
+        .overrides
+        .rules;
+    let config = compose_rules_for(base, enabled, profiles, force)?;
     finalize_effective_config(state, base, config, dns_override, tolerance_override, None)
 }
 
@@ -107,7 +112,7 @@ fn finalize_effective_config(
 
 #[cfg(test)]
 use crate::configuration::dns::resolve_dns_detours;
-pub(crate) use crate::configuration::dns::strip_profile_dns;
+
 use crate::configuration::rules::{common_tag, eligible_profiles};
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
@@ -141,8 +146,15 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
             reason: Some("当前没有活动配置".to_string()),
         });
     };
-    let effective = enabled && mode == "rule" && eligible_count > 0;
-    let reason = if !enabled {
+    let inherited = active_content(state)?
+        .is_some_and(|base| base.pointer("/route/rules").is_some())
+        && !common::lock(state.app_config(), "app_config")?
+            .overrides
+            .rules;
+    let effective = enabled && !inherited && mode == "rule" && eligible_count > 0;
+    let reason = if inherited {
+        Some("使用配置中的规则；未开启客户端规则追加".to_string())
+    } else if !enabled {
         Some("公共规则注入已关闭".to_string())
     } else if mode != "rule" {
         Some("等待活动配置切换到规则模式".to_string())
@@ -359,6 +371,19 @@ fn current_effective_config(state: &AppState) -> AppResult<Option<Value>> {
         .transpose()
 }
 
+fn compose_rules_for(
+    base: &Value,
+    enabled: bool,
+    profiles: &[RuleSetProfile],
+    force: bool,
+) -> AppResult<Value> {
+    if !force && base.pointer("/route/rules").is_some() {
+        crate::configuration::route_integrity::validate(base)?;
+        return Ok(base.clone());
+    }
+    Ok(compose_with(base, enabled, profiles)?.config)
+}
+
 fn compose_with(
     base: &Value,
     enabled: bool,
@@ -471,8 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn global_dns_is_injected_and_profile_dns_is_discarded() {
+    fn explicit_dns_override_replaces_profile_dns() {
         let mut app_config = AppConfig::default();
+        app_config.overrides.dns = true;
         app_config.dns.enabled = true;
         app_config.dns.config = Some(
             serde_json::from_value(json!({
@@ -700,8 +726,10 @@ mod tests {
             "mode":{"type":"rule"},
             "route":{"rule_sets":[],"rules":[],"final":{"type":"direct"}}
         });
+        let mut app = AppConfig::default();
+        app.overrides.rules = true;
         let state = AppState::with_domain_data(
-            AppConfig::default(),
+            app,
             vec![ProxyConfigProfile {
                 id: "active".into(),
                 name: "Active".into(),

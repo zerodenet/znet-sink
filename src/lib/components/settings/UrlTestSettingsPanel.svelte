@@ -83,7 +83,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">公共测速地址</span>
-        <span class="label-desc">手动节点测速和自动 URLTest 统一使用此地址，覆盖订阅／配置文件的测速地址。保存后应用到当前内核，后续测速使用新值。</span>
+        <span class="label-desc">配置未提供公共测速地址时使用此值；策略组专用地址优先保留。手动节点测速使用配置公共地址，缺失时用此值。强制统一地址需开启公共测速覆盖。</span>
       </div>
       <Input class="w-full max-w-sm font-mono" bind:value={url} oninput={() => (saved = false)} disabled={saving} aria-label="公共测速地址" placeholder="http://www.gstatic.com/generate_204" />
     </div>
@@ -91,7 +91,7 @@
       <div class="config-row-label">
         <span class="label-text">URLTest 延迟容差</span>
         <span class="label-desc">
-          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；客户端设置覆盖配置文件中的 tolerance_ms。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
+          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；仅补齐配置缺少的 tolerance_ms，保留显式的 0；开启公共测速覆盖后才替换。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
         </span>
       </div>
 

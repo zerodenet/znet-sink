@@ -32,3 +32,5 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod preferences;

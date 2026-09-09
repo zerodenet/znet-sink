@@ -33,8 +33,21 @@ const endpointConfig = () => ({ localProxy: {
   host: '127.0.0.2', port: 8899,
   sourceProxyConfigId: new URLSearchParams(location.search).has('custom') ? 'custom-profile' : null,
 } });
+let precedenceOverrides = {listener:false,dns:false,tun:false,urlTest:false,bypass:false,rules:false};
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
+  if (panel === 'settings' && new URLSearchParams(location.search).get('mode') === 'precedence') {
+    return { ...(await getTunConfig()), core: {cleanupProxyOnExit:true}, localProxy: {host:'127.0.0.1',port:7890,bypass:[]},
+      overrides:precedenceOverrides, urlTest:{url:'https://client.test/204',toleranceMs:50},
+      resolved:[
+        {key:'listener',label:'代理入口',source:precedenceOverrides.listener?'客户端显式覆盖':'当前配置',value:precedenceOverrides.listener?'127.0.0.1:7890':'127.0.0.1:7891'},
+        {key:'urlTest',label:'公共测速',source:'当前配置',value:'https://source.test/204；2 个策略组另有专用地址'},
+        {key:'dns',label:'DNS',source:'当前配置',value:'保留配置中的 DNS 定义'},
+        {key:'tun',label:'TUN 参数',source:'客户端缺省值',value:'10.0.85.1/24 · MTU 1500；启停由客户端控制'},
+        {key:'bypass',label:'绕过规则',source:'当前配置',value:'保留配置中的绕过规则（含空列表）'},
+        {key:'rules',label:'通用规则追加',source:'当前配置',value:'保留配置规则，不追加客户端通用规则'}
+      ] };
+  }
   if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
   if (panel === 'url-test') return {urlTest: {url: 'http://www.gstatic.com/generate_204', toleranceMs: 50}};
   if (panel === 'endpoint') return endpointConfig();
@@ -45,6 +58,11 @@ export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ ker
 export const getCoreProcessStatus = async () => ({ state:'running' });
 export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
+  if (new URLSearchParams(location.search).get('mode') === 'precedence') {
+    precedenceOverrides = {...precedenceOverrides,...(input as {overrides:typeof precedenceOverrides}).overrides};
+    window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));
+    return getAppConfig();
+  }
   if (['endpoint', 'url-test'].includes(new URLSearchParams(location.search).get('panel') ?? '')) {
     window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
     return input;

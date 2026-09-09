@@ -81,7 +81,9 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
             AppError::invalid_argument("client kernel settings requires schemaVersion")
         })?;
     let mut settings = match schema {
-        CLIENT_KERNEL_SETTINGS_SCHEMA | "znet.client-kernel-settings.v1" => {
+        CLIENT_KERNEL_SETTINGS_SCHEMA
+        | "znet.client-kernel-settings.v2"
+        | "znet.client-kernel-settings.v1" => {
             serde_json::from_value::<ClientKernelSettingsBundle>(value)
                 .map_err(|error| {
                     AppError::invalid_argument(format!(

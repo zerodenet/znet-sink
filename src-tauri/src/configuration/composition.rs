@@ -1,8 +1,8 @@
 //! Explicit composition inputs. No AppState, filesystem reads, IPC, or persistence.
-use super::{dns, CompositionReport};
+use super::{dns, preferences, CompositionReport};
 use crate::errors::AppResult;
 use crate::models::app_config::AppConfig;
-use crate::services::{bypass, policy_selection, proxy_config, url_test};
+use crate::services::{policy_selection, proxy_config, url_test};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -29,7 +29,11 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         &config,
     );
     report.apply("local_listener", &["/inbounds"], &mut config, |config| {
-        proxy_config::project_managed_endpoint(config, &inputs.app.local_proxy)
+        proxy_config::project_endpoint(
+            config,
+            &inputs.app.local_proxy,
+            inputs.app.overrides.listener,
+        )
     })?;
     report.apply("client_tun", &["/runtime/tun"], &mut config, |config| {
         if let Some(runtime) = config.get_mut("runtime").and_then(Value::as_object_mut) {
@@ -38,16 +42,27 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         Ok(())
     })?;
     report.apply("global_dns", &["/runtime/dns"], &mut config, |config| {
-        dns::apply_global_dns(config, &inputs.app.dns)
+        if inputs.app.overrides.dns || config.pointer("/runtime/dns").is_none() {
+            dns::apply_global_dns(config, &inputs.app.dns)?;
+        }
+        Ok(())
     })?;
     report.apply(
         "urltest_override",
         &["/runtime/latency_test_url", "/outbound_groups"],
         &mut config,
         |config| {
-            url_test::apply_url(config, &inputs.app.url_test.url)?;
+            url_test::apply_url_with_preference(
+                config,
+                &inputs.app.url_test.url,
+                inputs.app.overrides.url_test,
+            )?;
             if inputs.supports_tolerance {
-                url_test::apply_default_tolerance(config, inputs.app.url_test.tolerance_ms)?;
+                url_test::apply_tolerance(
+                    config,
+                    inputs.app.url_test.tolerance_ms,
+                    inputs.app.overrides.url_test,
+                )?;
             }
             Ok(())
         },
@@ -69,7 +84,7 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
             "/runtime/dns",
         ],
         &mut config,
-        |config| bypass::apply(config, &inputs.app),
+        |config| preferences::apply_bypass(config, base, &inputs.app),
     )?;
     Ok(Candidate { config, report })
 }
