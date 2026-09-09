@@ -20,11 +20,8 @@ pub async fn app_config_apply_tun(
 }
 
 #[tauri::command]
-pub fn app_config_get(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
-    let config = app_config::get(state.clone())?;
-    let mut view = serde_json::to_value(&config).map_err(|e| AppError::internal(e.to_string()))?;
-    view["resolved"] = crate::configuration::preferences::describe(state.inner(), &config)?;
-    Ok(view)
+pub fn app_config_get(state: State<'_, AppState>) -> AppResult<AppConfig> {
+    app_config::get(state)
 }
 
 #[tauri::command]
@@ -59,7 +56,11 @@ pub async fn app_config_import_kernel_settings(
 ) -> AppResult<AppConfig> {
     let _operation = state.proxy_config_operation().lock().await;
     let old_config = app_config::get(state.clone())?;
-    let new_config = kernel_settings::import_from_path(&old_config, path)?;
+    let mut new_config = kernel_settings::import_from_path(&old_config, path)?;
+    let active_id = crate::configuration::local_edits::active(state.inner())
+        .ok()
+        .map(|v| v.0);
+    crate::configuration::local_edits::migrate_legacy(&mut new_config, active_id.as_deref());
     if new_config == old_config {
         return Ok(new_config);
     }
@@ -149,10 +150,19 @@ pub async fn app_config_update(
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
 
+    let new_config = app_config::prepare_update(&old_config, patch)?;
+    apply_candidate(app_handle, state.clone(), old_config, new_config).await
+}
+
+pub(crate) async fn apply_candidate(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    old_config: AppConfig,
+    new_config: AppConfig,
+) -> AppResult<AppConfig> {
     // Read legacy capture intent before replacing settings or stopping the process.
     let was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let new_config = app_config::prepare_update(&old_config, patch)?;
     if was_running && old_config.bypass != new_config.bypass {
         crate::services::bypass::require_core_support(&new_config).await?;
     }

@@ -799,3 +799,19 @@ function stageToState(stage: string): ConnectionStatus['state'] {
       return 'disconnected';
   }
 }
+
+export interface ProfileSettings {
+  applied?: boolean;
+  profileId: string;
+  settings: AppConfig;
+  editedFields: string[];
+  sourceEndpoint?: [string, number];
+  sourceBypass?: unknown;
+  groupTolerances?: number[];
+}
+export async function getProfileSettings(): Promise<ProfileSettings> {
+  return invoke('profile_settings_get');
+}
+export async function applyProfileSettings(profileId: string, changes: Record<string, unknown>, reset: string[] = []): Promise<ProfileSettings> {
+  return invoke('profile_settings_apply', {profileId, changes, reset});
+}

@@ -6,6 +6,9 @@ use super::dns_config::ClientDnsConfig;
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
+    pub profile_edits:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>,
+    #[serde(default)]
     pub overrides: ConfigOverrides,
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
@@ -32,6 +35,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            profile_edits: Default::default(),
             overrides: ConfigOverrides::default(),
             schema_version: default_schema_version(),
             core: AppCoreConfig::default(),

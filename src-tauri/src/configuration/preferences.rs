@@ -6,60 +6,24 @@ use crate::state::app_state::AppState;
 use serde_json::{json, Value};
 
 pub(crate) fn source(state: &AppState) -> AppResult<Value> {
-    Ok(lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone())
-        .unwrap_or_else(|| json!({})))
+    Ok(current(state)?.1)
 }
 
-pub(crate) fn describe(state: &AppState, app: &AppConfig) -> AppResult<Value> {
-    let source = source(state)?;
-    let origin = |force: bool, present: bool| {
-        if force {
-            "客户端显式覆盖"
-        } else if present {
-            "当前配置"
-        } else {
-            "客户端缺省值"
-        }
-    };
-    let endpoint = endpoint_for(app, &source)
-        .map(|(h, p)| format!("{h}:{p}"))
-        .unwrap_or_else(|e| e.message);
-    let url = if app.overrides.url_test {
-        json!(app.url_test.url)
-    } else {
-        source
-            .pointer("/runtime/latency_test_url")
-            .cloned()
-            .unwrap_or_else(|| json!(app.url_test.url))
-    };
-    let tun = tun_params_for(app, &source, app.tun.clone())
-        .map(|tun| {
-            format!(
-                "{} · MTU {}；启停由客户端控制",
-                tun["addr"].as_str().unwrap_or("无效地址"),
-                tun["mtu"]
-            )
-        })
-        .unwrap_or_else(|error| format!("配置无效：{}", error.message));
-    let groups = source
-        .get("outbound_groups")
-        .and_then(Value::as_array)
-        .map_or(0, |v| v.iter().filter(|g| g.get("url").is_some()).count());
-    Ok(json!([
-        {"key":"listener","label":"代理入口","source":origin(app.overrides.listener,source.get("inbounds").is_some()),"value":endpoint},
-        {"key":"urlTest","label":"公共测速","source":origin(app.overrides.url_test,source.pointer("/runtime/latency_test_url").is_some()),"value":format!("{}；{} 个策略组另有专用地址",url.as_str().unwrap_or("配置值无效"),if app.overrides.url_test {0} else {groups})},
-        {"key":"dns","label":"DNS","source":origin(app.overrides.dns,source.pointer("/runtime/dns").is_some()),"value":if !app.overrides.dns && source.pointer("/runtime/dns").is_some() {"保留配置中的 DNS 定义"} else if app.dns.enabled {"使用客户端 DNS 设置"} else {"关闭"}},
-        {"key":"tun","label":"TUN 参数","source":origin(app.overrides.tun,source.pointer("/runtime/tun").is_some()),"value":tun},
-        {"key":"bypass","label":"绕过规则","source":origin(app.overrides.bypass,source.pointer("/route/bypass").is_some()),"value":if !app.overrides.bypass && source.pointer("/route/bypass").is_some() {"保留配置中的绕过规则（含空列表）"} else {"使用客户端绕过设置"}},
-        {"key":"rules","label":"通用规则追加","source":origin(app.overrides.rules,source.pointer("/route/rules").is_some()),"value":if !app.overrides.rules && source.pointer("/route/rules").is_some() {"保留配置规则，不追加客户端通用规则"} else if app.routing.inject_common_rules {"允许追加已启用的通用规则"} else {"关闭追加"}}
-    ]))
+pub(crate) fn current(state: &AppState) -> AppResult<(AppConfig, Value)> {
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|p| p.active)
+        .cloned();
+    let base = profile
+        .as_ref()
+        .and_then(|p| p.content.clone())
+        .unwrap_or_else(|| json!({}));
+    super::local_edits::resolve(&app, profile.as_ref().map(|p| p.id.as_str()), &base)
 }
 
 pub(crate) fn owns_tun(state: &AppState) -> AppResult<bool> {
-    let app = lock(state.app_config(), "app_config")?.clone();
+    let (app, _) = current(state)?;
     Ok(!app.overrides.tun
         && source(state)?
             .pointer("/runtime/tun")
@@ -68,10 +32,16 @@ pub(crate) fn owns_tun(state: &AppState) -> AppResult<bool> {
 
 /// A hot config apply cannot silently retain an old command-owned TUN plan.
 /// Check before publishing either the new runtime config or source profile.
-pub(crate) async fn require_capture_compatible(state: &AppState, next: &Value) -> AppResult<()> {
+pub(crate) async fn require_capture_compatible(
+    state: &AppState,
+    next: &Value,
+    id: Option<&str>,
+) -> AppResult<()> {
     let app = lock(state.app_config(), "app_config")?.clone();
-    let previous = tun_params_for(&app, &source(state)?, app.tun.clone())?;
-    let candidate = tun_params_for(&app, next, app.tun.clone())?;
+    let (current_app, current_source) = current(state)?;
+    let previous = tun_params_for(&current_app, &current_source, current_app.tun.clone())?;
+    let (next_app, next) = super::local_edits::resolve(&app, id, next)?;
+    let candidate = tun_params_for(&next_app, &next, next_app.tun.clone())?;
     if previous == candidate {
         return Ok(());
     }
@@ -98,8 +68,8 @@ pub(crate) fn endpoint_for(app: &AppConfig, source: &Value) -> AppResult<(String
 }
 
 pub(crate) fn endpoint(state: &AppState) -> AppResult<(String, u16)> {
-    let app = lock(state.app_config(), "app_config")?.clone();
-    endpoint_for(&app, &source(state)?)
+    let (app, source) = current(state)?;
+    endpoint_for(&app, &source)
 }
 
 pub(crate) fn proxy_settings(state: &AppState) -> AppResult<(String, u16, Vec<String>)> {
@@ -111,8 +81,17 @@ pub(crate) fn proxy_settings_for(
     state: &AppState,
     app: &AppConfig,
 ) -> AppResult<(String, u16, Vec<String>)> {
-    let source = source(state)?;
-    let (host, port) = endpoint_for(app, &source)?;
+    let profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|p| p.active)
+        .cloned();
+    let base = profile
+        .as_ref()
+        .and_then(|p| p.content.clone())
+        .unwrap_or_else(|| json!({}));
+    let (app, source) =
+        super::local_edits::resolve(app, profile.as_ref().map(|p| p.id.as_str()), &base)?;
+    let (host, port) = endpoint_for(&app, &source)?;
     // Arbitrary source bypass expressions remain enforced by Zero. Native
     // exceptions must never bypass a source policy using unrelated app defaults.
     let native = if !app.overrides.bypass && source.pointer("/route/bypass").is_some() {
@@ -124,8 +103,8 @@ pub(crate) fn proxy_settings_for(
 }
 
 pub(crate) fn tun_params(state: &AppState, defaults: AppTunConfig) -> AppResult<Value> {
-    let app = lock(state.app_config(), "app_config")?.clone();
-    tun_params_for(&app, &source(state)?, defaults)
+    let (app, source) = current(state)?;
+    tun_params_for(&app, &source, defaults)
 }
 
 pub(crate) fn tun_params_for(

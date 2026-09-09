@@ -1,11 +1,21 @@
 <script lang="ts">
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let snapshot = $state<ProfileSettings | null>(null);
+  async function restoreSource() {
+    if (!snapshot || saving) return;
+    saving = true;
+    try {snapshot = await restoreProfileSettings(snapshot, 'tun'); await load();}
+    catch (cause) {error = getAppErrorMessage(cause, '恢复 TUN 配置失败');}
+    finally {saving = false;}
+  }
+
   import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
-  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, applyTunSettings } from '$lib/services/core';
+  import { getProfileSettings, getAppErrorInfo, getAppErrorMessage } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import {
@@ -43,7 +53,8 @@
     loading = true;
     error = null;
     try {
-      const config = await getAppConfig();
+      snapshot = await getProfileSettings();
+      const config = snapshot.settings;
       name = config.tun.name ?? '';
       tag = config.tun.tag;
       addr = config.tun.addr;
@@ -101,7 +112,8 @@
 
     saving = true;
     try {
-      const config = await applyTunSettings({
+      if (!snapshot) return;
+      snapshot = await saveProfileSettings(snapshot, {tun: {
         name: name.trim() || null,
         tag: normalizedTag,
         addr: normalizedAddr,
@@ -110,7 +122,8 @@
         includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
         dualStack,
         dnsHijack,
-      });
+      }});
+      const config = snapshot.settings;
       name = config.tun.name ?? '';
       tag = config.tun.tag;
       addr = config.tun.addr;
@@ -134,6 +147,10 @@
     void Promise.allSettled([load(), guiState.refreshTunStatus()]);
   });
 </script>
+<div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
+  <span>{isLocallyEdited(snapshot, 'tun') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</span>
+  <Button variant="outline" size="sm" onclick={restoreSource} disabled={saving || !isLocallyEdited(snapshot, 'tun')}>恢复配置值</Button>
+</div>
 
 {#if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
@@ -193,8 +210,8 @@
   {:else}
     <div class="config-row">
       <div class="config-row-label">
-        <span class="label-text">缺省主地址</span>
-        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。配置已有 TUN 参数时优先保留；可在网络设置中查看来源或开启覆盖。</span>
+        <span class="label-text">主地址</span>
+        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。修改并应用后只替换当前配置中改动的参数。</span>
       </div>
       <div class="field-control">
         <Input

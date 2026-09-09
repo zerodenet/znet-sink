@@ -1,7 +1,17 @@
 <script lang="ts">
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let networkSnapshot = $state<ProfileSettings | null>(null);
+  async function restoreBypass() {
+    if (!networkSnapshot) return;
+    loading = true;
+    try {networkSnapshot = await restoreProfileSettings(networkSnapshot, 'bypass'); await refreshConfig();}
+    catch (cause) {updateError = getAppErrorMessage(cause, '恢复绕过配置失败');}
+    finally {loading = false;}
+  }
+
   import { Button } from '$lib/components/ui/button';
   import { Textarea } from '$lib/components/ui/textarea';
-  import { appendLog, getAppErrorMessage, getAppConfig, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
+  import { appendLog, getAppErrorMessage, getAppConfig, getProfileSettings, updateAppConfig, guiLogPaths, type GuiLogPaths } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
   import { setTheme, type ThemeMode } from '$lib/services/theme.svelte';
@@ -50,7 +60,8 @@
     configError = null;
     updateError = null;
     try {
-      const next = await getAppConfig();
+      let next = await getAppConfig();
+      if (scope === "network") { networkSnapshot = await getProfileSettings(); next = networkSnapshot.settings; }
       if (generation !== configRequestGeneration) return;
       config = next;
       proxyBypassDraft = (next.bypass?.rules ?? []).join('\n');
@@ -97,9 +108,11 @@
     loading = true;
     updateError = null;
     try {
-      const updated = await updateAppConfig({
+      if (!networkSnapshot) return;
+      networkSnapshot = await saveProfileSettings(networkSnapshot, {
         bypass: { localNetworks: bypassLocalNetworks, rules: parseProxyBypass(proxyBypassDraft) },
       });
+      const updated = networkSnapshot.settings;
       config = updated;
       proxyBypassDraft = (updated.bypass?.rules ?? []).join('\n');
       bypassLocalNetworks = updated.bypass?.localNetworks ?? true;
@@ -434,9 +447,13 @@
       </div>
 
       <div class="proxy-bypass-editor">
+        <p class="text-xs text-muted-foreground">{isLocallyEdited(networkSnapshot, 'bypass') ? '本地修改 · 仅当前配置' : '来自配置 · 下方表单用于设置本地替换规则'}</p>
+        {#if networkSnapshot?.sourceBypass && !isLocallyEdited(networkSnapshot, 'bypass')}
+          <details><summary>当前配置中的绕过规则</summary><pre class="text-xs whitespace-pre-wrap break-all">{JSON.stringify(networkSnapshot.sourceBypass, null, 2)}</pre></details>
+        {/if}
         <div class="config-row-label">
           <span class="label-text">绕过规则</span>
-          <span class="label-desc">此处保存客户端缺省绕过规则。配置已有 route.bypass 时保留来源规则；开启绕过规则覆盖后才使用此处设置。</span>
+          <span class="label-desc">保存后替换当前配置的绕过规则，其他配置不受影响；恢复配置值会移除这项本地修改。</span>
         </div>
         <div class="config-row">
           <div class="config-row-label"><span class="label-text">自动绕过局域网</span><span class="label-desc">包含本机、常用私有网段和链路本地地址，保留系统原有网络与 VPN 路由。</span></div>
@@ -464,8 +481,9 @@
           spellcheck="false"
           placeholder="没有额外的自定义规则"
         ></Textarea>
-        <p class="label-desc">默认设置为开启内置局域网规则、自定义规则为空。恢复默认后请保存；当前是否采用这些规则，由上方配置优先级决定。</p>
+        <p class="label-desc">默认设置为开启内置局域网规则、自定义规则为空。恢复默认后点击保存并应用，会将这组规则保存为当前配置的本地修改。</p>
         <div class="bypass-actions">
+          <Button variant="outline" size="sm" onclick={restoreBypass} disabled={loading || !isLocallyEdited(networkSnapshot, 'bypass')}>恢复配置值</Button>
           <Button variant="outline" size="sm"
 
             onclick={() => { proxyBypassDraft = ''; bypassLocalNetworks = true; }}

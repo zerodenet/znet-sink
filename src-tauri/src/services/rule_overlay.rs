@@ -18,17 +18,56 @@ use crate::models::rule_set::{
     CommonRuleBindingInput, CommonRuleInjectionStatus, EffectiveRuleSetOption, RuleSetProfile,
 };
 use crate::services::{
-    app_config, common, core_config, core_process, domain_store, policy_selection, proxy_mode,
-    rule_set, url_test,
+    common, core_config, core_process, domain_store, policy_selection, proxy_mode, rule_set,
+    url_test,
 };
 use crate::state::app_state::AppState;
 
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
-    let enabled = common::lock(state.app_config(), "app_config")?
-        .routing
-        .inject_common_rules;
+    let (id, _) = policy_selection::saved_selections(state, base)?;
+    compose_effective_config_for(state, base, id.as_deref())
+}
+
+pub(crate) fn compose_effective_config_for(
+    state: &AppState,
+    base: &Value,
+    id: Option<&str>,
+) -> AppResult<Value> {
+    let app = common::lock(state.app_config(), "app_config")?.clone();
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    compose_effective_with(state, base, enabled, &profiles, None, None)
+    let (app, edited) = crate::configuration::local_edits::resolve(&app, id, base)?;
+    let config = compose_rules_for(
+        &edited,
+        app.routing.inject_common_rules,
+        &profiles,
+        app.overrides.rules,
+    )?;
+    let (_, selections) = policy_selection::saved_selections(state, base)?;
+    let inputs = crate::configuration::composition::Inputs {
+        source_profile_id: id.map(str::to_owned),
+        app,
+        supports_tolerance: url_test::supports_tolerance(state),
+        selections,
+    };
+    let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
+    if id
+        .and_then(|id| inputs.app.profile_edits.get(id))
+        .is_some_and(|edits| !edits.is_empty())
+    {
+        candidate.report.compare(
+            "profile_local_edits",
+            &[
+                "/inbounds",
+                "/runtime/latency_test_url",
+                "/runtime/tun",
+                "/outbound_groups",
+            ],
+            base,
+            &edited,
+        );
+    }
+    state.configuration().record(candidate.report.clone());
+    Ok(candidate.config)
 }
 
 pub(crate) fn compose_effective_config_with_dns(
@@ -51,9 +90,12 @@ pub(crate) fn validate_app_config_candidate(
         return Ok(());
     };
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let enabled = app_config.routing.inject_common_rules
-        && (app_config.overrides.rules || base.pointer("/route/rules").is_none());
-    let config = compose_rules_for(&base, enabled, &profiles, app_config.overrides.rules)?;
+    let (id, _) = policy_selection::saved_selections(state, &base)?;
+    let (scoped, edited) =
+        crate::configuration::local_edits::resolve(app_config, id.as_deref(), &base)?;
+    let enabled = scoped.routing.inject_common_rules
+        && (scoped.overrides.rules || edited.pointer("/route/rules").is_none());
+    let config = compose_rules_for(&edited, enabled, &profiles, scoped.overrides.rules)?;
     finalize_effective_config(
         state,
         &base,
@@ -73,10 +115,13 @@ fn compose_effective_with(
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
-    let force = common::lock(state.app_config(), "app_config")?
-        .overrides
-        .rules;
-    let config = compose_rules_for(base, enabled, profiles, force)?;
+    let (scoped, _) = crate::configuration::preferences::current(state)?;
+    let enabled = if scoped.overrides.rules {
+        scoped.routing.inject_common_rules
+    } else {
+        enabled
+    };
+    let config = compose_rules_for(base, enabled, profiles, scoped.overrides.rules)?;
     finalize_effective_config(state, base, config, dns_override, tolerance_override, None)
 }
 
@@ -99,6 +144,8 @@ fn finalize_effective_config(
         app.url_test.tolerance_ms = tolerance;
     }
     let (source_profile_id, selections) = policy_selection::saved_selections(state, base)?;
+    let (app, config) =
+        crate::configuration::local_edits::resolve(&app, source_profile_id.as_deref(), &config)?;
     let inputs = crate::configuration::composition::Inputs {
         source_profile_id,
         app,
@@ -116,9 +163,8 @@ use crate::configuration::dns::resolve_dns_detours;
 use crate::configuration::rules::{common_tag, eligible_profiles};
 
 pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
-    let enabled = common::lock(state.app_config(), "app_config")?
-        .routing
-        .inject_common_rules;
+    let (scoped, _) = crate::configuration::preferences::current(state)?;
+    let enabled = scoped.routing.inject_common_rules;
     let eligible_count = {
         let profiles = common::lock(state.rule_sets(), "rule_set")?;
         eligible_profiles(&profiles).count()
@@ -148,9 +194,7 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
     };
     let inherited = active_content(state)?
         .is_some_and(|base| base.pointer("/route/rules").is_some())
-        && !common::lock(state.app_config(), "app_config")?
-            .overrides
-            .rules;
+        && !scoped.overrides.rules;
     let effective = enabled && !inherited && mode == "rule" && eligible_count > 0;
     let reason = if inherited {
         Some("使用配置中的规则；未开启客户端规则追加".to_string())
@@ -234,44 +278,14 @@ pub async fn set_enabled(
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
     let previous = common::lock(state.app_config(), "app_config")?.clone();
-    if previous.routing.inject_common_rules == enabled {
-        return status(state.inner());
-    }
-    let mut next = previous.clone();
-    next.routing.inject_common_rules = enabled;
-    let base = active_content(state.inner())?;
-    let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let previous_effective = base
-        .as_ref()
-        .map(|base| {
-            compose_effective_with(
-                state.inner(),
-                base,
-                previous.routing.inject_common_rules,
-                &profiles,
-                None,
-                None,
-            )
-        })
-        .transpose()?;
-    let next_effective = base
-        .as_ref()
-        .map(|base| compose_effective_with(state.inner(), base, enabled, &profiles, None, None))
-        .transpose()?;
-
-    apply_if_running(state.inner(), next_effective.clone()).await?;
-    if let Err(error) = app_config::replace(state.inner(), next) {
-        let _ = apply_if_running(state.inner(), previous_effective.clone()).await;
-        return Err(error);
-    }
-    if base.is_some() {
-        if let Err(error) = core_config::export_active(state.clone()) {
-            let _ = app_config::replace(state.inner(), previous);
-            let _ = apply_if_running(state.inner(), previous_effective).await;
-            let _ = core_config::export_active(state.clone());
-            return Err(error);
-        }
-    }
+    let (id, _) = crate::configuration::local_edits::active(state.inner())?;
+    let changes = std::collections::BTreeMap::from([(
+        "routing.injectCommonRules".to_owned(),
+        serde_json::json!(enabled),
+    )]);
+    let next = crate::configuration::local_edits::candidate(&previous, &id, changes, &[])?;
+    crate::commands::app_config::apply_candidate(app_handle.clone(), state.clone(), previous, next)
+        .await?;
     status(state.inner())
 }
 
@@ -498,7 +512,6 @@ mod tests {
     #[test]
     fn explicit_dns_override_replaces_profile_dns() {
         let mut app_config = AppConfig::default();
-        app_config.overrides.dns = true;
         app_config.dns.enabled = true;
         app_config.dns.config = Some(
             serde_json::from_value(json!({
@@ -507,6 +520,10 @@ mod tests {
                 "answer": { "type": "fake_ip", "cidr": "198.18.0.0/15", "ttl_seconds": 60 }
             }))
             .unwrap(),
+        );
+        app_config.profile_edits.insert(
+            "dns-test".into(),
+            std::collections::BTreeMap::from([("dns".into(), json!(app_config.dns))]),
         );
         let state =
             AppState::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -518,7 +535,7 @@ mod tests {
             }
         });
 
-        let effective = compose_effective_config(&state, &base).unwrap();
+        let effective = compose_effective_config_for(&state, &base, Some("dns-test")).unwrap();
         assert_eq!(effective["runtime"]["dns"]["default_server"], "system");
         assert_eq!(effective["runtime"]["dns"]["answer"]["type"], "fake_ip");
         assert!(effective.pointer("/runtime/tun").is_none());
@@ -728,6 +745,7 @@ mod tests {
         });
         let mut app = AppConfig::default();
         app.overrides.rules = true;
+        crate::configuration::local_edits::migrate_legacy(&mut app, Some("active"));
         let state = AppState::with_domain_data(
             app,
             vec![ProxyConfigProfile {

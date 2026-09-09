@@ -75,3 +75,18 @@ fn changing_public_probe_url_recomposes_without_restarting_or_retargeting_proxy(
     let effects = between(&old, &next);
     assert!(effects.recompose && !effects.restart && !effects.retarget_proxy);
 }
+
+#[test]
+fn profile_port_edit_and_reset_retarget_proxy_without_restarting_capture() {
+    let old = AppConfig::default();
+    let next = crate::configuration::local_edits::candidate(
+        &old,
+        "profile",
+        std::collections::BTreeMap::from([("localProxy.port".into(), serde_json::json!(7877))]),
+        &[],
+    )
+    .unwrap();
+    for effects in [between(&old, &next), between(&next, &old)] {
+        assert!(effects.recompose && effects.retarget_proxy && !effects.restart);
+    }
+}

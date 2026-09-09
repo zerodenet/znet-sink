@@ -17,3 +17,5 @@ pub mod rule_set;
 pub mod runtime_performance;
 pub mod subscription;
 pub mod system_proxy;
+
+pub mod profile_settings;

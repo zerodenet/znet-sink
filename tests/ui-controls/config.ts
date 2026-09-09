@@ -137,3 +137,28 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
     nodes: ['node-a','node-b'].map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:['proxy'], selectedIn:tag === selectedNode ? ['proxy'] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
       history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
 };
+
+let localFieldEdits: Record<string, unknown> = {};
+export const getProfileSettings = async () => {
+  const defaults = await getAppConfig();
+  const settings = JSON.parse(JSON.stringify(defaults));
+  const mode = new URLSearchParams(location.search).get('mode');
+  if (mode === 'precedence') settings.localProxy = {host:'127.0.0.2',port:7891,bypass:[]};
+  for (const [key,value] of Object.entries(localFieldEdits)) {
+    const [section,field] = key.split('.');
+    if (field) {settings[section] ??= {}; settings[section][field] = value;}
+    else settings[section] = value;
+  }
+  return {profileId:'fixture-profile',settings,editedFields:Object.keys(localFieldEdits)};
+};
+export const applyProfileSettings = async (profileId: string, changes: Record<string,unknown>, reset: string[] = []) => {
+  if (new URLSearchParams(location.search).get('panel') === 'tun') {
+    await new Promise(resolve=>setTimeout(resolve,300));
+    if (new URLSearchParams(location.search).get('mode') === 'failure') throw new Error('已恢复旧 TUN 配置');
+  }
+  if (new URLSearchParams(location.search).get('failure') === 'apply') throw new Error('端口占用，已恢复此前状态');
+  for (const key of reset) delete localFieldEdits[key];
+  Object.assign(localFieldEdits, changes);
+  window.dispatchEvent(new CustomEvent('fixture-save',{detail:{profileId,changes,reset}}));
+  return {...(await getProfileSettings()), applied: !new URLSearchParams(location.search).has("stopped")};
+};

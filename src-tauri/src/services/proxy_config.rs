@@ -207,8 +207,17 @@ pub(crate) async fn upsert_runtime_locked(
     let content = next_active.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
-    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
+    crate::configuration::preferences::require_capture_compatible(
+        state.inner(),
+        &content,
+        Some(&next_active.id),
+    )
+    .await?;
+    let content = crate::services::rule_overlay::compose_effective_config_for(
+        state.inner(),
+        &content,
+        Some(&next_active.id),
+    )?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
     adapter
@@ -354,8 +363,17 @@ async fn activate_runtime_locked(
     let content = target.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot activate a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
-    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
+    crate::configuration::preferences::require_capture_compatible(
+        state.inner(),
+        &content,
+        Some(&target.id),
+    )
+    .await?;
+    let content = crate::services::rule_overlay::compose_effective_config_for(
+        state.inner(),
+        &content,
+        Some(&target.id),
+    )?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
     adapter
@@ -428,8 +446,17 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     let content = replacement.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot promote a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(state.inner(), &content).await?;
-    let content = crate::services::rule_overlay::compose_effective_config(state.inner(), &content)?;
+    crate::configuration::preferences::require_capture_compatible(
+        state.inner(),
+        &content,
+        Some(&replacement.id),
+    )
+    .await?;
+    let content = crate::services::rule_overlay::compose_effective_config_for(
+        state.inner(),
+        &content,
+        Some(&replacement.id),
+    )?;
     let options = ipc_options(state.inner())?;
     let adapter = ZeroAdapter::new();
     adapter
@@ -492,7 +519,11 @@ async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppR
     let Some(content) = profile.content.clone() else {
         return Ok(());
     };
-    let content = crate::services::rule_overlay::compose_effective_config(state, &content)?;
+    let content = crate::services::rule_overlay::compose_effective_config_for(
+        state,
+        &content,
+        Some(&profile.id),
+    )?;
     crate::services::config_apply::apply(content, ipc_options(state)?).await
 }
 

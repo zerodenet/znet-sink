@@ -1,4 +1,27 @@
 <script lang="ts">
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let profileSnapshot = $state<ProfileSettings | null>(null);
+  async function loadGlobalDnsSettings() {
+    profileSnapshot = await getProfileSettings();
+    const source = profileSnapshot.settings.dns;
+    return {source, draft: readDnsSettings(source)};
+  }
+  async function applyGlobalDnsSettings(source: DnsSettingsInput, draft: DnsSettingsDraft) {
+    if (!profileSnapshot) throw new Error('请先读取当前配置');
+    const issues = validateDnsDraft(draft).filter(issue => issue.severity === 'error');
+    if (issues.length) throw new Error(issues.map(issue => issue.message).join('；'));
+    const next = projectDnsSettings(source, draft);
+    profileSnapshot = await saveProfileSettings(profileSnapshot, {dns: next});
+    return profileSnapshot.settings.dns;
+  }
+  async function restoreDnsSource() {
+    if (!profileSnapshot || saving) return;
+    saving = true;
+    try { profileSnapshot = await restoreProfileSettings(profileSnapshot, 'dns'); await load(); }
+    catch (cause) {error = getAppErrorMessage(cause, '恢复 DNS 配置失败');}
+    finally {saving = false;}
+  }
+
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
@@ -11,15 +34,13 @@
   import { Switch } from '$lib/components/ui/switch';
   import {
     DNS_DETOUR_ROUTE_FINAL,
-    applyGlobalDnsSettings,
     createDefaultDnsConfig,
     createRecommendedDnsConfig,
     createDnsServer,
     getDnsKernelCompatibility,
     getDnsAddressFamilyPolicy,
-    loadGlobalDnsSettings,
     parseDnsConfig,
-    persistGlobalDnsSettings,
+    projectDnsSettings,
     readDnsSettings,
     recommendedDnsAddressFamily,
     renameDnsServer,
@@ -29,6 +50,7 @@
   } from '$lib/services/dns-config';
   import { getEffectiveRuleSetOptions } from '$lib/services/config';
   import {
+    getProfileSettings,
     getAppErrorInfo,
     getAppErrorMessage,
     getConfigPolicyGroups,
@@ -806,9 +828,8 @@
     try {
       const nextDraft = draft;
       if (nextDraft.mode === 'fake_ip' && compatibility.status === 'unsupported') {
-        source = await persistGlobalDnsSettings(source, nextDraft);
-        error = '';
-        savedPending = true;
+        throw new Error("当前内核不支持此 DNS 设置，请先更新内核后再应用");
+
       } else {
         source = await applyGlobalDnsSettings(source, nextDraft);
       }
@@ -829,6 +850,10 @@
     return ruleSetSignal.onChanged(() => void refreshRuleSetReferences());
   });
 </script>
+<div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
+  <span>{isLocallyEdited(profileSnapshot, 'dns') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</span>
+  <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
+</div>
 
 <div class="panel-head">
   <div>
@@ -856,7 +881,7 @@
 {:else if draft}
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
     <div class="issues warning" role="status">
-      <div>当前内核未声明 DNS 与 Fake-IP 能力。配置仍会保存到客户端，升级内核后重新点击“保存并应用”即可生效。</div>
+      <div>当前内核未声明 DNS 与 Fake-IP 能力，请先升级内核再应用此设置。</div>
       {#if compatibility.engineVersion || compatibility.apiVersion}<small>内核 {compatibility.engineVersion ?? '未知版本'} · API {compatibility.apiVersion ?? '未知'}</small>{/if}
     </div>
   {:else if compatibility.status === 'unknown' && draft.mode === 'fake_ip'}
@@ -1173,7 +1198,7 @@
       <ErrorRecoveryActions code={errorCode} context="dns" onretry={save} />
     </div>
   {/if}
-  <p class="state compact">此处编辑客户端缺省 DNS。配置已有 DNS 时保存不会替换来源；请在网络设置的“配置优先级”查看来源或显式开启覆盖。</p>
+  <p class="state compact">此处编辑当前配置的 DNS；保存后保留为本地修改，订阅原文不变。恢复配置值后重新采用来源 DNS。</p>
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 
