@@ -66,14 +66,35 @@ fn healthy_ipc_for_another_pid_is_rejected() {
     let path = dir.path().join("core.sock");
     let server = UnixListener::bind(&path).unwrap();
     let worker = std::thread::spawn(move || {
+        let (mut stream, _) = server.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        let frame: Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(frame["type"], "subscribe");
+        writeln!(
+            stream,
+            "{}",
+            json!({
+                "api_id":"zero.api.v1", "id":frame["id"],
+                "ok":true, "result":"subscribed"
+            })
+        )
+        .unwrap();
         for response in [
             json!({"health": {"healthy":true}}),
             json!({"runtime": {"pid":999}}),
         ] {
-            let (mut stream, _) = server.accept().unwrap();
-            let mut request = String::new();
-            BufReader::new(&stream).read_line(&mut request).unwrap();
-            writeln!(stream, "{}", json!({"ok":true,"result":response})).unwrap();
+            request.clear();
+            reader.read_line(&mut request).unwrap();
+            let frame: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(frame["type"], "query");
+            writeln!(
+                stream,
+                "{}",
+                json!({"id":frame["id"],"ok":true,"result":response})
+            )
+            .unwrap();
         }
     });
     let endpoint = CoreEndpoint {

@@ -59,6 +59,9 @@ use crate::models::debug::{push_debug_frame, DebugFrame};
 /// request, and its ack is simply dropped by the reader.
 const SUBSCRIBE_FRAME_ID: &str = "znet-sink-subscribe";
 
+mod scoped;
+pub(crate) use scoped::ScopedConnection;
+
 /// Broadcast channel capacity for kernel events.
 ///
 /// Generous on purpose: traffic stats and flow events can burst. A slow

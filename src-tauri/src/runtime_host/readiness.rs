@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::transport;
+use crate::kernel::{
+    connection::{MultiplexedConnection, ScopedConnection},
+    transport,
+};
 use crate::models::core::CoreEndpoint;
 
 pub(super) fn wait_for_ready(child: &mut Child, endpoint: &CoreEndpoint) -> AppResult<()> {
@@ -26,16 +29,17 @@ pub(super) fn wait_for_ready(child: &mut Child, endpoint: &CoreEndpoint) -> AppR
 }
 
 fn probe(endpoint: &CoreEndpoint, pid: u32, timeout: Duration) -> AppResult<()> {
-    let started = Instant::now();
-    let health = query(endpoint, "health", timeout)?;
+    let deadline = Instant::now() + timeout;
+    // Released Windows kernels may close a one-shot pipe before the response
+    // is consumed. Use the acknowledged subscription handshake already used
+    // by normal client control, and check both facts over that same peer.
+    let scoped = ScopedConnection::connect(endpoint.clone(), timeout)?;
+    let connection = scoped.connection();
+    let health = query(connection, "health", deadline)?;
     if health.get("healthy").and_then(Value::as_bool) != Some(true) {
         return Err(AppError::internal("core IPC has not reported healthy"));
     }
-    let remaining = timeout.saturating_sub(started.elapsed());
-    if remaining.is_zero() {
-        return Err(AppError::internal("core readiness probe timed out"));
-    }
-    let runtime = query(endpoint, "runtime", remaining)?;
+    let runtime = query(connection, "runtime", deadline)?;
     if runtime.get("pid").and_then(Value::as_u64) != Some(u64::from(pid)) {
         return Err(AppError::internal(
             "core IPC belongs to a different process",
@@ -44,9 +48,16 @@ fn probe(endpoint: &CoreEndpoint, pid: u32, timeout: Duration) -> AppResult<()> 
     Ok(())
 }
 
-fn query(endpoint: &CoreEndpoint, variant: &str, timeout: Duration) -> AppResult<Value> {
-    let frame = transport::serialize_frame(&json!({"type": "query", "request": {(variant): {}}}))?;
-    let response = transport::send_json_line_request(endpoint.clone(), frame, timeout)?;
+fn query(connection: &MultiplexedConnection, variant: &str, deadline: Instant) -> AppResult<Value> {
+    let timeout = deadline.saturating_duration_since(Instant::now());
+    if timeout.is_zero() {
+        return Err(AppError::internal("core readiness probe timed out"));
+    }
+    let id = format!("znet-readiness-{variant}");
+    let frame = transport::serialize_frame(
+        &json!({"type": "query", "id": id, "request": {(variant): {}}}),
+    )?;
+    let response = tauri::async_runtime::block_on(connection.request(frame, id, timeout))?;
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(AppError::core_response(response));
     }
