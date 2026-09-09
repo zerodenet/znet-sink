@@ -424,6 +424,19 @@
     }
   }
 
+  let stoppingProbes = $state(false);
+  async function handleStopProbes() {
+    if (!probeJobs || stoppingProbes) return;
+    stoppingProbes = true;
+    try {
+      const results = await Promise.allSettled(activeProbeJobs.map(async job => {
+        handleProbeJobUpdate(await probeJobs.cancel(job.id));
+      }));
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') reportActionError(failed.reason);
+    } finally { stoppingProbes = false; }
+  }
+
   async function handleProbeAll() {
     if (!probeJobs) return;
     if (!isCoreAvailable) {
@@ -631,6 +644,8 @@
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={setViewMode}
       onProbeAll={probeJobs ? handleProbeAll : undefined}
+      onStopProbes={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined}
+      {stoppingProbes}
     />
 
     <!-- Node content -->

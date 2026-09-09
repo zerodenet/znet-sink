@@ -25,3 +25,17 @@ test('trimmed tools are absent from imports and rejected if reached through anot
     else process.env.ZNET_PRODUCT = previous;
   }
 });
+
+test('backend tool diagnostic reader follows the selected composition even without a node page', () => {
+  const previous = process.env.ZNET_PRODUCT;
+  try {
+    process.env.ZNET_PRODUCT = 'desktop-base';
+    assert.equal(productComposition().load('\0virtual:znet-tool-diagnostics'), 'export const toolDiagnostics = [];');
+    process.env.ZNET_PRODUCT = 'desktop-node-probe';
+    assert.match(productComposition().load('\0virtual:znet-tool-diagnostics'), /node-probes\/diagnostics/);
+    assert.match(productComposition().load('\0virtual:znet-node-probes'), /cancelProbeJob/);
+  } finally {
+    if (previous === undefined) delete process.env.ZNET_PRODUCT;
+    else process.env.ZNET_PRODUCT = previous;
+  }
+});

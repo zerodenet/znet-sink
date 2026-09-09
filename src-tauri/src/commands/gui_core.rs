@@ -60,6 +60,14 @@ pub async fn gui_node_screen_snapshot(
 
 #[cfg(feature = "tool-node-probe")]
 #[tauri::command]
+pub(crate) fn gui_probe_runtime_snapshot(
+    state: State<'_, AppState>,
+) -> probe::runtime::ProbeRuntimeSnapshot {
+    state.probe_runtime().snapshot()
+}
+
+#[cfg(feature = "tool-node-probe")]
+#[tauri::command]
 pub fn gui_probe_job_get(
     state: State<'_, AppState>,
     job_id: ProbeJobId,
@@ -88,7 +96,6 @@ pub fn gui_probe_job_cancel(
     let job = state
         .cancel_client_probe(job_id)
         .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))?;
-    probe::forget_policy_probe_job(state.inner(), job_id);
     let _ = app_handle.emit(probe::PROBE_JOB_UPDATED_EVENT, job.clone());
     Ok(job)
 }
@@ -254,31 +261,6 @@ pub async fn gui_select_policy(
         }
     }
     Ok(result)
-}
-
-/// Probe a single outbound through the kernel proxy stack.
-///
-/// Fire-and-forget like `gui_probe_policy`: spawns the IPC probe in background,
-/// returns immediately. Results arrive via `diagnostics.probe_outbound` response
-/// logged to the event stream, or the frontend can poll via policy status.
-#[cfg(feature = "tool-node-probe")]
-#[tauri::command]
-pub async fn gui_probe_target(
-    state: State<'_, AppState>,
-    target_tag: String,
-) -> AppResult<serde_json::Value> {
-    let adapter = ZeroAdapter::new();
-    let opts = default_opts(state.inner());
-    // Quick health check first — fail fast if kernel is offline
-    if adapter.readiness_health(opts).await.is_err() {
-        return Ok(serde_json::json!({"accepted": false, "reason": "kernel offline"}));
-    }
-    let opts = default_opts(state.inner());
-    let url = crate::services::url_test::configured_url(state.inner())?;
-    tauri::async_runtime::spawn(async move {
-        let _ = adapter.probe_outbound(target_tag, Some(url), opts).await;
-    });
-    Ok(serde_json::json!({"accepted": true}))
 }
 
 #[tauri::command]
@@ -624,20 +606,6 @@ pub async fn gui_set_mode(
 ) -> AppResult<serde_json::Value> {
     let opts = default_opts(state.inner());
     ZeroAdapter::new().set_mode(mode, outbound, opts).await
-}
-
-/// Trigger a url_test probe on a policy group.
-///
-/// Waits only for the kernel's command acknowledgement. Probe results arrive
-/// later via `policy.probeCompleted` events.
-#[cfg(feature = "tool-node-probe")]
-#[tauri::command]
-pub async fn gui_probe_policy(
-    state: State<'_, AppState>,
-    policy_tag: String,
-) -> AppResult<serde_json::Value> {
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().probe_policy(policy_tag, opts).await
 }
 
 /// DNS lookup diagnostic.

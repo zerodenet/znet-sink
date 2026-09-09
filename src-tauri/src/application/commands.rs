@@ -52,6 +52,8 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         #[cfg(feature = "tool-node-probe")]
         gui_core_commands::gui_probe_job_start,
         #[cfg(feature = "tool-node-probe")]
+        gui_core_commands::gui_probe_runtime_snapshot,
+        #[cfg(feature = "tool-node-probe")]
         gui_core_commands::gui_probe_job_get,
         #[cfg(feature = "tool-node-probe")]
         gui_core_commands::gui_probe_job_list,
@@ -65,8 +67,6 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_config_policy_groups,
         gui_core_commands::gui_proxy_nodes,
         gui_core_commands::gui_select_policy,
-        #[cfg(feature = "tool-node-probe")]
-        gui_core_commands::gui_probe_target,
         gui_core_commands::gui_observation_snapshot,
         gui_core_commands::gui_connections,
         gui_core_commands::gui_connection_detail,
@@ -85,8 +85,6 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_validate_dns_config,
         gui_core_commands::gui_inspect_dns_effective_config,
         gui_core_commands::gui_set_mode,
-        #[cfg(feature = "tool-node-probe")]
-        gui_core_commands::gui_probe_policy,
         #[cfg(feature = "tool-dns")]
         gui_core_commands::gui_dns_lookup,
         #[cfg(feature = "tool-dns")]

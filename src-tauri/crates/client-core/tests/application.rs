@@ -1,4 +1,5 @@
-use znet_client_core::ClientCore;
+mod support;
+use support::TestHost as ClientCore;
 use znet_client_core::{
     ConfigRevision, CoreInstanceId, ProbeJobKind, ProbeJobState, ProbeObservation,
     ProbeObservationSource, ProbeTargetResult, ProfileId, SnapshotRevision, StartProbeRequest,

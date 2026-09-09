@@ -1,3 +1,4 @@
+import { toolDiagnostics } from 'virtual:znet-tool-diagnostics';
 import { moduleCatalog, productName } from 'virtual:znet-product-metadata';
 import { readRegisteredModules } from '$lib/features/diagnostics/registry';
 import { getCoreProcessStatus } from './core';
@@ -11,6 +12,7 @@ const layerLabels: Record<string, string> = {
 };
 export function getModuleDiagnostics() {
   return collectModules([
+    ...toolDiagnostics,
     {id: 'runtime-host', title: '内核托管', async read(): Promise<ModuleStatus> {
       const process = await getCoreProcessStatus();
       const host = process.host;
@@ -23,5 +25,5 @@ export function getModuleDiagnostics() {
       return {id: 'configuration', title: '配置组合', state: report ? 'ready' : 'idle', summary: report ? '最近一次成功组合；不代表已在内核生效' : '本次运行尚无组合记录',
         facts: report?.layers.map((layer) => ({label: layerLabels[layer.source] ?? layer.source, value: layer.changedPaths.length ? layer.changedPaths.join('、') : '未改变'})) ?? []};
     }},
-  ], [{id: 'product', title: '产品组合', state: 'ready', summary: productName, facts: moduleCatalog.map(tool => ({label: tool.title, value: '已编译'}))}, ...guiState.moduleDiagnostics(), ...readRegisteredModules(moduleCatalog)]);
+  ], [{id: 'product', title: '产品组合', state: 'ready', summary: productName, facts: moduleCatalog.map(tool => ({label: tool.title, value: '已编译'}))}, ...guiState.moduleDiagnostics(), ...readRegisteredModules(moduleCatalog).filter(module => !toolDiagnostics.some(source => source.id === module.id))]);
 }

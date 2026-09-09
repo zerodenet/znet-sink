@@ -83,3 +83,22 @@ test('old diagnostic owner cannot unregister its replacement',()=>{
  releaseOld();assert.equal(readRegisteredModules().find(s=>s.id==='test-owner').summary,'new');
  releaseNew();assert.equal(readRegisteredModules().find(s=>s.id==='test-owner').state,'idle');
 });
+
+test('closing probe page leaves backend execution alone and explicit cancellation updates projection',async()=>{
+ const {ProbeJobsState}=load('features/node-probes/jobs.svelte.ts');let cancels=0;
+ const running={id:1,state:'running',scope:{profileId:'test',configRevision:1,coreInstanceId:1},targetTags:['a'],results:[],completed:0};
+ const owner=new ProbeJobsState(async()=>({activeProbeJobs:[running]}),async()=>running,async id=>{cancels++;return {...running,id,state:'cancelled'};});
+ await owner.start({targetTags:['a']});assert.equal(owner.directProbeJobs.size,1);
+ await owner.cancel(1);assert.equal(cancels,1);assert.equal(owner.directProbeJobs.size,0);
+ owner.dispose();assert.equal(cancels,1);
+ const reopened=new ProbeJobsState(async()=>({activeProbeJobs:[running]}));
+ await reopened.refresh('reopen');assert.equal(reopened.nodeScreen.activeProbeJobs[0].id,1);reopened.dispose();
+});
+
+test('probe diagnostics counts retained kernel work even without a frontend projection',async()=>{
+ cache.set('features/node-probes/client.ts',{getProbeRuntimeSnapshot:async()=>({maxConcurrency:8,maxPendingTargets:256,queued:0,inFlight:2,draining:2,jobs:1,kernelCancellation:'unsupported'})});
+ const {probeDiagnostics}=load('features/node-probes/diagnostics.ts');
+ const status=await probeDiagnostics[0].read();
+ assert.equal(status.state,'busy');assert.equal(status.facts.find(f=>f.label==='停止后仍在等待').value,'2');
+ assert.match(status.facts.find(f=>f.label==='停止测速').value,/不支持取消已发送请求/);
+});

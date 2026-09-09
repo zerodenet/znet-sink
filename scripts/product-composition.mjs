@@ -18,13 +18,15 @@ export function productComposition() {
   const metadata = 'virtual:znet-product-metadata';
   const panels = 'virtual:znet-product';
   const probes = 'virtual:znet-node-probes';
+  const diagnostics = 'virtual:znet-tool-diagnostics';
   const panelTools = product.tools.filter(tool => tool.panel);
   return {
     name: 'znet-product-composition',
-    resolveId(id) { if ([metadata, panels, probes].includes(id)) return '\0' + id; },
+    resolveId(id) { if ([metadata, panels, probes, diagnostics].includes(id)) return '\0' + id; },
     load(id) {
       if (id === '\0' + metadata) return `export const productName = ${JSON.stringify(product.name)}; export const diagnosticCatalog = ${JSON.stringify(panelTools.map(({id, title}) => ({id, title})))}; export const moduleCatalog = ${JSON.stringify(product.tools.map(({id, title}) => ({id, title})))};`;
-      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob);` : 'export const createProbeJobs = null;';
+      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob, cancelProbeJob } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob, cancelProbeJob);` : 'export const createProbeJobs = null;';
+      if (id === '\0' + diagnostics) return product.features.includes('tool-node-probe') ? `export { probeDiagnostics as toolDiagnostics } from '$lib/features/node-probes/diagnostics';` : 'export const toolDiagnostics = [];';
       if (id === '\0' + panels) return panelTools.map((tool, i) => `import Panel${i} from '$lib/features/${tool.directory}/Panel.svelte';`).join('\n') + `\nexport const diagnosticTools = [${panelTools.map((tool, i) => `{id: ${JSON.stringify(tool.id)}, panel: Panel${i}}`).join(',')}];`;
     },
     generateBundle(_options, bundle) {

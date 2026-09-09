@@ -12,3 +12,7 @@ declare module 'virtual:znet-node-probes' {
   import type { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte';
   export const createProbeJobs: ((query: (reason: string) => Promise<NodeScreenSnapshot>) => ProbeJobsState) | null;
 }
+
+declare module 'virtual:znet-tool-diagnostics' {
+  export const toolDiagnostics: import('$lib/features/diagnostics/model').ModuleSource[];
+}

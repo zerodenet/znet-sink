@@ -115,38 +115,59 @@ impl AppState {
     }
 
     pub(crate) fn client_core_snapshot(&self) -> ClientCoreSnapshot {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot()
+        let core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        #[allow(unused_mut)]
+        let mut snapshot = core.snapshot();
+        #[cfg(feature = "tool-node-probe")]
+        {
+            snapshot.active_probe_jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .list_probe_jobs(None)
+                .into_iter()
+                .filter(|j| !j.state.is_terminal())
+                .collect();
+        }
+        snapshot
     }
 
     pub(crate) fn client_core_configuration_committed(
         &self,
         active_profile: Option<&ProxyConfigProfile>,
     ) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .configuration_committed(
-                active_profile.map(|profile| ProfileId(profile.id.clone())),
-                config_revision(active_profile),
-                crate::services::common::now_unix_ms(),
-            );
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.configuration_committed(
+            active_profile.map(|profile| ProfileId(profile.id.clone())),
+            config_revision(active_profile),
+            crate::services::common::now_unix_ms(),
+        );
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByConfigChange,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_started(&self) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .core_instance_started(crate::services::common::now_unix_ms());
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.core_instance_started(crate::services::common::now_unix_ms());
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_lost(&self) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .core_instance_lost(crate::services::common::now_unix_ms());
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.core_instance_lost(crate::services::common::now_unix_ms());
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn set_client_core_source_status(&self, status: SourceStatus) {
@@ -161,10 +182,16 @@ impl AppState {
         &self,
         request: StartProbeRequest,
     ) -> Result<StartProbeOutcome, ClientCoreError> {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start_probe(request, crate::services::common::now_unix_ms())
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = self.probe_runtime.start(
+            &core.snapshot().scope,
+            request,
+            crate::services::common::now_unix_ms(),
+        )?;
+        if outcome.created {
+            core.advance_snapshot();
+        }
+        Ok(outcome)
     }
 
     #[cfg(feature = "tool-node-probe")]
@@ -179,7 +206,21 @@ impl AppState {
                 .client_core
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let updated = core.record_probe_result(id, scope, result);
+            if &core.snapshot().scope != scope {
+                return None;
+            }
+            let mut jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let updated = jobs.record_probe_result(id, scope, result);
+            for observation in jobs.take_observations() {
+                core.record_observation(observation);
+            }
+            if updated.is_some() {
+                core.advance_snapshot();
+            }
             let observations = updated.is_some().then(|| core.observations(None));
             (updated, observations)
         };
@@ -224,9 +265,10 @@ impl AppState {
 
     #[cfg(feature = "tool-node-probe")]
     pub(crate) fn get_client_probe_job(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
-        self.client_core
+        self.probe_runtime
+            .jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .get_probe_job(id)
     }
 
@@ -234,19 +276,36 @@ impl AppState {
         &self,
         profile_id: Option<String>,
     ) -> Vec<ProbeJobSnapshot> {
-        let profile_id = profile_id.map(ProfileId);
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .list_probe_jobs(profile_id.as_ref())
+        #[cfg(feature = "tool-node-probe")]
+        {
+            let profile_id = profile_id.map(ProfileId);
+            self.probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .list_probe_jobs(profile_id.as_ref())
+        }
+        #[cfg(not(feature = "tool-node-probe"))]
+        {
+            let _ = profile_id;
+            Vec::new()
+        }
     }
 
     #[cfg(feature = "tool-node-probe")]
     pub(crate) fn cancel_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
-        self.client_core
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        self.probe_runtime.cancel_execution(id);
+        let updated = self
+            .probe_runtime
+            .jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .cancel_probe(id, crate::services::common::now_unix_ms())
+            .unwrap_or_else(|e| e.into_inner())
+            .cancel_probe(id, crate::services::common::now_unix_ms());
+        if updated.is_some() {
+            core.advance_snapshot();
+        }
+        updated
     }
 
     #[cfg(feature = "tool-node-probe")]
@@ -256,7 +315,19 @@ impl AppState {
                 .client_core
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let updated = core.timeout_probe(id, crate::services::common::now_unix_ms());
+            self.probe_runtime.cancel_execution(id);
+            let mut jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let updated = jobs.timeout_probe(id, crate::services::common::now_unix_ms());
+            for observation in jobs.take_observations() {
+                core.record_observation(observation);
+            }
+            if updated.is_some() {
+                core.advance_snapshot();
+            }
             let observations = updated
                 .as_ref()
                 .is_some_and(|job| job.state == crate::client_core::ProbeJobState::TimedOut)

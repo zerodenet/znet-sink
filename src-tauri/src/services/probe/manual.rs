@@ -18,10 +18,6 @@ use super::policy_probe_summary;
 
 pub const PROBE_JOB_UPDATED_EVENT: &str = "client-core:probe-job-updated";
 
-pub(crate) fn forget_policy_probe_job(state: &AppState, job_id: ProbeJobId) {
-    state.probe_runtime().forget_job(job_id);
-}
-
 const MIN_POLICY_PROBE_TIMEOUT_MS: u64 = 60_000;
 const POLICY_PROBE_BASE_TIMEOUT_MS: u64 = 15_000;
 const POLICY_PROBE_MEMBER_TIMEOUT_MS: u64 = 10_000;
@@ -319,7 +315,7 @@ fn log_probe_response(
     );
 }
 
-/// Execute a Client Core-owned probe job. Tauri is only used to schedule work
+/// Execute a tool-owned probe job. Tauri is only used to schedule work
 /// and publish advisory updates; the job remains recoverable from AppState.
 pub async fn run_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
     match job.kind {
@@ -337,20 +333,23 @@ async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
         let scope = job.scope.clone();
         let job_id = job.id;
         handles.push(tauri::async_runtime::spawn(async move {
-            let Ok(_permit) = app
-                .state::<AppState>()
-                .probe_runtime()
-                .semaphore()
-                .acquire_owned()
-                .await
-            else {
+            let state = app.state::<AppState>();
+            let Some(_lease) = state.probe_runtime().acquire(job_id, &target_tag).await else {
                 return;
             };
-            let state = app.state::<AppState>();
             if state
                 .get_client_probe_job(job_id)
                 .is_none_or(|current| current.state != ProbeJobState::Running)
             {
+                return;
+            }
+            if common::now_unix_ms()
+                >= state
+                    .get_client_probe_job(job_id)
+                    .map(|j| j.deadline_at_unix_ms)
+                    .unwrap_or(0)
+            {
+                expire_job(&app, job_id);
                 return;
             }
             let result = probe_single(state.inner(), job_id, &target_tag).await;
@@ -379,20 +378,18 @@ async fn run_outbound_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
 
 async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
     for policy_tag in job.target_tags.clone() {
-        let Ok(_permit) = app_handle
-            .state::<AppState>()
-            .probe_runtime()
-            .semaphore()
-            .acquire_owned()
-            .await
-        else {
-            return;
-        };
         let state = app_handle.state::<AppState>();
+        let Some(_lease) = state.probe_runtime().acquire(job.id, &policy_tag).await else {
+            continue;
+        };
         if state
             .get_client_probe_job(job.id)
             .is_none_or(|current| current.state != ProbeJobState::Running)
         {
+            return;
+        }
+        if common::now_unix_ms() >= job.deadline_at_unix_ms {
+            expire_job(&app_handle, job.id);
             return;
         }
         let options = match default_ipc_options(state.inner()) {
@@ -421,7 +418,7 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
                 if let Some(operation_id) = commands::policy_probe_operation_id(&response) {
                     state
                         .probe_runtime()
-                        .remember(job.id, &policy_tag, operation_id.to_owned());
+                        .acknowledge(job.id, &policy_tag, operation_id.to_owned());
                 }
                 None
             }
@@ -430,22 +427,17 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
             state.probe_runtime().forget(job.id, &policy_tag);
             record_policy_job_failure(&app_handle, &job, policy_tag, message);
         } else {
-            wait_for_policy_target(&app_handle, job.id, &policy_tag).await;
+            wait_for_policy_target(&app_handle, &job, &policy_tag).await;
         }
     }
 }
 
-async fn wait_for_policy_target(
-    app_handle: &AppHandle,
-    job_id: crate::client_core::ProbeJobId,
-    target: &str,
-) {
+async fn wait_for_policy_target(app_handle: &AppHandle, job: &ProbeJobSnapshot, target: &str) {
     loop {
         let state = app_handle.state::<AppState>();
-        let Some(job) = state.get_client_probe_job(job_id) else {
-            return;
-        };
-        if job.state.is_terminal() || job.results.iter().any(|result| result.target_tag == target) {
+        if state.probe_runtime().expected(job.id, target).is_none()
+            || common::now_unix_ms() >= job.deadline_at_unix_ms
+        {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -491,10 +483,10 @@ fn policy_completion_matches_job(
     {
         return false;
     }
-    if let (Some(expected), Some(actual)) = (
-        state.probe_runtime().expected(job.id, &event.policy_tag),
-        event.operation_id.as_deref(),
-    ) {
+    let Some(expected) = state.probe_runtime().expected(job.id, &event.policy_tag) else {
+        return false; // A queued or already retired request cannot consume a completion.
+    };
+    if let Some(actual) = event.operation_id.as_deref() {
         return expected == actual;
     }
     policy_completion_is_fresh(event, job)
@@ -525,16 +517,40 @@ pub fn spawn_probe_timeout(app_handle: AppHandle, job: &ProbeJobSnapshot) {
         .deadline_at_unix_ms
         .saturating_sub(common::now_unix_ms());
     let job_id = job.id;
+    let Some(mut cancelled) = app_handle
+        .state::<AppState>()
+        .probe_runtime()
+        .cancellation(job_id)
+    else {
+        return;
+    };
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-        let state = app_handle.state::<AppState>();
-        if let Some(update) = state.timeout_client_probe(job_id) {
-            if update.state == ProbeJobState::TimedOut {
-                forget_policy_probe_job(state.inner(), job_id);
-                let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
-            }
+        if *cancelled.borrow() {
+            return;
         }
+        tokio::select! {
+            changed = cancelled.changed() => {
+                if changed.is_ok() { return; }
+                // A worker panic can retire its lease before recording a result.
+                // Keep the deadline as a final guard for an unfinished ledger.
+                if app_handle.state::<AppState>().get_client_probe_job(job_id)
+                    .is_none_or(|job| job.state.is_terminal()) { return; }
+                let remaining = app_handle.state::<AppState>().get_client_probe_job(job_id)
+                    .map(|job| job.deadline_at_unix_ms.saturating_sub(common::now_unix_ms())).unwrap_or(0);
+                tokio::time::sleep(std::time::Duration::from_millis(remaining)).await;
+            },
+            _=tokio::time::sleep(std::time::Duration::from_millis(wait_ms))=>{},
+        }
+        expire_job(&app_handle, job_id);
     });
+}
+
+fn expire_job(app: &AppHandle, job_id: ProbeJobId) {
+    if let Some(update) = app.state::<AppState>().timeout_client_probe(job_id) {
+        if update.state == ProbeJobState::TimedOut {
+            let _ = app.emit(PROBE_JOB_UPDATED_EVENT, update);
+        }
+    }
 }
 
 fn default_ipc_options(
@@ -565,15 +581,26 @@ pub(super) fn complete_policy_jobs(app_handle: &AppHandle, event: &GuiPolicyProb
         .list_client_probe_jobs(None)
         .into_iter()
         .filter(|job| {
-            job.state == ProbeJobState::Running
-                && job.kind == ProbeJobKind::ManualPolicy
-                && job.scope == current_scope
+            job.kind == ProbeJobKind::ManualPolicy
+                && (job.scope == current_scope
+                    || (job.scope.core_instance_id == current_scope.core_instance_id
+                        && event.operation_id.as_deref().is_some_and(|actual| {
+                            state
+                                .probe_runtime()
+                                .expected(job.id, &event.policy_tag)
+                                .as_deref()
+                                == Some(actual)
+                        })))
                 && job.target_tags.contains(&event.policy_tag)
                 && policy_completion_matches_job(state.inner(), event, job)
         })
         .collect();
 
     for job in matching_jobs {
+        state.probe_runtime().forget(job.id, &event.policy_tag);
+        if job.state.is_terminal() {
+            continue;
+        }
         let update = state.record_client_probe_result(
             job.id,
             &job.scope,

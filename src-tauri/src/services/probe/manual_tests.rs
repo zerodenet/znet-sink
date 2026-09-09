@@ -1,6 +1,6 @@
 use super::{
-    forget_policy_probe_job, normalize_outbound_probe_failure, policy_completion_is_fresh,
-    policy_completion_matches_job, policy_probe_summary, policy_probe_timeout_ms,
+    normalize_outbound_probe_failure, policy_completion_is_fresh, policy_completion_matches_job,
+    policy_probe_summary, policy_probe_timeout_ms,
 };
 use crate::client_core::{
     ClientScope, ConfigRevision, CoreInstanceId, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
@@ -71,23 +71,6 @@ fn manual_policy_completion_requires_the_acknowledged_operation() {
     assert!(policy_completion_matches_job(&state, &completion, &job));
 
     state.probe_runtime().forget(job.id, "auto");
-}
-
-#[test]
-fn terminal_policy_job_forgets_every_target_operation() {
-    let state = AppState::default();
-    let job_id = ProbeJobId(999);
-    state
-        .probe_runtime()
-        .remember(job_id, "auto-a", "manual-a".to_owned());
-    state
-        .probe_runtime()
-        .remember(job_id, "auto-b", "manual-b".to_owned());
-
-    forget_policy_probe_job(&state, job_id);
-
-    assert_eq!(state.probe_runtime().expected(job_id, "auto-a"), None);
-    assert_eq!(state.probe_runtime().expected(job_id, "auto-b"), None);
 }
 
 #[test]

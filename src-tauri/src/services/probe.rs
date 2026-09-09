@@ -11,8 +11,6 @@ pub const CLIENT_CORE_UPDATED_EVENT: &str = "client-core:updated";
 #[cfg(feature = "tool-node-probe")]
 mod manual;
 #[cfg(feature = "tool-node-probe")]
-pub(crate) use manual::forget_policy_probe_job;
-#[cfg(feature = "tool-node-probe")]
 pub use manual::{
     normalize_start_request, run_probe_job, spawn_probe_timeout, PROBE_JOB_UPDATED_EVENT,
 };
