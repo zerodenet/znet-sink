@@ -436,20 +436,35 @@
       <div class="proxy-bypass-editor">
         <div class="config-row-label">
           <span class="label-text">绕过规则</span>
-          <span class="label-desc">系统代理与 TUN 共用，规则和全局模式均生效。匹配目标通过本机网络直接访问。每行填写一个 IP、CIDR 或域名（例如 *.example.com）；留空表示没有自定义规则。</span>
+          <span class="label-desc">系统代理与 TUN 共用，规则和全局模式均生效。匹配目标通过本机网络直接访问。</span>
         </div>
         <div class="config-row">
           <div class="config-row-label"><span class="label-text">自动绕过局域网</span><span class="label-desc">包含本机、常用私有网段和链路本地地址，保留系统原有网络与 VPN 路由。</span></div>
           <Switch bind:checked={bypassLocalNetworks} disabled={loading} aria-label="自动绕过局域网" />
         </div>
+        <details class="bypass-preset" open>
+          <summary>内置局域网规则（{bypassLocalNetworks ? '已选择启用' : '已选择停用'}）</summary>
+          <ul>
+            <li>本机：<code>127.0.0.0/8</code>、<code>::1/128</code>、<code>localhost</code></li>
+            <li>私有网络：<code>10.0.0.0/8</code>、<code>172.16.0.0/12</code>、<code>192.168.0.0/16</code>、<code>fc00::/7</code></li>
+            <li>链路本地：<code>169.254.0.0/16</code>、<code>fe80::/10</code></li>
+            <li>本地域名：<code>*.local</code>、不含点号的主机名（<code>&lt;local&gt;</code>）</li>
+          </ul>
+        </details>
+        <div class="config-row-label">
+          <label class="label-text" for="custom-bypass-rules">自定义绕过规则</label>
+          <span class="label-desc">每行填写一个 IP、CIDR 或域名（例如 *.example.com）。留空仅表示没有额外规则，不会清除上方启用的内置规则。</span>
+        </div>
         <Textarea
+          id="custom-bypass-rules"
           class="font-mono"
           bind:value={proxyBypassDraft}
           disabled={loading}
           rows={6}
           spellcheck="false"
-          aria-label="本地地址绕过列表"
+          placeholder="没有额外的自定义规则"
         ></Textarea>
+        <p class="label-desc">默认设置为开启内置局域网规则、自定义规则为空。恢复默认后，请点击“保存并应用”使其生效。</p>
         <div class="bypass-actions">
           <Button variant="outline" size="sm"
 
@@ -669,6 +684,24 @@
     display: flex;
     justify-content: flex-end;
     gap: 6px;
+  }
+
+  .bypass-preset {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .bypass-preset summary {
+    cursor: pointer;
+  }
+
+  .bypass-preset ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    line-height: 1.8;
   }
 
   @media (max-width: 760px) {
