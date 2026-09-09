@@ -3,7 +3,7 @@ use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(target_os = "windows")]
-use crate::services::local_proxy;
+use crate::services::{core_process, local_proxy};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
