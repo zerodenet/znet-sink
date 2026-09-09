@@ -225,13 +225,29 @@ fn restore_file(source: &Path, target: &Path) -> AppResult<()> {
     if let Ok(metadata) = fs::symlink_metadata(target) {
         if metadata.is_file()
             && !metadata.file_type().is_symlink()
-            && metadata.permissions() == fs::metadata(source).map_err(storage_error)?.permissions()
+            && restorable_permissions_match(
+                metadata.permissions(),
+                fs::metadata(source).map_err(storage_error)?.permissions(),
+            )
             && super::files_are_identical(source, target)?
         {
             return Ok(());
         }
     }
     replace_file(source, target)
+}
+
+fn restorable_permissions_match(left: fs::Permissions, right: fs::Permissions) -> bool {
+    // Windows Permissions equality also compares archive/temporary attributes;
+    // those differ for a persisted backup without changing file access.
+    #[cfg(windows)]
+    {
+        left.readonly() == right.readonly()
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 
 fn write_receipt(backup: &Path, receipt: &Receipt) -> AppResult<()> {
