@@ -91,14 +91,19 @@ test('selector members alone are manually switchable and stale latency is not re
   assert.equal(model.groups[0].switchable,true); assert.equal(model.groups[1].switchable,false);
   assert.equal(model.groups[0].options[0].label,'n · 待探测');
 });
-test('failed policy reads invalidate selection even while connection reads remain fresh', () => {
+test('failed policy reads stay actionable while age-only refreshes stay neutral', () => {
   const groups = [{name:'p',kind:'selector',selected:'n',outbounds:[{tag:'n',alive:true,delayMs:42,lastCheckedUnixMs:now}]}];
-  for (const observation of [{groupsAt:now,groupsError:'IPC timeout'},{groupsAt:now-16000}]) {
-    const model=buildOverview({...baseline(),groups,...observation});
-    assert.equal(model.ready,true); assert.equal(model.groupsReady,false);
-    assert.equal(model.groups[0].selectedTag,''); assert.equal(model.groups[0].delay,'—');
-    assert.ok(model.findings.some(finding=>finding.target==='nodes'));
-  }
+  const failed=buildOverview({...baseline(),groups,groupsAt:now,groupsError:'IPC timeout'});
+  assert.equal(failed.ready,true); assert.equal(failed.groupsReady,false);
+  assert.equal(failed.groups[0].selectedTag,''); assert.equal(failed.groups[0].delay,'—');
+  assert.ok(failed.findings.some(finding=>finding.target==='nodes'));
+
+  const selfTest = { ready:true,checks:[{status:'pass'}],blockingIssues:[] };
+  const pending=buildOverview({...baseline(),groups,groupsAt:now-16000,selfTest,selfTestAt:now});
+  assert.equal(pending.ready,true); assert.equal(pending.groupsReady,false); assert.equal(pending.groupsPending,true);
+  assert.equal(pending.groups[0].selectedTag,''); assert.equal(pending.groups[0].delay,'—');
+  assert.equal(pending.findings.some(finding=>finding.target==='nodes'),false);
+  assert.equal(pending.tone,'neutral'); assert.equal(pending.selfTestPassed,false);
 });
 
 test('Lite shares the professional freshness, partial capture and cleanup semantics', () => {

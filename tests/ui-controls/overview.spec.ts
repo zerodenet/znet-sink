@@ -75,6 +75,15 @@ test('stale state protects traffic and mode changes while preserving managed res
   await expect(page.getByRole('button', { name: '自测通过' })).toHaveCount(0);
 });
 
+test('an age-only policy refresh stays neutral without a transient warning banner', async ({ page }) => {
+  await page.goto('/?panel=overview&mode=policy-stale');
+  await expect(page.getByRole('region', { name: '需要处理' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '查看与切换策略组' })).toContainText('待内核确认');
+  await expect(page.getByRole('button', { name: '自测待确认' })).toBeVisible();
+  await page.getByRole('button', { name: '查看与切换策略组' }).click();
+  await expect(page.getByRole('button', { name: '工作网络 当前出口' })).toBeDisabled();
+});
+
 test('real core card blocks duplicate operations and never restarts an external kernel', async ({ page }) => {
   await page.goto('/?panel=overview&mode=busy');
   await expect(page.getByRole('button', { name: '重启内核' })).toBeDisabled();
@@ -98,6 +107,42 @@ test('overview fits narrow and dark layouts without horizontal clipping', async 
   const overflow = await page.getByLabel('专业运行概览').evaluate(element => element.scrollWidth > element.clientWidth + 1);
   expect(overflow).toBe(false);
   await page.getByLabel('专业运行概览').screenshot({ path: testInfo.outputPath('overview-dark.png') });
+});
+
+test('network reason dialog scrolls its body and keeps actions visible in a short window', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 260 });
+  await page.goto('/?panel=overview&mode=failure');
+  await page.getByRole('button', { name: '查看原因', exact: true }).click();
+
+  const dialog = page.getByRole('dialog');
+  const body = dialog.locator('[data-slot="dialog-body"]');
+  const footer = dialog.locator('[data-slot="dialog-footer"]');
+  const layout = await dialog.evaluate((element) => {
+    const body = element.querySelector<HTMLElement>('[data-slot="dialog-body"]');
+    const footer = element.querySelector<HTMLElement>('[data-slot="dialog-footer"]');
+    if (!body || !footer) throw new Error('dialog regions are missing');
+    const dialogRect = element.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    return {
+      dialogTop: dialogRect.top,
+      dialogBottom: dialogRect.bottom,
+      viewportHeight: window.innerHeight,
+      footerBottom: footerRect.bottom,
+      bodyClientHeight: body.clientHeight,
+      bodyScrollHeight: body.scrollHeight,
+      bodyOverflowY: getComputedStyle(body).overflowY,
+    };
+  });
+
+  expect(layout.dialogTop).toBeGreaterThanOrEqual(0);
+  expect(layout.dialogBottom).toBeLessThanOrEqual(layout.viewportHeight);
+  expect(layout.footerBottom).toBeLessThanOrEqual(layout.dialogBottom + 1);
+  expect(layout.bodyScrollHeight).toBeGreaterThan(layout.bodyClientHeight);
+  expect(layout.bodyOverflowY).toBe('auto');
+
+  await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(footer.getByRole('button', { name: '完成', exact: true })).toBeVisible();
 });
 
 test('IPv4 preferred without IPv6 keeps a neutral capability detail and no alert banner', async ({page}) => {

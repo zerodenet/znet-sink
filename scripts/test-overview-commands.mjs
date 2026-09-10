@@ -13,7 +13,7 @@ async function harness(environment = {}) {
     mode: { currentMode:'rule',availableModes:['rule','global','direct'] },
     tun: { key:'tun',supported:true,enabled:true,desiredEnabled:true,healthy:true,addresses:[],ipv4Egress:{availability:'available'},ipv6Egress:{availability:'available'} },
     groups: [{name:'manual',kind:'selector',selected:'a',outbounds:[{tag:'a'},{tag:'b'},{tag:'auto',type:'urltest'}]}, {name:'auto',kind:'urltest',selected:'a',outbounds:[{tag:'a'}]}],
-    reject: false, readFailure: false, connectionReadFailure: false, connectionReads: 0, connectionWait: null, modeWait: null, calls: [], notifications: [], wait: null,
+    reject: false, readFailure: false, connectionReadFailure: false, connectionReads: 0, connectionWait: null, modeWait: null, groupsWait: null, calls: [], notifications: [], wait: null,
   };
   const copy = value => structuredClone(value);
   const command = async (name, effect) => { state.calls.push(name); if (state.wait) await state.wait; if (state.reject) throw new Error('command rejected'); effect(); };
@@ -24,7 +24,7 @@ async function harness(environment = {}) {
     guiSetProxyMode: async mode=>{await command('mode',()=>{state.mode.currentMode=mode;});return copy(state.mode);},
     guiSelectPolicy: async (group,target)=>{state.calls.push('policy');if(state.wait)await state.wait;if(state.reject)return {accepted:false,message:'not accepted'};state.groups.find(item=>item.name===group).selected=target;return {accepted:true};},
     getGuiCoreOverview: async()=>({coreState:'running'}),
-    getGuiPolicyGroups: async()=>{if(state.readFailure)throw new Error('query failed');return copy(state.groups);},
+    getGuiPolicyGroups: async()=>{if(state.readFailure)throw new Error('query failed');const snapshot=copy(state.groups);if(state.groupsWait)await state.groupsWait;return snapshot;},
     getConfigProxyNodes: async()=>[], getConfigPolicyGroups:async()=>copy(state.groups),
     getGuiZeroCapabilities:async()=>({available:true,features:['query']}),
     guiNetworkProbe:async()=>({ip:'192.0.2.1'}),trayUpdateStatus:async()=>{},
@@ -173,6 +173,20 @@ test('hidden application pauses observation and visibility or focus immediately 
   window.dispatchEvent(new Event('focus'));await settled();assert.equal(state.connectionReads,initialReads+2);
   gui.destroy();window.dispatchEvent(new Event('focus'));t.mock.timers.tick(60_000);await settled();
   assert.equal(state.connectionReads,initialReads+2);
+});
+
+test('focus refresh keeps an old policy snapshot neutral while its query is pending',async t=>{
+  t.mock.timers.enable({apis:['Date','setInterval','setTimeout'],now:100_000});
+  const document=Object.assign(new EventTarget(),{visibilityState:'visible'});const window=new EventTarget();
+  const {gui,state}=await harness({document,window});t.after(()=>gui.destroy());await gui.initialize();
+  document.visibilityState='hidden';t.mock.timers.tick(60_000);await settled();
+  let finish;state.groupsWait=new Promise(resolve=>{finish=resolve;});
+  document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));await settled();
+  const pending=viewOf(gui);
+  assert.equal(pending.stale,false);assert.equal(pending.groupsReady,false);assert.equal(pending.groupsPending,true);
+  assert.equal(pending.findings.some(finding=>finding.target==='nodes'),false);
+  state.groupsWait=null;finish();await settled();
+  assert.equal(viewOf(gui).groupsReady,true);
 });
 
 test('slow observations do not overlap and stop does not accept a late connection response',async t=>{
