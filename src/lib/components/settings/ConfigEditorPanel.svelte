@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Textarea } from '$lib/components/ui/textarea';
-  import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-editor.svelte';
+  import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-workspace.svelte';
   import { Button } from '$lib/components/ui/button';
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
   import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
@@ -9,6 +9,7 @@
   // parent value to a bindable prop with a non-undefined fallback.
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let tabSize = 2;
+  let workspaceView: 'source' | 'overrides' | 'effective' = $state('source');
 
   $effect(() => {
     // Auto-load on mount
@@ -124,7 +125,7 @@
     <div class="heading">
       <div class="title">内核配置编辑</div>
       <div class="desc">
-        编辑当前活动的 Zero 配置。保存前由运行中内核校验，应用后同步回活动配置并自动对账。
+        对照来源配置、客户端覆盖与最终生效配置；预检后以热加载或重启事务应用。
       </div>
     </div>
     <div class="actions">
@@ -133,6 +134,18 @@
       </Button>
     </div>
   </div>
+
+  {#if configEditor.runtime}
+    <div class="runtime-card" class:confirmed={configEditor.runtime.confirmed}>
+      <div class="runtime-main">
+        <span class="runtime-state">{configEditor.runtime.confirmed ? '运行态已确认' : '运行态待确认'}</span>
+        <span>{configEditor.runtime.reason}</span>
+      </div>
+      {#if configEditor.runtime.identity}
+        <code>{configEditor.runtime.identity.coreInstanceId.slice(0, 8)} · rev {configEditor.runtime.identity.configRevision}</code>
+      {/if}
+    </div>
+  {/if}
 
   <!-- Status bar -->
   <div class="status-bar">
@@ -242,8 +255,8 @@
         onclick={handleApply}
         disabled={!canApply || isLoading}
         title={needsConfirmApply
-          ? '部分变更需要重启内核才能生效，点击确认应用'
-          : '校验并应用到运行中的内核（热加载，无需重启）'}
+          ? '停止并重启内核后应用配置；失败时恢复上一份配置并再次启动'
+          : '校验、预检并热加载到运行中的内核'}
       >
         {#if configEditor.phase === 'applying'}
           <Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -252,7 +265,7 @@
         {:else}
           <Send class="h-3.5 w-3.5" />
         {/if}
-        {needsConfirmApply ? '确认应用' : '应用'}
+        {needsConfirmApply ? '重启并应用' : '应用'}
       </Button>
     </div>
   </div>
@@ -357,25 +370,54 @@
     </div>
   {/if}
 
-  <!-- Editor -->
-  {#if configEditor.phase !== 'idle'}
-    <div class="editor-container">
-      <div class="line-numbers">
-        {#each Array(jsonLineCount()) as _, i (i)}
-          <div class="line-number">{i + 1}</div>
-        {/each}
-      </div>
-      <Textarea
-        bind:ref={textareaRef}
-        class="font-mono flex-1 resize-none whitespace-pre border-0 rounded-none bg-transparent py-2.5 px-3 text-[10.5px] leading-[1.55] [tab-size:2]"
-        spellcheck="false"
-        value={configEditor.draftJson}
-        oninput={handleInput}
-        onkeydown={handleKeyDown}
-        disabled={isLoading}
-        placeholder={'{}'}
-      ></Textarea>
+  {#if configEditor.compositionLayers.length > 0}
+    <div class="composition-strip">
+      <span class="composition-title">客户端组合层</span>
+      {#each configEditor.compositionLayers as layer (layer.source)}
+        <span class:changed={layer.changedPaths.length > 0} class="layer-chip">
+          {layer.source}{layer.changedPaths.length > 0 ? ` · ${layer.changedPaths.length}` : ''}
+        </span>
+      {/each}
     </div>
+  {/if}
+
+  <div class="workspace-tabs" role="tablist" aria-label="配置层级">
+    <button data-slot="surface-button" class:active={workspaceView === 'source'} onclick={() => workspaceView = 'source'}>来源编辑</button>
+    <button data-slot="surface-button" class:active={workspaceView === 'overrides'} onclick={() => workspaceView = 'overrides'}>客户端覆盖</button>
+    <button data-slot="surface-button" class:active={workspaceView === 'effective'} onclick={() => workspaceView = 'effective'}>最终生效</button>
+  </div>
+
+  <!-- Workspace views -->
+  {#if configEditor.phase !== 'idle'}
+    {#if workspaceView === 'source'}
+      <div class="editor-container">
+        <div class="line-numbers">
+          {#each Array(jsonLineCount()) as _, i (i)}
+            <div class="line-number">{i + 1}</div>
+          {/each}
+        </div>
+        <Textarea
+          bind:ref={textareaRef}
+          class="font-mono flex-1 resize-none whitespace-pre border-0 rounded-none bg-transparent py-2.5 px-3 text-[10.5px] leading-[1.55] [tab-size:2]"
+          spellcheck="false"
+          value={configEditor.draftJson}
+          oninput={handleInput}
+          onkeydown={handleKeyDown}
+          disabled={isLoading}
+          placeholder={'{}'}
+        ></Textarea>
+      </div>
+    {:else if workspaceView === 'overrides'}
+      <div class="read-view">
+        <div class="view-note">这些字段由客户端设置按当前配置隔离保存，不会写回订阅来源。</div>
+        <pre>{configEditor.localEditsJson}</pre>
+      </div>
+    {:else}
+      <div class="read-view effective-view">
+        <div class="view-note">这是来源配置叠加客户端修改后，实际提交给内核的配置。</div>
+        <pre>{configEditor.effectiveJson}</pre>
+      </div>
+    {/if}
   {:else}
     <div class="empty-editor">
       <span class="empty-text">点击刷新按钮加载当前活动配置</span>
@@ -434,6 +476,40 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--surface);
+  }
+
+  .runtime-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 28%, var(--border));
+    border-radius: var(--radius-md);
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+
+  .runtime-card.confirmed {
+    border-color: color-mix(in srgb, var(--success, #22c55e) 32%, var(--border));
+  }
+
+  .runtime-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .runtime-state {
+    color: var(--foreground);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .runtime-card code {
+    white-space: nowrap;
+    font-size: 9.5px;
   }
 
   .status-left {
@@ -649,6 +725,87 @@
     font-size: 10px;
     color: var(--muted-foreground);
     padding: 4px 0;
+  }
+
+  .composition-strip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 2px 0;
+  }
+
+  .composition-title,
+  .layer-chip {
+    white-space: nowrap;
+    font-size: 9.5px;
+    color: var(--muted-foreground);
+  }
+
+  .layer-chip {
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+
+  .layer-chip.changed {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  }
+
+  .workspace-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 3px;
+    border-radius: var(--radius-lg);
+    background: var(--muted);
+  }
+
+  .workspace-tabs button {
+    height: 28px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 10.5px;
+    cursor: pointer;
+  }
+
+  .workspace-tabs button.active {
+    background: var(--card);
+    color: var(--foreground);
+    font-weight: 650;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  }
+
+  .read-view {
+    min-height: 360px;
+    max-height: calc(100vh - 320px);
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+  }
+
+  .view-note {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+
+  .read-view pre {
+    margin: 0;
+    padding: 10px 12px;
+    color: var(--foreground);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.55;
+    white-space: pre;
   }
 
   .editor-container {

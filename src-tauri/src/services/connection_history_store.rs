@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod report;
+pub(crate) use report::{export, latest_id, record_write_failure};
+pub use report::{HistoryExport, HistorySummary};
+
 use super::data_dir;
 use crate::errors::{AppError, AppResult};
 use crate::models::debug::{DebugFrame, DebugFramePage, DebugFrameQuery};
@@ -67,12 +71,18 @@ pub(crate) fn clear() -> AppResult<()> {
 }
 
 fn query_page_from_path(path: &Path, query: &DebugFrameQuery) -> AppResult<DebugFramePage> {
-    let limit = query.limit.unwrap_or(50);
+    if matches!((query.captured_after_ms, query.captured_before_ms), (Some(after), Some(before)) if after > before)
+    {
+        return Err(AppError::invalid_argument("记录开始时间不能晚于结束时间"));
+    }
+    let limit = query.limit.unwrap_or(50).min(HISTORY_RECORD_LIMIT);
+    let mut summary = HistorySummary::empty();
     if limit == 0 || !path.exists() {
         return Ok(DebugFramePage {
             items: Vec::new(),
             has_more: false,
             oldest_available_id: None,
+            history: Some(summary),
         });
     }
 
@@ -81,6 +91,7 @@ fn query_page_from_path(path: &Path, query: &DebugFrameQuery) -> AppResult<Debug
         message: format!("failed to read connection history: {error}"),
         details: Some(serde_json::json!({ "path": path.display().to_string() })),
     })?;
+    summary.retained_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
     let reader = BufReader::new(file);
     let before_id = query.before_id.unwrap_or(u64::MAX);
     let mut oldest_available_id = None;
@@ -95,10 +106,15 @@ fn query_page_from_path(path: &Path, query: &DebugFrameQuery) -> AppResult<Debug
         let Ok(frame) = serde_json::from_str::<DebugFrame>(line.trim()) else {
             continue;
         };
-        if !is_completed_connection_frame(&frame) || !matches_query(&frame, query) {
+        if !is_completed_connection_frame(&frame) {
+            continue;
+        }
+        summary.observe(&frame);
+        if !matches_query(&frame, query) {
             continue;
         }
 
+        summary.matched_records += 1;
         oldest_available_id.get_or_insert(frame.id);
         if frame.id >= before_id {
             continue;
@@ -119,6 +135,7 @@ fn query_page_from_path(path: &Path, query: &DebugFrameQuery) -> AppResult<Debug
         items,
         has_more,
         oldest_available_id,
+        history: Some(summary),
     })
 }
 
@@ -167,6 +184,7 @@ fn rotate_path(path: &Path) -> AppResult<()> {
     let mut records: VecDeque<(String, usize)> = VecDeque::new();
     let mut retained_bytes = 0usize;
     let mut changed = false;
+    let mut removed = 0u64;
 
     for line in reader.lines() {
         let line = line.map_err(|error| AppError {
@@ -176,10 +194,12 @@ fn rotate_path(path: &Path) -> AppResult<()> {
         })?;
         let Ok(frame) = serde_json::from_str::<DebugFrame>(line.trim()) else {
             changed = true;
+            removed += 1;
             continue;
         };
         if frame.at_ms < cutoff || !is_completed_connection_frame(&frame) {
             changed = true;
+            removed += 1;
             continue;
         }
 
@@ -196,6 +216,7 @@ fn rotate_path(path: &Path) -> AppResult<()> {
             if let Some((_, removed_bytes)) = records.pop_front() {
                 retained_bytes = retained_bytes.saturating_sub(removed_bytes);
                 changed = true;
+                removed += 1;
             } else {
                 break;
             }
@@ -215,7 +236,9 @@ fn rotate_path(path: &Path) -> AppResult<()> {
         code: "io_error",
         message: format!("failed to rotate connection history: {error}"),
         details: Some(serde_json::json!({ "path": path.display().to_string() })),
-    })
+    })?;
+    report::record_removals(removed);
+    Ok(())
 }
 
 fn is_completed_connection_frame(frame: &DebugFrame) -> bool {
@@ -234,6 +257,11 @@ fn is_completed_connection_frame(frame: &DebugFrame) -> bool {
 }
 
 fn matches_query(frame: &DebugFrame, query: &DebugFrameQuery) -> bool {
+    if query.captured_after_ms.is_some_and(|at| frame.at_ms < at)
+        || query.captured_before_ms.is_some_and(|at| frame.at_ms > at)
+    {
+        return false;
+    }
     let Some(envelope) = frame.payload.as_object() else {
         return false;
     };
@@ -281,12 +309,15 @@ fn matches_query(frame: &DebugFrame, query: &DebugFrameQuery) -> bool {
 
     if let Some(expected) = normalized_filter(query.outcome.as_deref()) {
         let result = object(record.get("result"));
-        let actual = result
-            .and_then(|value| text(value, &["outcome", "close_reason", "closeReason"]))
-            .or_else(|| text(record, &["outcome", "close_reason", "closeReason"]))
-            .map(str::to_lowercase)
-            .unwrap_or_default();
-        if actual != expected {
+        let matches = ["outcome", "close_reason", "closeReason"]
+            .iter()
+            .any(|key| {
+                result
+                    .and_then(|value| text(value, &[*key]))
+                    .or_else(|| text(record, &[*key]))
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
+            });
+        if !matches {
             return false;
         }
     }
@@ -329,51 +360,4 @@ fn history_path() -> AppResult<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn completed_frame(id: u64, at_ms: u64) -> DebugFrame {
-        DebugFrame {
-            id,
-            at_ms,
-            direction: "rx".to_string(),
-            frame_type: "event".to_string(),
-            payload: serde_json::json!({
-                "eventType": "connection.closed",
-                "payload": {
-                    "record": {
-                        "flowId": format!("flow-{id}"),
-                        "network": "tcp",
-                        "path": { "outbound": { "tag": "proxy-a" } },
-                        "result": { "outcome": "success" }
-                    }
-                }
-            }),
-            elapsed_ms: None,
-            error: None,
-        }
-    }
-
-    #[test]
-    fn detects_only_completed_connection_events() {
-        let completed = completed_frame(1, now_unix_ms());
-        assert!(is_completed_connection_frame(&completed));
-
-        let mut updated = completed.clone();
-        updated.payload["eventType"] = serde_json::json!("connection.updated");
-        assert!(!is_completed_connection_frame(&updated));
-    }
-
-    #[test]
-    fn filters_connection_history_before_paging() {
-        let frame = completed_frame(1, now_unix_ms());
-        let query = DebugFrameQuery {
-            protocol: Some("tcp".to_string()),
-            outbound: Some("proxy-a".to_string()),
-            outcome: Some("success".to_string()),
-            search: Some("flow-1".to_string()),
-            ..DebugFrameQuery::default()
-        };
-        assert!(matches_query(&frame, &query));
-    }
-}
+mod tests;

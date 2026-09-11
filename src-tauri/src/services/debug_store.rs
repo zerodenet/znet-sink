@@ -63,6 +63,7 @@ pub(crate) fn query_page_from_path(
             items: Vec::new(),
             has_more: false,
             oldest_available_id: None,
+            history: None,
         });
     }
 
@@ -125,6 +126,7 @@ pub(crate) fn query_page_from_path(
         items,
         has_more,
         oldest_available_id,
+        history: None,
     })
 }
 

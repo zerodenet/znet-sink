@@ -6,6 +6,13 @@ use crate::models::core::CoreIpcOptions;
 use serde_json::Value;
 
 pub(crate) async fn apply(config: Value, options: CoreIpcOptions) -> AppResult<()> {
+    apply_with_identity(config, options).await.map(|_| ())
+}
+
+pub(crate) async fn apply_with_identity(
+    config: Value,
+    options: CoreIpcOptions,
+) -> AppResult<queries::KernelRuntimeIdentity> {
     if !config.is_object() {
         return Err(AppError::invalid_argument("config must be a JSON object"));
     }
@@ -30,10 +37,12 @@ impl Backend for Live {
 
 // Callers may persist only after this returns. A lost reply is not a rejection
 // and must never trigger a second apply or an implicit process restart.
-async fn confirm(backend: &impl Backend<Error = AppError>) -> AppResult<()> {
+async fn confirm(
+    backend: &impl Backend<Error = AppError>,
+) -> AppResult<queries::KernelRuntimeIdentity> {
     configuration::confirm(backend)
         .await
-        .map(|_| ())
+        .map(|confirmed| confirmed.identity().clone())
         .map_err(|failure| match failure {
             ApplyFailure::Preflight(error) => error,
             ApplyFailure::Submission(mut error) => {

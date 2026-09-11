@@ -173,3 +173,22 @@ export const applyProfileSettings = async (profileId: string, changes: Record<st
   window.dispatchEvent(new CustomEvent('fixture-save',{detail:{profileId,changes,reset}}));
   return {...(await getProfileSettings()), applied: !new URLSearchParams(location.search).has("stopped")};
 };
+
+export const closeFlow = async () => { throw new Error('not available in connection fixture'); };
+export const guiCloseConnection = closeFlow;
+export async function getGuiDebugFrames(query: import('../../src/lib/types/debug').DebugFrameQuery = {}) {
+  const items = Array.from({length: 120}, (_, index) => ({
+    id: index + 1, atMs: 1789110000000 + index * 1000, direction: 'rx' as const, frameType: 'event',
+    payload: { event_type: 'flow.completed', core_instance_id: 'fixture-kernel', payload: {record: {
+      flow_id: String(index + 1), network: 'tcp', target: {host: 'records.test', port: 443},
+      timing: {started_at_unix_ms: 1789110000000 + index * 1000, ended_at_unix_ms: 1789110000500 + index * 1000},
+      result: {outcome: 'success'},
+    }}},
+  }));
+  const eligible = items.filter(item => item.id < (query.beforeId ?? Infinity));
+  return {items: eligible.slice(-(query.limit ?? 50)), hasMore: eligible.length > (query.limit ?? 50), oldestAvailableId: 1,
+    history: {retainedRecords: 120, matchedRecords: 120, retainedBytes: 1024,
+      oldestCapturedAtMs: items[0].atMs, newestCapturedAtMs: items.at(-1)!.atMs,
+      recordLimit: 10000, byteLimit: 33554432, maxAgeMs: 2592000000,
+      removedSinceClientStart: 3, writeFailuresSinceClientStart: 0, completeness: 'unknown' as const}};
+}

@@ -47,6 +47,8 @@ pub mod subscription;
 pub mod system_proxy;
 pub mod system_proxy_guard;
 pub(crate) mod text_encoding;
+#[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+pub mod tool_jobs;
 pub mod traffic_sampler;
 pub mod url_test;
 

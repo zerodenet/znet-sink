@@ -49,18 +49,22 @@ test('network probe performs one follow-up for a burst',async()=>{
  const pending=probe.run();void probe.run();void probe.run();first.resolve({});await pending;await Promise.resolve();
  assert.equal(calls,2);probe.stop();
 });
-test('disposed DNS and route tools never publish delayed results',async()=>{
- const wait=deferred();const dns=new DnsState({guiDnsLookup:()=>wait.promise,getAppErrorMessage:e=>String(e)});
- const route=new RouteTraceState({guiTraceRoute:()=>wait.promise,getAppErrorMessage:e=>String(e)});
+const toolJob=(id,kind,state='queued',result)=>({id,kind,state,scope:{profileId:'test',configRevision:1,coreInstanceId:1},subject:'example.test',params:{},result,createdAtUnixMs:1,updatedAtUnixMs:1,deadlineAtUnixMs:10000});
+const toolPorts=(start, subscribe=async()=>()=>{})=>({start,list:async()=>[],cancel:async id=>toolJob(id,'dns_lookup','cancelled'),subscribe});
+test('disposed DNS and route tools never publish delayed task starts',async()=>{
+ const wait=deferred();const dns=new DnsState({...toolPorts(()=>wait.promise),getAppErrorMessage:e=>String(e),confirm:()=>true});
+ const route=new RouteTraceState({...toolPorts(()=>wait.promise),getAppErrorMessage:e=>String(e)});
  dns.dnsHost='example.test';route.traceTarget='example.test';
- const tasks=[dns.runDns(),route.runTrace()];dns.dispose();route.dispose();wait.resolve({});await Promise.all(tasks);
+ const tasks=[dns.runDns(),route.runTrace()];dns.dispose();route.dispose();wait.resolve(toolJob(1,'dns_lookup'));await Promise.all(tasks);
  assert.equal(dns.dnsResult,null);assert.equal(route.traceResult,null);assert.equal(dns.dnsLoading,false);
 });
 test('Fake-IP cleanup and lookup cannot overlap or replay on cache read failure',async()=>{
- const wait=deferred();let mutations=0,queries=0;
- const dns=new DnsState({guiClearFakeIp:()=>{mutations++;return wait.promise;},guiFakeIpLookup:async()=>{queries++;return {};},guiDnsCache:async()=>{throw new Error('cache unavailable');},getAppErrorMessage:e=>e.message,confirm:()=>true});
+ let mutations=0,queries=0,handler=()=>{};
+ const start=async request=>{if(request.kind==='fake_ip_clear'){mutations++;return toolJob(1,request.kind);}if(request.kind==='dns_cache')throw new Error('cache unavailable');queries++;return toolJob(2,request.kind);};
+ const dns=new DnsState({...toolPorts(start,async fn=>{handler=fn;return()=>{};}),getAppErrorMessage:e=>e.message,confirm:()=>true});
+ await Promise.resolve();
  dns.fakeQuery='example.test';const pending=dns.clearFakeIp('selected');await dns.runFakeIp();await dns.clearFakeIp('selected');
- wait.resolve({enabled:true,removedMappings:1,removedAddresses:1,liveMappings:0,retiredAddresses:0});await pending;
+ await pending;handler(toolJob(1,'fake_ip_clear','completed',{enabled:true,removedMappings:1,removedAddresses:1,liveMappings:0,retiredAddresses:0}));await new Promise(resolve=>setImmediate(resolve));
  assert.equal(mutations,1);assert.equal(queries,0);assert.equal(dns.fakeError,'cache unavailable');
 });
 test('module diagnostics keeps other sources when one fails or times out',async()=>{

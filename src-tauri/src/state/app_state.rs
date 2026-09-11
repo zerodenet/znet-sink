@@ -20,6 +20,8 @@ use crate::models::{
 };
 
 pub struct AppState {
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    tool_runtime: crate::services::tool_jobs::ToolRuntime,
     #[cfg(feature = "tool-node-probe")]
     probe_runtime: crate::services::probe::runtime::ProbeRuntime,
     client_core: Mutex<ClientCore>,
@@ -75,6 +77,8 @@ impl AppState {
         let config_revision = config_revision(active_profile);
 
         Self {
+            #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+            tool_runtime: crate::services::tool_jobs::ToolRuntime::default(),
             #[cfg(feature = "tool-node-probe")]
             probe_runtime: crate::services::probe::runtime::ProbeRuntime::default(),
             client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
@@ -95,6 +99,11 @@ impl AppState {
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    pub(crate) fn tool_runtime(&self) -> &crate::services::tool_jobs::ToolRuntime {
+        &self.tool_runtime
     }
 
     #[cfg(feature = "tool-node-probe")]
@@ -148,6 +157,11 @@ impl AppState {
             crate::client_core::ProbeJobState::InvalidatedByConfigChange,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.tool_runtime.invalidate(
+            crate::models::tool_job::ToolJobState::InvalidatedByConfigChange,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_started(&self) {
@@ -158,6 +172,11 @@ impl AppState {
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.tool_runtime.invalidate(
+            crate::models::tool_job::ToolJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_lost(&self) {
@@ -166,6 +185,11 @@ impl AppState {
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.tool_runtime.invalidate(
+            crate::models::tool_job::ToolJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
     }
