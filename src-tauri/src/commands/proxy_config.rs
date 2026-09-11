@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::errors::AppResult;
 use crate::models::proxy_config::{ProxyConfigImport, ProxyConfigProfile, ProxyConfigUpsert};
 use crate::services::common::lock;
-use crate::services::{interaction_mode, profile_switch, proxy_config};
+use crate::services::{interaction_mode, proxy_config};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -58,17 +58,7 @@ pub async fn proxy_config_set_active(
         interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
     }
 
-    // Zero intentionally preserves active flows across generic config.apply.
-    // A ZNet-Sink profile/source switch is different: it is a user-visible
-    // session boundary. Capture the complete pre-switch flow set and retire
-    // those sessions only after the new profile is committed successfully.
-    let boundary = profile_switch::capture(state.inner(), &id).await?;
-    let active = proxy_config::activate_runtime(app_handle.clone(), id).await?;
-    if let Some((options, boundary)) = boundary {
-        profile_switch::reconcile(state.inner(), options, boundary).await;
-    }
-
-    Ok(active)
+    proxy_config::activate_runtime(app_handle.clone(), id).await
 }
 
 #[tauri::command]
@@ -76,4 +66,12 @@ pub async fn proxy_config_remove(app_handle: AppHandle, id: String) -> AppResult
     let state = app_handle.state::<AppState>();
     interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?;
     proxy_config::remove_runtime(app_handle.clone(), id).await
+}
+
+/// Last successful composition metadata; this does not claim kernel application.
+#[tauri::command]
+pub fn proxy_config_composition_report(
+    state: State<'_, AppState>,
+) -> Option<crate::configuration::CompositionReport> {
+    state.configuration().report()
 }

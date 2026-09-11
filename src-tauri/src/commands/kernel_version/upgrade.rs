@@ -167,14 +167,11 @@ async fn restore_runtime(
     )
     .await?;
     if proxy {
-        let endpoint = previous.local_proxy.clone();
+        let (host, port, bypass) =
+            crate::configuration::preferences::proxy_settings_for(state, previous)?;
         blocking(move || {
-            crate::services::local_proxy::wait_until_listening(&endpoint.host, endpoint.port)?;
-            system_proxy_guard::enable_with_guard_and_bypass(
-                &endpoint.host,
-                endpoint.port,
-                &endpoint.bypass,
-            )
+            crate::services::local_proxy::wait_until_listening(&host, port)?;
+            system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
         })
         .await?;
     }

@@ -24,7 +24,7 @@ const dnsTransaction = readFileSync('src-tauri/src/commands/gui_core/dns_transac
 const tunPanel = readFileSync('src/lib/components/settings/TunSettingsPanel.svelte', 'utf8');
 const recoveryActions = readFileSync('src/lib/components/core/ErrorRecoveryActions.svelte', 'utf8');
 const configService = readFileSync('src/lib/services/config.ts', 'utf8');
-const ruleOverlay = readFileSync('src-tauri/src/services/rule_overlay.rs', 'utf8');
+const ruleOverlay = readFileSync('src-tauri/src/configuration/dns.rs', 'utf8');
 const proxyConfig = readFileSync('src-tauri/src/services/proxy_config.rs', 'utf8');
 
 assert.match(service, /enabled: draft\.mode !== 'disabled'/);

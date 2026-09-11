@@ -56,7 +56,11 @@ pub async fn app_config_import_kernel_settings(
 ) -> AppResult<AppConfig> {
     let _operation = state.proxy_config_operation().lock().await;
     let old_config = app_config::get(state.clone())?;
-    let new_config = kernel_settings::import_from_path(&old_config, path)?;
+    let mut new_config = kernel_settings::import_from_path(&old_config, path)?;
+    let active_id = crate::configuration::local_edits::active(state.inner())
+        .ok()
+        .map(|v| v.0);
+    crate::configuration::local_edits::migrate_legacy(&mut new_config, active_id.as_deref());
     if new_config == old_config {
         return Ok(new_config);
     }
@@ -109,11 +113,7 @@ pub async fn app_config_import_kernel_settings(
                 && runtime_rollback.is_none()
                 && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
             {
-                if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
-                    &old_config.local_proxy.host,
-                    old_config.local_proxy.port,
-                    &old_config.local_proxy.bypass,
-                ) {
+                if let Err(proxy_error) = restore_proxy_settings(state.inner(), &old_config) {
                     runtime_rollback = Some(format!(
                         "system proxy rollback failed: {}",
                         proxy_error.message
@@ -150,10 +150,19 @@ pub async fn app_config_update(
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
 
+    let new_config = app_config::prepare_update(&old_config, patch)?;
+    apply_candidate(app_handle, state.clone(), old_config, new_config).await
+}
+
+pub(crate) async fn apply_candidate(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    old_config: AppConfig,
+    new_config: AppConfig,
+) -> AppResult<AppConfig> {
     // Read legacy capture intent before replacing settings or stopping the process.
     let was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let new_config = app_config::prepare_update(&old_config, patch)?;
     if was_running && old_config.bypass != new_config.bypass {
         crate::services::bypass::require_core_support(&new_config).await?;
     }
@@ -166,15 +175,6 @@ pub async fn app_config_update(
     if was_running && old_config.dns != new_config.dns {
         return Err(AppError::invalid_argument(
             "运行中 DNS 配置必须通过 DNS 应用事务修改，请使用 DNS 设置页的应用操作",
-        ));
-    }
-    let custom_endpoint = old_config.local_proxy.source_proxy_config_id.is_some();
-    if custom_endpoint
-        && (old_config.local_proxy.host != new_config.local_proxy.host
-            || old_config.local_proxy.port != new_config.local_proxy.port)
-    {
-        return Err(AppError::invalid_argument(
-            "当前代理入口由配置文件定义，请在配置编辑器修改入站地址和端口",
         ));
     }
     if effects.restart || effects.recompose || old_config.dns != new_config.dns {
@@ -213,11 +213,7 @@ pub async fn app_config_update(
                     && runtime_rollback.is_none()
                     && !system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
                 {
-                    if let Err(proxy_error) = system_proxy_guard::enable_with_guard_and_bypass(
-                        &old_config.local_proxy.host,
-                        old_config.local_proxy.port,
-                        &old_config.local_proxy.bypass,
-                    ) {
+                    if let Err(proxy_error) = restore_proxy_settings(state.inner(), &old_config) {
                         runtime_rollback = Some(format!(
                             "system proxy rollback failed: {}",
                             proxy_error.message
@@ -277,11 +273,7 @@ pub async fn app_config_update(
     }
 
     if managed_proxy_enabled && effects.retarget_proxy {
-        if let Err(error) = system_proxy_guard::enable_with_guard_and_bypass(
-            &new_config.local_proxy.host,
-            new_config.local_proxy.port,
-            &new_config.local_proxy.bypass,
-        ) {
+        if let Err(error) = restore_proxy_settings(state.inner(), &new_config) {
             let mut error = error;
             let storage = app_config::replace(state.inner(), old_config.clone());
             if let Err(rollback) = storage {
@@ -301,11 +293,7 @@ pub async fn app_config_update(
                         .push_str(&format!("; runtime rollback failed: {}", rollback.message));
                 }
             }
-            if let Err(rollback) = system_proxy_guard::enable_with_guard_and_bypass(
-                &old_config.local_proxy.host,
-                old_config.local_proxy.port,
-                &old_config.local_proxy.bypass,
-            ) {
+            if let Err(rollback) = restore_proxy_settings(state.inner(), &old_config) {
                 error.message.push_str(&format!(
                     "; system proxy rollback failed: {}",
                     rollback.message
@@ -316,4 +304,9 @@ pub async fn app_config_update(
     }
 
     Ok(new_config)
+}
+
+fn restore_proxy_settings(state: &AppState, app: &AppConfig) -> AppResult<()> {
+    let (host, port, bypass) = crate::configuration::preferences::proxy_settings_for(state, app)?;
+    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
 }

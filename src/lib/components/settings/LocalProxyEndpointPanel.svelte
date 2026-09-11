@@ -2,7 +2,10 @@
   import { Input } from '$lib/components/ui/input';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
-  import { getAppConfig, getAppErrorMessage, updateAppConfig } from '$lib/services/core';
+  import { getProfileSettings, getAppErrorMessage } from '$lib/services/core';
+
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let snapshot = $state<ProfileSettings | null>(null);
 
   const DEFAULT_HOST = '127.0.0.1';
   const DEFAULT_PORT = 7890;
@@ -13,21 +16,21 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let saved = $state(false);
-  let profileOwned = $state(false);
 
-  function resetDefault() {
-    host = DEFAULT_HOST;
-    port = String(DEFAULT_PORT);
-    saved = false;
-    error = null;
+  async function resetDefault() {
+    if (!snapshot || saving) return;
+    saving = true; error = null; saved = false;
+    try { snapshot = await restoreProfileSettings(snapshot, 'localProxy'); await loadEndpoint(); }
+    catch (cause) { error = getAppErrorMessage(cause, '恢复配置值失败'); }
+    finally { saving = false; }
   }
 
   async function loadEndpoint() {
     loading = true;
     error = null;
     try {
-      const config = await getAppConfig();
-      profileOwned = Boolean(config.localProxy.sourceProxyConfigId);
+      snapshot = await getProfileSettings();
+      const config = snapshot.settings;
       host = config.localProxy.host || DEFAULT_HOST;
       port = String(config.localProxy.port || DEFAULT_PORT);
     } catch (cause) {
@@ -38,7 +41,7 @@
   }
 
   async function saveEndpoint() {
-    if (profileOwned || saving) return;
+    if (saving) return;
     const normalizedHost = host.trim();
     const normalizedPort = Number(port.trim());
     saved = false;
@@ -55,13 +58,14 @@
 
     saving = true;
     try {
-      const config = await updateAppConfig({
+      if (!snapshot) return;
+      snapshot = await saveProfileSettings(snapshot, {
         localProxy: {
           host: normalizedHost,
           port: normalizedPort,
-          sourceProxyConfigId: null,
         },
       });
+      const config = snapshot.settings;
       host = config.localProxy.host;
       port = String(config.localProxy.port);
       saved = true;
@@ -80,6 +84,8 @@
 <div class="config-section">
   <div class="config-section-title">代理端口</div>
 
+  <p class="text-xs text-muted-foreground">{isLocallyEdited(snapshot, 'localProxy') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</p>
+
   {#if loading}
     <div class="config-loading">加载配置中...</div>
   {:else}
@@ -87,7 +93,7 @@
       <div class="config-row-label">
         <span class="label-text">代理监听</span>
         <span class="label-desc">
-          {profileOwned ? '当前地址和端口由配置文件定义，请在配置编辑器修改入站设置。' : '修改客户端代理入口，运行中保存会同时更新监听端口和已开启的系统代理。默认使用 127.0.0.1:7890。'}
+          修改后只对当前配置生效，系统代理跟随实际端口。订阅更新保留本地修改，恢复后采用配置最新值。
         </span>
       </div>
 
@@ -98,7 +104,7 @@
             type="text"
             bind:value={host}
             oninput={() => (saved = false)}
-            disabled={saving || profileOwned}
+            disabled={saving}
             spellcheck="false"
             aria-label="代理监听地址"
           />
@@ -109,17 +115,17 @@
             inputmode="numeric"
             bind:value={port}
             oninput={() => (saved = false)}
-            disabled={saving || profileOwned}
+            disabled={saving}
             aria-label="代理监听端口"
           />
         </div>
 
         <div class="endpoint-actions">
-          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving || profileOwned}>
-            恢复默认
+          <Button variant="outline" size="sm" onclick={resetDefault} disabled={saving || !isLocallyEdited(snapshot, 'localProxy')}>
+            恢复配置值
           </Button>
-          <Button size="sm" onclick={saveEndpoint} disabled={saving || profileOwned}>
-            {saving ? '保存中...' : saved ? '已保存' : '保存'}
+          <Button size="sm" onclick={saveEndpoint} disabled={saving}>
+            {saving ? '保存中...' : saved ? snapshot?.applied === false ? '已保存，启动后生效' : '已应用' : '应用'}
           </Button>
         </div>
       </div>

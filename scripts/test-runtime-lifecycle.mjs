@@ -50,13 +50,21 @@ assert.ok(
   'overview and traffic ball must consume the same Rust-calculated rate sample',
 );
 
-const appRuntime = read('src-tauri/src/lib.rs');
-const coreProcessService = read('src-tauri/src/services/core_process.rs');
+const appRuntime = read('src-tauri/src/application/mod.rs');
+const tauriManifest = read('src-tauri/Cargo.toml');
+const coreProcessService = read('src-tauri/src/runtime_host/shutdown.rs');
+assert.ok(
+  tauriManifest.includes('tauri-plugin-single-instance = "2"')
+    && appRuntime.includes('.plugin(tauri_plugin_single_instance::init(')
+    && appRuntime.indexOf('.plugin(tauri_plugin_single_instance::init(')
+      < appRuntime.indexOf('.manage(app_state)'),
+  'single-instance rejection must run before managed state setup so a second GUI cannot disable proxy capture owned by the first GUI',
+);
 assert.ok(
   appRuntime.includes('tauri::RunEvent::ExitRequested')
     && appRuntime.includes('core_process::shutdown_managed_runtime(cleanup_app.clone()).await')
-    && coreProcessService.indexOf('crate::kernel::zero::runtime::disable_tun(Some(options))')
-      < coreProcessService.indexOf('stop(stop_app.clone(), stop_state)'),
+    && coreProcessService.indexOf('crate::capture::shutdown::stop_owned_tun(pid, endpoint)')
+      < coreProcessService.indexOf('super::stop::stop_with_proxy_restore('),
   'application exit should stop TUN before restoring the proxy and stopping the managed core process',
 );
 

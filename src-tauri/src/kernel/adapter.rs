@@ -9,11 +9,14 @@
 
 use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
+#[cfg(feature = "tool-dns")]
+use crate::models::gui_core::GuiFakeIpClearResult;
+#[cfg(feature = "tool-node-probe")]
+use crate::models::gui_core::GuiTargetProbeResult;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficStats,
-    GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 use serde_json::Value;
@@ -69,9 +72,11 @@ pub trait KernelAdapter {
     ) -> AppResult<GuiPolicySelectionResult>;
 
     /// Probe a url_test policy group (trigger latency measurement).
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_policy(&self, policy_tag: String, options: CoreIpcOptions) -> AppResult<Value>;
 
     /// Probe a single target for reachability and latency.
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_target(
         &self,
         target_tag: String,
@@ -79,6 +84,7 @@ pub trait KernelAdapter {
     ) -> AppResult<GuiTargetProbeResult>;
 
     /// Probe a single outbound through the proxy stack.
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_outbound(
         &self,
         target_tag: String,
@@ -136,9 +142,11 @@ pub trait KernelAdapter {
     // ── Diagnostics ─────────────────────────────────────────────
 
     /// DNS lookup diagnostic.
+    #[cfg(feature = "tool-dns")]
     async fn dns_lookup(&self, hostname: String, options: CoreIpcOptions) -> AppResult<Value>;
 
     /// Inspect the runtime DNS cache without mutating it.
+    #[cfg(feature = "tool-dns")]
     async fn dns_cache(
         &self,
         domain: Option<String>,
@@ -147,6 +155,7 @@ pub trait KernelAdapter {
     ) -> AppResult<Value>;
 
     /// Inspect a Fake-IP mapping and allocator counters without allocating.
+    #[cfg(feature = "tool-dns")]
     async fn fakeip_lookup(
         &self,
         domain: Option<String>,
@@ -155,6 +164,7 @@ pub trait KernelAdapter {
     ) -> AppResult<Value>;
 
     /// Clear all Fake-IP mappings or one mapping selected by domain/address.
+    #[cfg(feature = "tool-dns")]
     async fn clear_fake_ip(
         &self,
         domain: Option<String>,
@@ -163,6 +173,7 @@ pub trait KernelAdapter {
     ) -> AppResult<GuiFakeIpClearResult>;
 
     /// Route trace diagnostic.
+    #[cfg(feature = "tool-route")]
     async fn trace_route(
         &self,
         target: String,

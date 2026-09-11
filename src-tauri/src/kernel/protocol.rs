@@ -133,6 +133,33 @@ async fn request_with_response_timeout(
     let timeout = timeout_from_options(options.as_ref())?;
     let response_timeout =
         response_timeout_from_options(options.as_ref(), minimum_response_timeout)?;
+    request_bound(frame, endpoint, timeout, response_timeout, None).await
+}
+
+/// Query the exact connection that supplies an observation subscription.
+/// Never silently reconnect between a baseline query and its buffered events.
+pub(crate) async fn request_on_connection(
+    frame: Value,
+    binding: &znet_engine_client::Binding,
+    connection: connection::MultiplexedConnection,
+) -> AppResult<CoreCallResult> {
+    request_bound(
+        frame,
+        binding.endpoint.clone(),
+        binding.timeout,
+        binding.timeout,
+        Some(connection),
+    )
+    .await
+}
+
+async fn request_bound(
+    frame: Value,
+    endpoint: CoreEndpoint,
+    timeout: Duration,
+    response_timeout: Duration,
+    bound: Option<connection::MultiplexedConnection>,
+) -> AppResult<CoreCallResult> {
     let (frame_value, request_id) = ensure_request_id(frame)?;
     let frame_type = frame_type_for_debug(&frame_value);
     // Capture outgoing frame
@@ -156,12 +183,17 @@ async fn request_with_response_timeout(
     // Acquire the shared multiplexed connection (blocking connect when cold,
     // cheap lock + clone on the hot path). The connection is kept alive by
     // the kernel because its first frame was `subscribe`.
-    let connect_endpoint = endpoint.clone();
-    let conn = tauri::async_runtime::spawn_blocking(move || {
-        connection::get_or_connect(connect_endpoint, timeout)
-    })
-    .await
-    .map_err(|error| AppError::internal(format!("IPC connect worker failed: {error}")))??;
+    let conn = match bound {
+        Some(conn) => conn,
+        None => {
+            let connect_endpoint = endpoint.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                connection::get_or_connect(connect_endpoint, timeout)
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("IPC connect worker failed: {error}")))??
+        }
+    };
 
     // Send the request and await its response over the multiplexed connection.
     let t0 = std::time::Instant::now();
@@ -272,6 +304,7 @@ pub async fn select_policy(
 }
 
 /// Trigger a probe on a url_test policy group.
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_policy(
     policy_tag: String,
     options: Option<CoreIpcOptions>,
@@ -285,6 +318,7 @@ pub async fn probe_policy(
 }
 
 /// Probe a single target's reachability.
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_target(
     target_tag: String,
     options: Option<CoreIpcOptions>,

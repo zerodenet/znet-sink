@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { createProbeJobs } from 'virtual:znet-node-probes';
+  import { NodeScreenState } from '$lib/features/nodes/screen.svelte';
   import { Button } from '$lib/components/ui/button';
   import { onDestroy, onMount } from 'svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { appendLog, getNodeScreenSnapshot, guiSelectPolicy, startProbeJob } from '$lib/services/core';
+  import { appendLog, getNodeScreenSnapshot, guiSelectPolicy } from '$lib/services/core';
   import { listen } from '@tauri-apps/api/event';
   import { getGroupKindStyle, parseNodeName } from '$lib/services/node-utils';
   import type { ProxyNode } from '$lib/types/protocol';
@@ -25,9 +27,7 @@
     type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
   import {
-    applyProbeJobSnapshot,
     mergeActiveProbeJobs,
-    shouldApplyNodeScreenSnapshot,
   } from '$lib/components/tabs/nodes-probe-state';
 
   // View state
@@ -55,17 +55,12 @@
     }
   }
 
+  const probeJobs = createProbeJobs?.(getNodeScreenSnapshot);
+  const screen = probeJobs ?? new NodeScreenState(getNodeScreenSnapshot);
+
   // Action state
   let switching = $state<string | null>(null);
   let lastError = $state<string | null>(null);
-  let nodeScreen = $state<NodeScreenSnapshot | null>(null);
-  let directProbeJobs = $state<Map<number, ProbeJobSnapshot>>(new Map());
-  let terminalProbeJobIds = $state<Set<number>>(new Set());
-  let nodeScreenRequestSequence = 0;
-  let lastAppliedNodeScreenRequest = 0;
-  let unlistenProbeJobs: (() => void) | null = null;
-  let unlistenClientCore: (() => void) | null = null;
-  const reportedProbeJobs = new Set<number>();
   type DelayEntry = { delay: number; at: number; selectedTag?: string };
 
   function reportActionError(message: string) {
@@ -135,36 +130,13 @@
 
   // Kernel connection state
   const isCoreAvailable = $derived(
-    nodeScreen?.sourceStatus === 'ready' || nodeScreen?.sourceStatus === 'degraded',
+    screen.nodeScreen?.sourceStatus === 'ready' || screen.nodeScreen?.sourceStatus === 'degraded',
   );
   const probeDisabledReason = $derived(
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
-  async function refreshNodeScreen(reason: string) {
-    const requestSequence = ++nodeScreenRequestSequence;
-    try {
-      const snapshot = await getNodeScreenSnapshot(reason);
-      if (!shouldApplyNodeScreenSnapshot({
-        currentRevision: nodeScreen?.revision,
-        candidateRevision: snapshot.revision,
-        requestSequence,
-        lastAppliedRequest: lastAppliedNodeScreenRequest,
-      })) return;
-      lastAppliedNodeScreenRequest = requestSequence;
-      nodeScreen = snapshot;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  function applyProbeJob(job: ProbeJobSnapshot) {
-    const next = applyProbeJobSnapshot({
-      directJobs: directProbeJobs,
-      terminalJobIds: terminalProbeJobIds,
-    }, job);
-    directProbeJobs = next.directJobs;
-    terminalProbeJobIds = next.terminalJobIds;
-  }
+  function refreshNodeScreen(reason: string) { return screen.refresh(reason); }
+  function applyProbeJob(job: ProbeJobSnapshot) { probeJobs?.apply(job); }
 
   function probeScope(job: ProbeJobSnapshot): 'single' | 'batch' | 'policy' {
     if (job.kind === 'manual_policy') return 'policy';
@@ -172,14 +144,15 @@
   }
 
   function handleProbeJobUpdate(job: ProbeJobSnapshot) {
+    if (!probeJobs || probeJobs.disposed) return;
     applyProbeJob(job);
     if (job.state === 'running') return;
 
     // Node observations/history are refreshed only after the authoritative job
     // enters a terminal state. The spinner is driven by the job snapshot itself.
     void refreshNodeScreen('probe_terminal');
-    if (reportedProbeJobs.has(job.id)) return;
-    reportedProbeJobs.add(job.id);
+    if (probeJobs.reportedProbeJobs.has(job.id)) return;
+    probeJobs.reportedProbeJobs.add(job.id);
     if (job.state === 'failed' || job.state === 'partially_failed' || job.state === 'timed_out') {
       recordProbeFailure({
         message: job.state === 'timed_out'
@@ -197,34 +170,29 @@
   onMount(() => {
     viewMode = loadViewMode();
     void refreshNodeScreen('mount');
-    void listen<ProbeJobSnapshot>('client-core:probe-job-updated', (event) => {
+    if (probeJobs) void probeJobs.attach(listen<ProbeJobSnapshot>('client-core:probe-job-updated', (event) => {
       handleProbeJobUpdate(event.payload);
-    }).then((unlisten) => {
-      unlistenProbeJobs = unlisten;
-    });
-    void listen('client-core:updated', () => {
+    }));
+    void screen.attach(listen('client-core:updated', () => {
       void refreshNodeScreen('client_core_updated');
-    }).then((unlisten) => {
-      unlistenClientCore = unlisten;
-    });
+    }));
   });
 
   onDestroy(() => {
     if (hideTimer) clearTimeout(hideTimer);
-    unlistenProbeJobs?.();
-    unlistenClientCore?.();
+    screen.dispose();
   });
 
   // Presentation adapters over the single authoritative Rust snapshot.
   const groups = $derived.by<PolicyGroup[]>(() =>
-    (nodeScreen?.groups ?? []).map((group) => ({
+    (screen.nodeScreen?.groups ?? []).map((group) => ({
       name: group.tag,
       kind: group.kind,
       selected: group.selected,
       available: group.available,
       reason: group.reason,
       outbounds: group.memberTags.map((tag) => {
-        const node = nodeScreen?.nodes.find((candidate) => candidate.tag === tag);
+        const node = screen.nodeScreen?.nodes.find((candidate) => candidate.tag === tag);
         return {
           tag,
           type: node?.protocol ?? 'unknown',
@@ -242,7 +210,7 @@
   });
 
   const allNodes = $derived.by<ProxyNode[]>(() => {
-    return (nodeScreen?.nodes ?? []).map((node) => {
+    return (screen.nodeScreen?.nodes ?? []).map((node) => {
       const parsed = parseNodeName(node.tag);
       return {
         id: `${node.id.profileId}:${node.id.configRevision}:${node.id.tag}`,
@@ -269,9 +237,9 @@
   });
 
   const activeProbeJobs = $derived.by(() => mergeActiveProbeJobs(
-    nodeScreen?.activeProbeJobs ?? [],
-    directProbeJobs,
-    terminalProbeJobIds,
+    screen.nodeScreen?.activeProbeJobs ?? [],
+    probeJobs?.directProbeJobs ?? new Map(),
+    probeJobs?.terminalProbeJobIds ?? new Set(),
   ));
   const probingNodeTags = $derived.by(() => new Set(
     activeProbeJobs
@@ -425,6 +393,7 @@
   }
 
   async function handleProbe(node: ProxyNode) {
+    if (!probeJobs) return;
     const policyProbe = isUrlTestPolicyNode(node);
     if (!isCoreAvailable) {
       recordProbeFailure({
@@ -437,7 +406,7 @@
     }
 
     try {
-      const job = await startProbeJob({
+      const job = await probeJobs.start({
         kind: policyProbe ? 'manual_policy' : 'outbound',
         targetTags: [node.tag],
         timeoutMs: 30_000,
@@ -455,7 +424,21 @@
     }
   }
 
+  let stoppingProbes = $state(false);
+  async function handleStopProbes() {
+    if (!probeJobs || stoppingProbes) return;
+    stoppingProbes = true;
+    try {
+      const results = await Promise.allSettled(activeProbeJobs.map(async job => {
+        handleProbeJobUpdate(await probeJobs.cancel(job.id));
+      }));
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') reportActionError(failed.reason);
+    } finally { stoppingProbes = false; }
+  }
+
   async function handleProbeAll() {
+    if (!probeJobs) return;
     if (!isCoreAvailable) {
       recordProbeFailure({ message: '内核未就绪', scope: 'batch' });
       return;
@@ -469,7 +452,7 @@
     lastError = null;
     try {
       const waves = Math.max(1, Math.ceil(targets.nodes.length / 8));
-      const job = await startProbeJob({
+      const job = await probeJobs.start({
         kind: 'outbound',
         targetTags: targets.nodes.map((node) => node.tag),
         timeoutMs: Math.min(300_000, Math.max(30_000, 15_000 + waves * 15_000)),
@@ -523,7 +506,7 @@
   let popoverPositionVersion = $state(0);
   let popoverPlacement = $state<PopoverPlacement | null>(null);
   function historyForNode(tag: string): DelayEntry[] {
-    return (nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).flatMap((entry) => {
+    return (screen.nodeScreen?.nodes.find((node) => node.tag === tag)?.history ?? []).flatMap((entry) => {
       if (entry.latencyMs != null) {
         return [{
           delay: entry.latencyMs,
@@ -660,7 +643,9 @@
       {probeDisabledReason}
       onSearchQueryChange={(value) => (searchQuery = value)}
       onViewModeChange={setViewMode}
-      onProbeAll={handleProbeAll}
+      onProbeAll={probeJobs ? handleProbeAll : undefined}
+      onStopProbes={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined}
+      {stoppingProbes}
     />
 
     <!-- Node content -->
@@ -704,7 +689,7 @@
               probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
-              onProbeNode={handleProbe}
+              onProbeNode={probeJobs ? handleProbe : undefined}
               onShowPopover={showPopover}
               onHidePopover={hidePopover}
             />
@@ -722,7 +707,7 @@
               probeDisabled={!isCoreAvailable}
               selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
               onSelectNode={handleSelect}
-              onProbeNode={handleProbe}
+              onProbeNode={probeJobs ? handleProbe : undefined}
               onShowPopover={showPopover}
               onHidePopover={hidePopover}
             />
@@ -762,7 +747,7 @@
                       probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
-                      onProbeNode={handleProbe}
+                      onProbeNode={probeJobs ? handleProbe : undefined}
                       onShowPopover={showPopover}
                       onHidePopover={hidePopover}
                     />
@@ -780,7 +765,7 @@
                       probeDisabled={!isCoreAvailable}
                       selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
                       onSelectNode={handleSelect}
-                      onProbeNode={handleProbe}
+                      onProbeNode={probeJobs ? handleProbe : undefined}
                       onShowPopover={showPopover}
                       onHidePopover={hidePopover}
                     />

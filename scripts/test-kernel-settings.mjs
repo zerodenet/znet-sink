@@ -13,7 +13,7 @@ const advancedPanel = read('src/lib/components/settings/ConfigEditorPanel.svelte
 const transfer = read('src/lib/components/settings/KernelSettingsTransfer.svelte');
 const service = read('src/lib/services/core.ts');
 const commands = read('src-tauri/src/commands/app_config.rs');
-const commandRegistry = read('src-tauri/src/lib.rs');
+const commandRegistry = read('src-tauri/src/application/commands.rs');
 const model = read('src-tauri/src/models/app_config.rs');
 const migration = read('src-tauri/src/services/kernel_settings.rs');
 const overlay = read('src-tauri/src/services/rule_overlay.rs');
@@ -60,7 +60,7 @@ assert.ok(
     commandRegistry.includes('app_config_export_kernel_settings'),
   'Tauri must register both kernel settings commands',
 );
-assert.match(model, /CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet\.client-kernel-settings\.v2"/);
+assert.match(model, /CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet\.client-kernel-settings\.v3"/);
 assert.match(model, /pub struct ClientKernelSettings \{/);
 assert.match(model, /pub core: PortableCoreConfig/);
 assert.match(model, /pub tun: AppTunConfig/);

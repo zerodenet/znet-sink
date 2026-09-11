@@ -2,7 +2,11 @@
 
 import type { DnsConfig } from './dns';
 
+export interface ConfigOverrides { listener: boolean; dns: boolean; tun: boolean; urlTest: boolean; bypass: boolean; rules: boolean; }
+
 export interface AppConfig {
+  resolved?: { key: keyof ConfigOverrides; label: string; source: string; value: string }[];
+  overrides?: ConfigOverrides;
   schemaVersion: string;
   core: AppCoreConfig;
   logs: AppLogConfig;
@@ -77,6 +81,7 @@ export interface AppRoutingConfig {
 }
 
 export interface AppUrlTestConfig {
+  url: string;
   toleranceMs: number;
 }
 
@@ -88,6 +93,7 @@ export interface KernelSettingsExportResult {
 // Patch types for partial updates
 
 export interface AppConfigPatch {
+  overrides?: ConfigOverrides;
   core?: AppCoreConfigPatch;
   logs?: AppLogConfigPatch;
   ui?: AppUiConfigPatch;
@@ -158,6 +164,7 @@ export interface AppRoutingConfigPatch {
 }
 
 export interface AppUrlTestConfigPatch {
+  url?: string;
   toleranceMs?: number;
 }
 

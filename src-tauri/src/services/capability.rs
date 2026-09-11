@@ -93,11 +93,9 @@ async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
     // lock.  Fall back to cached or empty features — the interaction surface
     // will be refreshed once the kernel is running and the cache expires.
     let core_running = state
-        .core_process()
-        .try_lock()
-        .map(|process| {
-            process.status.state == crate::models::core_process::CoreProcessState::Running
-        })
+        .runtime_host()
+        .try_process_status()
+        .map(|process| process.state == crate::models::core_process::CoreProcessState::Running)
         .unwrap_or(false);
 
     if !core_running {
@@ -302,6 +300,7 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
         pro_only("core.config.get", "action", is_pro),
         pro_only("core.config.exportActive", "action", is_pro),
         pro_only("core.config.validate", "action", is_pro),
+        #[cfg(feature = "tool-node-probe")]
         pro_only("core.policy.probe", "action", is_pro),
         feature_required(
             "core.connections.list",

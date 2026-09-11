@@ -4,6 +4,10 @@
 //! consumed by GUI services. Also provides the high-level `core_overview`
 //! composite query and traffic snapshot rate calculation.
 
+#[cfg(feature = "tool-dns")]
+use crate::models::gui_core::GuiFakeIpClearResult;
+#[cfg(feature = "tool-node-probe")]
+use crate::models::gui_core::GuiTargetProbeResult;
 use serde_json::Value;
 
 use crate::errors::AppResult;
@@ -11,9 +15,9 @@ use crate::kernel::adapter::KernelAdapter;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiFakeIpClearResult, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicySelectionResult, GuiTargetProbeResult, GuiTrafficRates,
-    GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTrafficRates, GuiTrafficSnapshot, GuiTrafficStats,
+    GuiZeroCapabilities,
 };
 
 use super::{commands, config, queries};
@@ -159,6 +163,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::select_policy(policy_tag, target_tag, Some(options)).await
     }
 
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_target(
         &self,
         target_tag: String,
@@ -167,6 +172,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::probe_target(target_tag, Some(options)).await
     }
 
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_outbound(
         &self,
         target_tag: String,
@@ -176,6 +182,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::probe_outbound(target_tag, url, Some(options)).await
     }
 
+    #[cfg(feature = "tool-node-probe")]
     async fn probe_policy(&self, policy_tag: String, options: CoreIpcOptions) -> AppResult<Value> {
         commands::probe_policy(policy_tag, Some(options)).await
     }
@@ -229,10 +236,12 @@ impl KernelAdapter for ZeroAdapter {
         commands::set_mode(mode, outbound, Some(options)).await
     }
 
+    #[cfg(feature = "tool-dns")]
     async fn dns_lookup(&self, hostname: String, options: CoreIpcOptions) -> AppResult<Value> {
         commands::dns_lookup(hostname, Some(options)).await
     }
 
+    #[cfg(feature = "tool-dns")]
     async fn dns_cache(
         &self,
         domain: Option<String>,
@@ -242,6 +251,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::dns_cache(domain, limit, Some(options)).await
     }
 
+    #[cfg(feature = "tool-dns")]
     async fn fakeip_lookup(
         &self,
         domain: Option<String>,
@@ -251,6 +261,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::fakeip_lookup(domain, ip, Some(options)).await
     }
 
+    #[cfg(feature = "tool-dns")]
     async fn clear_fake_ip(
         &self,
         domain: Option<String>,
@@ -260,6 +271,7 @@ impl KernelAdapter for ZeroAdapter {
         commands::clear_fake_ip(domain, ip, Some(options)).await
     }
 
+    #[cfg(feature = "tool-route")]
     async fn trace_route(
         &self,
         target: String,

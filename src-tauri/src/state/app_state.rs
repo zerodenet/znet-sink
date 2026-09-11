@@ -1,43 +1,42 @@
+#[cfg(feature = "tool-node-probe")]
+use crate::client_core::{
+    ClientCoreError, ProbeJobId, ProbeTargetResult, StartProbeOutcome, StartProbeRequest,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use std::thread::JoinHandle;
 
 use crate::client_core::{
-    ClientCore, ClientCoreError, ClientCoreSnapshot, ClientScope, ProbeJobId, ProbeJobSnapshot,
-    ProbeObservation, ProbeTargetResult, ProfileId, SourceStatus, StartProbeOutcome,
-    StartProbeRequest,
+    ClientCore, ClientCoreSnapshot, ClientScope, ProbeJobSnapshot, ProbeObservation, ProfileId,
+    SourceStatus,
 };
 use crate::kernel::zero::adapter::TrafficSample;
 use crate::models::{
-    app_config::AppConfig,
-    core_process::{CoreProcessState, CoreProcessStatus},
-    logs::LogEntry,
-    proxy_config::ProxyConfigProfile,
-    rule_set::RuleSetProfile,
-    subscription::SubscriptionProfile,
+    app_config::AppConfig, logs::LogEntry, proxy_config::ProxyConfigProfile,
+    rule_set::RuleSetProfile, subscription::SubscriptionProfile,
 };
 
 pub struct AppState {
+    #[cfg(feature = "tool-node-probe")]
+    probe_runtime: crate::services::probe::runtime::ProbeRuntime,
     client_core: Mutex<ClientCore>,
     core_event_generation: Arc<AtomicU64>,
-    gui_event_generation: Arc<AtomicU64>,
-    core_process_monitor_generation: Arc<AtomicU64>,
+    observations: znet_engine_client::SubscriptionOwner,
     next_record_id: AtomicU64,
     app_config: Mutex<AppConfig>,
     proxy_configs: Mutex<Vec<ProxyConfigProfile>>,
     subscriptions: Mutex<Vec<SubscriptionProfile>>,
     rule_sets: Mutex<Vec<RuleSetProfile>>,
-    proxy_config_operation: tokio::sync::Mutex<()>,
+    configuration: crate::configuration::Workspace,
+    runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
     logs: Mutex<Vec<LogEntry>>,
     traffic_sample: Mutex<Option<TrafficSample>>,
-    core_process: Mutex<ManagedCoreProcess>,
+    runtime_host: crate::runtime_host::Host,
     zero_features_cache: Mutex<Option<ZeroFeaturesCache>>,
     /// Set to `true` the moment shutdown begins. Long-lived background
     /// tasks (core-process watchdog, event streams) poll this to stop
@@ -49,41 +48,6 @@ pub struct AppState {
 pub(crate) struct ZeroFeaturesCache {
     pub features: Vec<String>,
     pub cached_at_unix_ms: u64,
-}
-
-pub(crate) struct ManagedCoreProcess {
-    pub child: Option<Child>,
-    pub stderr_handle: Option<JoinHandle<()>>,
-    pub status: CoreProcessStatus,
-}
-
-impl Drop for ManagedCoreProcess {
-    fn drop(&mut self) {
-        if let Some(ref mut child) = self.child {
-            eprintln!(
-                "[ZNet] shutdown: closing core lifetime pipe (pid={})",
-                child.id()
-            );
-            child.stdin.take();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                    _ => {
-                        // This is still scoped to the exact child owned by
-                        // this state; never kill processes by executable name.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                }
-            }
-        }
-        self.stderr_handle.take().map(|h| h.join());
-    }
 }
 
 impl Default for AppState {
@@ -111,24 +75,31 @@ impl AppState {
         let config_revision = config_revision(active_profile);
 
         Self {
+            #[cfg(feature = "tool-node-probe")]
+            probe_runtime: crate::services::probe::runtime::ProbeRuntime::default(),
             client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
             core_event_generation: Arc::new(AtomicU64::default()),
-            gui_event_generation: Arc::new(AtomicU64::default()),
-            core_process_monitor_generation: Arc::new(AtomicU64::default()),
+            observations: znet_engine_client::SubscriptionOwner::default(),
             next_record_id: AtomicU64::new(next_record_id),
             app_config: Mutex::new(app_config),
             proxy_configs: Mutex::new(proxy_configs),
             subscriptions: Mutex::new(subscriptions),
             rule_sets: Mutex::new(rule_sets),
-            proxy_config_operation: tokio::sync::Mutex::new(()),
+            configuration: crate::configuration::Workspace::default(),
+            runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
             logs: Mutex::new(logs),
             traffic_sample: Mutex::new(None),
-            core_process: Mutex::new(ManagedCoreProcess::default()),
+            runtime_host: crate::runtime_host::Host::default(),
             zero_features_cache: Mutex::new(None),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[cfg(feature = "tool-node-probe")]
+    pub(crate) fn probe_runtime(&self) -> &crate::services::probe::runtime::ProbeRuntime {
+        &self.probe_runtime
     }
 
     pub(crate) fn next_core_event_generation(&self) -> u64 {
@@ -139,47 +110,64 @@ impl AppState {
         Arc::clone(&self.core_event_generation)
     }
 
-    pub(crate) fn next_gui_event_generation(&self) -> u64 {
-        self.gui_event_generation.fetch_add(1, Ordering::SeqCst) + 1
-    }
-
-    pub(crate) fn gui_event_generation(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.gui_event_generation)
+    pub(crate) fn observations(&self) -> &znet_engine_client::SubscriptionOwner {
+        &self.observations
     }
 
     pub(crate) fn client_core_snapshot(&self) -> ClientCoreSnapshot {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot()
+        let core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        #[allow(unused_mut)]
+        let mut snapshot = core.snapshot();
+        #[cfg(feature = "tool-node-probe")]
+        {
+            snapshot.active_probe_jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .list_probe_jobs(None)
+                .into_iter()
+                .filter(|j| !j.state.is_terminal())
+                .collect();
+        }
+        snapshot
     }
 
     pub(crate) fn client_core_configuration_committed(
         &self,
         active_profile: Option<&ProxyConfigProfile>,
     ) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .configuration_committed(
-                active_profile.map(|profile| ProfileId(profile.id.clone())),
-                config_revision(active_profile),
-                crate::services::common::now_unix_ms(),
-            );
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.configuration_committed(
+            active_profile.map(|profile| ProfileId(profile.id.clone())),
+            config_revision(active_profile),
+            crate::services::common::now_unix_ms(),
+        );
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByConfigChange,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_started(&self) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .core_instance_started(crate::services::common::now_unix_ms());
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.core_instance_started(crate::services::common::now_unix_ms());
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn client_core_instance_lost(&self) {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .core_instance_lost(crate::services::common::now_unix_ms());
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        core.core_instance_lost(crate::services::common::now_unix_ms());
+        #[cfg(feature = "tool-node-probe")]
+        self.probe_runtime.invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
     }
 
     pub(crate) fn set_client_core_source_status(&self, status: SourceStatus) {
@@ -189,16 +177,24 @@ impl AppState {
             .set_source_status(status);
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn start_client_probe(
         &self,
         request: StartProbeRequest,
     ) -> Result<StartProbeOutcome, ClientCoreError> {
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start_probe(request, crate::services::common::now_unix_ms())
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = self.probe_runtime.start(
+            &core.snapshot().scope,
+            request,
+            crate::services::common::now_unix_ms(),
+        )?;
+        if outcome.created {
+            core.advance_snapshot();
+        }
+        Ok(outcome)
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn record_client_probe_result(
         &self,
         id: ProbeJobId,
@@ -210,7 +206,21 @@ impl AppState {
                 .client_core
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let updated = core.record_probe_result(id, scope, result);
+            if &core.snapshot().scope != scope {
+                return None;
+            }
+            let mut jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let updated = jobs.record_probe_result(id, scope, result);
+            for observation in jobs.take_observations() {
+                core.record_observation(observation);
+            }
+            if updated.is_some() {
+                core.advance_snapshot();
+            }
             let observations = updated.is_some().then(|| core.observations(None));
             (updated, observations)
         };
@@ -253,10 +263,12 @@ impl AppState {
             .restore_observations(observations);
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn get_client_probe_job(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
-        self.client_core
+        self.probe_runtime
+            .jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .get_probe_job(id)
     }
 
@@ -264,27 +276,58 @@ impl AppState {
         &self,
         profile_id: Option<String>,
     ) -> Vec<ProbeJobSnapshot> {
-        let profile_id = profile_id.map(ProfileId);
-        self.client_core
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .list_probe_jobs(profile_id.as_ref())
+        #[cfg(feature = "tool-node-probe")]
+        {
+            let profile_id = profile_id.map(ProfileId);
+            self.probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .list_probe_jobs(profile_id.as_ref())
+        }
+        #[cfg(not(feature = "tool-node-probe"))]
+        {
+            let _ = profile_id;
+            Vec::new()
+        }
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn cancel_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
-        self.client_core
+        let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        self.probe_runtime.cancel_execution(id);
+        let updated = self
+            .probe_runtime
+            .jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .cancel_probe(id, crate::services::common::now_unix_ms())
+            .unwrap_or_else(|e| e.into_inner())
+            .cancel_probe(id, crate::services::common::now_unix_ms());
+        if updated.is_some() {
+            core.advance_snapshot();
+        }
+        updated
     }
 
+    #[cfg(feature = "tool-node-probe")]
     pub(crate) fn timeout_client_probe(&self, id: ProbeJobId) -> Option<ProbeJobSnapshot> {
         let (updated, observations) = {
             let mut core = self
                 .client_core
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let updated = core.timeout_probe(id, crate::services::common::now_unix_ms());
+            self.probe_runtime.cancel_execution(id);
+            let mut jobs = self
+                .probe_runtime
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let updated = jobs.timeout_probe(id, crate::services::common::now_unix_ms());
+            for observation in jobs.take_observations() {
+                core.record_observation(observation);
+            }
+            if updated.is_some() {
+                core.advance_snapshot();
+            }
             let observations = updated
                 .as_ref()
                 .is_some_and(|job| job.state == crate::client_core::ProbeJobState::TimedOut)
@@ -298,13 +341,11 @@ impl AppState {
     }
 
     pub(crate) fn next_core_process_monitor_generation(&self) -> u64 {
-        self.core_process_monitor_generation
-            .fetch_add(1, Ordering::SeqCst)
-            + 1
+        self.runtime_host.advance_generation()
     }
 
     pub(crate) fn core_process_monitor_generation(&self) -> u64 {
-        self.core_process_monitor_generation.load(Ordering::SeqCst)
+        self.runtime_host.generation()
     }
 
     pub(crate) fn next_record_id(&self) -> u64 {
@@ -327,8 +368,12 @@ impl AppState {
         &self.rule_sets
     }
 
+    pub(crate) fn configuration(&self) -> &crate::configuration::Workspace {
+        &self.configuration
+    }
+
     pub(crate) fn proxy_config_operation(&self) -> &tokio::sync::Mutex<()> {
-        &self.proxy_config_operation
+        &self.runtime_operation
     }
 
     pub(crate) fn subscription_syncs(&self) -> &Mutex<HashSet<String>> {
@@ -347,8 +392,8 @@ impl AppState {
         &self.traffic_sample
     }
 
-    pub(crate) fn core_process(&self) -> &Mutex<ManagedCoreProcess> {
-        &self.core_process
+    pub(crate) fn runtime_host(&self) -> &crate::runtime_host::Host {
+        &self.runtime_host
     }
 
     pub(crate) fn zero_features_cache(&self) -> &Mutex<Option<ZeroFeaturesCache>> {
@@ -384,29 +429,6 @@ fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyCo
     }
 
     profiles
-}
-
-impl Default for ManagedCoreProcess {
-    fn default() -> Self {
-        Self {
-            child: None,
-            stderr_handle: None,
-            status: CoreProcessStatus {
-                state: CoreProcessState::NotStarted,
-                pid: None,
-                kernel: "zero".to_string(),
-                executable_path: None,
-                working_dir: None,
-                config_path: None,
-                endpoint_path: String::new(),
-                started_at_unix_ms: None,
-                exited_at_unix_ms: None,
-                exit_code: None,
-                exit_reason: None,
-                last_error: None,
-            },
-        }
-    }
 }
 
 fn config_revision(profile: Option<&ProxyConfigProfile>) -> crate::client_core::ConfigRevision {

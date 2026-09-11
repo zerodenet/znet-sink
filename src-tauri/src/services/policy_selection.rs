@@ -49,7 +49,10 @@ pub fn record_active_subscription_selection(
 
 /// Apply saved choices to a config before it is exported or sent to Zero.
 /// Invalid/stale choices are ignored so Zero uses the group's first member.
-pub fn apply_saved_selections(state: &AppState, base: &Value, config: &mut Value) -> AppResult<()> {
+pub(crate) fn saved_selections(
+    state: &AppState,
+    base: &Value,
+) -> AppResult<(Option<String>, BTreeMap<String, String>)> {
     let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
     let profile_id = profiles
         .iter()
@@ -62,15 +65,14 @@ pub fn apply_saved_selections(state: &AppState, base: &Value, config: &mut Value
         .map(|profile| profile.id.clone());
     drop(profiles);
     let Some(profile_id) = profile_id else {
-        return Ok(());
+        return Ok((None, BTreeMap::new()));
     };
     let selections = common::lock(state.subscriptions(), "subscription")?
         .iter()
         .find(|item| item.target_proxy_config_id.as_deref() == Some(profile_id.as_str()))
         .map(|item| item.policy_selections.clone())
         .unwrap_or_default();
-    apply_selections(config, &selections);
-    Ok(())
+    Ok((Some(profile_id), selections))
 }
 
 pub fn retain_valid_selections(selections: &mut BTreeMap<String, String>, config: &Value) {

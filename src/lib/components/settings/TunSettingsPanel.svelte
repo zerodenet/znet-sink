@@ -1,11 +1,21 @@
 <script lang="ts">
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let snapshot = $state<ProfileSettings | null>(null);
+  async function restoreSource() {
+    if (!snapshot || saving) return;
+    saving = true;
+    try {snapshot = await restoreProfileSettings(snapshot, 'tun'); await load();}
+    catch (cause) {error = getAppErrorMessage(cause, '恢复 TUN 配置失败');}
+    finally {saving = false;}
+  }
+
   import { Textarea } from '$lib/components/ui/textarea';
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
-  import { getAppConfig, getAppErrorInfo, getAppErrorMessage, applyTunSettings } from '$lib/services/core';
+  import { getProfileSettings, getAppErrorInfo, getAppErrorMessage } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import {
@@ -29,8 +39,6 @@
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
 
-  const profileManaged = $derived(guiState.tunStatus?.configSource === 'profile');
-  const profileSourceName = $derived(guiState.tunStatus?.configSourceName ?? '当前配置');
   const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
   const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
@@ -45,7 +53,8 @@
     loading = true;
     error = null;
     try {
-      const config = await getAppConfig();
+      snapshot = await getProfileSettings();
+      const config = snapshot.settings;
       name = config.tun.name ?? '';
       tag = config.tun.tag;
       addr = config.tun.addr;
@@ -103,7 +112,8 @@
 
     saving = true;
     try {
-      const config = await applyTunSettings({
+      if (!snapshot) return;
+      snapshot = await saveProfileSettings(snapshot, {tun: {
         name: name.trim() || null,
         tag: normalizedTag,
         addr: normalizedAddr,
@@ -112,7 +122,8 @@
         includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
         dualStack,
         dnsHijack,
-      });
+      }});
+      const config = snapshot.settings;
       name = config.tun.name ?? '';
       tag = config.tun.tag;
       addr = config.tun.addr;
@@ -136,12 +147,12 @@
     void Promise.allSettled([load(), guiState.refreshTunStatus()]);
   });
 </script>
+<div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
+  <span>{isLocallyEdited(snapshot, 'tun') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</span>
+  <Button variant="outline" size="sm" onclick={restoreSource} disabled={saving || !isLocallyEdited(snapshot, 'tun')}>恢复配置值</Button>
+</div>
 
-{#if profileManaged}
-  <div class="settings-notice" role="status">
-    {profileSourceName} 已显式定义 <code>runtime.tun</code>，当前运行时优先使用该配置。下方内容仅作为 ZNet-Sink 缺省值，在活动配置未定义 TUN 时生效。
-  </div>
-{:else if guiState.isTunEnabled}
+{#if guiState.isTunEnabled}
   <div class="settings-notice" role="status">
     保存后会自动重建 TUN 并应用新参数，期间连接可能短暂中断，客户端和内核保持运行。
   </div>
@@ -200,7 +211,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">主地址</span>
-        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。</span>
+        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。修改并应用后只替换当前配置中改动的参数。</span>
       </div>
       <div class="field-control">
         <Input
@@ -334,7 +345,7 @@
 {#if !loading}
   <div class="settings-actions">
     <Button size="sm" onclick={save} disabled={locked}>
-      {saving ? '应用中...' : saved ? '已保存' : profileManaged ? '保存缺省值' : guiState.isTunEnabled ? '保存并应用' : '保存'}
+      {saving ? '应用中...' : saved ? '已保存' : guiState.isTunEnabled ? '保存并应用' : '保存'}
     </Button>
   </div>
 {/if}

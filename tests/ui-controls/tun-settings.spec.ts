@@ -48,11 +48,11 @@ test('apply failure remains visible and does not report saved', async ({ page })
   await expect(page.getByLabel('保存结果')).toBeEmpty();
 });
 
-test('profile ownership stays visible and local defaults remain editable', async ({ page }) => {
+test('client TUN settings stay authoritative with a legacy profile observation', async ({ page }) => {
   await page.goto('/?panel=tun&mode=profile');
-  await expect(page.getByText('下方内容仅作为 ZNet-Sink 缺省值', { exact: false })).toBeVisible();
+  await expect(page.getByText('下方内容仅作为 ZNet-Sink 缺省值', { exact: false })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'TUN 接管网段' })).toBeEnabled();
-  await expect(page.getByText('保存后会自动重建 TUN', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('保存后会自动重建 TUN', { exact: false })).toBeVisible();
 });
 
 test('TUN exposes one link to the shared bypass policy instead of a second editor', async ({page}) => {

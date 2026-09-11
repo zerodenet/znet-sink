@@ -32,6 +32,15 @@ pub(super) async fn apply(
         .iter()
         .find(|profile| profile.active)
         .and_then(|profile| profile.content.clone());
+    if !candidate.overrides.dns
+        && content
+            .as_ref()
+            .and_then(|v| v.pointer("/runtime/dns"))
+            .is_some()
+    {
+        app_config::replace(state.inner(), candidate)?;
+        return Ok(serde_json::json!({"ok":true,"applied":false,"reason":"profile_dns_selected"}));
+    }
     let configs = content
         .as_ref()
         .map(|content| {
@@ -89,6 +98,11 @@ impl Backend for Live<'_> {
                 "runtime",
                 "core changed while reading DNS/TUN state",
             ));
+        }
+        let mut status = status;
+        // DNS changes must not rebuild a TUN whose parameters come from the profile.
+        if crate::configuration::preferences::owns_tun(self.state.inner())? {
+            status.managed_by_config = true;
         }
         Ok(Snapshot { identity, status })
     }

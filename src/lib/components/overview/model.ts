@@ -65,6 +65,7 @@ export function buildOverview(input: OverviewInput) {
   const running = c?.processState === 'running';
   const ready = !stale && c?.coreAvailable === true;
   const groupsReady = ready && !input.groupsError && (input.groupsAt === undefined || (input.groupsAt > 0 && now - input.groupsAt <= 15_000));
+  const groupsPending = ready && !groupsReady && !input.groupsError && input.groups.length > 0;
   const egress = presentEgress(tun);
   const findings: Finding[] = [];
   const add = (title: string, detail: string, target: Destination, severity: Finding['severity'] = 'warning') => {
@@ -89,7 +90,10 @@ export function buildOverview(input: OverviewInput) {
       if (check.status === 'warn') add('就绪检查提醒', check.message || check.key, check.key === 'internetSharing' ? 'network' : 'logs');
     }
   }
-  if (ready && !groupsReady && (input.groupsError || input.groups.length)) add('策略状态待确认', input.groupsError || '策略选择状态已过期，请重新检查。', 'nodes');
+  // A paused background poll makes the last policy snapshot old without
+  // proving a fault. Keep old selections unconfirmed, but only surface an
+  // actionable warning when the policy read itself failed.
+  if (ready && input.groupsError) add('策略状态更新失败', input.groupsError, 'nodes');
   const groups = input.groups.map((g) => {
     const resolved = selectedPolicyPath(g, input.groups);
     const selected = resolved.probe;
@@ -110,8 +114,8 @@ export function buildOverview(input: OverviewInput) {
   }).sort((a, b) => Number(b.failed) - Number(a.failed));
   const failed = groups.filter((g) => g.failed);
   if (failed.length) add('已选出口最近探测失败', failed.map((g) => `${g.name} → ${g.selected}`).join('；'), 'nodes');
-  const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : ready ? 'good' : 'neutral';
-  const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
+  const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : groupsPending ? 'neutral' : ready ? 'good' : 'neutral';
+  const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : groupsPending ? '策略状态正在更新' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
   const proxy = stale ? '状态待确认' : c?.systemProxyEnabled ? '已开启' : '未开启';
   const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy && !egress.issue ? '已开启 · 健康' : '已开启 · 异常' : tun.lastError ? '已停止 · 待处理' : '未开启';
   const endpoint = c?.localProxyHost && c.localProxyPort ? `${c.localProxyHost.includes(':') ? `[${c.localProxyHost}]` : c.localProxyHost}:${c.localProxyPort}` : '尚未取得';
@@ -121,7 +125,7 @@ export function buildOverview(input: OverviewInput) {
     return egress?.availability === 'available' ? egress.interface ?? '可用' : egress?.availability === 'unavailable' ? '不可用' : '尚未确认';
   };
   return {
-    ready, running, stale, title, tone, findings, groups, groupsReady, egress,
+    ready, running, stale, title, tone, findings, groups, groupsReady, groupsPending, egress,
     tunSnapshot: tun,
     tunConfirmed: ready && !!tun && !input.tunError,
     availableModes: input.mode?.availableModes ?? [],
@@ -138,7 +142,7 @@ export function buildOverview(input: OverviewInput) {
     selfTest: input.selfTest,
     selfTestAge: ageLabel(input.selfTestAt, now),
     selfTestStale: !input.selfTestAt || now - input.selfTestAt > 60_000,
-    selfTestPassed: ready && !!input.selfTest?.ready && !!input.selfTestAt && now - input.selfTestAt <= 60_000 && !findings.length && input.selfTest.checks.every((check) => check.status === 'pass'),
+    selfTestPassed: ready && groupsReady && !!input.selfTest?.ready && !!input.selfTestAt && now - input.selfTestAt <= 60_000 && !findings.length && input.selfTest.checks.every((check) => check.status === 'pass'),
   };
 }
 export type OverviewModel = ReturnType<typeof buildOverview>;

@@ -1,3 +1,9 @@
+#[cfg(feature = "tool-dns")]
+use crate::models::gui_core::GuiFakeIpClearInput;
+#[cfg(feature = "tool-dns")]
+use crate::models::gui_core::GuiFakeIpClearResult;
+#[cfg(feature = "tool-node-probe")]
+use crate::services::probe;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use std::{
@@ -5,12 +11,13 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
-use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(feature = "tool-node-probe")]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, State};
 
-use crate::client_core::{
-    ClientCoreSnapshot, NodeScreenSnapshot, ProbeJobId, ProbeJobKind, ProbeJobSnapshot,
-    StartProbeRequest,
-};
+use crate::client_core::{ClientCoreSnapshot, NodeScreenSnapshot};
+#[cfg(feature = "tool-node-probe")]
+use crate::client_core::{ProbeJobId, ProbeJobKind, ProbeJobSnapshot, StartProbeRequest};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::{self, build_traffic_snapshot, TrafficSample, ZeroAdapter};
@@ -19,14 +26,13 @@ use crate::models::core_process::CoreProcessState;
 use crate::models::dns_config::ClientDnsConfig;
 use crate::models::gui_core::{
     ConfigProxyNode, GuiConnection, GuiConnectionCloseResult, GuiConnectionList,
-    GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFakeIpClearInput,
-    GuiFakeIpClearResult, GuiFeatureStatus, GuiPolicyGroup, GuiPolicySelectionResult,
-    GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
+    GuiConnectionListOptions, GuiCoreHealth, GuiCoreOverview, GuiFeatureStatus, GuiPolicyGroup,
+    GuiPolicySelectionResult, GuiTrafficSnapshot, GuiTrafficStats, GuiZeroCapabilities,
 };
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
 use crate::services::{
-    core_config, core_process, diagnostic_storage, interaction_mode, probe, proxy_config,
+    core_config, core_process, diagnostic_storage, interaction_mode, proxy_config,
 };
 use crate::state::app_state::AppState;
 
@@ -52,6 +58,15 @@ pub async fn gui_node_screen_snapshot(
     crate::services::node_screen::snapshot(state.inner(), reason.as_deref()).await
 }
 
+#[cfg(feature = "tool-node-probe")]
+#[tauri::command]
+pub(crate) fn gui_probe_runtime_snapshot(
+    state: State<'_, AppState>,
+) -> probe::runtime::ProbeRuntimeSnapshot {
+    state.probe_runtime().snapshot()
+}
+
+#[cfg(feature = "tool-node-probe")]
 #[tauri::command]
 pub fn gui_probe_job_get(
     state: State<'_, AppState>,
@@ -62,6 +77,7 @@ pub fn gui_probe_job_get(
         .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[tauri::command]
 pub fn gui_probe_job_list(
     state: State<'_, AppState>,
@@ -70,6 +86,7 @@ pub fn gui_probe_job_list(
     state.list_client_probe_jobs(profile_id)
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[tauri::command]
 pub fn gui_probe_job_cancel(
     app_handle: AppHandle,
@@ -79,11 +96,11 @@ pub fn gui_probe_job_cancel(
     let job = state
         .cancel_client_probe(job_id)
         .ok_or_else(|| AppError::not_found("probe_job", job_id.0.to_string()))?;
-    probe::forget_policy_probe_job(job_id);
     let _ = app_handle.emit(probe::PROBE_JOB_UPDATED_EVENT, job.clone());
     Ok(job)
 }
 
+#[cfg(feature = "tool-node-probe")]
 #[tauri::command]
 pub fn gui_probe_job_start(
     app_handle: AppHandle,
@@ -246,27 +263,12 @@ pub async fn gui_select_policy(
     Ok(result)
 }
 
-/// Probe a single outbound through the kernel proxy stack.
-///
-/// Fire-and-forget like `gui_probe_policy`: spawns the IPC probe in background,
-/// returns immediately. Results arrive via `diagnostics.probe_outbound` response
-/// logged to the event stream, or the frontend can poll via policy status.
 #[tauri::command]
-pub async fn gui_probe_target(
-    state: State<'_, AppState>,
-    target_tag: String,
-) -> AppResult<serde_json::Value> {
-    let adapter = ZeroAdapter::new();
-    let opts = default_opts(state.inner());
-    // Quick health check first — fail fast if kernel is offline
-    if adapter.readiness_health(opts).await.is_err() {
-        return Ok(serde_json::json!({"accepted": false, "reason": "kernel offline"}));
-    }
-    let opts = default_opts(state.inner());
-    tauri::async_runtime::spawn(async move {
-        let _ = adapter.probe_outbound(target_tag, None, opts).await;
-    });
-    Ok(serde_json::json!({"accepted": true}))
+pub async fn gui_observation_snapshot(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    crate::services::flow_observation::connect(state.inner())
+        .await?
+        .snapshot()
+        .await
 }
 
 #[tauri::command]
@@ -275,8 +277,10 @@ pub async fn gui_connections(
     options: Option<GuiConnectionListOptions>,
 ) -> AppResult<GuiConnectionList> {
     interaction_mode::require_pro_mode(state.inner(), "connections")?;
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().connections(options, opts).await
+    crate::services::flow_observation::connect(state.inner())
+        .await?
+        .active(options)
+        .await
 }
 
 #[tauri::command]
@@ -285,8 +289,10 @@ pub async fn gui_connection_detail(
     flow_id: String,
 ) -> AppResult<GuiConnection> {
     interaction_mode::require_pro_mode(state.inner(), "connections")?;
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().connection_detail(flow_id, opts).await
+    crate::services::flow_observation::connect(state.inner())
+        .await?
+        .detail(&flow_id)
+        .await
 }
 
 #[tauri::command]
@@ -295,7 +301,11 @@ pub async fn gui_close_connection(
     flow_id: String,
 ) -> AppResult<GuiConnectionCloseResult> {
     interaction_mode::require_pro_mode(state.inner(), "connections")?;
-    let opts = default_opts(state.inner());
+    let binding = crate::services::flow_observation::binding(state.inner())?;
+    let opts = crate::models::core::CoreIpcOptions {
+        socket: Some(binding.endpoint.path),
+        timeout_ms: Some(binding.timeout.as_millis() as u64),
+    };
     ZeroAdapter::new().close_connection(flow_id, opts).await
 }
 
@@ -321,7 +331,11 @@ pub async fn gui_tun_enable(
     ensure_core_ready(app_handle, state.clone()).await?;
     let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
     let opts = default_opts(state.inner());
-    zero::runtime::enable_tun(tun, Some(opts)).await
+    zero::runtime::enable_tun_params(
+        crate::configuration::preferences::tun_params(state.inner(), tun)?,
+        Some(opts),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -594,20 +608,8 @@ pub async fn gui_set_mode(
     ZeroAdapter::new().set_mode(mode, outbound, opts).await
 }
 
-/// Trigger a url_test probe on a policy group.
-///
-/// Waits only for the kernel's command acknowledgement. Probe results arrive
-/// later via `policy.probeCompleted` events.
-#[tauri::command]
-pub async fn gui_probe_policy(
-    state: State<'_, AppState>,
-    policy_tag: String,
-) -> AppResult<serde_json::Value> {
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().probe_policy(policy_tag, opts).await
-}
-
 /// DNS lookup diagnostic.
+#[cfg(feature = "tool-dns")]
 #[tauri::command]
 pub async fn gui_dns_lookup(
     state: State<'_, AppState>,
@@ -618,6 +620,7 @@ pub async fn gui_dns_lookup(
     ZeroAdapter::new().dns_lookup(hostname, opts).await
 }
 
+#[cfg(feature = "tool-dns")]
 #[tauri::command]
 pub async fn gui_dns_cache(
     state: State<'_, AppState>,
@@ -630,6 +633,7 @@ pub async fn gui_dns_cache(
         .await
 }
 
+#[cfg(feature = "tool-dns")]
 #[tauri::command]
 pub async fn gui_fakeip_lookup(
     state: State<'_, AppState>,
@@ -643,6 +647,7 @@ pub async fn gui_fakeip_lookup(
 }
 
 /// Clear all Fake-IP mappings or one mapping selected by domain/address.
+#[cfg(feature = "tool-dns")]
 #[tauri::command]
 pub async fn gui_clear_fake_ip(
     state: State<'_, AppState>,
@@ -657,6 +662,7 @@ pub async fn gui_clear_fake_ip(
 }
 
 /// Route trace diagnostic.
+#[cfg(feature = "tool-route")]
 #[tauri::command]
 pub async fn gui_trace_route(
     state: State<'_, AppState>,
@@ -679,8 +685,10 @@ pub async fn gui_recent_connections(
     options: Option<GuiConnectionListOptions>,
 ) -> AppResult<GuiConnectionList> {
     interaction_mode::require_pro_mode(state.inner(), "recent_connections")?;
-    let opts = default_opts(state.inner());
-    ZeroAdapter::new().recent_connections(options, opts).await
+    crate::services::flow_observation::connect(state.inner())
+        .await?
+        .recent(options)
+        .await
 }
 
 /// Query event sink delivery status.

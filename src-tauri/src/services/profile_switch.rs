@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::errors::{AppError, AppResult};
-use crate::kernel::zero::{commands as zero_commands, parsing, queries};
+use crate::kernel::configuration::BoundControl;
 use crate::models::core::CoreIpcOptions;
 use crate::models::core_process::CoreProcessState;
 use crate::models::logs::LogLevel;
@@ -9,10 +9,11 @@ use crate::services::common::lock;
 use crate::services::{core_config, core_process, logs};
 use crate::state::app_state::AppState;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct FlowBoundary {
     core_instance_id: String,
     flow_ids: Vec<String>,
+    control: BoundControl,
 }
 
 pub(crate) async fn capture(
@@ -47,121 +48,44 @@ pub(crate) async fn capture(
     Ok(Some((options, boundary)))
 }
 
-pub(crate) async fn reconcile(state: &AppState, options: CoreIpcOptions, boundary: FlowBoundary) {
-    if boundary.flow_ids.is_empty() {
-        return;
-    }
-
-    let current_instance = match core_instance_id(options.clone()).await {
-        Ok(instance_id) => instance_id,
-        Err(error) => {
-            logs::znet_log_fields(
-                Some(state),
-                LogLevel::Warn,
-                "proxy config switched but previous connection cleanup was skipped because the current core instance could not be verified",
-                json!({
-                    "previousCoreInstanceId": boundary.core_instance_id,
-                    "flowCount": boundary.flow_ids.len(),
-                    "error": error.message,
-                }),
-            );
-            return;
-        }
-    };
-
-    // A fallback kernel restart already destroys every old flow. Flow IDs may
-    // be reused by the new core instance, so never replay old close commands
-    // across an instance boundary.
-    if current_instance != boundary.core_instance_id {
-        return;
-    }
-
-    let total = boundary.flow_ids.len();
-    let mut failed = Vec::new();
-    for flow_id in boundary.flow_ids {
-        if let Err(error) =
-            zero_commands::close_connection(flow_id.clone(), Some(options.clone())).await
-        {
-            failed.push(json!({
-                "flowId": flow_id,
-                "code": error.code,
-                "message": error.message,
-            }));
-        }
-    }
-
-    if !failed.is_empty() {
+pub(crate) async fn reconcile(state: &AppState, _options: CoreIpcOptions, boundary: FlowBoundary) {
+    let report = znet_engine_client::flow_cleanup::close_previous(
+        &boundary.control,
+        &boundary.core_instance_id,
+        &boundary.flow_ids,
+    )
+    .await;
+    if !report.failures.is_empty() || report.boundary_error.is_some() {
+        let failures: Vec<_> = report
+            .failures
+            .iter()
+            .map(|(id, error)| json!({"flowId":id,"code":error.code,"message":error.message}))
+            .collect();
         logs::znet_log_fields(
             Some(state),
             LogLevel::Warn,
-            "proxy config switched but some previous connections could not be closed",
-            json!({
-                "coreInstanceId": current_instance,
-                "flowCount": total,
-                "failedCount": failed.len(),
-                "failures": failed,
-            }),
+            "proxy config switched; previous connection cleanup is incomplete",
+            json!({"coreInstanceId":boundary.core_instance_id,"closedCount":report.closed,
+                "skippedCount":report.skipped,"failures":failures,"boundaryError":report.boundary_error}),
         );
     }
 }
 
 async fn capture_flow_boundary(options: CoreIpcOptions) -> AppResult<FlowBoundary> {
-    let core_instance_id = core_instance_id(options.clone()).await?;
-    let value = queries::query_value(active_flows_request(), "active_flows", Some(options)).await?;
-
+    let control = BoundControl::connect(options).await?;
+    let before = control.identity().await?;
+    let flow_ids = control.all_flow_ids().await?;
+    let after = control.identity().await?;
+    if before != after {
+        return Err(AppError::conflict(
+            "config",
+            "runtime",
+            "runtime changed while capturing previous flows",
+        ));
+    }
     Ok(FlowBoundary {
-        core_instance_id,
-        flow_ids: flow_ids_from_value(&value),
+        core_instance_id: before.core_instance_id,
+        flow_ids,
+        control,
     })
-}
-
-async fn core_instance_id(options: CoreIpcOptions) -> AppResult<String> {
-    let runtime = queries::query_value(json!({"runtime": {}}), "runtime", Some(options)).await?;
-    parsing::string_at(&runtime, &["core_instance_id", "coreInstanceId"])
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::internal("core runtime did not expose core_instance_id"))
-}
-
-fn active_flows_request() -> Value {
-    json!({
-        "active_flows": {
-            "filter": {}
-        }
-    })
-}
-
-fn flow_ids_from_value(value: &Value) -> Vec<String> {
-    parsing::parse_connection_list(value, u32::MAX)
-        .items
-        .into_iter()
-        .map(|connection| connection.flow_id)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{active_flows_request, flow_ids_from_value};
-
-    #[test]
-    fn profile_switch_snapshot_is_not_limited_by_the_ui_page_size() {
-        let request = active_flows_request();
-        let active = request["active_flows"]
-            .as_object()
-            .expect("active_flows request should be an object");
-
-        assert_eq!(active.get("filter"), Some(&json!({})));
-        assert!(!active.contains_key("limit"));
-    }
-
-    #[test]
-    fn profile_switch_snapshot_extracts_all_returned_flow_ids() {
-        let ids = flow_ids_from_value(&json!([
-            { "record": { "flow_id": "old-1", "network": "tcp", "target": { "host": "a.example", "port": 443 } } },
-            { "record": { "flow_id": "old-2", "network": "udp", "target": { "host": "8.8.8.8", "port": 53 } } }
-        ]));
-
-        assert_eq!(ids, vec!["old-1".to_string(), "old-2".to_string()]);
-    }
 }

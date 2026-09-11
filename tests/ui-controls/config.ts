@@ -27,15 +27,30 @@ export const updateBuiltinRuleSets = updateAllRuleSets;
 export const updateRuleSet = async () => items[0];
 export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
+export const handleAppError = (_error: unknown, _fallback: string) => {};
 import { getTunConfig } from './tun-state.svelte';
 export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
 const endpointConfig = () => ({ localProxy: {
   host: '127.0.0.2', port: 8899,
   sourceProxyConfigId: new URLSearchParams(location.search).has('custom') ? 'custom-profile' : null,
 } });
+let precedenceOverrides = {listener:false,dns:false,tun:false,urlTest:false,bypass:false,rules:false};
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
-  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { toleranceMs: 50 } };
+  if (panel === 'settings' && new URLSearchParams(location.search).get('mode') === 'precedence') {
+    return { ...(await getTunConfig()), core: {cleanupProxyOnExit:true}, localProxy: {host:'127.0.0.1',port:7890,bypass:[]},
+      overrides:precedenceOverrides, urlTest:{url:'https://client.test/204',toleranceMs:50},
+      resolved:[
+        {key:'listener',label:'代理入口',source:precedenceOverrides.listener?'客户端显式覆盖':'当前配置',value:precedenceOverrides.listener?'127.0.0.1:7890':'127.0.0.1:7891'},
+        {key:'urlTest',label:'公共测速',source:'当前配置',value:'https://source.test/204；2 个策略组另有专用地址'},
+        {key:'dns',label:'DNS',source:'当前配置',value:'保留配置中的 DNS 定义'},
+        {key:'tun',label:'TUN 参数',source:'客户端缺省值',value:'10.0.85.1/24 · MTU 1500；启停由客户端控制'},
+        {key:'bypass',label:'绕过规则',source:'当前配置',value:'保留配置中的绕过规则（含空列表）'},
+        {key:'rules',label:'通用规则追加',source:'当前配置',value:'保留配置规则，不追加客户端通用规则'}
+      ] };
+  }
+  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
+  if (panel === 'url-test') return {urlTest: {url: 'http://www.gstatic.com/generate_204', toleranceMs: 50}};
   if (panel === 'endpoint') return endpointConfig();
   if (panel === 'kernel') return { core: { kernel: 'zero', executablePath: '/fixture/zero', networkProbeUrls: ['https://example.test'] } };
   return getTunConfig();
@@ -44,7 +59,12 @@ export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ ker
 export const getCoreProcessStatus = async () => ({ state:'running' });
 export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
-  if (new URLSearchParams(location.search).get('panel') === 'endpoint') {
+  if (new URLSearchParams(location.search).get('mode') === 'precedence') {
+    precedenceOverrides = {...precedenceOverrides,...(input as {overrides:typeof precedenceOverrides}).overrides};
+    window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));
+    return getAppConfig();
+  }
+  if (['endpoint', 'url-test'].includes(new URLSearchParams(location.search).get('panel') ?? '')) {
     window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
     return input;
   }
@@ -52,6 +72,8 @@ export const updateAppConfig = async (input?: unknown) => {
   throw new Error('Install must not write app settings a second time');
 };
 export const guiExportDiagnostics = async () => ({ path: 'fixture' });
+export const exportClientKernelSettings = async () => {};
+export const importClientKernelSettings = async () => {};
 export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };
 
 export const getCorePolicies = async () => ({ groups: [] });
@@ -75,6 +97,9 @@ export const setActiveProxyConfig = async (id: string) => {
   proxyConfigSignal.markChanged(true);
   return structuredClone(profiles.find(profile => profile.id === id)!);
 };
+export const importProxyConfig = async () => structuredClone(profiles[0]);
+export const upsertProxyConfig = async () => structuredClone(profiles[0]);
+export const removeProxyConfig = async () => {};
 export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
 
 export const guiLogPaths = async () => ({ logFile: '/fixture/logs/gui.log.jsonl', coreLogFile: '/fixture/logs/core.log.jsonl', logsDir: '/fixture/logs', dataDir: '/fixture' });
@@ -99,5 +124,52 @@ export const getEffectiveRuleSetOptions = async () => [];
 export const getConfigPolicyGroups = async () => [];
 export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const getGuiZeroCapabilities = async () => ({ available: false, globalLimitations: [] });
+export const getCoreRuntime = async () => null;
+export const getCoreStats = async () => null;
+export const guiValidateConfig = async () => ({ valid: true, errors: [] });
+export const guiApplyConfig = async () => ({ accepted: true });
+export const guiPlanApplyConfig = async () => ({ hotReload: [], requiresRestart: [] });
 export const guiApplyDnsConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const guiValidateDnsConfig = async () => ({valid: true});
+
+export const getConfigCompositionReport = async () => null;
+
+// Node browsing and scheduled observations remain usable when manual probes are trimmed.
+let selectedNode = 'node-a';
+export const guiSelectPolicy = async (_policy: string, tag: string) => {
+  selectedNode = tag;
+  window.dispatchEvent(new CustomEvent('fixture-save', {detail: {selected: tag}}));
+  return {accepted: true};
+};
+export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
+  const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
+  return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs: [],
+    groups: [{id: {profileId:'fixture', configRevision:1, tag:'proxy'}, tag:'proxy', kind:'selector', selected:selectedNode, memberTags:['node-a','node-b'], runtimeAvailable:true, available:true}],
+    nodes: ['node-a','node-b'].map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:['proxy'], selectedIn:tag === selectedNode ? ['proxy'] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
+      history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
+};
+
+let localFieldEdits: Record<string, unknown> = {};
+export const getProfileSettings = async () => {
+  const defaults = await getAppConfig();
+  const settings = JSON.parse(JSON.stringify(defaults));
+  const mode = new URLSearchParams(location.search).get('mode');
+  if (mode === 'precedence') settings.localProxy = {host:'127.0.0.2',port:7891,bypass:[]};
+  for (const [key,value] of Object.entries(localFieldEdits)) {
+    const [section,field] = key.split('.');
+    if (field) {settings[section] ??= {}; settings[section][field] = value;}
+    else settings[section] = value;
+  }
+  return {profileId:'fixture-profile',settings,editedFields:Object.keys(localFieldEdits)};
+};
+export const applyProfileSettings = async (profileId: string, changes: Record<string,unknown>, reset: string[] = []) => {
+  if (new URLSearchParams(location.search).get('panel') === 'tun') {
+    await new Promise(resolve=>setTimeout(resolve,300));
+    if (new URLSearchParams(location.search).get('mode') === 'failure') throw new Error('已恢复旧 TUN 配置');
+  }
+  if (new URLSearchParams(location.search).get('failure') === 'apply') throw new Error('端口占用，已恢复此前状态');
+  for (const key of reset) delete localFieldEdits[key];
+  Object.assign(localFieldEdits, changes);
+  window.dispatchEvent(new CustomEvent('fixture-save',{detail:{profileId,changes,reset}}));
+  return {...(await getProfileSettings()), applied: !new URLSearchParams(location.search).has("stopped")};
+};

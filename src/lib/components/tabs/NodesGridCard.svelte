@@ -21,7 +21,7 @@
     probeDisabled: boolean;
     selectDisabled: boolean;
     onSelectNode: (node: ProxyNode) => void | Promise<void>;
-    onProbeNode: (node: ProxyNode) => void | Promise<void>;
+    onProbeNode?: (node: ProxyNode) => void | Promise<void>;
     onShowPopover: (event: MouseEvent, node: ProxyNode) => void;
     onHidePopover: (delay?: number) => void;
   }
@@ -116,11 +116,12 @@
     </div>
   </button>
 
-  <Button
+  {#if onProbeNode}
+<Button
       variant="ghost"
       size="icon-xs"
       class="grid-probe-btn"
-      onclick={() => onProbeNode(node)}
+      onclick={() => onProbeNode?.(node)}
       onmouseenter={() => onHidePopover(0)}
       disabled={probeDisabled || isProbing || probingAll}
       title="测试延迟"
@@ -132,6 +133,7 @@
         <RefreshCw />
       {/if}
     </Button>
+    {/if}
 </div>
 
 <style>

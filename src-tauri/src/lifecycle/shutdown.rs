@@ -8,8 +8,8 @@ type ShutdownFn = Box<dyn Fn() + Send + Sync>;
 /// Collects cleanup callbacks during startup, executes them on shutdown
 /// in **reverse phase order** (Runtime → Register → State → Config → Guard).
 ///
-/// Thread-safe: the coordinator is stored behind `Arc<Mutex<..>` inside `AppState`
-/// so any service can register cleanup from any thread.
+/// The application registers callbacks during startup and runs them after the
+/// event loop exits. Callback bounds make the coordinator Send + Sync naturally.
 pub struct ShutdownCoordinator {
     guards: Vec<(Phase, &'static str, ShutdownFn)>,
 }
@@ -42,21 +42,26 @@ impl ShutdownCoordinator {
             return;
         }
 
-        // Sort descending by phase (Runtime first, Guard last).
-        let mut ordered: Vec<_> = self.guards.iter().collect();
+        // Start in reverse registration order. Stable sorting then preserves
+        // LIFO within each phase while putting Runtime first and Guard last.
+        let mut ordered: Vec<_> = self.guards.iter().rev().collect();
         ordered.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
         eprintln!("[ZNet] shutdown: begin ({} callbacks)", ordered.len());
+        let mut failures = 0;
         for (phase, name, callback) in &ordered {
             eprintln!("[ZNet] shutdown: [{phase}] {name}");
-            callback();
+            // Cleanup callbacks have no shared borrowed coordinator state.
+            // A service panic must not skip later system-resource cleanup.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).is_err() {
+                failures += 1;
+                eprintln!("[ZNet] shutdown: [{phase}] {name} panicked; continuing cleanup");
+            }
         }
-        eprintln!("[ZNet] shutdown: complete");
+        if failures == 0 {
+            eprintln!("[ZNet] shutdown: complete");
+        } else {
+            eprintln!("[ZNet] shutdown: finished with {failures} failed callbacks");
+        }
     }
 }
-
-// SAFETY: `ShutdownFn` is `Fn() + Send + Sync`. The coordinator is only
-/// mutated during startup (single-threaded) and only read during shutdown
-/// (after the Tauri event loop returns).
-unsafe impl Send for ShutdownCoordinator {}
-unsafe impl Sync for ShutdownCoordinator {}

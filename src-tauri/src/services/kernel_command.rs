@@ -2,14 +2,16 @@
 use std::process::Command;
 
 pub(crate) fn command(program: &str) -> Command {
-    let mut command = super::common::background_command(program);
+    let command = super::common::background_command(program);
     #[cfg(unix)]
-    {
+    let command = {
+        let mut command = command;
         use std::os::unix::process::CommandExt;
         // SAFETY: the child callback uses only descriptor/resource-limit
         // syscalls and stack values. It must never allocate, log or take locks.
         unsafe { command.pre_exec(prepare_child) };
-    }
+        command
+    };
     command
 }
 

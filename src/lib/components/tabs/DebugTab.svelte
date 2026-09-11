@@ -11,11 +11,13 @@
     serializeDebugFrameForClipboard,
     serializeDebugFramesForClipboard,
   } from '$lib/services/diagnostic-copy';
+  import ModuleDiagnosticsPanel from './ModuleDiagnosticsPanel.svelte';
+  import { diagnosticCatalog } from 'virtual:znet-product-metadata';
   import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import VersionManagementPanel from './VersionManagementPanel.svelte';
   import type { DebugFrame, DebugFramePage, DebugFrameQuery } from '$lib/types/debug';
 
-  type SubTab = 'diagnostics' | 'frames' | 'versions';
+  type SubTab = 'modules' | 'diagnostics' | 'frames' | 'versions';
 
   const PAGE_SIZE = 400;
   const FRAME_TYPES = [
@@ -32,7 +34,7 @@
     'error',
   ];
 
-  let subTab = $state<SubTab>('diagnostics');
+  let subTab = $state<SubTab>(diagnosticCatalog.length ? 'diagnostics' : 'modules');
   let frames = $state<DebugFrame[]>([]);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -371,12 +373,15 @@
 
 <Tabs.Root bind:value={subTab} class="debug-page">
   <Tabs.List class="debug-subtabs" aria-label="调试功能">
-    <Tabs.Trigger class="debug-subtab" value="diagnostics">诊断工具</Tabs.Trigger>
+    <Tabs.Trigger class="debug-subtab" value="modules">模块状态</Tabs.Trigger>
+    {#if diagnosticCatalog.length}<Tabs.Trigger class="debug-subtab" value="diagnostics">诊断工具</Tabs.Trigger>{/if}
     <Tabs.Trigger class="debug-subtab" value="frames">IPC 调试</Tabs.Trigger>
     <Tabs.Trigger class="debug-subtab" value="versions">版本管理</Tabs.Trigger>
   </Tabs.List>
 
-  {#if subTab === 'diagnostics'}
+  {#if subTab === 'modules'}
+    <ModuleDiagnosticsPanel />
+  {:else if subTab === 'diagnostics'}
     <DiagnosticsPanel />
   {:else if subTab === 'versions'}
     <VersionManagementPanel />

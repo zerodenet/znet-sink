@@ -1,5 +1,5 @@
 import type { CoreCallResult, CoreIpcOptions } from '$lib/types/core';
-import { guiDnsCache, guiFakeIpLookup } from '$lib/services/core';
+import { guiDnsCache, guiFakeIpLookup } from '$lib/features/dns/client';
 import type { DnsCacheResult, FakeIpLookupResult } from '$lib/types/diagnostics';
 
 /**

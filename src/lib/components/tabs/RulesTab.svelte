@@ -1,4 +1,15 @@
 <script lang="ts">
+  import { getProfileSettings } from '$lib/services/core';
+  import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
+  let profileSnapshot = $state<ProfileSettings | null>(null);
+  async function restoreRuleSource() {
+    if (!profileSnapshot || commonSaving) return;
+    commonSaving = true;
+    try {profileSnapshot = await restoreProfileSettings(profileSnapshot, 'routing.injectCommonRules'); commonStatus = await getCommonRuleInjectionStatus();}
+    catch (cause) {pageError = getAppErrorMessage(cause, '恢复规则设置失败');}
+    finally {commonSaving = false;}
+  }
+
   import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
   import { openUrl as openLink } from '@tauri-apps/plugin-opener';
@@ -16,7 +27,6 @@
     listRuleSets,
     removeRuleSet,
     setCommonRuleBinding,
-    setCommonRuleInjectionEnabled,
     updateAllRuleSets,
     updateBuiltinRuleSets,
     updateRuleSet,
@@ -100,12 +110,14 @@
   async function load(showLoading = true) {
     if (showLoading) loading = true;
     try {
-      const [nextItems, nextStatus] = await Promise.all([
+      const [nextItems, nextStatus, profile] = await Promise.all([
         listRuleSets(),
         getCommonRuleInjectionStatus(),
+        getProfileSettings().catch(() => null),
       ]);
       items = nextItems;
       commonStatus = nextStatus;
+      profileSnapshot = profile;
       loadError = '';
     } catch (cause) {
       loadError = getAppErrorMessage(cause, '加载规则集失败');
@@ -125,7 +137,9 @@
     commonSaving = true;
     pageError = '';
     try {
-      commonStatus = await setCommonRuleInjectionEnabled(!commonStatus?.enabled);
+      if (!profileSnapshot) throw new Error('请先选择当前配置');
+      profileSnapshot = await saveProfileSettings(profileSnapshot, {routing: {injectCommonRules: !commonStatus?.enabled}});
+      commonStatus = await getCommonRuleInjectionStatus();
     } catch (cause) {
       pageError = getAppErrorMessage(cause, '切换公共规则注入失败，已保留原运行配置');
     } finally {
@@ -474,8 +488,9 @@
   <div class="common-injection-row">
     <div class="common-injection-copy">
       <span class="common-injection-title">在规则模式下注入公共规则</span>
-      <span class="common-injection-hint">{commonStatusCopy()}。机场订阅规则优先，公共规则作为补充，且不会写回订阅原配置。</span>
+      <span class="common-injection-hint">仅当前配置。{commonStatusCopy()}。机场订阅规则优先，公共规则作为补充，且不会写回订阅原配置。</span>
     </div>
+    <Button variant="outline" size="sm" onclick={restoreRuleSource} disabled={commonSaving || !isLocallyEdited(profileSnapshot, 'routing.injectCommonRules')}>恢复配置值</Button>
     <Switch
       checked={commonStatus?.enabled ?? false}
       onCheckedChange={toggleCommonInjection}

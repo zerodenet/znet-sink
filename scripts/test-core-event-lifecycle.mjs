@@ -60,7 +60,7 @@ async function testProfileSwitchRotatesTheRuntimeEventGeneration() {
     readFile(new URL('../src/lib/services/config.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src-tauri/src/commands/gui_events.rs', import.meta.url), 'utf8'),
   ]);
-  const switchStart = configService.indexOf('export async function setActiveProxyConfig');
+  const switchStart = configService.indexOf('const profileActivation');
   const switchEnd = configService.indexOf('export async function removeProxyConfig', switchStart);
   const switchBody = configService.slice(switchStart, switchEnd);
 
@@ -79,8 +79,8 @@ async function testProfileSwitchRotatesTheRuntimeEventGeneration() {
   const stopCommandEnd = guiEventsCommand.indexOf('fn resolve_options', stopCommandStart);
   const stopCommand = guiEventsCommand.slice(stopCommandStart, stopCommandEnd);
   assert.ok(guiEventsCommand.includes('use crate::kernel::connection;'));
-  assert.ok(stopCommand.includes('state.next_gui_event_generation()'));
-  assert.ok(stopCommand.includes('connection::reset();'));
+  assert.ok(stopCommand.includes('state.observations().stop()'));
+  assert.ok(stopCommand.includes('connection::reset_endpoint(&binding.endpoint);'));
 }
 
 async function testCoreWarningsStayOutOfTransientNotifications() {

@@ -29,19 +29,16 @@ pub(super) async fn apply(state: &AppState, patch: AppTunConfigPatch) -> AppResu
         },
     )?;
     validation::validate(&mut candidate)?;
-    let profile_owned = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.as_ref())
-        .and_then(|content| content.get("runtime"))
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|runtime| runtime.contains_key("tun"));
+    if crate::configuration::preferences::owns_tun(state)? {
+        app_config::replace(state, candidate.clone())?;
+        return Ok(candidate);
+    }
     let running = core_process::refresh_status(state)?.state == CoreProcessState::Running;
     let backend = LiveBackend {
         state,
         options: core_config::ipc_options_from_app_config(&previous.core),
     };
-    transaction::apply(&backend, &previous, &candidate, running && !profile_owned).await?;
+    transaction::apply(&backend, &previous, &candidate, running).await?;
     Ok(candidate)
 }
 

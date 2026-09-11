@@ -27,6 +27,13 @@ pub async fn enable_tun(
     tun: AppTunConfig,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiTunStatus> {
+    enable_tun_params(build_tun_start_params(tun), options).await
+}
+
+pub(crate) async fn enable_tun_params(
+    params: Value,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<GuiTunStatus> {
     // Capability/state is authoritative for whether the client should prepare
     // platform dependencies. An unsupported or temporarily unreadable Zero
     // must never cause a speculative Wintun download.
@@ -38,7 +45,6 @@ pub async fn enable_tun(
     #[cfg(windows)]
     super::wintun_compat::ensure_for_current_runtime().await?;
 
-    let params = build_tun_start_params(tun);
     commands::run_command("tun.start", params, options.clone()).await?;
     tun_status(options).await
 }
@@ -59,7 +65,7 @@ pub async fn disable_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunSta
     tun_status(options).await
 }
 
-fn build_tun_start_params(tun: AppTunConfig) -> Value {
+pub(crate) fn build_tun_start_params(tun: AppTunConfig) -> Value {
     let mut params = Map::new();
     if let Some(name) = tun.name {
         params.insert("name".to_string(), json!(name));
@@ -91,7 +97,7 @@ fn build_tun_start_params(tun: AppTunConfig) -> Value {
     Value::Object(params)
 }
 
-fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
+pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
     let running = bool_at(value, &["running", "enabled"])
         .ok_or_else(|| AppError::internal("TUN status response is missing its running state"))?;
     let healthy = bool_at(value, &["healthy"]).unwrap_or(running);
@@ -245,8 +251,8 @@ mod tests {
             dual_stack: true,
             dns_hijack: true,
         };
-        let params = build_tun_start_params(tun);
 
+        let params = build_tun_start_params(tun);
         assert_eq!(params["name"], "CustomTun");
         assert_eq!(params["addr"], "10.88.0.1/24");
         assert_eq!(params["secondary_addr"], "fd88::1/64");
@@ -267,8 +273,8 @@ mod tests {
             dual_stack: false,
             ..AppTunConfig::default()
         };
-        let params = build_tun_start_params(tun);
 
+        let params = build_tun_start_params(tun);
         assert!(params.get("secondary_addr").is_none());
         assert_eq!(params["dual_stack"], false);
     }

@@ -3,6 +3,8 @@
 //! Each function sends an IPC command and parses the response into a
 //! GUI model type. Stateless — receives `CoreIpcOptions` directly.
 
+#[cfg(feature = "tool-node-probe")]
+use crate::models::gui_core::GuiTargetProbeResult;
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 
@@ -10,18 +12,26 @@ use crate::errors::AppResult;
 use crate::kernel::protocol;
 use crate::models::core::CoreIpcOptions;
 use crate::models::gui_core::{
-    GuiConnectionCloseResult, GuiFakeIpClearResult, GuiFeatureStatus, GuiPolicySelectionResult,
-    GuiTargetProbeResult,
+    GuiConnectionCloseResult, GuiFeatureStatus, GuiPolicySelectionResult,
 };
 
+#[cfg(any(
+    feature = "tool-dns",
+    feature = "tool-route",
+    feature = "tool-node-probe"
+))]
+use super::parsing::normalize_optional;
+#[cfg(feature = "tool-node-probe")]
+use super::parsing::parse_target_probe;
 use super::parsing::{
-    normalize_non_empty, normalize_optional, parse_connection_close, parse_fake_ip_clear,
-    parse_feature_runtime_status, parse_policy_selection, parse_target_probe, unwrap_call_result,
+    normalize_non_empty, parse_connection_close, parse_feature_runtime_status,
+    parse_policy_selection, unwrap_call_result,
 };
 
 /// Outbound diagnostics can legitimately queue behind other probes in the
 /// kernel and take tens of seconds. The process watchdog remains responsible
 /// for detecting a genuinely unresponsive IPC channel.
+#[cfg(feature = "tool-node-probe")]
 const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
 
 /// Creating/removing the device and routes can exceed the ordinary two-second
@@ -76,10 +86,12 @@ pub async fn select_policy(
 }
 
 /// Probe a url_test policy group (triggers latency measurement).
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_policy(policy_tag: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     probe_policy_with_operation_id(policy_tag, None, options).await
 }
 
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_policy_with_operation_id(
     policy_tag: String,
     operation_id: Option<String>,
@@ -95,6 +107,7 @@ pub async fn probe_policy_with_operation_id(
 
 /// Normalize legacy policy-probe acknowledgement fields at the Zero boundary.
 /// Older kernels omitted these flags, which remains a compatible acceptance.
+#[cfg(feature = "tool-node-probe")]
 pub fn policy_probe_command_accepted(response: &Value) -> bool {
     response.get("accepted").and_then(Value::as_bool) != Some(false)
         && response
@@ -108,6 +121,7 @@ pub fn policy_probe_command_accepted(response: &Value) -> bool {
             != Some(false)
 }
 
+#[cfg(feature = "tool-node-probe")]
 pub fn policy_probe_operation_id(response: &Value) -> Option<&str> {
     response
         .get("result")
@@ -120,6 +134,7 @@ pub fn policy_probe_operation_id(response: &Value) -> Option<&str> {
 }
 
 /// Probe a single target for reachability and latency.
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_target(
     target_tag: String,
     options: Option<CoreIpcOptions>,
@@ -137,6 +152,7 @@ pub async fn probe_target(
 }
 
 /// Probe a single outbound through the kernel's full proxy stack.
+#[cfg(feature = "tool-node-probe")]
 pub async fn probe_outbound(
     target_tag: String,
     url: Option<String>,
@@ -182,7 +198,7 @@ pub async fn close_connection(
     }
 }
 
-fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {
+pub(crate) fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {
     if error.code == "not_found" {
         return true;
     }
@@ -236,125 +252,7 @@ pub async fn set_mode(
     run_command("mode.set", Value::Object(params), options).await
 }
 
-/// DNS lookup diagnostic.
-pub async fn dns_lookup(hostname: String, options: Option<CoreIpcOptions>) -> AppResult<Value> {
-    let hostname = normalize_non_empty(hostname, "hostname")?;
-    let value = run_command(
-        "diagnostics.dns_lookup",
-        json!({ "hostname": hostname }),
-        options,
-    )
-    .await?;
-    diagnostic_command_result(value)
-}
-
-pub async fn dns_cache(
-    domain: Option<String>,
-    limit: Option<usize>,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
-    let mut params = Map::new();
-    if let Some(domain) = normalize_optional(domain) {
-        params.insert("domain".to_string(), json!(domain));
-    }
-    if let Some(limit) = limit {
-        params.insert("limit".to_string(), json!(limit));
-    }
-    let value = run_command("diagnostics.dns_cache", Value::Object(params), options).await?;
-    diagnostic_command_result(value)
-}
-
-pub async fn fakeip_lookup(
-    domain: Option<String>,
-    ip: Option<String>,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
-    let domain = normalize_optional(domain);
-    let ip = normalize_optional(ip);
-    if domain.is_some() == ip.is_some() {
-        return Err(crate::errors::AppError::invalid_argument(
-            "exactly one of domain or ip is required for Fake-IP lookup",
-        ));
-    }
-    let mut params = Map::new();
-    if let Some(domain) = domain {
-        params.insert("domain".to_string(), json!(domain));
-    }
-    if let Some(ip) = ip {
-        params.insert("ip".to_string(), json!(ip));
-    }
-    let value = run_command("diagnostics.fakeip_lookup", Value::Object(params), options).await?;
-    diagnostic_command_result(value)
-}
-
-fn diagnostic_command_result(value: Value) -> AppResult<Value> {
-    if value.get("accepted").and_then(Value::as_bool) == Some(false) {
-        return Err(crate::errors::AppError::core_response(value));
-    }
-    Ok(value.get("result").cloned().unwrap_or(value))
-}
-
-/// Clear all Fake-IP mappings or one mapping selected by domain/address.
-pub async fn clear_fake_ip(
-    domain: Option<String>,
-    ip: Option<String>,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<GuiFakeIpClearResult> {
-    let params = fake_ip_clear_params(domain, ip)?;
-    let value = run_command("fakeip.clear", params, options).await?;
-    Ok(parse_fake_ip_clear(&value))
-}
-
-fn fake_ip_clear_params(domain: Option<String>, ip: Option<String>) -> AppResult<Value> {
-    let domain = normalize_optional(domain);
-    let ip = normalize_optional(ip);
-    if domain.is_some() && ip.is_some() {
-        return Err(crate::errors::AppError::invalid_argument(
-            "fake-IP clear accepts at most one of domain or ip",
-        ));
-    }
-
-    let mut params = Map::new();
-    if let Some(domain) = domain {
-        params.insert("domain".to_string(), json!(domain));
-    }
-    if let Some(ip) = ip {
-        params.insert("ip".to_string(), json!(ip));
-    }
-    Ok(Value::Object(params))
-}
-
-/// Route trace diagnostic.
-pub async fn trace_route(
-    target: String,
-    port: u16,
-    protocol: Option<String>,
-    inbound_tag: Option<String>,
-    options: Option<CoreIpcOptions>,
-) -> AppResult<Value> {
-    let target = normalize_non_empty(target, "target")?;
-    let params = trace_route_params(target, port, protocol, inbound_tag);
-    run_command("diagnostics.trace_route", params, options).await
-}
-
-fn trace_route_params(
-    target: String,
-    port: u16,
-    protocol: Option<String>,
-    inbound_tag: Option<String>,
-) -> Value {
-    let mut params = Map::new();
-    params.insert("target".to_string(), json!(target));
-    params.insert("port".to_string(), json!(port));
-    if let Some(protocol) = normalize_optional(protocol) {
-        params.insert("protocol".to_string(), json!(protocol));
-    }
-    if let Some(inbound_tag) = normalize_optional(inbound_tag) {
-        params.insert("inbound_tag".to_string(), json!(inbound_tag));
-    }
-    Value::Object(params)
-}
-
+#[cfg(feature = "tool-node-probe")]
 fn probe_ipc_options(options: Option<CoreIpcOptions>) -> Option<CoreIpcOptions> {
     let mut options = options.unwrap_or_default();
     options.timeout_ms = Some(PROBE_IPC_TIMEOUT_MS);
@@ -405,7 +303,7 @@ pub(crate) async fn run_command(
     unwrap_call_result(call.response, call.error)
 }
 
-fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
+pub(crate) fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
     if response.get("accepted").and_then(Value::as_bool) == Some(false) {
         return Err(crate::errors::AppError::core_response(response.clone()));
     }
@@ -422,15 +320,21 @@ fn ensure_config_apply_accepted(response: &Value) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ensure_config_apply_accepted, fake_ip_clear_params, is_flow_already_completed_error,
-        policy_probe_command_accepted, probe_ipc_options, trace_route_params, PROBE_IPC_TIMEOUT_MS,
-    };
+    #[cfg(feature = "tool-dns")]
+    use super::dns::fake_ip_clear_params;
+    #[cfg(feature = "tool-route")]
+    use super::route::trace_route_params;
+    use super::{ensure_config_apply_accepted, is_flow_already_completed_error};
+    #[cfg(feature = "tool-node-probe")]
+    use super::{policy_probe_command_accepted, probe_ipc_options, PROBE_IPC_TIMEOUT_MS};
     use crate::errors::AppError;
+    #[cfg(feature = "tool-dns")]
     use crate::kernel::zero::parsing::parse_fake_ip_clear;
+    #[cfg(feature = "tool-node-probe")]
     use crate::models::core::CoreIpcOptions;
     use serde_json::json;
 
+    #[cfg(feature = "tool-route")]
     #[test]
     fn trace_route_preserves_optional_inbound_tag() {
         assert_eq!(
@@ -449,6 +353,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tool-dns")]
     #[test]
     fn fake_ip_clear_params_support_full_and_targeted_management() {
         assert_eq!(
@@ -466,6 +371,7 @@ mod tests {
         .is_err());
     }
 
+    #[cfg(feature = "tool-dns")]
     #[test]
     fn fake_ip_clear_response_is_normalized_for_the_gui() {
         let result = parse_fake_ip_clear(&json!({
@@ -493,6 +399,7 @@ mod tests {
         assert_eq!(result.retired_addresses, 4);
     }
 
+    #[cfg(feature = "tool-node-probe")]
     #[test]
     fn outbound_probe_uses_a_bounded_long_response_timeout() {
         let options = probe_ipc_options(Some(CoreIpcOptions {
@@ -524,6 +431,7 @@ mod tests {
         .is_ok());
     }
 
+    #[cfg(feature = "tool-node-probe")]
     #[test]
     fn policy_probe_ack_compatibility_is_normalized_at_zero_boundary() {
         assert!(!policy_probe_command_accepted(
@@ -567,3 +475,12 @@ mod tests {
         assert!(!is_flow_already_completed_error(&transport_failure));
     }
 }
+
+#[cfg(feature = "tool-dns")]
+mod dns;
+#[cfg(feature = "tool-dns")]
+pub use dns::{clear_fake_ip, dns_cache, dns_lookup, fakeip_lookup};
+#[cfg(feature = "tool-route")]
+mod route;
+#[cfg(feature = "tool-route")]
+pub use route::trace_route;

@@ -13,6 +13,7 @@ function loadService(file, dependencies) {
   });
   const exports = {};
   new Function('require', 'exports', '$state', outputText)((name) => {
+    if (name.startsWith('$lib/features/')) return loadService(`../features/${name.slice('$lib/features/'.length)}.ts`, { ...dependencies, '$lib/services/latest-request-gate.js': { createLatestRequestGate }, '$lib/services/node-state-reconcile': loadService('node-state-reconcile.ts', {}) });
     assert.ok(name in dependencies, `unexpected dependency: ${name}`);
     return dependencies[name];
   }, exports, (value) => value);
@@ -72,12 +73,12 @@ test('successful stop acknowledgement with running status remains an error', asy
   assert.equal(config.tun.enabled, false);
 });
 
-test('profile-owned TUN is never overwritten by cancelling app intent', async () => {
+test('source TUN declarations do not block cancelling client intent', async () => {
   for (const tun of [null, { name: 'profile-tun' }]) {
-    const { service, config, calls } = tunService({ profile: { runtime: { tun } } });
-    await assert.rejects(service.disableGuiTun(), { code: 'tun_managed_by_profile' });
-    assert.equal(config.tun.enabled, true);
-    assert.deepEqual(calls, []);
+    const { service, config, calls } = tunService({ status: () => snapshot(false), profile: { runtime: { tun } } });
+    await service.disableGuiTun();
+    assert.equal(config.tun.enabled, false);
+    assert.deepEqual(calls, ['save:false']);
   }
 });
 
@@ -90,6 +91,7 @@ function storeHarness({ status, desired = true, restart = async () => ({}) }) {
     './telemetry': { tracedOperation: async (_area, _operation, operation) => operation() },
     './latest-request-gate.js': { createLatestRequestGate },
     './runtime-status-observer': loadService('runtime-status-observer.ts', {}),
+    '$lib/features/runtime/observation.svelte': loadService('../features/runtime/observation.svelte.ts', { '$lib/services/latest-request-gate.js': { createLatestRequestGate } }),
     './node-state-reconcile': {},
   });
   guiState.isInitializing = false;
@@ -162,7 +164,7 @@ for (const profileOwned of [false, true]) {
       profile: profileOwned ? { runtime: { tun: {} } } : {},
     });
     await assert.rejects(service.enableGuiTun(), {
-      code: profileOwned ? 'tun_profile_runtime_inactive' : 'tun_start_unconfirmed',
+      code: 'tun_start_unconfirmed',
     });
   });
 }
@@ -201,4 +203,18 @@ test('manual recovery waits for the command and preserves desired TUN state', as
 test('manual recovery cannot claim success while egress remains unhealthy', async () => {
   const { service } = tunService({ status: () => ({ ...snapshot(true), healthy: false, lastError: 'no default route' }) });
   await assert.rejects(service.recoverGuiTun(), error => error.message === 'no default route');
+});
+
+test('destroyed runtime owner rejects delayed TUN reads and saved-intent fallback', async () => {
+  let resolve;
+  const pending = new Promise((done) => { resolve = done; });
+  const { state } = storeHarness({ status: () => pending });
+  const previous = snapshot(false, false);
+  state.tunStatus = previous;
+  const read = state.refreshTunStatus();
+  state.destroy();
+  resolve(snapshot(true));
+  await read;
+  assert.equal(state.tunStatus, previous);
+  assert.equal(state.isTunEnabled, false);
 });

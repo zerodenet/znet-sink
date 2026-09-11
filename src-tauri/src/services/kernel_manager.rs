@@ -295,6 +295,7 @@ pub fn prepare_version(
 }
 
 pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersionDetect> {
+    let _files = install::lock_installed_files()?;
     let executable_path = core_config::resolve_executable_path(config);
 
     match executable_path {

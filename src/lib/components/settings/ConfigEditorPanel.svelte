@@ -5,7 +5,9 @@
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
   import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
 
-  let textareaRef: HTMLTextAreaElement | undefined = $state();
+  // Textarea.ref has a null fallback. Svelte rejects binding an undefined
+  // parent value to a bindable prop with a non-undefined fallback.
+  let textareaRef: HTMLTextAreaElement | null = $state(null);
   let tabSize = 2;
 
   $effect(() => {

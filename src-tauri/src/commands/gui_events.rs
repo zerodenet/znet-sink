@@ -14,28 +14,23 @@ pub fn gui_events_start(
     events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiEventSubscription> {
-    let generation = state.next_gui_event_generation();
     let options = resolve_options(&state, options)?;
-    gui_events::start(
-        app,
-        state.gui_event_generation(),
-        generation,
-        events,
-        options,
-    )
+    let binding = znet_engine_client::Binding {
+        endpoint: crate::kernel::protocol::endpoint_from_options(options.as_ref())?,
+        timeout: crate::kernel::protocol::timeout_from_options(options.as_ref())?,
+    };
+    let subscription = state.observations().begin(binding);
+    gui_events::start(app, subscription, events)
 }
 
 #[tauri::command]
 pub fn gui_events_stop(state: State<'_, AppState>) -> u64 {
-    // Advancing the GUI generation stops the current forwarder, but that alone
-    // does not create a new Zero subscription: `get_or_connect` intentionally
-    // reuses the still-alive multiplexed IPC connection whose initial
-    // `subscribe` frame belongs to the previous runtime/event source. Close the
-    // ZNet-Sink-owned multiplexed connection as part of the event-stream stop
-    // boundary so the next gui_events_start performs a fresh pipe connect and
-    // subscribe handshake. Other IPC callers recover through get_or_connect.
-    let generation = state.next_gui_event_generation();
-    connection::reset();
+    let (generation, binding) = state.observations().stop();
+    if let Some(binding) = binding {
+        // Retire only the observation endpoint; raw diagnostics may be connected
+        // to another engine. Never reset that unrelated transport.
+        connection::reset_endpoint(&binding.endpoint);
+    }
     generation
 }
 

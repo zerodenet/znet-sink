@@ -47,6 +47,10 @@ const config = await invoke('app_config_get');
 
 ## 文档索引
 
+- [网络工具箱架构与现有实现迁移计划（当前工作方向）](./internal-modules.md)
+- [流量拦截、抓包、HTTPS 调试与改写（目标边界）](./network-inspection.md)
+- [客户端插件系统设计（归档候选，暂不实施）](./plugins.md)
+- [ZBoard 受保护配置与内存运行设计（待后续评审）](./protected-config.md)
 - [应用配置](./app-config.md)
 - [本地存储边界](./storage.md)
 - [交互模式约束](./interaction-modes.md)
@@ -60,3 +64,5 @@ const config = await invoke('app_config_get');
 - [Nodes Manual QA](./nodes-manual-qa.md)
 - [Current Integration Status](./current-integration-status.md)
 - [Worktree Commit Plan](./worktree-commit-plan.md)
+
+- [客户端配置优先级](./config-precedence.md)：客户端设置覆盖来源配置及公共测速地址。

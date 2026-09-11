@@ -8,6 +8,7 @@
     guiCloseConnection,
     handleAppError,
   } from '$lib/services/core';
+  import { connectionObservations } from '$lib/features/observations/connections.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
   import { buildConnectionView, type DisplayConnection } from '$lib/services/connection-view';
@@ -83,7 +84,7 @@
   const liveView = $derived(buildConnectionView({
     activeSnapshot: [],
     recentSnapshot: [],
-    activeEvents: coreEvents.activeConnections,
+    activeEvents: connectionObservations.activeConnections,
     recentEvents: [],
     limit: 500,
   }).active.filter((connection) => !suppressedActiveIds.has(connection.flowId)));
@@ -227,7 +228,7 @@
     }
     pausedSnapshot = liveView.map((connection) => ({ ...connection }));
     pausedChangedFlowIds = new Set();
-    coreEvents.drainDeltas();
+    connectionObservations.drainDeltas();
     livePaused = true;
   }
 
@@ -605,7 +606,7 @@
   });
 
   $effect(() => {
-    const latest = coreEvents.connectionHistory[0];
+    const latest = connectionObservations.connectionHistory[0];
     const key = latest
       ? `${latest.flowId}:${latest.startedAtUnixMs ?? ''}:${latest.endedAtUnixMs ?? ''}`
       : '';
@@ -616,9 +617,9 @@
   });
 
   $effect(() => {
-    const deltaSeq = coreEvents.deltaSeq;
+    const deltaSeq = connectionObservations.deltaSeq;
     void deltaSeq;
-    const deltas = coreEvents.drainDeltas();
+    const deltas = connectionObservations.drainDeltas();
     if (!livePaused || deltas.length === 0) return;
 
     const nextChangedFlowIds = new Set(pausedChangedFlowIds);

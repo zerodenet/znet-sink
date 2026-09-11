@@ -26,7 +26,9 @@
     probeDisabledReason?: string | null;
     onSearchQueryChange: (value: string) => void;
     onViewModeChange: (mode: ViewMode) => void;
-    onProbeAll: () => void | Promise<void>;
+    onStopProbes?: () => void | Promise<void>;
+    stoppingProbes?: boolean;
+    onProbeAll?: () => void | Promise<void>;
   }
 
   let {
@@ -43,6 +45,8 @@
     onSearchQueryChange,
     onViewModeChange,
     onProbeAll,
+    onStopProbes,
+    stoppingProbes = false,
   }: Props = $props();
 
   const hideTimeout = $derived(nodesDisplayPreferences.hideTimeout);
@@ -148,8 +152,14 @@
       </SegmentedControl.Item>
     </SegmentedControl.Root>
 
-    <Button variant="default" size="sm"
-
+    {#if onStopProbes}
+      <Button variant="outline" size="sm" onclick={onStopProbes} disabled={stoppingProbes}
+        title="停止当前配置的手动测速：清除排队目标，已发送请求等待内核返回或超时">
+        {stoppingProbes ? '正在停止…' : '停止测速'}
+      </Button>
+    {/if}
+    {#if onProbeAll}
+      <Button variant="default" size="sm"
       onclick={onProbeAll}
       disabled={!canProbeAll}
       title={probeDisabledReason ?? undefined}
@@ -170,6 +180,7 @@
         <span>{`测速`}</span>
       {/if}
     </Button>
+    {/if}
   </div>
 </div>
 

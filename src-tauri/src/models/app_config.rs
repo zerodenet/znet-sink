@@ -5,6 +5,11 @@ use super::dns_config::ClientDnsConfig;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default)]
+    pub profile_edits:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>,
+    #[serde(default)]
+    pub overrides: ConfigOverrides,
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
     #[serde(default)]
@@ -30,6 +35,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            profile_edits: Default::default(),
+            overrides: ConfigOverrides::default(),
             schema_version: default_schema_version(),
             core: AppCoreConfig::default(),
             logs: AppLogConfig::default(),
@@ -230,6 +237,8 @@ impl Default for AppRoutingConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUrlTestConfig {
+    #[serde(default = "default_url_test_url")]
+    pub url: String,
     #[serde(default = "default_url_test_tolerance_ms")]
     pub tolerance_ms: u64,
 }
@@ -237,6 +246,7 @@ pub struct AppUrlTestConfig {
 impl Default for AppUrlTestConfig {
     fn default() -> Self {
         Self {
+            url: default_url_test_url(),
             tolerance_ms: default_url_test_tolerance_ms(),
         }
     }
@@ -260,7 +270,7 @@ impl Default for AppTunConfig {
     }
 }
 
-pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v2";
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v3";
 
 /// Portable client-owned settings projected onto every active proxy profile.
 /// Machine-bound executable paths, runtime sockets, UI state, logs, and
@@ -276,6 +286,8 @@ pub struct ClientKernelSettingsBundle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKernelSettings {
+    #[serde(default)]
+    pub overrides: ConfigOverrides,
     pub core: PortableCoreConfig,
     pub tun: AppTunConfig,
     pub dns: AppDnsConfig,
@@ -297,6 +309,7 @@ pub struct PortableCoreConfig {
 impl ClientKernelSettings {
     pub fn from_app_config(config: &AppConfig) -> Self {
         Self {
+            overrides: config.overrides.clone(),
             core: PortableCoreConfig {
                 auto_connect: config.core.auto_connect,
                 auto_start: config.core.auto_start,
@@ -312,6 +325,7 @@ impl ClientKernelSettings {
     }
 
     pub fn apply_to(self, config: &mut AppConfig) {
+        config.overrides = self.overrides;
         config.core.auto_connect = self.core.auto_connect;
         config.core.auto_start = self.core.auto_start;
         config.core.cleanup_proxy_on_exit = self.core.cleanup_proxy_on_exit;
@@ -352,6 +366,7 @@ impl Default for AppLocalProxyConfig {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigPatch {
+    pub overrides: Option<ConfigOverrides>,
     pub core: Option<AppCoreConfigPatch>,
     pub logs: Option<AppLogConfigPatch>,
     pub ui: Option<AppUiConfigPatch>,
@@ -449,6 +464,7 @@ pub struct AppRoutingConfigPatch {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUrlTestConfigPatch {
+    pub url: Option<String>,
     pub tolerance_ms: Option<u64>,
 }
 
@@ -517,6 +533,10 @@ where
 
 fn default_tun_mtu() -> u16 {
     1500
+}
+
+pub fn default_url_test_url() -> String {
+    "http://www.gstatic.com/generate_204".to_owned()
 }
 
 pub fn default_url_test_tolerance_ms() -> u64 {
@@ -703,4 +723,16 @@ pub struct AppBypassConfig {
     pub local_networks: bool,
     #[serde(default)]
     pub rules: Vec<String>,
+}
+
+/// Explicit opt-in overrides; old saved defaults never imply authorization to override.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigOverrides {
+    pub listener: bool,
+    pub dns: bool,
+    pub tun: bool,
+    pub url_test: bool,
+    pub bypass: bool,
+    pub rules: bool,
 }

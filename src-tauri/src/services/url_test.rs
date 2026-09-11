@@ -13,9 +13,11 @@ const URLTEST_TOLERANCE_MIN_VERSION: &str = "0.0.16-dev.3";
 /// fresh process has been queried, fall back to the installed binary version
 /// so startup config export remains compatible with older kernels.
 pub fn supports_tolerance(state: &AppState) -> bool {
-    let started_at = common::lock(state.core_process(), "core_process")
+    let started_at = state
+        .runtime_host()
+        .process_status()
         .ok()
-        .and_then(|process| process.status.started_at_unix_ms);
+        .and_then(|process| process.started_at_unix_ms);
 
     if let Ok(cache) = common::lock(state.zero_features_cache(), "zero_features_cache") {
         if let Some(cached) = cache.as_ref() {
@@ -54,12 +56,12 @@ fn version_supports_tolerance(version: &str) -> bool {
     version >= minimum || (version >= reset_minimum && version < legacy_start)
 }
 
-/// Apply the client product default to URLTest groups that did not explicitly
-/// configure a tolerance. The base profile is never mutated; this runs only on
-/// the effective configuration passed to Zero.
-///
-/// Explicit values, including `0`, always win over the client default.
+/// Missing fields inherit client defaults; explicit zero remains authoritative.
 pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResult<usize> {
+    apply_tolerance(config, tolerance_ms, false)
+}
+
+pub fn apply_tolerance(config: &mut Value, tolerance_ms: u64, force: bool) -> AppResult<usize> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_argument("Zero config must be a JSON object"))?;
@@ -81,15 +83,86 @@ pub fn apply_default_tolerance(config: &mut Value, tolerance_ms: u64) -> AppResu
             .is_some_and(|kind| {
                 kind.eq_ignore_ascii_case("url_test") || kind.eq_ignore_ascii_case("urltest")
             });
-        if !is_url_test || group.contains_key("tolerance_ms") {
+        if !is_url_test {
             continue;
         }
 
+        if !force && group.contains_key("tolerance_ms") {
+            continue;
+        }
         group.insert("tolerance_ms".to_string(), json!(tolerance_ms));
         applied += 1;
     }
 
     Ok(applied)
+}
+
+/// One validation boundary for settings, imports, composition and manual requests.
+pub fn normalize_url(raw: &str) -> AppResult<String> {
+    let url = reqwest::Url::parse(raw.trim())
+        .map_err(|_| AppError::invalid_argument("公共测速地址必须是完整的 HTTP(S) URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::invalid_argument(
+            "公共测速地址需要 HTTP(S) 协议和主机，不能包含账号密码或片段",
+        ));
+    }
+    Ok(url.to_string())
+}
+
+#[cfg(feature = "tool-node-probe")]
+pub fn configured_url(state: &AppState) -> AppResult<String> {
+    let config = common::lock(state.app_config(), "app_config")?.clone();
+    let source = crate::configuration::preferences::source(state)?;
+    if !config.overrides.url_test {
+        if let Some(value) = source.pointer("/runtime/latency_test_url") {
+            return normalize_url(value.as_str().ok_or_else(|| {
+                AppError::invalid_argument("runtime.latency_test_url must be a URL string")
+            })?);
+        }
+    }
+    normalize_url(&config.url_test.url)
+}
+
+pub fn apply_url(config: &mut Value, url: &str) -> AppResult<()> {
+    apply_url_with_preference(config, url, false)
+}
+
+pub fn apply_url_with_preference(config: &mut Value, url: &str, force: bool) -> AppResult<()> {
+    let url = normalize_url(url)?;
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("Zero config must be an object"))?;
+    let runtime = root
+        .entry("runtime")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| AppError::invalid_argument("runtime must be an object"))?;
+    if force || !runtime.contains_key("latency_test_url") {
+        runtime.insert("latency_test_url".into(), json!(url));
+    }
+    let effective_url = runtime["latency_test_url"].clone();
+    if let Some(groups) = root
+        .get_mut("outbound_groups")
+        .and_then(Value::as_array_mut)
+    {
+        for group in groups {
+            let is_urltest = group
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("url_test") || kind.eq_ignore_ascii_case("urltest")
+                });
+            if is_urltest && (force || group.get("url").is_none()) {
+                group["url"] = effective_url.clone();
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -120,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_tolerance_including_zero_is_preserved() {
+    fn explicit_profile_tolerance_including_zero_is_preserved() {
         let mut config = json!({
             "outbound_groups": [
                 {"tag": "Strict", "type": "url_test", "outbounds": ["HK"], "tolerance_ms": 0},
