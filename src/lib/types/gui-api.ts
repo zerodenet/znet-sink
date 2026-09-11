@@ -509,6 +509,8 @@ export interface GuiConnectionNetworkContext {
 
 export interface GuiConnectionItem {
   flowId: string;
+  /** Present only when reported by the original event. */
+  coreInstanceId?: string;
   revision?: number;
   state?: 'opening' | 'active' | 'completed' | string;
   network: string;

@@ -139,14 +139,21 @@ impl OnPhase for ConfigPhase {
                 format!("failed to rotate debug frames: {e:?}"),
             );
         }
-        match debug_store::latest_id() {
-            Ok(Some(id)) => crate::models::debug::seed_next_debug_frame_id(id.saturating_add(1)),
-            Ok(None) => {}
-            Err(e) => crate::services::logs::znet_log(
-                None,
-                crate::models::logs::LogLevel::Warn,
-                format!("failed to seed debug frame id: {e:?}"),
-            ),
+        for latest in [
+            debug_store::latest_id(),
+            crate::services::connection_history_store::latest_id(),
+        ] {
+            match latest {
+                Ok(Some(id)) => {
+                    crate::models::debug::seed_next_debug_frame_id(id.saturating_add(1))
+                }
+                Ok(None) => {}
+                Err(e) => crate::services::logs::znet_log(
+                    None,
+                    crate::models::logs::LogLevel::Warn,
+                    format!("failed to seed debug frame id: {e:?}"),
+                ),
+            }
         }
 
         *self.data.lock().expect("startup data lock") = Some(StartupData {

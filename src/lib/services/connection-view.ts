@@ -104,6 +104,7 @@ export function compareConnectionFreshness(
 
 export function connectionLifecycleKey(connection: GuiConnectionItem): string {
   return [
+    connection.coreInstanceId ?? 'unknown',
     connection.flowId,
     connection.startedAtUnixMs ?? '',
     connection.endedAtUnixMs ?? '',

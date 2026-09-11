@@ -153,3 +153,20 @@ assert.equal(history[0].eventSequence, 9);
 assert.deepEqual(history[0].rawEnvelope, completed.payload);
 
 console.log('local connection history recovery tests passed');
+
+const otherInstance = structuredClone(completed);
+otherInstance.id = 3;
+otherInstance.payload.core_instance_id = 'kernel-b';
+const originalInstance = structuredClone(completed);
+originalInstance.payload.core_instance_id = 'kernel-a';
+const isolated = buildPersistedConnectionHistory([originalInstance, otherInstance]);
+assert.equal(isolated.length, 2, 'identical flow IDs and times from different kernel instances must remain separate');
+assert.equal(new Set(isolated.map(record => record.coreInstanceId)).size, 2);
+const { buildConnectionView } = await import('../src/lib/services/connection-view.ts');
+assert.equal(buildConnectionView({ activeSnapshot: [], activeEvents: [], recentSnapshot: isolated, recentEvents: [] }).recent.length, 2);
+
+const { historyHeadReplacesWindow } = await import('../src/lib/services/connection-history-window.ts');
+assert.equal(historyHeadReplacesWindow([isolated[0]], [isolated[1]], true), true, 'a new instance must not imply continuous pagination');
+assert.equal(historyHeadReplacesWindow(isolated, [isolated[0]], true), false, 'overlapping pages retain the existing cursor');
+assert.equal(historyHeadReplacesWindow(isolated, [], false), true, 'an empty retained snapshot must remove obsolete rows');
+assert.equal(historyHeadReplacesWindow([], isolated, true), true, 'initial snapshot owns its cursor');

@@ -119,6 +119,7 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_events_commands::gui_events_start,
         gui_events_commands::gui_events_stop,
         debug_commands::gui_debug_frames,
+        debug_commands::gui_connection_history_export,
         debug_commands::gui_debug_clear,
         gui_self_test_commands::gui_self_test_snapshot,
         proxy_mode_commands::gui_proxy_mode_status,

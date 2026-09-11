@@ -47,3 +47,14 @@ pub async fn gui_debug_clear(_state: State<'_, AppState>, scope: Option<String>)
     .await
     .map_err(|error| AppError::internal(format!("debug clear worker failed: {error}")))?
 }
+
+#[tauri::command]
+pub async fn gui_connection_history_export(
+    query: Option<DebugFrameQuery>,
+) -> AppResult<connection_history_store::HistoryExport> {
+    tauri::async_runtime::spawn_blocking(move || {
+        connection_history_store::export(query.unwrap_or_default())
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("history export worker failed: {error}")))?
+}

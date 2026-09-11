@@ -1,5 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { revealItemInDir } from '@tauri-apps/plugin-opener';
+  import type { ConnectionHistorySummary, DebugFrameQuery } from '$lib/types/debug';
+  import { historyHeadReplacesWindow } from '$lib/services/connection-history-window';
+  import ConnectionHistoryCoverage from '$lib/components/ConnectionHistoryCoverage.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import {
     closeFlow,
@@ -11,7 +15,7 @@
   import { connectionObservations } from '$lib/features/observations/connections.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { store } from '$lib/services/store.svelte';
-  import { buildConnectionView, type DisplayConnection } from '$lib/services/connection-view';
+  import { buildConnectionView, connectionLifecycleKey, type DisplayConnection } from '$lib/services/connection-view';
   import {
     buildPersistedConnectionHistory,
     type PersistedConnection,
@@ -47,6 +51,11 @@
   let protocolFilter = $state('all');
   let outboundFilter = $state('all');
   let resultFilter = $state('all');
+  let capturedAfter = $state('');
+  let capturedBefore = $state('');
+  let historySummary = $state<ConnectionHistorySummary | undefined>();
+  let exporting = $state(false);
+  let exportPath = $state('');
   let filtersOpen = $state(false);
   let actionsOpen = $state(false);
 
@@ -105,7 +114,7 @@
       ?? connection.endedAtUnixMs
       ?? connection.eventOccurredAtUnixMs
       ?? 0;
-    return `${connection.origin}:${connection.flowId}:${lifetime}`;
+    return `${connection.origin}:${connection.coreInstanceId ?? 'unknown'}:${connection.flowId}:${lifetime}`;
   }
 
   const selectedConnection = $derived(
@@ -186,7 +195,9 @@
     ].some((value) => hasText(value) && value.toLowerCase().includes(query));
   }
 
-  const filteredConnections = $derived(currentSource.filter(matchesFilters));
+  // History filters run over the complete stored record before pagination.
+  // A second display-only search would hide matching failure/network fields.
+  const filteredConnections = $derived(activeTab === 'history' ? historyView : currentSource.filter(matchesFilters));
   const visibleConnections = $derived(
     activeTab === 'live'
       ? filteredConnections.slice(0, LIVE_RENDER_LIMIT)
@@ -205,7 +216,7 @@
       searchQuery.trim(),
       protocolFilter,
       outboundFilter,
-      resultFilter,
+      resultFilter, capturedAfter, capturedBefore,
     ]);
   }
 
@@ -216,6 +227,7 @@
     historyHasMore = false;
     historyPendingEvents = 0;
     historyError = null;
+    historySummary = undefined;
     if (selectedKey?.startsWith('recent:')) selectedKey = null;
   }
 
@@ -237,12 +249,41 @@
     if (!historyPaused && historyPendingEvents > 0) scheduleHistoryHeadSync(0);
   }
 
-  function persistedConnectionKey(connection: PersistedConnection): string {
-    return [
-      connection.flowId,
-      connection.startedAtUnixMs ?? '',
-      connection.endedAtUnixMs ?? '',
-    ].join(':');
+  const persistedConnectionKey = connectionLifecycleKey;
+
+  function historyQuery(): DebugFrameQuery {
+    const after = capturedAfter ? new Date(capturedAfter).getTime() : undefined;
+    const before = capturedBefore ? new Date(capturedBefore).getTime() + 59_999 : undefined;
+    if ((after !== undefined && !Number.isFinite(after)) || (before !== undefined && !Number.isFinite(before))
+      || (after !== undefined && before !== undefined && after > before)) {
+      throw new Error('请选择有效的记录时间范围');
+    }
+    return {
+      frameType: HISTORY_SCOPE,
+      search: searchQuery.trim() || undefined,
+      protocol: protocolFilter === 'all' ? undefined : protocolFilter,
+      outbound: outboundFilter === 'all' ? undefined : outboundFilter,
+      outcome: resultFilter === 'all' ? undefined : resultFilter,
+      capturedAfterMs: after,
+      capturedBeforeMs: before,
+    };
+  }
+
+  async function exportHistory() {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const result = await invoke<{path: string; records: number}>('gui_connection_history_export', { query: historyQuery() });
+      exportPath = result.path;
+      showSuccessToast(`已导出 ${result.records} 条连接记录`);
+    } catch (error) {
+      handleAppError(error, '导出连接记录失败');
+    } finally { exporting = false; }
+  }
+
+  async function revealExport() {
+    try { await revealItemInDir(exportPath); }
+    catch (error) { handleAppError(error, '无法打开导出位置'); }
   }
 
   function historyTimestamp(connection: PersistedConnection): number {
@@ -262,7 +303,7 @@
       seen.add(key);
       return true;
     });
-    historyItems = [...historyItems, ...additions];
+    historyItems = [...historyItems, ...additions].slice(0, HISTORY_LIMIT);
   }
 
   function mergeHistoryHead(records: PersistedConnection[]) {
@@ -289,16 +330,13 @@
 
     try {
       const result = await getGuiDebugFrames({
-        frameType: HISTORY_SCOPE,
+        ...historyQuery(),
         limit: HISTORY_BATCH_SIZE,
         beforeId,
-        search: searchQuery.trim() || undefined,
-        protocol: protocolFilter === 'all' ? undefined : protocolFilter,
-        outbound: outboundFilter === 'all' ? undefined : outboundFilter,
-        outcome: resultFilter === 'all' ? undefined : resultFilter,
       });
       if (generation !== historyRequestGeneration) return;
 
+      historySummary = result.history;
       const page = buildPersistedConnectionHistory(result.items, HISTORY_BATCH_SIZE);
       if (reset) historyItems = page;
       else appendUniqueHistory(page);
@@ -361,17 +399,21 @@
 
     try {
       const result = await getGuiDebugFrames({
-        frameType: HISTORY_SCOPE,
+        ...historyQuery(),
         limit: HISTORY_BATCH_SIZE,
-        search: searchQuery.trim() || undefined,
-        protocol: protocolFilter === 'all' ? undefined : protocolFilter,
-        outbound: outboundFilter === 'all' ? undefined : outboundFilter,
-        outcome: resultFilter === 'all' ? undefined : resultFilter,
       });
       if (generation !== historyRequestGeneration || requestedSignature !== historySignature()) return;
 
+      historySummary = result.history;
       const head = buildPersistedConnectionHistory(result.items, HISTORY_BATCH_SIZE);
-      mergeHistoryHead(head);
+      if (historyHeadReplacesWindow(historyItems, head, result.hasMore)) {
+        // Do not skip an unobserved middle page after a burst or long pause.
+        historyItems = head;
+        historyBeforeId = result.items[0]?.id;
+        historyHasMore = result.hasMore;
+      } else {
+        mergeHistoryHead(head);
+      }
       if (historyBeforeId === undefined) {
         historyBeforeId = result.items[0]?.id;
         historyHasMore = result.hasMore;
@@ -646,6 +688,7 @@
       now = Date.now();
     }, 1_000);
     return () => {
+      historyRequestGeneration += 1;
       window.clearInterval(clock);
       if (historySyncTimer) clearTimeout(historySyncTimer);
     };
@@ -782,6 +825,32 @@
       </div>
     </div>
   </div>
+
+  {#if activeTab === 'history'}
+    <ConnectionHistoryCoverage summary={historySummary} />
+    <div class="flex flex-wrap items-end gap-2 border-b border-border px-3 py-2">
+      <label class="min-w-0 text-[10.5px] text-muted-foreground">记录时间从
+        <Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录开始时间" bind:value={capturedAfter} />
+      </label>
+      <label class="min-w-0 text-[10.5px] text-muted-foreground">至
+        <Input type="datetime-local" class="mt-1 h-8 w-full text-xs" aria-label="记录结束时间" bind:value={capturedBefore} />
+      </label>
+      {#if capturedAfter || capturedBefore}
+        <Button variant="ghost" size="sm" onclick={() => { capturedAfter = ''; capturedBefore = ''; }}>清除时间</Button>
+      {/if}
+      <Button variant="outline" size="sm" disabled={exporting || historyLoading || Boolean(historyError)} onclick={exportHistory}>
+        {exporting ? '导出中…' : '导出筛选记录'}
+      </Button>
+      {#if exportPath}
+        <Button variant="ghost" size="sm" onclick={revealExport}>打开导出位置</Button>
+      {/if}
+      <span class="basis-full break-all text-[10px] text-muted-foreground">{exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
+    </div>
+  {/if}
+
+  {#if activeTab === 'live'}
+    <p class="border-b border-border px-3 py-1 text-[10px] text-muted-foreground">实时视图最多保留 500 条、每次展示前 200 条；不是所有连接的完整存档。</p>
+  {/if}
 
   {#if activeTab === 'live' && !canCloseConnections}
     <div class="border-b border-border bg-amber-500/5 px-3 py-2 text-[10.5px] text-amber-700 dark:text-amber-400" role="status">
@@ -956,7 +1025,7 @@
           {:else if historyHasMore}
             继续滚动加载更多
           {:else}
-            已加载全部 {historyView.length} 条记录
+            已加载当前筛选下保留的 {historyView.length} 条记录
           {/if}
         </div>
       {/if}
