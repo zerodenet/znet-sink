@@ -1,45 +1,81 @@
-import { registerModule } from '$lib/features/diagnostics/registry';
 import type { TraceRouteResult } from '$lib/types/diagnostics';
-import type * as Core from './client';
-import type { getAppErrorMessage } from '$lib/services/core';
-interface Ports {
-  guiTraceRoute: typeof Core.guiTraceRoute;
-  getAppErrorMessage: typeof getAppErrorMessage;
+import type { ToolJobSnapshot } from '$lib/types/gui-api';
+import { ToolJobsState, type ToolJobPorts } from '$lib/features/tool-jobs/state.svelte';
+
+interface Ports extends ToolJobPorts {
+  getAppErrorMessage(error: unknown, fallback?: string): string;
 }
+
 export class RouteTraceState {
   traceTarget = $state('');
   tracePort = $state(80);
   traceProtocol = $state('');
   traceInboundTag = $state('');
-  traceLoading = $state(false);
   traceResult = $state<TraceRouteResult | null>(null);
   traceError = $state<string | null>(null);
-  private releaseDiagnostic = registerModule('route-trace', () => ({id: 'route-trace', title: '路由追踪', state: this.traceLoading ? 'busy' : this.traceError ? 'error' : this.traceResult ? 'ready' : 'idle', summary: '按需读取路由诊断', error: this.traceError, facts: []}));
-  private generation = 0;
-  private ports: Ports;
-  constructor(ports: Ports) { this.ports = ports; }
-  dispose() {
-    this.releaseDiagnostic(); this.generation++; this.traceLoading = false; }
-  async runTrace() {
+  readonly jobs: ToolJobsState;
+  private readonly ports: Ports;
+  private starting = $state(false);
+
+  constructor(ports: Ports) {
+    this.ports = ports;
+    this.jobs = new ToolJobsState(['route_trace'], ports, (job) => this.applyJob(job));
+    void this.jobs.init();
+  }
+
+  get traceLoading(): boolean {
+    return this.starting || this.jobs.active('route_trace').length > 0;
+  }
+
+  dispose(): void {
+    this.jobs.dispose();
+  }
+
+  async runTrace(): Promise<void> {
     const target = this.traceTarget.trim();
     if (!target || this.traceLoading) return;
-    this.traceLoading = true;
     this.traceError = null;
     this.traceResult = null;
-    const generation = this.generation;
+    this.starting = true;
     try {
-      const proto = this.traceProtocol.trim() || undefined;
-      const inboundTag = this.traceInboundTag.trim() || undefined;
-      const result = await this.ports.guiTraceRoute(target, this.tracePort || undefined, proto, inboundTag);
-      if (generation === this.generation) this.traceResult = result;
-    } catch (e) {
-      if (generation !== this.generation) return;
-      this.traceError = this.ports.getAppErrorMessage(e, '路由追踪失败');
+      await this.jobs.start({
+        kind: 'route_trace',
+        params: {
+          target,
+          port: this.tracePort || 80,
+          ...(this.traceProtocol.trim() ? { protocol: this.traceProtocol.trim() } : {}),
+          ...(this.traceInboundTag.trim() ? { inboundTag: this.traceInboundTag.trim() } : {}),
+        },
+      });
+    } catch (error) {
+      this.traceError = this.ports.getAppErrorMessage(error, '路由追踪任务启动失败');
     } finally {
-      if (generation === this.generation) {
-        this.traceLoading = false;
-      }
+      this.starting = false;
     }
   }
 
+  async cancel(jobId: number): Promise<void> {
+    try {
+      await this.jobs.cancel(jobId);
+    } catch (error) {
+      this.traceError = this.ports.getAppErrorMessage(error, '取消路由追踪失败');
+    }
+  }
+
+  private applyJob(job: ToolJobSnapshot): void {
+    if (this.jobs.latest('route_trace')?.id !== job.id) return;
+    if (job.state === 'completed') {
+      this.traceResult = job.result as TraceRouteResult;
+      this.traceError = null;
+      return;
+    }
+    const messages: Partial<Record<ToolJobSnapshot['state'], string>> = {
+      failed: job.error?.message ?? '路由追踪失败',
+      timed_out: '路由追踪任务超时',
+      cancelled: '路由追踪任务已取消',
+      invalidated_by_config_change: '配置已切换，旧路由追踪结果已失效',
+      invalidated_by_core_restart: '内核已重启，旧路由追踪结果已失效',
+    };
+    this.traceError = messages[job.state] ?? null;
+  }
 }

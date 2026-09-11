@@ -34,6 +34,9 @@ test('backend tool diagnostic reader follows the selected composition even witho
     process.env.ZNET_PRODUCT = 'desktop-node-probe';
     assert.match(productComposition().load('\0virtual:znet-tool-diagnostics'), /node-probes\/diagnostics/);
     assert.match(productComposition().load('\0virtual:znet-node-probes'), /cancelProbeJob/);
+    process.env.ZNET_PRODUCT = 'desktop-dns';
+    assert.match(productComposition().load('\0virtual:znet-tool-diagnostics'), /dnsToolDiagnostics/);
+    assert.match(productComposition().load('\0virtual:znet-tool-diagnostics'), /tool-jobs\/diagnostics/);
   } finally {
     if (previous === undefined) delete process.env.ZNET_PRODUCT;
     else process.env.ZNET_PRODUCT = previous;

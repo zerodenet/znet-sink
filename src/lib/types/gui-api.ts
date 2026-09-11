@@ -88,6 +88,67 @@ export interface StartProbeRequest {
   timeoutMs?: number;
 }
 
+export type ToolJobKind =
+  | 'dns_lookup'
+  | 'dns_cache'
+  | 'fake_ip_lookup'
+  | 'fake_ip_clear'
+  | 'route_trace';
+export type ToolJobState =
+  | 'queued'
+  | 'running'
+  | 'cancelling'
+  | 'completed'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'invalidated_by_config_change'
+  | 'invalidated_by_core_restart';
+export interface ToolJobError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+export interface ToolJobSnapshot<TResult = unknown> {
+  id: number;
+  scope: ClientScope;
+  kind: ToolJobKind;
+  state: ToolJobState;
+  subject: string;
+  params: Record<string, unknown>;
+  result?: TResult;
+  error?: ToolJobError;
+  createdAtUnixMs: number;
+  startedAtUnixMs?: number;
+  updatedAtUnixMs: number;
+  deadlineAtUnixMs: number;
+}
+export interface StartToolJobRequest {
+  kind: ToolJobKind;
+  params?: Record<string, unknown>;
+  timeoutMs?: number;
+}
+export interface ToolKindRuntimeSnapshot {
+  kind: ToolJobKind;
+  queued: number;
+  running: number;
+  cancelling: number;
+  retained: number;
+}
+export interface ToolRuntimeSnapshot {
+  maxPendingJobs: number;
+  dnsMaxConcurrency: number;
+  routeMaxConcurrency: number;
+  mutationMaxConcurrency: number;
+  queued: number;
+  running: number;
+  cancelling: number;
+  retained: number;
+  active: number;
+  kernelCancellation: string;
+  kinds: ToolKindRuntimeSnapshot[];
+}
+
 export interface StableNodeId {
   profileId: string;
   configRevision: number;
@@ -532,4 +593,59 @@ export interface ConfigPlanApplyResult {
   warnings: string[];
   /** Validation errors (present when `valid` is false). */
   errors: string[];
+}
+
+export type ConfigApplyStrategy = 'hot_reload' | 'restart';
+
+export interface ConfigRuntimeIdentityView {
+  coreInstanceId: string;
+  configRevision: number;
+}
+
+export interface ConfigTransactionReceipt {
+  transactionId: number;
+  profileId: string;
+  strategy: ConfigApplyStrategy;
+  state: 'confirmed';
+  effectiveDigest: string;
+  startedAtUnixMs: number;
+  completedAtUnixMs: number;
+  runtimeIdentity: ConfigRuntimeIdentityView;
+}
+
+export interface ConfigWorkspaceApplyInput {
+  profileId: string;
+  sourceUpdatedAtUnixMs: number;
+  sourceConfig: Record<string, unknown>;
+  strategy: ConfigApplyStrategy;
+}
+
+export interface ConfigWorkspaceRuntimeView {
+  running: boolean;
+  identity?: ConfigRuntimeIdentityView;
+  effectiveDigest: string;
+  confirmed: boolean;
+  reason: string;
+}
+
+export interface ConfigWorkspaceSnapshot {
+  profileId: string;
+  profileName: string;
+  sourceUpdatedAtUnixMs: number;
+  sourceConfig: Record<string, unknown>;
+  localEdits: Record<string, unknown>;
+  effectiveConfig: Record<string, unknown>;
+  composition?: { sourceProfileId?: string; layers: ConfigCompositionLayer[] };
+  runtime: ConfigWorkspaceRuntimeView;
+  lastTransaction?: ConfigTransactionReceipt;
+}
+
+export interface ConfigWorkspacePlan extends ConfigPlanApplyResult {
+  effectiveConfig: Record<string, unknown>;
+  effectiveDigest: string;
+}
+
+export interface ConfigCompositionLayer {
+  source: string;
+  changedPaths: string[];
 }

@@ -8,7 +8,7 @@ function read(path) {
 const configService = read('src/lib/services/config.ts');
 const configSignal = read('src/lib/services/proxy-config-signal.svelte.ts');
 const profilesTab = read('src/lib/components/tabs/ProfilesTab.svelte');
-const configEditor = read('src/lib/services/config-editor.svelte.ts');
+const configEditor = read('src/lib/services/config-workspace.svelte.ts');
 const guiConnection = read('src-tauri/src/capture/connection.rs');
 const coreProcessCommand = read('src-tauri/src/commands/core_process.rs') + read('src-tauri/src/capture/tun.rs');
 const appConfigCommand = read('src-tauri/src/commands/app_config.rs');
@@ -51,12 +51,12 @@ assert.ok(
 
 assert.ok(
   configEditor.includes("import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte'")
-    && configEditor.includes('private _sourceProfileId: string | null = null')
-    && configEditor.includes('private _sourceProfileUpdatedAt: number | null = null')
+    && configEditor.includes('private sourceProfileId: string | null = null')
+    && configEditor.includes('private sourceProfileUpdatedAt: number | null = null')
     && configEditor.includes('proxyConfigSignal.onActiveChanged')
     && configEditor.includes('reconcileExternalSource()')
-    && configEditor.includes('activeId === this._sourceProfileId')
-    && configEditor.includes('activeUpdatedAt === this._sourceProfileUpdatedAt'),
+    && configEditor.includes('snapshot.profileId !== this.sourceProfileId')
+    && configEditor.includes('snapshot.sourceUpdatedAtUnixMs !== this.sourceProfileUpdatedAt'),
   'the singleton Pro config editor must reconcile its source identity instead of retaining a stale profile after Lite switches',
 );
 

@@ -584,7 +584,7 @@ fn restore_removed_profile(
     Ok(())
 }
 
-fn restore_profiles(state: &AppState, previous: &[ProxyConfigProfile]) -> AppResult<()> {
+pub(crate) fn restore_profiles(state: &AppState, previous: &[ProxyConfigProfile]) -> AppResult<()> {
     let current = lock(state.proxy_configs(), "proxy_config")?.clone();
     persist_profile_transition(state, &current, previous.to_vec())
 }

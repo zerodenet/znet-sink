@@ -3,6 +3,7 @@
 use crate::commands::app_config as app_config_commands;
 use crate::commands::app_update as app_update_commands;
 use crate::commands::capability as capability_commands;
+use crate::commands::config_workspace as config_workspace_commands;
 use crate::commands::core as core_commands;
 use crate::commands::core_config as core_config_commands;
 use crate::commands::core_process as core_process_commands;
@@ -18,6 +19,8 @@ use crate::commands::proxy_mode as proxy_mode_commands;
 use crate::commands::rule_set as rule_set_commands;
 use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
+#[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+use crate::commands::tool_jobs as tool_job_commands;
 
 pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.invoke_handler(tauri::generate_handler![
@@ -45,10 +48,23 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         core_process_commands::core_process_start,
         core_process_commands::core_process_restart,
         core_config_commands::core_config_export_active,
+        config_workspace_commands::gui_config_workspace_snapshot,
+        config_workspace_commands::gui_config_workspace_plan,
+        config_workspace_commands::gui_config_workspace_apply,
         core_config_commands::core_download_latest,
         gui_core_commands::gui_core_overview,
         gui_core_commands::gui_client_core_snapshot,
         gui_core_commands::gui_node_screen_snapshot,
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        tool_job_commands::gui_tool_job_start,
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        tool_job_commands::gui_tool_job_get,
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        tool_job_commands::gui_tool_job_list,
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        tool_job_commands::gui_tool_job_cancel,
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        tool_job_commands::gui_tool_runtime_snapshot,
         #[cfg(feature = "tool-node-probe")]
         gui_core_commands::gui_probe_job_start,
         #[cfg(feature = "tool-node-probe")]
@@ -78,7 +94,6 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_tun_recover,
         gui_core_commands::gui_stack_status,
         gui_core_commands::gui_rule_status,
-        gui_core_commands::gui_apply_config,
         // DNS/Fake-IP is a client-global override applied to the effective Zero config.
         gui_core_commands::gui_apply_dns_config,
         gui_core_commands::gui_validate_config,
