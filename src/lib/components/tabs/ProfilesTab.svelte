@@ -806,7 +806,7 @@
     border: 0;
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 600px) {
     .toolbar-top {
       flex-direction: column;
       align-items: stretch;

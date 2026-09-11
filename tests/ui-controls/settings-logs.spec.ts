@@ -44,6 +44,16 @@ test('settings rows and switches stay inside the actual section container', asyn
   expect(errors).toEqual([]);
 });
 
+test('advanced configuration mounts without a bindable ref crash', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/?panel=settings&section=config');
+  await expect(page.getByText('内核配置编辑', { exact: true })).toBeVisible();
+  await expect(page.getByText('页面显示异常', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.editor-container textarea')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('logs remain interactive with large structured records and repeated refreshes', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));

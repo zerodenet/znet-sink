@@ -51,7 +51,15 @@ assert.ok(
 );
 
 const appRuntime = read('src-tauri/src/application/mod.rs');
+const tauriManifest = read('src-tauri/Cargo.toml');
 const coreProcessService = read('src-tauri/src/runtime_host/shutdown.rs');
+assert.ok(
+  tauriManifest.includes('tauri-plugin-single-instance = "2"')
+    && appRuntime.includes('.plugin(tauri_plugin_single_instance::init(')
+    && appRuntime.indexOf('.plugin(tauri_plugin_single_instance::init(')
+      < appRuntime.indexOf('.manage(app_state)'),
+  'single-instance rejection must run before managed state setup so a second GUI cannot disable proxy capture owned by the first GUI',
+);
 assert.ok(
   appRuntime.includes('tauri::RunEvent::ExitRequested')
     && appRuntime.includes('core_process::shutdown_managed_runtime(cleanup_app.clone()).await')

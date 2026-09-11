@@ -74,6 +74,16 @@ pub fn run() {
     crate::services::file_logger::line("runtime: entering register/runtime phase");
     // ── Phase 4–5: Register + Runtime (inside Tauri builder) ──
     let builder = tauri::Builder::default()
+        // A second GUI lifetime owns a different private control socket but
+        // shares the system-proxy guard. Reject it before setup so its status
+        // polling cannot restore (disable) capture owned by the first GUI.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(app_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())

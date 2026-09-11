@@ -27,6 +27,7 @@ export const updateBuiltinRuleSets = updateAllRuleSets;
 export const updateRuleSet = async () => items[0];
 export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
+export const handleAppError = (_error: unknown, _fallback: string) => {};
 import { getTunConfig } from './tun-state.svelte';
 export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
 const endpointConfig = () => ({ localProxy: {
@@ -71,6 +72,8 @@ export const updateAppConfig = async (input?: unknown) => {
   throw new Error('Install must not write app settings a second time');
 };
 export const guiExportDiagnostics = async () => ({ path: 'fixture' });
+export const exportClientKernelSettings = async () => {};
+export const importClientKernelSettings = async () => {};
 export const restartCoreProcess = async () => { throw new Error('The UI fixture cannot restart a core'); };
 
 export const getCorePolicies = async () => ({ groups: [] });
@@ -94,6 +97,9 @@ export const setActiveProxyConfig = async (id: string) => {
   proxyConfigSignal.markChanged(true);
   return structuredClone(profiles.find(profile => profile.id === id)!);
 };
+export const importProxyConfig = async () => structuredClone(profiles[0]);
+export const upsertProxyConfig = async () => structuredClone(profiles[0]);
+export const removeProxyConfig = async () => {};
 export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
 
 export const guiLogPaths = async () => ({ logFile: '/fixture/logs/gui.log.jsonl', coreLogFile: '/fixture/logs/core.log.jsonl', logsDir: '/fixture/logs', dataDir: '/fixture' });
@@ -118,6 +124,11 @@ export const getEffectiveRuleSetOptions = async () => [];
 export const getConfigPolicyGroups = async () => [];
 export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const getGuiZeroCapabilities = async () => ({ available: false, globalLimitations: [] });
+export const getCoreRuntime = async () => null;
+export const getCoreStats = async () => null;
+export const guiValidateConfig = async () => ({ valid: true, errors: [] });
+export const guiApplyConfig = async () => ({ accepted: true });
+export const guiPlanApplyConfig = async () => ({ hotReload: [], requiresRestart: [] });
 export const guiApplyDnsConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const guiValidateDnsConfig = async () => ({valid: true});
 
