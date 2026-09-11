@@ -184,8 +184,9 @@ assert.ok(
     && coreProcessCommand.includes('if !should_enable')
     && !coreProcessCommand.includes('active_profile_defines_tun')
     && coreProcessCommand.includes('tun_restore::restore(')
-    && coreProcessCommand.includes('zero::runtime::enable_tun(app_config.tun.clone(), Some(options.clone()))'),
-  'managed Core start/restart must replay persisted app-owned TUN independently of source runtime.tun',
+    && coreProcessCommand.includes('crate::configuration::preferences::tun_params(state, app_config.tun.clone())?')
+    && coreProcessCommand.includes('zero::runtime::enable_tun_params(params.clone(), Some(options.clone()))'),
+  'managed Core start/restart must replay persisted app-owned TUN through resolved client preferences',
 );
 
 assert.ok(
