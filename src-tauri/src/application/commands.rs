@@ -14,6 +14,7 @@ use crate::commands::gui_events as gui_events_commands;
 use crate::commands::gui_self_test as gui_self_test_commands;
 use crate::commands::kernel_version as kernel_version_commands;
 use crate::commands::logs as logs_commands;
+use crate::commands::plugins as plugin_commands;
 use crate::commands::proxy_config as proxy_config_commands;
 use crate::commands::proxy_mode as proxy_mode_commands;
 use crate::commands::rule_set as rule_set_commands;
@@ -24,6 +25,21 @@ use crate::commands::tool_jobs as tool_job_commands;
 
 pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.invoke_handler(tauri::generate_handler![
+        plugin_commands::plugins_supported,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_snapshot,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_refresh,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_authorize,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_stop,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_run,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_install,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall,
         core_commands::core_ipc_default_endpoint,
         core_commands::core_status,
         core_commands::core_ipc_ping,

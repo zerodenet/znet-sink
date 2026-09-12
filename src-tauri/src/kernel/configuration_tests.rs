@@ -8,7 +8,11 @@ use std::{
 
 #[tokio::test]
 async fn bound_configuration_uses_the_real_envelope_and_never_replays_a_lost_submission() {
-    for lose_reply in [false, true] {
+    for (lose_reply, persistence) in [
+        (false, Some("runtime_only")),
+        (true, Some("runtime_only")),
+        (false, None),
+    ] {
         let directory = tempfile::tempdir_in("/tmp").unwrap();
         let path = directory.path().join("config.sock");
         let listener = UnixListener::bind(&path).unwrap();
@@ -39,13 +43,13 @@ async fn bound_configuration_uses_the_real_envelope_and_never_replays_a_lost_sub
                             .lock()
                             .unwrap()
                             .push(request["method"].as_str().unwrap().to_string());
-                        assert_eq!(request["method"], "config.apply");
+                        assert_eq!(request["method"], "config.apply_runtime");
                         assert!(request["params"]["config"].is_object());
                         revision += 1;
                         if lose_reply {
                             break;
                         }
-                        json!({"accepted":true,"result":{"applied":true,"core_instance_id":"one","config_revision":revision}})
+                        json!({"accepted":true,"result":{"applied":true,"persistence":persistence,"core_instance_id":"one","config_revision":revision}})
                     }
                     other => panic!("unexpected {other}"),
                 };
@@ -66,9 +70,13 @@ async fn bound_configuration_uses_the_real_envelope_and_never_replays_a_lost_sub
         };
         let bound = BoundControl::connect(options.clone()).await.unwrap();
         assert_eq!(bound.all_flow_ids().await.unwrap().len(), 700);
-        let outcome =
-            crate::services::config_apply::apply(json!({"inbounds":[]}), options.clone()).await;
-        if lose_reply {
+        let outcome = crate::services::config_apply::apply(
+            &znet_client_core::capability::Manager::default(),
+            json!({"inbounds":[]}),
+            options.clone(),
+        )
+        .await;
+        if lose_reply || persistence.is_none() {
             assert_eq!(outcome.unwrap_err().code, "config_apply_uncertain");
         } else {
             outcome.unwrap();
@@ -76,7 +84,7 @@ async fn bound_configuration_uses_the_real_envelope_and_never_replays_a_lost_sub
         connection::reset_endpoint(&bound.binding.endpoint);
         assert!(bound.close_flow("old").await.is_err());
         worker.join().unwrap();
-        assert_eq!(*calls.lock().unwrap(), vec!["config.apply"]);
+        assert_eq!(*calls.lock().unwrap(), vec!["config.apply_runtime"]);
     }
 }
 
@@ -144,19 +152,45 @@ async fn supplied_zero_confirms_config_application_without_restarting() {
     crate::capture::shutdown::stop_owned_tun(kernel.0.id(), socket.to_string_lossy().into_owned())
         .await
         .unwrap();
+    let bootstrap_before = std::fs::read(&path).unwrap();
     let before = control.identity().await.unwrap();
     config["route"]["final"] = json!({"type":"direct"});
-    crate::services::config_apply::apply(config, options.clone())
-        .await
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = reservation.local_addr().unwrap();
+    config["inbounds"] = json!([{"tag":"runtime-listener","listen":{"address":"127.0.0.1","port":address.port()},"protocol":{"type":"mixed"}}]);
+    drop(reservation);
+    crate::services::config_apply::apply(
+        &znet_client_core::capability::Manager::default(),
+        config,
+        options.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bootstrap_before);
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_secs(3)).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
         .unwrap();
+    stream.write_all(&[5, 1, 0]).unwrap();
+    let mut greeting = [0; 2];
+    std::io::Read::read_exact(&mut stream, &mut greeting).unwrap();
+    assert_eq!(
+        greeting,
+        [5, 0],
+        "runtime listener must process SOCKS authentication"
+    );
+    assert!(kernel.0.try_wait().unwrap().is_none());
     let after = control.identity().await.unwrap();
     assert_eq!(before.core_instance_id, after.core_instance_id);
     assert!(after.config_revision > before.config_revision);
-    assert!(
-        crate::services::config_apply::apply(json!({"inbounds":"invalid"}), options)
-            .await
-            .is_err()
-    );
+    assert!(crate::services::config_apply::apply(
+        &znet_client_core::capability::Manager::default(),
+        json!({"inbounds":"invalid"}),
+        options
+    )
+    .await
+    .is_err());
     assert_eq!(control.identity().await.unwrap(), after);
     connection::reset_endpoint(&control.binding.endpoint);
     drop(kernel);

@@ -108,10 +108,8 @@ fn healthy_ipc_for_another_pid_is_rejected() {
         transport: "unix-socket".into(),
         path: path.to_string_lossy().into_owned(),
     };
-    assert!(probe(&endpoint, 123, Duration::from_secs(1))
-        .unwrap_err()
-        .message
-        .contains("different process"));
+    let error = probe(&endpoint, 123, Duration::from_secs(1)).unwrap_err();
+    assert!(error.message.contains("different process"), "{error:?}");
     worker.join().unwrap();
 }
 

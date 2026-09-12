@@ -10,7 +10,7 @@ import {
 import type { InteractionSurfaceItem } from '$lib/types/capability';
 
 export type UIMode = 'lite' | 'pro';
-export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'dns' | 'config' | 'logs' | 'about';
+export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'dns' | 'config' | 'logs' | 'plugins' | 'about';
 
 const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'settings']);
 const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config']);

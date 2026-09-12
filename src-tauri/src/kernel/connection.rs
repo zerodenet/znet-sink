@@ -202,7 +202,7 @@ impl MultiplexedConnection {
         // and we must not stall the async runtime. The pending slot is
         // already registered so a lightning-fast kernel response can still be
         // paired even while the write is completing.
-        let frame_preview: String = String::from_utf8_lossy(&frame_bytes).into_owned();
+        let frame_preview = crate::kernel::redaction::preview(&frame_bytes);
         push_debug_frame(DebugFrame {
             id: 0,
             at_ms: crate::services::common::now_unix_ms(),
@@ -211,11 +211,7 @@ impl MultiplexedConnection {
             payload: serde_json::json!({
                 "requestId": request_id,
                 "bytes": frame_bytes.len(),
-                "preview": if frame_preview.len() > 200 {
-                    format!("{}…", &frame_preview[..200])
-                } else {
-                    frame_preview
-                },
+                "preview": frame_preview,
             }),
             elapsed_ms: None,
             error: None,
@@ -434,9 +430,10 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 // No id on this response — log a snippet so we can identify
                 // what the kernel is sending.
                 let snippet: String =
-                    serde_json::to_string(&frame).unwrap_or_else(|_| "<invalid>".to_string());
+                    serde_json::to_string(&crate::kernel::redaction::frame(&frame))
+                        .unwrap_or_else(|_| "<invalid>".to_string());
                 let preview: String = if snippet.len() > 200 {
-                    format!("{}…", &snippet[..200])
+                    format!("{}…", snippet.chars().take(200).collect::<String>())
                 } else {
                     snippet
                 };

@@ -211,18 +211,6 @@ pub(crate) fn is_flow_already_completed_error(error: &crate::errors::AppError) -
         && message.contains("already completed")
 }
 
-/// Hot-apply a full config without restarting the kernel.
-pub async fn apply_config(config: Value, options: Option<CoreIpcOptions>) -> AppResult<Value> {
-    if !config.is_object() {
-        return Err(crate::errors::AppError::invalid_argument(
-            "config must be a JSON object",
-        ));
-    }
-    let response = run_command("config.apply", json!({ "config": config }), options).await?;
-    ensure_config_apply_accepted(&response)?;
-    Ok(response)
-}
-
 /// Validate a config without applying it.
 pub async fn validate_config(config: Value, options: Option<CoreIpcOptions>) -> AppResult<Value> {
     if !config.is_object() {

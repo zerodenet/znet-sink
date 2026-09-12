@@ -13,6 +13,7 @@
     { id: 'general', label: '应用' },
     { id: 'network', label: '网络' },
     { id: 'logs',    label: '日志' },
+    { id: 'plugins', label: '插件' },
     { id: 'core',    label: '版本管理' },
     { id: 'dns',     label: '域名解析' },
     { id: 'tun',     label: '流量接管' },
@@ -28,6 +29,7 @@
     dns: '内核',
     tun: '内核',
     config: '内核',
+    plugins: '客户端',
     about: '其他',
   };
 
@@ -46,6 +48,7 @@
     dns: () => import('$lib/components/settings/DnsSettingsPanel.svelte'),
     config: () => import('$lib/components/settings/ConfigEditorPanel.svelte'),
     logs: () => import('$lib/components/settings/LogsSettingsPanel.svelte'),
+    plugins: () => import('$lib/components/settings/PluginsSettingsPanel.svelte'),
     about: () => import('$lib/components/settings/AboutPanel.svelte'),
   };
 

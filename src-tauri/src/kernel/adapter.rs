@@ -28,7 +28,7 @@ use serde_json::Value;
 /// - **Traffic** — `traffic_stats`
 /// - **Policies** — `policy_groups`, `select_policy`, `probe_target`, `probe_policy`
 /// - **Connections** — `connections`, `recent_connections`, `connection_detail`, `close_connection`
-/// - **Config** — `apply_config`, `validate_config`, `set_mode`
+/// - **Config inspection** — `validate_config`, `set_mode`; full application is client-owned
 /// - **Diagnostics** — `dns_lookup`, `trace_route`
 /// - **Features** — `tun_status`, `enable_tun`, `disable_tun`, etc.
 /// - **Static** — `proxy_nodes_from_config`, `policy_groups_from_config`
@@ -123,9 +123,6 @@ pub trait KernelAdapter {
     ) -> AppResult<GuiConnectionCloseResult>;
 
     // ── Config ──────────────────────────────────────────────────
-
-    /// Hot-apply a full config without restarting the kernel.
-    async fn apply_config(&self, config: Value, options: CoreIpcOptions) -> AppResult<Value>;
 
     /// Validate a config without applying it.
     async fn validate_config(&self, config: Value, options: CoreIpcOptions) -> AppResult<Value>;

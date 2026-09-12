@@ -350,15 +350,6 @@ pub async fn set_binding(
         return Err(error);
     }
     *common::lock(state.rule_sets(), "rule_set")? = next;
-    if base.is_some() {
-        if let Err(error) = core_config::export_active(state.clone()) {
-            let _ = domain_store::save_rule_sets(&previous);
-            *common::lock(state.rule_sets(), "rule_set")? = previous;
-            let _ = apply_if_running(state.inner(), old_effective).await;
-            let _ = core_config::export_active(state.clone());
-            return Err(error);
-        }
-    }
     Ok(updated)
 }
 
@@ -379,11 +370,7 @@ pub async fn reconcile_after_rule_change(app_handle: AppHandle) -> AppResult<()>
 pub(crate) async fn reconcile_current_config_locked(app_handle: AppHandle) -> AppResult<()> {
     let state = app_handle.state::<AppState>();
     let effective = current_effective_config(state.inner())?;
-    let has_active_config = effective.is_some();
     apply_if_running(state.inner(), effective).await?;
-    if has_active_config {
-        core_config::export_active(state.clone())?;
-    }
     Ok(())
 }
 
@@ -455,8 +442,12 @@ async fn apply_if_running(state: &AppState, config: Option<Value>) -> AppResult<
         AppError::invalid_argument("a running kernel requires an active proxy config")
     })?;
     let core = common::lock(state.app_config(), "app_config")?.core.clone();
-    crate::services::config_apply::apply(config, core_config::ipc_options_from_app_config(&core))
-        .await
+    crate::services::config_apply::apply(
+        state.capabilities(),
+        config,
+        core_config::ipc_options_from_app_config(&core),
+    )
+    .await
 }
 
 #[cfg(test)]

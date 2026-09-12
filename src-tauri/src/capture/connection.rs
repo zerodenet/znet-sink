@@ -28,7 +28,6 @@ pub async fn connect(
 ) -> AppResult<GuiConnectionStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     let active_proxy_config_id = active_proxy_config_id(state.inner())?;
-    core_config::export_active(state.clone())?;
 
     let managed_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;

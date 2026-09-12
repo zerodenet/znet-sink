@@ -59,3 +59,5 @@ mod tests;
 pub(crate) mod preferences;
 
 pub(crate) mod local_edits;
+
+pub(crate) mod material;

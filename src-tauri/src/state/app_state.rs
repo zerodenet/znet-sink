@@ -20,11 +20,14 @@ use crate::models::{
 };
 
 pub struct AppState {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    plugins: crate::services::plugins::Host,
     #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
     tool_runtime: crate::services::tool_jobs::ToolRuntime,
     #[cfg(feature = "tool-node-probe")]
     probe_runtime: crate::services::probe::runtime::ProbeRuntime,
     client_core: Mutex<ClientCore>,
+    capabilities: znet_client_core::capability::Manager,
     core_event_generation: Arc<AtomicU64>,
     observations: znet_engine_client::SubscriptionOwner,
     next_record_id: AtomicU64,
@@ -59,6 +62,14 @@ impl Default for AppState {
 }
 
 impl AppState {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) fn plugins(&self) -> &crate::services::plugins::Host {
+        &self.plugins
+    }
+    pub(crate) fn capabilities(&self) -> &znet_client_core::capability::Manager {
+        &self.capabilities
+    }
+
     pub(crate) fn new(app_config: AppConfig) -> Self {
         Self::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new())
     }
@@ -77,10 +88,13 @@ impl AppState {
         let config_revision = config_revision(active_profile);
 
         Self {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            plugins: crate::services::plugins::Host::default(),
             #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
             tool_runtime: crate::services::tool_jobs::ToolRuntime::default(),
             #[cfg(feature = "tool-node-probe")]
             probe_runtime: crate::services::probe::runtime::ProbeRuntime::default(),
+            capabilities: znet_client_core::capability::Manager::default(),
             client_core: Mutex::new(ClientCore::new(active_profile_id, config_revision)),
             core_event_generation: Arc::new(AtomicU64::default()),
             observations: znet_engine_client::SubscriptionOwner::default(),

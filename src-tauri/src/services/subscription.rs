@@ -18,7 +18,6 @@ use crate::services::common::{
 use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
 
-const SUBSCRIPTION_FETCH_TIMEOUT_SECONDS: u64 = 30;
 /// Default auto-sync check cadence for the background scheduler.
 const AUTO_SYNC_TICK_SECONDS: u64 = 60;
 /// Grace delay before the first auto-sync pass so the kernel and
@@ -37,7 +36,7 @@ const DEFAULT_CLASH_USER_AGENT: &str = "Clash.Meta";
 /// minimum. Prevents accidentally hammering a provider.
 const MIN_AUTO_SYNC_INTERVAL_SECS: u64 = 60;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct AutoSyncRetryState {
     /// Failed attempts in the current cycle, including the initial attempt.
     failed_attempts: u32,
@@ -376,7 +375,12 @@ async fn sync_subscription(
         .user_agent
         .clone()
         .unwrap_or_else(|| default_user_agent_for_format(&subscription.format).to_string());
-    let response = fetch_subscription_content(subscription.url.clone(), user_agent.clone()).await?;
+    let response = fetch_subscription_content(
+        state.capabilities().clone(),
+        subscription.url.clone(),
+        user_agent.clone(),
+    )
+    .await?;
     let mut parsed = parse_subscription_content(&response.content, &subscription.format)?;
     let now = now_unix_ms();
     let target_proxy_config_id = subscription
@@ -602,54 +606,69 @@ struct SubscriptionFetch {
 }
 
 async fn fetch_subscription_content(
+    manager: znet_client_core::capability::Manager,
     url: String,
     user_agent: String,
 ) -> AppResult<SubscriptionFetch> {
     tauri::async_runtime::spawn_blocking(move || {
-        fetch_subscription_content_blocking(&url, &user_agent)
+        fetch_subscription_content_blocking(&manager, &url, &user_agent)
     })
     .await
     .map_err(|error| AppError::internal(format!("subscription worker failed: {error}")))?
 }
 
 fn fetch_subscription_content_blocking(
+    manager: &znet_client_core::capability::Manager,
     url: &str,
     user_agent: &str,
 ) -> AppResult<SubscriptionFetch> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(SUBSCRIPTION_FETCH_TIMEOUT_SECONDS))
-        .user_agent(user_agent)
-        // Use reqwest's default environment-variable proxy policy. The GUI
-        // does not infer a download proxy from kernel or OS proxy state.
-        .build()
-        .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
-
-    let response = client.get(url).send().map_err(|error| AppError {
+    use znet_client_capabilities::network;
+    let error = |error| AppError {
         code: "upstream_error",
-        message: format!("failed to fetch subscription: {error}"),
-        details: Some(serde_json::json!({ "url": url })),
-    })?;
-
-    let status = response.status();
-    if !status.is_success() {
+        message: match error {
+            znet_client_core::capability::Error::BudgetExceeded => {
+                "订阅读取超出限制：正文最多 8 MiB，重定向最多 10 次"
+            }
+            znet_client_core::capability::Error::Expired
+            | znet_client_core::capability::Error::Deadline => "订阅读取超时，请稍后重试",
+            znet_client_core::capability::Error::InvalidRequest => {
+                "订阅地址或请求参数无效：仅支持不含用户名和密码的 HTTP(S) 地址"
+            }
+            znet_client_core::capability::Error::PermissionDenied => {
+                "订阅读取被访问策略拒绝，请检查地址及重定向目标"
+            }
+            znet_client_core::capability::Error::Busy => "当前网络任务较多，请稍后重试",
+            znet_client_core::capability::Error::Cancelled
+            | znet_client_core::capability::Error::Revoked => "订阅读取已停止",
+            _ => "订阅网络请求失败，请检查连接后重试",
+        }
+        .to_owned(),
+        details: None,
+    };
+    let lease = znet_client_capabilities::subscription::begin(manager).map_err(error)?;
+    let response = network::get(
+        &lease,
+        url,
+        user_agent,
+        network::MAX_BODY_BYTES,
+        &["subscription-userinfo"],
+    )
+    .and_then(|resource| resource.take(&lease))
+    .map_err(error)?;
+    if !(200..300).contains(&response.status) {
         return Err(AppError {
             code: "upstream_error",
-            message: format!("subscription server returned HTTP {status}"),
-            details: Some(serde_json::json!({ "url": url, "status": status.as_u16() })),
+            message: format!("subscription server returned HTTP {}", response.status),
+            details: None,
         });
     }
-
     let userinfo = response
-        .headers()
+        .headers
         .get("subscription-userinfo")
-        .and_then(|value| value.to_str().ok())
+        .map(String::as_str)
         .map(parse_subscription_userinfo)
         .unwrap_or_default();
-    let content = response.text().map_err(|error| AppError {
-        code: "upstream_error",
-        message: format!("failed to read subscription response: {error}"),
-        details: Some(serde_json::json!({ "url": url })),
-    })?;
+    let content = String::from_utf8_lossy(&response.body).into_owned();
     Ok(SubscriptionFetch { content, userinfo })
 }
 
@@ -1793,10 +1812,42 @@ pub fn spawn_auto_sync_scheduler(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         // Warmup: let the kernel / network come up before the first pass.
         tokio::time::sleep(Duration::from_secs(AUTO_SYNC_WARMUP_SECONDS)).await;
-        let mut retry_states = HashMap::new();
+        let manager = app.state::<AppState>().capabilities().clone();
+        let (mut retry_states, mut revision) = match crate::services::schedule_store::load::<
+            HashMap<String, AutoSyncRetryState>,
+        >(manager.clone(), "subscriptions")
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                logs::znet_log_fields(
+                    Some(app.state::<AppState>().inner()),
+                    LogLevel::Error,
+                    error.message,
+                    json!({"operation":"scheduler_storage","scheduler":"subscriptions"}),
+                );
+                return;
+            }
+        };
 
         loop {
             run_auto_sync_pass(&app, &mut retry_states).await;
+            if let Err(error) = crate::services::schedule_store::save(
+                manager.clone(),
+                "subscriptions",
+                &retry_states,
+                &mut revision,
+            )
+            .await
+            {
+                logs::znet_log_fields(
+                    Some(app.state::<AppState>().inner()),
+                    LogLevel::Error,
+                    error.message,
+                    json!({"operation":"scheduler_storage","scheduler":"subscriptions"}),
+                );
+                return;
+            }
             tokio::time::sleep(Duration::from_secs(AUTO_SYNC_TICK_SECONDS)).await;
         }
     });
@@ -2022,10 +2073,11 @@ fn collect_due_subscription_attempts(
 }
 
 fn auto_sync_retry_delay_secs(retry_number: u32) -> u64 {
-    let exponent = retry_number.saturating_sub(1).min(31);
-    AUTO_SYNC_RETRY_BASE_SECONDS
-        .saturating_mul(1_u64 << exponent)
-        .min(AUTO_SYNC_RETRY_MAX_SECONDS)
+    znet_client_core::scheduling::retry_delay_seconds(
+        retry_number,
+        AUTO_SYNC_RETRY_BASE_SECONDS,
+        AUTO_SYNC_RETRY_MAX_SECONDS,
+    )
 }
 
 fn record_auto_sync_failure(
@@ -2839,3 +2891,7 @@ proxy-groups:
         assert!(!retries.contains_key("manual-success"));
     }
 }
+
+#[cfg(test)]
+#[path = "subscription_capability_tests.rs"]
+mod capability_tests;

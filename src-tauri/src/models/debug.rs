@@ -74,6 +74,7 @@ pub(crate) fn install_debug_frame_observer(observer: DebugFrameObserver) -> bool
 /// Push a frame into the ring buffer from anywhere in the crate.
 pub(crate) fn push_debug_frame(frame: DebugFrame) {
     let mut frame = frame;
+    frame.payload = crate::kernel::redaction::frame(&frame.payload);
     frame.id = DEBUG_FRAME_ID.fetch_add(1, Ordering::Relaxed);
     let persisted = frame.clone();
     if let Ok(mut frames) = DEBUG_FRAMES.lock() {
