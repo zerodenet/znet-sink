@@ -49,7 +49,12 @@ const config = await invoke('app_config_get');
 
 - [网络工具箱架构与现有实现迁移计划（当前工作方向）](./internal-modules.md)
 - [流量拦截、抓包、HTTPS 调试与改写（目标边界）](./network-inspection.md)
-- [客户端插件系统设计（归档候选，暂不实施）](./plugins.md)
+- [客户端统一入口、管理与执行管道（最新实施计划）](./unified-capability-plan.md)
+- [能力入口盘点与本地迁移进度](./capability-migration.md)
+- [ZBoard 联动插件主线：登录、权限与受保护订阅](./zboard-plugin-target.md)
+- [客户端插件注册、发布与本地安装链](./plugin-distribution.md)
+- [客户端插件基础阶段（设备准入、沙箱与授权）](./plugin-foundation.md)
+- [客户端插件系统完整候选](./plugins.md)
 - [ZBoard 受保护配置与内存运行设计（待后续评审）](./protected-config.md)
 - [应用配置](./app-config.md)
 - [本地存储边界](./storage.md)
