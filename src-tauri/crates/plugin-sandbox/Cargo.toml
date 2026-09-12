@@ -1,0 +1,32 @@
+[package]
+name = "znet-plugin-sandbox"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.87"
+publish = false
+
+[dependencies]
+znet-client-core = { path = "../client-core" }
+znet-client-capabilities = { path = "../client-capabilities" }
+rquickjs = { version = "=0.13.0", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+tempfile = "3"
+fs2 = "0.4"
+
+[[bin]]
+name = "znet-plugin-lab"
+path = "src/bin/lab.rs"
+
+[[bin]]
+name = "znet-plugin"
+path = "src/bin/plugin.rs"
+
+[features]
+# Explicit experimental bridge; never enabled by the GUI or default lab.
+network-lab = []
