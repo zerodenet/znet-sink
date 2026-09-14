@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZNet Sink",
-  "version": "0.0.1",
+  "version": "0.0.2-dev.202609140953",
   "identifier": "org.zerodenet.znetsink",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -77,11 +77,11 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "bundleVersion": "375"
+      "bundleVersion": "379"
     },
     "windows": {
       "wix": {
-        "version": "0.0.1.375"
+        "version": "0.0.2.379"
       },
       "nsis": {
         "installerHooks": "./nsis/uninstall.nsh"
