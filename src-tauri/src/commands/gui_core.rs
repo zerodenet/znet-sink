@@ -31,9 +31,7 @@ use crate::models::gui_core::{
 };
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
-use crate::services::{
-    core_config, core_process, diagnostic_storage, interaction_mode, proxy_config,
-};
+use crate::services::{core_config, core_process, diagnostic_storage, interaction_mode};
 use crate::state::app_state::AppState;
 
 mod dns_apply;
@@ -409,16 +407,6 @@ pub fn gui_config_policy_groups(state: State<'_, AppState>) -> AppResult<Vec<Gui
     adapter.policy_groups_from_config(content)
 }
 
-/// Apply a config to the running kernel without restart (hot-reload).
-#[tauri::command]
-pub async fn gui_apply_config(
-    state: State<'_, AppState>,
-    config: serde_json::Value,
-) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "apply_config")?;
-    apply_config_transaction(state.inner(), config).await
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiDnsSettingsInput {
@@ -447,47 +435,6 @@ pub async fn gui_apply_dns_config(
     validate_dns_settings(&input)?;
     let _operation = state.proxy_config_operation().lock().await;
     dns_apply::apply(state.clone(), input).await
-}
-
-async fn apply_config_transaction(
-    state: &AppState,
-    config: serde_json::Value,
-) -> AppResult<serde_json::Value> {
-    let _operation = state.proxy_config_operation().lock().await;
-    let previous_content = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .and_then(|profile| profile.content.clone())
-        .ok_or_else(|| {
-            AppError::invalid_argument(
-                "an active proxy config with parsed content is required before applying changes",
-            )
-        })?;
-    let opts = default_opts(state);
-    let effective = crate::services::rule_overlay::compose_effective_config(state, &config)?;
-    let result = ZeroAdapter::new().apply_config(effective, opts).await?;
-    // The kernel accepted the config — mirror it into the active profile so
-    // that config-derived views (proxy nodes, policy groups) and the next
-    // core-process start reflect the live configuration.
-    if let Err(error) = proxy_config::update_active_content(state, config) {
-        let previous_effective =
-            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
-        let _ = ZeroAdapter::new()
-            .apply_config(previous_effective, default_opts(state))
-            .await;
-        return Err(error);
-    }
-    if let Err(error) = proxy_config::retarget_managed_system_proxy(state) {
-        let _ = proxy_config::update_active_content(state, previous_content.clone());
-        let previous_effective =
-            crate::services::rule_overlay::compose_effective_config(state, &previous_content)?;
-        let _ = ZeroAdapter::new()
-            .apply_config(previous_effective, default_opts(state))
-            .await;
-        let _ = proxy_config::retarget_managed_system_proxy(state);
-        return Err(error);
-    }
-    Ok(result)
 }
 
 /// Validate a config without applying it.

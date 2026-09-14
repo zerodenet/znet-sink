@@ -44,7 +44,7 @@
       ?? item.endedAtUnixMs
       ?? item.eventOccurredAtUnixMs
       ?? 0;
-    return `${item.origin}:${item.flowId}:${lifetime}`;
+    return `${item.origin}:${item.coreInstanceId ?? 'unknown'}:${item.flowId}:${lifetime}`;
   }
 
   function focusableElements(): HTMLElement[] {
@@ -438,6 +438,7 @@
               <p>这里保留内核原始结构，用于排查字段缺失和版本兼容问题；日常查看连接不需要展开原始 JSON。</p>
               <div class="property-grid">
                 <div class="property"><span>数据来源</span><strong>{rawSourceLabel(connection.rawSource)}</strong></div>
+                <div class="property"><span>所属内核实例</span><strong>{connection.coreInstanceId ?? '记录未提供'}</strong></div>
                 <div class="property"><span>记录版本</span><strong>{isNumber(connection.revision) ? connection.revision : '当前查询模型未提供'}</strong></div>
                 {#if connection.eventType}<div class="property"><span>事件类型</span><strong>{connection.eventType}</strong></div>{/if}
                 {#if isNumber(connection.eventSequence)}<div class="property"><span>事件序号</span><strong>{connection.eventSequence}</strong></div>{/if}

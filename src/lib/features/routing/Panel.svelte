@@ -1,15 +1,26 @@
 <script lang="ts">
   import { RouteTraceState } from '$lib/features/routing/state.svelte';
   import { onDestroy } from 'svelte';
-  import { Clipboard, LoaderCircle, Network } from '@lucide/svelte';
+  import { Clipboard, LoaderCircle, Network, XCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { getAppErrorMessage } from '$lib/services/core';
-  import { guiTraceRoute } from './client';
+  import {
+    cancelToolJob,
+    listToolJobs,
+    startToolJob,
+    subscribeToolJobs,
+  } from '$lib/features/tool-jobs/client';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import type { TraceRouteResult, TraceHop } from '$lib/types/diagnostics';
 
-  const route = new RouteTraceState({guiTraceRoute, getAppErrorMessage});
+  const route = new RouteTraceState({
+    start: startToolJob,
+    list: listToolJobs,
+    cancel: cancelToolJob,
+    subscribe: subscribeToolJobs,
+    getAppErrorMessage,
+  });
 
   let traceCopyFeedback = $state<string | null>(null);
   let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -51,6 +62,17 @@
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
   });
 </script>
+
+  {#if route.jobs.active('route_trace').length > 0}
+    <div class="job-strip" aria-label="路由追踪活动任务">
+      {#each route.jobs.active('route_trace') as job (job.id)}
+        <LoaderCircle class="animate-spin" />
+        <span>#{job.id} · {job.subject}</span>
+        <small>{job.state === 'queued' ? '排队中' : job.state === 'cancelling' ? '正在停止' : '执行中'}</small>
+        <Button variant="ghost" size="xs" onclick={() => route.cancel(job.id)}><XCircle />停止</Button>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Route trace -->
   <section class="diag-tool">
@@ -127,6 +149,22 @@
     {/if}
   </section>
 <style>
+
+  .job-strip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    font-size: 11px;
+  }
+
+  .job-strip > :global(svg) { width: 13px; height: 13px; flex: 0 0 auto; }
+  .job-strip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job-strip > small { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 
   .diag-tool {
     display: flex;

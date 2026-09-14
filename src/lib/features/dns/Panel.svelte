@@ -1,17 +1,29 @@
 <script lang="ts">
   import { DnsState } from '$lib/features/dns/state.svelte';
   import { onDestroy } from 'svelte';
-  import { Clipboard, LoaderCircle, Search, Settings2, Trash2 } from '@lucide/svelte';
+  import { Clipboard, LoaderCircle, Search, Settings2, Trash2, XCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import * as Select from '$lib/components/ui/select';
   import { getAppErrorMessage } from '$lib/services/core';
-  import { guiClearFakeIp, guiDnsCache, guiDnsLookup, guiFakeIpLookup } from './client';
+  import {
+    cancelToolJob,
+    listToolJobs,
+    startToolJob,
+    subscribeToolJobs,
+  } from '$lib/features/tool-jobs/client';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
   import type { DnsLookupResult, DnsRecord } from '$lib/types/diagnostics';
 
-  const dns = new DnsState({guiDnsLookup, guiFakeIpLookup, guiDnsCache, guiClearFakeIp, getAppErrorMessage, confirm: (message) => window.confirm(message)});
+  const dns = new DnsState({
+    start: startToolJob,
+    list: listToolJobs,
+    cancel: cancelToolJob,
+    subscribe: subscribeToolJobs,
+    getAppErrorMessage,
+    confirm: (message) => window.confirm(message),
+  });
 
   let dnsCopyFeedback = $state<string | null>(null);
 
@@ -24,6 +36,10 @@
 
   function fmtElapsed(ms: number | undefined): string {
     return ms == null ? '' : `${ms}ms`;
+  }
+
+  function jobLabel(kind: string): string {
+    return ({ dns_lookup: '域名查询', dns_cache: '缓存读取', fake_ip_lookup: 'Fake-IP 查询', fake_ip_clear: 'Fake-IP 清理' } as Record<string, string>)[kind] ?? kind;
   }
 
   async function copyText(text: string) {
@@ -53,6 +69,19 @@
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
   });
 </script>
+
+  {#if dns.jobs.active().length > 0}
+    <div class="job-strip" aria-label="DNS 与 Fake-IP 活动任务">
+      {#each dns.jobs.active() as job (job.id)}
+        <div class="job-item">
+          <LoaderCircle class="animate-spin" />
+          <span>#{job.id} · {jobLabel(job.kind)} · {job.subject}</span>
+          <small>{job.state === 'queued' ? '排队中' : job.state === 'cancelling' ? '正在停止' : '执行中'}</small>
+          <Button variant="ghost" size="xs" onclick={() => dns.cancel(job.id)} title="停止任务"><XCircle />停止</Button>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <!-- DNS lookup -->
   <section class="diag-tool">
@@ -195,6 +224,28 @@
   </section>
 
 <style>
+
+  .job-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+  }
+
+  .job-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  .job-item > :global(svg) { width: 13px; height: 13px; flex: 0 0 auto; }
+  .job-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job-item > small { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 
   .diag-tool {
     display: flex;

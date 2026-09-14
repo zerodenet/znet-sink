@@ -28,10 +28,27 @@ export interface DebugFrameQuery {
   outbound?: string;
   /** Connection-history-only exact outcome/close-reason filter. */
   outcome?: string;
+  capturedAfterMs?: number;
+  capturedBeforeMs?: number;
 }
 
 export interface DebugFramePage {
   items: DebugFrame[];
   hasMore: boolean;
   oldestAvailableId?: number;
+  history?: ConnectionHistorySummary;
+}
+
+export interface ConnectionHistorySummary {
+  retainedRecords: number;
+  matchedRecords: number;
+  retainedBytes: number;
+  oldestCapturedAtMs: number | null;
+  newestCapturedAtMs: number | null;
+  recordLimit: number;
+  byteLimit: number;
+  maxAgeMs: number;
+  removedSinceClientStart: number;
+  writeFailuresSinceClientStart: number;
+  completeness: 'unknown';
 }

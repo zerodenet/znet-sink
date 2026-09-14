@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigPlanApplyResult } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -439,12 +439,6 @@ export async function getGuiRecentConnections(options?: GuiConnectionListOptions
   return invoke('gui_recent_connections', { options });
 }
 
-// Config hot-reload
-
-export async function guiApplyConfig(config: Record<string, unknown>): Promise<unknown> {
-  return invoke('gui_apply_config', { config });
-}
-
 export async function guiApplyDnsConfig(input: DnsSettingsInput): Promise<unknown> {
   return invoke('gui_apply_dns_config', { input });
 }
@@ -479,10 +473,20 @@ export async function guiInspectDnsEffectiveConfig(
   return invoke('gui_inspect_dns_effective_config', { input });
 }
 
-/** Compatibility-only API. The current Zero IPC contract does not expose
- * config.plan_apply, and the Tauri command is intentionally not registered. */
-export async function guiPlanApplyConfig(config: Record<string, unknown>): Promise<ConfigPlanApplyResult> {
-  return invoke('gui_plan_apply_config', { config });
+export async function getConfigWorkspaceSnapshot(): Promise<ConfigWorkspaceSnapshot> {
+  return invoke('gui_config_workspace_snapshot');
+}
+
+export async function planConfigWorkspace(
+  sourceConfig: Record<string, unknown>,
+): Promise<ConfigWorkspacePlan> {
+  return invoke('gui_config_workspace_plan', { sourceConfig });
+}
+
+export async function applyConfigWorkspace(
+  input: ConfigWorkspaceApplyInput,
+): Promise<ConfigTransactionReceipt> {
+  return invoke('gui_config_workspace_apply', { input });
 }
 
 // Mode hot-switch

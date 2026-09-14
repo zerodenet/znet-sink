@@ -7,7 +7,7 @@ pub use original::{
     LocalProxyEndpoint,
 };
 pub(crate) use original::{
-    clear_local_proxy_source, ensure_managed_system_proxy_compatible,
+    clear_local_proxy_source, ensure_managed_system_proxy_compatible, restore_profiles,
     retarget_managed_system_proxy, sync_local_proxy_from_profile, upsert_runtime_locked,
 };
 

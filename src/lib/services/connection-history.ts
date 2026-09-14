@@ -1,3 +1,4 @@
+import { connectionLifecycleKey } from '$lib/services/connection-view';
 import type { ConnectionWireMetadata } from '$lib/services/connection-wire';
 import { parseConnectionNetworkContext } from '$lib/services/connection-network';
 import type { DebugFrame } from '$lib/types/debug';
@@ -33,6 +34,7 @@ export function buildPersistedConnectionHistory(
     const eventOccurredAtUnixMs = number(envelope, ['occurred_at_unix_ms', 'occurredAtUnixMs']);
     const enriched: PersistedConnection = {
       ...connection,
+      coreInstanceId: text(envelope, ['core_instance_id', 'coreInstanceId']),
       rawSource: 'event',
       rawPayload: rawRecord,
       rawEnvelope: frame.payload,
@@ -132,14 +134,6 @@ function parseCompletedRecord(raw: Record<string, unknown>): GuiConnectionItem |
     updatedAtUnixMs: number(throughput, ['sampled_at_unix_ms', 'sampledAtUnixMs']),
     durationMs: number(timing, ['duration_ms', 'durationMs']),
   };
-}
-
-function connectionLifecycleKey(connection: GuiConnectionItem): string {
-  return [
-    connection.flowId,
-    connection.startedAtUnixMs ?? '',
-    connection.endedAtUnixMs ?? '',
-  ].join(':');
 }
 
 function completedTimestamp(connection: GuiConnectionItem): number {

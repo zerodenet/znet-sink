@@ -9,7 +9,7 @@ export const guiState = $state({
   tunStatus: { configSource: mode === 'profile' ? 'profile' : 'app', configSourceName: '测试配置' },
   refreshTunStatus: async () => {},
 });
-export const store = $state({ isActionOperable: (_action: string) => true, selectedTheme: 'light', isSwitchingUiMode: false, switchUIMode: async (_mode: string) => {}, refreshInteractionSurface: async () => {}, isNavVisible: (_key: string) => true, uiMode: 'pro' as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
+export const store = $state({ interactionSurface: { actions: new Map() }, isActionOperable: (_action: string) => true, selectedTheme: 'light', isSwitchingUiMode: false, switchUIMode: async (_mode: string) => {}, refreshInteractionSurface: async () => {}, isNavVisible: (_key: string) => true, uiMode: 'pro' as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
 export type TunDnsHijackReadiness = {
   state: string; code?: string; message: string;
   features: { tunDualStack: { state: string }; tunDnsHijack: { state: string } };

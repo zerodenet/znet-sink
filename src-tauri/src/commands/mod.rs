@@ -1,6 +1,7 @@
 pub mod app_config;
 pub mod app_update;
 pub mod capability;
+pub mod config_workspace;
 pub mod core;
 pub mod core_config;
 pub mod core_process;
@@ -17,5 +18,7 @@ pub mod rule_set;
 pub mod runtime_performance;
 pub mod subscription;
 pub mod system_proxy;
+#[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+pub mod tool_jobs;
 
 pub mod profile_settings;

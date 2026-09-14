@@ -93,7 +93,7 @@ const overviewTab = read('src/lib/components/tabs/OverviewTab.svelte');
 const nodesTab = read('src/lib/components/tabs/NodesTab.svelte');
 const nodesToolbar = read('src/lib/components/tabs/NodesToolbar.svelte');
 const proxyConfigCommands = read('src-tauri/src/commands/proxy_config.rs');
-const configEditor = read('src/lib/services/config-editor.svelte.ts');
+const configEditor = read('src/lib/services/config-workspace.svelte.ts');
 const segmentedConsumers = [
   'src/lib/components/TitleBar.svelte',
   'src/lib/components/settings/AppConfigPanel.svelte',
@@ -176,11 +176,11 @@ assert.ok(
   'Lite Settings must hide and never mount Pro-only TUN and live kernel config editors',
 );
 assert.ok(
-  configEditor.includes("import { listProxyConfigs } from '$lib/services/config'") &&
-    configEditor.includes('profile.active') &&
-    configEditor.includes('activeProfile.content') &&
+  configEditor.includes('getConfigWorkspaceSnapshot') &&
+    configEditor.includes('snapshot.sourceConfig') &&
+    configEditor.includes('snapshot.effectiveConfig') &&
     !configEditor.includes('getCoreConfig'),
-  'the Pro config editor must edit the active persisted Zero config, never the read-only core ConfigSnapshot',
+  'the Pro config workspace must edit the backend-owned active source and never the read-only core ConfigSnapshot',
 );
 assert.ok(
   overviewTab.includes("store.activeTab = 'nodes'") &&

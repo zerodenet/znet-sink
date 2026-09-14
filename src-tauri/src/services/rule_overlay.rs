@@ -33,6 +33,16 @@ pub(crate) fn compose_effective_config_for(
     base: &Value,
     id: Option<&str>,
 ) -> AppResult<Value> {
+    let candidate = compose_effective_candidate_for(state, base, id)?;
+    state.configuration().record(candidate.report.clone());
+    Ok(candidate.config)
+}
+
+pub(crate) fn compose_effective_candidate_for(
+    state: &AppState,
+    base: &Value,
+    id: Option<&str>,
+) -> AppResult<crate::configuration::composition::Candidate> {
     let app = common::lock(state.app_config(), "app_config")?.clone();
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let (app, edited) = crate::configuration::local_edits::resolve(&app, id, base)?;
@@ -66,8 +76,7 @@ pub(crate) fn compose_effective_config_for(
             &edited,
         );
     }
-    state.configuration().record(candidate.report.clone());
-    Ok(candidate.config)
+    Ok(candidate)
 }
 
 pub(crate) fn compose_effective_config_with_dns(

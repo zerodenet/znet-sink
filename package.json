@@ -48,7 +48,7 @@
     "test:kernel-version": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-kernel-version-policy.mjs",
     "verify:stable": "node scripts/check-stable-readiness.mjs",
     "test:overview": "node --experimental-strip-types --test scripts/test-professional-overview.mjs && node --experimental-vm-modules --test scripts/test-overview-commands.mjs",
-    "test:config-workspace": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-profile-activation.mjs",
+    "test:config-workspace": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-profile-activation.mjs scripts/test-config-workspace.mjs",
     "test:feature-owners": "node --test scripts/test-feature-owners.mjs",
     "product": "node scripts/product.mjs",
     "test:product-composition": "node --test scripts/test-product-composition.mjs"

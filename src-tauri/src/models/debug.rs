@@ -23,7 +23,7 @@ pub struct DebugFrame {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugFrameQuery {
     pub frame_type: Option<String>,
@@ -37,6 +37,9 @@ pub struct DebugFrameQuery {
     pub outbound: Option<String>,
     /// Connection-history-only exact outcome or close-reason filter.
     pub outcome: Option<String>,
+    /// Inclusive client capture-time bounds for connection history.
+    pub captured_after_ms: Option<u64>,
+    pub captured_before_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -45,6 +48,8 @@ pub struct DebugFramePage {
     pub items: Vec<DebugFrame>,
     pub has_more: bool,
     pub oldest_available_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::services::connection_history_store::HistorySummary>,
 }
 
 /// Maximum number of recent frames retained in memory for live inspection.
@@ -78,7 +83,9 @@ pub(crate) fn push_debug_frame(frame: DebugFrame) {
         frames.push(frame);
     }
     let _ = crate::services::debug_store::append(&persisted);
-    let _ = crate::services::connection_history_store::append_if_completed(&persisted);
+    if crate::services::connection_history_store::append_if_completed(&persisted).is_err() {
+        crate::services::connection_history_store::record_write_failure();
+    }
     if let Some(observer) = DEBUG_FRAME_OBSERVER.get() {
         // Diagnostics must never be able to break the IPC path.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(&persisted)));
