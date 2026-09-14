@@ -78,10 +78,12 @@ test('online discovery selects a stable release and installs without automatical
   await expect(page.getByText('在线示例', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '选择版本' }).click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog.getByLabel('发布版本')).toHaveValue('v1.1.0');
-  await dialog.getByLabel('发布版本').selectOption('v2.0.0-beta');
+  await expect(dialog.getByRole('button', { name: '发布版本', exact: true })).toHaveText('v1.1.0');
+  await dialog.getByRole('button', { name: '发布版本', exact: true }).click();
+  await page.getByRole('option', { name: 'v2.0.0-beta（预发布）', exact: true }).click();
   await expect(dialog.getByText('这是预发布版本，可能尚不稳定。')).toBeVisible();
-  await dialog.getByLabel('发布版本').selectOption('v1.1.0');
+  await dialog.getByRole('button', { name: '发布版本', exact: true }).click();
+  await page.getByRole('option', { name: 'v1.1.0', exact: true }).click();
   await dialog.getByRole('button', { name: '下载并安装' }).click();
   await expect(page.getByText('1.1.0', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();

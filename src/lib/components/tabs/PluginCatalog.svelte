@@ -3,6 +3,7 @@
   import { Search, Download, RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import * as Dialog from '$lib/components/ui/dialog';
   import { pluginApi, type PluginListing, type PluginRelease, type PluginSnapshot } from '$lib/services/plugins';
   import { getAppErrorInfo } from '$lib/services/core';
@@ -80,9 +81,13 @@
       {#if versionsLoading}<p role="status">正在读取发布版本…</p>
       {:else if releases.length}
         <label class="version-label" for="plugin-version">发布版本</label>
-        <select id="plugin-version" class="znet-field w-full" bind:value={tag} disabled={installing}>
-          {#each releases as version}<option value={version.tag_name}>{version.tag_name}{version.prerelease ? '（预发布）' : ''}</option>{/each}
-        </select>
+        <FieldSelect
+          id="plugin-version"
+          aria-label="发布版本"
+          bind:value={tag}
+          disabled={installing}
+          options={releases.map(version => ({ value: version.tag_name, label: `${version.tag_name}${version.prerelease ? '（预发布）' : ''}` }))}
+        />
         {#if release?.prerelease}<p>这是预发布版本，可能尚不稳定。</p>{/if}
         {#if release?.body}<pre>{release.body}</pre>{/if}
       {:else if !versionError}<p>发布者尚未发布可安装版本。</p>{/if}
