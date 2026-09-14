@@ -1,3 +1,6 @@
 *.sh text eol=lf
 *.mjs text eol=lf
 *.plist text eol=lf
+
+# Plugin manifests hash source bytes; checkout must preserve their LF form.
+examples/plugins/**/*.js text eol=lf
