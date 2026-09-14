@@ -1,4 +1,5 @@
 //! Desktop component owner. Verified material only; guest IO stays in capability executors.
+mod discovery;
 mod io;
 mod model;
 mod operations;

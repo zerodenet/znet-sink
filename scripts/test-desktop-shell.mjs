@@ -163,7 +163,7 @@ assert.ok(
   'segmented control consumers should not retain page-level selected-state implementations',
 );
 assert.ok(
-  appStore.includes("'overview', 'nodes', 'subscriptions', 'logs', 'settings'"),
+  appStore.includes("'overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings'"),
   'Lite fallback navigation should expose the existing nodes page',
 );
 assert.ok(

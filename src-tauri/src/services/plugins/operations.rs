@@ -135,8 +135,17 @@ impl Host {
             .map_err(io::failure)?;
         let payload: package::Payload = serde_json::from_slice(&payload).map_err(io::failure)?;
         let directory = io::directory(manager)?;
-        let registration = directory.find(&payload.plugin_id).map_err(io::failure)?;
-        let verified = package::verify(&bytes, registration).map_err(io::failure)?;
+        self.install_bytes(manager, &bytes, directory, &payload.plugin_id)
+    }
+    pub(super) fn install_bytes(
+        &self,
+        manager: &Manager,
+        bytes: &[u8],
+        directory: Directory,
+        id: &str,
+    ) -> AppResult<Snapshot> {
+        let registration = directory.find(id).map_err(io::failure)?;
+        let verified = package::verify(bytes, registration).map_err(io::failure)?;
         let target = Target::native_desktop().map_err(io::failure)?;
         verified
             .compatible(&target, env!("CARGO_PKG_VERSION"))
@@ -171,7 +180,7 @@ impl Host {
                 return Err(AppError::invalid_argument("旧组件正在退出，请稍后重新安装"));
             }
             store
-                .install(&bytes, registration, &target, env!("CARGO_PKG_VERSION"))
+                .install(bytes, registration, &target, env!("CARGO_PKG_VERSION"))
                 .map_err(io::failure)?;
             self.state.lock().unwrap().directory = Some((directory.clone(), Instant::now()));
             self.rescan(manager, &store)

@@ -263,3 +263,48 @@ fn store_rejects_symlink_state_without_touching_target() {
     assert!(store.list().is_err());
     assert_eq!(std::fs::read(outside).unwrap(), b"keep");
 }
+
+#[test]
+fn host_fetch_reuses_release_identity_and_signature_validation() {
+    use znet_plugin_sandbox::distribution::remote::{Release, Remote};
+    let registration = registration();
+    let payload = payload("1.0.0", serde_json::json!("any"));
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let metadata = serde_json::to_vec(&ReleaseMetadata {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: registration.id.clone(),
+        version: "1.0.0".into(),
+        asset: "plugin.zspkg".into(),
+        sha256: sha256(&bytes),
+    })
+    .unwrap();
+    let release: Release = serde_json::from_value(serde_json::json!({
+        "tag_name":"v1.0.0", "html_url":"https://github.com/example/plugin/releases/tag/v1.0.0", "published_at":"2026-09-14", "draft":false, "prerelease":false,
+        "assets":[{"name":"marketplace-entry.json","browser_download_url":"https://github.com/example/plugin/releases/download/v1.0.0/marketplace-entry.json","size":metadata.len()}, {"name":"plugin.zspkg","browser_download_url":"https://github.com/example/plugin/releases/download/v1.0.0/plugin.zspkg","size":bytes.len()}]
+    })).unwrap();
+    let remote = Remote::with_fetch(|url, _| {
+        Ok(if url.ends_with(".json") {
+            metadata.clone()
+        } else {
+            bytes.clone()
+        })
+    })
+    .unwrap();
+    assert_eq!(remote.download(&registration, &release).unwrap(), bytes);
+    let mut wrong_repository = release.clone();
+    wrong_repository.assets[1].browser_download_url =
+        "https://github.com/attacker/plugin/releases/download/v1/plugin.zspkg".into();
+    assert!(remote.download(&registration, &wrong_repository).is_err());
+    let corrupted = Remote::with_fetch(|url, _| {
+        Ok(if url.ends_with(".json") {
+            metadata.clone()
+        } else {
+            b"tampered".to_vec()
+        })
+    })
+    .unwrap();
+    assert!(corrupted.download(&registration, &release).is_err());
+    assert!(remote.get("https://attacker.example/package", 100).is_err());
+    assert!(remote.get("https://github.com/example/plugin", 1).is_err());
+}

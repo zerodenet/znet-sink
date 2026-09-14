@@ -322,7 +322,7 @@
       <span class="search-icon">
         <Search class="h-3.5 w-3.5" />
       </span>
-      <Input bind:value={query} class="w-[180px] max-w-full" placeholder="搜索名称、ID 或文件路径" />
+      <Input bind:value={query} class="w-[260px] max-w-full pl-8" aria-label="搜索配置" placeholder="搜索名称、ID 或文件路径" />
     </div>
   </div>
 

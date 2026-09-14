@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-async function fixture(page: Page) {
+async function fixture(page: Page, discover = false) {
   await page.addInitScript(() => {
     const component = {
       plugin_id: 'org.example.plugin', name: '示例插件', component_id: 'identity', version: '1.0.0', publisher: 'example',
@@ -18,6 +18,13 @@ async function fixture(page: Page) {
         late: () => { pending?.({ result: 'late-canary' }); },
       },
       __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
+        if (command === 'plugins_catalog') return [{ id: component.plugin_id, name: '在线示例', description: '插件目录测试', publisher: { id: 'example' }, repository: 'https://github.com/example/plugin' }];
+        if (command === 'plugins_releases') return [{ tag_name: 'v2.0.0-beta', prerelease: true, body: '预发布说明' }, { tag_name: 'v1.1.0', prerelease: false, body: '稳定版本说明' }];
+        if (command === 'plugins_install_release') {
+          if (args.id !== component.plugin_id || args.tag !== 'v1.1.0') throw new Error('错误的安装选择');
+          installed = true; component.version = '1.1.0'; component.enabled = false;
+          return state();
+        }
         if (command === 'plugins_supported') return true;
         if (command === 'plugins_snapshot' || command === 'plugins_refresh') return state();
         if (command === 'plugins_authorize') {
@@ -34,7 +41,7 @@ async function fixture(page: Page) {
     });
   });
   await page.goto('/?panel=plugins', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByText('示例插件', { exact: true })).toBeVisible();
+  if (!discover) { await page.getByRole('button', { name: '已安装', exact: true }).click(); await expect(page.getByText('示例插件', { exact: true })).toBeVisible(); }
 }
 test('permissions are explicit and unsupported access cannot be selected; stopping discards a late result', async ({ page }) => {
   await fixture(page);
@@ -65,3 +72,43 @@ test('an old permission dialog displays rejection instead of enabling the compon
   await expect(page.getByText('插件状态或授权已变化，请重新检查并确认权限', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
 });
+
+test('online discovery selects a stable release and installs without automatically authorizing', async ({ page }) => {
+  await fixture(page, true);
+  await expect(page.getByText('在线示例', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '选择版本' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('发布版本')).toHaveValue('v1.1.0');
+  await dialog.getByLabel('发布版本').selectOption('v2.0.0-beta');
+  await expect(dialog.getByText('这是预发布版本，可能尚不稳定。')).toBeVisible();
+  await dialog.getByLabel('发布版本').selectOption('v1.1.0');
+  await dialog.getByRole('button', { name: '下载并安装' }).click();
+  await expect(page.getByText('1.1.0', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
+});
+test('catalog errors can be retried and an empty catalog has an honest empty state', async ({ page }) => {
+  await page.addInitScript(() => {
+    let attempts = 0;
+    Object.assign(window, { __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      if (command === 'plugins_supported') return true;
+      if (command === 'plugins_snapshot') return { checked: false, components: [], notices: [] };
+      if (command === 'plugins_catalog') { if (++attempts === 1) throw { message: '网络暂不可用' }; return []; }
+      throw new Error(command);
+    } } });
+  });
+  await page.goto('/?panel=plugins');
+  await expect(page.getByRole('alert')).toContainText('网络暂不可用');
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.getByText('暂时没有已上架的插件。', { exact: false })).toBeVisible();
+});
+
+for (const mode of ['lite', 'pro']) {
+  test(`plugins has a top-level menu in ${mode} mode`, async ({ page }) => {
+    await fixture(page, true);
+    await page.goto(`/?panel=plugins-shell&mode=${mode}`);
+    await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('tab', { name: '插件', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('button', { name: '发现插件', exact: true })).toBeVisible();
+    await expect(page.getByText('在线示例', { exact: true })).toBeVisible();
+    await page.screenshot({ path: `/tmp/znet-plugins-${mode}.png` });
+  });
+}

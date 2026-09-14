@@ -196,3 +196,62 @@ fn signed_network_component_requires_approval_and_stop_prevents_more_requests() 
     assert!(host.run(&manager, review).is_err());
     assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
 }
+
+#[test]
+fn verified_install_upgrade_revokes_grants_and_invalid_bytes_preserve_current() {
+    let (_root, host, manager) = setup(false);
+    let old_review = approve(&host, &manager);
+    let directory = host
+        .state
+        .lock()
+        .unwrap()
+        .directory
+        .as_ref()
+        .unwrap()
+        .0
+        .clone();
+    let mut manifest = host
+        .state
+        .lock()
+        .unwrap()
+        .loaded
+        .values()
+        .next()
+        .unwrap()
+        .component
+        .manifest()
+        .clone();
+    manifest.version = "1.1.0".into();
+    let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.1.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    assert!(host
+        .install_bytes(
+            &manager,
+            b"invalid",
+            directory.clone(),
+            "org.example.plugin"
+        )
+        .is_err());
+    assert_eq!(host.snapshot(&manager).components[0].version, "1.0.0");
+    assert!(host.snapshot(&manager).components[0].enabled);
+    let next = host
+        .install_bytes(&manager, &bytes, directory.clone(), "org.example.plugin")
+        .unwrap();
+    assert_eq!(next.components[0].version, "1.1.0");
+    assert!(!next.components[0].enabled);
+    assert!(host.run(&manager, old_review).is_err());
+    assert!(host
+        .install_bytes(&manager, &bytes, directory, "org.example.plugin")
+        .is_err());
+    assert_eq!(host.snapshot(&manager).components[0].version, "1.1.0");
+}

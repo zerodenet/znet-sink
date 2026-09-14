@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::{io::Read, time::Duration};
 pub const DIRECTORY_URL: &str =
     "https://raw.githubusercontent.com/zerodenet/plugins/main/catalogs/znet-sink.json";
-pub struct Remote {
+type Fetch<'a> = dyn Fn(&str, usize) -> Result<Vec<u8>> + 'a;
+pub struct Remote<'a> {
+    fetch: Option<Box<Fetch<'a>>>,
     client: Client,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +41,7 @@ pub struct ReleaseMetadata {
     pub asset: String,
     pub sha256: String,
 }
-impl Remote {
+impl<'a> Remote<'a> {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent("ZNet-Sink-Plugin/1")
@@ -53,12 +55,28 @@ impl Remote {
                 }
             }))
             .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            fetch: None,
+        })
+    }
+    /// Route downloads through the host's permission-aware HTTP executor.
+    pub fn with_fetch(fetch: impl Fn(&str, usize) -> Result<Vec<u8>> + 'a) -> Result<Self> {
+        let mut remote = Self::new()?;
+        remote.fetch = Some(Box::new(fetch));
+        Ok(remote)
     }
     pub fn get(&self, url: &str, limit: usize) -> Result<Vec<u8>> {
         let url = Url::parse(url)?;
         if !allowed(&url) {
             return Err("untrusted release URL".into());
+        }
+        if let Some(fetch) = &self.fetch {
+            let bytes = fetch(url.as_str(), limit)?;
+            if bytes.len() > limit {
+                return Err("download exceeds limit".into());
+            }
+            return Ok(bytes);
         }
         let response = self.client.get(url).send()?.error_for_status()?;
         if response.content_length().is_some_and(|n| n > limit as u64) {

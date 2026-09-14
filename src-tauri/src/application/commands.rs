@@ -40,6 +40,12 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         plugin_commands::plugins_install,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_catalog,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_releases,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_install_release,
         core_commands::core_ipc_default_endpoint,
         core_commands::core_status,
         core_commands::core_ipc_ping,

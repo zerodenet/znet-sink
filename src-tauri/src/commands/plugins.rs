@@ -60,6 +60,35 @@ mod desktop {
         .await
     }
     #[tauri::command]
+    pub async fn plugins_catalog(
+        app: AppHandle,
+    ) -> AppResult<Vec<znet_plugin_sandbox::distribution::directory::Registration>> {
+        blocking(app, |state| state.plugins().catalog(state.capabilities())).await
+    }
+    #[tauri::command]
+    pub async fn plugins_releases(
+        app: AppHandle,
+        id: String,
+    ) -> AppResult<Vec<znet_plugin_sandbox::distribution::remote::Release>> {
+        blocking(app, move |state| {
+            state.plugins().releases(state.capabilities(), &id)
+        })
+        .await
+    }
+    #[tauri::command]
+    pub async fn plugins_install_release(
+        app: AppHandle,
+        id: String,
+        tag: String,
+    ) -> AppResult<Snapshot> {
+        blocking(app, move |state| {
+            state
+                .plugins()
+                .install_release(state.capabilities(), &id, &tag)
+        })
+        .await
+    }
+    #[tauri::command]
     pub async fn plugins_uninstall(app: AppHandle, id: String) -> AppResult<Snapshot> {
         blocking(app, move |state| {
             state.plugins().uninstall(state.capabilities(), &id)

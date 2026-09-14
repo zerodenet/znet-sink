@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PluginCatalog from './PluginCatalog.svelte';
   import { onMount } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { Choice } from '$lib/components/ui/choice';
@@ -8,6 +9,7 @@
   import { pluginApi, type PluginComponent, type PluginSnapshot } from '$lib/services/plugins';
   import { canApprove, selectedGrants, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
 
+  let section = $state<'discover' | 'installed'>('discover');
   let supported = $state<boolean | null>(null);
   let snapshot = $state<PluginSnapshot>({ checked: false, components: [], notices: [] });
   let busy = $state(false);
@@ -43,7 +45,7 @@
   async function install() {
     try {
       const path = await open({ title: '选择插件包', multiple: false, directory: false, filters: [{ name: 'ZNet Sink 插件', extensions: ['zspkg'] }] });
-      if (typeof path === 'string') await action(() => pluginApi.install(path), '已安装，请查看权限后决定是否启用');
+      if (typeof path === 'string') { section = 'installed'; await action(() => pluginApi.install(path), '已安装，请查看权限后决定是否启用'); }
     } catch (reason) { error = getAppErrorInfo(reason, '无法选择插件包').message; }
   }
   function review(component: PluginComponent) {
@@ -78,17 +80,24 @@
 </script>
 
 <div class="plugins-panel">
-  <div class="heading"><div><h2>插件</h2><p>管理已安装的插件及其访问权限。</p></div></div>
+  <div class="heading"><div><h2>插件</h2><p>发现、安装插件，并管理访问权限。</p></div></div>
   {#if supported === null}<p class="muted">正在读取插件状态…</p>
   {:else if !supported}<p class="muted">当前设备尚未开放插件运行。</p>
   {:else}
+    <div class="actions" aria-label="插件页面">
+      <Button variant={section === 'discover' ? 'default' : 'outline'} size="sm" aria-pressed={section === 'discover'} onclick={() => { section = 'discover'; }}>发现插件</Button>
+      <Button variant={section === 'installed' ? 'default' : 'outline'} size="sm" aria-pressed={section === 'installed'} onclick={() => { section = 'installed'; }}>已安装</Button>
+      <Button variant="ghost" size="sm" disabled={busy || runningKey !== null} onclick={install}>从本地安装</Button>
+    </div>
+    {#if section === 'discover'}
+      <PluginCatalog disabled={busy || runningKey !== null} oninstalled={(value) => { snapshot = value; section = 'installed'; message = '已安装，请查看权限后决定是否启用'; error = ''; }} />
+    {:else}
     <div class="actions">
       <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={() => action(pluginApi.refresh, '已核验中央登记与已安装插件')}>检查已安装插件</Button>
-      <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={install}>安装插件包</Button>
     </div>
     <p class="muted">安装包须通过中央登记与发布者签名校验。安装后默认不授予权限。</p>
     {#if !snapshot.checked}<p class="hint">请先检查插件登记。客户端重启后需要重新授权。</p>{/if}
-    {#if snapshot.checked && snapshot.components.length === 0}<div class="empty">还没有可加载的插件。可从发布者获取已登记的插件包后安装。</div>{/if}
+    {#if snapshot.checked && snapshot.components.length === 0}<div class="empty">还没有已安装的插件。前往“发现插件”在线安装，也可选择本地插件包。</div>{/if}
     {#each snapshot.notices as notice}<p class="hint">{notice}</p>{/each}
     {#each snapshot.components as component (`${component.plugin_id}/${component.component_id}`)}
       <article class="plugin-card">
@@ -108,6 +117,7 @@
         {/if}
       </article>
     {/each}
+    {/if}
   {/if}
   <div aria-live="polite">{#if message}<p>{message}</p>{/if}{#if error}<p class="error">{error}</p>{/if}</div>
   {#if result}<details open><summary>运行结果</summary><pre>{result}</pre></details>{/if}
@@ -147,7 +157,7 @@
 </Dialog.Root>
 
 <style>
-  .plugins-panel { padding: 24px; overflow: auto; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 16px; font-size: 13px; }
+  .plugins-panel { padding: 24px; flex: 1; min-height: 0; overflow: auto; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 16px; font-size: 13px; }
   h2 { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
   p { margin: 0; overflow-wrap: anywhere; }
   .muted, small { color: var(--muted-foreground); font-size: 12px; }

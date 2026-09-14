@@ -20,6 +20,7 @@
     rules: () => import('./tabs/RulesTab.svelte'),
     connections: () => import('./tabs/ConnectionsTab.svelte'),
     logs: () => import('./tabs/LogsTab.svelte'),
+    plugins: () => import('./tabs/PluginsTab.svelte'),
     settings: () => import('./SettingsPanel.svelte'),
     capabilities: () => import('./tabs/CapabilitiesTab.svelte'),
     debug: () => import('./tabs/DebugTab.svelte'),
