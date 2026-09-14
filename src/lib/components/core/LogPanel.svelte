@@ -122,6 +122,17 @@
     hasMore = page.hasMore || items[0].id > page.oldestAvailableId;
   }
 
+  function captureScrollAnchor() {
+    if (followLatest || !logBodyEl) return null;
+    // Anchor the row being read, not a preceding overscan row whose measured
+    // height can change independently of the visible content.
+    const top = logBodyEl.scrollTop;
+    let index = windowed.start;
+    while (index < visibleLogs.length && windowed.offsets[index + 1] <= top) index++;
+    return visibleLogs[index]
+      ? { id: visibleLogs[index].id, offset: top - windowed.offsets[index] } : null;
+  }
+
   async function refreshLogs(options: {
     replace?: boolean;
     generation?: number;
@@ -143,13 +154,15 @@
         (count, entry) => count + (knownIds.has(entry.id) ? 0 : 1),
         0,
       );
-      const anchor = !followLatest && visibleLogs[windowed.start]
-        ? { id: visibleLogs[windowed.start].id, offset: viewportTop - windowed.top } : null;
+      const anchor = captureScrollAnchor();
       logs = nextLogs;
       if (anchor) void tick().then(() => {
         if (disposed || !logBodyEl || followLatest) return;
         const index = visibleLogs.findIndex(log => log.id === anchor.id);
-        if (index >= 0) logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+        if (index >= 0) {
+          logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+          viewportTop = logBodyEl.scrollTop;
+        }
       });
       syncHasMore(page, logs);
       loadError = '';
@@ -395,13 +408,15 @@
         }
         pendingMeasurements.clear();
         if (changed) {
-          const anchor = !followLatest && visibleLogs[windowed.start]
-            ? { id: visibleLogs[windowed.start].id, offset: viewportTop - windowed.top } : null;
+          const anchor = captureScrollAnchor();
           rowHeights = next;
           if (anchor) void tick().then(() => {
             if (disposed || !logBodyEl || followLatest) return;
             const index = visibleLogs.findIndex(log => log.id === anchor.id);
-            if (index >= 0) logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+            if (index >= 0) {
+              logBodyEl.scrollTop = windowed.offsets[index] + anchor.offset;
+              viewportTop = logBodyEl.scrollTop;
+            }
           });
         }
       });

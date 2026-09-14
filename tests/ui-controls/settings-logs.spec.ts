@@ -80,13 +80,37 @@ test('logs remain interactive with large structured records and repeated refresh
   // Scrolling reaches records outside the initial DOM window.
   await page.locator('.log-body').evaluate(el => el.scrollTop = 5000);
   await expect.poll(()=>page.locator('.log-row').first().getAttribute('data-log-id')).not.toBe('5000');
-  const anchor=await page.locator('.log-row').first().getAttribute('data-log-id');
-  await page.evaluate(()=>window.dispatchEvent(new Event('fixture-append-log')));
-  await page.getByRole('button',{name:'立即刷新',exact:true}).click();
-  await expect(page.locator(`[data-log-id="${anchor}"]`)).toHaveCount(1);
+  // The first DOM row is overscan, outside the viewport. Wait for row
+  // measurements to settle, then assert the actual reading position.
+  const readingPosition = () => page.locator('.log-body').evaluate(el => {
+    const top = el.getBoundingClientRect().top;
+    const row = [...el.querySelectorAll<HTMLElement>('.log-row')]
+      .find(row => row.getBoundingClientRect().top >= top);
+    return row ? { id: row.dataset.logId, offset: row.getBoundingClientRect().top - top } : null;
+  });
+  let previous = '';
+  let stableSamples = 0;
+  await expect.poll(async () => {
+    const position = JSON.stringify(await readingPosition());
+    stableSamples = position !== 'null' && position === previous ? stableSamples + 1 : 0;
+    previous = position;
+    return stableSamples;
+  }).toBeGreaterThanOrEqual(2);
+  const anchor = await readingPosition();
+  expect(anchor).not.toBeNull();
+  for (let refresh = 0; refresh < 3; refresh++) {
+    await page.evaluate(() => window.dispatchEvent(new Event('fixture-append-log')));
+    await page.getByRole('button', { name: '立即刷新', exact: true }).click();
+    await expect(page.getByLabel('已加载日志摘要')).toContainText(`${401 + refresh}+`);
+    const row = page.locator(`[data-log-id="${anchor!.id}"]`);
+    await expect(row).toBeInViewport();
+    await expect.poll(async () => Math.abs(await row.evaluate(el =>
+      el.getBoundingClientRect().top - el.closest('.log-body')!.getBoundingClientRect().top,
+    ) - anchor!.offset)).toBeLessThanOrEqual(1);
+  }
   await page.locator('.log-body').evaluate(el => el.scrollTop = el.scrollHeight);
   await page.getByRole('button',{name:'加载更早日志',exact:true}).click();
-  await expect(page.getByLabel('已加载日志摘要')).toContainText('801');
+  await expect(page.getByLabel('已加载日志摘要')).toContainText('803');
   await expect.poll(()=>page.locator('.log-row').count()).toBeLessThan(50);
   await page.getByPlaceholder('搜索日志（Ctrl+F）').fill('session_id');
   await expect(page.locator('.log-row').first()).toBeVisible();
