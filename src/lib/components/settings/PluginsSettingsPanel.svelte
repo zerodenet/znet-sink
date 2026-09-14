@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { Choice } from '$lib/components/ui/choice';
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
   import { getAppErrorInfo } from '$lib/services/core';
@@ -120,7 +121,14 @@
       <p class="muted">{selectedComponent.version} · 发布者 {selectedComponent.publisher}</p>
       {#each selectedComponent.permissions as permission}
         <label class="permission-row">
-          <input type="checkbox" value={permissionKey(permission.request)} bind:group={selected} disabled={!permission.supported} />
+          <Choice
+            checked={selected.includes(permissionKey(permission.request))}
+            onchange={(event) => {
+              const key = permissionKey(permission.request);
+              selected = event.currentTarget.checked ? [...selected.filter(value => value !== key), key] : selected.filter(value => value !== key);
+            }}
+            disabled={!permission.supported}
+          />
           <span>{permissionLabel(permission.request.capability)}{permission.required ? '（必需）' : '（可选）'}<small>{permission.request.scope === 'self' ? '仅此插件的身份信息' : permission.request.scope}{permission.supported ? '' : ' · 暂不可用'}</small></span>
         </label>
       {/each}
@@ -148,7 +156,7 @@
   .hint, .empty { padding: 14px; border-radius: 8px; background: var(--muted); color: var(--muted-foreground); }
   .error { color: var(--destructive); }
   .permission-row { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; }
-  .permission-row input { margin-top: 4px; }
+  .permission-row :global([data-slot='choice']) { margin-top: 4px; }
   small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
   pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding: 12px; background: var(--muted); border-radius: 8px; }
   @media (max-width: 640px) { .plugins-panel { padding: 16px; } }

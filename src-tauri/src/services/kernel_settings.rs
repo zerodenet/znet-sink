@@ -394,7 +394,13 @@ mod tests {
         assert_eq!(imported.tun.tag, "tun-in");
         assert_eq!(imported.tun.secondary_addr.as_deref(), Some("fd66::1/64"));
         assert_eq!(imported.tun.include_cidrs, vec!["0.0.0.0/0"]);
-        assert_eq!(imported.bypass.as_ref().unwrap().rules, vec!["16.0.0.0/8"]);
+        // Imported legacy defaults are now visible alongside the custom exclusion.
+        let mut defaults = current.clone();
+        crate::services::bypass::normalize(&mut defaults).unwrap();
+        let mut expected = defaults.bypass.unwrap().rules;
+        expected.push("16.0.0.0/8".into());
+        assert_eq!(imported.bypass.as_ref().unwrap().rules, expected);
+        assert!(!imported.bypass.as_ref().unwrap().local_networks);
         assert_eq!(
             imported
                 .tun
