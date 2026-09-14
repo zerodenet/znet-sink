@@ -17,6 +17,14 @@ for (const tool of tools) {
     assert.equal(artifact.modules.some(id => id.endsWith(`/features/${tool.directory}/${file}`)), selected, `${product.name}: ${tool.directory}/${file}`);
   }
   if (tool.style) assert.equal(styles.includes(tool.style), selected, `${product.name}: tool styles`);
-  for (const command of tool.commands) assert.equal(code.includes(command), selected, `${product.name}: bundled ${command}`);
+}
+// Shared job transport is present when any of its owning tools is selected.
+for (const file of new Set(tools.flatMap(tool => tool.sharedFiles ?? []))) {
+  const selected = tools.some(tool => product.features.includes(tool.feature) && tool.sharedFiles?.includes(file));
+  assert.equal(artifact.modules.some(id => id.endsWith(`/features/${file}`)), selected, `${product.name}: shared ${file}`);
+}
+for (const command of new Set(tools.flatMap(tool => tool.commands))) {
+  const selected = tools.some(tool => product.features.includes(tool.feature) && tool.commands.includes(command));
+  assert.equal(code.includes(command), selected, `${product.name}: bundled ${command}`);
 }
 console.log(`${product.name}: artifact module graph and command calls verified`);

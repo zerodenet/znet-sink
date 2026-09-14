@@ -2,8 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 export const products = JSON.parse(readFileSync(new URL('../products/desktop.json', import.meta.url), 'utf8'));
 export const tools = [
-  { feature: 'tool-dns', id: 'dns', title: 'DNS 与 Fake-IP', directory: 'dns', panel: true, diagnostics: ['tool-jobs/diagnostics', 'dnsToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts', 'client.ts'], style: '.dns-attempts', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
-  { feature: 'tool-route', id: 'route-trace', title: '路由追踪', directory: 'routing', panel: true, diagnostics: ['tool-jobs/diagnostics', 'routeToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts', 'client.ts'], style: '.hop-table', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
+  { feature: 'tool-dns', id: 'dns', title: 'DNS 与 Fake-IP', directory: 'dns', panel: true, diagnostics: ['tool-jobs/diagnostics', 'dnsToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.dns-attempts', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
+  { feature: 'tool-route', id: 'route-trace', title: '路由追踪', directory: 'routing', panel: true, diagnostics: ['tool-jobs/diagnostics', 'routeToolDiagnostics'], files: ['Panel.svelte', 'state.svelte.ts'], sharedFiles: ['tool-jobs/client.ts', 'tool-jobs/state.svelte.ts'], style: '.hop-table', commands: ['gui_tool_job_start', 'gui_tool_job_cancel'] },
   { feature: 'tool-node-probe', id: 'probe-jobs', title: '节点测速任务', directory: 'node-probes', panel: false, diagnostics: ['node-probes/diagnostics', 'probeDiagnostics'], files: ['jobs.svelte.ts', 'client.ts'], commands: ['gui_probe_job_start'] },
 ];
 export function resolveProduct(name = process.env.ZNET_PRODUCT || 'desktop') {

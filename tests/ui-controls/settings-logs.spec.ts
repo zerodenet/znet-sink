@@ -50,7 +50,13 @@ test('advanced configuration mounts without a bindable ref crash', async ({ page
   await page.goto('/?panel=settings&section=config');
   await expect(page.getByText('内核配置编辑', { exact: true })).toBeVisible();
   await expect(page.getByText('页面显示异常', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.editor-container textarea')).toBeVisible();
+  await expect(page.locator('.editor-container textarea')).toHaveValue(/"level": "info"/);
+  await page.getByRole('button', { name: '客户端覆盖', exact: true }).click();
+  await expect(page.locator('.read-view pre')).toContainText('"localProxy.port": 7890');
+  await page.getByRole('button', { name: '最终生效', exact: true }).click();
+  await expect(page.locator('.effective-view pre')).toContainText('"inbounds"');
+  await page.getByRole('button', { name: '来源编辑', exact: true }).click();
+  await expect(page.locator('.editor-container textarea')).not.toHaveValue(/"inbounds"/);
   expect(errors).toEqual([]);
 });
 
