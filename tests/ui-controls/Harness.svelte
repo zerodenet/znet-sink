@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PluginsWorkspaceFixture from "./PluginsWorkspaceFixture.svelte";
+  import PluginsTab from '$lib/components/tabs/PluginsTab.svelte';
   import ConnectionInspectorWorkspace from '$lib/components/tabs/ConnectionInspectorWorkspace.svelte';
   import NodesTab from '$lib/components/tabs/NodesTab.svelte';
   import UrlTestSettingsPanel from '$lib/components/settings/UrlTestSettingsPanel.svelte';
@@ -54,7 +56,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'plugins-shell'}<PluginsWorkspaceFixture />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

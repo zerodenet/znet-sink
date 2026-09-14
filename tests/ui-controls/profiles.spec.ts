@@ -14,3 +14,19 @@ test('profile toolbar keeps desktop actions on one row at the normal compact win
   expect(actionsBox!.x).toBeGreaterThan(titleBox!.x + titleBox!.width);
   await expect(page.locator('.profiles-root')).not.toHaveCSS('overflow-x', 'scroll');
 });
+
+for (const width of [900, 625, 375]) {
+  test(`profile search reserves icon space at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 500 });
+    await page.goto('/?panel=profiles');
+    const input = page.getByRole('textbox', { name: '搜索配置' });
+    await expect(input).toBeVisible();
+    const icon = page.locator('.toolbar-search .search-icon');
+    const bounds = await input.boundingBox();
+    const iconBounds = await icon.boundingBox();
+    const padding = await input.evaluate(el => parseFloat(getComputedStyle(el).paddingLeft));
+    expect(bounds!.x + padding).toBeGreaterThan(iconBounds!.x + iconBounds!.width + 3);
+    await input.fill('狗梯');
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+  });
+}

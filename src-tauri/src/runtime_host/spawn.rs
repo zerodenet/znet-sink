@@ -124,7 +124,17 @@ pub(super) fn spawn_core_child(
 
     // Running means the IPC endpoint is healthy and belongs to this exact
     // child, including when starting after an upgrade or watchdog recovery.
-    if let Err(readiness_error) = readiness::wait_for_ready(&mut child, &snapshot.endpoint) {
+    let ready = readiness::wait_for_ready(&mut child, &snapshot.endpoint).and_then(|()| {
+        crate::kernel::connection::reset_endpoint(&snapshot.endpoint);
+        tauri::async_runtime::block_on(crate::services::core_config::apply_active_runtime(
+            state,
+            crate::models::core::CoreIpcOptions {
+                socket: Some(snapshot.endpoint.path.clone()),
+                timeout_ms: Some(5000),
+            },
+        ))
+    });
+    if let Err(readiness_error) = ready {
         let _ = child.kill();
         let exit_status = child.wait().ok();
         let _ = stderr_handle.join();

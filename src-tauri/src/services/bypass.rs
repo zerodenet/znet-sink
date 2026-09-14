@@ -9,16 +9,12 @@ use crate::models::app_config::{default_proxy_bypass, AppBypassConfig, AppConfig
 mod rules;
 use rules::{domain_pattern, native_patterns, network};
 
-const LOCAL_NETWORKS: &[&str] = &[
-    "127.0.0.0/8",
-    "::1/128",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    "169.254.0.0/16",
-    "fe80::/10",
-    "fc00::/7",
-];
+fn default_rules() -> Vec<String> {
+    serde_json::from_str(include_str!(
+        "../../../src/lib/constants/bypass-defaults.json"
+    ))
+    .expect("bundled bypass defaults are valid")
+}
 
 pub fn normalize(config: &mut AppConfig) -> AppResult<()> {
     let policy = config.bypass.clone().unwrap_or_else(|| {
@@ -40,7 +36,7 @@ pub fn normalize(config: &mut AppConfig) -> AppResult<()> {
         }
     });
     let mut rules = Vec::new();
-    for rule in policy.rules {
+    for rule in entries_from_policy(&policy) {
         let rule = rule.trim().to_ascii_lowercase();
         if rule.is_empty() {
             continue;
@@ -56,7 +52,7 @@ pub fn normalize(config: &mut AppConfig) -> AppResult<()> {
         }
     }
     config.bypass = Some(AppBypassConfig {
-        local_networks: policy.local_networks,
+        local_networks: false,
         rules,
     });
     let entries = entries(config);
@@ -84,11 +80,15 @@ fn entries(config: &AppConfig) -> Vec<String> {
     let Some(policy) = &config.bypass else {
         return Vec::new();
     };
-    let mut entries = Vec::new();
-    if policy.local_networks {
-        entries.extend(LOCAL_NETWORKS.iter().map(|v| v.to_string()));
-        entries.extend(["localhost".into(), "*.local".into(), "<local>".into()]);
-    }
+    entries_from_policy(policy)
+}
+
+fn entries_from_policy(policy: &AppBypassConfig) -> Vec<String> {
+    let mut entries = if policy.local_networks {
+        default_rules()
+    } else {
+        Vec::new()
+    };
     for rule in &policy.rules {
         if !entries.contains(rule) {
             entries.push(rule.clone());

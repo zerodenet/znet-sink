@@ -8,6 +8,7 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
     state
         .shutting_down_handle()
         .store(true, std::sync::atomic::Ordering::SeqCst);
+    state.capabilities().shutdown_components();
     let _operation = state.proxy_config_operation().lock().await;
     let stop_app = app_handle.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {

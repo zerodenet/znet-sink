@@ -137,7 +137,7 @@ assert.doesNotMatch(selectContent, /--bits-select-/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
 assert.ok(
   activation.indexOf('validate_config(content.clone(), options.clone())')
-    < activation.indexOf('match crate::services::config_apply::apply(content, options).await'),
+    < activation.indexOf('match crate::services::config_apply::apply(state.capabilities(), content, options).await'),
   'profile activation must validate the composed target config before confirmed hot apply',
 );
 
@@ -209,12 +209,9 @@ assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.equal(recommendedDns.servers.google.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'system']);
 assert.equal(recommendedDns.policy?.node_server, 'system');
-assert.deepEqual(recommendedDns.policy?.node_fallback_servers, [
-  'cloudflare-bootstrap',
-  'google-bootstrap',
-]);
-assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, undefined);
-assert.equal(recommendedDns.servers['google-bootstrap'].detour, undefined);
+assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['alidns', '114dns']);
+assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
+assert.equal(recommendedDns.servers['google-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.servers.alidns, {
   type: 'doh',
   host: 'dns.alidns.com',

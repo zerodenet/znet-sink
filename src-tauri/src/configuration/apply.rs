@@ -4,33 +4,124 @@ use crate::errors::{AppError, AppResult};
 use crate::kernel::{configuration::BoundControl, zero::queries};
 use crate::models::core::CoreIpcOptions;
 use serde_json::Value;
+use std::{
+    collections::BTreeSet,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
+use znet_client_core::capability::{Budget, Lease, Manager, Permission};
 
-pub(crate) async fn apply(config: Value, options: CoreIpcOptions) -> AppResult<()> {
-    apply_with_identity(config, options).await.map(|_| ())
+pub(crate) async fn apply(
+    manager: &Manager,
+    config: Value,
+    options: CoreIpcOptions,
+) -> AppResult<()> {
+    apply_with_identity(manager, config, options)
+        .await
+        .map(|_| ())
 }
 
 pub(crate) async fn apply_with_identity(
+    manager: &Manager,
     config: Value,
     options: CoreIpcOptions,
 ) -> AppResult<queries::KernelRuntimeIdentity> {
-    if !config.is_object() {
-        return Err(AppError::invalid_argument("config must be a JSON object"));
-    }
-    let control = BoundControl::connect(options).await?;
-    confirm(&Live { config, control }).await
+    let permission = Permission::new("configuration.apply", "active-runtime");
+    let grants = BTreeSet::from([permission]);
+    let failure = |error| AppError::invalid_argument(format!("配置能力不可用：{error}"));
+    let policy = manager
+        .admit(
+            "builtin.configuration".into(),
+            grants.clone(),
+            grants.clone(),
+            &grants,
+        )
+        .map_err(failure)?;
+    policy
+        .authorize(grants, Duration::from_secs(60))
+        .map_err(failure)?;
+    let lease = policy
+        .begin(
+            Budget {
+                calls: 1,
+                resource_bytes: 4096,
+                timeout: Duration::from_secs(60),
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .map_err(failure)?;
+    apply_authorized(&lease, config, options).await
 }
 
-struct Live {
+pub(crate) async fn apply_authorized(
+    lease: &Lease,
+    config: Value,
+    options: CoreIpcOptions,
+) -> AppResult<queries::KernelRuntimeIdentity> {
+    let permission = Permission::new("configuration.apply", "active-runtime");
+    lease
+        .check(Some(&permission))
+        .map_err(|reason| AppError::invalid_argument(format!("配置操作未获授权：{reason}")))?;
+    let mut backend_error = None;
+    let result = lease
+        .execute_async(&permission, async {
+            let result = async {
+                if !config.is_object() {
+                    return Err(AppError::invalid_argument("config must be a JSON object"));
+                }
+                let control = BoundControl::connect(options).await?;
+                let target = control.identity().await?;
+                let _claim = lease
+                    .claim_resource(format!("configuration:{}", target.core_instance_id))
+                    .map_err(|reason| {
+                        AppError::conflict(
+                            "configuration",
+                            "runtime",
+                            format!("已有配置操作正在执行：{reason}"),
+                        )
+                    })?;
+                confirm(&Live {
+                    config,
+                    control,
+                    lease,
+                })
+                .await
+            }
+            .await;
+            result.map(|identity| (identity, 256)).map_err(|error| {
+                backend_error = Some(error);
+                znet_client_core::capability::Error::Transport
+            })
+        })
+        .await
+        .and_then(|resource| resource.take(lease));
+    result.map_err(|reason| {
+        backend_error.unwrap_or_else(|| AppError {
+            code: "config_apply_uncertain",
+            message: format!("配置操作授权已失效或结果无法交付，请核对实际运行状态：{reason}"),
+            details: None,
+        })
+    })
+}
+
+struct Live<'a> {
+    lease: &'a Lease,
     config: Value,
     control: BoundControl,
 }
 
-impl Backend for Live {
+impl Backend for Live<'_> {
     type Error = AppError;
     async fn identity(&self) -> AppResult<queries::KernelRuntimeIdentity> {
         self.control.identity().await
     }
     async fn submit(&self) -> AppResult<queries::KernelRuntimeIdentity> {
+        self.lease
+            .check(Some(&Permission::new(
+                "configuration.apply",
+                "active-runtime",
+            )))
+            .map_err(|error| AppError::invalid_argument(format!("配置提交授权失效：{error}")))?;
         self.control.apply(self.config.clone()).await
     }
 }

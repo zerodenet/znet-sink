@@ -51,9 +51,21 @@ impl BoundControl {
     }
     pub(crate) async fn apply(&self, config: Value) -> AppResult<RuntimeIdentity> {
         let result = self
-            .call(json!({"type":"command","method":"config.apply","params":{"config":config}}))
+            .call(json!({"type":"command","method":"config.apply_runtime","params":{"config":config}}))
             .await?;
         commands::ensure_config_apply_accepted(&result)?;
+        if result
+            .pointer("/result/persistence")
+            .or_else(|| result.get("persistence"))
+            .and_then(Value::as_str)
+            != Some("runtime_only")
+        {
+            return Err(AppError {
+                code: "config_apply_uncertain",
+                message: "内核未确认仅内存应用配置，请核对内核版本及运行状态".into(),
+                details: None,
+            });
+        }
         queries::config_apply_identity(&result).map_err(|mut error| {
             error.code = "config_apply_uncertain";
             error.message = format!("配置应用结果无法确认，请刷新运行状态：{}", error.message);

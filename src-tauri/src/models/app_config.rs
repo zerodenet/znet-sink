@@ -719,6 +719,7 @@ mod tests {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppBypassConfig {
+    /// Legacy preset flag; normalization expands it into editable rules once.
     #[serde(default = "default_true")]
     pub local_networks: bool,
     #[serde(default)]

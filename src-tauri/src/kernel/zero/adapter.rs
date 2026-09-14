@@ -219,10 +219,6 @@ impl KernelAdapter for ZeroAdapter {
         queries::recent_connections(list_options, Some(ipc_options)).await
     }
 
-    async fn apply_config(&self, config: Value, options: CoreIpcOptions) -> AppResult<Value> {
-        commands::apply_config(config, Some(options)).await
-    }
-
     async fn validate_config(&self, config: Value, options: CoreIpcOptions) -> AppResult<Value> {
         commands::validate_config(config, Some(options)).await
     }

@@ -1,0 +1,15 @@
+[package]
+name = "znet-client-capabilities"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+znet-client-core = { path = "../client-core" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

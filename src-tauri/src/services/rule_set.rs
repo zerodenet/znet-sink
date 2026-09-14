@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ pub(crate) struct ManagedRuleSetSyncOutcome {
     pub failures: Vec<ManagedRuleSetFailure>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct AutoUpdateRetryState {
     failed_attempts: u32,
     next_attempt_at_unix_ms: u64,
@@ -163,7 +163,9 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
             let source = source.as_ref().ok_or_else(|| {
                 AppError::invalid_argument("semanticIr is required without a subscription source")
             })?;
-            let FetchOutcome::Modified(resource) = fetch_source(source, None).await? else {
+            let FetchOutcome::Modified(resource) =
+                fetch_source(state.capabilities().clone(), source, None).await?
+            else {
                 return Err(AppError::internal(
                     "new rule source unexpectedly returned not modified",
                 ));
@@ -256,7 +258,13 @@ async fn update_by_id(state: &AppState, id: String) -> AppResult<(RuleSetProfile
         .clone()
         .ok_or_else(|| AppError::invalid_argument("this rule asset has no subscription source"))?;
     let result = async {
-        match fetch_source(&source, Some(&profile.source_state)).await? {
+        match fetch_source(
+            state.capabilities().clone(),
+            &source,
+            Some(&profile.source_state),
+        )
+        .await?
+        {
             FetchOutcome::NotModified(source_state) => Ok::<_, AppError>((None, source_state)),
             FetchOutcome::Modified(resource) => {
                 let semantic_ir =
@@ -389,7 +397,9 @@ pub(crate) async fn sync_managed_subscription_sources(
             .flatten();
 
         let result = async {
-            let values = match fetch_source(&source, previous_state).await? {
+            let values = match fetch_source(state.capabilities().clone(), &source, previous_state)
+                .await?
+            {
                 FetchOutcome::Modified(resource) => {
                     let display_name = format!("{subscription_name} / {}", managed.tag);
                     let artifact = if source.format == "zrs" {
@@ -760,6 +770,7 @@ enum FetchOutcome {
 }
 
 async fn fetch_source(
+    manager: znet_client_core::capability::Manager,
     source: &RuleSetSource,
     previous: Option<&RuleSetSourceState>,
 ) -> AppResult<FetchOutcome> {
@@ -770,56 +781,38 @@ async fn fetch_source(
         .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string());
     let previous = previous.cloned().unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent(user_agent)
-            .build()
-            .map_err(|error| AppError::internal(format!("failed to build rule client: {error}")))?;
-        let mut request = client.get(&url);
-        if let Some(etag) = &previous.etag {
-            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
-        }
-        if let Some(last_modified) = &previous.last_modified {
-            request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
-        }
-        let mut response = request.send().map_err(|error| {
-            AppError::internal(format!("failed to download rule source: {error}"))
-        })?;
+        use znet_client_capabilities::{network, subscription::web_read};
+        let failure = |error| AppError::internal(format!("规则来源读取失败：{error}"));
+        let lease = web_read(&manager, "builtin.rules", MAX_INPUT_BYTES).map_err(failure)?;
+        let validators = network::Validators {
+            etag: previous.etag.clone(),
+            last_modified: previous.last_modified.clone(),
+        };
+        let response = network::get_conditional(
+            &lease,
+            &url,
+            &user_agent,
+            MAX_INPUT_BYTES,
+            &["etag", "last-modified"],
+            &validators,
+        )
+        .and_then(|resource| resource.take(&lease))
+        .map_err(failure)?;
         let checked_at = now_unix_ms();
-        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        if response.status == 304 {
             let mut state = previous;
             state.last_checked_at_unix_ms = Some(checked_at);
             return Ok(FetchOutcome::NotModified(state));
         }
-        response = response.error_for_status().map_err(|error| {
-            AppError::invalid_argument(format!("rule source rejected update: {error}"))
-        })?;
-        if response
-            .content_length()
-            .is_some_and(|size| size > MAX_INPUT_BYTES as u64)
-        {
-            return Err(AppError::invalid_argument("rule source exceeds 64 MiB"));
+        if !(200..300).contains(&response.status) {
+            return Err(AppError::invalid_argument(format!(
+                "规则来源返回 HTTP {}",
+                response.status
+            )));
         }
-        let etag = response
-            .headers()
-            .get(reqwest::header::ETAG)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        let last_modified = response
-            .headers()
-            .get(reqwest::header::LAST_MODIFIED)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        let mut bytes = Vec::new();
-        response
-            .take(MAX_INPUT_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| {
-                AppError::invalid_argument(format!("failed to read rule source: {error}"))
-            })?;
-        if bytes.len() > MAX_INPUT_BYTES {
-            return Err(AppError::invalid_argument("rule source exceeds 64 MiB"));
-        }
+        let etag = response.headers.get("etag").cloned();
+        let last_modified = response.headers.get("last-modified").cloned();
+        let bytes = response.body;
         let content_bytes = bytes.len() as u64;
         let content_sha256 = format!("{:x}", Sha256::digest(&bytes));
         let state = RuleSetSourceState {
@@ -841,9 +834,41 @@ async fn fetch_source(
 pub fn spawn_auto_update_scheduler(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
-        let mut retry_states = HashMap::new();
+        let manager = app.state::<AppState>().capabilities().clone();
+        let (mut retry_states, mut revision) = match crate::services::schedule_store::load::<
+            HashMap<String, AutoUpdateRetryState>,
+        >(manager.clone(), "rule-sets")
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                logs::znet_log_fields(
+                    Some(app.state::<AppState>().inner()),
+                    LogLevel::Error,
+                    error.message,
+                    json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
+                );
+                return;
+            }
+        };
         loop {
             run_auto_update_pass(&app, &mut retry_states).await;
+            if let Err(error) = crate::services::schedule_store::save(
+                manager.clone(),
+                "rule-sets",
+                &retry_states,
+                &mut revision,
+            )
+            .await
+            {
+                logs::znet_log_fields(
+                    Some(app.state::<AppState>().inner()),
+                    LogLevel::Error,
+                    error.message,
+                    json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
+                );
+                return;
+            }
             tokio::time::sleep(Duration::from_secs(AUTO_UPDATE_TICK_SECS)).await;
         }
     });
@@ -1065,10 +1090,11 @@ fn collect_due_rule_set_attempts(
 }
 
 fn auto_update_retry_delay_secs(retry_number: u32) -> u64 {
-    let exponent = retry_number.saturating_sub(1).min(31);
-    AUTO_UPDATE_RETRY_BASE_SECS
-        .saturating_mul(1_u64 << exponent)
-        .min(AUTO_UPDATE_RETRY_MAX_SECS)
+    znet_client_core::scheduling::retry_delay_seconds(
+        retry_number,
+        AUTO_UPDATE_RETRY_BASE_SECS,
+        AUTO_UPDATE_RETRY_MAX_SECS,
+    )
 }
 
 fn record_auto_update_failure(
@@ -1673,3 +1699,7 @@ mod tests {
         assert_eq!(next_cycle.kind, AutoUpdateAttemptKind::Initial);
     }
 }
+
+#[cfg(test)]
+#[path = "rule_set_capability_tests.rs"]
+mod capability_tests;

@@ -49,6 +49,10 @@ pub async fn core_ipc_command(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
+    if matches!(method.as_str(), "config.apply" | "config.apply_runtime") {
+        return managed_config_command(state.inner(), params.unwrap_or_default(), options, None)
+            .await;
+    }
     ipc::command(method, params, resolve_options(&state, options)?).await
 }
 
@@ -59,6 +63,20 @@ pub async fn core_ipc_request(
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
     interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
+    if frame.get("type").and_then(Value::as_str) == Some("command")
+        && matches!(
+            frame.get("method").and_then(Value::as_str),
+            Some("config.apply" | "config.apply_runtime")
+        )
+    {
+        return managed_config_command(
+            state.inner(),
+            frame.get("params").cloned().unwrap_or_default(),
+            options,
+            frame.get("id").cloned(),
+        )
+        .await;
+    }
     ipc::request(frame, resolve_options(&state, options)?).await
 }
 
@@ -207,7 +225,7 @@ pub fn core_events_stop(state: State<'_, AppState>) -> u64 {
 }
 
 fn resolve_options(
-    state: &State<'_, AppState>,
+    state: &AppState,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Option<CoreIpcOptions>> {
     if options
@@ -225,7 +243,27 @@ fn resolve_options(
     Ok(Some(resolved))
 }
 
-fn default_options(state: &State<'_, AppState>) -> AppResult<CoreIpcOptions> {
+fn default_options(state: &AppState) -> AppResult<CoreIpcOptions> {
     let config = lock(state.app_config(), "app_config")?.core.clone();
     Ok(core_config::ipc_options_from_app_config(&config))
+}
+
+async fn managed_config_command(
+    state: &AppState,
+    params: Value,
+    options: Option<CoreIpcOptions>,
+    id: Option<Value>,
+) -> AppResult<CoreCallResult> {
+    let _operation = state.proxy_config_operation().lock().await;
+    let config = params
+        .get("config")
+        .cloned()
+        .ok_or_else(|| crate::errors::AppError::invalid_argument("config is required"))?;
+    let options = resolve_options(state, options)?.unwrap_or_default();
+    let endpoint = ipc::endpoint_from_options(Some(&options))?;
+    let result = crate::configuration::apply::apply_with_identity(state.capabilities(), config, options).await.map(|identity| serde_json::json!({
+        "api_id":"zero.api.v1", "id":id, "ok":true,
+        "result":{"accepted":true,"result":{"applied":true,"persistence":"runtime_only","core_instance_id":identity.core_instance_id,"config_revision":identity.config_revision}}
+    }));
+    Ok(CoreCallResult::from_core_result(endpoint, id, result))
 }

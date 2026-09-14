@@ -303,7 +303,7 @@ impl ClientDnsConfig {
                     IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
                 ],
                 server_name: None,
-                detour: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
                 extra: BTreeMap::new(),
             },
         );
@@ -318,7 +318,7 @@ impl ClientDnsConfig {
                     IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
                 ],
                 server_name: None,
-                detour: None,
+                detour: Some(CLIENT_DNS_DETOUR_ROUTE_FINAL.to_string()),
                 extra: BTreeMap::new(),
             },
         );
@@ -357,10 +357,7 @@ impl ClientDnsConfig {
                 server_timeout_ms: None,
                 fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
                 node_server: Some("system".to_string()),
-                node_fallback_servers: Some(vec![
-                    "cloudflare-bootstrap".to_string(),
-                    "google-bootstrap".to_string(),
-                ]),
+                node_fallback_servers: Some(vec!["alidns".to_string(), "114dns".to_string()]),
                 direct_server: None,
                 direct_fallback_servers: None,
                 reject_address_cidrs: None,
@@ -377,6 +374,7 @@ impl ClientDnsConfig {
     /// user-replaced server definitions remain authoritative.
     pub fn migrate_missing_builtin_domestic_resolvers(&mut self) -> bool {
         let recommended = Self::recommended_default();
+        let legacy = Self::legacy_recommended_default();
         let retains_recommended_scaffold = [
             "cloudflare",
             "google",
@@ -385,7 +383,10 @@ impl ClientDnsConfig {
             "system",
         ]
         .iter()
-        .all(|tag| self.servers.get(*tag) == recommended.servers.get(*tag));
+        .all(|tag| {
+            self.servers.get(*tag) == recommended.servers.get(*tag)
+                || self.servers.get(*tag) == legacy.servers.get(*tag)
+        });
         if !retains_recommended_scaffold {
             return false;
         }
@@ -404,37 +405,58 @@ impl ClientDnsConfig {
         changed
     }
 
-    /// Move only the previous built-in node-resolution policy to the safer
-    /// system-first order. Custom server definitions or policy orders are
-    /// deliberately left untouched.
+    /// Upgrade the two historical built-in node policies together with their
+    /// resolver detours. User-modified server definitions and orders are kept.
     pub fn migrate_legacy_recommended_node_resolution(&mut self) -> bool {
         let legacy = Self::legacy_recommended_default();
+        let recommended = Self::recommended_default();
         let uses_builtin_servers = ["system", "cloudflare-bootstrap", "google-bootstrap"]
             .into_iter()
             .all(|tag| self.servers.get(tag) == legacy.servers.get(tag));
-        let uses_legacy_policy = self.policy.as_ref().is_some_and(|policy| {
-            policy.node_server.as_deref() == Some("cloudflare-bootstrap")
-                && policy.node_fallback_servers.as_deref()
-                    == Some(["google-bootstrap".to_string(), "system".to_string()].as_slice())
+        let uses_builtin_domestic = ["alidns", "114dns"].into_iter().all(|tag| {
+            !self.servers.contains_key(tag) || self.servers.get(tag) == recommended.servers.get(tag)
         });
-        if !uses_builtin_servers || !uses_legacy_policy {
+        let uses_legacy_policy = self.policy.as_ref().is_some_and(|policy| {
+            (policy.node_server.as_deref() == Some("cloudflare-bootstrap")
+                && policy.node_fallback_servers.as_deref()
+                    == Some(["google-bootstrap".to_string(), "system".to_string()].as_slice()))
+                || (policy.node_server.as_deref() == Some("system")
+                    && policy.node_fallback_servers.as_deref()
+                        == Some(
+                            [
+                                "cloudflare-bootstrap".to_string(),
+                                "google-bootstrap".to_string(),
+                            ]
+                            .as_slice(),
+                        ))
+        });
+        if !uses_builtin_servers || !uses_builtin_domestic || !uses_legacy_policy {
             return false;
         }
-
-        let policy = self
-            .policy
-            .as_mut()
-            .expect("legacy policy match requires DNS policy");
+        // Resolve the complete new node chain in the same migration, including
+        // older installations that predate the domestic resolver presets.
+        for tag in [
+            "cloudflare-bootstrap",
+            "google-bootstrap",
+            "alidns",
+            "114dns",
+        ] {
+            self.servers
+                .insert(tag.to_string(), recommended.servers[tag].clone());
+        }
+        let policy = self.policy.as_mut().expect("matched node policy");
         policy.node_server = Some("system".to_string());
-        policy.node_fallback_servers = Some(vec![
-            "cloudflare-bootstrap".to_string(),
-            "google-bootstrap".to_string(),
-        ]);
+        policy.node_fallback_servers = Some(vec!["alidns".to_string(), "114dns".to_string()]);
         true
     }
 
     fn legacy_recommended_default() -> Self {
         let mut config = Self::recommended_default();
+        for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
+            if let Some(ClientDnsServer::Doh { detour, .. }) = config.servers.get_mut(tag) {
+                *detour = None;
+            }
+        }
         let policy = config
             .policy
             .as_mut()
@@ -1116,12 +1138,14 @@ mod tests {
         assert_eq!(value["policy"]["node_server"], "system");
         assert_eq!(
             value["policy"]["node_fallback_servers"],
-            json!(["cloudflare-bootstrap", "google-bootstrap"])
+            json!(["alidns", "114dns"])
         );
-        assert!(value["servers"]["cloudflare-bootstrap"]
-            .get("detour")
-            .is_none());
-        assert!(value["servers"]["google-bootstrap"].get("detour").is_none());
+        for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
+            assert_eq!(
+                value["servers"][tag]["detour"],
+                CLIENT_DNS_DETOUR_ROUTE_FINAL
+            );
+        }
         assert_eq!(value["servers"]["alidns"]["type"], "doh");
         assert_eq!(value["servers"]["alidns"]["host"], "dns.alidns.com");
         assert_eq!(
@@ -1178,13 +1202,7 @@ mod tests {
         assert_eq!(policy.node_server.as_deref(), Some("system"));
         assert_eq!(
             policy.node_fallback_servers.as_deref(),
-            Some(
-                [
-                    "cloudflare-bootstrap".to_string(),
-                    "google-bootstrap".to_string()
-                ]
-                .as_slice()
-            )
+            Some(["alidns".to_string(), "114dns".to_string()].as_slice())
         );
         assert!(!legacy.migrate_legacy_recommended_node_resolution());
 
@@ -1204,5 +1222,51 @@ mod tests {
             },
         );
         assert!(!custom_server.migrate_legacy_recommended_node_resolution());
+    }
+    #[test]
+    fn previous_system_first_dns_migrates_atomically_and_preserves_other_preferences() {
+        let mut previous = ClientDnsConfig::legacy_recommended_default();
+        previous.policy.as_mut().unwrap().node_server = Some("system".into());
+        previous.policy.as_mut().unwrap().node_fallback_servers = Some(vec![
+            "cloudflare-bootstrap".into(),
+            "google-bootstrap".into(),
+        ]);
+        previous.policy.as_mut().unwrap().timeout_ms = Some(3456);
+        previous.answer = ClientDnsAnswer::Real;
+        previous.servers.remove("alidns");
+        previous.servers.remove("114dns");
+        assert!(previous.migrate_legacy_recommended_node_resolution());
+        previous.validate_client_shape().unwrap();
+        assert_eq!(previous.answer, ClientDnsAnswer::Real);
+        assert_eq!(previous.policy.as_ref().unwrap().timeout_ms, Some(3456));
+        for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
+            assert_eq!(
+                previous.servers[tag].detour(),
+                Some(CLIENT_DNS_DETOUR_ROUTE_FINAL)
+            );
+        }
+        for tag in ["system", "alidns", "114dns"] {
+            assert_eq!(previous.servers[tag].detour(), None);
+        }
+        let migrated = previous.clone();
+        assert!(!previous.migrate_legacy_recommended_node_resolution());
+        assert_eq!(previous, migrated);
+    }
+
+    #[test]
+    fn dns_migration_does_not_replace_a_custom_domestic_resolver_or_node_order() {
+        let original = ClientDnsConfig::legacy_recommended_default();
+        let mut custom = original.clone();
+        if let ClientDnsServer::Doh { host, .. } = custom.servers.get_mut("alidns").unwrap() {
+            *host = "custom.example".into();
+        }
+        let before = custom.clone();
+        assert!(!custom.migrate_legacy_recommended_node_resolution());
+        assert_eq!(custom, before);
+        let mut custom = original;
+        custom.policy.as_mut().unwrap().node_fallback_servers = Some(vec!["system".into()]);
+        let before = custom.clone();
+        assert!(!custom.migrate_legacy_recommended_node_resolution());
+        assert_eq!(custom, before);
     }
 }

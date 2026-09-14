@@ -38,3 +38,5 @@ pub mod zero;
 pub use adapter::KernelAdapter;
 
 pub(crate) mod configuration;
+
+pub(crate) mod redaction;

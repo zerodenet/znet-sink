@@ -208,6 +208,7 @@ fn navigation_items(
         pro_only("rules", "navigation", is_pro),
         pro_only("connections", "navigation", is_pro),
         shared("logs", "navigation"),
+        shared("plugins", "navigation"),
         shared("settings", "navigation"),
         // Debug tab: Pro-only — exposes low-level IPC/state inspection
         // that lite-mode users shouldn't see. ui.hiddenMenuKeys can still
@@ -458,7 +459,7 @@ fn feature_required(
 
 #[cfg(test)]
 mod tests {
-    use super::{action_items, feature_surface_items};
+    use super::{action_items, feature_surface_items, navigation_items};
 
     #[test]
     fn canonical_zero_snapshot_features_enable_gui_surfaces() {
@@ -488,6 +489,17 @@ mod tests {
                 surfaces.iter().any(|item| item.key == key && item.operable),
                 "{key} should be enabled by the canonical Zero feature names"
             );
+        }
+    }
+    #[test]
+    fn plugins_navigation_is_shared_and_respects_menu_visibility() {
+        for pro in [false, true] {
+            let items = navigation_items(pro, &[], false);
+            let plugin = items.iter().find(|item| item.key == "plugins").unwrap();
+            assert!(plugin.visible && plugin.operable);
+            let hidden = navigation_items(pro, &["plugins".into()], false);
+            let plugin = hidden.iter().find(|item| item.key == "plugins").unwrap();
+            assert!(!plugin.visible && !plugin.operable);
         }
     }
 }

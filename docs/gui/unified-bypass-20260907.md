@@ -1,6 +1,10 @@
 # Unified bypass policy
 
-The Network settings page owns one `bypass` policy: `localNetworks` and `rules`.
+The Network settings page owns one editable `bypass.rules` list. Default rules
+are expanded into that list; users can remove any entry or clear it entirely.
+The legacy `localNetworks` flag is expanded once during normalization and reset
+to false, so deleted defaults cannot return. Restore defaults fills the draft
+from the same bundled JSON used by migration and requires save to apply.
 The TUN page links to that editor. Matching destinations use the host's network
 directly in both rule and global modes. This does not promise that every direct
 connection avoids the core process: native proxy APIs cannot express every CIDR.

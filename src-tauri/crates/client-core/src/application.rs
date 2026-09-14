@@ -71,7 +71,6 @@ impl ClientCore {
 
     /// Records at most one result for each requested target. Results from an
     /// older scope or a terminal job are deterministically ignored.
-
     pub fn record_observation(&mut self, observation: ProbeObservation) -> bool {
         if observation.scope != self.snapshot.scope
             || observation.source != observation.job_kind.observation_source()

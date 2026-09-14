@@ -23,3 +23,7 @@ pub use kernel::{
 pub mod publication;
 
 pub mod probe_jobs;
+
+pub mod capability;
+
+pub mod scheduling;

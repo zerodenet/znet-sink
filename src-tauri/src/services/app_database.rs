@@ -15,7 +15,9 @@ use crate::models::subscription::SubscriptionProfile;
 use super::domain_store;
 
 const DATABASE_FILE: &str = "znet-sink.db";
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
+
+pub(crate) mod storage;
 const APPLICATION_ID: i32 = 0x5A4E_4554; // "ZNET"
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RECORD_JSON_BYTES: usize = 16 * 1024 * 1024;
@@ -192,6 +194,12 @@ fn migrate_schema(connection: &mut Connection, dir: &Path) -> AppResult<()> {
             .pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(|error| database_error(dir, error))?;
     }
+    transaction
+        .execute_batch(storage::SCHEMA)
+        .map_err(|error| database_error(dir, error))?;
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|error| database_error(dir, error))?;
     commit_and_restrict(transaction, dir)
 }
 

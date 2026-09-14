@@ -45,11 +45,13 @@ pub fn run() {
     // on an abrupt GUI death the inherited lifetime pipe closes in the OS.
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
     let shutdown_flag = app_state.shutting_down_handle();
+    let capabilities = app_state.capabilities().clone();
     shutdown_coord.register(
         lifecycle::Phase::Runtime,
         "mark_shutting_down",
         Box::new(move || {
             shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            capabilities.shutdown_components();
             eprintln!("[ZNet] shutdown: marking shutdown (watchdog will stop restarting)");
         }),
     );

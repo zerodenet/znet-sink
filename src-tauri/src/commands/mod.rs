@@ -22,3 +22,5 @@ pub mod system_proxy;
 pub mod tool_jobs;
 
 pub mod profile_settings;
+
+pub mod plugins;

@@ -262,7 +262,6 @@ async fn apply_locked(
 
 fn persist_export_retarget(state: State<'_, AppState>, source: Value) -> AppResult<()> {
     proxy_config::update_active_content(state.inner(), source)?;
-    core_config::export_active(state.clone())?;
     proxy_config::retarget_managed_system_proxy(state.inner())
 }
 
@@ -272,7 +271,6 @@ async fn persist_and_restart(
     source: Value,
 ) -> AppResult<()> {
     proxy_config::update_active_content(state.inner(), source)?;
-    core_config::export_active(state.clone())?;
     crate::commands::core_process::restart_managed(app_handle)
         .await?
         .require_restored()?;
@@ -297,11 +295,6 @@ async fn rollback_hot(
     );
     append_recovery(
         error,
-        "export",
-        core_config::export_active(state.clone()).map(|_| ()),
-    );
-    append_recovery(
-        error,
         "system proxy",
         proxy_config::retarget_managed_system_proxy(state.inner()),
     );
@@ -317,11 +310,6 @@ async fn rollback_restart(
         error,
         "profile storage",
         proxy_config::restore_profiles(state.inner(), previous_profiles),
-    );
-    append_recovery(
-        error,
-        "export",
-        core_config::export_active(state.clone()).map(|_| ()),
     );
     let restarted = crate::commands::core_process::restart_managed(app_handle)
         .await
@@ -377,14 +365,19 @@ fn ipc_options(state: &AppState) -> AppResult<CoreIpcOptions> {
 }
 
 async fn apply_effective(state: &AppState, config: Value) -> AppResult<()> {
-    crate::services::config_apply::apply(config, ipc_options(state)?).await
+    crate::services::config_apply::apply(state.capabilities(), config, ipc_options(state)?).await
 }
 
 async fn apply_effective_with_identity(
     state: &AppState,
     config: Value,
 ) -> AppResult<queries::KernelRuntimeIdentity> {
-    crate::services::config_apply::apply_with_identity(config, ipc_options(state)?).await
+    crate::services::config_apply::apply_with_identity(
+        state.capabilities(),
+        config,
+        ipc_options(state)?,
+    )
+    .await
 }
 
 fn ensure_validation_accepted(response: &Value) -> AppResult<()> {

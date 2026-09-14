@@ -48,7 +48,7 @@ pub struct CoreConfigExportResult {
 impl CoreConfigSnapshot {
     /// Only checks user-actionable preconditions: the executable binary must exist.
     /// Config file and working directory are auto-managed by the system
-    /// (export_active, resolve_working_dir) — they are not blocking constraints.
+    /// (prepare_bootstrap, resolve_working_dir) — they are not blocking constraints.
     /// The "no active proxy config" guard lives in the self-test check
     /// (`check_active_proxy_config`), not here.
     pub fn validate_launchable(&self) -> Result<(), String> {

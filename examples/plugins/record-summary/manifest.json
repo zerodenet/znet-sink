@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "host": "znet-sink",
+  "plugin_id": "org.zerodenet.example.record-summary",
+  "component_id": "summary",
+  "version": "0.1.0",
+  "requires_host": "=0.0.1",
+  "api_version": 1,
+  "runtime": "javascript-v1",
+  "minimum_isolation": "vm",
+  "targets": [
+    {
+      "os": "macos",
+      "arch": "x86_64",
+      "device": "desktop"
+    },
+    {
+      "os": "macos",
+      "arch": "aarch64",
+      "device": "desktop"
+    },
+    {
+      "os": "windows",
+      "arch": "x86_64",
+      "device": "desktop"
+    },
+    {
+      "os": "windows",
+      "arch": "aarch64",
+      "device": "desktop"
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "device": "desktop"
+    },
+    {
+      "os": "linux",
+      "arch": "aarch64",
+      "device": "desktop"
+    }
+  ],
+  "required": [
+    {
+      "capability": "records.summary.read",
+      "scope": "selection:demo"
+    }
+  ],
+  "optional": [],
+  "source_sha256": "75ee749b293f45e638ce33b95d9c6a38082f8eb025986033de55918f1a0dbf27",
+  "limits": {
+    "memory_bytes": 33554432,
+    "stack_bytes": 524288,
+    "timeout_ms": 2000,
+    "max_calls": 32,
+    "output_bytes": 65536
+  }
+}

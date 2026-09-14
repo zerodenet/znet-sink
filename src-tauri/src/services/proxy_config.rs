@@ -1,5 +1,3 @@
-use std::fs;
-
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
@@ -129,25 +127,19 @@ pub fn import(
     state: State<'_, AppState>,
     input: ProxyConfigImport,
 ) -> AppResult<ProxyConfigProfile> {
-    upsert(state, import_to_upsert(input)?)
+    let input = import_to_upsert(state.capabilities(), input)?;
+    upsert(state, input)
 }
 
-fn import_to_upsert(input: ProxyConfigImport) -> AppResult<ProxyConfigUpsert> {
-    let content = match (input.content, normalize_optional(input.path.clone())) {
-        (Some(content), _) => content,
-        (None, Some(path)) => fs::read_to_string(&path).map_err(|error| AppError {
-            code: "io_error",
-            message: format!("failed to read proxy config: {error}"),
-            details: Some(serde_json::json!({ "path": path })),
-        })?,
-        (None, None) => {
-            return Err(AppError::invalid_argument(
-                "content or path is required to import proxy config",
-            ));
-        }
-    };
-
-    let parsed = parse_config_content(&content)?;
+fn import_to_upsert(
+    manager: &znet_client_core::capability::Manager,
+    input: ProxyConfigImport,
+) -> AppResult<ProxyConfigUpsert> {
+    let parsed = crate::configuration::material::import(
+        manager,
+        input.content,
+        normalize_optional(input.path.clone()),
+    )?;
     Ok(ProxyConfigUpsert {
         id: input.id,
         name: input.name,
@@ -185,17 +177,13 @@ pub(crate) async fn upsert_runtime_locked(
 
     if !running || !runtime_changed {
         persist_profile_transition(state.inner(), &previous, next)?;
-        if let Err(mut error) = export_and_retarget_active(state.clone()) {
+        if let Err(mut error) = retarget_active(state.clone()) {
             append_recovery(
                 &mut error,
                 "profile storage",
                 restore_profiles(state.inner(), &previous),
             );
-            append_recovery(
-                &mut error,
-                "export and system proxy",
-                export_and_retarget_active(state.clone()),
-            );
+            append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
             return Err(error);
         }
         return Ok(profile);
@@ -223,7 +211,7 @@ pub(crate) async fn upsert_runtime_locked(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(content, options).await {
+    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
         Ok(_) => {
             if let Err(mut error) = persist_profile_transition(state.inner(), &previous, next) {
                 if let Some(previous_active) = previous_active.as_ref() {
@@ -235,7 +223,7 @@ pub(crate) async fn upsert_runtime_locked(
                 }
                 return Err(error);
             }
-            if let Err(mut error) = export_and_retarget_active(state.clone()) {
+            if let Err(mut error) = retarget_active(state.clone()) {
                 append_recovery(
                     &mut error,
                     "profile storage",
@@ -248,11 +236,7 @@ pub(crate) async fn upsert_runtime_locked(
                         reapply_profile(state.inner(), previous_active).await,
                     );
                 }
-                append_recovery(
-                    &mut error,
-                    "export and system proxy",
-                    export_and_retarget_active(state.clone()),
-                );
+                append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
                 return Err(error);
             }
             Ok(profile)
@@ -265,7 +249,9 @@ pub async fn import_runtime(
     app_handle: AppHandle,
     input: ProxyConfigImport,
 ) -> AppResult<ProxyConfigProfile> {
-    upsert_runtime(app_handle, import_to_upsert(input)?).await
+    let state = app_handle.state::<AppState>();
+    let input = import_to_upsert(state.capabilities(), input)?;
+    upsert_runtime(app_handle, input).await
 }
 
 pub fn set_active(state: State<'_, AppState>, id: String) -> AppResult<ProxyConfigProfile> {
@@ -291,10 +277,9 @@ pub fn set_active(state: State<'_, AppState>, id: String) -> AppResult<ProxyConf
 
 /// Mirror a hot-applied config into the active profile's `content`.
 ///
-/// Called after the kernel accepts `config.apply` so that config-derived
-/// views (proxy nodes, policy groups) and the next core-process start —
-/// which exports `content` to disk via `core_config::export_active` — both
-/// reflect the live configuration. Re-derives capabilities and bumps
+/// Called after confirmed runtime application so that config-derived views
+/// and the next managed startup both use the selected material.
+/// Re-derives capabilities and bumps
 /// `updated_at`. No-op when no profile is active.
 pub fn update_active_content(state: &AppState, content: Value) -> AppResult<()> {
     let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
@@ -353,7 +338,7 @@ async fn activate_runtime_locked(
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     if !running {
         let active = set_active(state.clone(), id)?;
-        if let Err(error) = export_and_retarget_active(state.clone()) {
+        if let Err(error) = retarget_active(state.clone()) {
             rollback_stopped_activation(state.clone(), previous_active.as_ref());
             return Err(error);
         }
@@ -379,10 +364,10 @@ async fn activate_runtime_locked(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(content, options).await {
+    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
         Ok(_) => match set_active(state.clone(), id) {
             Ok(active) => {
-                if let Err(mut error) = export_and_retarget_active(state.clone()) {
+                if let Err(mut error) = retarget_active(state.clone()) {
                     rollback_hot_activation(state.clone(), previous_active.as_ref(), &mut error)
                         .await;
                     return Err(error);
@@ -462,7 +447,7 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(content, options).await {
+    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
         Ok(_) => {
             if let Err(mut error) = remove(state.clone(), id) {
                 append_recovery(
@@ -524,7 +509,7 @@ async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppR
         &content,
         Some(&profile.id),
     )?;
-    crate::services::config_apply::apply(content, ipc_options(state)?).await
+    crate::services::config_apply::apply(state.capabilities(), content, ipc_options(state)?).await
 }
 
 async fn rollback_hot_activation(
@@ -545,11 +530,7 @@ async fn rollback_hot_activation(
         "profile storage",
         set_active(state.clone(), previous.id.clone()).map(|_| ()),
     );
-    append_recovery(
-        error,
-        "export and system proxy",
-        export_and_retarget_active(state),
-    );
+    append_recovery(error, "system proxy", retarget_active(state));
 }
 
 fn rollback_stopped_activation(state: State<'_, AppState>, previous: Option<&ProxyConfigProfile>) {
@@ -557,13 +538,11 @@ fn rollback_stopped_activation(state: State<'_, AppState>, previous: Option<&Pro
         return;
     };
     if set_active(state.clone(), previous.id.clone()).is_ok() {
-        let _ = core_config::export_active(state.clone());
         let _ = retarget_managed_system_proxy(state.inner());
     }
 }
 
-fn export_and_retarget_active(state: State<'_, AppState>) -> AppResult<()> {
-    core_config::export_active(state.clone())?;
+fn retarget_active(state: State<'_, AppState>) -> AppResult<()> {
     retarget_managed_system_proxy(state.inner())
 }
 

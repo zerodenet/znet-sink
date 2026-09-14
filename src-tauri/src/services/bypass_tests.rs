@@ -8,7 +8,7 @@ fn legacy_lists_merge_once_and_removed_rules_never_reappear_from_projections() {
     app.local_proxy.bypass.push("*.example.org".into());
     normalize(&mut app).unwrap();
     let policy = app.bypass.as_ref().unwrap();
-    assert!(policy.local_networks);
+    assert!(!policy.local_networks);
     assert!(policy.rules.contains(&"16.0.0.0/8".into()));
     assert!(policy.rules.contains(&"*.example.org".into()));
     let snapshot = app.clone();
@@ -62,7 +62,7 @@ fn portable_settings_include_the_authoritative_policy() {
     normalize(&mut app).unwrap();
     let portable = ClientKernelSettings::from_app_config(&app);
     let value = serde_json::to_value(&portable).unwrap();
-    assert!(value["bypass"]["localNetworks"].as_bool().unwrap());
+    assert!(!value["bypass"]["localNetworks"].as_bool().unwrap());
     let portable: ClientKernelSettings = serde_json::from_value(value).unwrap();
     let mut restored = AppConfig::default();
     portable.apply_to(&mut restored);
@@ -110,4 +110,45 @@ fn version_one_portable_tun_exclusions_merge_with_current_proxy_bypass() {
     let policy = imported.bypass.unwrap();
     assert!(!policy.local_networks);
     assert_eq!(policy.rules, ["*.example.org", "16.0.0.0/8"]);
+}
+
+#[test]
+fn preset_is_visible_and_deletions_survive_reload_and_projection() {
+    let mut app = AppConfig::default();
+    normalize(&mut app).unwrap();
+    let policy = app.bypass.as_mut().unwrap();
+    assert!(!policy.local_networks);
+    for rule in default_rules() {
+        assert!(policy.rules.contains(&rule));
+    }
+    policy.rules.retain(|rule| rule != "10.0.0.0/8");
+    let saved = serde_json::to_string(&app).unwrap();
+    let mut app: AppConfig = serde_json::from_str(&saved).unwrap();
+    normalize(&mut app).unwrap();
+    assert!(!app.tun.exclude_cidrs.contains(&"10.0.0.0/8".into()));
+    assert!(!app.local_proxy.bypass.contains(&"10.*".into()));
+    app.bypass.as_mut().unwrap().rules.clear();
+    normalize(&mut app).unwrap();
+    assert!(app.tun.exclude_cidrs.is_empty());
+    assert!(app.local_proxy.bypass.is_empty());
+    let mut runtime = json!({"route":{},"runtime":{}});
+    apply(&mut runtime, &app).unwrap();
+    assert_eq!(runtime["route"]["bypass"], json!([]));
+}
+
+#[test]
+fn saved_legacy_preset_expands_once_and_preserves_custom_rules() {
+    let mut app = AppConfig::default();
+    app.bypass = Some(AppBypassConfig {
+        local_networks: true,
+        rules: vec!["*.example.org".into(), "10.0.0.0/8".into()],
+    });
+    normalize(&mut app).unwrap();
+    let policy = app.bypass.as_ref().unwrap();
+    assert!(!policy.local_networks);
+    assert_eq!(policy.rules.len(), default_rules().len() + 1);
+    assert!(policy.rules.contains(&"*.example.org".into()));
+    let snapshot = app.clone();
+    normalize(&mut app).unwrap();
+    assert_eq!(app, snapshot);
 }

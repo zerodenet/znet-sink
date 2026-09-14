@@ -1,0 +1,157 @@
+pub use crate::bridge::Summary;
+use crate::{
+    contract::{Component, Error, Isolation, Target},
+    policy::Authority,
+};
+use rquickjs::{Context, Function, Runtime};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
+pub fn execute(
+    component: &Component,
+    authority: &Authority,
+    selection: Option<(String, Summary)>,
+    cancelled: Arc<AtomicBool>,
+) -> Result<serde_json::Value, Error> {
+    execute_inner(
+        component,
+        authority,
+        selection,
+        cancelled,
+        false,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// Native host supplies its product version; the VM library version is not the client version.
+pub fn execute_for_host(
+    component: &Component,
+    authority: &Authority,
+    selection: Option<(String, Summary)>,
+    cancelled: Arc<AtomicBool>,
+    host_version: &str,
+) -> Result<serde_json::Value, Error> {
+    execute_inner(
+        component,
+        authority,
+        selection,
+        cancelled,
+        true,
+        host_version,
+    )
+}
+
+/// Explicit native test entry; unavailable in default builds and the GUI.
+#[cfg(feature = "network-lab")]
+pub fn execute_network_lab(
+    component: &Component,
+    authority: &Authority,
+    cancelled: Arc<AtomicBool>,
+) -> Result<serde_json::Value, Error> {
+    execute_inner(
+        component,
+        authority,
+        None,
+        cancelled,
+        true,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+fn execute_inner(
+    component: &Component,
+    authority: &Authority,
+    selection: Option<(String, Summary)>,
+    cancelled: Arc<AtomicBool>,
+    network_enabled: bool,
+    host_version: &str,
+) -> Result<serde_json::Value, Error> {
+    component.compatible(&Target::native_desktop()?, host_version, Isolation::Vm)?;
+    let lease = Arc::new(authority.begin_cancelled(component, cancelled.clone())?);
+    let limits = &component.manifest.limits;
+    let deadline = Instant::now() + Duration::from_millis(limits.timeout_ms);
+    let failure = Rc::new(Cell::new(None));
+    let runtime = Runtime::new().map_err(|_| Error::BudgetExceeded)?;
+    runtime.set_memory_limit(limits.memory_bytes);
+    runtime.set_max_stack_size(limits.stack_bytes);
+    let check_lease = lease.clone();
+    let check_cancel = cancelled.clone();
+    let check_failure = failure.clone();
+    runtime.set_interrupt_handler(Some(Box::new(move || {
+        let reason = check_lease.check(None).err().or_else(|| {
+            if check_cancel.load(Ordering::Relaxed) {
+                Some(Error::Cancelled)
+            } else if Instant::now() >= deadline {
+                Some(Error::Deadline)
+            } else {
+                None
+            }
+        });
+        if let Some(error) = reason {
+            check_failure.set(Some(error));
+        }
+        reason.is_some()
+    })));
+    // Promise also initializes async function prototypes used by the hardening bootstrap.
+    // We never run pending jobs, and Promise results are rejected.
+    let context = Context::custom::<(
+        rquickjs::context::intrinsic::Eval,
+        rquickjs::context::intrinsic::Json,
+        rquickjs::context::intrinsic::Promise,
+    )>(&runtime)
+    .map_err(|_| Error::BudgetExceeded)?;
+    let result = context.with(|ctx| -> Result<serde_json::Value, Error> {
+        // No module loader, std/os, native modules, async jobs, or host IO are installed.
+        ctx.eval::<(), _>(r#"
+            for (const f of [function(){}, function*(){}, async function(){}, async function*(){}]) {
+                Object.defineProperty(Object.getPrototypeOf(f), 'constructor', {value: undefined, writable:false, configurable:false});
+            }
+            for (const key of ['eval','Function']) Object.defineProperty(globalThis,key,{value:undefined,writable:false,configurable:false});
+        "#).map_err(|_| Error::GuestException)?;
+        let callback_lease = lease.clone();
+        let callback_failure = failure.clone();
+        let callback_cancel = cancelled.clone();
+        let identity = serde_json::json!({"plugin_id":component.manifest.plugin_id,"component_id":component.manifest.component_id,"digest":component.digest}).to_string();
+        let bridge = crate::bridge::Bridge { identity, selection, network_enabled, output_bytes: limits.output_bytes };
+        let callback = Function::new(ctx.clone(), move |callback_ctx: rquickjs::Ctx<'_>, input: rquickjs::String<'_>| -> rquickjs::Result<String> {
+            let operation = || -> Result<String, Error> {
+                if let Some(error) = callback_failure.get() { return Err(error); }
+                if callback_cancel.load(Ordering::Relaxed) { return Err(Error::Cancelled); }
+                if Instant::now() >= deadline { return Err(Error::Deadline); }
+                let input = input.to_cstring().map_err(|_| Error::InvalidOutput)?;
+                if input.len() > 128 * 1024 { return Err(Error::BudgetExceeded); }
+                bridge.dispatch(&callback_lease, input.as_str())
+            };
+            match operation() {
+                Ok(value) => Ok(value),
+                Err(error) => { callback_failure.set(Some(error)); Err(rquickjs::Exception::throw_message(&callback_ctx, "host capability denied or budget exhausted")) }
+            }
+        }).map_err(|_| Error::GuestException)?;
+        ctx.globals().set("hostCall", callback).map_err(|_| Error::GuestException)?;
+        ctx.eval::<(), _>("Object.defineProperty(globalThis,'hostCall',{writable:false,configurable:false});").map_err(|_| Error::GuestException)?;
+        let value: rquickjs::Value = ctx.eval(component.source.as_bytes()).map_err(|_| Error::GuestException)?;
+        if value.is_promise() { return Err(Error::InvalidOutput); }
+        let json = ctx.json_stringify(value).map_err(|_| Error::InvalidOutput)?.ok_or(Error::InvalidOutput)?;
+        let bytes = json.to_cstring().map_err(|_| Error::InvalidOutput)?;
+        if bytes.len() > limits.output_bytes { return Err(Error::BudgetExceeded); }
+        serde_json::from_str(bytes.as_str()).map_err(|_| Error::InvalidOutput)
+    });
+    lease.check(None)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(Error::Cancelled);
+    }
+    if Instant::now() >= deadline {
+        return Err(Error::Deadline);
+    }
+    if let Some(error) = failure.get() {
+        return Err(error);
+    }
+    result
+}

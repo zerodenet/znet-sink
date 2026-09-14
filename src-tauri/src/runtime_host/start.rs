@@ -1,7 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
 use crate::models::logs::{LogLevel, LogSource};
-use crate::services::{app_config_store, common::lock, core_config, local_proxy, logs};
+use crate::services::{common::lock, core_config, local_proxy, logs};
 use crate::state::app_state::AppState;
 use serde_json::json;
 use tauri::{AppHandle, Manager, State};
@@ -15,45 +15,19 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
         if process.child.is_some() {
             return Ok(process.status.clone());
         }
-        // Invalidate an older restart loop before export/validation can fail.
+        // Invalidate an older restart loop before bootstrap/validation can fail.
         state.next_core_process_monitor_generation()
     };
-    // The kernel is a managed service, so it must also be startable before the
-    // user imports a proxy profile. In that state we launch a small, persistent
-    // control-plane config with no listeners or outbounds. System proxy enable
-    // and normal connection flows still require a usable active profile.
-    let has_active_profile = lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .any(|profile| profile.active);
-    if has_active_profile {
-        // Exporting the selected profile is the single source of the managed
-        // core config path. Invalid active content still fails loudly here.
-        core_config::export_active(state.clone())?;
-    } else {
-        let path = core_config::write_minimal_temp_config()?;
-        let config_path = path.to_string_lossy().into_owned();
-        {
-            let mut app_config = lock(state.app_config(), "app_config")?;
-            app_config.core.config_path = Some(config_path.clone());
-            app_config_store::save(&app_config_store::default_config_path()?, &app_config)?;
-        }
-        // `logs::append_entry` reads app_config.logs.max_entries, so the
-        // config mutex must be released before recording this lifecycle log.
-        let _ = logs::append_entry(
-            state.inner(),
-            LogSource::App,
-            LogLevel::Info,
-            "core process start: no active proxy config, using management-only config".to_string(),
-            Some(json!({ "configPath": config_path })),
-        );
-    }
+    // Every managed source uses the same non-secret bootstrap. The selected
+    // configuration is applied over the bound control connection after readiness.
+    core_config::prepare_bootstrap(state.inner())?;
 
     let config = { lock(state.app_config(), "app_config")?.core.clone() };
     let snapshot = core_config::snapshot_from_config(&config)?;
     if snapshot.config_path.is_none() || snapshot.config_exists != Some(true) {
         return Err(AppError {
             code: "core_config_required",
-            message: "当前配置尚未生成可用的内核配置文件，请重新同步或导入配置".to_string(),
+            message: "内核启动准备失败，请重试并查看诊断信息".to_string(),
             details: Some(json!({
                 "configPath": snapshot.config_path,
                 "configExists": snapshot.config_exists,

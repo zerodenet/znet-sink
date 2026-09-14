@@ -151,6 +151,7 @@ export function createRecommendedDnsConfig(
       port: 443,
       path: '/dns-query',
       bootstrap: ['1.1.1.1', '1.0.0.1'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
     },
     'google-bootstrap': {
       type: 'doh',
@@ -158,6 +159,7 @@ export function createRecommendedDnsConfig(
       port: 443,
       path: '/dns-query',
       bootstrap: ['8.8.8.8', '8.8.4.4'],
+      detour: DNS_DETOUR_ROUTE_FINAL,
     },
     alidns: {
       type: 'doh',
@@ -178,7 +180,7 @@ export function createRecommendedDnsConfig(
     ...dns.policy,
     fallback_servers: ['google', 'system'],
     node_server: 'system',
-    node_fallback_servers: ['cloudflare-bootstrap', 'google-bootstrap'],
+    node_fallback_servers: ['alidns', '114dns'],
   };
   return dns;
 }

@@ -1,0 +1,6 @@
+[
+  {
+    "capability": "records.summary.read",
+    "scope": "selection:demo"
+  }
+]

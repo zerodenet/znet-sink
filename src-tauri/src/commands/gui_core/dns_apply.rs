@@ -1,15 +1,12 @@
 use super::{default_opts, GuiDnsSettingsInput};
 use crate::commands::app_config::tun_settings::transaction::{Backend, Snapshot};
 use crate::errors::{AppError, AppResult};
-use crate::kernel::{
-    adapter::KernelAdapter,
-    zero::{self, ZeroAdapter},
-};
+use crate::kernel::zero;
 use crate::models::{
     app_config::{AppConfig, AppDnsConfig, AppTunConfig},
     core_process::CoreProcessState,
 };
-use crate::services::{app_config, common, core_config, core_process, rule_overlay};
+use crate::services::{app_config, common, core_process, rule_overlay};
 use crate::state::app_state::AppState;
 use serde_json::Value;
 use tauri::State;
@@ -61,7 +58,6 @@ pub(super) async fn apply(
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let backend = Live {
         state: state.clone(),
-        export: content.is_some(),
     };
     if let Some((old, next)) = configs.filter(|_| running) {
         transaction::apply(&backend, &previous, &candidate, &old, &next).await
@@ -82,7 +78,6 @@ pub(super) async fn apply(
 
 struct Live<'a> {
     state: State<'a, AppState>,
-    export: bool,
 }
 
 impl Backend for Live<'_> {
@@ -118,9 +113,6 @@ impl Backend for Live<'_> {
     }
     fn persist(&self, config: &AppConfig) -> AppResult<()> {
         app_config::replace(self.state.inner(), config.clone())?;
-        if self.export {
-            core_config::export_active(self.state.clone())?;
-        }
         Ok(())
     }
 }
@@ -130,13 +122,13 @@ impl transaction::Backend for Live<'_> {
         &self,
         config: &Value,
     ) -> AppResult<(Value, zero::queries::KernelRuntimeIdentity)> {
-        let value = ZeroAdapter::new()
-            .apply_config(config.clone(), default_opts(self.state.inner()))
-            .await?;
-        let identity = zero::queries::config_apply_identity(&value).map_err(|mut error| {
-            error.code = "dns_apply_uncertain";
-            error
-        })?;
+        let identity = crate::configuration::apply::apply_with_identity(
+            self.state.capabilities(),
+            config.clone(),
+            default_opts(self.state.inner()),
+        )
+        .await?;
+        let value = serde_json::json!({"accepted":true,"result":{"applied":true,"core_instance_id":identity.core_instance_id,"config_revision":identity.config_revision,"persistence":"runtime_only"}});
         Ok((value, identity))
     }
 }

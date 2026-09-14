@@ -69,6 +69,42 @@ pub fn export_active(state: State<'_, AppState>) -> AppResult<CoreConfigExportRe
     })
 }
 
+/// Persistent management-only bootstrap; never contains profile content.
+pub(crate) fn prepare_bootstrap(state: &AppState) -> AppResult<()> {
+    let path = write_minimal_temp_config()?;
+    let mut app = lock(state.app_config(), "app_config")?;
+    app.core.config_path = Some(path_to_string(&path));
+    app_config_store::save(&app_config_store::default_config_path()?, &app)
+}
+
+pub(crate) fn runtime_candidate(state: &AppState) -> AppResult<Option<serde_json::Value>> {
+    let active = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|p| p.active)
+        .cloned();
+    let Some(active) = active else {
+        return Ok(None);
+    };
+    let content = active
+        .content
+        .as_ref()
+        .ok_or_else(|| AppError::invalid_argument("active configuration has no material"))?;
+    let effective = rule_overlay::compose_effective_config(state, content)?;
+    let mut candidate = strip_gui_only_fields(&effective);
+    inject_managed_core_log(&mut candidate)?;
+    Ok(Some(candidate))
+}
+
+pub(crate) async fn apply_active_runtime(
+    state: &AppState,
+    options: CoreIpcOptions,
+) -> AppResult<()> {
+    if let Some(candidate) = runtime_candidate(state)? {
+        crate::configuration::apply::apply(state.capabilities(), candidate, options).await?;
+    }
+    Ok(())
+}
+
 pub fn ipc_options_from_app_config(config: &AppCoreConfig) -> CoreIpcOptions {
     CoreIpcOptions {
         socket: resolve_socket(config).map(|path| path_to_string(&path)),
@@ -93,7 +129,7 @@ pub fn snapshot_from_config(config: &AppCoreConfig) -> AppResult<CoreConfigSnaps
     } else if !executable_exists {
         warnings.push("core executable does not exist".to_string());
     }
-    // config_path / working_dir 由 export_active() / resolve_working_dir() 自动生成，
+    // config_path / working_dir 由 prepare_bootstrap() / resolve_working_dir() 自动生成，
     // 不作为用户可见的警告。自检中的 check_active_proxy_config 独立守卫"无活跃配置"场景。
 
     Ok(CoreConfigSnapshot {
