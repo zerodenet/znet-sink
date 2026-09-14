@@ -138,3 +138,37 @@ fn malformed_test_url_rejects_candidate_before_publication() {
     );
     assert_eq!(legacy.tolerance_ms, 0);
 }
+
+#[test]
+fn recommended_dns_follows_route_final_without_proxying_node_resolution() {
+    let app = AppConfig::default();
+    for (final_route, expected) in [
+        (json!({"type":"route", "outbound":"proxy"}), Some("proxy")),
+        (json!({"type":"direct"}), None),
+    ] {
+        let mut config = json!({"outbounds":[{"tag":"proxy"}],"route":{"final":final_route}});
+        let mut dns = app.dns.clone();
+        dns.enabled = true;
+        super::dns::apply_global_dns(&mut config, &dns).unwrap();
+        let value = &config["runtime"]["dns"];
+        for tag in [
+            "cloudflare",
+            "google",
+            "cloudflare-bootstrap",
+            "google-bootstrap",
+        ] {
+            assert_eq!(value["servers"][tag]["detour"].as_str(), expected);
+        }
+        for tag in ["system", "alidns", "114dns"] {
+            assert!(value["servers"][tag].get("detour").is_none());
+        }
+        assert_eq!(value["policy"]["node_server"], "system");
+        assert_eq!(
+            value["policy"]["node_fallback_servers"],
+            json!(["alidns", "114dns"])
+        );
+        let model: crate::models::dns_config::ClientDnsConfig =
+            serde_json::from_value(value.clone()).unwrap();
+        model.validate_client_shape().unwrap();
+    }
+}

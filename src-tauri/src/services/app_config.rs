@@ -602,6 +602,13 @@ mod tests {
     fn migrates_only_the_previous_client_owned_node_dns_defaults() {
         let mut config = AppConfig::default();
         let dns = config.dns.config.as_mut().unwrap();
+        for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
+            if let Some(crate::models::dns_config::ClientDnsServer::Doh { detour, .. }) =
+                dns.servers.get_mut(tag)
+            {
+                *detour = None;
+            }
+        }
         dns.policy.as_mut().unwrap().node_server = Some("cloudflare-bootstrap".to_string());
         dns.policy.as_mut().unwrap().node_fallback_servers =
             Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
@@ -611,10 +618,7 @@ mod tests {
         assert_eq!(policy.node_server.as_deref(), Some("system"));
         assert_eq!(
             policy.node_fallback_servers,
-            Some(vec![
-                "cloudflare-bootstrap".to_string(),
-                "google-bootstrap".to_string(),
-            ])
+            Some(vec!["alidns".to_string(), "114dns".to_string(),])
         );
     }
 

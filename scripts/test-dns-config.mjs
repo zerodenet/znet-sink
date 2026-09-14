@@ -209,12 +209,9 @@ assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.equal(recommendedDns.servers.google.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'system']);
 assert.equal(recommendedDns.policy?.node_server, 'system');
-assert.deepEqual(recommendedDns.policy?.node_fallback_servers, [
-  'cloudflare-bootstrap',
-  'google-bootstrap',
-]);
-assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, undefined);
-assert.equal(recommendedDns.servers['google-bootstrap'].detour, undefined);
+assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['alidns', '114dns']);
+assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
+assert.equal(recommendedDns.servers['google-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.servers.alidns, {
   type: 'doh',
   host: 'dns.alidns.com',
