@@ -192,3 +192,15 @@ export async function getGuiDebugFrames(query: import('../../src/lib/types/debug
       recordLimit: 10000, byteLimit: 33554432, maxAgeMs: 2592000000,
       removedSinceClientStart: 3, writeFailuresSinceClientStart: 0, completeness: 'unknown' as const}};
 }
+
+// The configuration editor uses the host-owned workspace API, not direct kernel writes.
+export const getConfigWorkspaceSnapshot = async (): Promise<import('../../src/lib/types/gui-api').ConfigWorkspaceSnapshot> => ({
+  profileId: 'main', profileName: '日常网络配置', sourceUpdatedAtUnixMs: 1,
+  sourceConfig: { log: { level: 'info' } },
+  localEdits: { 'localProxy.port': 7890 },
+  effectiveConfig: { log: { level: 'info' }, inbounds: [{ tag: 'local', listen: { port: 7890 } }] },
+  composition: { layers: [{ source: 'client', changedPaths: ['/inbounds'] }] },
+  runtime: { running: false, effectiveDigest: 'fixture', confirmed: false, reason: 'No kernel in UI fixture' },
+});
+export const planConfigWorkspace = async () => { throw new Error('Workspace planning is not provided by this fixture'); };
+export const applyConfigWorkspace = async () => { throw new Error('The UI fixture cannot apply a workspace'); };
