@@ -1644,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.2-dev.202609140953"
+version = "0.0.2-dev.202609151342"
 dependencies = [
  "base64 0.22.1",
  "dirs",
