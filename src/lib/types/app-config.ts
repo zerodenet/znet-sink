@@ -16,6 +16,7 @@ export interface AppConfig {
   dns: AppDnsConfig;
   routing: AppRoutingConfig;
   urlTest: AppUrlTestConfig;
+  runtime: AppRuntimeConfig;
   bypass?: AppBypassConfig | null;
 }
 
@@ -85,6 +86,10 @@ export interface AppUrlTestConfig {
   toleranceMs: number;
 }
 
+export interface AppRuntimeConfig {
+  udpUpstreamIdleTimeoutSeconds: number;
+}
+
 export interface KernelSettingsExportResult {
   path: string;
   schemaVersion: string;
@@ -102,6 +107,7 @@ export interface AppConfigPatch {
   dns?: AppDnsConfigPatch;
   routing?: AppRoutingConfigPatch;
   urlTest?: AppUrlTestConfigPatch;
+  runtime?: AppRuntimeConfigPatch;
   bypass?: AppBypassConfig;
 }
 
@@ -166,6 +172,10 @@ export interface AppRoutingConfigPatch {
 export interface AppUrlTestConfigPatch {
   url?: string;
   toleranceMs?: number;
+}
+
+export interface AppRuntimeConfigPatch {
+  udpUpstreamIdleTimeoutSeconds?: number;
 }
 
 export interface AppBypassConfig {

@@ -29,6 +29,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub url_test: AppUrlTestConfig,
     #[serde(default)]
+    pub runtime: AppRuntimeConfig,
+    #[serde(default)]
     pub bypass: Option<AppBypassConfig>,
 }
 
@@ -46,6 +48,7 @@ impl Default for AppConfig {
             dns: AppDnsConfig::recommended_default(),
             routing: AppRoutingConfig::default(),
             url_test: AppUrlTestConfig::default(),
+            runtime: AppRuntimeConfig::default(),
             bypass: None,
         }
     }
@@ -243,6 +246,21 @@ pub struct AppUrlTestConfig {
     pub tolerance_ms: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRuntimeConfig {
+    #[serde(default = "default_udp_upstream_idle_timeout_seconds")]
+    pub udp_upstream_idle_timeout_seconds: u64,
+}
+
+impl Default for AppRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            udp_upstream_idle_timeout_seconds: default_udp_upstream_idle_timeout_seconds(),
+        }
+    }
+}
+
 impl Default for AppUrlTestConfig {
     fn default() -> Self {
         Self {
@@ -375,6 +393,7 @@ pub struct AppConfigPatch {
     pub dns: Option<AppDnsConfigPatch>,
     pub routing: Option<AppRoutingConfigPatch>,
     pub url_test: Option<AppUrlTestConfigPatch>,
+    pub runtime: Option<AppRuntimeConfigPatch>,
     pub bypass: Option<AppBypassConfig>,
 }
 
@@ -468,6 +487,12 @@ pub struct AppUrlTestConfigPatch {
     pub tolerance_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRuntimeConfigPatch {
+    pub udp_upstream_idle_timeout_seconds: Option<u64>,
+}
+
 fn default_schema_version() -> String {
     "gui.app.v1".to_string()
 }
@@ -541,6 +566,10 @@ pub fn default_url_test_url() -> String {
 
 pub fn default_url_test_tolerance_ms() -> u64 {
     50
+}
+
+pub fn default_udp_upstream_idle_timeout_seconds() -> u64 {
+    30
 }
 
 pub fn default_proxy_bypass() -> Vec<String> {

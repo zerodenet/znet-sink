@@ -75,6 +75,14 @@ pub(crate) fn resolve(
                     .as_u64()
                     .ok_or_else(|| AppError::invalid_argument("invalid tolerance"))?;
             }
+            "runtime.udpUpstreamIdleTimeoutSeconds" => {
+                let timeout = value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                    AppError::invalid_argument("UDP 上游空闲时间必须是大于 0 的整数秒")
+                })?;
+                object(&mut source, "runtime")?
+                    .insert("udp_upstream_idle_timeout_seconds".into(), json!(timeout));
+                app.runtime.udp_upstream_idle_timeout_seconds = timeout;
+            }
             "dns" => {
                 app.dns = serde_json::from_value(value.clone()).map_err(invalid)?;
                 app.overrides.dns = true;
@@ -171,6 +179,7 @@ fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
     let allowed = match section {
         "localProxy" => matches!(field, "host" | "port"),
         "urlTest" => matches!(field, "url" | "toleranceMs"),
+        "runtime" => field == "udpUpstreamIdleTimeoutSeconds",
         "tun" => matches!(
             field,
             "name"
@@ -236,6 +245,10 @@ pub(crate) fn view(state: &AppState) -> AppResult<Value> {
         .pointer("/runtime/latency_test_url")
         .cloned()
         .unwrap_or_else(|| json!(app.url_test.url));
+    settings["runtime"]["udpUpstreamIdleTimeoutSeconds"] = source
+        .pointer("/runtime/udp_upstream_idle_timeout_seconds")
+        .cloned()
+        .unwrap_or_else(|| json!(app.runtime.udp_upstream_idle_timeout_seconds));
     let tolerances: Vec<Value> = source
         .get("outbound_groups")
         .and_then(Value::as_array)

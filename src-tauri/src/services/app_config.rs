@@ -289,6 +289,17 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
         }
     }
 
+    if let Some(runtime) = patch.runtime {
+        if let Some(timeout) = runtime.udp_upstream_idle_timeout_seconds {
+            if timeout == 0 {
+                return Err(AppError::invalid_argument(
+                    "runtime.udpUpstreamIdleTimeoutSeconds must be greater than 0",
+                ));
+            }
+            config.runtime.udp_upstream_idle_timeout_seconds = timeout;
+        }
+    }
+
     if legacy_bypass_patch {
         config.bypass = None;
     }

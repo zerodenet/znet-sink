@@ -2,12 +2,15 @@
   import LocalProxyEndpointPanel from '$lib/components/settings/LocalProxyEndpointPanel.svelte';
   import AppConfigPanel from '$lib/components/settings/AppConfigPanel.svelte';
   import UrlTestSettingsPanel from '$lib/components/settings/UrlTestSettingsPanel.svelte';
+  import RuntimeNetworkSettingsPanel from '$lib/components/settings/RuntimeNetworkSettingsPanel.svelte';
 </script>
 
 <LocalProxyEndpointPanel />
 <AppConfigPanel scope="network" />
 <div class="section-gap"></div>
 <UrlTestSettingsPanel />
+<div class="section-gap"></div>
+<RuntimeNetworkSettingsPanel />
 
 <style>
   .section-gap {

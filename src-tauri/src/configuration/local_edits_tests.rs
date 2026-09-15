@@ -83,6 +83,44 @@ fn editing_public_url_keeps_policy_specific_url_and_tolerance() {
 }
 
 #[test]
+fn udp_idle_timeout_is_profile_owned_and_restores_the_latest_source_value() {
+    let base = json!({
+        "runtime": {"udp_upstream_idle_timeout_seconds": 45},
+        "route": {"bypass": []}
+    });
+    let app = candidate(
+        &AppConfig::default(),
+        "a",
+        BTreeMap::from([("runtime.udpUpstreamIdleTimeoutSeconds".into(), json!(90))]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        resolve(&app, Some("a"), &base).unwrap().1["runtime"]["udp_upstream_idle_timeout_seconds"],
+        90
+    );
+    assert_eq!(
+        resolve(&app, Some("b"), &base).unwrap().1["runtime"]["udp_upstream_idle_timeout_seconds"],
+        45
+    );
+    assert!(candidate(
+        &AppConfig::default(),
+        "a",
+        BTreeMap::from([("runtime.udpUpstreamIdleTimeoutSeconds".into(), json!(0),)]),
+        &[],
+    )
+    .is_err());
+    let restored = candidate(
+        &app,
+        "a",
+        Edits::new(),
+        &["runtime.udpUpstreamIdleTimeoutSeconds".into()],
+    )
+    .unwrap();
+    assert_eq!(resolve(&restored, Some("a"), &base).unwrap().1, base);
+}
+
+#[test]
 fn legacy_switches_migrate_to_current_profile_without_affecting_other_profiles() {
     let mut app = AppConfig::default();
     app.overrides.listener = true;
