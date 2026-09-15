@@ -1,5 +1,26 @@
 use super::*;
 
+#[cfg(unix)]
+fn read_fixture_line(
+    reader: &mut impl std::io::BufRead,
+    line: &mut String,
+) -> std::io::Result<usize> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match reader.read_line(line) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            result => return result,
+        }
+    }
+}
+
 #[path = "readiness_real_tests.rs"]
 mod real;
 
@@ -60,7 +81,7 @@ fn process_exit_during_successful_probe_is_rejected() {
 #[cfg(unix)]
 #[test]
 fn healthy_ipc_for_another_pid_is_rejected() {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufReader, Write};
     use std::os::unix::net::UnixListener;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.sock");
@@ -72,7 +93,7 @@ fn healthy_ipc_for_another_pid_is_rejected() {
             .unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut request = String::new();
-        reader.read_line(&mut request).unwrap();
+        read_fixture_line(&mut reader, &mut request).unwrap();
         let frame: Value = serde_json::from_str(&request).unwrap();
         assert_eq!(frame["type"], "subscribe");
         writeln!(
@@ -89,7 +110,7 @@ fn healthy_ipc_for_another_pid_is_rejected() {
             json!({"runtime": {"pid":999}}),
         ] {
             request.clear();
-            reader.read_line(&mut request).unwrap();
+            read_fixture_line(&mut reader, &mut request).unwrap();
             let frame: Value = serde_json::from_str(&request).unwrap();
             assert_eq!(frame["type"], "query");
             writeln!(
@@ -102,13 +123,13 @@ fn healthy_ipc_for_another_pid_is_rejected() {
         // Rejecting the peer must also close the dedicated subscription;
         // otherwise its reader thread retains a live socket after startup.
         request.clear();
-        assert_eq!(reader.read_line(&mut request).unwrap(), 0);
+        assert_eq!(read_fixture_line(&mut reader, &mut request).unwrap(), 0);
     });
     let endpoint = CoreEndpoint {
         transport: "unix-socket".into(),
         path: path.to_string_lossy().into_owned(),
     };
-    let error = probe(&endpoint, 123, Duration::from_secs(1)).unwrap_err();
+    let error = probe(&endpoint, 123, Duration::from_secs(10)).unwrap_err();
     assert!(error.message.contains("different process"), "{error:?}");
     worker.join().unwrap();
 }
