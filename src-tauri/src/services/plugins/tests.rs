@@ -8,6 +8,8 @@ use znet_plugin_sandbox::{
     },
 };
 const SEED: [u8; 32] = [17; 32];
+// Fixtures exercise the real Host, which checks the compiled client version.
+const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
     serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","records.summary.read"]})).unwrap()
 }
@@ -27,7 +29,7 @@ fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempD
         ..Host::default()
     };
     let manager = Manager::default();
-    let manifest: Manifest = serde_json::from_value(serde_json::json!({"schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":"=0.0.1","api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[request],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()})).unwrap();
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({"schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[request],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()})).unwrap();
     let payload = Payload {
         schema_version: 1,
         host: "znet-sink".into(),
@@ -50,7 +52,7 @@ fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempD
             &bytes,
             &directory.plugins[0],
             &Target::native_desktop().unwrap(),
-            "0.0.1",
+            HOST_VERSION,
         )
         .unwrap();
     host.state.lock().unwrap().directory = Some((directory, Instant::now()));
