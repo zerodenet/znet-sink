@@ -1,5 +1,6 @@
 //! Publisher-owned releases, signed packages and host-owned local installation.
 pub mod directory;
+pub mod marketplace;
 pub mod package;
 pub mod remote;
 pub mod store;

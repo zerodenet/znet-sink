@@ -1,5 +1,9 @@
 <script lang="ts">
   import PluginCatalog from './PluginCatalog.svelte';
+  import './plugins.css';
+  import { Puzzle, Upload, RefreshCw, ShieldCheck, Play, Square, Trash2, Search } from '@lucide/svelte';
+  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Input } from '$lib/components/ui/input';
   import { onMount } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { Choice } from '$lib/components/ui/choice';
@@ -9,6 +13,7 @@
   import { pluginApi, type PluginComponent, type PluginSnapshot } from '$lib/services/plugins';
   import { canApprove, selectedGrants, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
 
+  let installedQuery = $state('');
   let section = $state<'discover' | 'installed'>('discover');
   let supported = $state<boolean | null>(null);
   let snapshot = $state<PluginSnapshot>({ checked: false, components: [], notices: [] });
@@ -22,6 +27,8 @@
   let selected = $state<string[]>([]);
   let removeOpen = $state(false);
   let removeComponent = $state<PluginComponent | null>(null);
+  const installedComponents = $derived(snapshot.components.filter(component =>
+    `${component.name} ${component.plugin_id} ${component.component_id} ${component.publisher}`.toLowerCase().includes(installedQuery.trim().toLowerCase())));
   let runGeneration = 0;
   let alive = true;
 
@@ -79,56 +86,80 @@
   }
 </script>
 
-<div class="plugins-panel">
-  <div class="heading"><div><h2>插件</h2><p>发现、安装插件，并管理访问权限。</p></div></div>
-  {#if supported === null}<p class="muted">正在读取插件状态…</p>
-  {:else if !supported}<p class="muted">当前设备尚未开放插件运行。</p>
+{#snippet sections()}
+  <SegmentedControl.Root value={section} onValueChange={(value) => { section = value as typeof section; }} aria-label="插件页面" disabled={busy}>
+    <SegmentedControl.Item value="discover">发现插件</SegmentedControl.Item>
+    <SegmentedControl.Item value="installed">已安装</SegmentedControl.Item>
+  </SegmentedControl.Root>
+{/snippet}
+
+<div class="desk-card plugins-panel animate-fade-in">
+  <div class="plugins-header">
+    <div class="plugins-title-group"><h2>插件管理</h2><p>发现与安装插件，管理访问权限</p></div>
+    {#if supported}
+      <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={install}><Upload size={14} />从本地安装</Button>
+    {/if}
+  </div>
+  {#if supported === null}<div class="plugins-empty" role="status">正在读取插件状态…</div>
+  {:else if !supported}<div class="plugins-empty"><Puzzle size={28} />当前设备尚未开放插件运行。</div>
   {:else}
-    <div class="actions" aria-label="插件页面">
-      <Button variant={section === 'discover' ? 'default' : 'outline'} size="sm" aria-pressed={section === 'discover'} onclick={() => { section = 'discover'; }}>发现插件</Button>
-      <Button variant={section === 'installed' ? 'default' : 'outline'} size="sm" aria-pressed={section === 'installed'} onclick={() => { section = 'installed'; }}>已安装</Button>
-      <Button variant="ghost" size="sm" disabled={busy || runningKey !== null} onclick={install}>从本地安装</Button>
-    </div>
     {#if section === 'discover'}
-      <PluginCatalog disabled={busy || runningKey !== null} oninstalled={(value) => { snapshot = value; section = 'installed'; message = '已安装，请查看权限后决定是否启用'; error = ''; }} />
+      <PluginCatalog navigation={sections} disabled={busy || runningKey !== null} oninstalled={(value) => { snapshot = value; section = 'installed'; message = '已安装，请查看权限后决定是否启用'; error = ''; }} />
     {:else}
-    <div class="actions">
-      <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={() => action(pluginApi.refresh, '已核验中央登记与已安装插件')}>检查已安装插件</Button>
-    </div>
-    <p class="muted">安装包须通过中央登记与发布者签名校验。安装后默认不授予权限。</p>
-    {#if !snapshot.checked}<p class="hint">请先检查插件登记。客户端重启后需要重新授权。</p>{/if}
-    {#if snapshot.checked && snapshot.components.length === 0}<div class="empty">还没有已安装的插件。前往“发现插件”在线安装，也可选择本地插件包。</div>{/if}
-    {#each snapshot.notices as notice}<p class="hint">{notice}</p>{/each}
-    {#each snapshot.components as component (`${component.plugin_id}/${component.component_id}`)}
-      <article class="plugin-card">
-        <div class="card-heading"><strong>{component.name}</strong><span class="muted">{component.version}</span></div>
-        <p class="muted">{component.component_id} · 发布者 {component.publisher}</p>
-        <p>{component.blocked ?? (component.running || runningKey === component.review?.key ? '运行中' : component.enabled ? '已授权' : '未授权')}</p>
-        <div class="actions">
-          <Button size="sm" variant="outline" disabled={busy || runningKey !== null || !snapshot.checked || !component.review || !!component.blocked} onclick={() => review(component)}>查看权限</Button>
-          <Button size="sm" disabled={busy || runningKey !== null || !snapshot.checked || !component.enabled || !!component.blocked} onclick={() => run(component)}>运行</Button>
-          {#if component.enabled || component.running || runningKey === component.review?.key}
-            <Button size="sm" variant="outline" onclick={() => stop(component)}>停用</Button>
-          {/if}
-          <Button size="sm" variant="ghost" disabled={busy || runningKey !== null} onclick={() => { removeComponent = component; removeOpen = true; }}>卸载</Button>
+      <div class="plugins-toolbar">
+        {@render sections()}
+        <div class="plugins-toolbar-actions">
+          <div class="plugins-search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索已安装插件" placeholder="搜索已安装插件…" bind:value={installedQuery} /></div>
+          <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={() => action(pluginApi.refresh, '已核验中央登记与已安装插件')}><RefreshCw size={14} class={busy ? 'animate-spin' : ''} />检查已安装插件</Button>
         </div>
-        {#if component.blocked}
-          {#each component.permissions as permission}<p class="muted">{permissionLabel(permission.request.capability)} · {permission.request.scope}{permission.supported ? '' : ' · 暂不可用'}</p>{/each}
+      </div>
+      <div class="plugins-scroll">
+        <p class="plugins-hint">安装后默认不授予权限。客户端重启后需要重新授权。</p>
+        {#if !snapshot.checked}<p class="plugins-notice">请先检查插件登记，再确认访问权限。</p>{/if}
+        {#each snapshot.notices as notice}<p class="plugins-notice">{notice}</p>{/each}
+        {#if snapshot.checked && snapshot.components.length === 0}
+          <div class="plugins-empty"><Puzzle size={28} /><strong>还没有已安装的插件</strong><p>在线发现插件，或从本地选择插件包。</p><Button variant="outline" size="sm" onclick={() => { section = 'discover'; }}>发现插件</Button></div>
+        {:else if snapshot.components.length > 0 && !installedComponents.length}
+          <div class="plugins-empty"><Search size={28} /><p>没有找到匹配的插件。</p><Button variant="ghost" size="sm" onclick={() => { installedQuery = ''; }}>清除搜索</Button></div>
+        {:else}
+          <div class="plugins-grid">
+            {#each installedComponents as component (`${component.plugin_id}/${component.component_id}`)}
+              <article class="plugin-card">
+                <div class="plugin-card-heading">
+                  <div class="plugin-icon"><Puzzle size={18} /></div>
+                  <div class="plugin-identity"><strong>{component.name}</strong><span class="plugin-meta">发布者 {component.publisher}</span></div>
+                  <span class="plugin-version">{component.version}</span>
+                </div>
+                <div class="plugin-details"><span class="plugin-meta">{component.component_id}</span><span class="plugin-status" class:authorized={component.enabled && !component.blocked} class:blocked={!!component.blocked}>{component.blocked ? '暂不可用' : component.running || runningKey === component.review?.key ? '运行中' : component.enabled ? '已授权' : '未授权'}</span></div>
+                {#if component.blocked}<p class="plugins-error">{component.blocked}</p>{/if}
+                <div class="plugin-card-actions">
+                  <Button size="sm" variant="outline" disabled={busy || runningKey !== null || !snapshot.checked || !component.review || !!component.blocked} onclick={() => review(component)}><ShieldCheck size={14} />查看权限</Button>
+                  <Button size="sm" disabled={busy || runningKey !== null || !snapshot.checked || !component.enabled || !!component.blocked} onclick={() => run(component)}><Play size={14} />运行</Button>
+                  {#if component.enabled || component.running || runningKey === component.review?.key}
+                    <Button size="sm" variant="outline" onclick={() => stop(component)}><Square size={14} />停用</Button>
+                  {/if}
+                  <Button size="sm" variant="ghost" class="text-destructive hover:text-destructive" disabled={busy || runningKey !== null} onclick={() => { removeComponent = component; removeOpen = true; }}><Trash2 size={14} />卸载</Button>
+                </div>
+                {#if component.blocked}
+                  {#each component.permissions as permission}<p class="plugin-meta">{permissionLabel(permission.request.capability)} · {permission.request.scope}{permission.supported ? '' : ' · 暂不可用'}</p>{/each}
+                {/if}
+              </article>
+            {/each}
+          </div>
         {/if}
-      </article>
-    {/each}
+        {#if result}<details class="plugins-result" open><summary>运行结果</summary><pre>{result}</pre></details>{/if}
+      </div>
     {/if}
   {/if}
-  <div aria-live="polite">{#if message}<p>{message}</p>{/if}{#if error}<p class="error">{error}</p>{/if}</div>
-  {#if result}<details open><summary>运行结果</summary><pre>{result}</pre></details>{/if}
+  {#if message || error}<div class="plugins-feedback" aria-live="polite">{#if message}<p>{message}</p>{/if}{#if error}<p class="plugins-error" role="alert">{error}</p>{/if}</div>{/if}
 </div>
 
 <Dialog.Root bind:open={reviewOpen}>
   <Dialog.Content class="sm:max-w-[480px]">
     <Dialog.Header><Dialog.Title>插件权限</Dialog.Title><Dialog.Description>{selectedComponent?.name} 申请以下权限。仅勾选你愿意允许的访问范围。</Dialog.Description></Dialog.Header>
     {#if selectedComponent}
-      <Dialog.Body>
-      <p class="muted">{selectedComponent.version} · 发布者 {selectedComponent.publisher}</p>
+      <Dialog.Body class="space-y-4">
+      <p class="plugin-meta">{selectedComponent.version} · 发布者 {selectedComponent.publisher}</p>
       {#each selectedComponent.permissions as permission}
         <label class="permission-row">
           <Choice
@@ -143,7 +174,7 @@
         </label>
       {/each}
       {#if selectedComponent.permissions.length === 0}<p>此组件未申请宿主访问权限。</p>{/if}
-      <p class="muted">本次授权最多有效 10 分钟，客户端退出后失效。可随时停用。</p>
+      <p class="plugin-meta">本次授权最多有效 10 分钟，客户端退出后失效。可随时停用。</p>
       </Dialog.Body>
       <Dialog.Footer><Button variant="outline" onclick={() => { reviewOpen = false; }}>取消</Button><Button disabled={!canApprove(selectedComponent, selected)} onclick={approve}>允许并启用</Button></Dialog.Footer>
     {/if}
@@ -157,17 +188,8 @@
 </Dialog.Root>
 
 <style>
-  .plugins-panel { padding: 24px; flex: 1; min-height: 0; overflow: auto; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 16px; font-size: 13px; }
-  h2 { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
-  p { margin: 0; overflow-wrap: anywhere; }
-  .muted, small { color: var(--muted-foreground); font-size: 12px; }
-  .actions, .card-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .plugin-card { padding: 16px; border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; gap: 10px; }
-  .hint, .empty { padding: 14px; border-radius: 8px; background: var(--muted); color: var(--muted-foreground); }
-  .error { color: var(--destructive); }
-  .permission-row { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; }
-  .permission-row :global([data-slot='choice']) { margin-top: 4px; }
-  small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
-  pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding: 12px; background: var(--muted); border-radius: 8px; }
-  @media (max-width: 640px) { .plugins-panel { padding: 16px; } }
+  .permission-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+  .permission-row :global([data-slot='choice']) { margin-top: 3px; flex-shrink: 0; }
+  .permission-row span { min-width: 0; }
+  small { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 </style>

@@ -42,6 +42,7 @@ fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempD
     };
     let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
     let directory = Directory {
+        snapshot_version: None,
         schema_version: 2,
         host: "znet-sink".into(),
         plugins: vec![registration()],

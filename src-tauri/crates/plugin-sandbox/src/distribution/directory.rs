@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Directory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_version: Option<String>,
     pub schema_version: u32,
     pub host: String,
     pub plugins: Vec<Registration>,
@@ -26,6 +28,8 @@ pub struct ReleaseSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<String>,
     pub id: String,
     pub repository: String,
     pub publisher: Publisher,
@@ -91,6 +95,7 @@ impl Registration {
         {
             return Err("unsupported release source".into());
         }
+        super::marketplace::validate_registration(self)?;
         Ok(())
     }
     pub fn repository_path(&self) -> Result<String> {

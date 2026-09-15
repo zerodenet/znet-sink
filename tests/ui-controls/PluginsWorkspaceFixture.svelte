@@ -8,4 +8,9 @@
   store.activeTab = 'plugins';
   store.interactionSurface.navigation = new Map(NAV_TABS.map(tab => [tab.id, { key: tab.id, visible: true, operable: true, readonly: false, category: 'navigation' }]));
 </script>
-<div class="flex h-full min-h-0 flex-col bg-background"><AppHeader /><TabContent tab={store.activeTab} /></div>
+<div class="flex h-full min-h-0 flex-col bg-background"><AppHeader /><div class="plugin-fixture-content"><TabContent tab={store.activeTab} /></div></div>
+
+<style>
+  .plugin-fixture-content { flex: 1; min-height: 0; display: flex; padding: 14px 20px; }
+  @media (max-width: 640px) { .plugin-fixture-content { padding: 12px; } }
+</style>

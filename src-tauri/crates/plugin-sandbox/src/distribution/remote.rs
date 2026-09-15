@@ -9,10 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::{io::Read, time::Duration};
 pub const DIRECTORY_URL: &str =
     "https://raw.githubusercontent.com/zerodenet/plugins/main/catalogs/znet-sink.json";
+pub const MARKETPLACE_API_URL: &str = "https://plugins.zerodenet.org/api/plugins";
 type Fetch<'a> = dyn Fn(&str, usize) -> Result<Vec<u8>> + 'a;
 pub struct Remote<'a> {
     fetch: Option<Box<Fetch<'a>>>,
     client: Client,
+    host_version: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
@@ -22,6 +24,8 @@ pub struct Asset {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
+    #[serde(default)]
+    pub channel: Option<String>,
     pub tag_name: String,
     pub name: Option<String>,
     pub body: Option<String>,
@@ -57,6 +61,7 @@ impl<'a> Remote<'a> {
             .build()?;
         Ok(Self {
             client,
+            host_version: env!("CARGO_PKG_VERSION").into(),
             fetch: None,
         })
     }
@@ -89,8 +94,21 @@ impl<'a> Remote<'a> {
         }
         Ok(bytes)
     }
+    /// The desktop host supplies its product version, independently of this crate's version.
+    pub fn for_host(mut self, version: &str) -> Result<Self> {
+        semver::Version::parse(version)?;
+        self.host_version = version.into();
+        Ok(self)
+    }
+    /// Complete trust registrations, including products without an online release.
+    pub fn registration_directory(&self) -> Result<Directory> {
+        self.get(&format!("{MARKETPLACE_API_URL}.json"), 1024 * 1024)
+            .and_then(|bytes| Directory::parse_marketplace_registrations(&bytes))
+            .or_else(|_| Directory::parse(&self.get(DIRECTORY_URL, 1024 * 1024)?))
+    }
+    /// Discovery uses registrations only. The publisher repository owns releases.
     pub fn directory(&self) -> Result<Directory> {
-        Directory::parse(&self.get(DIRECTORY_URL, 1024 * 1024)?)
+        self.registration_directory()
     }
     /// Explicit bounded discovery. Older releases can be selected directly by tag.
     pub fn releases(&self, registration: &Registration) -> Result<Vec<Release>> {
@@ -123,16 +141,26 @@ impl<'a> Remote<'a> {
         Ok(release)
     }
     pub fn download(&self, registration: &Registration, release: &Release) -> Result<Vec<u8>> {
+        if release.draft || release.published_at.is_none() {
+            return Err("release is not published".into());
+        }
         let metadata_asset = asset(
             registration,
             release,
             &registration.release_source.metadata_asset,
         )?;
-        let metadata: ReleaseMetadata =
-            serde_json::from_slice(&self.get(&metadata_asset.browser_download_url, 16 * 1024)?)?;
+        let metadata_bytes = self.get(&metadata_asset.browser_download_url, 512 * 1024)?;
+        let metadata: ReleaseMetadata = match serde_json::from_slice(&metadata_bytes) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                let target = self.unified_target(&metadata_bytes, registration, release)?;
+                return self.download_target(registration, release, &target);
+            }
+        };
         if metadata.schema_version != 1
             || metadata.host != "znet-sink"
             || metadata.plugin_id != registration.id
+            || release.tag_name != format!("v{}", metadata.version)
         {
             return Err("release metadata identity mismatch".into());
         }
@@ -141,10 +169,33 @@ impl<'a> Remote<'a> {
             return Err("package exceeds limit".into());
         }
         let bytes = self.get(&package_asset.browser_download_url, MAX_PACKAGE_BYTES)?;
+        if bytes.len() as u64 != package_asset.size {
+            return Err("downloaded package size differs from release".into());
+        }
         validate_download(&bytes, &metadata, registration)?;
         Ok(bytes)
     }
 }
+
+pub(super) fn marketplace_platform(
+    target: &crate::contract::Target,
+) -> Result<(&'static str, &'static str)> {
+    use crate::contract::{Arch, Os};
+    let os = match target.os {
+        Os::Macos => "darwin",
+        Os::Windows => "windows",
+        Os::Linux => "linux",
+        Os::Android => "android",
+        Os::Ios => "ios",
+    };
+    let arch = match target.arch {
+        Arch::X86_64 => "amd64",
+        Arch::Aarch64 => "arm64",
+        Arch::Armv7 => return Err("marketplace does not support this native architecture".into()),
+    };
+    Ok((os, arch))
+}
+
 pub fn validate_download(
     bytes: &[u8],
     metadata: &ReleaseMetadata,
@@ -170,8 +221,18 @@ fn asset<'a>(registration: &Registration, release: &'a Release, name: &str) -> R
     }
     let selected = matches[0];
     let url = Url::parse(&selected.browser_download_url)?;
-    let prefix = format!("/{}/releases/download/", registration.repository_path()?);
-    if url.host_str() != Some("github.com") || !url.path().starts_with(&prefix) {
+    let prefix = format!(
+        "/{}/releases/download/{}/",
+        registration.repository_path()?,
+        release.tag_name
+    );
+    if !allowed(&url)
+        || url.host_str() != Some("github.com")
+        || !url.path().starts_with(&prefix)
+        || url.path()[prefix.len()..].contains('/')
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         return Err("asset belongs to another repository".into());
     }
     Ok(selected)
@@ -182,7 +243,10 @@ fn allowed(url: &Url) -> bool {
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
-        && (host == "github.com"
+        && (host == "plugins.zerodenet.org"
+            || host == "github.com"
             || host == "api.github.com"
             || host.ends_with(".githubusercontent.com"))
 }
+
+mod marketplace;

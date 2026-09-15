@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Search, Download, RefreshCw } from '@lucide/svelte';
+  import { onMount, type Snippet } from 'svelte';
+  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { Search, Download, RefreshCw, Puzzle, ExternalLink } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import FieldSelect from '$lib/components/ui/select/field-select.svelte';
@@ -8,7 +9,7 @@
   import { pluginApi, type PluginListing, type PluginRelease, type PluginSnapshot } from '$lib/services/plugins';
   import { getAppErrorInfo } from '$lib/services/core';
 
-  let { oninstalled, disabled = false }: { oninstalled: (snapshot: PluginSnapshot) => void; disabled?: boolean } = $props();
+  let { oninstalled, disabled = false, navigation }: { oninstalled: (snapshot: PluginSnapshot) => void; disabled?: boolean; navigation: Snippet } = $props();
   let catalog = $state<PluginListing[]>([]);
   let loading = $state(true);
   let error = $state('');
@@ -22,7 +23,7 @@
   let open = $state(false);
   let generation = 0;
   let alive = true;
-  const filtered = $derived(catalog.filter(p => `${p.name} ${p.id} ${p.description}`.toLowerCase().includes(query.trim().toLowerCase())));
+  const filtered = $derived(catalog.filter(p => `${p.name} ${p.id} ${p.product_id ?? ''} ${p.description}`.toLowerCase().includes(query.trim().toLowerCase())));
   const release = $derived(releases.find(r => r.tag_name === tag));
 
   async function load() {
@@ -39,7 +40,7 @@
       const value = await pluginApi.releases(plugin.id);
       if (alive && current === generation) {
         releases = value;
-        tag = value.find(r => !r.prerelease)?.tag_name ?? value[0]?.tag_name ?? '';
+        tag = value.find(r => r.channel ? r.channel === 'stable' : !r.prerelease)?.tag_name ?? value[0]?.tag_name ?? '';
       }
     } catch (reason) { if (alive && current === generation) versionError = getAppErrorInfo(reason, '无法读取发布版本').message; }
     finally { if (alive && current === generation) versionsLoading = false; }
@@ -55,30 +56,42 @@
   }
 </script>
 
-<div class="catalog-toolbar">
-  <div class="search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索插件" placeholder="搜索插件名称或简介" bind:value={query} /></div>
-  <Button variant="outline" size="sm" disabled={loading || installing} onclick={load}><RefreshCw size={14} />刷新目录</Button>
-</div>
-{#if loading}<div class="empty" role="status">正在加载在线插件目录…</div>
-{:else if error}<div class="empty" role="alert">{error}<Button variant="outline" size="sm" onclick={load}>重试</Button></div>
-{:else if !catalog.length}<div class="empty">暂时没有已上架的插件。发布者完成登记并发布后，可在这里选择版本并在线安装。</div>
-{:else if !filtered.length}<div class="empty">没有找到匹配的插件。</div>
-{:else}
-  <div class="catalog-grid">
-    {#each filtered as plugin (plugin.id)}
-      <article>
-        <strong>{plugin.name}</strong><p>{plugin.description}</p>
-        <small>发布者 {plugin.publisher.id}</small>
-        <Button size="sm" variant="outline" disabled={disabled || installing} onclick={() => choose(plugin)}><Download size={14} />选择版本</Button>
-      </article>
-    {/each}
+<div class="plugins-toolbar">
+  {@render navigation()}
+  <div class="plugins-toolbar-actions">
+    <div class="plugins-search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索插件" placeholder="搜索插件名称或简介…" bind:value={query} /></div>
+    <Button variant="outline" size="sm" disabled={loading || installing} onclick={load}><RefreshCw size={14} class={loading ? 'animate-spin' : ''} />刷新目录</Button>
   </div>
-{/if}
+</div>
+<div class="plugins-scroll">
+  {#if loading}<div class="plugins-empty" role="status"><RefreshCw size={24} class="animate-spin" />正在加载插件目录…</div>
+  {:else if error}<div class="plugins-empty" role="alert"><Puzzle size={28} /><p class="plugins-error">{error}</p><Button variant="outline" size="sm" onclick={load}>重试</Button></div>
+  {:else if !catalog.length}<div class="plugins-empty"><Puzzle size={28} /><strong>暂时没有已登记的插件</strong><p>发布者登记后，可在这里查看仓库版本并在线安装。</p></div>
+  {:else if !filtered.length}<div class="plugins-empty"><Search size={28} /><p>没有找到匹配的插件。</p><Button variant="ghost" size="sm" onclick={() => { query = ''; }}>清除搜索</Button></div>
+  {:else}
+    <div class="plugins-grid">
+      {#each filtered as plugin (plugin.id)}
+        <article class="plugin-card">
+          <div class="plugin-card-heading"><div class="plugin-icon"><Puzzle size={18} /></div><div class="plugin-identity"><strong>{plugin.name}</strong><span class="plugin-meta">发布者 {plugin.publisher.id}</span></div></div>
+          <p class="plugin-description">{plugin.description}</p>
+          <div class="plugin-card-actions">
+            <Button size="sm" variant="ghost" class="mr-auto" onclick={async () => {
+              try { await openUrl(plugin.repository); }
+              catch (reason) { error = getAppErrorInfo(reason, '无法打开插件仓库').message; }
+            }}><ExternalLink size={13} />仓库</Button>
+            <Button size="sm" variant="outline" disabled={disabled || installing} onclick={() => choose(plugin)}><Download size={14} />选择版本</Button>
+          </div>
+        </article>
+      {/each}
+    </div>
+  {/if}
+</div>
 <Dialog.Root bind:open onOpenChange={(value) => { if (installing) open = true; else open = value; }}>
   <Dialog.Content class="sm:max-w-[480px]" showCloseButton={!installing}>
     <Dialog.Header><Dialog.Title>在线安装 · {selected?.name}</Dialog.Title><Dialog.Description>从发布者的登记仓库下载。安装后需单独授权才能运行。</Dialog.Description></Dialog.Header>
-    <Dialog.Body>
-      {#if versionsLoading}<p role="status">正在读取发布版本…</p>
+    <Dialog.Body class="space-y-4">
+      <div class="release-source"><span>发布仓库</span><strong>{selected?.repository.replace('https://github.com/', '')}</strong></div>
+      {#if versionsLoading}<p role="status">正在读取仓库发布版本…</p>
       {:else if releases.length}
         <label class="version-label" for="plugin-version">发布版本</label>
         <FieldSelect
@@ -86,10 +99,16 @@
           aria-label="发布版本"
           bind:value={tag}
           disabled={installing}
-          options={releases.map(version => ({ value: version.tag_name, label: `${version.tag_name}${version.prerelease ? '（预发布）' : ''}` }))}
+          options={releases.map(version => ({ value: version.tag_name, label: `${version.tag_name}${version.channel ? `（${version.channel}）` : version.prerelease ? '（预发布）' : ''}` }))}
         />
         {#if release?.prerelease}<p>这是预发布版本，可能尚不稳定。</p>{/if}
-        {#if release?.body}<pre>{release.body}</pre>{/if}
+        {#if release?.body}<pre class="release-notes">{release.body}</pre>{/if}
+        {#if release?.html_url?.startsWith('https://')}
+          <Button variant="link" size="sm" onclick={async () => {
+            try { await openUrl(release!.html_url!); }
+            catch (reason) { versionError = getAppErrorInfo(reason, '无法打开发行说明').message; }
+          }}>查看发行说明</Button>
+        {/if}
       {:else if !versionError}<p>发布者尚未发布可安装版本。</p>{/if}
       {#if versionError}<p class="error" role="alert">{versionError}</p>{/if}
       {#if versionError && !releases.length}<Button variant="outline" disabled={installing} onclick={() => { if (selected) void choose(selected); }}>重试</Button>{/if}
@@ -99,14 +118,10 @@
   </Dialog.Content>
 </Dialog.Root>
 <style>
-  .catalog-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .search { position: relative; width: 280px; max-width: 100%; }
-  .search :global(svg) { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
-  .catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px; }
-  article { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 18px; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; min-width: 0; }
-  p, small { color: var(--muted-foreground); overflow-wrap: anywhere; }
-  .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 20px; background: var(--muted); border-radius: 10px; color: var(--muted-foreground); text-align: center; }
+  p { font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
   .error { color: var(--destructive); }
-  .version-label { display: block; margin-bottom: 8px; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 180px; overflow: auto; margin-top: 12px; }
+  .version-label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 500; }
+  .release-source { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--muted); font-size: 11px; color: var(--muted-foreground); }
+  .release-source strong { font-weight: 500; color: var(--foreground); overflow-wrap: anywhere; min-width: 0; }
+  .release-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; max-height: 180px; overflow: auto; padding: 12px; border-radius: 8px; border: 1px solid var(--border); }
 </style>

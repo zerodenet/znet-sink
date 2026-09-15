@@ -5,9 +5,7 @@ use std::{
     time::Duration,
 };
 use znet_client_core::capability::{Budget, Lease, Manager, Permission};
-use znet_plugin_sandbox::distribution::{
-    directory::Directory, remote::DIRECTORY_URL, store::Store,
-};
+use znet_plugin_sandbox::distribution::{directory::Directory, remote::Remote, store::Store};
 
 pub(super) fn failure(_: impl std::fmt::Display) -> AppError {
     AppError::invalid_argument("插件校验或操作失败，请检查安装包、中央登记及网络连接")
@@ -38,25 +36,28 @@ pub(super) fn lease(manager: &Manager, permissions: BTreeSet<Permission>) -> App
 pub(super) fn directory(manager: &Manager) -> AppResult<Directory> {
     let lease = lease(
         manager,
-        BTreeSet::from([Permission::new(
-            "network.get",
+        [
+            "https://plugins.zerodenet.org",
             "https://raw.githubusercontent.com",
-        )]),
+        ]
+        .into_iter()
+        .map(|origin| Permission::new("network.get", origin))
+        .collect(),
     )?;
-    let response = znet_client_capabilities::network::get(
-        &lease,
-        DIRECTORY_URL,
-        "ZNet-Sink-Plugin/1",
-        1024 * 1024,
-        &[],
-    )
-    .and_then(|resource| resource.take(&lease))
-    .map_err(failure)?;
-    if response.status != 200 {
-        return Err(failure("directory response"));
-    }
-    Directory::parse(&response.body).map_err(failure)
+    Remote::with_fetch(|url, limit| {
+        let response =
+            znet_client_capabilities::network::get(&lease, url, "ZNet-Sink-Plugin/1", limit, &[])
+                .and_then(|resource| resource.take(&lease))?;
+        if response.status != 200 {
+            return Err("directory response failed".into());
+        }
+        Ok(response.body)
+    })
+    .and_then(|remote| remote.for_host(env!("CARGO_PKG_VERSION")))
+    .and_then(|remote| remote.directory())
+    .map_err(failure)
 }
+
 pub(super) fn store() -> AppResult<Store> {
     Store::new(super::super::data_dir()?.join("plugins")).map_err(failure)
 }

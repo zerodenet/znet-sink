@@ -36,11 +36,12 @@ fn run() -> Result<()> {
             let remote = Remote::new()?; let directory = remote.directory()?; let registration = directory.find(id)?;
             let release = remote.release(registration, tag)?;
             let bytes = remote.download(registration, &release)?;
-            let package = Store::new(root)?.install(&bytes, registration, &Target::native_desktop()?, env!("CARGO_PKG_VERSION"))?;
+            let trusted = remote.registration_directory()?;
+            let package = Store::new(root)?.install(&bytes, trusted.find(id)?, &Target::native_desktop()?, env!("CARGO_PKG_VERSION"))?;
             println!("installed {} {} {} (not enabled)", package.id, package.version, package.digest);
         }
         [cmd, root, id] if cmd == "rollback" || cmd == "inspect" => {
-            let directory = Remote::new()?.directory()?; let registration = directory.find(id)?; let store = Store::new(root)?;
+            let directory = Remote::new()?.registration_directory()?; let registration = directory.find(id)?; let store = Store::new(root)?;
             let package = if cmd == "rollback" { store.rollback(registration, &Target::native_desktop()?, env!("CARGO_PKG_VERSION"))? } else { store.current(registration)? };
             println!("{} {} {} (not enabled)", package.id, package.version, package.digest);
             for component in package.components { println!("{}", serde_json::to_string_pretty(component.manifest())?); }

@@ -7,8 +7,8 @@ export interface PluginComponent {
   permissions: Array<{ request: PluginPermission; required: boolean; supported: boolean; granted: boolean }>;
 }
 export interface PluginSnapshot { checked: boolean; components: PluginComponent[]; notices: string[] }
-export interface PluginListing { id: string; name: string; description: string; publisher: { id: string }; repository: string }
-export interface PluginRelease { tag_name: string; name: string | null; body: string | null; prerelease: boolean; published_at: string | null }
+export interface PluginListing { product_id?: string; id: string; name: string; description: string; publisher: { id: string }; repository: string }
+export interface PluginRelease { channel?: 'stable' | 'rc' | 'dev' | null; html_url?: string; tag_name: string; name: string | null; body: string | null; prerelease: boolean; published_at: string | null }
 export const pluginApi = {
   catalog: () => invoke<PluginListing[]>('plugins_catalog'),
   releases: (id: string) => invoke<PluginRelease[]>('plugins_releases', { id }),

@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::SigningKey;
 use std::{
@@ -8,42 +9,17 @@ use std::{
 use znet_plugin_sandbox::{
     contract::*,
     distribution::{
-        directory::{Directory, Registration},
-        package::{self, Payload, SourceComponent},
+        directory::Directory,
+        package,
         remote::{validate_download, ReleaseMetadata},
         store::Store,
     },
     policy::Authority,
     runtime::execute,
 };
-const SEED: [u8; 32] = [17; 32];
-fn registration() -> Registration {
-    serde_json::from_value(serde_json::json!({
-        "id":"org.example.plugin", "repository":"https://github.com/example/plugin", "publisher":{"id":"example","public_key":STANDARD.encode(SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},
-        "name":"Example", "description":"Test", "license":"MIT", "maintainers":["example"],
-        "release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"}, "surfaces":[],"capabilities":["plugin.self.read"]
-    })).unwrap()
-}
-fn payload(version: &str, targets: serde_json::Value) -> Payload {
-    let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
-    let manifest: Manifest = serde_json::from_value(serde_json::json!({
-        "schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":version,"requires_host":"=0.0.1", "api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":targets,
-        "required":[{"capability":"plugin.self.read","scope":"self"}],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()
-    })).unwrap();
-    Payload {
-        schema_version: 1,
-        host: "znet-sink".into(),
-        plugin_id: "org.example.plugin".into(),
-        version: version.into(),
-        components: vec![SourceComponent {
-            manifest,
-            source: source.into(),
-        }],
-    }
-}
-fn signed(payload: &Payload) -> Vec<u8> {
-    package::sign(&serde_json::to_vec(payload).unwrap(), &SEED).unwrap()
-}
+#[path = "support/distribution.rs"]
+mod support;
+use support::*;
 #[test]
 fn any_devices_still_enforce_runtime_isolation_and_version() {
     let bytes = signed(&payload("1.0.0", serde_json::json!("any")));
@@ -194,6 +170,7 @@ fn duplicate_registration_wrong_host_and_untrusted_repository_rejected() {
         assert!(bad.validate().is_err());
     }
 }
+
 #[test]
 fn tampered_installed_store_is_not_trusted() {
     let temp = tempfile::tempdir().unwrap();
@@ -307,4 +284,89 @@ fn host_fetch_reuses_release_identity_and_signature_validation() {
     assert!(corrupted.download(&registration, &release).is_err());
     assert!(remote.get("https://attacker.example/package", 100).is_err());
     assert!(remote.get("https://github.com/example/plugin", 1).is_err());
+}
+
+#[test]
+fn host_accepts_unified_multi_target_release_but_selects_only_znet_sink() {
+    use znet_plugin_sandbox::distribution::remote::{Release, Remote};
+    let mut registration = registration();
+    registration.product_id = Some("example.product".into());
+    let payload = payload("1.0.0", serde_json::json!("any"));
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let package_url = "https://github.com/example/plugin/releases/download/v1.0.0/plugin.zspkg";
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "product_id": "example.product",
+        "repository": registration.repository,
+        "publisher": registration.publisher,
+        "source": {"tag":"v1.0.0", "commit":"a".repeat(40)},
+        "release": {
+            "version":"1.0.0", "channel":"stable", "published_at":"2026-09-15T00:00:00Z",
+            "notes_url":"https://github.com/example/plugin/releases/tag/v1.0.0",
+            "targets":[
+                {"host":"zboard", "package_id":"example.server", "host_version":{"min":"0.0.1"}, "surfaces":[], "capabilities":[], "artifacts":[]},
+                {"host":"znet-sink", "package_id":registration.id, "host_version":{"min":"0.0.1"}, "surfaces":registration.surfaces, "capabilities":registration.capabilities,
+                 "artifacts":[{"os":"any","arch":"any","url":package_url,"size":bytes.len(),"sha256":sha256(&bytes),"signature":{"algorithm":"ed25519","value":serde_json::from_slice::<package::Envelope>(&bytes).unwrap().signature}}]}
+            ]
+        }
+    })).unwrap();
+    let release: Release = serde_json::from_value(serde_json::json!({
+        "tag_name":"v1.0.0", "html_url":"https://github.com/example/plugin/releases/tag/v1.0.0", "published_at":"2026-09-15T00:00:00Z", "draft":false, "prerelease":false,
+        "assets":[
+            {"name":"marketplace-entry.json","browser_download_url":"https://github.com/example/plugin/releases/download/v1.0.0/marketplace-entry.json","size":metadata.len()},
+            {"name":"plugin.zspkg","browser_download_url":package_url,"size":bytes.len()}
+        ]
+    })).unwrap();
+    let remote = Remote::with_fetch(|url, _| {
+        Ok(if url.ends_with(".json") {
+            metadata.clone()
+        } else {
+            bytes.clone()
+        })
+    })
+    .unwrap();
+    assert_eq!(remote.download(&registration, &release).unwrap(), bytes);
+    for (pointer, value) in [
+        ("/product_id", serde_json::json!("other.product")),
+        (
+            "/repository",
+            serde_json::json!("https://github.com/other/plugin"),
+        ),
+        (
+            "/publisher/public_key",
+            serde_json::json!(STANDARD.encode([0; 32])),
+        ),
+        ("/source/tag", serde_json::json!("v2.0.0")),
+        (
+            "/release/targets/1/package_id",
+            serde_json::json!("other.package"),
+        ),
+        (
+            "/release/targets/1/host_version/min",
+            serde_json::json!("0.0.2"),
+        ),
+        (
+            "/release/targets/1/capabilities",
+            serde_json::json!(["network.get"]),
+        ),
+        (
+            "/release/targets/1/artifacts/0/signature",
+            serde_json::json!(null),
+        ),
+    ] {
+        let mut document: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        *document.pointer_mut(pointer).unwrap() = value;
+        let rejected = Remote::with_fetch(|url, _| {
+            assert!(
+                url.ends_with(".json"),
+                "must reject before package download: {pointer}"
+            );
+            Ok(serde_json::to_vec(&document).unwrap())
+        })
+        .unwrap();
+        assert!(
+            rejected.download(&registration, &release).is_err(),
+            "accepted {pointer}"
+        );
+    }
 }

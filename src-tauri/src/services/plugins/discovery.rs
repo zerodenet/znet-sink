@@ -28,6 +28,7 @@ fn remote(manager: &Manager) -> AppResult<Remote<'_>> {
         }
         Ok(response.body)
     })
+    .and_then(|remote| remote.for_host(env!("CARGO_PKG_VERSION")))
     .map_err(io::failure)
 }
 
@@ -51,6 +52,6 @@ impl Host {
         let bytes = remote
             .download(registration, &release)
             .map_err(io::failure)?;
-        self.install_bytes(manager, &bytes, directory, id)
+        self.install_bytes(manager, &bytes, io::directory(manager)?, id)
     }
 }
