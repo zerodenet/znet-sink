@@ -1,3 +1,4 @@
+use super::marketplace::MarketplaceRelease;
 use super::Result;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,8 @@ pub struct Registration {
     pub release_source: ReleaseSource,
     pub surfaces: Vec<String>,
     pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<MarketplaceRelease>,
 }
 impl Directory {
     pub fn parse(bytes: &[u8]) -> Result<Self> {

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 export interface PluginPermission { capability: string; scope: string }
 export interface PluginReview { key: string; identity: string; registration: number; revision: number }
 export interface PluginComponent {
@@ -9,6 +10,12 @@ export interface PluginComponent {
 export interface PluginSnapshot { checked: boolean; components: PluginComponent[]; notices: string[] }
 export interface PluginListing { product_id?: string; id: string; name: string; description: string; publisher: { id: string }; repository: string }
 export interface PluginRelease { channel?: 'stable' | 'rc' | 'dev' | null; html_url?: string; tag_name: string; name: string | null; body: string | null; prerelease: boolean; published_at: string | null }
+export interface PluginDownloadProgress {
+  pluginId: string; tag: string; bytesDownloaded: number; bytesTotal?: number;
+  percent?: number; state: 'downloading' | 'retrying' | 'verifying'; attempt: number;
+}
+export const onPluginDownloadProgress = (callback: (progress: PluginDownloadProgress) => void): Promise<UnlistenFn> =>
+  listen<PluginDownloadProgress>('plugin:download-progress', event => callback(event.payload));
 export const pluginApi = {
   catalog: () => invoke<PluginListing[]>('plugins_catalog'),
   releases: (id: string) => invoke<PluginRelease[]>('plugins_releases', { id }),

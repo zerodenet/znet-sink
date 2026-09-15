@@ -7,21 +7,28 @@ use crate::contract::sha256;
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{io::Read, time::Duration};
-pub const DIRECTORY_URL: &str =
-    "https://raw.githubusercontent.com/zerodenet/plugins/main/catalogs/znet-sink.json";
-pub const MARKETPLACE_API_URL: &str = "https://plugins.zerodenet.org/api/plugins";
+
+/// Current public metadata endpoint. The future custom domain can replace this
+/// constant without changing the publisher-owned GitHub package path.
+pub const MARKETPLACE_API_URL: &str = "https://zerodenet.github.io/plugins/api/plugins.json";
+
 type Fetch<'a> = dyn Fn(&str, usize) -> Result<Vec<u8>> + 'a;
+type PackageFetch<'a> = dyn Fn(&str, usize, &str) -> Result<Vec<u8>> + 'a;
+
 pub struct Remote<'a> {
     fetch: Option<Box<Fetch<'a>>>,
+    package_fetch: Option<Box<PackageFetch<'a>>>,
     client: Client,
     host_version: String,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
     pub name: String,
     pub browser_download_url: String,
     pub size: u64,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
     #[serde(default)]
@@ -35,6 +42,7 @@ pub struct Release {
     pub prerelease: bool,
     pub assets: Vec<Asset>,
 }
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseMetadata {
@@ -45,6 +53,7 @@ pub struct ReleaseMetadata {
     pub asset: String,
     pub sha256: String,
 }
+
 impl<'a> Remote<'a> {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
@@ -63,18 +72,30 @@ impl<'a> Remote<'a> {
             client,
             host_version: env!("CARGO_PKG_VERSION").into(),
             fetch: None,
+            package_fetch: None,
         })
     }
-    /// Route downloads through the host's permission-aware HTTP executor.
+
+    /// Route bounded metadata reads through the host's capability executor.
     pub fn with_fetch(fetch: impl Fn(&str, usize) -> Result<Vec<u8>> + 'a) -> Result<Self> {
         let mut remote = Self::new()?;
         remote.fetch = Some(Box::new(fetch));
         Ok(remote)
     }
+
+    /// Let the desktop host persist and resume only publisher package bodies.
+    pub fn with_package_fetch(
+        mut self,
+        fetch: impl Fn(&str, usize, &str) -> Result<Vec<u8>> + 'a,
+    ) -> Self {
+        self.package_fetch = Some(Box::new(fetch));
+        self
+    }
+
     pub fn get(&self, url: &str, limit: usize) -> Result<Vec<u8>> {
         let url = Url::parse(url)?;
         if !allowed(&url) {
-            return Err("untrusted release URL".into());
+            return Err("untrusted marketplace URL".into());
         }
         if let Some(fetch) = &self.fetch {
             let bytes = fetch(url.as_str(), limit)?;
@@ -94,86 +115,96 @@ impl<'a> Remote<'a> {
         }
         Ok(bytes)
     }
-    /// The desktop host supplies its product version, independently of this crate's version.
+
+    fn get_package(&self, url: &str, limit: usize, expected_sha256: &str) -> Result<Vec<u8>> {
+        let url = Url::parse(url)?;
+        if url.host_str() != Some("github.com") || !allowed(&url) {
+            return Err("package must use the publisher GitHub release URL".into());
+        }
+        if let Some(fetch) = &self.package_fetch {
+            return fetch(url.as_str(), limit, expected_sha256);
+        }
+        self.get(url.as_str(), limit)
+    }
+
     pub fn for_host(mut self, version: &str) -> Result<Self> {
         semver::Version::parse(version)?;
         self.host_version = version.into();
         Ok(self)
     }
-    /// Complete trust registrations, including products without an online release.
+
+    /// The marketplace owns registrations, releases, compatibility and hashes.
     pub fn registration_directory(&self) -> Result<Directory> {
-        self.get(&format!("{MARKETPLACE_API_URL}.json"), 1024 * 1024)
-            .and_then(|bytes| Directory::parse_marketplace_registrations(&bytes))
-            .or_else(|_| Directory::parse(&self.get(DIRECTORY_URL, 1024 * 1024)?))
+        Directory::parse_marketplace(
+            &self.get(MARKETPLACE_API_URL, 4 * 1024 * 1024)?,
+            &self.host_version,
+        )
     }
-    /// Discovery uses registrations only. The publisher repository owns releases.
+
     pub fn directory(&self) -> Result<Directory> {
         self.registration_directory()
     }
-    /// Explicit bounded discovery. Older releases can be selected directly by tag.
+
     pub fn releases(&self, registration: &Registration) -> Result<Vec<Release>> {
-        let path = registration.repository_path()?;
-        let releases: Vec<Release> = serde_json::from_slice(&self.get(
-            &format!("https://api.github.com/repos/{path}/releases?per_page=100"),
-            2 * 1024 * 1024,
-        )?)?;
-        Ok(releases
-            .into_iter()
-            .filter(|r| !r.draft && r.published_at.is_some())
-            .collect())
+        registration
+            .releases
+            .iter()
+            .map(|record| {
+                Ok(Release {
+                    channel: Some(record.channel.clone()),
+                    tag_name: format!("v{}", record.version),
+                    name: Some(format!("{} {}", registration.name, record.version)),
+                    body: None,
+                    published_at: Some(record.published_at.clone()),
+                    html_url: record.notes_url.clone(),
+                    draft: false,
+                    prerelease: record.channel != "stable",
+                    assets: record
+                        .artifacts
+                        .iter()
+                        .map(|artifact| {
+                            let url = Url::parse(&artifact.url)?;
+                            let name = url
+                                .path_segments()
+                                .and_then(|mut segments| segments.next_back())
+                                .filter(|name| !name.is_empty())
+                                .ok_or("invalid marketplace artifact name")?;
+                            Ok(Asset {
+                                name: name.to_owned(),
+                                browser_download_url: artifact.url.clone(),
+                                size: artifact.size,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                })
+            })
+            .collect()
     }
+
     pub fn release(&self, registration: &Registration, tag: &str) -> Result<Release> {
         if tag.is_empty() || tag.len() > 128 {
             return Err("invalid release tag".into());
         }
-        let mut url = Url::parse(&format!(
-            "https://api.github.com/repos/{}/releases/tags/",
-            registration.repository_path()?
-        ))?;
-        url.path_segments_mut()
-            .map_err(|_| "invalid release base")?
-            .pop_if_empty()
-            .push(tag);
-        let release: Release = serde_json::from_slice(&self.get(url.as_str(), 512 * 1024)?)?;
-        if release.draft || release.published_at.is_none() || release.tag_name != tag {
-            return Err("release is not published".into());
-        }
-        Ok(release)
+        self.releases(registration)?
+            .into_iter()
+            .find(|release| release.tag_name == tag)
+            .ok_or_else(|| "release is not present in the marketplace snapshot".into())
     }
+
     pub fn download(&self, registration: &Registration, release: &Release) -> Result<Vec<u8>> {
-        if release.draft || release.published_at.is_none() {
-            return Err("release is not published".into());
+        let version = release
+            .tag_name
+            .strip_prefix('v')
+            .ok_or("invalid release tag")?;
+        let records: Vec<_> = registration
+            .releases
+            .iter()
+            .filter(|record| record.version == version)
+            .collect();
+        if records.len() != 1 {
+            return Err("release is missing or ambiguous in marketplace snapshot".into());
         }
-        let metadata_asset = asset(
-            registration,
-            release,
-            &registration.release_source.metadata_asset,
-        )?;
-        let metadata_bytes = self.get(&metadata_asset.browser_download_url, 512 * 1024)?;
-        let metadata: ReleaseMetadata = match serde_json::from_slice(&metadata_bytes) {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                let target = self.unified_target(&metadata_bytes, registration, release)?;
-                return self.download_target(registration, release, &target);
-            }
-        };
-        if metadata.schema_version != 1
-            || metadata.host != "znet-sink"
-            || metadata.plugin_id != registration.id
-            || release.tag_name != format!("v{}", metadata.version)
-        {
-            return Err("release metadata identity mismatch".into());
-        }
-        let package_asset = asset(registration, release, &metadata.asset)?;
-        if package_asset.size > MAX_PACKAGE_BYTES as u64 {
-            return Err("package exceeds limit".into());
-        }
-        let bytes = self.get(&package_asset.browser_download_url, MAX_PACKAGE_BYTES)?;
-        if bytes.len() as u64 != package_asset.size {
-            return Err("downloaded package size differs from release".into());
-        }
-        validate_download(&bytes, &metadata, registration)?;
-        Ok(bytes)
+        self.download_target(registration, release, records[0])
     }
 }
 
@@ -214,36 +245,14 @@ pub fn validate_download(
     }
     Ok(())
 }
-fn asset<'a>(registration: &Registration, release: &'a Release, name: &str) -> Result<&'a Asset> {
-    let matches: Vec<_> = release.assets.iter().filter(|a| a.name == name).collect();
-    if matches.len() != 1 {
-        return Err("release asset missing or ambiguous".into());
-    }
-    let selected = matches[0];
-    let url = Url::parse(&selected.browser_download_url)?;
-    let prefix = format!(
-        "/{}/releases/download/{}/",
-        registration.repository_path()?,
-        release.tag_name
-    );
-    if !allowed(&url)
-        || url.host_str() != Some("github.com")
-        || !url.path().starts_with(&prefix)
-        || url.path()[prefix.len()..].contains('/')
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("asset belongs to another repository".into());
-    }
-    Ok(selected)
-}
+
 fn allowed(url: &Url) -> bool {
     let host = url.host_str().unwrap_or("");
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
-        && (host == "plugins.zerodenet.org"
+        && (host == "zerodenet.github.io"
             || host == "github.com"
             || host == "api.github.com"
             || host.ends_with(".githubusercontent.com"))

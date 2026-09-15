@@ -35,9 +35,17 @@ struct Target {
     package_id: String,
     surfaces: Vec<String>,
     capabilities: Vec<String>,
+    #[serde(default)]
+    releases: Vec<SnapshotRelease>,
+}
+#[derive(Deserialize)]
+struct SnapshotRelease {
+    #[serde(flatten)]
+    release: MarketplaceRelease,
+    host_version: HostVersion,
 }
 impl Directory {
-    pub fn parse_marketplace_registrations(bytes: &[u8]) -> Result<Self> {
+    pub fn parse_marketplace(bytes: &[u8], host_version: &str) -> Result<Self> {
         if bytes.len() > 1024 * 1024 {
             return Err("directory exceeds limit".into());
         }
@@ -57,6 +65,7 @@ impl Directory {
             return Err("unsupported marketplace registry snapshot".into());
         }
         let mut plugins = Vec::new();
+        let current_host = semver::Version::parse(host_version)?;
         let mut products = BTreeSet::new();
         let mut packages = BTreeSet::new();
         for product in snapshot.products {
@@ -87,7 +96,7 @@ impl Directory {
             if !packages.insert(target.package_id.clone()) {
                 return Err("duplicate registration".into());
             }
-            let registration = Registration {
+            let mut registration = Registration {
                 product_id: Some(product.id),
                 id: target.package_id,
                 repository: product.repository,
@@ -102,8 +111,20 @@ impl Directory {
                 release_source: product.release_source,
                 surfaces: target.surfaces,
                 capabilities: target.capabilities,
+                releases: Vec::new(),
             };
             registration.validate()?;
+            for snapshot_release in target.releases {
+                validate_release(&registration, &snapshot_release.release)?;
+                if snapshot_release.host_version.supports(&current_host)? {
+                    registration.releases.push(snapshot_release.release);
+                }
+            }
+            registration.releases.sort_by(|left, right| {
+                semver::Version::parse(&right.version)
+                    .ok()
+                    .cmp(&semver::Version::parse(&left.version).ok())
+            });
             plugins.push(registration);
         }
         Ok(Self {
@@ -112,5 +133,9 @@ impl Directory {
             host: "znet-sink".into(),
             plugins,
         })
+    }
+
+    pub fn parse_marketplace_registrations(bytes: &[u8]) -> Result<Self> {
+        Self::parse_marketplace(bytes, env!("CARGO_PKG_VERSION"))
     }
 }

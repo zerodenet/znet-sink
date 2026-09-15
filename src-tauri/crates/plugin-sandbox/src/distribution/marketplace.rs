@@ -1,4 +1,4 @@
-//! Central registrations and publisher-owned release manifest contracts.
+//! Central registration, compatibility, release and verification metadata contracts.
 use super::{
     directory::{Directory, Publisher, Registration, ReleaseSource},
     Result,

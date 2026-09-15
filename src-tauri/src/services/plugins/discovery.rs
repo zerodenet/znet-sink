@@ -8,15 +8,10 @@ fn remote(manager: &Manager) -> AppResult<Remote<'_>> {
     Remote::with_fetch(move |url, limit| {
         let lease = io::lease(
             manager,
-            [
-                "https://api.github.com",
-                "https://github.com",
-                "https://release-assets.githubusercontent.com",
-                "https://objects.githubusercontent.com",
-            ]
-            .into_iter()
-            .map(|origin| Permission::new("network.get", origin))
-            .collect(),
+            ["https://zerodenet.github.io"]
+                .into_iter()
+                .map(|origin| Permission::new("network.get", origin))
+                .collect(),
         )
         .map_err(|_| "plugin network authorization failed")?;
         let response =
@@ -29,7 +24,7 @@ fn remote(manager: &Manager) -> AppResult<Remote<'_>> {
         Ok(response.body)
     })
     .and_then(|remote| remote.for_host(env!("CARGO_PKG_VERSION")))
-    .map_err(io::failure)
+    .map_err(io::marketplace_failure)
 }
 
 impl Host {
@@ -41,17 +36,30 @@ impl Host {
         let _operation = self.operation.lock().unwrap();
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
-        remote(manager)?.releases(registration).map_err(io::failure)
+        remote(manager)?
+            .releases(registration)
+            .map_err(io::marketplace_failure)
     }
-    pub fn install_release(&self, manager: &Manager, id: &str, tag: &str) -> AppResult<Snapshot> {
+    pub fn install_release(
+        &self,
+        manager: &Manager,
+        id: &str,
+        tag: &str,
+        progress: impl Fn(crate::services::download::Progress),
+    ) -> AppResult<Snapshot> {
         let _operation = self.operation.lock().unwrap();
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
-        let remote = remote(manager)?;
-        let release = remote.release(registration, tag).map_err(io::failure)?;
+        let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {
+            io::download_package(url, limit, sha256, &progress)
+                .map_err(|error| std::io::Error::other(error.message).into())
+        });
+        let release = remote
+            .release(registration, tag)
+            .map_err(io::marketplace_failure)?;
         let bytes = remote
             .download(registration, &release)
-            .map_err(io::failure)?;
-        self.install_bytes(manager, &bytes, io::directory(manager)?, id)
+            .map_err(io::package_failure)?;
+        self.install_bytes(manager, &bytes, directory, id)
     }
 }

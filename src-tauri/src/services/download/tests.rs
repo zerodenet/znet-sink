@@ -64,6 +64,7 @@ fn fetch_test(root: &Path, url: &str) -> AppResult<Download> {
         &Client::builder().no_proxy().build().unwrap(),
         url,
         "version:platform:signature",
+        MAX_BYTES,
         |_| {},
         Duration::ZERO,
     )
@@ -78,6 +79,7 @@ fn interrupted_body_resumes_with_strong_validator_and_absolute_progress() {
         &Client::builder().no_proxy().build().unwrap(),
         &url,
         "release",
+        MAX_BYTES,
         |p| events.push(p),
         Duration::ZERO,
     )
@@ -240,6 +242,29 @@ fn rejects_oversized_download_before_writing_payload() {
         .unwrap()
         .message
         .contains("512 MB"));
+    task.join().unwrap();
+}
+
+#[test]
+fn caller_bound_rejects_a_body_larger_than_marketplace_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let (url, _, task) = server(vec![response(
+        "200 OK",
+        "Content-Length: 9\r\n",
+        "abcdefghi",
+    )]);
+    let error = fetch_in(
+        root.path(),
+        &Client::builder().no_proxy().build().unwrap(),
+        &url,
+        "plugin:expected-digest",
+        8,
+        |_| {},
+        Duration::ZERO,
+    )
+    .err()
+    .unwrap();
+    assert!(error.message.contains("允许的大小限制"));
     task.join().unwrap();
 }
 

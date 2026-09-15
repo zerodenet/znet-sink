@@ -39,11 +39,25 @@ pub fn fetch(
     identity: &str,
     progress: impl FnMut(Progress),
 ) -> AppResult<Download> {
+    fetch_bounded(client, url, identity, MAX_BYTES, progress)
+}
+
+pub fn fetch_bounded(
+    client: &Client,
+    url: &str,
+    identity: &str,
+    max_bytes: u64,
+    progress: impl FnMut(Progress),
+) -> AppResult<Download> {
+    if max_bytes == 0 || max_bytes > MAX_BYTES {
+        return Err(AppError::invalid_argument("下载大小限制无效"));
+    }
     fetch_in(
         &super::data_dir()?.join("downloads"),
         client,
         url,
         identity,
+        max_bytes,
         progress,
         Duration::from_secs(1),
     )
@@ -54,13 +68,14 @@ fn fetch_in(
     client: &Client,
     url: &str,
     identity: &str,
+    max_bytes: u64,
     mut progress: impl FnMut(Progress),
     delay: Duration,
 ) -> AppResult<Download> {
     let mut cache = Cache::open(root, url, identity)?;
     let mut last_error = String::new();
     for attempt in 1..=4 {
-        match transfer::attempt(&mut cache, client, url, attempt, &mut progress) {
+        match transfer::attempt(&mut cache, client, url, max_bytes, attempt, &mut progress) {
             Ok(()) => {
                 return Ok(Download {
                     path: cache.part.clone(),

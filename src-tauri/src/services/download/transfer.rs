@@ -35,11 +35,12 @@ pub(super) fn attempt(
     cache: &mut Cache,
     client: &Client,
     url: &str,
+    max_bytes: u64,
     attempt: usize,
     progress: &mut impl FnMut(Progress),
 ) -> Result<(), Failure> {
     let mut offset = cache.len().map_err(|e| fatal(e.message))?;
-    if offset > MAX_BYTES {
+    if offset > max_bytes {
         cache.reset().map_err(|e| fatal(e.message))?;
         return Err(fatal("下载缓存超过大小限制"));
     }
@@ -147,8 +148,12 @@ pub(super) fn attempt(
     } else {
         return Err(fatal(format!("不支持的下载响应：HTTP {status}")));
     }
-    if total.is_some_and(|n| n == 0 || n > MAX_BYTES) {
-        return Err(fatal("下载文件为空或超过 512 MB 限制"));
+    if total.is_some_and(|n| n == 0 || n > max_bytes) {
+        return Err(fatal(if max_bytes == MAX_BYTES {
+            "下载文件为空或超过 512 MB 限制"
+        } else {
+            "下载文件为空或超过允许的大小限制"
+        }));
     }
     let mut file = OpenOptions::new()
         .create(true)
@@ -178,7 +183,7 @@ pub(super) fn attempt(
             break;
         }
         bytes += count as u64;
-        if bytes > MAX_BYTES || total.is_some_and(|n| bytes > n) {
+        if bytes > max_bytes || total.is_some_and(|n| bytes > n) {
             drop(file);
             cache.reset().map_err(|e| fatal(e.message))?;
             return Err(fatal("下载大小与服务器声明不一致"));

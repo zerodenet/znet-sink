@@ -38,16 +38,17 @@ pub(crate) fn validate_release(
     let prefix = format!("/{repository_path}/releases/download/v{}/", release.version);
     let mut platforms = BTreeSet::new();
     for artifact in &release.artifacts {
-        if let Some(signature) = &artifact.signature {
-            use base64::Engine;
-            if signature.algorithm != "ed25519"
-                || base64::engine::general_purpose::STANDARD
-                    .decode(&signature.value)?
-                    .len()
-                    != 64
-            {
-                return Err("invalid marketplace signature".into());
-            }
+        let Some(signature) = &artifact.signature else {
+            return Err("marketplace artifact has no signature".into());
+        };
+        use base64::Engine;
+        if signature.algorithm != "ed25519"
+            || base64::engine::general_purpose::STANDARD
+                .decode(&signature.value)?
+                .len()
+                != 64
+        {
+            return Err("invalid marketplace signature".into());
         }
         let artifact_url = reqwest::Url::parse(&artifact.url)?;
         if !matches!(

@@ -10,7 +10,7 @@ mod desktop {
         services::plugins::{Review, Snapshot},
         state::app_state::AppState,
     };
-    use tauri::{AppHandle, Manager, State};
+    use tauri::{AppHandle, Emitter, Manager, State};
     use znet_plugin_sandbox::contract::Request;
     async fn blocking<T: Send + 'static>(
         app: AppHandle,
@@ -81,10 +81,30 @@ mod desktop {
         id: String,
         tag: String,
     ) -> AppResult<Snapshot> {
+        let progress_app = app.clone();
+        let progress_id = id.clone();
+        let progress_tag = tag.clone();
         blocking(app, move |state| {
             state
                 .plugins()
-                .install_release(state.capabilities(), &id, &tag)
+                .install_release(state.capabilities(), &id, &tag, move |progress| {
+                    let percent = progress
+                        .bytes_total
+                        .filter(|total| *total > 0)
+                        .map(|total| progress.bytes_downloaded as f64 / total as f64 * 100.0);
+                    let _ = progress_app.emit(
+                        "plugin:download-progress",
+                        serde_json::json!({
+                            "pluginId": progress_id.clone(),
+                            "tag": progress_tag.clone(),
+                            "bytesDownloaded": progress.bytes_downloaded,
+                            "bytesTotal": progress.bytes_total,
+                            "percent": percent,
+                            "state": progress.state,
+                            "attempt": progress.attempt,
+                        }),
+                    );
+                })
         })
         .await
     }
