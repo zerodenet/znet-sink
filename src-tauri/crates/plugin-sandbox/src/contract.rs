@@ -288,14 +288,22 @@ impl Component {
             return Err(Error::IncompatibleDevice);
         }
         let version = Version::parse(host_version).map_err(|_| Error::IncompatibleVersion)?;
-        if !VersionReq::parse(&self.manifest.requires_host)
-            .map_err(|_| Error::IncompatibleVersion)?
-            .matches(&version)
-        {
+        let requirement = VersionReq::parse(&self.manifest.requires_host)
+            .map_err(|_| Error::IncompatibleVersion)?;
+        // Product dev/rc builds implement the API of their base release. SemVer
+        // deliberately excludes prereleases from ordinary ranges, so first keep
+        // support for an explicit prerelease requirement, then compare the base
+        // version for normal host compatibility ranges.
+        let base = host_compatibility_version(&version);
+        if !requirement.matches(&version) && !requirement.matches(&base) {
             return Err(Error::IncompatibleVersion);
         }
         Ok(())
     }
+}
+
+pub(crate) fn host_compatibility_version(version: &Version) -> Version {
+    Version::new(version.major, version.minor, version.patch)
 }
 
 pub fn sha256(bytes: &[u8]) -> String {

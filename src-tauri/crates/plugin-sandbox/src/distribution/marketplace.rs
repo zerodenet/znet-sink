@@ -41,6 +41,7 @@ pub(crate) struct HostVersion {
 }
 impl HostVersion {
     pub(crate) fn supports(&self, current: &semver::Version) -> Result<bool> {
+        let current = crate::contract::host_compatibility_version(current);
         let min = semver::Version::parse(&self.min)?;
         let max = self
             .max_exclusive
@@ -50,6 +51,6 @@ impl HostVersion {
         if max.as_ref().is_some_and(|max| max <= &min) {
             return Err("invalid marketplace host version range".into());
         }
-        Ok(current >= &min && max.as_ref().is_none_or(|max| current < max))
+        Ok(current >= min && max.is_none_or(|max| current < max))
     }
 }

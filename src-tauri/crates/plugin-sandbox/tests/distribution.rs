@@ -54,6 +54,30 @@ fn any_devices_still_enforce_runtime_isolation_and_version() {
     }]);
     assert!(package::verify(&signed(&p), &registration()).is_err());
 }
+
+#[test]
+fn prerelease_clients_use_their_base_version_for_host_compatibility() {
+    let android = Target {
+        os: Os::Android,
+        arch: Arch::Aarch64,
+        device: DeviceClass::Phone,
+    };
+    let mut p = payload("1.0.0", serde_json::json!("any"));
+    p.components[0].manifest.requires_host = ">=0.0.1, <0.1.0".into();
+    let package = package::verify(&signed(&p), &registration()).unwrap();
+    package
+        .compatible(&android, "0.0.2-dev.202609151725")
+        .unwrap();
+    assert!(package
+        .compatible(&android, "0.1.0-dev.202609151725")
+        .is_err());
+
+    p.components[0].manifest.requires_host = "=0.0.2-dev.202609151725".into();
+    let package = package::verify(&signed(&p), &registration()).unwrap();
+    package
+        .compatible(&android, "0.0.2-dev.202609151725")
+        .unwrap();
+}
 #[test]
 fn publisher_signature_identity_capabilities_and_release_digest_are_checked() {
     let bytes = signed(&payload("1.0.0", serde_json::json!("any")));

@@ -157,6 +157,21 @@ fn incompatible_and_foreign_release_metadata_is_rejected_before_download() {
 }
 
 #[test]
+fn marketplace_ranges_treat_prerelease_clients_as_their_base_release() {
+    let bytes = signed(&payload("1.0.0", json!("any")));
+    let value = snapshot("1.0.0", "stable", &bytes);
+    assert_eq!(
+        directory(&value, "0.0.2-dev.202609151725").plugins[0]
+            .releases
+            .len(),
+        1
+    );
+    assert!(directory(&value, "0.1.0-dev.202609151725").plugins[0]
+        .releases
+        .is_empty());
+}
+
+#[test]
 fn package_size_digest_signature_and_identity_must_match_the_marketplace() {
     let bytes = signed(&payload("1.0.0", json!("any")));
     for fault in ["size", "digest", "signature", "version"] {
