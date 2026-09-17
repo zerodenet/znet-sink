@@ -14,6 +14,7 @@ use crate::commands::gui_events as gui_events_commands;
 use crate::commands::gui_self_test as gui_self_test_commands;
 use crate::commands::kernel_version as kernel_version_commands;
 use crate::commands::logs as logs_commands;
+use crate::commands::platform as platform_commands;
 use crate::commands::plugins as plugin_commands;
 use crate::commands::proxy_config as proxy_config_commands;
 use crate::commands::proxy_mode as proxy_mode_commands;
@@ -29,13 +30,31 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_snapshot,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_refresh,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_authorize,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_configure,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_stop,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_revoke_permissions,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_storage_get,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_storage_put,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_storage_delete,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_run,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_invoke,
+        plugin_commands::plugins_sdk_call,
+        plugin_commands::plugins_protected_load,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_preview_install,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_install,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -44,6 +63,8 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         plugin_commands::plugins_catalog,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_releases,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_preview_release,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_install_release,
         core_commands::core_ipc_default_endpoint,
@@ -187,6 +208,10 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         logs_commands::logs_clear,
         capability_commands::gui_capabilities_snapshot,
         capability_commands::gui_interaction_surface_snapshot,
+        platform_commands::platform_open_url,
+        platform_commands::platform_open_path,
+        platform_commands::platform_reveal_path,
+        platform_commands::platform_clipboard_write,
         system_proxy_commands::system_proxy_enable,
         system_proxy_commands::system_proxy_disable,
         system_proxy_commands::system_proxy_status,

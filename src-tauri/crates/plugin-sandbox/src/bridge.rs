@@ -119,6 +119,20 @@ impl Bridge {
                     Capability::NetworkGet | Capability::NetworkRequest => {
                         return Err(capability::Error::PermissionDenied)
                     }
+                    Capability::StorageRead
+                    | Capability::StorageWrite
+                    | Capability::NotificationsPost
+                    | Capability::TasksSchedule
+                    | Capability::BrowserOpen
+                    | Capability::BrowserCallback
+                    | Capability::FilesSelectionRead
+                    | Capability::FilesSelectionWrite
+                    | Capability::MaterialsSubmit
+                    | Capability::SecretsSessionReceive
+                    | Capability::CryptoSessionUse
+                    | Capability::RuntimeProtectedLoad => {
+                        return Err(capability::Error::PermissionDenied)
+                    }
                 };
                 let bytes = response.len();
                 Ok((response, bytes))

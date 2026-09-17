@@ -30,11 +30,14 @@ pub mod log_store;
 pub mod logs;
 #[cfg(target_os = "macos")]
 pub mod macos_privilege;
+pub(crate) mod native_operation;
 pub mod network_probe;
 pub mod node_screen;
 pub mod policy_selection;
 pub mod probe;
 pub mod probe_history;
+#[cfg(feature = "tool-node-probe")]
+pub(crate) mod probe_job_store;
 pub(crate) mod profile_switch;
 #[path = "proxy_config_wrapper.rs"]
 pub mod proxy_config;
@@ -47,6 +50,8 @@ pub mod subscription;
 pub mod system_proxy;
 pub mod system_proxy_guard;
 pub(crate) mod text_encoding;
+#[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+pub(crate) mod tool_job_store;
 #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
 pub mod tool_jobs;
 pub mod traffic_sampler;

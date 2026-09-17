@@ -1,5 +1,6 @@
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use std::time::Instant;
 use znet_plugin_sandbox::{
     contract::{sha256, Limits, Manifest},
     distribution::{
@@ -23,13 +24,20 @@ fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     setup_component(source, request)
 }
 fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempDir, Host, Manager) {
+    setup_component_with_configuration(source, request, serde_json::Value::Null)
+}
+fn setup_component_with_configuration(
+    source: &str,
+    request: serde_json::Value,
+    configuration: serde_json::Value,
+) -> (tempfile::TempDir, Host, Manager) {
     let root = tempfile::tempdir().unwrap();
     let host = Host {
         root: Some(root.path().into()),
         ..Host::default()
     };
     let manager = Manager::default();
-    let manifest: Manifest = serde_json::from_value(serde_json::json!({"schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[request],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()})).unwrap();
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({"schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[request],"optional":[],"configuration":configuration,"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()})).unwrap();
     let payload = Payload {
         schema_version: 1,
         host: "znet-sink".into(),
@@ -39,6 +47,7 @@ fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempD
             manifest,
             source: source.into(),
         }],
+        pages: Vec::new(),
     };
     let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
     let directory = Directory {
@@ -56,9 +65,73 @@ fn setup_component(source: &str, request: serde_json::Value) -> (tempfile::TempD
             HOST_VERSION,
         )
         .unwrap();
-    host.state.lock().unwrap().directory = Some((directory, Instant::now()));
+    local_state::save_directory(root.path(), &directory).unwrap();
+    host.state.lock().unwrap().directory = Some(directory);
     host.rescan(&manager, &host.store().unwrap()).unwrap();
     (root, host, manager)
+}
+
+#[test]
+fn declarative_configuration_is_validated_persisted_and_passed_to_the_guest() {
+    let source = "pluginInput.configuration";
+    let schema = serde_json::json!({
+        "title":"Provider source",
+        "description":"Configure one compatible provider.",
+        "fields":[
+            {"id":"name","label":"Name","kind":"text","required":true},
+            {"id":"origin","label":"Origin","kind":"https_origin","required":true},
+            {"id":"path","label":"Path","kind":"select","required":true,"default":"direct","options":[{"value":"direct","label":"Direct"},{"value":"core","label":"Core"}]}
+        ]
+    });
+    let (root, host, manager) = setup_component_with_configuration(
+        source,
+        serde_json::json!({"capability":"plugin.self.read","scope":"self"}),
+        schema,
+    );
+    let before = host.snapshot(&manager);
+    let row = &before.components[0];
+    assert!(!row.configuration.as_ref().unwrap().configured);
+    assert!(host
+        .authorize(
+            &manager,
+            row.review.clone().unwrap(),
+            row.permissions
+                .iter()
+                .map(|value| value.request.clone())
+                .collect()
+        )
+        .is_err());
+    assert!(host
+        .configure(
+            &manager,
+            "org.example.plugin/identity",
+            BTreeMap::from([("name".into(), "Example".into())])
+        )
+        .is_err());
+    let values = BTreeMap::from([
+        ("name".into(), "Example".into()),
+        ("origin".into(), "https://panel.example.com".into()),
+        ("path".into(), "direct".into()),
+    ]);
+    let configured = host
+        .configure(&manager, "org.example.plugin/identity", values.clone())
+        .unwrap();
+    assert!(
+        configured.components[0]
+            .configuration
+            .as_ref()
+            .unwrap()
+            .configured
+    );
+    assert_eq!(
+        configuration::values(root.path(), "org.example.plugin/identity").unwrap(),
+        values
+    );
+    let review = approve(&host, &manager);
+    assert_eq!(
+        host.run(&manager, review).unwrap()["origin"],
+        "https://panel.example.com"
+    );
 }
 fn approve(host: &Host, manager: &Manager) -> Review {
     let snapshot = host.snapshot(manager);
@@ -74,9 +147,142 @@ fn approve(host: &Host, manager: &Manager) -> Review {
         .clone()
         .unwrap()
 }
+
+#[test]
+fn unpublished_local_package_uses_embedded_publisher_trust_and_survives_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let host = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let manager = Manager::default();
+    let source = "pluginInput.configuration";
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        "schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()
+    })).unwrap();
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.0.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+        pages: vec![package::SourcePage {
+            id: "manage".into(),
+            title: "Manage".into(),
+            kind: package::PageKind::Management,
+            html: "<!doctype html><button>Sign in</button>".into(),
+        }],
+    };
+    let bytes = package::sign_with_registration(
+        &serde_json::to_vec(&payload).unwrap(),
+        &SEED,
+        registration(),
+    )
+    .unwrap();
+    let review = host
+        .preview_local_bytes(&manager, &bytes, "org.example.plugin")
+        .unwrap();
+    assert!(review.first_install);
+    assert!(review.local_trust);
+    assert!(review.requires_approval);
+    assert_eq!(
+        review.requested_surfaces,
+        vec!["znet-sink.ui.management.v1"]
+    );
+    assert!(host
+        .install_local_bytes(&manager, &bytes, "org.example.plugin", None)
+        .is_err());
+    let installed = host
+        .install_local_bytes(
+            &manager,
+            &bytes,
+            "org.example.plugin",
+            Some(&review.candidate_digest),
+        )
+        .unwrap();
+    assert_eq!(installed.components.len(), 1);
+    assert_eq!(installed.pages.len(), 1);
+
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let snapshot = restarted.snapshot(&Manager::default());
+    assert_eq!(snapshot.components.len(), 1);
+    assert_eq!(snapshot.pages.len(), 1);
+}
+
+#[test]
+fn marketplace_ceiling_failures_are_reported_as_specific_install_errors() {
+    assert!(
+        io::failure("package page exceeds registered surface ceiling")
+            .message
+            .contains("管理页面超出线上插件登记范围")
+    );
+    assert!(io::failure("package exceeds registered capability ceiling")
+        .message
+        .contains("权限超出线上插件登记范围"));
+}
+
+#[test]
+fn legacy_local_package_uses_cached_key_without_marketplace_surface_ceiling() {
+    let root = tempfile::tempdir().unwrap();
+    let host = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let manager = Manager::default();
+    let source = "pluginInput.configuration";
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        "schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any","required":[],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()
+    })).unwrap();
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.0.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+        pages: vec![package::SourcePage {
+            id: "manage".into(),
+            title: "Manage".into(),
+            kind: package::PageKind::Management,
+            html: "<!doctype html><button>Sign in</button>".into(),
+        }],
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let directory = Directory {
+        snapshot_version: None,
+        schema_version: 2,
+        host: "znet-sink".into(),
+        plugins: vec![registration()],
+    };
+    assert!(package::verify(&bytes, &directory.plugins[0]).is_err());
+    local_state::save_directory(root.path(), &directory).unwrap();
+    let review = host
+        .preview_local_bytes(&manager, &bytes, "org.example.plugin")
+        .unwrap();
+    assert!(review.requires_approval);
+    assert_eq!(
+        review.requested_surfaces,
+        vec!["znet-sink.ui.management.v1"]
+    );
+}
 #[test]
 fn signed_install_review_authorize_real_vm_and_stop_share_the_client_manager() {
     let (_root, host, manager) = setup(false);
+    let installed = host.snapshot(&manager);
+    assert_eq!(installed.components[0].description, "Test");
+    assert_eq!(
+        installed.components[0].repository,
+        "https://github.com/example/plugin"
+    );
+    assert_eq!(installed.components[0].license, "MIT");
     let review = approve(&host, &manager);
     let result = host.run(&manager, review.clone()).unwrap();
     assert_eq!(result["plugin_id"], "org.example.plugin");
@@ -84,15 +290,11 @@ fn signed_install_review_authorize_real_vm_and_stop_share_the_client_manager() {
         .operations()
         .iter()
         .any(|o| o.capability == "plugin.self.read"));
-    host.stop(&manager, &review.key);
+    host.stop(&manager, &review.key).unwrap();
     assert!(host.run(&manager, review).is_err());
 }
 #[test]
-fn unsupported_required_permissions_and_forged_grants_are_denied() {
-    let (_root, host, manager) = setup(true);
-    let snapshot = host.snapshot(&manager);
-    assert!(snapshot.components[0].blocked.is_some());
-    assert!(!snapshot.components[0].permissions[0].supported);
+fn declared_permission_ceiling_and_forged_grants_are_denied() {
     let (_root, host, manager) = setup(false);
     let review = host.snapshot(&manager).components[0]
         .review
@@ -123,7 +325,6 @@ fn tampering_or_registry_withdrawal_revokes_an_already_authorized_component() {
                 .directory
                 .as_mut()
                 .unwrap()
-                .0
                 .plugins
                 .clear();
         }
@@ -132,16 +333,21 @@ fn tampering_or_registry_withdrawal_revokes_an_already_authorized_component() {
     }
 }
 #[test]
-fn uninstall_and_expired_registry_prevent_execution() {
+fn uninstall_prevents_execution_and_cached_registry_survives_restart() {
     let (_root, host, manager) = setup(false);
     let review = approve(&host, &manager);
     host.uninstall(&manager, "org.example.plugin").unwrap();
     assert!(host.run(&manager, review).is_err());
-    let (_root, host, manager) = setup(false);
-    let review = approve(&host, &manager);
-    host.state.lock().unwrap().directory.as_mut().unwrap().1 = Instant::now() - DIRECTORY_TTL;
-    assert!(host.run(&manager, review).is_err());
-    assert!(!host.snapshot(&manager).checked);
+    let (root, host, manager) = setup(false);
+    let _review = approve(&host, &manager);
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let restarted_manager = Manager::default();
+    let snapshot = restarted.snapshot(&restarted_manager);
+    assert!(snapshot.checked);
+    assert!(snapshot.components[0].enabled);
 }
 
 #[test]
@@ -195,13 +401,13 @@ fn signed_network_component_requires_approval_and_stop_prevents_more_requests() 
         serde_json::json!(200)
     );
     let listener = server.join().unwrap();
-    host.stop(&manager, &review.key);
+    host.stop(&manager, &review.key).unwrap();
     assert!(host.run(&manager, review).is_err());
     assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
 }
 
 #[test]
-fn verified_install_upgrade_revokes_grants_and_invalid_bytes_preserve_current() {
+fn verified_install_upgrade_preserves_compatible_consent_and_invalid_bytes_preserve_current() {
     let (_root, host, manager) = setup(false);
     let old_review = approve(&host, &manager);
     let directory = host
@@ -211,7 +417,6 @@ fn verified_install_upgrade_revokes_grants_and_invalid_bytes_preserve_current() 
         .directory
         .as_ref()
         .unwrap()
-        .0
         .clone();
     let mut manifest = host
         .state
@@ -235,6 +440,7 @@ fn verified_install_upgrade_revokes_grants_and_invalid_bytes_preserve_current() 
             manifest,
             source: source.into(),
         }],
+        pages: Vec::new(),
     };
     let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
     assert!(host
@@ -242,19 +448,223 @@ fn verified_install_upgrade_revokes_grants_and_invalid_bytes_preserve_current() 
             &manager,
             b"invalid",
             directory.clone(),
-            "org.example.plugin"
+            "org.example.plugin",
+            None,
         )
         .is_err());
     assert_eq!(host.snapshot(&manager).components[0].version, "1.0.0");
     assert!(host.snapshot(&manager).components[0].enabled);
     let next = host
-        .install_bytes(&manager, &bytes, directory.clone(), "org.example.plugin")
+        .install_bytes(
+            &manager,
+            &bytes,
+            directory.clone(),
+            "org.example.plugin",
+            None,
+        )
+        .unwrap();
+    assert_eq!(next.components[0].version, "1.1.0");
+    assert!(next.components[0].enabled);
+    assert!(host.run(&manager, old_review).is_err());
+    assert!(host
+        .install_bytes(&manager, &bytes, directory, "org.example.plugin", None,)
+        .is_err());
+    assert_eq!(host.snapshot(&manager).components[0].version, "1.1.0");
+}
+
+#[test]
+fn opaque_plugin_state_is_namespaced_bounded_and_survives_restart() {
+    let (root, host, manager) = setup(false);
+    let value = STANDARD.encode(br#"{"device_credential":"opaque"}"#);
+    host.storage_put(
+        "org.example.plugin",
+        namespace::Area::State,
+        "session/device".into(),
+        value.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        host.storage_get(
+            "org.example.plugin",
+            namespace::Area::State,
+            "session/device",
+        )
+        .unwrap(),
+        Some(value.clone())
+    );
+    assert!(host
+        .storage_put(
+            "org.example.plugin",
+            namespace::Area::State,
+            "../escape".into(),
+            value.clone(),
+        )
+        .is_err());
+    assert!(host
+        .storage_put(
+            "org.example.plugin",
+            namespace::Area::State,
+            "too-large".into(),
+            STANDARD.encode(vec![0u8; 128 * 1024 + 1]),
+        )
+        .is_err());
+
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let restarted_manager = Manager::default();
+    assert!(restarted.snapshot(&restarted_manager).checked);
+    assert_eq!(
+        restarted
+            .storage_get(
+                "org.example.plugin",
+                namespace::Area::State,
+                "session/device",
+            )
+            .unwrap(),
+        Some(value)
+    );
+    drop(manager);
+}
+
+#[test]
+fn permission_expanding_upgrade_requires_package_specific_confirmation() {
+    let (_root, host, manager) = setup(false);
+    approve(&host, &manager);
+    let directory = host.state.lock().unwrap().directory.clone().unwrap();
+    let mut manifest = host
+        .state
+        .lock()
+        .unwrap()
+        .loaded
+        .values()
+        .next()
+        .unwrap()
+        .component
+        .manifest()
+        .clone();
+    manifest.version = "1.1.0".into();
+    manifest.optional.push(Request {
+        capability: Capability::NetworkGet,
+        scope: "https://example.org".into(),
+    });
+    let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.1.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+        pages: Vec::new(),
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let review = host
+        .preview_bytes(&bytes, &directory, "org.example.plugin")
+        .unwrap();
+    assert_eq!(review.added_permissions.len(), 1);
+    assert!(host
+        .install_bytes(
+            &manager,
+            &bytes,
+            directory.clone(),
+            "org.example.plugin",
+            None,
+        )
+        .is_err());
+    assert_eq!(host.snapshot(&manager).components[0].version, "1.0.0");
+
+    let next = host
+        .install_bytes(
+            &manager,
+            &bytes,
+            directory,
+            "org.example.plugin",
+            Some(&review.candidate_digest),
+        )
         .unwrap();
     assert_eq!(next.components[0].version, "1.1.0");
     assert!(!next.components[0].enabled);
-    assert!(host.run(&manager, old_review).is_err());
-    assert!(host
-        .install_bytes(&manager, &bytes, directory, "org.example.plugin")
-        .is_err());
-    assert_eq!(host.snapshot(&manager).components[0].version, "1.1.0");
+    assert_eq!(
+        next.components[0]
+            .permissions
+            .iter()
+            .filter(|permission| permission.granted)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn enabled_startup_hook_restores_consent_and_atomically_updates_opaque_state() {
+    let root = tempfile::tempdir().unwrap();
+    let host = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let manager = Manager::default();
+    let next_value = STANDARD.encode(b"renewed-device-credential");
+    let source = format!(
+        "pluginInput.invocation.action === 'lifecycle.host_start' ? ({{znet_plugin_result:1,state_updates:{{'session/device':{}}},value:{{restored:true}}}}) : null",
+        serde_json::to_string(&next_value).unwrap()
+    );
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        "schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":"1.0.0","requires_host":format!("={HOST_VERSION}"),"api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any",
+        "required":[{"capability":"plugin.self.read","scope":"self"}],"optional":[],"lifecycle":["host_start"],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()
+    })).unwrap();
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.0.0".into(),
+        components: vec![SourceComponent { manifest, source }],
+        pages: Vec::new(),
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let directory = Directory {
+        snapshot_version: None,
+        schema_version: 2,
+        host: "znet-sink".into(),
+        plugins: vec![registration()],
+    };
+    host.store()
+        .unwrap()
+        .install(
+            &bytes,
+            &directory.plugins[0],
+            &Target::native_desktop().unwrap(),
+            HOST_VERSION,
+        )
+        .unwrap();
+    local_state::save_directory(root.path(), &directory).unwrap();
+    host.state.lock().unwrap().directory = Some(directory);
+    host.rescan(&manager, &host.store().unwrap()).unwrap();
+    approve(&host, &manager);
+    host.storage_put(
+        "org.example.plugin",
+        namespace::Area::State,
+        "session/device".into(),
+        STANDARD.encode(b"expired"),
+    )
+    .unwrap();
+
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let restarted_manager = Manager::default();
+    restarted.start_enabled(&restarted_manager);
+    assert_eq!(
+        restarted
+            .storage_get(
+                "org.example.plugin",
+                namespace::Area::State,
+                "session/device",
+            )
+            .unwrap(),
+        Some(next_value)
+    );
 }

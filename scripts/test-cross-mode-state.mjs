@@ -94,12 +94,16 @@ assert.ok(
   'Lite power-on should establish system proxy before TUN and power-off should stop TUN before releasing the system proxy',
 );
 
-const initialSnapshot = guiState.indexOf('await this.refreshAll();');
+const initialSnapshot = guiState.indexOf('const initialRefresh = this.refreshAll();');
 const initializationUnlock = guiState.indexOf('this.isInitializing = false;', initialSnapshot);
-const autoConnect = guiState.indexOf('await this.autoConnectForMode(', initializationUnlock);
+const initialSnapshotAwait = guiState.indexOf('await initialRefresh;', initializationUnlock);
+const autoConnect = guiState.indexOf('await this.autoConnectForMode(', initialSnapshotAwait);
 assert.ok(
-  initialSnapshot >= 0 && initializationUnlock > initialSnapshot && autoConnect > initializationUnlock,
-  'Lite default auto-connect should run only after the first trusted snapshot and after UI action guards are unlocked',
+  initialSnapshot >= 0
+    && initializationUnlock > initialSnapshot
+    && initialSnapshotAwait > initializationUnlock
+    && autoConnect > initialSnapshotAwait,
+  'the shell should unlock while the first trusted snapshot loads, while Lite auto-connect must still wait for that snapshot',
 );
 
 assert.ok(

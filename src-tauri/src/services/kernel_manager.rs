@@ -20,7 +20,6 @@ use crate::services::{common, core_config};
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/zerodenet/core/releases?per_page=30";
 const PROGRESS_EVENT: &str = "kernel:download-progress";
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600); // 10 min for large archives
 const RUNTIME_MANIFEST_FILE: &str = ".znet-sink-zero-runtime.json";
 
@@ -70,41 +69,35 @@ impl Drop for KernelInstallWorkspace {
     }
 }
 
-/// Build a blocking HTTP client for management traffic.
-///
-/// Reqwest's default proxy policy follows `HTTPS_PROXY`, `HTTP_PROXY`,
-/// `ALL_PROXY`, and `NO_PROXY` from the process environment. The application
-/// does not synthesize a proxy from kernel or operating-system state.
-fn build_http_client() -> AppResult<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
-        .user_agent("znet-sink")
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()
-        .map_err(|e| AppError::internal(format!("failed to create http client: {e}")))
-}
+pub fn list_available_versions(
+    manager: &znet_client_core::capability::Manager,
+) -> AppResult<KernelVersionList> {
+    let lease = znet_client_capabilities::host::network(
+        manager,
+        "builtin.kernel.catalog",
+        "network.get",
+        1,
+        4 * 1024 * 1024,
+        Duration::from_secs(30),
+    )
+    .map_err(network_error)?;
+    let response = znet_client_capabilities::network::get(
+        &lease,
+        GITHUB_RELEASES_URL,
+        "znet-sink",
+        4 * 1024 * 1024,
+        &[],
+    )
+    .and_then(|resource| resource.take(&lease))
+    .map_err(network_error)?;
 
-pub fn list_available_versions() -> AppResult<KernelVersionList> {
-    let client = build_http_client()?;
-
-    let mut resp = client
-        .get(GITHUB_RELEASES_URL)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .map_err(|e| AppError::internal(format!("failed to fetch releases: {e}")))?;
-
-    if !resp.status().is_success() {
+    if !(200..300).contains(&response.status) {
         return Err(AppError::internal(format!(
             "failed to fetch releases: HTTP {}",
-            resp.status()
+            response.status
         )));
     }
-
-    let mut body = String::new();
-    resp.read_to_string(&mut body)
-        .map_err(|e| AppError::internal(format!("failed to read releases response: {e}")))?;
-
-    let releases_json: Vec<serde_json::Value> = serde_json::from_str(&body)
+    let releases_json: Vec<serde_json::Value> = serde_json::from_slice(&response.body)
         .map_err(|e| AppError::internal(format!("failed to parse releases: {e}")))?;
 
     let platform_asset = platform_asset_name();
@@ -123,6 +116,7 @@ pub fn list_available_versions() -> AppResult<KernelVersionList> {
 }
 
 pub fn prepare_version(
+    manager: &znet_client_core::capability::Manager,
     version: String,
     download_url: String,
     expected_sha256: Option<String>,
@@ -153,7 +147,6 @@ pub fn prepare_version(
     };
     let temp_file = workspace.root.join(format!("zero-download.{ext}"));
 
-    let client = build_http_client()?;
     // Version listing is metadata-only. Resolve the checksum lazily for the
     // single release the user actually installs instead of issuing one extra
     // network request per release while opening the version manager.
@@ -162,7 +155,7 @@ pub fn prepare_version(
         .filter(|value| !value.is_empty())
     {
         Some(value) => Some(value),
-        None => fetch_checksum_for_download(&client, &download_url, platform_asset_name())?,
+        None => fetch_checksum_for_download(manager, &download_url, platform_asset_name())?,
     };
 
     let identity = format!(
@@ -170,22 +163,32 @@ pub fn prepare_version(
         platform_asset_name(),
         expected_sha256.as_deref().unwrap_or("unverified")
     );
-    let download = super::download::fetch(&client, &download_url, &identity, |progress| {
-        let _ = app.emit(
-            PROGRESS_EVENT,
-            KernelDownloadProgress {
-                version: version.clone(),
-                bytes_downloaded: progress.bytes_downloaded,
-                bytes_total: progress.bytes_total,
-                percent: progress
-                    .bytes_total
-                    .filter(|total| *total > 0)
-                    .map(|total| progress.bytes_downloaded as f64 / total as f64 * 100.0),
-                state: progress.state,
-                attempt: progress.attempt,
-            },
-        );
-    })?;
+    let download = super::download::fetch(
+        manager,
+        &download_url,
+        &identity,
+        &super::download::NetworkOptions {
+            timeout: DOWNLOAD_TIMEOUT,
+            allowed_https_hosts: vec!["github.com".into(), ".githubusercontent.com".into()],
+            ..Default::default()
+        },
+        |progress| {
+            let _ = app.emit(
+                PROGRESS_EVENT,
+                KernelDownloadProgress {
+                    version: version.clone(),
+                    bytes_downloaded: progress.bytes_downloaded,
+                    bytes_total: progress.bytes_total,
+                    percent: progress
+                        .bytes_total
+                        .filter(|total| *total > 0)
+                        .map(|total| progress.bytes_downloaded as f64 / total as f64 * 100.0),
+                    state: progress.state,
+                    attempt: progress.attempt,
+                },
+            );
+        },
+    )?;
     report_install_stage(
         &app,
         &version,
@@ -442,7 +445,7 @@ fn platform_asset_name() -> &'static str {
 }
 
 fn fetch_checksum_for_download(
-    client: &reqwest::blocking::Client,
+    manager: &znet_client_core::capability::Manager,
     download_url: &str,
     platform_asset: &str,
 ) -> AppResult<Option<String>> {
@@ -455,23 +458,48 @@ fn fetch_checksum_for_download(
         format!("{download_url}.sha256"),
         format!("{release_root}/checksums.txt"),
     ];
+    let lease = znet_client_capabilities::host::network(
+        manager,
+        "builtin.kernel.checksum",
+        "network.get",
+        2,
+        2 * 1024 * 1024,
+        Duration::from_secs(30),
+    )
+    .map_err(network_error)?;
     for checksum_url in checksum_urls {
-        let Ok(mut response) = client.get(&checksum_url).send() else {
+        let Ok(response) = znet_client_capabilities::network::get(
+            &lease,
+            &checksum_url,
+            "znet-sink",
+            1024 * 1024,
+            &[],
+        )
+        .and_then(|resource| resource.take(&lease)) else {
             continue;
         };
-        if !response.status().is_success() {
+        if !(200..300).contains(&response.status) {
             continue;
         }
-
-        let mut body = String::new();
-        if response.read_to_string(&mut body).is_err() {
+        let Ok(body) = std::str::from_utf8(&response.body) else {
             continue;
-        }
-        if let Some(hash) = parse_checksum(&body, platform_asset) {
+        };
+        if let Some(hash) = parse_checksum(body, platform_asset) {
             return Ok(Some(hash));
         }
     }
     Ok(None)
+}
+
+fn network_error(error: znet_client_core::capability::Error) -> AppError {
+    AppError::internal(match error {
+        znet_client_core::capability::Error::Deadline
+        | znet_client_core::capability::Error::Expired => "内核下载请求超时",
+        znet_client_core::capability::Error::PermissionDenied
+        | znet_client_core::capability::Error::InvalidRequest => "内核下载地址被访问策略拒绝",
+        znet_client_core::capability::Error::BudgetExceeded => "内核下载响应超过允许的大小限制",
+        _ => "内核下载网络请求失败",
+    })
 }
 
 fn parse_checksum(body: &str, platform_asset: &str) -> Option<String> {

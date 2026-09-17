@@ -1,3 +1,4 @@
+use std::time::Duration;
 use tauri::State;
 
 use crate::errors::{AppError, AppResult};
@@ -34,27 +35,46 @@ pub async fn gui_debug_frames(
 }
 
 #[tauri::command]
-pub async fn gui_debug_clear(_state: State<'_, AppState>, scope: Option<String>) -> AppResult<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        if scope.as_deref() == Some(CONNECTION_HISTORY_SCOPE) {
-            return connection_history_store::clear();
-        }
-
-        clear_debug_frames();
-        debug_store::clear()?;
-        connection_history_store::clear()
-    })
+pub async fn gui_debug_clear(state: State<'_, AppState>, scope: Option<String>) -> AppResult<()> {
+    let operation_scope = scope.clone().unwrap_or_else(|| "all".into());
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "diagnostic.clear",
+        &operation_scope,
+        Duration::from_secs(30),
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                if scope.as_deref() == Some(CONNECTION_HISTORY_SCOPE) {
+                    return connection_history_store::clear();
+                }
+                clear_debug_frames();
+                debug_store::clear()?;
+                connection_history_store::clear()
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("debug clear worker failed: {error}")))?
+        },
+    )
     .await
-    .map_err(|error| AppError::internal(format!("debug clear worker failed: {error}")))?
 }
 
 #[tauri::command]
 pub async fn gui_connection_history_export(
+    state: State<'_, AppState>,
     query: Option<DebugFrameQuery>,
 ) -> AppResult<connection_history_store::HistoryExport> {
-    tauri::async_runtime::spawn_blocking(move || {
-        connection_history_store::export(query.unwrap_or_default())
-    })
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "diagnostic.export",
+        "connection-history",
+        Duration::from_secs(60),
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                connection_history_store::export(query.unwrap_or_default())
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("history export worker failed: {error}")))?
+        },
+    )
     .await
-    .map_err(|error| AppError::internal(format!("history export worker failed: {error}")))?
 }

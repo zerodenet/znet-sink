@@ -50,6 +50,7 @@ pub fn gui_tool_job_cancel(
         .tool_runtime()
         .cancel(job_id, common::now_unix_ms())
         .ok_or_else(|| AppError::not_found("tool_job", job_id.0.to_string()))?;
+    checkpoint(state.inner());
     let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, job.clone());
     Ok(job)
 }
@@ -66,6 +67,10 @@ pub fn gui_tool_job_start(
         request,
         common::now_unix_ms(),
     )?;
+    if let Err(error) = state.tool_runtime().checkpoint(state.capabilities()) {
+        state.tool_runtime().discard(job.id);
+        return Err(error);
+    }
     let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, job.clone());
     tauri::async_runtime::spawn(run(app_handle, job.clone()));
     Ok(job)
@@ -97,6 +102,7 @@ async fn run(app_handle: AppHandle, job: ToolJobSnapshot) {
             .tool_runtime()
             .finish_cancel(job.id, common::now_unix_ms())
         {
+            checkpoint(state.inner());
             let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, update);
         }
         return;
@@ -105,6 +111,7 @@ async fn run(app_handle: AppHandle, job: ToolJobSnapshot) {
     let now = common::now_unix_ms();
     if now >= job.deadline_at_unix_ms {
         if let Some(update) = state.tool_runtime().timeout(job.id, now) {
+            checkpoint(state.inner());
             let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, update);
         }
         return;
@@ -112,22 +119,32 @@ async fn run(app_handle: AppHandle, job: ToolJobSnapshot) {
     let Some(running) = state.tool_runtime().mark_running(job.id, now) else {
         return;
     };
+    checkpoint(state.inner());
     let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, running);
 
     let Some(mut cancellation) = state.tool_runtime().cancellation(job.id) else {
         return;
     };
     let remaining = Duration::from_millis(job.deadline_at_unix_ms.saturating_sub(now));
-    let operation = execute(state.inner(), job.kind, job.params.clone());
+    let operation_scope = format!("job:{}:{:?}", job.id.0, job.kind);
+    let operation = crate::services::native_operation::execute_async(
+        state.inner(),
+        "diagnostic.tool",
+        &operation_scope,
+        remaining.min(Duration::from_secs(60)),
+        execute(state.inner(), job.kind, job.params.clone()),
+    );
     tokio::pin!(operation);
     tokio::select! {
         result = &mut operation => {
             if let Some(update) = state.tool_runtime().complete(job.id, result, common::now_unix_ms()) {
+                checkpoint(state.inner());
                 let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, update);
             }
         }
         _ = tokio::time::sleep(remaining) => {
             if let Some(update) = state.tool_runtime().timeout(job.id, common::now_unix_ms()) {
+                checkpoint(state.inner());
                 let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, update);
             }
         }
@@ -145,9 +162,19 @@ async fn run(app_handle: AppHandle, job: ToolJobSnapshot) {
                 let _ = tokio::time::timeout(remaining, &mut operation).await;
             }
             if let Some(update) = state.tool_runtime().finish_cancel(job.id, common::now_unix_ms()) {
+                checkpoint(state.inner());
                 let _ = app_handle.emit(TOOL_JOB_UPDATED_EVENT, update);
             }
         }
+    }
+}
+
+fn checkpoint(state: &AppState) {
+    if let Err(error) = state.tool_runtime().checkpoint(state.capabilities()) {
+        crate::services::file_logger::line(&format!(
+            "tool jobs: failed to persist transition: {}",
+            error.message
+        ));
     }
 }
 

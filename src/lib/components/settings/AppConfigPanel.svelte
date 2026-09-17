@@ -22,7 +22,7 @@
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { NAV_TABS, TAB_LABELS } from '$lib/constants/navigation';
   import { onDestroy } from 'svelte';
-  import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
+  import { openPath, revealItemInDir } from '$lib/services/platform';
   import { warning } from '$lib/services/toast.svelte';
 
   type SettingsScope = 'general' | 'network' | 'logs';

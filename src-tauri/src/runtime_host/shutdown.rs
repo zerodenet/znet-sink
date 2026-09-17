@@ -8,7 +8,27 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
     state
         .shutting_down_handle()
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    state.capabilities().shutdown_components();
+    #[cfg(feature = "tool-node-probe")]
+    {
+        state.probe_runtime().invalidate(
+            crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
+            crate::services::common::now_unix_ms(),
+        );
+        state.checkpoint_probe_jobs();
+    }
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    {
+        state
+            .tool_runtime()
+            .interrupt_for_shutdown(crate::services::common::now_unix_ms());
+        if let Err(error) = state.tool_runtime().checkpoint(state.capabilities()) {
+            crate::services::file_logger::line(&format!(
+                "shutdown: failed to persist interrupted tool jobs: {}",
+                error.message
+            ));
+        }
+    }
+    state.capabilities().shutdown();
     let _operation = state.proxy_config_operation().lock().await;
     let stop_app = app_handle.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {

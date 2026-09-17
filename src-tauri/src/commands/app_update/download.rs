@@ -2,8 +2,8 @@ use crate::errors::{AppError, AppResult};
 use crate::services::download::{self, Progress};
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use tauri::{ipc::Channel, Manager, ResourceId, Webview};
 use tauri_plugin_updater::Update;
 
@@ -34,27 +34,34 @@ pub async fn app_download_update(
         .get::<Update>(rid)
         .map_err(|e| AppError::internal(e.to_string()))?;
     let pubkey = public_key(&webview)?;
+    let capabilities = webview
+        .state::<crate::state::app_state::AppState>()
+        .capabilities()
+        .clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = operation;
-        let mut builder = reqwest::blocking::Client::builder()
-            .user_agent("znet-sink-updater")
-            .connect_timeout(Duration::from_secs(15))
-            .default_headers(update.headers.clone());
-        if update.no_proxy {
-            builder = builder.no_proxy();
-        } else if let Some(proxy) = &update.proxy {
-            builder = builder.proxy(
-                reqwest::Proxy::all(proxy.as_str())
-                    .map_err(|e| AppError::internal(e.to_string()))?,
-            );
-        }
-        let client = builder
-            .build()
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        let headers = update
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                value
+                    .to_str()
+                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
+                    .map_err(|_| AppError::internal("更新请求头格式无效"))
+            })
+            .collect::<AppResult<BTreeMap<_, _>>>()?;
         let artifact = download::fetch(
-            &client,
+            &capabilities,
             update.download_url.as_str(),
             &identity(&update),
+            &download::NetworkOptions {
+                user_agent: "znet-sink-updater".into(),
+                headers,
+                proxy: update.proxy.as_ref().map(ToString::to_string),
+                no_proxy: update.no_proxy,
+                connect_timeout: std::time::Duration::from_secs(15),
+                ..Default::default()
+            },
             |event| {
                 let _ = on_event.send(event);
             },

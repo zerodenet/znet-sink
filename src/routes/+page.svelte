@@ -7,8 +7,7 @@
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { initTheme, applyTheme } from '$lib/services/theme.svelte';
   import { updater } from '$lib/services/updater.svelte';
-  import { fade, fly } from 'svelte/transition';
-  import { cubicIn, cubicOut } from 'svelte/easing';
+  import { fade } from 'svelte/transition';
   import TitleBar from '$lib/components/TitleBar.svelte';
   import AppHeader from '$lib/components/AppHeader.svelte';
   import AppLogo from '$lib/components/AppLogo.svelte';
@@ -19,21 +18,13 @@
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
   import { installDesktopWebviewGuards } from '$lib/services/desktop-webview';
-  import { NAV_TABS } from '$lib/constants/navigation';
-  import {
-    getTabTransitionDirection,
-    type TabTransitionDirection,
-  } from '$lib/utils/tab-transition';
 
   const EVENT_STREAM_RETRY_MIN_MS = 500;
   const EVENT_STREAM_RETRY_MAX_MS = 5_000;
   const SETTINGS_SECTIONS = new Set<SettingsSection>([
     'general', 'network', 'core', 'tun', 'dns', 'config', 'logs', 'about',
   ]);
-  const tabOrder = NAV_TABS.map((tab) => tab.id);
   let renderedTab = $state(store.activeTab);
-  let tabDirection = $state<TabTransitionDirection>(1);
-  let reduceMotion = $state(false);
 
   function waitForRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
     if (signal.aborted) return Promise.resolve(false);
@@ -155,15 +146,8 @@
       if (store.selectedTheme === 'system') applyTheme('system');
     };
     mediaQuery.addEventListener('change', onSystemThemeChange);
-    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const onMotionPreferenceChange = () => {
-      reduceMotion = motionQuery.matches;
-    };
-    onMotionPreferenceChange();
-    motionQuery.addEventListener('change', onMotionPreferenceChange);
     return () => {
       mediaQuery.removeEventListener('change', onSystemThemeChange);
-      motionQuery.removeEventListener('change', onMotionPreferenceChange);
       unlistenNavigate?.();
       unlistenTrayAction?.();
       uninstallGlobalErrorTelemetry();
@@ -176,7 +160,6 @@
     const previousTab = untrack(() => renderedTab);
     if (nextTab === previousTab) return;
 
-    tabDirection = getTabTransitionDirection(tabOrder, previousTab, nextTab);
     renderedTab = nextTab;
   });
 
@@ -300,23 +283,7 @@
     {:else}
       <div class="tab-transition-viewport">
         {#key renderedTab}
-          <div
-            class="tab-transition-page"
-            in:fly={{
-              x: tabDirection * 28,
-              y: 0,
-              opacity: 1,
-              duration: reduceMotion ? 0 : 180,
-              easing: cubicOut,
-            }}
-            out:fly={{
-              x: tabDirection * -20,
-              y: 0,
-              opacity: 1,
-              duration: reduceMotion ? 0 : 130,
-              easing: cubicIn,
-            }}
-          >
+          <div class="tab-transition-page">
             <TabContent tab={renderedTab} />
           </div>
         {/key}

@@ -99,6 +99,8 @@ pub(crate) fn append_entry(
     message: String,
     fields: Option<serde_json::Value>,
 ) -> AppResult<LogEntry> {
+    let message = crate::kernel::redaction::text(&message);
+    let fields = fields.map(|value| crate::kernel::redaction::sensitive(&value));
     let entry = LogEntry {
         id: state.next_record_id(),
         source,

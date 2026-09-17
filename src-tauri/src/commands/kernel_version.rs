@@ -9,13 +9,14 @@ use crate::state::app_state::AppState;
 mod upgrade;
 
 #[tauri::command]
-pub async fn kernel_list_versions() -> AppResult<KernelVersionList> {
+pub async fn kernel_list_versions(state: State<'_, AppState>) -> AppResult<KernelVersionList> {
     // Read-only — available in both lite and pro mode
-    tauri::async_runtime::spawn_blocking(kernel_manager::list_available_versions)
-        .await
-        .map_err(|e| {
-            crate::errors::AppError::internal(format!("version list thread panicked: {e}"))
-        })?
+    let capabilities = state.capabilities().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        kernel_manager::list_available_versions(&capabilities)
+    })
+    .await
+    .map_err(|e| crate::errors::AppError::internal(format!("version list thread panicked: {e}")))?
 }
 
 #[tauri::command]
@@ -36,8 +37,10 @@ pub async fn kernel_install_version(
     );
 
     let install_app = app.clone();
+    let capabilities = state.capabilities().clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         kernel_manager::prepare_version(
+            &capabilities,
             version,
             download_url,
             expected_sha256,

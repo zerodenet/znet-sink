@@ -177,7 +177,27 @@ pub async fn probe_single(state: &AppState, job_id: ProbeJobId, target_tag: &str
 
     // Persist the normalized Zero response at the Rust boundary. This remains
     // observable even when the node page is closed or misses a Tauri event.
-    match commands::probe_outbound(target_tag.clone(), Some(url), options).await {
+    let timeout = state
+        .get_client_probe_job(job_id)
+        .map(|job| {
+            std::time::Duration::from_millis(
+                job.deadline_at_unix_ms
+                    .saturating_sub(common::now_unix_ms())
+                    .max(1),
+            )
+            .min(std::time::Duration::from_secs(60))
+        })
+        .unwrap_or_else(|| std::time::Duration::from_secs(30));
+    let operation_scope = format!("job:{}:outbound", job_id.0);
+    match crate::services::native_operation::execute_async(
+        state,
+        "kernel.probe",
+        &operation_scope,
+        timeout,
+        commands::probe_outbound(target_tag.clone(), Some(url), options),
+    )
+    .await
+    {
         Ok(response) => {
             let kernel_message = response.message;
             let normalized_failure = (!response.reachable)
@@ -403,10 +423,22 @@ async fn run_policy_probe_job(app_handle: AppHandle, job: ProbeJobSnapshot) {
         state
             .probe_runtime()
             .remember(job.id, &policy_tag, requested_operation_id.clone());
-        let command = commands::probe_policy_with_operation_id(
-            policy_tag.clone(),
-            Some(requested_operation_id),
-            options,
+        let operation_scope = format!("job:{}:policy", job.id.0);
+        let command = crate::services::native_operation::execute_async(
+            state.inner(),
+            "kernel.probe",
+            &operation_scope,
+            std::time::Duration::from_millis(
+                job.deadline_at_unix_ms
+                    .saturating_sub(common::now_unix_ms())
+                    .max(1),
+            )
+            .min(std::time::Duration::from_secs(60)),
+            commands::probe_policy_with_operation_id(
+                policy_tag.clone(),
+                Some(requested_operation_id),
+                options,
+            ),
         )
         .await;
         let rejection = match command {

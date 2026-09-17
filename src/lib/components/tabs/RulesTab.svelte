@@ -12,7 +12,7 @@
 
   import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
-  import { openUrl as openLink } from '@tauri-apps/plugin-opener';
+  import { openExternalUrl as openLink } from '$lib/services/platform';
   import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';

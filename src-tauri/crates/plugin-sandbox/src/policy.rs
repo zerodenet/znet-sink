@@ -91,15 +91,15 @@ impl Lease {
             .check(request.map(permission).as_ref())
             .map_err(map_error)
     }
+
+    /// Native host capability adapters only. Guest code never receives the
+    /// underlying lease or a way to construct permissions.
+    pub fn host_lease(&self) -> &capability::Lease {
+        &self.inner
+    }
 }
 pub(crate) fn permission(request: &Request) -> Permission {
-    let name = match request.capability {
-        crate::contract::Capability::SelfRead => "plugin.self.read",
-        crate::contract::Capability::RecordsSummaryRead => "records.summary.read",
-        crate::contract::Capability::NetworkGet => "network.get",
-        crate::contract::Capability::NetworkRequest => "network.request",
-    };
-    Permission::new(name, &request.scope)
+    Permission::new(request.capability.as_str(), &request.scope)
 }
 pub(crate) fn map_error(error: capability::Error) -> Error {
     match error {

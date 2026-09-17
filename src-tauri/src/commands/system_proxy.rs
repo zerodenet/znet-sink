@@ -29,19 +29,28 @@ pub async fn system_proxy_enable(
     state: State<'_, AppState>,
 ) -> AppResult<SystemProxyStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    ensure_active_proxy_config(state.inner())?;
-    ensure_core_ready(app_handle.clone(), state.clone()).await?;
-
-    let (host, port, bypass) = crate::configuration::preferences::proxy_settings(state.inner())?;
-    let status = tauri::async_runtime::spawn_blocking(move || {
-        local_proxy::wait_until_listening(&host, port)?;
-        system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
-        system_proxy::status()
-    })
-    .await
-    .map_err(|e| {
-        crate::errors::AppError::internal(format!("system proxy thread panicked: {e}"))
-    })??;
+    let status = crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.proxy",
+        "enable",
+        Duration::from_secs(30),
+        async {
+            ensure_active_proxy_config(state.inner())?;
+            ensure_core_ready(app_handle.clone(), state.clone()).await?;
+            let (host, port, bypass) =
+                crate::configuration::preferences::proxy_settings(state.inner())?;
+            tauri::async_runtime::spawn_blocking(move || {
+                local_proxy::wait_until_listening(&host, port)?;
+                system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
+                system_proxy::status()
+            })
+            .await
+            .map_err(|e| {
+                crate::errors::AppError::internal(format!("system proxy thread panicked: {e}"))
+            })?
+        },
+    )
+    .await?;
 
     network_probe::emit_host_network_changed(&app_handle, "system_proxy.enabled");
     Ok(status)
@@ -73,14 +82,23 @@ pub async fn system_proxy_disable(
     state: State<'_, AppState>,
 ) -> AppResult<SystemProxyStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    let status = tauri::async_runtime::spawn_blocking(|| {
-        system_proxy_guard::disable_with_guard()?;
-        system_proxy::status()
-    })
-    .await
-    .map_err(|e| {
-        crate::errors::AppError::internal(format!("system proxy thread panicked: {e}"))
-    })??;
+    let status = crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.proxy",
+        "disable",
+        Duration::from_secs(30),
+        async {
+            tauri::async_runtime::spawn_blocking(|| {
+                system_proxy_guard::disable_with_guard()?;
+                system_proxy::status()
+            })
+            .await
+            .map_err(|e| {
+                crate::errors::AppError::internal(format!("system proxy thread panicked: {e}"))
+            })?
+        },
+    )
+    .await?;
 
     network_probe::emit_host_network_changed(&app_handle, "system_proxy.disabled");
     Ok(status)

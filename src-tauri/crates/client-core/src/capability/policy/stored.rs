@@ -60,7 +60,7 @@ impl StoredPolicy {
             declared: self.declared.iter().cloned().collect(),
             required: self.required.iter().cloned().collect(),
             grants: s.grants.iter().cloned().collect(),
-            enabled: s.enabled && s.expires > Instant::now(),
+            enabled: s.enabled && s.expires.is_none_or(|expires| expires > Instant::now()),
             retired: s.retired,
             running: s.busy,
             revision: s.epoch,

@@ -34,6 +34,44 @@ pub fn run() {
     if let Ok(observations) = crate::services::probe_history::load() {
         app_state.restore_client_probe_observations(observations);
     }
+    #[cfg(feature = "tool-node-probe")]
+    match crate::services::probe_job_store::load(app_state.capabilities()) {
+        Ok((jobs, revision)) => {
+            app_state.probe_runtime().restore(
+                jobs,
+                revision,
+                crate::services::common::now_unix_ms(),
+            );
+            app_state.checkpoint_probe_jobs();
+        }
+        Err(error) => crate::services::file_logger::line(&format!(
+            "probe jobs: failed to restore history: {}",
+            error.message
+        )),
+    }
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    match crate::services::tool_job_store::load(app_state.capabilities()) {
+        Ok((jobs, revision)) => {
+            app_state.tool_runtime().restore(
+                jobs,
+                revision,
+                crate::services::common::now_unix_ms(),
+            );
+            if let Err(error) = app_state
+                .tool_runtime()
+                .checkpoint(app_state.capabilities())
+            {
+                crate::services::file_logger::line(&format!(
+                    "tool jobs: failed to persist recovered state: {}",
+                    error.message
+                ));
+            }
+        }
+        Err(error) => crate::services::file_logger::line(&format!(
+            "tool jobs: failed to restore history: {}",
+            error.message
+        )),
+    }
     crate::services::file_logger::line("lifecycle:   → app_state");
 
     // 0 = running, 1 = graceful cleanup in progress, 2 = cleanup complete.
@@ -51,7 +89,7 @@ pub fn run() {
         "mark_shutting_down",
         Box::new(move || {
             shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            capabilities.shutdown_components();
+            capabilities.shutdown();
             eprintln!("[ZNet] shutdown: marking shutdown (watchdog will stop restarting)");
         }),
     );
@@ -116,6 +154,14 @@ pub fn run() {
                     "runtime: host network monitor unavailable: {}",
                     error.message
                 ));
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let plugin_app = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = plugin_app.state::<AppState>();
+                    state.plugins().start_enabled(state.capabilities());
+                });
             }
             // A GUI lifetime owns exactly one kernel child. Never probe or
             // adopt a process from an earlier GUI lifetime; the private IPC
@@ -182,6 +228,8 @@ pub fn run() {
             // the kernel and network come up.
             crate::services::subscription::spawn_auto_sync_scheduler(app.handle().clone());
             crate::services::rule_set::spawn_auto_update_scheduler(app.handle().clone());
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::services::plugins::spawn_scheduler(app.handle().clone());
 
             // Spawn the traffic sampler so the overview chart updates live —
             // the kernel doesn't push traffic events on its own (TODO P5).

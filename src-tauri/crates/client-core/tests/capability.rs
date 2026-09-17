@@ -128,6 +128,24 @@ fn cancelled_before_and_during_execution_never_delivers() {
         Err(Error::Cancelled)
     ));
 }
+
+#[test]
+fn shutdown_cancels_native_leases_and_closes_future_admission() {
+    let manager = Manager::default();
+    let policy = policy(&manager, "native");
+    let run = lease(&policy, 1, 32);
+    manager.shutdown();
+    assert_eq!(run.check(None), Err(Error::Cancelled));
+    assert!(matches!(
+        manager.admit(
+            "late".into(),
+            BTreeSet::from([permission()]),
+            BTreeSet::from([permission()]),
+            &BTreeSet::from([permission()])
+        ),
+        Err(Error::Cancelled)
+    ));
+}
 #[test]
 fn operation_history_is_bounded_without_payloads() {
     let manager = Manager::default();

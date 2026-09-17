@@ -115,6 +115,10 @@ pub fn gui_probe_job_start(
         .start_client_probe(request)
         .map_err(AppError::client_core)?;
     if outcome.created {
+        if let Err(error) = state.probe_runtime().checkpoint(state.capabilities()) {
+            let _ = state.cancel_client_probe(outcome.job.id);
+            return Err(error);
+        }
         probe::spawn_probe_timeout(app_handle.clone(), &outcome.job);
         tauri::async_runtime::spawn(probe::run_probe_job(app_handle, outcome.job.clone()));
     }
@@ -322,12 +326,21 @@ pub async fn gui_tun_enable(
     state: State<'_, AppState>,
 ) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    ensure_core_ready(app_handle, state.clone()).await?;
-    let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
-    let opts = default_opts(state.inner());
-    zero::runtime::enable_tun_params(
-        crate::configuration::preferences::tun_params(state.inner(), tun)?,
-        Some(opts),
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.tun",
+        "enable",
+        Duration::from_secs(60),
+        async {
+            ensure_core_ready(app_handle, state.clone()).await?;
+            let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
+            let opts = default_opts(state.inner());
+            zero::runtime::enable_tun_params(
+                crate::configuration::preferences::tun_params(state.inner(), tun)?,
+                Some(opts),
+            )
+            .await
+        },
     )
     .await
 }
@@ -335,14 +348,28 @@ pub async fn gui_tun_enable(
 #[tauri::command]
 pub async fn gui_tun_recover(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
-    zero::runtime::recover_tun(Some(default_opts(state.inner()))).await
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.tun",
+        "recover",
+        Duration::from_secs(60),
+        zero::runtime::recover_tun(Some(default_opts(state.inner()))),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     let opts = default_opts(state.inner());
-    zero::runtime::disable_tun(Some(opts)).await
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.tun",
+        "disable",
+        Duration::from_secs(60),
+        zero::runtime::disable_tun(Some(opts)),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -548,7 +575,14 @@ pub async fn gui_set_mode(
     outbound: Option<String>,
 ) -> AppResult<serde_json::Value> {
     let opts = default_opts(state.inner());
-    ZeroAdapter::new().set_mode(mode, outbound, opts).await
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "runtime.mode",
+        &mode,
+        Duration::from_secs(30),
+        ZeroAdapter::new().set_mode(mode.clone(), outbound, opts),
+    )
+    .await
 }
 
 /// DNS lookup diagnostic.
@@ -712,9 +746,10 @@ pub async fn gui_network_probe(
         let config = common::lock(state.app_config(), "app_config")?;
         config.core.network_probe_urls.clone()
     };
+    let capabilities = state.capabilities().clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        crate::services::network_probe::probe_local_network(&probe_urls)
+        crate::services::network_probe::probe_local_network(&capabilities, &probe_urls)
     })
     .await
     .map_err(|e| AppError::internal(format!("network probe task failed: {}", e)))?
@@ -756,12 +791,23 @@ pub async fn gui_debug_storage_summary() -> AppResult<diagnostic_storage::DebugS
 pub async fn gui_clear_debug_storage(
     app_handle: AppHandle,
 ) -> AppResult<diagnostic_storage::DebugStorageCleanupResult> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        diagnostic_storage::clear(state.inner())
-    })
+    let state = app_handle.state::<AppState>();
+    let cleanup_app = app_handle.clone();
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "diagnostic.clear",
+        "managed-storage",
+        Duration::from_secs(60),
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = cleanup_app.state::<AppState>();
+                diagnostic_storage::clear(state.inner())
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("debug cleanup worker failed: {error}")))?
+        },
+    )
     .await
-    .map_err(|error| AppError::internal(format!("debug cleanup worker failed: {error}")))?
 }
 
 #[derive(serde::Serialize)]
@@ -775,10 +821,21 @@ pub struct GuiDiagnosticExport {
 /// Export a local, support-ready diagnostic directory without proxy config
 /// contents, subscription URLs, credentials, or other user secrets.
 #[tauri::command]
-pub async fn gui_export_diagnostics() -> AppResult<GuiDiagnosticExport> {
-    tauri::async_runtime::spawn_blocking(export_diagnostics)
-        .await
-        .map_err(|error| AppError::internal(format!("diagnostic export worker failed: {error}")))?
+pub async fn gui_export_diagnostics(state: State<'_, AppState>) -> AppResult<GuiDiagnosticExport> {
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "diagnostic.export",
+        "sanitized-bundle",
+        Duration::from_secs(60),
+        async {
+            tauri::async_runtime::spawn_blocking(export_diagnostics)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("diagnostic export worker failed: {error}"))
+                })?
+        },
+    )
+    .await
 }
 
 fn export_diagnostics() -> AppResult<GuiDiagnosticExport> {

@@ -59,6 +59,15 @@ pub(crate) async fn apply_authorized(
     options: CoreIpcOptions,
 ) -> AppResult<queries::KernelRuntimeIdentity> {
     let permission = Permission::new("configuration.apply", "active-runtime");
+    apply_authorized_for(lease, permission, config, options).await
+}
+
+pub(crate) async fn apply_authorized_for(
+    lease: &Lease,
+    permission: Permission,
+    config: Value,
+    options: CoreIpcOptions,
+) -> AppResult<queries::KernelRuntimeIdentity> {
     lease
         .check(Some(&permission))
         .map_err(|reason| AppError::invalid_argument(format!("配置操作未获授权：{reason}")))?;
@@ -84,6 +93,7 @@ pub(crate) async fn apply_authorized(
                     config,
                     control,
                     lease,
+                    permission: permission.clone(),
                 })
                 .await
             }
@@ -108,6 +118,7 @@ struct Live<'a> {
     lease: &'a Lease,
     config: Value,
     control: BoundControl,
+    permission: Permission,
 }
 
 impl Backend for Live<'_> {
@@ -117,10 +128,7 @@ impl Backend for Live<'_> {
     }
     async fn submit(&self) -> AppResult<queries::KernelRuntimeIdentity> {
         self.lease
-            .check(Some(&Permission::new(
-                "configuration.apply",
-                "active-runtime",
-            )))
+            .check(Some(&self.permission))
             .map_err(|error| AppError::invalid_argument(format!("配置提交授权失效：{error}")))?;
         self.control.apply(self.config.clone()).await
     }

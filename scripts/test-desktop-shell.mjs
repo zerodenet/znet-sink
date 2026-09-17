@@ -68,8 +68,11 @@ assert.ok(
   'the root page should install production WebView guards',
 );
 assert.ok(
-  page.includes('in:fly=') && page.includes('out:fly='),
-  'top-level pages should use directional horizontal transitions',
+  page.includes('{#key renderedTab}')
+    && page.includes('<div class="tab-transition-page">')
+    && !page.includes('in:fly=')
+    && !page.includes('out:fly='),
+  'top-level navigation must replace the old page immediately so WKWebView cannot retain an invisible hit-test layer',
 );
 assert.ok(
   page.includes(':global(.animate-fade-in)'),

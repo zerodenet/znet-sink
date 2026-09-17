@@ -14,3 +14,20 @@ fn configuration_canary_is_removed_from_envelopes_and_byte_previews() {
     )
     .ends_with('…'));
 }
+
+#[test]
+fn persistent_log_redaction_removes_nested_secrets_and_urls() {
+    let input = serde_json::json!({
+        "account": {"password": "canary-password", "deviceToken": "canary-token"},
+        "message": "request https://example.test/private completed"
+    });
+    let output = sensitive(&input).to_string();
+    assert!(!output.contains("canary"));
+    assert!(!output.contains("example.test"));
+    assert!(output.contains("[redacted]"));
+    assert!(output.contains("[redacted-url]"));
+    assert_eq!(
+        text("failed at vmess://credential@example.test"),
+        "failed at [redacted-url]"
+    );
+}

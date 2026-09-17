@@ -4,5 +4,6 @@ pub mod contract;
 pub mod distribution;
 pub mod policy;
 pub mod runtime;
+pub mod sdk;
 
 mod bridge;

@@ -1,6 +1,6 @@
-use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -20,6 +20,7 @@ pub struct KernelSettingsExportResult {
 }
 
 pub fn export_to_path(
+    manager: &znet_client_core::capability::Manager,
     config: &AppConfig,
     path: impl AsRef<Path>,
 ) -> AppResult<KernelSettingsExportResult> {
@@ -34,40 +35,53 @@ pub fn export_to_path(
             "failed to serialize client kernel settings: {error}"
         ))
     })?;
-    fs::write(&path, format!("{content}\n")).map_err(|error| AppError {
-        code: "io_error",
-        message: format!("failed to export client kernel settings: {error}"),
-        details: Some(serde_json::json!({ "path": path.display().to_string() })),
-    })?;
+    let bytes = format!("{content}\n").into_bytes();
+    let target = znet_client_capabilities::files::Publication::from_host_path(path.clone());
+    let lease = znet_client_capabilities::host::operation(
+        manager,
+        "builtin.kernel-settings-export",
+        target.permission(),
+        1,
+        bytes.len(),
+        Duration::from_secs(30),
+    )
+    .map_err(file_capability_error)?;
+    znet_client_capabilities::files::publish(&lease, &target, &bytes, MAX_IMPORT_BYTES as usize)
+        .and_then(|resource| resource.take(&lease))
+        .map_err(file_capability_error)?;
     Ok(KernelSettingsExportResult {
         path: path.display().to_string(),
         schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.to_string(),
     })
 }
 
-pub fn import_from_path(current: &AppConfig, path: impl AsRef<Path>) -> AppResult<AppConfig> {
+pub fn import_from_path(
+    manager: &znet_client_core::capability::Manager,
+    current: &AppConfig,
+    path: impl AsRef<Path>,
+) -> AppResult<AppConfig> {
     let path = normalized_path(path)?;
-    let metadata = fs::metadata(&path).map_err(|error| AppError {
-        code: "io_error",
-        message: format!("failed to inspect client kernel settings: {error}"),
-        details: Some(serde_json::json!({ "path": path.display().to_string() })),
-    })?;
-    if metadata.len() > MAX_IMPORT_BYTES {
-        return Err(AppError::invalid_argument(
-            "client kernel settings file must not exceed 2 MiB",
-        ));
-    }
-    let content = fs::read_to_string(&path).map_err(|error| AppError {
-        code: "io_error",
-        message: format!("failed to read client kernel settings: {error}"),
-        details: Some(serde_json::json!({ "path": path.display().to_string() })),
-    })?;
-    if content.len() as u64 > MAX_IMPORT_BYTES {
-        return Err(AppError::invalid_argument(
-            "client kernel settings file must not exceed 2 MiB",
-        ));
-    }
+    let selection = znet_client_capabilities::files::Selection::from_user_path(path);
+    let lease = znet_client_capabilities::host::operation(
+        manager,
+        "builtin.kernel-settings-import",
+        selection.permission(),
+        1,
+        MAX_IMPORT_BYTES as usize,
+        Duration::from_secs(30),
+    )
+    .map_err(file_capability_error)?;
+    let bytes =
+        znet_client_capabilities::files::read(&lease, &selection, MAX_IMPORT_BYTES as usize)
+            .and_then(|resource| resource.take(&lease))
+            .map_err(file_capability_error)?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| AppError::invalid_argument("client kernel settings must use UTF-8"))?;
     import_from_str(current, &content)
+}
+
+fn file_capability_error(error: znet_client_core::capability::Error) -> AppError {
+    AppError::internal(format!("客户端内核设置文件操作失败：{error}"))
 }
 
 pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<AppConfig> {

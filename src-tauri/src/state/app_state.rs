@@ -171,11 +171,15 @@ impl AppState {
             crate::client_core::ProbeJobState::InvalidatedByConfigChange,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(feature = "tool-node-probe")]
+        self.checkpoint_probe_jobs();
         #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
         self.tool_runtime.invalidate(
             crate::models::tool_job::ToolJobState::InvalidatedByConfigChange,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.checkpoint_tool_jobs();
     }
 
     pub(crate) fn client_core_instance_started(&self) {
@@ -186,11 +190,15 @@ impl AppState {
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(feature = "tool-node-probe")]
+        self.checkpoint_probe_jobs();
         #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
         self.tool_runtime.invalidate(
             crate::models::tool_job::ToolJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.checkpoint_tool_jobs();
     }
 
     pub(crate) fn client_core_instance_lost(&self) {
@@ -201,11 +209,25 @@ impl AppState {
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(feature = "tool-node-probe")]
+        self.checkpoint_probe_jobs();
         #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
         self.tool_runtime.invalidate(
             crate::models::tool_job::ToolJobState::InvalidatedByCoreRestart,
             crate::services::common::now_unix_ms(),
         );
+        #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+        self.checkpoint_tool_jobs();
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    fn checkpoint_tool_jobs(&self) {
+        if let Err(error) = self.tool_runtime.checkpoint(&self.capabilities) {
+            crate::services::file_logger::line(&format!(
+                "tool jobs: failed to persist invalidation: {}",
+                error.message
+            ));
+        }
     }
 
     pub(crate) fn set_client_core_source_status(&self, status: SourceStatus) {
@@ -264,6 +286,9 @@ impl AppState {
         };
         if let Some(observations) = observations {
             let _ = crate::services::probe_history::save(&observations);
+        }
+        if updated.is_some() {
+            self.checkpoint_probe_jobs();
         }
         updated
     }
@@ -343,6 +368,10 @@ impl AppState {
         if updated.is_some() {
             core.advance_snapshot();
         }
+        drop(core);
+        if updated.is_some() {
+            self.checkpoint_probe_jobs();
+        }
         updated
     }
 
@@ -375,7 +404,20 @@ impl AppState {
         if let Some(observations) = observations {
             let _ = crate::services::probe_history::save(&observations);
         }
+        if updated.is_some() {
+            self.checkpoint_probe_jobs();
+        }
         updated
+    }
+
+    #[cfg(feature = "tool-node-probe")]
+    pub(crate) fn checkpoint_probe_jobs(&self) {
+        if let Err(error) = self.probe_runtime.checkpoint(&self.capabilities) {
+            crate::services::file_logger::line(&format!(
+                "probe jobs: failed to persist transition: {}",
+                error.message
+            ));
+        }
     }
 
     pub(crate) fn next_core_process_monitor_generation(&self) -> u64 {

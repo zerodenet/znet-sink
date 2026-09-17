@@ -6,12 +6,42 @@ mod transfer;
 
 use crate::errors::{AppError, AppResult};
 use cache::Cache;
-use reqwest::blocking::Client;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+use znet_client_core::capability::Manager;
 
 pub const MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct NetworkOptions {
+    pub user_agent: String,
+    pub headers: BTreeMap<String, String>,
+    pub proxy: Option<String>,
+    pub no_proxy: bool,
+    pub connect_timeout: Duration,
+    pub timeout: Duration,
+    pub max_redirects: usize,
+    pub allowed_https_hosts: Vec<String>,
+}
+
+impl Default for NetworkOptions {
+    fn default() -> Self {
+        Self {
+            user_agent: "znet-sink".into(),
+            headers: BTreeMap::new(),
+            proxy: None,
+            no_proxy: false,
+            connect_timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(600),
+            max_redirects: 10,
+            allowed_https_hosts: Vec::new(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,19 +64,21 @@ impl Download {
 }
 
 pub fn fetch(
-    client: &Client,
+    manager: &Manager,
     url: &str,
     identity: &str,
+    options: &NetworkOptions,
     progress: impl FnMut(Progress),
 ) -> AppResult<Download> {
-    fetch_bounded(client, url, identity, MAX_BYTES, progress)
+    fetch_bounded(manager, url, identity, MAX_BYTES, options, progress)
 }
 
 pub fn fetch_bounded(
-    client: &Client,
+    manager: &Manager,
     url: &str,
     identity: &str,
     max_bytes: u64,
+    options: &NetworkOptions,
     progress: impl FnMut(Progress),
 ) -> AppResult<Download> {
     if max_bytes == 0 || max_bytes > MAX_BYTES {
@@ -54,10 +86,11 @@ pub fn fetch_bounded(
     }
     fetch_in(
         &super::data_dir()?.join("downloads"),
-        client,
+        manager,
         url,
         identity,
         max_bytes,
+        options,
         progress,
         Duration::from_secs(1),
     )
@@ -65,17 +98,35 @@ pub fn fetch_bounded(
 
 fn fetch_in(
     root: &Path,
-    client: &Client,
+    manager: &Manager,
     url: &str,
     identity: &str,
     max_bytes: u64,
+    options: &NetworkOptions,
     mut progress: impl FnMut(Progress),
     delay: Duration,
 ) -> AppResult<Download> {
     let mut cache = Cache::open(root, url, identity)?;
+    let lease = znet_client_capabilities::host::network(
+        manager,
+        &format!("builtin.download:{identity}"),
+        "network.download",
+        4,
+        max_bytes as usize,
+        options.timeout,
+    )
+    .map_err(|error| AppError::internal(format!("下载能力不可用：{error}")))?;
     let mut last_error = String::new();
     for attempt in 1..=4 {
-        match transfer::attempt(&mut cache, client, url, max_bytes, attempt, &mut progress) {
+        match transfer::attempt(
+            &mut cache,
+            &lease,
+            url,
+            max_bytes,
+            options,
+            attempt,
+            &mut progress,
+        ) {
             Ok(()) => {
                 return Ok(Download {
                     path: cache.part.clone(),

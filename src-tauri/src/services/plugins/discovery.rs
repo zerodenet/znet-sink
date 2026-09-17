@@ -45,13 +45,41 @@ impl Host {
         manager: &Manager,
         id: &str,
         tag: &str,
+        approval_digest: Option<&str>,
         progress: impl Fn(crate::services::download::Progress),
     ) -> AppResult<Snapshot> {
         let _operation = self.operation.lock().unwrap();
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
         let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {
-            io::download_package(url, limit, sha256, &progress)
+            io::download_package(manager, url, limit, sha256, &progress)
+                .map_err(|error| std::io::Error::other(error.message).into())
+        });
+        let release = remote
+            .release(registration, tag)
+            .map_err(io::marketplace_failure)?;
+        let version = release
+            .tag_name
+            .strip_prefix('v')
+            .ok_or_else(|| AppError::invalid_argument("插件发行版本格式无效"))?;
+        ensure_newer(&self.store()?, registration, version)?;
+        let bytes = remote
+            .download(registration, &release)
+            .map_err(io::package_failure)?;
+        self.install_bytes(manager, &bytes, directory, id, approval_digest)
+    }
+    pub fn preview_release(
+        &self,
+        manager: &Manager,
+        id: &str,
+        tag: &str,
+        progress: impl Fn(crate::services::download::Progress),
+    ) -> AppResult<InstallReview> {
+        let _operation = self.operation.lock().unwrap();
+        let directory = io::directory(manager)?;
+        let registration = directory.find(id).map_err(io::failure)?;
+        let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {
+            io::download_package(manager, url, limit, sha256, &progress)
                 .map_err(|error| std::io::Error::other(error.message).into())
         });
         let release = remote
@@ -60,6 +88,6 @@ impl Host {
         let bytes = remote
             .download(registration, &release)
             .map_err(io::package_failure)?;
-        self.install_bytes(manager, &bytes, directory, id)
+        self.preview_bytes(&bytes, &directory, id)
     }
 }

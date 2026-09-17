@@ -1,6 +1,15 @@
+import { invoke } from '@tauri-apps/api/core';
+
 /** Copy text in both Tauri WebView and browser development environments. */
 export async function copyTextToClipboard(text: string): Promise<void> {
   let clipboardError: unknown;
+
+  try {
+    await invoke('platform_clipboard_write', { text });
+    return;
+  } catch (error) {
+    clipboardError = error;
+  }
 
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {

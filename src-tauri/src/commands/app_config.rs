@@ -29,8 +29,8 @@ pub fn app_config_export_kernel_settings(
     state: State<'_, AppState>,
     path: String,
 ) -> AppResult<KernelSettingsExportResult> {
-    let config = app_config::get(state)?;
-    kernel_settings::export_to_path(&config, path)
+    let config = app_config::get(state.clone())?;
+    kernel_settings::export_to_path(state.capabilities(), &config, path)
 }
 
 async fn restart_core_and_restore_tun(
@@ -56,7 +56,8 @@ pub async fn app_config_import_kernel_settings(
 ) -> AppResult<AppConfig> {
     let _operation = state.proxy_config_operation().lock().await;
     let old_config = app_config::get(state.clone())?;
-    let mut new_config = kernel_settings::import_from_path(&old_config, path)?;
+    let mut new_config =
+        kernel_settings::import_from_path(state.capabilities(), &old_config, path)?;
     let active_id = crate::configuration::local_edits::active(state.inner())
         .ok()
         .map(|v| v.0);

@@ -24,6 +24,7 @@ pub fn execute(
         component,
         authority,
         selection,
+        None,
         cancelled,
         false,
         env!("CARGO_PKG_VERSION"),
@@ -42,6 +43,26 @@ pub fn execute_for_host(
         component,
         authority,
         selection,
+        None,
+        cancelled,
+        true,
+        host_version,
+    )
+}
+
+/// Native host entry with a bounded, host-validated declarative input.
+pub fn execute_for_host_with_input(
+    component: &Component,
+    authority: &Authority,
+    input: serde_json::Value,
+    cancelled: Arc<AtomicBool>,
+    host_version: &str,
+) -> Result<serde_json::Value, Error> {
+    execute_inner(
+        component,
+        authority,
+        None,
+        Some(input),
         cancelled,
         true,
         host_version,
@@ -59,6 +80,7 @@ pub fn execute_network_lab(
         component,
         authority,
         None,
+        None,
         cancelled,
         true,
         env!("CARGO_PKG_VERSION"),
@@ -69,6 +91,7 @@ fn execute_inner(
     component: &Component,
     authority: &Authority,
     selection: Option<(String, Summary)>,
+    input: Option<serde_json::Value>,
     cancelled: Arc<AtomicBool>,
     network_enabled: bool,
     host_version: &str,
@@ -115,6 +138,22 @@ fn execute_inner(
             }
             for (const key of ['eval','Function']) Object.defineProperty(globalThis,key,{value:undefined,writable:false,configurable:false});
         "#).map_err(|_| Error::GuestException)?;
+        let input = serde_json::to_string(&input.unwrap_or(serde_json::Value::Null))
+            .map_err(|_| Error::InvalidOutput)?;
+        if input.len() > 16 * 1024 {
+            return Err(Error::BudgetExceeded);
+        }
+        ctx.globals()
+            .set("__pluginInputJson", input)
+            .map_err(|_| Error::BudgetExceeded)?;
+        ctx.eval::<(), _>(r#"
+            Object.defineProperty(globalThis, 'pluginInput', {
+                value: JSON.parse(globalThis.__pluginInputJson),
+                writable: false,
+                configurable: false,
+            });
+            delete globalThis.__pluginInputJson;
+        "#).map_err(|_| Error::InvalidOutput)?;
         let callback_lease = lease.clone();
         let callback_failure = failure.clone();
         let callback_cancel = cancelled.clone();

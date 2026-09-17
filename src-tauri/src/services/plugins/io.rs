@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 use znet_client_core::capability::{Budget, Lease, Manager, Permission};
-use znet_plugin_sandbox::distribution::{directory::Directory, remote::Remote, store::Store};
+use znet_plugin_sandbox::distribution::{directory::Directory, remote::Remote};
 
 pub(super) fn failure(error: impl std::fmt::Display) -> AppError {
     AppError::invalid_argument(format!("插件操作失败：{}", safe_reason(error)))
@@ -28,6 +28,18 @@ pub(super) fn package_failure(error: impl std::fmt::Display) -> AppError {
 }
 fn safe_reason(error: impl std::fmt::Display) -> String {
     let message = error.to_string();
+    if message.contains("package page exceeds registered surface ceiling") {
+        return "安装包声明的管理页面超出线上插件登记范围".into();
+    }
+    if message.contains("package exceeds registered capability ceiling") {
+        return "安装包申请的权限超出线上插件登记范围".into();
+    }
+    if message.contains("未携带发布者公钥")
+        || message.contains("发布者签名与已安装插件不一致")
+        || message.contains("本地安装需要先确认")
+    {
+        return message.chars().take(240).collect();
+    }
     if message.contains("已保留进度")
         || message.contains("大小")
         || message.contains("校验")
@@ -99,49 +111,32 @@ pub(super) fn directory(manager: &Manager) -> AppResult<Directory> {
 }
 
 pub(super) fn download_package(
+    manager: &Manager,
     url: &str,
     limit: usize,
     expected_sha256: &str,
     progress: impl Fn(crate::services::download::Progress),
 ) -> AppResult<Vec<u8>> {
-    let source = reqwest::Url::parse(url)
-        .map_err(|_| AppError::invalid_argument("插件中心返回了无效的安装包地址"))?;
-    if source.scheme() != "https"
-        || source.host_str() != Some("github.com")
-        || !source.username().is_empty()
-        || source.password().is_some()
-        || source.port().is_some()
-        || source.query().is_some()
-        || source.fragment().is_some()
-    {
+    if !znet_client_capabilities::network::is_https_host_url(url, "github.com") {
         return Err(AppError::invalid_argument(
             "插件安装包必须来自作者仓库的 GitHub Release",
         ));
     }
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("ZNet-Sink-Plugin/1")
-        .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(600))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let url = attempt.url();
-            let host = url.host_str().unwrap_or("");
-            let trusted = url.scheme() == "https"
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.port().is_none()
-                && (host == "github.com" || host.ends_with(".githubusercontent.com"));
-            if attempt.previous().len() >= 5 || !trusted {
-                attempt.error("untrusted GitHub release redirect")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
-        .map_err(package_failure)?;
     let identity = format!("plugin:{expected_sha256}");
-    let download =
-        crate::services::download::fetch_bounded(&client, url, &identity, limit as u64, progress)
-            .map_err(|error| package_failure(error.message))?;
+    let download = crate::services::download::fetch_bounded(
+        manager,
+        url,
+        &identity,
+        limit as u64,
+        &crate::services::download::NetworkOptions {
+            user_agent: "ZNet-Sink-Plugin/1".into(),
+            max_redirects: 5,
+            allowed_https_hosts: vec!["github.com".into(), ".githubusercontent.com".into()],
+            ..Default::default()
+        },
+        progress,
+    )
+    .map_err(|error| package_failure(error.message))?;
     let file = File::open(&download.path).map_err(package_failure)?;
     let mut bytes = Vec::with_capacity(limit.min(1024 * 1024));
     file.take(limit as u64 + 1)
@@ -165,8 +160,8 @@ pub(super) fn download_package(
     Ok(bytes)
 }
 
-pub(super) fn store() -> AppResult<Store> {
-    Store::new(super::super::data_dir()?.join("plugins")).map_err(failure)
+pub(super) fn plugin_root() -> AppResult<std::path::PathBuf> {
+    Ok(super::super::data_dir()?.join("plugins"))
 }
 pub(super) fn manage<T>(manager: &Manager, work: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
     let permission = Permission::new("plugin.manage", "local");

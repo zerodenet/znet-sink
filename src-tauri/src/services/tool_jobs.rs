@@ -40,6 +40,7 @@ pub(crate) struct ToolRuntime {
     dns: Arc<tokio::sync::Semaphore>,
     route: Arc<tokio::sync::Semaphore>,
     mutation: Arc<tokio::sync::Semaphore>,
+    storage_revision: Mutex<Option<i64>>,
 }
 
 impl Default for ToolRuntime {
@@ -51,6 +52,7 @@ impl Default for ToolRuntime {
             dns: Arc::new(tokio::sync::Semaphore::new(DNS_CONCURRENCY)),
             route: Arc::new(tokio::sync::Semaphore::new(ROUTE_CONCURRENCY)),
             mutation: Arc::new(tokio::sync::Semaphore::new(MUTATION_CONCURRENCY)),
+            storage_revision: Mutex::new(None),
         }
     }
 }
@@ -82,6 +84,54 @@ struct ToolKindRuntimeSnapshot {
 }
 
 impl ToolRuntime {
+    pub(crate) fn restore(&self, snapshots: Vec<ToolJobSnapshot>, revision: Option<i64>, now: u64) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut maximum_id = self.next_id.load(Ordering::SeqCst);
+        for mut job in snapshots.into_iter().take(MAX_RETAINED_JOBS) {
+            maximum_id = maximum_id.max(job.id.0);
+            if !job.state.is_terminal() {
+                job.state = ToolJobState::Failed;
+                job.result = None;
+                job.error = Some(ToolJobError {
+                    code: "client_restarted".into(),
+                    message: "客户端上次退出时任务尚未完成，已安全中断，请重新执行".into(),
+                    details: None,
+                });
+                job.updated_at_unix_ms = now;
+            }
+            jobs.insert(job.id, job);
+        }
+        prune(&mut jobs);
+        self.next_id.store(maximum_id, Ordering::SeqCst);
+        *self
+            .storage_revision
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = revision;
+    }
+
+    pub(crate) fn checkpoint(
+        &self,
+        manager: &crate::client_core::capability::Manager,
+    ) -> AppResult<()> {
+        let snapshots = self.list(None);
+        let mut revision = self
+            .storage_revision
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::services::tool_job_store::save(manager, &snapshots, &mut revision)
+    }
+
+    pub(crate) fn discard(&self, id: ToolJobId) {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+        self.controls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+    }
+
     pub(crate) fn start(
         &self,
         scope: ClientScope,
@@ -242,6 +292,29 @@ impl ToolRuntime {
                 .filter(|job| !job.state.is_terminal())
                 .map(|job| {
                     job.state = state;
+                    job.updated_at_unix_ms = now;
+                    job.id
+                })
+                .collect::<Vec<_>>()
+        };
+        for id in ids {
+            self.signal(id);
+        }
+    }
+
+    pub(crate) fn interrupt_for_shutdown(&self, now: u64) {
+        let ids = {
+            let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            jobs.values_mut()
+                .filter(|job| !job.state.is_terminal())
+                .map(|job| {
+                    job.state = ToolJobState::Failed;
+                    job.result = None;
+                    job.error = Some(ToolJobError {
+                        code: "client_shutdown".into(),
+                        message: "客户端已退出，任务已安全中断".into(),
+                        details: None,
+                    });
                     job.updated_at_unix_ms = now;
                     job.id
                 })
@@ -514,6 +587,22 @@ mod tests {
             runtime.get(core.id).unwrap().state,
             ToolJobState::InvalidatedByCoreRestart
         );
+    }
+
+    #[test]
+    fn restored_active_jobs_are_not_replayed() {
+        let source = ToolRuntime::default();
+        let job = source
+            .start(scope(), request(ToolJobKind::DnsLookup), 100)
+            .unwrap();
+        source.mark_running(job.id, 101);
+
+        let restored = ToolRuntime::default();
+        restored.restore(source.list(None), Some(7), 200);
+        let job = restored.get(job.id).unwrap();
+        assert_eq!(job.state, ToolJobState::Failed);
+        assert_eq!(job.error.unwrap().code, "client_restarted");
+        assert_eq!(restored.snapshot().active, 0);
     }
 
     #[tokio::test]

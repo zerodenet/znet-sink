@@ -1644,14 +1644,16 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.2-dev.202609160113"
+version = "0.0.2-dev.202609171424"
 dependencies = [
  "base64 0.22.1",
  "dirs",
  "ed25519-dalek",
+ "getrandom 0.3.4",
  "libc",
  "minisign-verify",
  "reqwest 0.12.28",
+ "ring",
  "rusqlite",
  "semver",
  "serde",
@@ -1670,6 +1672,7 @@ dependencies = [
  "tokio",
  "windows-sys 0.61.2",
  "zero-rule",
+ "zeroize",
  "znet-client-capabilities",
  "znet-client-core",
  "znet-engine-client",
@@ -6526,6 +6529,16 @@ dependencies = [
  "tempfile",
  "znet-client-capabilities",
  "znet-client-core",
+ "znet-sink-plugin-sdk",
+]
+
+[[package]]
+name = "znet-sink-plugin-sdk"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

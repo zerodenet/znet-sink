@@ -3,7 +3,7 @@
   import * as Tabs from '$lib/components/AppTabs';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
-  import { openUrl as openLink } from '@tauri-apps/plugin-opener';
+  import { openExternalUrl as openLink } from '$lib/services/platform';
   import { AlertTriangle, Download, FolderOpen, RefreshCcw, Save, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';

@@ -7,7 +7,7 @@ import { buildOverview } from '../src/lib/components/overview/model.ts';
 
 // Exercise the real store methods with command/query adapters replaced at the
 // import boundary. These tests do not launch a kernel or change the host network.
-async function harness(environment = {}) {
+async function harness(environment = {}, { ready = true } = {}) {
   const state = {
     connection: { state:'connected',processState:'running',coreAvailable:true,systemProxyEnabled:true },
     mode: { currentMode:'rule',availableModes:['rule','global','direct'] },
@@ -64,9 +64,33 @@ async function harness(environment = {}) {
   }
   const module=await load(new URL('../src/lib/services/gui-state.svelte.ts',import.meta.url).href);
   await module.evaluate();
-  const gui=module.namespace.guiState;gui.isInitializing=false;
-  await gui.refreshAll();return {state,gui};
+  const gui=module.namespace.guiState;
+  if (ready) {
+    gui.isInitializing=false;
+    await gui.refreshAll();
+  }
+  return {state,gui};
 }
+
+test('startup unlocks the shell while runtime observations continue in the background', async t => {
+  const {gui,state}=await harness({}, {ready:false});t.after(()=>gui.destroy());
+  let finishConnection;
+  state.connectionWait=new Promise(resolve=>{finishConnection=resolve;});
+
+  const initialization=gui.initialize();
+  await Promise.resolve();
+
+  assert.equal(gui.isInitializing,false);
+  assert.equal(gui.connection,null);
+  assert.equal(gui.canConnect,false);
+  assert.equal(gui.canStartCore,false);
+  assert.equal(gui.canEnableSystemProxy,false);
+  assert.equal(gui.canEnableTun,false);
+
+  finishConnection();
+  await initialization;
+  assert.ok(gui.connection);
+});
 
 test('mode request is serialized and failures retain confirmed mode with a returned error',async()=>{
   const {gui,state}=await harness();let finish;state.wait=new Promise(resolve=>{finish=resolve;});

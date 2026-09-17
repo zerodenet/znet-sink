@@ -156,3 +156,20 @@ fn retired_completed_entries_do_not_exhaust_registry_capacity() {
     }
     assert!(manager.component_snapshots().len() <= 1);
 }
+
+#[test]
+fn host_can_restore_durable_component_consent_without_expiring_an_operation_policy() {
+    let manager = Manager::default();
+    let _policy = admit(&manager, "digest").unwrap();
+    let review = manager.component_snapshots()[0].clone();
+    manager
+        .authorize_component_persistent(&review, grants())
+        .unwrap();
+    let restored = manager.component_snapshots()[0].clone();
+    assert!(restored.enabled);
+    manager
+        .authorize_component_persistent(&restored, grants())
+        .unwrap();
+    assert_eq!(manager.component_snapshots()[0].revision, restored.revision);
+    assert!(begin(&admit(&manager, "digest").unwrap()).is_ok());
+}

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -185,11 +185,13 @@ pub(crate) async fn update_all(state: &AppState) -> AppResult<RuleSetSyncAllOutc
         .map(|item| item.updated_at_unix_ms)
         .max()
         .unwrap_or_default();
-    let (manifest, assets) = tauri::async_runtime::spawn_blocking(fetch_remote_bundle)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("built-in rule update worker failed: {error}"))
-        })??;
+    let capabilities = state.capabilities().clone();
+    let (manifest, assets) =
+        tauri::async_runtime::spawn_blocking(move || fetch_remote_bundle(&capabilities))
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("built-in rule update worker failed: {error}"))
+            })??;
     let total = manifest.assets.len();
     if manifest.generated_at_unix_ms < current_generation {
         return Ok(RuleSetSyncAllOutcome {
@@ -219,7 +221,7 @@ pub(crate) async fn update_all(state: &AppState) -> AppResult<RuleSetSyncAllOutc
         let metadata = verify(bytes, VerifyMode::FullChecksum).map_err(|error| {
             AppError::internal(format!("invalid remote ZRS '{}': {error}", asset.id))
         })?;
-        let artifact_path = install_artifact(&base, asset, bytes)?;
+        let artifact_path = install_artifact_managed(state.capabilities(), &base, asset, bytes)?;
         let previous = existing_index.map(|index| next[index].clone());
         let profile = RuleSetProfile {
             id: asset.id.clone(),
@@ -283,16 +285,13 @@ pub(crate) async fn update_all(state: &AppState) -> AppResult<RuleSetSyncAllOutc
     })
 }
 
-fn fetch_remote_bundle() -> AppResult<(Manifest, Vec<Vec<u8>>)> {
+fn fetch_remote_bundle(
+    manager: &crate::client_core::capability::Manager,
+) -> AppResult<(Manifest, Vec<Vec<u8>>)> {
     let embedded: Manifest = serde_json::from_str(MANIFEST_JSON)
         .map_err(|error| AppError::internal(format!("invalid embedded rule manifest: {error}")))?;
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| AppError::internal(format!("failed to build rule client: {error}")))?;
     let manifest_bytes = download_limited(
-        &client,
+        manager,
         REMOTE_MANIFEST_URL,
         MAX_REMOTE_MANIFEST_BYTES,
         "built-in rule manifest",
@@ -304,7 +303,7 @@ fn fetch_remote_bundle() -> AppResult<(Manifest, Vec<Vec<u8>>)> {
     let mut assets = Vec::with_capacity(manifest.assets.len());
     for asset in &manifest.assets {
         let url = format!("{REMOTE_ASSET_ROOT}/{}", asset.zrs_file);
-        let bytes = download_limited(&client, &url, MAX_REMOTE_ASSET_BYTES, &asset.id)?;
+        let bytes = download_limited(manager, &url, MAX_REMOTE_ASSET_BYTES, &asset.id)?;
         validate_asset(&bytes, asset)?;
         assets.push(bytes);
     }
@@ -343,31 +342,33 @@ fn validate_remote_manifest(manifest: &Manifest, embedded: &Manifest) -> AppResu
 }
 
 fn download_limited(
-    client: &reqwest::blocking::Client,
+    manager: &crate::client_core::capability::Manager,
     url: &str,
     limit: usize,
     label: &str,
 ) -> AppResult<Vec<u8>> {
-    let mut response = client
-        .get(url)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| AppError::internal(format!("failed to download {label}: {error}")))?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(AppError::invalid_argument(format!(
-            "downloaded {label} exceeds the size limit"
-        )));
-    }
-    let mut bytes = Vec::new();
-    response
-        .by_ref()
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
+    let options = super::download::NetworkOptions {
+        user_agent: concat!("ZNet-Sink/", env!("CARGO_PKG_VERSION")).into(),
+        timeout: Duration::from_secs(120),
+        max_redirects: 4,
+        allowed_https_hosts: vec!["raw.githubusercontent.com".into()],
+        ..super::download::NetworkOptions::default()
+    };
+    let artifact = super::download::fetch_bounded(
+        manager,
+        url,
+        &format!("builtin-rule:{label}"),
+        limit as u64,
+        &options,
+        |_| {},
+    )
+    .map_err(|error| {
+        AppError::internal(format!("failed to download {label}: {}", error.message))
+    })?;
+    let bytes = fs::read(&artifact.path)
         .map_err(|error| AppError::internal(format!("failed to read {label}: {error}")))?;
     if bytes.len() > limit {
+        let _ = artifact.discard();
         return Err(AppError::invalid_argument(format!(
             "downloaded {label} exceeds the size limit"
         )));
@@ -431,6 +432,33 @@ fn install_artifact(base: &Path, asset: &ManifestAsset, bytes: &[u8]) -> AppResu
         let _ = fs::remove_file(temporary);
         return Err(error);
     }
+    Ok(target)
+}
+
+fn install_artifact_managed(
+    manager: &crate::client_core::capability::Manager,
+    base: &Path,
+    asset: &ManifestAsset,
+    bytes: &[u8],
+) -> AppResult<PathBuf> {
+    let target = base
+        .join("rule-artifacts")
+        .join(&asset.id)
+        .join(format!("bundle-v1-{:08x}.zrs", asset.zrs_checksum));
+    let publication = znet_client_capabilities::files::Publication::from_host_path(target.clone());
+    let permission = publication.permission();
+    let lease = znet_client_capabilities::host::operation(
+        manager,
+        "builtin.rule-artifact",
+        permission,
+        1,
+        bytes.len(),
+        Duration::from_secs(30),
+    )
+    .map_err(|error| AppError::internal(format!("built-in ZRS publish unavailable: {error}")))?;
+    znet_client_capabilities::files::publish(&lease, &publication, bytes, MAX_REMOTE_ASSET_BYTES)
+        .and_then(|value| value.take(&lease))
+        .map_err(|error| AppError::internal(format!("failed to publish built-in ZRS: {error}")))?;
     Ok(target)
 }
 

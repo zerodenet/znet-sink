@@ -97,7 +97,29 @@ impl Manager {
         if policy.identity() != review.identity || stored.registration != review.registration {
             return Err(Error::Revoked);
         }
-        policy.authorize_revision(grants, ttl, Some(review.revision))
+        policy.authorize_revision(grants, Some(ttl), Some(review.revision))
+    }
+    /// Restore host-owned durable consent for an installed component. The
+    /// persistence record lives in the host; this registry still invalidates
+    /// every active invocation on stop, replacement, removal, or shutdown.
+    pub fn authorize_component_persistent(
+        &self,
+        review: &ComponentSnapshot,
+        grants: BTreeSet<Permission>,
+    ) -> Result<(), Error> {
+        let registry = self.components.lock().unwrap();
+        if registry.closed {
+            return Err(Error::Disabled);
+        }
+        let stored = registry
+            .entries
+            .get(&review.key)
+            .ok_or(Error::AdmissionDenied)?;
+        let policy = stored.policy.restore(self);
+        if policy.identity() != review.identity || stored.registration != review.registration {
+            return Err(Error::Revoked);
+        }
+        policy.authorize_revision(grants, None, Some(review.revision))
     }
     /// Stop access immediately. Explicit host authorization may enable it again.
     pub fn revoke_component(&self, key: &str) -> bool {

@@ -1,3 +1,4 @@
+use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
@@ -24,10 +25,21 @@ pub async fn logs_append(app_handle: AppHandle, input: LogAppend) -> AppResult<L
 
 #[tauri::command]
 pub async fn logs_clear(app_handle: AppHandle) -> AppResult<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        logs::clear(state.inner())
-    })
+    let state = app_handle.state::<AppState>();
+    let clear_app = app_handle.clone();
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "log.clear",
+        "all",
+        Duration::from_secs(30),
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = clear_app.state::<AppState>();
+                logs::clear(state.inner())
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("log clear worker failed: {error}")))?
+        },
+    )
     .await
-    .map_err(|error| AppError::internal(format!("log clear worker failed: {error}")))?
 }

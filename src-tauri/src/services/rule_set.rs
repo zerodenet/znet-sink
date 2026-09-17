@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -187,7 +186,7 @@ pub async fn upsert(state: State<'_, AppState>, input: RuleSetUpsert) -> AppResu
             "local visual rule sets are limited to {MAX_LOCAL_VISUAL_RULES} entries; use an external source for larger assets"
         )));
     }
-    let artifact = build_zrs_artifact(&id, &semantic_ir)?;
+    let artifact = build_zrs_artifact(state.capabilities(), &id, &semantic_ir)?;
     let stored_semantic_ir = if source.is_some() {
         empty_semantic_ir(&name)
     } else {
@@ -269,7 +268,7 @@ async fn update_by_id(state: &AppState, id: String) -> AppResult<(RuleSetProfile
             FetchOutcome::Modified(resource) => {
                 let semantic_ir =
                     convert_source(resource_text(&resource)?, &source.format, &profile.name)?;
-                let artifact = build_zrs_artifact(&profile.id, &semantic_ir)?;
+                let artifact = build_zrs_artifact(state.capabilities(), &profile.id, &semantic_ir)?;
                 Ok((Some((semantic_ir, artifact)), resource.state))
             }
         }
@@ -410,11 +409,17 @@ pub(crate) async fn sync_managed_subscription_sources(
                                     managed.tag
                                 ))
                             })?;
-                        publish_zrs_in(&data_dir()?, &id, &resource.bytes, metadata)?
+                        publish_zrs_in(
+                            state.capabilities(),
+                            &data_dir()?,
+                            &id,
+                            &resource.bytes,
+                            metadata,
+                        )?
                     } else {
                         let semantic_ir =
                             convert_managed_clash_source(resource_text(&resource)?, &display_name)?;
-                        build_zrs_artifact(&id, &semantic_ir)?
+                        build_zrs_artifact(state.capabilities(), &id, &semantic_ir)?
                     };
                     (artifact, resource.state, Some(now), now)
                 }
@@ -1267,7 +1272,11 @@ fn convert_clash_with_policy(
     )
 }
 
-fn build_zrs_artifact(id: &str, semantic_ir: &Value) -> AppResult<ZrsArtifact> {
+fn build_zrs_artifact(
+    manager: &znet_client_core::capability::Manager,
+    id: &str,
+    semantic_ir: &Value,
+) -> AppResult<ZrsArtifact> {
     let ir = serde_json::to_vec(semantic_ir).map_err(|error| {
         AppError::internal(format!("failed to serialize semantic rules: {error}"))
     })?;
@@ -1280,45 +1289,41 @@ fn build_zrs_artifact(id: &str, semantic_ir: &Value) -> AppResult<ZrsArtifact> {
         .map_err(|error| AppError::internal(format!("ZRS encoding failed: {error}")))?;
     let metadata = verify(&bytes, VerifyMode::FullChecksum)
         .map_err(|error| AppError::internal(format!("ZRS verification failed: {error}")))?;
-    publish_zrs_in(&data_dir()?, id, &bytes, metadata)
+    publish_zrs_in(manager, &data_dir()?, id, &bytes, metadata)
 }
 
 fn publish_zrs_in(
+    manager: &znet_client_core::capability::Manager,
     base_dir: &Path,
     id: &str,
     bytes: &[u8],
     metadata: RuleSetMetadata,
 ) -> AppResult<ZrsArtifact> {
     let directory = base_dir.join("rule-artifacts").join(id);
-    fs::create_dir_all(&directory)
-        .map_err(|error| io_error("create ZRS directory", &directory, error))?;
     let generation = now_unix_ms();
     let file_name = format!("{generation}-{:08x}.zrs", metadata.body_checksum);
     let final_path = directory.join(file_name);
-    let temporary_path = directory.join(format!(".{generation}-{}.tmp", std::process::id()));
-    let publish = || -> AppResult<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-            .map_err(|error| io_error("create temporary ZRS", &temporary_path, error))?;
-        file.write_all(bytes)
-            .map_err(|error| io_error("write temporary ZRS", &temporary_path, error))?;
-        file.sync_all()
-            .map_err(|error| io_error("flush temporary ZRS", &temporary_path, error))?;
-        let written = fs::read(&temporary_path)
-            .map_err(|error| io_error("read temporary ZRS", &temporary_path, error))?;
-        verify(&written, VerifyMode::FullChecksum).map_err(|error| {
-            AppError::internal(format!("published ZRS verification failed: {error}"))
-        })?;
-        fs::rename(&temporary_path, &final_path)
-            .map_err(|error| io_error("publish immutable ZRS", &final_path, error))?;
-        Ok(())
-    };
-    if let Err(error) = publish() {
-        let _ = fs::remove_file(&temporary_path);
-        return Err(error);
-    }
+    let target = znet_client_capabilities::files::Publication::from_host_path(final_path.clone());
+    let permission = target.permission();
+    let lease = znet_client_capabilities::host::operation(
+        manager,
+        "builtin.rule-artifact",
+        permission,
+        1,
+        bytes.len(),
+        Duration::from_secs(30),
+    )
+    .map_err(|error| AppError::internal(format!("ZRS 发布能力不可用：{error}")))?;
+    let published =
+        znet_client_capabilities::files::publish(&lease, &target, bytes, MAX_INPUT_BYTES)
+            .and_then(|resource| resource.take(&lease))
+            .map_err(|error| AppError::internal(format!("ZRS 原子发布失败：{error}")))?;
+    let written =
+        fs::read(&published).map_err(|error| io_error("read published ZRS", &published, error))?;
+    verify(&written, VerifyMode::FullChecksum).map_err(|error| {
+        let _ = fs::remove_file(&published);
+        AppError::internal(format!("published ZRS verification failed: {error}"))
+    })?;
     Ok(ZrsArtifact {
         path: final_path.to_string_lossy().into_owned(),
         major_version: metadata.major_version,
@@ -1565,7 +1570,8 @@ mod tests {
         let (compiled, _) = RuleSetCompiler.compile(source).unwrap();
         let bytes = encode(&compiled).unwrap();
         let metadata = verify(&bytes, VerifyMode::FullChecksum).unwrap();
-        let artifact = publish_zrs_in(&root, "asset", &bytes, metadata).unwrap();
+        let manager = znet_client_core::capability::Manager::default();
+        let artifact = publish_zrs_in(&manager, &root, "asset", &bytes, metadata).unwrap();
         let published = fs::read(&artifact.path).unwrap();
         verify(&published, VerifyMode::FullChecksum).unwrap();
         assert_eq!(&published[..4], b"ZRS!");
@@ -1588,8 +1594,10 @@ mod tests {
         let source = decode_json(&serde_json::to_vec(&ir).unwrap()).unwrap();
         let (compiled, _) = RuleSetCompiler.compile(source).unwrap();
         let bytes = encode(&compiled).unwrap();
+        let manager = znet_client_core::capability::Manager::default();
 
         let manual = publish_zrs_in(
+            &manager,
             &root,
             "manual-asset",
             &bytes,
@@ -1597,6 +1605,7 @@ mod tests {
         )
         .unwrap();
         let managed = publish_zrs_in(
+            &manager,
             &root,
             "subscription-rule-subscription-1-ai",
             &bytes,

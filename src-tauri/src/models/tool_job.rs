@@ -55,7 +55,7 @@ pub struct StartToolJobRequest {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolJobError {
     pub code: String,
@@ -64,7 +64,7 @@ pub struct ToolJobError {
     pub details: Option<Value>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolJobSnapshot {
     pub id: ToolJobId,

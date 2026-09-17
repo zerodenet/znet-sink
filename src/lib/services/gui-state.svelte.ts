@@ -119,13 +119,17 @@ class GuiStateStore {
 
     this.startPeriodicNetworkProbe();
     void this.probeNetwork();
-    await this.refreshAll();
-    if (!this.isInitialized) return;
+    const initialRefresh = this.refreshAll();
     this.runtimeStatusObserver.start();
 
-    // The first authoritative snapshot is complete. UI action guards may now
-    // be evaluated normally, including the mode-specific auto-connect below.
+    // Tauri commands are asynchronous, so the shell can remain interactive
+    // while the first runtime snapshot is collected. Runtime-changing actions
+    // below still require their own authoritative observations before they can
+    // be used.
     this.isInitializing = false;
+
+    await initialRefresh;
+    if (!this.isInitialized) return;
 
     try {
       const appConfig = await getAppConfig();
@@ -696,7 +700,7 @@ class GuiStateStore {
   }
 
   get canConnect(): boolean {
-    if (this.isInitializing) return false;
+    if (!this.connection || !this.selfTest || !this.tunStatus) return false;
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
     const missingProxyConfig = this.selfTest !== null && !this.selfTest.activeProxyConfigId;
     return (!selfTestBlocking || this.isProcessRunning)
@@ -708,7 +712,7 @@ class GuiStateStore {
   }
 
   get canDisconnect(): boolean {
-    if (this.isInitializing) return false;
+    if (!this.connection || !this.tunStatus) return false;
     return !this.isConnecting
       && !this.isDisconnecting
       && !this.isSwitchingTun
@@ -716,7 +720,7 @@ class GuiStateStore {
   }
 
   get canStartCore(): boolean {
-    if (this.isInitializing) return false;
+    if (!this.connection || !this.selfTest) return false;
     // A missing proxy profile must not prevent the user from starting the
     // management-only kernel. System proxy/TUN actions keep their stricter
     // profile guards; only launch-critical self-test failures block startup.
@@ -737,6 +741,7 @@ class GuiStateStore {
   }
 
   get canEnableSystemProxy(): boolean {
+    if (!this.connection || !this.selfTest) return false;
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
     return (!selfTestBlocking || this.isProcessRunning)
       && !this.isSwitchingSystemProxy
@@ -753,6 +758,7 @@ class GuiStateStore {
   }
 
   get canEnableTun(): boolean {
+    if (!this.connection || !this.selfTest || !this.tunStatus) return false;
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
     return (!selfTestBlocking || this.isProcessRunning)
       && !this.isCoreBusy

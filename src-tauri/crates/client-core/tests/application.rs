@@ -1,8 +1,9 @@
 mod support;
 use support::TestHost as ClientCore;
 use znet_client_core::{
-    ConfigRevision, CoreInstanceId, ProbeJobKind, ProbeJobState, ProbeObservation,
-    ProbeObservationSource, ProbeTargetResult, ProfileId, SnapshotRevision, StartProbeRequest,
+    probe_jobs::ProbeJobs, ClientScope, ConfigRevision, CoreInstanceId, ProbeJobKind,
+    ProbeJobState, ProbeObservation, ProbeObservationSource, ProbeTargetResult, ProfileId,
+    SnapshotRevision, StartProbeRequest,
 };
 
 fn core() -> ClientCore {
@@ -215,6 +216,47 @@ fn snapshot_recovers_running_job_after_page_recreation_or_stream_gap() {
     assert_eq!(recovered[0].id, job.id);
     assert_eq!(recovered[0].completed, 1);
     assert_eq!(recovered[0].target_tags, vec!["a", "b"]);
+}
+
+#[test]
+fn restored_probe_history_never_replays_running_work() {
+    let mut jobs = ProbeJobs::default();
+    let scope = ClientScope {
+        profile_id: Some(ProfileId("profile-a".into())),
+        config_revision: ConfigRevision(1),
+        core_instance_id: CoreInstanceId(1),
+    };
+    let running = jobs
+        .start_probe(
+            &scope,
+            StartProbeRequest {
+                kind: ProbeJobKind::Outbound,
+                target_tags: vec!["node-a".into()],
+                timeout_ms: Some(5_000),
+            },
+            100,
+        )
+        .unwrap()
+        .job;
+    let mut restored = ProbeJobs::default();
+    restored.restore_probe_jobs(vec![running.clone()], 200);
+    assert_eq!(
+        restored.get_probe_job(running.id).unwrap().state,
+        ProbeJobState::InvalidatedByCoreRestart
+    );
+    let next = restored
+        .start_probe(
+            &scope,
+            StartProbeRequest {
+                kind: ProbeJobKind::Outbound,
+                target_tags: vec!["node-b".into()],
+                timeout_ms: Some(5_000),
+            },
+            201,
+        )
+        .unwrap()
+        .job;
+    assert!(next.id.0 > running.id.0);
 }
 
 #[test]

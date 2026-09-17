@@ -8,6 +8,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+const MAX_HOST_RESOURCE_BYTES: usize = 512 * 1024 * 1024 + 8192;
+const MAX_HOST_OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
 pub(super) use stored::StoredPolicy;
 
 pub(super) struct State {
@@ -16,7 +18,9 @@ pub(super) struct State {
     epoch: u64,
     busy: bool,
     grants: BTreeSet<Permission>,
-    expires: Instant,
+    /// Temporary callers use a deadline; host-owned component consent is
+    /// durable and is restored explicitly after every application start.
+    expires: Option<Instant>,
 }
 #[derive(Clone)]
 pub struct Policy {
@@ -50,7 +54,7 @@ impl Policy {
                 epoch: 0,
                 busy: false,
                 grants: BTreeSet::new(),
-                expires: Instant::now(),
+                expires: Some(Instant::now()),
             })),
         }
     }
@@ -58,25 +62,31 @@ impl Policy {
         &self.identity
     }
     pub fn authorize(&self, grants: BTreeSet<Permission>, ttl: Duration) -> Result<(), Error> {
-        self.authorize_revision(grants, ttl, None)
+        self.authorize_revision(grants, Some(ttl), None)
     }
     pub(super) fn authorize_revision(
         &self,
         grants: BTreeSet<Permission>,
-        ttl: Duration,
+        ttl: Option<Duration>,
         revision: Option<u64>,
     ) -> Result<(), Error> {
-        if !grants.is_subset(&self.declared) || ttl.is_zero() || ttl > Duration::from_secs(3600) {
+        self.manager.ensure_open()?;
+        if !grants.is_subset(&self.declared)
+            || ttl.is_some_and(|ttl| ttl.is_zero() || ttl > Duration::from_secs(3600))
+        {
             return Err(Error::PermissionDenied);
         }
         let mut s = self.state.lock().unwrap();
         if s.retired || revision.is_some_and(|revision| revision != s.epoch) {
             return Err(Error::Revoked);
         }
+        if ttl.is_none() && s.enabled && s.expires.is_none() && s.grants == grants {
+            return Ok(());
+        }
         s.epoch += 1;
         s.enabled = true;
         s.grants = grants;
-        s.expires = Instant::now() + ttl;
+        s.expires = ttl.map(|ttl| Instant::now() + ttl);
         Ok(())
     }
     pub fn revoke(&self) {
@@ -86,12 +96,13 @@ impl Policy {
         s.grants.clear();
     }
     pub fn begin(&self, budget: Budget, cancelled: Arc<AtomicBool>) -> Result<Lease, Error> {
+        self.manager.ensure_open()?;
         if budget.calls == 0
             || budget.calls > 256
             || budget.resource_bytes == 0
-            || budget.resource_bytes > 64 * 1024 * 1024 + 8192
+            || budget.resource_bytes > MAX_HOST_RESOURCE_BYTES
             || budget.timeout.is_zero()
-            || budget.timeout > Duration::from_secs(60)
+            || budget.timeout > MAX_HOST_OPERATION_TIMEOUT
         {
             return Err(Error::BudgetExceeded);
         }
@@ -99,7 +110,7 @@ impl Policy {
         if !s.enabled {
             return Err(Error::Disabled);
         }
-        if s.expires <= Instant::now() {
+        if s.expires.is_some_and(|expires| expires <= Instant::now()) {
             return Err(Error::Expired);
         }
         if !self.required.is_subset(&s.grants) {
@@ -131,11 +142,12 @@ pub struct Lease {
 }
 impl Lease {
     pub fn check(&self, permission: Option<&Permission>) -> Result<(), Error> {
+        self.policy.manager.ensure_open()?;
         let s = self.policy.state.lock().unwrap();
         if !s.enabled || s.epoch != self.epoch {
             return Err(Error::Revoked);
         }
-        if s.expires <= Instant::now() {
+        if s.expires.is_some_and(|expires| expires <= Instant::now()) {
             return Err(Error::Expired);
         }
         if self.cancelled.load(Ordering::Relaxed) {

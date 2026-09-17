@@ -1,6 +1,6 @@
 # 通用客户端插件系统：能力、沙箱与跨平台契约
 
-状态：2026-09-12 已接通桌面 GUI 的签名包安装、逐项授权、受限 VM 运行、停用和卸载；当前仅开放插件自身信息权限。受保护数据流与通用业务 SDK 尚未完成。实际进度见 [迁移记录](./capability-migration.md)，早期范围见 [插件基础阶段](./plugin-foundation.md)。下文保留早期完整候选，不表示 SDK、安装器或生产沙箱已经完成。
+状态：2026-09-17 桌面 GUI 已接通签名包安装、持久授权与启用意图、升级权限差异确认、发布者/插件命名空间、受限 VM、签名管理页面及消息绑定 SDK，并提供有界 `host_start` 恢复入口。通用存储、通知、调度、浏览器回调、用户文件选择、短期秘密/材料句柄、密码学使用和 runtime-only 受保护加载已进入统一权限管道；完整契约见 [插件 SDK v1](./plugin-sdk.md)。Connect 登录、设备凭证协议和订阅关联仍由插件及服务端实现。
 
 2026-09-09 历史背景：产品定位已扩展为网络工具箱。后续插件可提供流量分析、协议展示和受限处理能力，相关实时执行、正文权限及故障策略见 [流量检查与改写边界](./network-inspection.md)。当时尚未形成可用 SDK 或已批准的插件运行时实现；2026-09-11 新增范围以基础阶段文档为准。
 
@@ -38,7 +38,7 @@ flowchart TD
 | CapabilityBroker | 身份、授权、句柄、并发/版本检查、任务回执 | 解析任意插件私有业务配置 |
 | 平台适配器 | Tauri/原生权限、存储、网络、代理/VPN 生命周期 | 向插件透传原始平台 API |
 | 插件组件 | 已授权的转换、接入、工具与业务扩展 | 接管宿主核心状态和退出清理 |
-| UI renderer | 安全组件渲染、固定授权/确认界面 | 执行插件 HTML、JS 或任意 CSS |
+| UI 容器 | 固定授权/确认界面；加载包内已验签页面并绑定受控 SDK | 加载远端页面、开放 Tauri/宿主 DOM、允许页面绕过能力入口 |
 
 Tauri 的 Rust/Kotlin/Swift 构建期插件用于实现平台适配器，与用户安装的业务插件分开。Tauri 移动扩展支持 Kotlin/Swift，但不意味着下载的业务插件可以装入任意本机代码。[Tauri 移动插件](https://v2.tauri.app/develop/plugins/develop-mobile/)。
 
@@ -165,7 +165,7 @@ export default definePlugin({
 });
 ```
 
-UI 用宿主支持的 page/card/form/table/chart/action schema，主题、语言、尺寸和无障碍一致适配桌面/移动端；禁用任意 HTML/JS/CSS，动态字段和动作做 schema 校验。标准页面布局能自适应窄屏，无需维护独立 Svelte 页面。高级自由 WebView 留作独立能力设计，不能成为基础插件必需条件。
+简单配置可使用宿主支持的声明式表单。复杂插件可随签名包提供独立管理页面；桌面客户端在无同源权限的 iframe 中运行包内 HTML/JS/CSS，以 CSP 禁止直接网络、表单和外部资源，并通过绑定真实插件身份的消息 SDK 调用配置、命名空间和组件操作。授权、启停、更新、卸载和可信元数据始终由宿主固定 UI 展示。
 
 用户在插件详情看到“读取绑定账号套餐”“访问此面板”“管理指定配置”等实际功能，展开可查看精确 scope。插件管理支持安装、授权、启停、升级、回退、卸载及“禁用全部插件”恢复模式。授权和关键确认由宿主固定界面完成。
 
@@ -173,7 +173,7 @@ UI 用宿主支持的 page/card/form/table/chart/action schema，主题、语言
 
 包使用签名 manifest + 资源散列，包含 `id/version/apiVersion/clientVersion/components/contributions/requiredCapabilities/optionalCapabilities`。每个 component 独立 entry、role、权限和最低隔离要求；origin 等动态作用域通过安装/账号绑定解析并授权，不能由脚本偷偷改写。
 
-宿主可信 key 绑定发布者及可发布的 ID，包内 key 不自证身份。拒绝未知能力/版本、路径穿越、符号链接、重复路径、压缩炸弹及未列明负载。manifest 签名覆盖原始字节与资源散列；桌面/移动通用脚本包不含可下载本机程序。
+线上安装由插件中心的可信 key 绑定发布者、包 ID 和声明上限。本地安装采用显式首次信任：v2 包内发布者登记、公钥与 payload 一同签名，客户端展示公钥指纹、权限和管理页面后由用户确认并保存本地信任；这不会产生线上登记。后续升级必须使用同一 key，新增权限或页面重新确认。拒绝未知能力/版本、路径穿越、符号链接、重复路径、压缩炸弹及未列明负载；桌面/移动通用脚本包不含可下载本机程序。
 
 任务携带 `operationId, componentGeneration, grantEpoch, resourceRevision, runtimeInstance, deadline`。写入前再核对作用域，过期结果拒绝。相同操作 ID 不执行第二次副作用；超时返回 uncertain 时通过查询回执恢复，不自动换路径重放。该机制不声称在没有持久回执的外部系统上实现 exactly-once。
 

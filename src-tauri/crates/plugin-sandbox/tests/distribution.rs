@@ -111,6 +111,66 @@ fn publisher_signature_identity_capabilities_and_release_digest_are_checked() {
     metadata.sha256 = "00".repeat(32);
     assert!(validate_download(&bytes, &metadata, &reg).is_err());
 }
+
+#[test]
+fn signed_management_pages_require_a_registered_surface_and_are_verified() {
+    let mut p = payload("1.0.0", serde_json::json!("any"));
+    p.pages.push(package::SourcePage {
+        id: "manage".into(),
+        title: "Manage".into(),
+        kind: package::PageKind::Management,
+        html: "<!doctype html><button>Sign in</button>".into(),
+    });
+    let bytes = signed(&p);
+    assert!(package::verify(&bytes, &registration()).is_err());
+
+    let mut reg = registration();
+    reg.surfaces.push("znet-sink.ui.management.v1".into());
+    let verified = package::verify(&bytes, &reg).unwrap();
+    assert_eq!(verified.pages.len(), 1);
+    assert_eq!(verified.pages[0].id, "manage");
+    assert_eq!(verified.pages[0].kind, package::PageKind::Management);
+
+    p.pages.push(p.pages[0].clone());
+    assert!(package::verify(&signed(&p), &reg).is_err());
+}
+
+#[test]
+fn self_contained_local_package_is_signed_and_does_not_require_marketplace_surface_admission() {
+    let mut p = payload("1.0.0", serde_json::json!("any"));
+    p.pages.push(package::SourcePage {
+        id: "manage".into(),
+        title: "Manage".into(),
+        kind: package::PageKind::Management,
+        html: "<!doctype html><button>Sign in</button>".into(),
+    });
+    let registration = registration();
+    let bytes = package::sign_with_registration(
+        &serde_json::to_vec(&p).unwrap(),
+        &SEED,
+        registration.clone(),
+    )
+    .unwrap();
+    let embedded = package::embedded_registration(&bytes).unwrap().unwrap();
+    assert_eq!(
+        embedded.publisher.public_key,
+        registration.publisher.public_key
+    );
+    assert!(package::verify(&bytes, &registration).is_err());
+    assert_eq!(
+        package::verify_local(&bytes, &embedded)
+            .unwrap()
+            .pages
+            .len(),
+        1
+    );
+
+    let mut envelope: package::Envelope = serde_json::from_slice(&bytes).unwrap();
+    envelope.registration.as_mut().unwrap().name = "Tampered".into();
+    let tampered = serde_json::to_vec(&envelope).unwrap();
+    let embedded = package::embedded_registration(&tampered).unwrap().unwrap();
+    assert!(package::verify_local(&tampered, &embedded).is_err());
+}
 #[test]
 fn registered_install_upgrade_restart_rollback_remove_and_explicit_execution() {
     let temp = tempfile::tempdir().unwrap();

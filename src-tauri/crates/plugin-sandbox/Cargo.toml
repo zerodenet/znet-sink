@@ -6,6 +6,7 @@ rust-version = "1.87"
 publish = false
 
 [dependencies]
+znet-sink-plugin-sdk = { path = "../../../sdk/rust" }
 znet-client-core = { path = "../client-core" }
 znet-client-capabilities = { path = "../client-capabilities" }
 rquickjs = { version = "=0.13.0", default-features = false, features = ["std"] }

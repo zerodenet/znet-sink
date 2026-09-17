@@ -15,6 +15,24 @@ pub struct ProbeJobs {
     observations: Vec<ProbeObservation>,
 }
 impl ProbeJobs {
+    /// Restore bounded history without replaying work submitted by a previous
+    /// client process. Any nonterminal entry is tied to the old core instance
+    /// and therefore becomes explicitly invalidated.
+    pub fn restore_probe_jobs(&mut self, jobs: Vec<ProbeJobSnapshot>, now_unix_ms: u64) {
+        self.probe_jobs.clear();
+        self.observations.clear();
+        self.next_probe_job_id = 0;
+        for mut job in jobs.into_iter().take(MAX_RETAINED_PROBE_JOBS) {
+            self.next_probe_job_id = self.next_probe_job_id.max(job.id.0);
+            if !job.state.is_terminal() {
+                job.state = ProbeJobState::InvalidatedByCoreRestart;
+                job.updated_at_unix_ms = now_unix_ms;
+            }
+            self.probe_jobs.insert(job.id, job);
+        }
+        self.prune_probe_jobs();
+    }
+
     pub fn take_observations(&mut self) -> Vec<ProbeObservation> {
         std::mem::take(&mut self.observations)
     }

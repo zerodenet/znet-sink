@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { revealItemInDir } from '@tauri-apps/plugin-opener';
+  import { revealItemInDir } from '$lib/services/platform';
   import type { ConnectionHistorySummary, DebugFrameQuery } from '$lib/types/debug';
   import { historyHeadReplacesWindow } from '$lib/services/connection-history-window';
   import ConnectionHistoryCoverage from '$lib/components/ConnectionHistoryCoverage.svelte';

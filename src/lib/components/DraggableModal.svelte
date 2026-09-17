@@ -16,8 +16,12 @@
     width?: string;
     /** If true, the close button and Escape key are disabled. */
     closeDisabled?: boolean;
+    /** Whether the modal body itself scrolls. Complex workspaces own their inner scroll region. */
+    bodyScrollable?: boolean;
     /** Extra buttons rendered left of fullscreen/close in the header. */
     headerActions?: import('svelte').Snippet;
+    /** Optional control rendered at the leading edge of the header. */
+    headerLeading?: import('svelte').Snippet;
     /** Dialog body content. */
     children: import('svelte').Snippet;
     /** Optional footer rendered at the bottom. */
@@ -31,7 +35,9 @@
     onClose,
     width = 'min(520px, 90vw)',
     closeDisabled = false,
+    bodyScrollable = true,
     headerActions,
+    headerLeading,
     children,
     footer,
   }: Props = $props();
@@ -227,11 +233,16 @@
         onmousedown={handleDragStart}
         ondblclick={toggleFullscreen}
       >
-        <div class="dm-header-text">
-          <div class="dm-title">{title}</div>
-          {#if description}
-            <div class="dm-desc">{description}</div>
+        <div class="dm-header-main">
+          {#if headerLeading}
+            <div class="dm-header-leading">{@render headerLeading()}</div>
           {/if}
+          <div class="dm-header-text">
+            <div class="dm-title">{title}</div>
+            {#if description}
+              <div class="dm-desc">{description}</div>
+            {/if}
+          </div>
         </div>
         <div class="dm-header-actions">
           {#if headerActions}
@@ -269,7 +280,7 @@
         </div>
       </div>
 
-      <div class="dm-body">
+      <div class="dm-body" class:dm-body-fixed={!bodyScrollable}>
         {@render children()}
       </div>
 
@@ -287,11 +298,16 @@
   .dm-overlay {
     position: fixed;
     inset: 0;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
     z-index: var(--layer-dialog);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
+    overflow: hidden;
+    overscroll-behavior: none;
     background: var(--dialog-overlay-bg);
     animation: dm-fade-in 0.15s ease;
   }
@@ -312,7 +328,7 @@
     border-radius: 10px;
     background: var(--dialog-bg);
     box-shadow: var(--dialog-shadow);
-    max-height: min(90vh, 840px);
+    max-height: min(calc(100dvh - 48px), 840px);
     animation: dm-scale-in 0.15s ease;
   }
 
@@ -348,6 +364,17 @@
     min-width: 0;
   }
 
+  .dm-header-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .dm-header-leading {
+    flex-shrink: 0;
+  }
+
   .dm-title {
     font-size: 13px;
     font-weight: 700;
@@ -381,6 +408,10 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .dm-body-fixed {
+    overflow: hidden;
   }
 
   /* ── Footer ── */

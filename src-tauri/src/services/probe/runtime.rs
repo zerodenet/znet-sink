@@ -11,6 +11,7 @@ pub(crate) struct ProbeRuntime {
     controls: Mutex<HashMap<ProbeJobId, Control>>,
     concurrency: Arc<tokio::sync::Semaphore>,
     operations: Mutex<HashMap<(ProbeJobId, String), String>>,
+    storage_revision: Mutex<Option<i64>>,
 }
 
 impl Default for ProbeRuntime {
@@ -20,11 +21,44 @@ impl Default for ProbeRuntime {
             controls: Mutex::new(HashMap::new()),
             concurrency: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES)),
             operations: Mutex::new(HashMap::new()),
+            storage_revision: Mutex::new(None),
         }
     }
 }
 
 impl ProbeRuntime {
+    pub(crate) fn restore(
+        &self,
+        jobs: Vec<crate::client_core::ProbeJobSnapshot>,
+        revision: Option<i64>,
+        now: u64,
+    ) {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .restore_probe_jobs(jobs, now);
+        *self
+            .storage_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = revision;
+    }
+
+    pub(crate) fn checkpoint(
+        &self,
+        manager: &crate::client_core::capability::Manager,
+    ) -> crate::errors::AppResult<()> {
+        let jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .list_probe_jobs(None);
+        let mut revision = self
+            .storage_revision
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::services::probe_job_store::save(manager, &jobs, &mut revision)
+    }
+
     #[cfg(test)]
     pub(crate) fn semaphore(&self) -> Arc<tokio::sync::Semaphore> {
         self.concurrency.clone()

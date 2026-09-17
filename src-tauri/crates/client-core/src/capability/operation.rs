@@ -24,6 +24,7 @@ struct State {
     active: usize,
     operations: VecDeque<Operation>,
     claims: BTreeSet<String>,
+    closed: bool,
 }
 #[derive(Clone)]
 pub struct Manager {
@@ -39,6 +40,7 @@ impl Default for Manager {
                 active: 0,
                 operations: VecDeque::new(),
                 claims: BTreeSet::new(),
+                closed: false,
             })),
         }
     }
@@ -51,6 +53,7 @@ impl Manager {
         required: BTreeSet<Permission>,
         ceiling: &BTreeSet<Permission>,
     ) -> Result<Policy, Error> {
+        self.ensure_open()?;
         if identity.is_empty()
             || !required.is_subset(&declared)
             || !declared.iter().all(|r| super::allows(ceiling, r))
@@ -61,6 +64,9 @@ impl Manager {
     }
     pub(super) fn claim(&self, key: String) -> Result<Claim, Error> {
         let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return Err(Error::Cancelled);
+        }
         if state.claims.len() >= 32 || !state.claims.insert(key.clone()) {
             return Err(Error::Busy);
         }
@@ -89,6 +95,9 @@ impl Manager {
         permission: &Permission,
     ) -> Result<OperationGuard, Error> {
         let mut s = self.state.lock().unwrap();
+        if s.closed {
+            return Err(Error::Cancelled);
+        }
         if s.active >= 32 {
             return Err(Error::Busy);
         }
@@ -114,6 +123,20 @@ impl Manager {
             id,
             finished: false,
         })
+    }
+    pub(super) fn ensure_open(&self) -> Result<(), Error> {
+        if self.state.lock().unwrap().closed {
+            Err(Error::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Close every authority owned by this client lifetime. Existing leases
+    /// fail their next check and no native or guest caller can be admitted.
+    pub fn shutdown(&self) {
+        self.shutdown_components();
+        self.state.lock().unwrap().closed = true;
     }
 }
 pub(super) struct OperationGuard {

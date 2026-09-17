@@ -11,7 +11,7 @@
     guiExportDiagnostics,
     type GuiDebugStorageSummary,
   } from '$lib/services/core';
-  import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
+  import { openPath, revealItemInDir } from '$lib/services/platform';
   import {
     error as toastError,
     success as toastSuccess,

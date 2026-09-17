@@ -118,25 +118,35 @@ pub struct NetworkProbeResult {
 /// This GUI-side check never injects the managed kernel's local proxy address.
 /// The default HTTP client follows proxy variables inherited by this process;
 /// without them, it uses the host's direct network path.
-pub fn probe_local_network(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
+pub fn probe_local_network(
+    manager: &znet_client_core::capability::Manager,
+    probe_urls: &[String],
+) -> AppResult<NetworkProbeResult> {
     let probe_urls = if probe_urls.is_empty() {
         default_network_probe_urls()
     } else {
         probe_urls.to_vec()
     };
 
-    try_probe_urls(&probe_urls)
+    try_probe_urls(manager, &probe_urls)
 }
 
-fn try_probe_urls(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|error| AppError::internal(format!("failed to build HTTP client: {error}")))?;
-
+fn try_probe_urls(
+    manager: &znet_client_core::capability::Manager,
+    probe_urls: &[String],
+) -> AppResult<NetworkProbeResult> {
+    let lease = znet_client_capabilities::host::network(
+        manager,
+        "builtin.network-probe",
+        "network.get",
+        probe_urls.len().clamp(1, 32) as u32,
+        1024 * 1024,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| AppError::internal(format!("network probe capability failed: {error}")))?;
     let mut failures = Vec::new();
     for url in probe_urls {
-        match fetch_probe_result(&client, url) {
+        match fetch_probe_result(&lease, url) {
             Ok(result) => return Ok(result),
             Err(error) => failures.push(format!("{url}: {}", error.message)),
         }
@@ -146,25 +156,26 @@ fn try_probe_urls(probe_urls: &[String]) -> AppResult<NetworkProbeResult> {
 }
 
 fn fetch_probe_result(
-    client: &reqwest::blocking::Client,
+    lease: &znet_client_core::capability::Lease,
     url: &str,
 ) -> AppResult<NetworkProbeResult> {
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|error| AppError::internal(format!("request failed: {error}")))?;
-
-    let status = response.status();
-    if !status.is_success() {
+    let response = znet_client_capabilities::network::get(
+        lease,
+        url,
+        "znet-sink-network-probe",
+        256 * 1024,
+        &[],
+    )
+    .and_then(|resource| resource.take(lease))
+    .map_err(|error| AppError::internal(format!("request failed: {error}")))?;
+    if !(200..300).contains(&response.status) {
         return Err(AppError::internal(format!(
-            "unexpected HTTP status {status}"
+            "unexpected HTTP status {}",
+            response.status
         )));
     }
-
-    let body = response
-        .text()
-        .map_err(|error| AppError::internal(format!("failed to read response body: {error}")))?;
-
+    let body = String::from_utf8(response.body)
+        .map_err(|_| AppError::internal("probe response is not UTF-8"))?;
     parse_probe_response(&body)
 }
 

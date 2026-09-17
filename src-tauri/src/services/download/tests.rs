@@ -58,13 +58,20 @@ fn remaining() -> String {
         "efgh",
     )
 }
+fn options() -> NetworkOptions {
+    NetworkOptions {
+        no_proxy: true,
+        ..NetworkOptions::default()
+    }
+}
 fn fetch_test(root: &Path, url: &str) -> AppResult<Download> {
     fetch_in(
         root,
-        &Client::builder().no_proxy().build().unwrap(),
+        &Manager::default(),
         url,
         "version:platform:signature",
         MAX_BYTES,
+        &options(),
         |_| {},
         Duration::ZERO,
     )
@@ -76,10 +83,11 @@ fn interrupted_body_resumes_with_strong_validator_and_absolute_progress() {
     let mut events = Vec::new();
     let artifact = fetch_in(
         root.path(),
-        &Client::builder().no_proxy().build().unwrap(),
+        &Manager::default(),
         &url,
         "release",
         MAX_BYTES,
+        &options(),
         |p| events.push(p),
         Duration::ZERO,
     )
@@ -255,10 +263,11 @@ fn caller_bound_rejects_a_body_larger_than_marketplace_metadata() {
     )]);
     let error = fetch_in(
         root.path(),
-        &Client::builder().no_proxy().build().unwrap(),
+        &Manager::default(),
         &url,
         "plugin:expected-digest",
         8,
+        &options(),
         |_| {},
         Duration::ZERO,
     )

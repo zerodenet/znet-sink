@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+pub use znet_sink_plugin_sdk::{Capability, Request};
 
 pub const MAX_SOURCE_BYTES: usize = 256 * 1024;
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
@@ -132,29 +133,17 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Capability {
-    #[serde(rename = "plugin.self.read")]
-    SelfRead,
-    #[serde(rename = "records.summary.read")]
-    RecordsSummaryRead,
-    #[serde(rename = "network.get")]
-    NetworkGet,
-    #[serde(rename = "network.request")]
-    NetworkRequest,
-}
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Request {
-    pub capability: Capability,
-    pub scope: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Isolation {
     Vm,
     Process,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleEvent {
+    HostStart,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +176,166 @@ impl Limits {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationFieldKind {
+    Text,
+    HttpsOrigin,
+    Select,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigurationOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigurationField {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub kind: ConfigurationFieldKind,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ConfigurationOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigurationSchema {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub fields: Vec<ConfigurationField>,
+}
+
+impl ConfigurationSchema {
+    fn valid(&self) -> bool {
+        if self.title.is_empty()
+            || self.title.len() > 80
+            || self
+                .description
+                .as_ref()
+                .is_some_and(|value| value.len() > 400)
+            || self.fields.is_empty()
+            || self.fields.len() > 16
+        {
+            return false;
+        }
+        let mut fields = BTreeSet::new();
+        self.fields.iter().all(|field| {
+            if !identifier(&field.id)
+                || !fields.insert(&field.id)
+                || field.label.is_empty()
+                || field.label.len() > 80
+                || field
+                    .description
+                    .as_ref()
+                    .is_some_and(|value| value.len() > 400)
+                || field
+                    .default
+                    .as_ref()
+                    .is_some_and(|value| value.len() > 2048)
+            {
+                return false;
+            }
+            let options_valid = match field.kind {
+                ConfigurationFieldKind::Select => {
+                    let mut values = BTreeSet::new();
+                    !field.options.is_empty()
+                        && field.options.len() <= 16
+                        && field.options.iter().all(|option| {
+                            !option.value.is_empty()
+                                && option.value.len() <= 128
+                                && !option.label.is_empty()
+                                && option.label.len() <= 80
+                                && values.insert(&option.value)
+                        })
+                }
+                _ => field.options.is_empty(),
+            };
+            options_valid
+                && field
+                    .default
+                    .as_deref()
+                    .is_none_or(|value| field.accepts(value))
+        })
+    }
+
+    pub fn defaults(&self) -> BTreeMap<String, String> {
+        self.fields
+            .iter()
+            .filter_map(|field| {
+                field
+                    .default
+                    .as_ref()
+                    .map(|value| (field.id.clone(), value.clone()))
+            })
+            .collect()
+    }
+
+    pub fn validate_values(&self, values: &BTreeMap<String, String>) -> Result<(), Error> {
+        if values.len() > self.fields.len()
+            || values
+                .iter()
+                .map(|(key, value)| key.len() + value.len())
+                .sum::<usize>()
+                > 16 * 1024
+        {
+            return Err(Error::InvalidManifest);
+        }
+        if values
+            .keys()
+            .any(|key| !self.fields.iter().any(|field| field.id == *key))
+        {
+            return Err(Error::InvalidManifest);
+        }
+        for field in &self.fields {
+            let value = values
+                .get(&field.id)
+                .map(String::as_str)
+                .or(field.default.as_deref());
+            if field.required && value.is_none_or(str::is_empty) {
+                return Err(Error::InvalidManifest);
+            }
+            if value.is_some_and(|value| !field.accepts(value)) {
+                return Err(Error::InvalidManifest);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ConfigurationField {
+    fn accepts(&self, value: &str) -> bool {
+        if value.len() > 2048 {
+            return false;
+        }
+        match self.kind {
+            ConfigurationFieldKind::Text => true,
+            ConfigurationFieldKind::HttpsOrigin => reqwest::Url::parse(value).is_ok_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.path() == "/"
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            }),
+            ConfigurationFieldKind::Select => {
+                self.options.iter().any(|option| option.value == value)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -202,6 +351,12 @@ pub struct Manifest {
     pub targets: Targets,
     pub required: Vec<Request>,
     pub optional: Vec<Request>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<ConfigurationSchema>,
+    /// Host-owned lifecycle triggers. They schedule a bounded component
+    /// invocation; they do not grant background residency or extra access.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lifecycle: Vec<LifecycleEvent>,
     pub source_sha256: String,
     pub limits: Limits,
 }
@@ -232,21 +387,18 @@ impl Component {
             || !manifest.targets.valid()
             || !manifest.limits.valid()
             || manifest.required.len() + manifest.optional.len() > 16
+            || manifest.lifecycle.len() > 4
+            || manifest.lifecycle.iter().collect::<BTreeSet<_>>().len() != manifest.lifecycle.len()
+            || manifest
+                .configuration
+                .as_ref()
+                .is_some_and(|schema| !schema.valid())
         {
             return Err(Error::InvalidManifest);
         }
         let mut seen = BTreeSet::new();
         for request in manifest.required.iter().chain(&manifest.optional) {
-            let valid_scope = match request.capability {
-                Capability::SelfRead => request.scope == "self",
-                Capability::NetworkGet | Capability::NetworkRequest => {
-                    znet_client_capabilities::network::origin(&request.scope)
-                        .is_ok_and(|origin| origin == request.scope)
-                }
-                Capability::RecordsSummaryRead => {
-                    request.scope.starts_with("selection:") && identifier(&request.scope[10..])
-                }
-            };
+            let valid_scope = request.capability.accepts_scope(&request.scope);
             if !valid_scope || !seen.insert(request) {
                 return Err(Error::InvalidManifest);
             }

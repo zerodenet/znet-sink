@@ -1,3 +1,4 @@
+use std::time::Duration;
 use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
@@ -16,5 +17,13 @@ pub async fn gui_set_proxy_mode(
     state: State<'_, AppState>,
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
-    proxy_mode::set(app_handle, state, input).await
+    let scope = format!("{:?}", input.mode);
+    crate::services::native_operation::execute_async(
+        state.inner(),
+        "runtime.proxy-mode",
+        &scope,
+        Duration::from_secs(120),
+        proxy_mode::set(app_handle, state.clone(), input),
+    )
+    .await
 }

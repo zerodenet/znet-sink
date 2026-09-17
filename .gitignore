@@ -17,6 +17,8 @@ vite.config.ts.timestamp-*
 *.pfx
 .pnpm-store
 src-tauri/target/
+/sdk/rust/target/
+/sdk/rust/Cargo.lock
 # Local agent / tooling config dirs (project-local, not shared in repo)
 .agents/
 .claude/

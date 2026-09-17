@@ -30,6 +30,7 @@ pub fn payload(version: &str, targets: serde_json::Value) -> Payload {
             manifest,
             source: source.into(),
         }],
+        pages: Vec::new(),
     }
 }
 pub fn signed(payload: &Payload) -> Vec<u8> {

@@ -8,6 +8,7 @@ use std::{
 use znet_plugin_sandbox::{
     contract::{sha256, Component, Target, MAX_MANIFEST_BYTES, MAX_SOURCE_BYTES},
     distribution::{
+        directory::Registration,
         package::{self, Payload, SourceComponent},
         remote::{ReleaseMetadata, Remote},
         store::Store,
@@ -46,8 +47,9 @@ fn run() -> Result<()> {
             println!("{} {} {} (not enabled)", package.id, package.version, package.digest);
             for component in package.components { println!("{}", serde_json::to_string_pretty(component.manifest())?); }
         }
-        [cmd, manifest, source, seed, output, metadata] if cmd == "pack" => pack(manifest, source, seed, output, metadata)?,
-        _ => return Err("usage: znet-plugin catalog | releases ID | list ROOT | install ROOT ID TAG | inspect ROOT ID | rollback ROOT ID | remove ROOT ID | pack MANIFEST SOURCE SEED_FILE PACKAGE_OUT METADATA_OUT".into()),
+        [cmd, manifest, source, seed, output, metadata] if cmd == "pack" => pack(manifest, source, seed, output, metadata, None)?,
+        [cmd, manifest, source, seed, output, metadata, registration] if cmd == "pack" => pack(manifest, source, seed, output, metadata, Some(registration))?,
+        _ => return Err("usage: znet-plugin catalog | releases ID | list ROOT | install ROOT ID TAG | inspect ROOT ID | rollback ROOT ID | remove ROOT ID | pack MANIFEST SOURCE SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]".into()),
     }
     Ok(())
 }
@@ -61,7 +63,14 @@ fn read(path: &str, limit: usize) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn pack(manifest: &str, source: &str, seed: &str, output: &str, metadata: &str) -> Result<()> {
+fn pack(
+    manifest: &str,
+    source: &str,
+    seed: &str,
+    output: &str,
+    metadata: &str,
+    registration: Option<&str>,
+) -> Result<()> {
     if Path::new(output).exists() || Path::new(metadata).exists() || output == metadata {
         return Err("output must be a new file".into());
     }
@@ -74,11 +83,18 @@ fn pack(manifest: &str, source: &str, seed: &str, output: &str, metadata: &str) 
         plugin_id: manifest.plugin_id.clone(),
         version: manifest.version.clone(),
         components: vec![SourceComponent { manifest, source }],
+        pages: Vec::new(),
     };
     let seed: [u8; 32] = read(seed, 32)?
         .try_into()
         .map_err(|_| "seed must contain exactly 32 raw bytes")?;
-    let package = package::sign(&serde_json::to_vec(&payload)?, &seed)?;
+    let payload_bytes = serde_json::to_vec(&payload)?;
+    let package = if let Some(path) = registration {
+        let registration: Registration = serde_json::from_slice(&read(path, 64 * 1024)?)?;
+        package::sign_with_registration(&payload_bytes, &seed, registration)?
+    } else {
+        package::sign(&payload_bytes, &seed)?
+    };
     let metadata_value = ReleaseMetadata {
         schema_version: 1,
         host: payload.host,

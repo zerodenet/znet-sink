@@ -28,6 +28,8 @@ fn manifest(source: &str) -> Manifest {
         targets: Targets::Only(vec![Target::native_desktop().unwrap()]),
         required: vec![request()],
         optional: vec![],
+        configuration: None,
+        lifecycle: vec![],
         source_sha256: sha256(source.as_bytes()),
         limits: Limits {
             timeout_ms: 100,
