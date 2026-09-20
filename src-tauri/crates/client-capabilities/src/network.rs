@@ -1,4 +1,6 @@
 use reqwest::{blocking::Client, redirect::Policy, Url};
+#[cfg(feature = "acceptance-test-utils")]
+use std::sync::OnceLock;
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -10,6 +12,40 @@ pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_RESOURCE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_STREAM_BYTES: u64 = 512 * 1024 * 1024;
 
+#[cfg(feature = "acceptance-test-utils")]
+static ACCEPTANCE_ROOT_CERTIFICATE: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Install one process-local TLS root for installed-package acceptance tests.
+///
+/// This API is absent from production builds. It keeps the normal configured
+/// request path and certificate verification intact while allowing a test host
+/// with an ephemeral certificate to exercise the complete HTTPS boundary.
+#[cfg(feature = "acceptance-test-utils")]
+pub fn install_acceptance_root_certificate(pem: Vec<u8>) -> Result<(), Error> {
+    reqwest::Certificate::from_pem(&pem).map_err(|_| Error::InvalidRequest)?;
+    ACCEPTANCE_ROOT_CERTIFICATE
+        .set(pem)
+        .map_err(|_| Error::InvalidRequest)
+}
+
+#[cfg(feature = "acceptance-test-utils")]
+fn add_acceptance_root(
+    builder: reqwest::blocking::ClientBuilder,
+) -> Result<reqwest::blocking::ClientBuilder, Error> {
+    let Some(pem) = ACCEPTANCE_ROOT_CERTIFICATE.get() else {
+        return Ok(builder);
+    };
+    let certificate = reqwest::Certificate::from_pem(pem).map_err(|_| Error::InvalidRequest)?;
+    Ok(builder.add_root_certificate(certificate))
+}
+
+#[cfg(not(feature = "acceptance-test-utils"))]
+fn add_acceptance_root(
+    builder: reqwest::blocking::ClientBuilder,
+) -> Result<reqwest::blocking::ClientBuilder, Error> {
+    Ok(builder)
+}
+
 #[derive(Default)]
 pub struct Validators {
     pub etag: Option<String>,
@@ -19,6 +55,14 @@ pub struct Response {
     pub status: u16,
     pub body: Vec<u8>,
     pub headers: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum Route {
+    #[default]
+    System,
+    Direct,
+    Proxy(String),
 }
 
 pub struct StreamRequest {
@@ -316,10 +360,12 @@ pub fn get_conditional(
         },
         Options {
             capability: "network.get",
+            permission_scope: None,
             user_agent,
             max_bytes,
             response_headers,
             follow: true,
+            route: Route::System,
         },
     )
 }
@@ -342,19 +388,59 @@ pub fn request(
         request,
         Options {
             capability: "network.request",
+            permission_scope: None,
             user_agent: "ZNet-Sink-Plugin/1",
             max_bytes,
             response_headers: &["content-type", "location"],
             follow: false,
+            route: Route::System,
+        },
+    )
+}
+
+/// Request an exact HTTPS origin selected through a declared configuration
+/// field. The permission scope is the field id rather than a mutable URL; the
+/// host must supply the already-validated current origin.
+pub fn configured_request(
+    lease: &Lease,
+    request: &Request,
+    configuration_scope: &str,
+    allowed_origin: &str,
+    route: Route,
+    max_bytes: usize,
+) -> Result<Resource<Response>, Error> {
+    let request_origin = origin(&request.url)?;
+    let allowed = parse(allowed_origin)?;
+    if allowed.scheme() != "https"
+        || allowed.path() != "/"
+        || allowed.query().is_some()
+        || allowed.fragment().is_some()
+        || request_origin != allowed.origin().ascii_serialization()
+    {
+        return Err(Error::PermissionDenied);
+    }
+    exchange(
+        lease,
+        request,
+        Options {
+            capability: "network.configured.request",
+            permission_scope: Some(configuration_scope),
+            user_agent: "ZNet-Sink-Plugin/1",
+            max_bytes,
+            response_headers: &["content-type", "location"],
+            follow: false,
+            route,
         },
     )
 }
 struct Options<'a> {
     capability: &'a str,
+    permission_scope: Option<&'a str>,
     user_agent: &'a str,
     max_bytes: usize,
     response_headers: &'a [&'a str],
     follow: bool,
+    route: Route,
 }
 fn exchange(
     lease: &Lease,
@@ -363,13 +449,20 @@ fn exchange(
 ) -> Result<Resource<Response>, Error> {
     let Options {
         capability,
+        permission_scope,
         user_agent,
         max_bytes,
         response_headers,
         follow,
+        route,
     } = options;
     let mut url = parse(&input.url)?;
-    let permission = Permission::new(capability, url.origin().ascii_serialization());
+    let permission = Permission::new(
+        capability,
+        permission_scope
+            .map(str::to_owned)
+            .unwrap_or_else(|| url.origin().ascii_serialization()),
+    );
     lease.execute(&permission, || {
         if max_bytes == 0 || max_bytes > MAX_RESOURCE_BYTES || input.body.len() > MAX_BODY_BYTES {
             return Err(Error::BudgetExceeded);
@@ -424,16 +517,25 @@ fn exchange(
         {
             return Err(Error::InvalidRequest);
         }
-        let client = Client::builder()
+        let mut builder = add_acceptance_root(Client::builder())?
             .redirect(Policy::none())
-            .user_agent(user_agent)
-            .build()
-            .map_err(|_| Error::InvalidRequest)?;
+            .user_agent(user_agent);
+        builder = match &route {
+            Route::System => builder,
+            Route::Direct => builder.no_proxy(),
+            Route::Proxy(proxy) => {
+                builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| Error::InvalidRequest)?)
+            }
+        };
+        let client = builder.build().map_err(|_| Error::InvalidRequest)?;
         for hop in 0..=10 {
-            lease.check(Some(&Permission::new(
+            let current_permission = Permission::new(
                 capability,
-                url.origin().ascii_serialization(),
-            )))?;
+                permission_scope
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| url.origin().ascii_serialization()),
+            );
+            lease.check(Some(&current_permission))?;
             let method = reqwest::Method::from_bytes(input.method.as_bytes())
                 .map_err(|_| Error::InvalidRequest)?;
             let mut response = client

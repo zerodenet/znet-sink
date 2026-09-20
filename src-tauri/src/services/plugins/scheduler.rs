@@ -25,6 +25,8 @@ pub(super) struct Task {
     pub action: String,
     pub interval_seconds: u64,
     pub next_run_unix_ms: u64,
+    #[serde(default)]
+    pub failure_count: u8,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -79,6 +81,7 @@ fn load(root: &Path) -> AppResult<Registry> {
                 || !safe_id(&task.component_id)
                 || !safe_id(&task.task_id)
                 || !safe_id(&task.action)
+                || task.failure_count > 16
                 || !(MIN_INTERVAL_SECONDS..=MAX_INTERVAL_SECONDS).contains(&task.interval_seconds)
         })
     {
@@ -132,6 +135,7 @@ impl Host {
             interval_seconds,
             next_run_unix_ms: crate::services::common::now_unix_ms()
                 .saturating_add(interval_seconds.saturating_mul(1000)),
+            failure_count: 0,
         };
         registry
             .tasks
@@ -232,6 +236,33 @@ impl Host {
         }
         Ok(due)
     }
+
+    fn record_schedule_result(&self, task: &Task, succeeded: bool, now: u64) -> AppResult<()> {
+        let _operation = self.operation.lock().unwrap();
+        let mut registry = load(&self.root()?)?;
+        let Some(stored) =
+            registry
+                .tasks
+                .get_mut(&key(&task.plugin_id, &task.component_id, &task.task_id))
+        else {
+            return Ok(());
+        };
+        if stored.action != task.action || stored.interval_seconds != task.interval_seconds {
+            return Ok(());
+        }
+        let delay_seconds = if succeeded {
+            stored.failure_count = 0;
+            stored.interval_seconds
+        } else {
+            stored.failure_count = stored.failure_count.saturating_add(1).min(16);
+            let exponent = u32::from(stored.failure_count.saturating_sub(1).min(4));
+            60_u64
+                .saturating_mul(1_u64 << exponent)
+                .min(stored.interval_seconds)
+        };
+        stored.next_run_unix_ms = now.saturating_add(delay_seconds.saturating_mul(1000));
+        save(&self.root()?, &registry)
+    }
 }
 
 pub(crate) fn spawn(app: tauri::AppHandle) {
@@ -250,17 +281,47 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
             match due {
                 Ok(tasks) => {
                     for task in tasks {
+                        let task_app = app.clone();
+                        let task_plugin_id = task.plugin_id.clone();
+                        let task_id = task.task_id.clone();
+                        let execution_task = task.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            let state = task_app.state::<crate::state::app_state::AppState>();
+                            state.plugins().invoke_scheduled(
+                                task_app.clone(),
+                                &execution_task.plugin_id,
+                                &execution_task.component_id,
+                                format!("lifecycle.scheduled.{}", execution_task.action),
+                                serde_json::json!({"taskId":execution_task.task_id}),
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(AppError::internal(format!("插件后台执行线程失败：{error}")))
+                        });
                         let state = app.state::<crate::state::app_state::AppState>();
-                        if let Err(error) = state.plugins().invoke(
-                            state.capabilities(),
-                            &task.plugin_id,
-                            &task.component_id,
-                            format!("lifecycle.scheduled.{}", task.action),
-                            serde_json::json!({"taskId":task.task_id}),
+                        let declared_failure = result.as_ref().ok().is_some_and(|value| {
+                            value.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+                        });
+                        let succeeded = result.is_ok() && !declared_failure;
+                        if let Err(error) = state.plugins().record_schedule_result(
+                            &task,
+                            succeeded,
+                            crate::services::common::now_unix_ms(),
                         ) {
+                            crate::services::file_logger::line(&format!(
+                                "plugin scheduler result checkpoint failed: {}",
+                                error.message
+                            ));
+                        }
+                        if let Err(error) = result {
                             state.plugins().state.lock().unwrap().notices.push(format!(
                                 "{}：后台任务 {} 执行失败（{}）",
-                                task.plugin_id, task.task_id, error.message
+                                task_plugin_id, task_id, error.message
+                            ));
+                        } else if declared_failure {
+                            crate::services::file_logger::line(&format!(
+                                "plugin scheduled action requested retry: {task_plugin_id}/{task_id}"
                             ));
                         }
                     }
@@ -289,6 +350,7 @@ mod tests {
             action: "refresh".into(),
             interval_seconds: MIN_INTERVAL_SECONDS,
             next_run_unix_ms: 100,
+            failure_count: 0,
         };
         let mut registry = Registry {
             schema_version: schema(),
@@ -301,5 +363,50 @@ mod tests {
         save(root.path(), &registry).unwrap();
         assert_eq!(load(root.path()).unwrap().tasks.len(), 1);
         assert!(!safe_id("../escape"));
+    }
+
+    #[test]
+    fn failed_tasks_use_bounded_exponential_retry_and_success_resets_it() {
+        let root = tempfile::tempdir().unwrap();
+        let host = Host {
+            root: Some(root.path().into()),
+            ..Host::default()
+        };
+        let task = Task {
+            plugin_id: "org.example.plugin".into(),
+            component_id: "worker".into(),
+            task_id: "refresh".into(),
+            action: "refresh".into(),
+            interval_seconds: 900,
+            next_run_unix_ms: 100,
+            failure_count: 0,
+        };
+        let mut registry = Registry {
+            schema_version: schema(),
+            ..Registry::default()
+        };
+        registry.tasks.insert(
+            key(&task.plugin_id, &task.component_id, &task.task_id),
+            task.clone(),
+        );
+        save(root.path(), &registry).unwrap();
+        host.record_schedule_result(&task, false, 1_000).unwrap();
+        let failed = load(root.path())
+            .unwrap()
+            .tasks
+            .into_values()
+            .next()
+            .unwrap();
+        assert_eq!(failed.failure_count, 1);
+        assert_eq!(failed.next_run_unix_ms, 61_000);
+        host.record_schedule_result(&failed, true, 2_000).unwrap();
+        let recovered = load(root.path())
+            .unwrap()
+            .tasks
+            .into_values()
+            .next()
+            .unwrap();
+        assert_eq!(recovered.failure_count, 0);
+        assert_eq!(recovered.next_run_unix_ms, 902_000);
     }
 }

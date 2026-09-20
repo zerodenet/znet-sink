@@ -8,8 +8,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::logs::LogLevel;
 use crate::models::proxy_config::{ProxyConfigProfile, ProxyConfigUpsert};
 use crate::models::subscription::{
-    SubscriptionProfile, SubscriptionRemovalOutcome, SubscriptionRemovalPreview,
-    SubscriptionRemovalTarget, SubscriptionUpsert, SyncMetadata,
+    ManagedSubscriptionApply, ManagedSubscriptionSource, SubscriptionProfile,
+    SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionRemovalTarget,
+    SubscriptionUpsert, SyncMetadata,
 };
 use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
@@ -17,6 +18,7 @@ use crate::services::common::{
 };
 use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
+use sha2::{Digest, Sha256};
 
 /// Default auto-sync check cadence for the background scheduler.
 const AUTO_SYNC_TICK_SECONDS: u64 = 60;
@@ -107,6 +109,13 @@ pub fn upsert(
     let mut next = subscriptions.clone();
     let profile = match next.iter_mut().find(|item| item.id == id) {
         Some(existing) => {
+            if existing.managed_source.is_some() {
+                return Err(AppError::conflict(
+                    "subscription",
+                    id,
+                    "managed subscription settings are owned by its plugin source",
+                ));
+            }
             // Preserve sync-derived state across edits; only the
             // user-editable fields are overwritten.
             existing.name = name;
@@ -129,6 +138,7 @@ pub fn upsert(
                 kernel,
                 format,
                 target_proxy_config_id,
+                managed_source: None,
                 policy_selections: Default::default(),
                 update_interval_secs,
                 user_agent,
@@ -209,6 +219,39 @@ pub async fn remove(
     id: String,
     remove_associated_config: bool,
 ) -> AppResult<SubscriptionRemovalOutcome> {
+    remove_authorized(app_handle, id, remove_associated_config, None, || Ok(())).await
+}
+
+pub async fn remove_managed_authorized<F>(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: bool,
+    plugin_id: String,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    remove_authorized(
+        app_handle,
+        id,
+        remove_associated_config,
+        Some(plugin_id),
+        authorize,
+    )
+    .await
+}
+
+async fn remove_authorized<F>(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: bool,
+    managed_plugin_id: Option<String>,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
     let id = normalize_required(id, "id")?;
     let state = app_handle.state::<AppState>();
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
@@ -217,6 +260,10 @@ pub async fn remove(
         .find(|profile| profile.id == id)
         .cloned()
         .ok_or_else(|| AppError::not_found("subscription", id.clone()))?;
+    if let Some(plugin_id) = managed_plugin_id {
+        ensure_managed_subscription_owner(&subscription, &plugin_id)?;
+    }
+    authorize()?;
 
     let mut removed_proxy_config = false;
     if remove_associated_config {
@@ -252,6 +299,23 @@ pub async fn remove(
         removed_proxy_config,
         removed_managed_rule_set_count,
     })
+}
+
+fn ensure_managed_subscription_owner(
+    subscription: &SubscriptionProfile,
+    plugin_id: &str,
+) -> AppResult<()> {
+    if subscription
+        .managed_source
+        .as_ref()
+        .is_some_and(|source| source.plugin_id == plugin_id)
+    {
+        Ok(())
+    } else {
+        Err(AppError::invalid_argument(
+            "插件只能移除由自己创建的托管订阅",
+        ))
+    }
 }
 
 fn shared_target_count(
@@ -333,6 +397,13 @@ async fn sync_by_id(
         update_sync_error(state, id, &error.message)?;
         return Err(error);
     }
+    if subscription.managed_source.is_some() {
+        let error = AppError::invalid_argument(
+            "managed subscription refresh is owned by its plugin source",
+        );
+        update_sync_error(state, id, &error.message)?;
+        return Err(error);
+    }
 
     let result = sync_subscription(app_handle, state, subscription).await;
     if let Err(error) = &result {
@@ -348,7 +419,7 @@ async fn sync_all_with_state(
 ) -> AppResult<SyncAllOutcome> {
     let ids: Vec<String> = lock(state.subscriptions(), "subscription")?
         .iter()
-        .filter(|profile| profile.enabled)
+        .filter(|profile| profile.enabled && profile.managed_source.is_none())
         .map(|profile| profile.id.clone())
         .collect();
 
@@ -381,7 +452,7 @@ async fn sync_subscription(
         user_agent.clone(),
     )
     .await?;
-    let mut parsed = parse_subscription_content(&response.content, &subscription.format)?;
+    let parsed = parse_subscription_content(&response.content, &subscription.format)?;
     let now = now_unix_ms();
     let target_proxy_config_id = subscription
         .target_proxy_config_id
@@ -396,6 +467,31 @@ async fn sync_subscription(
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
 
+    apply_parsed_subscription(
+        app_handle,
+        state,
+        subscription,
+        parsed,
+        user_agent,
+        metadata,
+        now,
+        target_proxy_config_id,
+        None,
+    )
+    .await
+}
+
+async fn apply_parsed_subscription(
+    app_handle: &AppHandle,
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    mut parsed: ParsedSubscriptionConfig,
+    user_agent: String,
+    metadata: SyncMetadata,
+    now: u64,
+    target_proxy_config_id: String,
+    commit_guard: Option<&(dyn Fn() -> AppResult<()> + Send + Sync)>,
+) -> AppResult<SubscriptionProfile> {
     let sources = if parsed.format.contains("clash") {
         std::mem::take(&mut parsed.rule_providers)
             .into_iter()
@@ -414,6 +510,9 @@ async fn sync_subscription(
         .iter()
         .map(|source| source.tag.clone())
         .collect::<std::collections::BTreeSet<_>>();
+    if let Some(guard) = commit_guard {
+        guard()?;
+    }
     let outcome = rule_set::sync_managed_subscription_sources(
         state,
         &subscription.id,
@@ -421,6 +520,9 @@ async fn sync_subscription(
         sources,
     )
     .await?;
+    if let Some(guard) = commit_guard {
+        guard()?;
+    }
     let injection = inject_synced_rule_sets(&mut parsed.content, &managed_tags, outcome.artifacts);
     for failure in outcome.failures {
         logs::znet_log_fields(
@@ -451,6 +553,9 @@ async fn sync_subscription(
 
     injection?;
     ensure_subscription_unchanged(state, &subscription)?;
+    if let Some(guard) = commit_guard {
+        guard()?;
+    }
 
     upsert_synced_proxy_config(
         app_handle,
@@ -460,12 +565,173 @@ async fn sync_subscription(
         parsed,
     )
     .await?;
+    if let Some(guard) = commit_guard {
+        guard()?;
+    }
     update_sync_success(
         state,
         &subscription.id,
         target_proxy_config_id,
         metadata,
         now,
+    )
+}
+
+pub async fn apply_managed(
+    app_handle: AppHandle,
+    input: ManagedSubscriptionApply,
+) -> AppResult<SubscriptionProfile> {
+    apply_managed_authorized(app_handle, input, || Ok(())).await
+}
+
+pub async fn apply_managed_authorized<F>(
+    app_handle: AppHandle,
+    input: ManagedSubscriptionApply,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    const MAX_MANAGED_CONTENT_BYTES: usize = 5 * 1024 * 1024;
+    let provider_id = normalize_required(input.provider_id, "provider_id")?;
+    validate_http_url(&provider_id)?;
+    let parsed_provider = reqwest::Url::parse(&provider_id)
+        .map_err(|_| AppError::invalid_argument("provider_id must be an exact HTTPS origin"))?;
+    if parsed_provider.scheme() != "https"
+        || parsed_provider.path() != "/"
+        || parsed_provider.query().is_some()
+        || parsed_provider.fragment().is_some()
+        || parsed_provider.origin().ascii_serialization() != provider_id
+    {
+        return Err(AppError::invalid_argument(
+            "provider_id must be an exact HTTPS origin",
+        ));
+    }
+    let plugin_id = normalize_required(input.plugin_id, "plugin_id")?;
+    let remote_subscription_id =
+        normalize_required(input.remote_subscription_id, "remote_subscription_id")?;
+    if remote_subscription_id.len() > 160
+        || !remote_subscription_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        return Err(AppError::invalid_argument(
+            "remote_subscription_id is invalid",
+        ));
+    }
+    let source_name = normalize_required(input.source_name, "source_name")?;
+    let subscription_name = normalize_required(input.subscription_name, "subscription_name")?;
+    if input.content.is_empty() || input.content.len() > MAX_MANAGED_CONTENT_BYTES {
+        return Err(AppError::invalid_argument(
+            "managed subscription content is empty or exceeds 5 MiB",
+        ));
+    }
+    let parsed = parse_subscription_content(&input.content, &input.format)?;
+    let (id, target_proxy_config_id) =
+        managed_subscription_ids(&plugin_id, &provider_id, &remote_subscription_id);
+    let managed_source = ManagedSubscriptionSource {
+        plugin_id: plugin_id.clone(),
+        provider_id: provider_id.clone(),
+        remote_subscription_id: remote_subscription_id.clone(),
+        revision: input.revision,
+    };
+    let state = app_handle.state::<AppState>();
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
+    let now = now_unix_ms();
+    authorize()?;
+    let profile = {
+        let mut subscriptions = lock(state.subscriptions(), "subscription")?;
+        let mut next = subscriptions.clone();
+        let profile = match next.iter_mut().find(|profile| profile.id == id) {
+            Some(existing) => {
+                if existing.managed_source.as_ref().is_some_and(|source| {
+                    source.plugin_id != plugin_id
+                        || source.provider_id != provider_id
+                        || source.remote_subscription_id != remote_subscription_id
+                }) || existing.managed_source.is_none()
+                {
+                    return Err(AppError::conflict(
+                        "subscription",
+                        id,
+                        "managed subscription namespace is already owned",
+                    ));
+                }
+                existing.name = format!("{source_name} / {subscription_name}");
+                existing.url = provider_id.clone();
+                existing.format = input.format.clone();
+                existing.managed_source = Some(managed_source.clone());
+                existing.enabled = true;
+                existing.updated_at_unix_ms = now;
+                existing.clone()
+            }
+            None => {
+                let profile = SubscriptionProfile {
+                    id: id.clone(),
+                    name: format!("{source_name} / {subscription_name}"),
+                    url: provider_id.clone(),
+                    enabled: true,
+                    kernel: "zero".into(),
+                    format: input.format.clone(),
+                    target_proxy_config_id: Some(target_proxy_config_id.clone()),
+                    managed_source: Some(managed_source),
+                    policy_selections: Default::default(),
+                    update_interval_secs: None,
+                    user_agent: None,
+                    node_count: None,
+                    upload_bytes: None,
+                    download_bytes: None,
+                    total_bytes: None,
+                    expire_at_unix_ms: None,
+                    updated_at_unix_ms: now,
+                    last_sync_at_unix_ms: None,
+                    last_error: None,
+                };
+                next.push(profile.clone());
+                profile
+            }
+        };
+        domain_store::save_subscriptions(&next)?;
+        *subscriptions = next;
+        profile
+    };
+    let metadata = SyncMetadata {
+        node_count: Some(count_proxy_nodes(&parsed.content)),
+        ..SyncMetadata::default()
+    };
+    let result = apply_parsed_subscription(
+        &app_handle,
+        state.inner(),
+        profile,
+        parsed,
+        DEFAULT_USER_AGENT.into(),
+        metadata,
+        now,
+        target_proxy_config_id,
+        Some(&authorize),
+    )
+    .await;
+    if let Err(error) = &result {
+        if authorize().is_ok() {
+            update_sync_error(state.inner(), &id, &error.message)?;
+        }
+    }
+    result
+}
+
+fn managed_subscription_ids(
+    plugin_id: &str,
+    provider_id: &str,
+    remote_subscription_id: &str,
+) -> (String, String) {
+    let digest =
+        Sha256::digest(format!("{plugin_id}\0{provider_id}\0{remote_subscription_id}").as_bytes());
+    let suffix = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    (
+        format!("managed-{suffix}"),
+        format!("managed-config-{suffix}"),
     )
 }
 
@@ -2010,6 +2276,7 @@ fn collect_due_subscription_attempts(
         subscriptions.iter().any(|profile| {
             profile.id == *id
                 && profile.enabled
+                && profile.managed_source.is_none()
                 && profile.update_interval_secs.is_some()
                 && profile.last_sync_at_unix_ms == retry.cycle_last_sync_at_unix_ms
         })
@@ -2019,7 +2286,7 @@ fn collect_due_subscription_attempts(
     let mut due = Vec::new();
 
     for profile in subscriptions.iter() {
-        if !profile.enabled {
+        if !profile.enabled || profile.managed_source.is_some() {
             continue;
         }
         if is_in_flight(state.subscription_syncs(), &profile.id)? {
@@ -2133,6 +2400,47 @@ fn record_auto_sync_failure(
 mod tests {
     use super::*;
 
+    #[test]
+    fn managed_subscription_identity_is_stable_and_provider_namespaced() {
+        let first = managed_subscription_ids(
+            "org.zerodenet.connect.znet-sink",
+            "https://panel.example.com",
+            "primary",
+        );
+        assert_eq!(
+            first,
+            managed_subscription_ids(
+                "org.zerodenet.connect.znet-sink",
+                "https://panel.example.com",
+                "primary",
+            )
+        );
+        assert_ne!(
+            first,
+            managed_subscription_ids(
+                "org.zerodenet.connect.znet-sink",
+                "https://other.example.com",
+                "primary",
+            )
+        );
+        assert!(first.0.starts_with("managed-"));
+        assert!(first.1.starts_with("managed-config-"));
+    }
+
+    #[test]
+    fn managed_subscription_removal_is_limited_to_the_owning_plugin() {
+        let mut profile = subscription_with_target("managed", None);
+        assert!(ensure_managed_subscription_owner(&profile, "org.example.plugin").is_err());
+        profile.managed_source = Some(ManagedSubscriptionSource {
+            plugin_id: "org.example.plugin".into(),
+            provider_id: "https://panel.example.com".into(),
+            remote_subscription_id: "primary".into(),
+            revision: None,
+        });
+        assert!(ensure_managed_subscription_owner(&profile, "org.example.plugin").is_ok());
+        assert!(ensure_managed_subscription_owner(&profile, "org.other.plugin").is_err());
+    }
+
     fn subscription_with_target(id: &str, target: Option<&str>) -> SubscriptionProfile {
         SubscriptionProfile {
             id: id.into(),
@@ -2142,6 +2450,7 @@ mod tests {
             kernel: "zero".into(),
             format: "zero".into(),
             target_proxy_config_id: target.map(str::to_string),
+            managed_source: None,
             policy_selections: Default::default(),
             update_interval_secs: None,
             user_agent: None,
@@ -2484,6 +2793,7 @@ rule-providers:
             kernel: "zero".to_string(),
             format: "clash-yaml".to_string(),
             target_proxy_config_id: None,
+            managed_source: None,
             policy_selections: Default::default(),
             update_interval_secs: None,
             user_agent: None,
@@ -2707,6 +3017,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                managed_source: None,
                 policy_selections: Default::default(),
                 update_interval_secs: interval,
                 user_agent: None,
@@ -2767,6 +3078,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                managed_source: None,
                 policy_selections: Default::default(),
                 update_interval_secs: Some(interval_secs),
                 user_agent: None,
@@ -2861,6 +3173,7 @@ proxy-groups:
                 kernel: "zero".to_string(),
                 format: "auto".to_string(),
                 target_proxy_config_id: None,
+                managed_source: None,
                 policy_selections: Default::default(),
                 update_interval_secs: Some(60),
                 user_agent: None,

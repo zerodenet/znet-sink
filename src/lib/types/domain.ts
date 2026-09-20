@@ -50,6 +50,12 @@ export interface SubscriptionProfile {
   kernel: string;
   format: string;
   targetProxyConfigId?: string;
+  managedSource?: {
+    pluginId: string;
+    providerId: string;
+    remoteSubscriptionId: string;
+    revision?: string;
+  };
   /** Persisted selector choices keyed by policy-group tag. */
   policySelections: Record<string, string>;
   /** Auto-sync interval in seconds. When set and enabled, the

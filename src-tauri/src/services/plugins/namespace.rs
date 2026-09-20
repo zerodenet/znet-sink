@@ -98,7 +98,7 @@ fn reject_symlink(path: &Path) -> AppResult<()> {
     }
 }
 
-fn directory(root: &Path, publisher: &str, plugin_id: &str) -> AppResult<PathBuf> {
+pub(super) fn directory(root: &Path, publisher: &str, plugin_id: &str) -> AppResult<PathBuf> {
     if !safe_identity(publisher) || !safe_identity(plugin_id) {
         return Err(AppError::invalid_argument("插件命名空间身份无效"));
     }
@@ -379,7 +379,7 @@ pub(super) fn remove_plugin(root: &Path, publisher: &str, plugin_id: &str) -> Ap
 }
 
 impl Host {
-    fn namespace_publisher(&self, plugin_id: &str) -> AppResult<String> {
+    pub(super) fn namespace_publisher(&self, plugin_id: &str) -> AppResult<String> {
         self.state
             .lock()
             .unwrap()

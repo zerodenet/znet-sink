@@ -24,6 +24,14 @@ fn scopes_and_budgets_fail_closed() {
         ..valid.clone()
     }
     .validate());
+    assert!(Request {
+        capability: Capability::NetworkConfiguredRequest,
+        scope: "provider_origin".into(),
+    }
+    .capability
+    .accepts_scope("provider_origin"));
+    assert!(!Capability::NetworkConfiguredRequest.accepts_scope("https://example.com"));
+    assert!(Capability::SubscriptionsManage.accepts_scope("self"));
     assert!(!Call {
         budget: Budget {
             timeout_ms: 0,

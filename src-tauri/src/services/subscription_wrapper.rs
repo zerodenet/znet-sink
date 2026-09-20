@@ -9,7 +9,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::subscription::{
-    SubscriptionProfile, SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionUpsert,
+    ManagedSubscriptionApply, SubscriptionProfile, SubscriptionRemovalOutcome,
+    SubscriptionRemovalPreview, SubscriptionUpsert,
 };
 use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
@@ -193,6 +194,30 @@ pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     original::sync_all(app_handle).await
 }
 
+pub async fn apply_managed(
+    app_handle: AppHandle,
+    mut input: ManagedSubscriptionApply,
+) -> AppResult<SubscriptionProfile> {
+    input.format = storage_format(Some(&input.format));
+    original::apply_managed(app_handle, input)
+        .await
+        .map(present_profile)
+}
+
+pub async fn apply_managed_authorized<F>(
+    app_handle: AppHandle,
+    mut input: ManagedSubscriptionApply,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    input.format = storage_format(Some(&input.format));
+    original::apply_managed_authorized(app_handle, input, authorize)
+        .await
+        .map(present_profile)
+}
+
 pub fn removal_preview(
     state: State<'_, AppState>,
     id: String,
@@ -206,6 +231,26 @@ pub async fn remove(
     remove_associated_config: bool,
 ) -> AppResult<SubscriptionRemovalOutcome> {
     original::remove(app_handle, id, remove_associated_config).await
+}
+
+pub async fn remove_managed_authorized<F>(
+    app_handle: AppHandle,
+    id: String,
+    remove_associated_config: bool,
+    plugin_id: String,
+    authorize: F,
+) -> AppResult<SubscriptionRemovalOutcome>
+where
+    F: Fn() -> AppResult<()> + Send + Sync,
+{
+    original::remove_managed_authorized(
+        app_handle,
+        id,
+        remove_associated_config,
+        plugin_id,
+        authorize,
+    )
+    .await
 }
 
 pub fn spawn_auto_sync_scheduler(app: AppHandle) {

@@ -39,6 +39,12 @@
     store.isInitialized = true;
     store.activeTab = 'logs';
   }
+
+  function runAction(toast: { id: number; action?: { run: () => void } }) {
+    if (!toast.action) return openLogs(toast.id);
+    dismissToast(toast.id);
+    toast.action.run();
+  }
 </script>
 
 {#if visibleToasts.length > 0}
@@ -87,8 +93,8 @@
           <span class="toast-msg">{toast.message}</span>
         </div>
 
-        <Button variant="outline" size="sm"  type="button" onclick={() => openLogs(toast.id)}>
-          查看日志
+        <Button variant="outline" size="sm" type="button" onclick={() => runAction(toast)}>
+          {toast.action?.label ?? '查看日志'}
         </Button>
         <Button variant="ghost" size="icon-sm"
           onclick={() => dismissToast(toast.id)}

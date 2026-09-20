@@ -3,13 +3,15 @@ export const SDK_VERSION = 1 as const;
 
 export type Capability =
   | 'plugin.self.read' | 'records.summary.read'
-  | 'network.get' | 'network.request'
+  | 'network.get' | 'network.request' | 'network.configured.request'
   | 'plugin.storage.read' | 'plugin.storage.write'
   | 'notifications.post' | 'tasks.schedule'
   | 'browser.open' | 'browser.callback'
   | 'files.selection.read' | 'files.selection.write'
   | 'materials.submit' | 'secrets.session.receive'
-  | 'crypto.session.use' | 'runtime.protected.load';
+  | 'crypto.session.use' | 'crypto.device.use'
+  | 'secrets.persistent.read' | 'secrets.persistent.write'
+  | 'subscriptions.manage' | 'runtime.protected.load';
 
 export interface Permission { capability: Capability; scope: string }
 export type Method =
@@ -17,7 +19,10 @@ export type Method =
   | 'notification_post' | 'schedule_put' | 'schedule_list' | 'schedule_delete'
   | 'browser_open' | 'callback_create' | 'callback_poll' | 'callback_cancel'
   | 'file_read' | 'file_write' | 'material_submit' | 'material_drop'
-  | 'secret_receive' | 'crypto_use' | 'protected_load';
+  | 'secret_receive' | 'configured_request' | 'crypto_use'
+  | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
+  | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest' | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
+  | 'subscription_apply' | 'subscription_remove' | 'protected_load';
 
 export interface Call {
   version: typeof SDK_VERSION;
@@ -58,7 +63,11 @@ export function createSdk(transport: Transport) {
       migrate: (area: 'state' | 'cache', from: number, to: number, values: Record<string, string>) => call<boolean>({ capability: 'plugin.storage.write', scope: 'self' }, 'storage_migrate', { area, from, to, values }),
     }),
     notifications: Object.freeze({
-      post: (message: string, options: { kind?: 'info' | 'success' | 'warning' | 'error'; duration_ms?: number } = {}) =>
+      post: (message: string, options: {
+        kind?: 'info' | 'success' | 'warning' | 'error';
+        duration_ms?: number;
+        action?: { pageId: string; route: string; reference?: string };
+      } = {}) =>
         call({ capability: 'notifications.post', scope: 'self' }, 'notification_post', { message, ...options }),
     }),
     tasks: Object.freeze({

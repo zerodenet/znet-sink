@@ -18,6 +18,7 @@
   import { pluginApi, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot } from '$lib/services/plugins';
   import { canApprove, selectedGrants, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
   import * as toast from '$lib/services/toast.svelte';
+  import { pluginNavigation, type PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
 
   type InstalledPlugin = {
     id: string;
@@ -40,6 +41,7 @@
   let installedQuery = $state('');
   let installedViewMode = $state<ViewMode>('list');
   let selectedPluginId = $state<string | null>(null);
+  let initialRoute = $state<PluginNavigationRequest | null>(null);
   let detailSection = $state<'manage' | 'permissions' | 'about'>('manage');
   let supported = $state<boolean | null>(null);
   let snapshot = $state<PluginSnapshot>({ checked: false, components: [], notices: [] });
@@ -177,9 +179,10 @@
   function componentKey(component: PluginComponent) {
     return component.review?.key ?? `${component.plugin_id}/${component.component_id}`;
   }
-  function openDetails(plugin: InstalledPlugin, tab: typeof detailSection = 'manage') {
+  function openDetails(plugin: InstalledPlugin, tab: typeof detailSection = 'manage', route: PluginNavigationRequest | null = null) {
     reloadGeneration++;
     selectedPluginId = plugin.id;
+    initialRoute = route;
     detailSection = tab;
     permissionSelections = Object.fromEntries(plugin.components.map(component => [componentKey(component), component.permissions.filter(permission => permission.supported && permission.granted).map(permission => permissionKey(permission.request))]));
     configurationDrafts = Object.fromEntries(plugin.components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
@@ -188,9 +191,19 @@
   }
   function closeDetails() {
     selectedPluginId = null;
+    initialRoute = null;
     message = ''; error = ''; clearResult();
     void reload().catch(() => {});
   }
+
+  $effect(() => {
+    const request = pluginNavigation.pending;
+    if (!request || !snapshot.checked) return;
+    const plugin = allPlugins.find(value => value.id === request.pluginId);
+    if (!plugin || !plugin.pages.some(page => page.id === request.pageId)) return;
+    openDetails(plugin, 'manage', request);
+    pluginNavigation.clear(request.token);
+  });
   function pluginEnabled(plugin: InstalledPlugin) {
     return plugin.components.some(component => component.enabled || component.running || runningKey === component.review?.key);
   }
@@ -278,6 +291,18 @@
           return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash;
         } catch { return false; }
       }
+      if (field.kind === 'https_origin_list' && value) {
+        try {
+          const origins = JSON.parse(value);
+          return Array.isArray(origins) && origins.length <= 16
+            && new Set(origins).size === origins.length
+            && origins.every(origin => {
+              if (typeof origin !== 'string') return false;
+              const url = new URL(origin);
+              return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash;
+            });
+        } catch { return false; }
+      }
       return value.length <= 2048;
     });
   }
@@ -325,7 +350,7 @@
       {#if detailSection === 'manage'}
         {#if selectedManagementPage}
           <div class="plugin-management-surface">
-            <PluginPageFrame pluginId={selectedPlugin.id} pageId={selectedManagementPage.id} title={selectedManagementPage.title} components={selectedPlugin.components} onSnapshot={(value) => { snapshot = value; }} />
+            <PluginPageFrame pluginId={selectedPlugin.id} pageId={selectedManagementPage.id} title={selectedManagementPage.title} components={selectedPlugin.components} {initialRoute} onSnapshot={(value) => { snapshot = value; }} />
           </div>
         {:else}
           <section class="plugin-detail-section"><div class="plugin-section-heading"><div><h3>基础配置与诊断</h3><p>此版本没有提供独立管理页面。这里仅保留宿主声明式配置和开发诊断。</p></div></div></section>
@@ -342,7 +367,7 @@
                       {#if field.kind === 'select'}
                         <FieldSelect aria-label={field.label} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} onValueChange={(value) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: value } }; }} options={field.options} />
                       {:else}
-                        <Input aria-label={field.label} type={field.kind === 'https_origin' ? 'url' : 'text'} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} oninput={(event) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: event.currentTarget.value } }; }} placeholder={field.kind === 'https_origin' ? 'https://panel.example.com' : ''} />
+                        <Input aria-label={field.label} type={field.kind === 'https_origin' ? 'url' : 'text'} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} oninput={(event) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: event.currentTarget.value } }; }} placeholder={field.kind === 'https_origin' ? 'https://panel.example.com' : field.kind === 'https_origin_list' ? '["https://panel.example.com"]' : ''} />
                       {/if}
                       {#if field.description}<small>{field.description}</small>{/if}
                     </label>

@@ -116,7 +116,9 @@ impl Bridge {
                         serde_json::to_string(summary)
                             .map_err(|_| capability::Error::InvalidRequest)?
                     }
-                    Capability::NetworkGet | Capability::NetworkRequest => {
+                    Capability::NetworkGet
+                    | Capability::NetworkRequest
+                    | Capability::NetworkConfiguredRequest => {
                         return Err(capability::Error::PermissionDenied)
                     }
                     Capability::StorageRead
@@ -130,6 +132,10 @@ impl Bridge {
                     | Capability::MaterialsSubmit
                     | Capability::SecretsSessionReceive
                     | Capability::CryptoSessionUse
+                    | Capability::PersistentSecretsRead
+                    | Capability::PersistentSecretsWrite
+                    | Capability::CryptoDeviceUse
+                    | Capability::SubscriptionsManage
                     | Capability::RuntimeProtectedLoad => {
                         return Err(capability::Error::PermissionDenied)
                     }

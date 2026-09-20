@@ -10,6 +10,7 @@ mod operations;
 mod scheduler;
 mod sdk;
 mod sensitive;
+mod vault;
 use crate::errors::{AppError, AppResult};
 use base64::{engine::general_purpose::STANDARD, Engine};
 pub use model::{

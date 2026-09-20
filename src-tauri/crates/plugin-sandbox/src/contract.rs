@@ -181,6 +181,7 @@ impl Limits {
 pub enum ConfigurationFieldKind {
     Text,
     HttpsOrigin,
+    HttpsOriginList,
     Select,
 }
 
@@ -239,10 +240,14 @@ impl ConfigurationSchema {
                     .description
                     .as_ref()
                     .is_some_and(|value| value.len() > 400)
-                || field
-                    .default
-                    .as_ref()
-                    .is_some_and(|value| value.len() > 2048)
+                || field.default.as_ref().is_some_and(|value| {
+                    value.len()
+                        > if matches!(field.kind, ConfigurationFieldKind::HttpsOriginList) {
+                            16 * 1024
+                        } else {
+                            2048
+                        }
+                })
             {
                 return false;
             }
@@ -314,26 +319,55 @@ impl ConfigurationSchema {
 }
 
 impl ConfigurationField {
+    pub fn https_origins(&self, value: &str) -> Option<Vec<String>> {
+        match self.kind {
+            ConfigurationFieldKind::HttpsOrigin => {
+                exact_https_origin(value).then(|| vec![value.to_owned()])
+            }
+            ConfigurationFieldKind::HttpsOriginList => {
+                let values: Vec<String> = serde_json::from_str(value).ok()?;
+                let mut unique = BTreeSet::new();
+                (values.len() <= 16
+                    && values
+                        .iter()
+                        .all(|value| exact_https_origin(value) && unique.insert(value.as_str())))
+                .then_some(values)
+            }
+            _ => None,
+        }
+    }
+
     fn accepts(&self, value: &str) -> bool {
-        if value.len() > 2048 {
+        let max_bytes = if matches!(self.kind, ConfigurationFieldKind::HttpsOriginList) {
+            16 * 1024
+        } else {
+            2048
+        };
+        if value.len() > max_bytes {
             return false;
         }
         match self.kind {
             ConfigurationFieldKind::Text => true,
-            ConfigurationFieldKind::HttpsOrigin => reqwest::Url::parse(value).is_ok_and(|url| {
-                url.scheme() == "https"
-                    && url.host_str().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.path() == "/"
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-            }),
+            ConfigurationFieldKind::HttpsOrigin | ConfigurationFieldKind::HttpsOriginList => {
+                self.https_origins(value).is_some()
+            }
             ConfigurationFieldKind::Select => {
                 self.options.iter().any(|option| option.value == value)
             }
         }
     }
+}
+
+fn exact_https_origin(value: &str) -> bool {
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

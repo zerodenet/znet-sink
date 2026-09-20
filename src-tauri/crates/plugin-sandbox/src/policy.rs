@@ -59,6 +59,64 @@ impl Authority {
     pub fn begin(&self, component: &Component) -> Result<Lease, Error> {
         self.begin_cancelled(component, Arc::new(AtomicBool::new(false)))
     }
+
+    /// Begin one native host SDK operation with the budget already validated
+    /// by the typed SDK contract. This is deliberately separate from the
+    /// QuickJS execution limits stored in the component manifest: a signed
+    /// management page may transfer a bounded multi-megabyte resource without
+    /// granting the guest VM a larger CPU, memory, or output envelope.
+    pub fn begin_host_call(
+        &self,
+        component: &Component,
+        timeout: Duration,
+        resource_bytes: usize,
+    ) -> Result<Lease, Error> {
+        if component.digest != self.digest
+            || timeout.is_zero()
+            || timeout > Duration::from_secs(120)
+            || resource_bytes == 0
+            || resource_bytes > 8 * 1024 * 1024
+        {
+            return Err(Error::BudgetExceeded);
+        }
+        let inner = self
+            .policy
+            .begin(
+                Budget {
+                    calls: 1,
+                    resource_bytes,
+                    timeout,
+                },
+                Arc::new(AtomicBool::new(false)),
+            )
+            .map_err(map_error)?;
+        Ok(Lease { inner })
+    }
+
+    /// Begin a bounded scheduled invocation. Guest CPU/output limits remain
+    /// those declared by the component; the longer wall clock only allows
+    /// governed host SDK calls (for example network IO) to complete.
+    pub fn begin_scheduled(
+        &self,
+        component: &Component,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Lease, Error> {
+        if component.digest != self.digest {
+            return Err(Error::DigestMismatch);
+        }
+        let inner = self
+            .policy
+            .begin(
+                Budget {
+                    calls: component.manifest.limits.max_calls,
+                    resource_bytes: 8 * 1024 * 1024,
+                    timeout: Duration::from_secs(120),
+                },
+                cancelled,
+            )
+            .map_err(map_error)?;
+        Ok(Lease { inner })
+    }
     pub(crate) fn begin_cancelled(
         &self,
         component: &Component,

@@ -13,7 +13,9 @@ mod desktop {
     use std::collections::BTreeMap;
     use tauri::{AppHandle, Emitter, Manager, State};
     use znet_plugin_sandbox::contract::Request;
-    use znet_plugin_sandbox::sdk::{Call as SdkCall, ErrorCode, Failure, Reply, SDK_VERSION};
+    use znet_plugin_sandbox::sdk::{
+        Call as SdkCall, ErrorCode, Failure, Method, Reply, SDK_VERSION,
+    };
 
     fn sdk_reply(result: AppResult<serde_json::Value>) -> Reply {
         match result {
@@ -179,11 +181,110 @@ mod desktop {
         component_id: String,
         call: SdkCall,
     ) -> Reply {
+        if call.method == Method::SubscriptionApply {
+            let timeout_ms = call.budget.timeout_ms;
+            let managed_call = call.clone();
+            let prepared = blocking(app.clone(), {
+                let plugin_id = plugin_id.clone();
+                let component_id = component_id.clone();
+                move |state| {
+                    state.plugins().prepare_managed_subscription(
+                        state.capabilities(),
+                        &plugin_id,
+                        &component_id,
+                        managed_call,
+                    )
+                }
+            })
+            .await;
+            return match prepared {
+                Ok(prepared) => sdk_reply(
+                    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), {
+                        let (input, authorization) = prepared.into_parts();
+                        crate::services::subscription::apply_managed_authorized(
+                            app,
+                            input,
+                            move || authorization.check(),
+                        )
+                    })
+                    .await
+                    {
+                        Ok(result) => result.and_then(|profile| {
+                            serde_json::to_value(profile).map_err(|error| {
+                                crate::errors::AppError::internal(format!(
+                                    "无法序列化托管订阅结果：{error}"
+                                ))
+                            })
+                        }),
+                        Err(_) => Err(crate::errors::AppError {
+                            code: "plugin_sdk_deadline",
+                            message: "插件托管订阅操作超时".into(),
+                            details: None,
+                        }),
+                    },
+                ),
+                Err(error) => sdk_reply(Err(error)),
+            };
+        }
+        if call.method == Method::SubscriptionRemove {
+            let timeout_ms = call.budget.timeout_ms;
+            let removal_call = call.clone();
+            let prepared = blocking(app.clone(), {
+                let plugin_id = plugin_id.clone();
+                let component_id = component_id.clone();
+                move |state| {
+                    state.plugins().prepare_managed_subscription_removal(
+                        state.capabilities(),
+                        &plugin_id,
+                        &component_id,
+                        removal_call,
+                    )
+                }
+            })
+            .await;
+            return match prepared {
+                Ok(prepared) => sdk_reply(
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(timeout_ms),
+                        crate::services::subscription::remove_managed_authorized(
+                            app,
+                            prepared.subscription_id,
+                            prepared.remove_associated_config,
+                            plugin_id,
+                            move || prepared.authorization.check(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result.and_then(|outcome| {
+                            serde_json::to_value(outcome).map_err(|error| {
+                                crate::errors::AppError::internal(format!(
+                                    "无法序列化托管订阅移除结果：{error}"
+                                ))
+                            })
+                        }),
+                        Err(_) => Err(crate::errors::AppError {
+                            code: "plugin_sdk_deadline",
+                            message: "插件托管订阅移除操作超时".into(),
+                            details: None,
+                        }),
+                    },
+                ),
+                Err(error) => sdk_reply(Err(error)),
+            };
+        }
         sdk_reply(
             blocking(app, move |state| {
-                state
-                    .plugins()
-                    .sdk_call(state.capabilities(), &plugin_id, &component_id, call)
+                let network_proxy = crate::configuration::preferences::endpoint(state)
+                    .ok()
+                    .map(|(host, port)| format!("http://{host}:{port}"));
+                state.plugins().sdk_call_with_network_proxy(
+                    state.capabilities(),
+                    &plugin_id,
+                    &component_id,
+                    call,
+                    network_proxy,
+                )
             })
             .await,
         )

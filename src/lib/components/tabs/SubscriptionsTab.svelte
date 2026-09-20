@@ -165,7 +165,7 @@
   async function handleSyncAll() {
     const list = subscriptions;
     if (list.length === 0 || busy) return;
-    const eligible = list.filter(s => s.enabled);
+    const eligible = list.filter(s => s.enabled && !s.managedSource);
     if (eligible.length === 0) {
       toast.warning('没有已启用的订阅可同步');
       return;
@@ -188,7 +188,7 @@
   }
 
   async function handleToggleEnabled(sub: SubscriptionProfile) {
-    if (busy) return;
+    if (busy || sub.managedSource) return;
     togglingId = sub.id;
     try {
       await upsertSubscription({
@@ -467,12 +467,16 @@
                 size="sm"
                 checked={sub.enabled}
                 onCheckedChange={() => handleToggleEnabled(sub)}
-                title={sub.enabled ? '已启用' : '已禁用'}
-                disabled={busy}
-                aria-label={sub.enabled ? '禁用订阅' : '启用订阅'}
+                title={sub.managedSource ? '启用状态由来源插件管理' : sub.enabled ? '已启用' : '已禁用'}
+                disabled={busy || Boolean(sub.managedSource)}
+                aria-label={sub.managedSource ? '插件托管订阅' : sub.enabled ? '禁用订阅' : '启用订阅'}
               />
 
               <span class="row-name">{sub.name}</span>
+
+              {#if sub.managedSource}
+                <span class="row-tag info-tag">插件托管</span>
+              {/if}
 
               {#if sub.lastError}
                 <span class="row-tag error-tag">同步失败</span>
@@ -537,9 +541,9 @@
             <Button variant="ghost" size="icon-sm"
 
               onclick={(e: MouseEvent) => { e.stopPropagation(); handleSync(sub.id); }}
-              disabled={busy || !sub.enabled}
-              title="同步订阅"
-              aria-label="同步订阅"
+              disabled={busy || !sub.enabled || Boolean(sub.managedSource)}
+              title={sub.managedSource ? '由来源插件刷新' : '同步订阅'}
+              aria-label={sub.managedSource ? '由来源插件刷新' : '同步订阅'}
             >
               <svg
                 width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor"
@@ -549,17 +553,18 @@
                 <path d="M10 6A4 4 0 1 1 6 2M6 2L9 2L9 5"/>
               </svg>
             </Button>
-            <Button variant="ghost" size="icon-sm"
-
-              onclick={(e: MouseEvent) => { e.stopPropagation(); openEdit(sub); }}
-              disabled={busy}
-              title="编辑订阅"
-              aria-label="编辑订阅"
-            >
-              <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M8.5 1.5l2 2L4 10H2V8z"/>
-              </svg>
-            </Button>
+            {#if !sub.managedSource}
+              <Button variant="ghost" size="icon-sm"
+                onclick={(e: MouseEvent) => { e.stopPropagation(); openEdit(sub); }}
+                disabled={busy}
+                title="编辑订阅"
+                aria-label="编辑订阅"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8.5 1.5l2 2L4 10H2V8z"/>
+                </svg>
+              </Button>
+            {/if}
             <Button variant="destructive" size="icon-sm"
 
               onclick={(e: MouseEvent) => { e.stopPropagation(); requestRemove(sub); }}

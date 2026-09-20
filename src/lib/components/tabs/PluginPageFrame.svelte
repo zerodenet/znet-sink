@@ -6,18 +6,21 @@
   import { pluginApi, type PluginComponent, type PluginSnapshot } from '$lib/services/plugins';
   import { openExternalUrl } from '$lib/services/platform';
   import * as toast from '$lib/services/toast.svelte';
+  import type { PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
 
   let {
     pluginId,
     pageId,
     title,
     components,
+    initialRoute,
     onSnapshot,
   }: {
     pluginId: string;
     pageId: string;
     title: string;
     components: PluginComponent[];
+    initialRoute: PluginNavigationRequest | null;
     onSnapshot: (snapshot: PluginSnapshot) => void;
   } = $props();
 
@@ -59,10 +62,15 @@
   function sdk(channelId: string) {
     const plugin = JSON.stringify(pluginId);
     const channelValue = JSON.stringify(channelId);
+    const navigationValue = JSON.stringify(initialRoute ? {
+      route: initialRoute.route,
+      ...(initialRoute.reference ? { reference: initialRoute.reference } : {}),
+    } : null);
     return `<script>
 (() => {
   const channel = ${channelValue};
   const pluginId = ${plugin};
+  const initialNavigation = ${navigationValue};
   let nextId = 1;
   const pending = new Map();
   function request(method, args = {}) {
@@ -103,6 +111,7 @@
       get: componentId => request('configuration.get', { componentId }),
       save: (componentId, values) => request('configuration.save', { componentId, values })
     }),
+    navigation: Object.freeze({ initial: () => initialNavigation }),
     storage: Object.freeze({
       get: (componentId, area, key) => sdkCall(componentId, 'plugin.storage.read', 'self', 'storage_get', { area, key }),
       put: (componentId, area, key, value) => sdkCall(componentId, 'plugin.storage.write', 'self', 'storage_put', { area, key, value }),
@@ -285,6 +294,7 @@
   $effect(() => {
     pluginId;
     pageId;
+    initialRoute?.token;
     if (typeof window !== 'undefined') void load();
   });
 </script>

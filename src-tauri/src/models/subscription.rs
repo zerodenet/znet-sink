@@ -11,6 +11,10 @@ pub struct SubscriptionProfile {
     pub kernel: String,
     pub format: String,
     pub target_proxy_config_id: Option<String>,
+    /// Stable ownership tuple for content projected by a signed plugin. This
+    /// namespace is disjoint from manually-created URL subscriptions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_source: Option<ManagedSubscriptionSource>,
     /// User-selected targets for selector policy groups. This runtime
     /// preference belongs to the subscription and survives kernel restarts.
     #[serde(default)]
@@ -42,6 +46,28 @@ pub struct SubscriptionProfile {
     pub updated_at_unix_ms: u64,
     pub last_sync_at_unix_ms: Option<u64>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedSubscriptionSource {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub remote_subscription_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManagedSubscriptionApply {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub remote_subscription_id: String,
+    pub source_name: String,
+    pub subscription_name: String,
+    pub content: String,
+    pub format: String,
+    pub revision: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

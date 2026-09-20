@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const SDK_VERSION: u32 = 1;
-pub const MAX_ARGUMENT_BYTES: usize = 256 * 1024;
-pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
+pub const MAX_ARGUMENT_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_RESULT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TIMEOUT_MS: u64 = 120_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -22,6 +22,8 @@ pub enum Capability {
     NetworkGet,
     #[serde(rename = "network.request")]
     NetworkRequest,
+    #[serde(rename = "network.configured.request")]
+    NetworkConfiguredRequest,
     #[serde(rename = "plugin.storage.read")]
     StorageRead,
     #[serde(rename = "plugin.storage.write")]
@@ -44,6 +46,14 @@ pub enum Capability {
     SecretsSessionReceive,
     #[serde(rename = "crypto.session.use")]
     CryptoSessionUse,
+    #[serde(rename = "secrets.persistent.read")]
+    PersistentSecretsRead,
+    #[serde(rename = "secrets.persistent.write")]
+    PersistentSecretsWrite,
+    #[serde(rename = "crypto.device.use")]
+    CryptoDeviceUse,
+    #[serde(rename = "subscriptions.manage")]
+    SubscriptionsManage,
     #[serde(rename = "runtime.protected.load")]
     RuntimeProtectedLoad,
 }
@@ -55,6 +65,7 @@ impl Capability {
             Self::RecordsSummaryRead => "records.summary.read",
             Self::NetworkGet => "network.get",
             Self::NetworkRequest => "network.request",
+            Self::NetworkConfiguredRequest => "network.configured.request",
             Self::StorageRead => "plugin.storage.read",
             Self::StorageWrite => "plugin.storage.write",
             Self::NotificationsPost => "notifications.post",
@@ -66,6 +77,10 @@ impl Capability {
             Self::MaterialsSubmit => "materials.submit",
             Self::SecretsSessionReceive => "secrets.session.receive",
             Self::CryptoSessionUse => "crypto.session.use",
+            Self::PersistentSecretsRead => "secrets.persistent.read",
+            Self::PersistentSecretsWrite => "secrets.persistent.write",
+            Self::CryptoDeviceUse => "crypto.device.use",
+            Self::SubscriptionsManage => "subscriptions.manage",
             Self::RuntimeProtectedLoad => "runtime.protected.load",
         }
     }
@@ -78,7 +93,11 @@ impl Capability {
             | Self::NotificationsPost
             | Self::TasksSchedule
             | Self::BrowserCallback
-            | Self::CryptoSessionUse => scope == "self",
+            | Self::CryptoSessionUse
+            | Self::PersistentSecretsRead
+            | Self::PersistentSecretsWrite
+            | Self::CryptoDeviceUse
+            | Self::SubscriptionsManage => scope == "self",
             Self::FilesSelectionRead | Self::FilesSelectionWrite => scope == "user",
             Self::MaterialsSubmit => scope == "configuration",
             Self::RuntimeProtectedLoad => scope == "active-runtime",
@@ -86,6 +105,7 @@ impl Capability {
             | Self::NetworkRequest
             | Self::BrowserOpen
             | Self::SecretsSessionReceive => exact_http_origin(scope),
+            Self::NetworkConfiguredRequest => identifier(scope),
             Self::RecordsSummaryRead => scope.strip_prefix("selection:").is_some_and(identifier),
         }
     }
@@ -173,7 +193,20 @@ pub enum Method {
     MaterialSubmit,
     MaterialDrop,
     SecretReceive,
+    ConfiguredRequest,
     CryptoUse,
+    PersistentSecretGet,
+    PersistentSecretPut,
+    PersistentSecretDelete,
+    CryptoKeyGenerate,
+    CryptoSign,
+    CryptoVerify,
+    CryptoDigest,
+    CryptoHpkeKeyGenerate,
+    CryptoHpkeSeal,
+    CryptoHpkeOpen,
+    SubscriptionApply,
+    SubscriptionRemove,
     ProtectedLoad,
 }
 

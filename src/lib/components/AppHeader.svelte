@@ -1,8 +1,53 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { store } from '$lib/services/store.svelte';
+  import { pluginNavigation } from '$lib/services/plugin-navigation.svelte';
+  import * as toast from '$lib/services/toast.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
   import Toast from '$lib/components/Toast.svelte';
   import * as Tabs from '$lib/components/AppTabs';
+
+  type PluginNotification = {
+    kind?: 'info' | 'success' | 'warning' | 'error';
+    message?: string;
+    durationMs?: number;
+    source?: string;
+    pluginId?: string;
+    action?: { pageId?: string; route?: string; reference?: string | null } | null;
+  };
+
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<PluginNotification>('plugin:notification', event => {
+      const value = event.payload;
+      const message = String(value.message ?? '').trim();
+      if (!message) return;
+      const action = value.action && value.pluginId && value.action.pageId && value.action.route
+        ? {
+            label: '查看',
+            run: () => {
+              pluginNavigation.request({
+                pluginId: value.pluginId!,
+                pageId: value.action!.pageId!,
+                route: value.action!.route!,
+                ...(value.action!.reference ? { reference: value.action!.reference } : {}),
+              });
+              store.isInitialized = true;
+              store.activeTab = 'plugins';
+            },
+          }
+        : undefined;
+      toast.showToast(
+        value.kind ?? 'info',
+        `${value.source ?? '插件'}：${message}`,
+        Number(value.durationMs ?? 5000),
+        action,
+      );
+    }).then(value => { if (disposed) value(); else unlisten = value; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
 </script>
 
 <!--

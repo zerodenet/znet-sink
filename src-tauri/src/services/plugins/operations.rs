@@ -1,10 +1,14 @@
 use super::*;
+use crate::services::common::now_unix_ms;
 use serde::Deserialize;
 use std::sync::atomic::AtomicBool;
+use tauri::{Emitter as _, Manager as _};
+use tauri_plugin_notification::NotificationExt as _;
 use znet_plugin_sandbox::{
     contract::{Capability, LifecycleEvent},
     distribution::{package, MAX_PACKAGE_BYTES},
     runtime,
+    sdk::{Call, Method},
 };
 
 #[derive(Deserialize)]
@@ -15,6 +19,32 @@ struct InvocationEnvelope {
     state_updates: BTreeMap<String, Option<String>>,
     value: serde_json::Value,
 }
+
+fn deliver_system_plugin_notification(app: &tauri::AppHandle, value: &serde_json::Value) {
+    use tauri::plugin::PermissionState;
+
+    let notification = app.notification();
+    let permission = match notification.permission_state() {
+        Ok(PermissionState::Prompt | PermissionState::PromptWithRationale) => {
+            notification.request_permission().ok()
+        }
+        Ok(state) => Some(state),
+        Err(_) => None,
+    };
+    if permission != Some(PermissionState::Granted) {
+        return;
+    }
+    let title = value
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("ZNet Sink");
+    let body = value
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("插件有一条新通知");
+    let _ = notification.builder().title(title).body(body).show();
+}
+
 impl Host {
     pub fn refresh(&self, manager: &Manager) -> AppResult<Snapshot> {
         let _operation = self.operation.lock().unwrap();
@@ -291,6 +321,147 @@ impl Host {
         if marker != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
+        let envelope: InvocationEnvelope = serde_json::from_value(output)
+            .map_err(|_| AppError::invalid_argument("插件返回的状态更新格式无效"))?;
+        if envelope.znet_plugin_result != 1 {
+            return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
+        }
+        let _operation = self.operation.lock().unwrap();
+        let key = format!("{plugin_id}/{component_id}");
+        let state = self.state.lock().unwrap();
+        let loaded = state.loaded.get(&key).ok_or_else(stale)?;
+        if loaded.component.digest() != digest || !loaded.consent.enabled {
+            return Err(stale());
+        }
+        drop(state);
+        namespace::apply_runtime_updates(
+            &self.root()?,
+            &publisher,
+            plugin_id,
+            envelope.state_updates,
+        )?;
+        Ok(envelope.value)
+    }
+
+    /// Execute a declared scheduled action with the same typed SDK surface as
+    /// signed management pages. The scheduler and host stay business-neutral;
+    /// the plugin owns the action and protocol.
+    pub fn invoke_scheduled(
+        &self,
+        app: tauri::AppHandle,
+        plugin_id: &str,
+        component_id: &str,
+        action: String,
+        payload: serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        if !action.starts_with("lifecycle.scheduled.") {
+            return Err(AppError::invalid_argument("插件后台动作无效"));
+        }
+        let (component, authority, configuration, publisher, plugin_state) = {
+            let _operation = self.operation.lock().unwrap();
+            let manager = app.state::<crate::state::app_state::AppState>();
+            self.checked_rescan(manager.capabilities())?;
+            let key = format!("{plugin_id}/{component_id}");
+            let state = self.state.lock().unwrap();
+            let loaded = state.loaded.get(&key).ok_or_else(stale)?;
+            let mut configuration = loaded
+                .component
+                .manifest()
+                .configuration
+                .as_ref()
+                .map_or_else(BTreeMap::new, |schema| schema.defaults());
+            configuration.extend(loaded.configuration.clone());
+            (
+                loaded.component.clone(),
+                loaded.authority.clone().ok_or_else(stale)?,
+                configuration,
+                loaded.publisher_fingerprint.clone(),
+                namespace::runtime_state(&self.root()?, &loaded.publisher_fingerprint, plugin_id)?,
+            )
+        };
+        let digest = component.digest().to_owned();
+        let dispatch_app = app.clone();
+        let dispatch_plugin = plugin_id.to_owned();
+        let dispatch_component = component_id.to_owned();
+        let dispatcher: runtime::HostSdkDispatcher = Arc::new(move |lease, input| {
+            let result = (|| -> AppResult<serde_json::Value> {
+                let call: Call = serde_json::from_str(input)
+                    .map_err(|_| AppError::invalid_argument("插件后台 SDK 请求格式无效"))?;
+                let notification = call.method == Method::NotificationPost;
+                let state = dispatch_app.state::<crate::state::app_state::AppState>();
+                if call.method == Method::SubscriptionApply {
+                    let (managed, request) = state
+                        .plugins()
+                        .managed_subscription_input_with_lease(&dispatch_plugin, lease, call)?;
+                    return tauri::async_runtime::block_on(
+                        crate::services::subscription::apply_managed_authorized(
+                            dispatch_app.clone(),
+                            managed,
+                            || lease.check(Some(&request)).map_err(io::failure),
+                        ),
+                    )
+                    .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
+                }
+                if call.method == Method::SubscriptionRemove {
+                    let (subscription_id, remove_associated_config, request) = state
+                        .plugins()
+                        .managed_subscription_removal_with_lease(lease, call)?;
+                    return tauri::async_runtime::block_on(
+                        crate::services::subscription::remove_managed_authorized(
+                            dispatch_app.clone(),
+                            subscription_id,
+                            remove_associated_config,
+                            dispatch_plugin.clone(),
+                            || lease.check(Some(&request)).map_err(io::failure),
+                        ),
+                    )
+                    .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
+                }
+                let network_proxy = crate::configuration::preferences::endpoint(state.inner())
+                    .ok()
+                    .map(|(host, port)| format!("http://{host}:{port}"));
+                let value = state.plugins().sdk_call_with_lease(
+                    state.capabilities(),
+                    &dispatch_plugin,
+                    &dispatch_component,
+                    lease,
+                    call,
+                    network_proxy,
+                )?;
+                if notification {
+                    let _ = dispatch_app.emit("plugin:notification", value.clone());
+                    deliver_system_plugin_notification(&dispatch_app, &value);
+                }
+                Ok(value)
+            })();
+            let reply = match result {
+                Ok(value) => serde_json::json!({"version":1,"ok":true,"value":value}),
+                Err(error) => serde_json::json!({
+                    "version":1,
+                    "ok":false,
+                    "error":{"code":error.code,"message":error.message}
+                }),
+            };
+            serde_json::to_string(&reply)
+                .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
+        });
+        let output = runtime::execute_scheduled_for_host_with_input(
+            &component,
+            &authority,
+            serde_json::json!({
+                "configuration": configuration,
+                "state": plugin_state,
+                "invocation": {
+                    "action": action,
+                    "payload": payload,
+                    "now_unix_ms": now_unix_ms()
+                }
+            }),
+            Arc::new(AtomicBool::new(false)),
+            env!("CARGO_PKG_VERSION"),
+            dispatcher,
+        )
+        .map_err(|error| AppError::invalid_argument(format!("插件后台操作失败：{error}")))?;
         let envelope: InvocationEnvelope = serde_json::from_value(output)
             .map_err(|_| AppError::invalid_argument("插件返回的状态更新格式无效"))?;
         if envelope.znet_plugin_result != 1 {

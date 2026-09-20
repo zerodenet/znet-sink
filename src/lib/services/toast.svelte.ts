@@ -13,12 +13,18 @@ export interface Toast {
   type: ToastType;
   message: string;
   duration: number;
+  action?: { label: string; run: () => void };
 }
 
 let nextId = 0;
 const toasts = new SvelteMap<number, Toast>();
 
-export function showToast(type: ToastType, message: string, duration: number = 4000): number {
+export function showToast(
+  type: ToastType,
+  message: string,
+  duration: number = 4000,
+  action?: Toast['action'],
+): number {
   const admission = planToastAdmission(toasts.values(), { type, message });
   if (admission.duplicateId !== undefined) {
     return admission.duplicateId;
@@ -28,7 +34,7 @@ export function showToast(type: ToastType, message: string, duration: number = 4
   }
 
   const id = ++nextId;
-  const toast = { id, type, message, duration };
+  const toast = { id, type, message, duration, action };
   toasts.set(id, toast);
 
   // Notifications are transient UI. Persist the complete text independently

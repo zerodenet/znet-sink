@@ -39,6 +39,8 @@ sha2 = "0.10"
 getrandom = "0.3"
 zeroize = "1"
 ring = "0.17"
+ed25519-dalek = "2"
+hpke = { version = "=0.14.1", default-features = false, features = ["alloc", "chacha", "getrandom", "hkdfsha2", "x25519"] }
 tempfile = "3"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
@@ -56,13 +58,13 @@ windows-sys = { version = "0.61", features = [
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
 dirs = "6.0.0"
 zero-rule = { git = "https://github.com/zerodenet/core.git", rev = "c69f417c5a835ab8193924279c5b562e6d244ab8" }
 tauri-plugin-clipboard-manager = { version = "2", default-features = false }
 libc = "0.2"
 
 [dev-dependencies]
-ed25519-dalek = "2"
 tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 
 [workspace]
@@ -75,6 +77,7 @@ default = ["tool-dns", "tool-route", "tool-node-probe"]
 tool-dns = []
 tool-route = []
 tool-node-probe = []
+acceptance-test-utils = ["znet-client-capabilities/acceptance-test-utils"]
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 znet-plugin-sandbox = { path = "crates/plugin-sandbox" }

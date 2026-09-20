@@ -3,6 +3,11 @@
 use super::*;
 use crate::services::common::now_unix_ms;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use hpke::{
+    aead::ChaCha20Poly1305, kdf::HkdfSha256, kem::X25519HkdfSha256, setup_receiver, setup_sender,
+    Deserializable, Kem as KemTrait, OpModeR, OpModeS, Serializable,
+};
 use ring::{aead, hmac};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -23,6 +28,17 @@ struct NotificationArgs {
     message: String,
     #[serde(default)]
     duration_ms: Option<u64>,
+    #[serde(default)]
+    action: Option<NotificationActionArgs>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationActionArgs {
+    page_id: String,
+    route: String,
+    #[serde(default)]
+    reference: Option<String>,
 }
 
 fn default_notification_kind() -> String {
@@ -143,7 +159,301 @@ struct CryptoArgs {
     lifetime_ms: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfiguredRequestArgs {
+    url: String,
+    #[serde(default = "default_post")]
+    method: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body_base64: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default = "default_network_route")]
+    route: String,
+}
+
+fn default_network_route() -> String {
+    "direct".into()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistentSecretArgs {
+    key: String,
+    #[serde(default)]
+    value_base64: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CryptoKeyArgs {
+    key_name: String,
+    #[serde(default)]
+    data_base64: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CryptoVerifyArgs {
+    public_key_base64: String,
+    data_base64: String,
+    signature_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CryptoDigestArgs {
+    data_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HpkeSealArgs {
+    recipient_public_key_base64: String,
+    info_base64: String,
+    aad_base64: String,
+    plaintext_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HpkeOpenArgs {
+    private_key_handle: String,
+    sender_public_key_base64: String,
+    info_base64: String,
+    aad_base64: String,
+    encapsulation_base64: String,
+    ciphertext_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubscriptionApplyArgs {
+    provider_id: String,
+    remote_subscription_id: String,
+    source_name: String,
+    subscription_name: String,
+    content: String,
+    format: String,
+    #[serde(default)]
+    revision: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubscriptionRemoveArgs {
+    subscription_id: String,
+    #[serde(default)]
+    remove_associated_config: bool,
+}
+
+pub(crate) struct PreparedManagedSubscription {
+    input: crate::models::subscription::ManagedSubscriptionApply,
+    authorization: ManagedSubscriptionAuthorization,
+}
+
+impl PreparedManagedSubscription {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        crate::models::subscription::ManagedSubscriptionApply,
+        ManagedSubscriptionAuthorization,
+    ) {
+        (self.input, self.authorization)
+    }
+}
+
+pub(crate) struct ManagedSubscriptionAuthorization {
+    lease: znet_plugin_sandbox::policy::Lease,
+    request: Request,
+}
+
+pub(crate) struct PreparedManagedSubscriptionRemoval {
+    pub(crate) subscription_id: String,
+    pub(crate) remove_associated_config: bool,
+    pub(crate) authorization: ManagedSubscriptionAuthorization,
+}
+
+impl ManagedSubscriptionAuthorization {
+    pub(crate) fn check(&self) -> AppResult<()> {
+        self.lease.check(Some(&self.request)).map_err(io::failure)
+    }
+}
+
+type HpkeKem = X25519HkdfSha256;
+type HpkeAead = ChaCha20Poly1305;
+type HpkeKdf = HkdfSha256;
+
 impl Host {
+    pub(crate) fn managed_subscription_input_with_lease(
+        &self,
+        plugin_id: &str,
+        lease: &znet_plugin_sandbox::policy::Lease,
+        call: Call,
+    ) -> AppResult<(
+        crate::models::subscription::ManagedSubscriptionApply,
+        Request,
+    )> {
+        if !call.validate()
+            || call.method != Method::SubscriptionApply
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅请求无效"));
+        }
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let request = call.request;
+        let args: SubscriptionApplyArgs = decode(call.arguments)?;
+        Ok((
+            crate::models::subscription::ManagedSubscriptionApply {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                source_name: args.source_name,
+                subscription_name: args.subscription_name,
+                content: args.content,
+                format: args.format,
+                revision: args.revision,
+            },
+            request,
+        ))
+    }
+
+    pub(crate) fn managed_subscription_removal_with_lease(
+        &self,
+        lease: &znet_plugin_sandbox::policy::Lease,
+        call: Call,
+    ) -> AppResult<(String, bool, Request)> {
+        if !call.validate()
+            || call.method != Method::SubscriptionRemove
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅移除请求无效"));
+        }
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let request = call.request;
+        let args: SubscriptionRemoveArgs = decode(call.arguments)?;
+        Ok((args.subscription_id, args.remove_associated_config, request))
+    }
+
+    pub(crate) fn prepare_managed_subscription(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        call: Call,
+    ) -> AppResult<PreparedManagedSubscription> {
+        if !call.validate()
+            || call.method != Method::SubscriptionApply
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅请求无效"));
+        }
+        let (component, authority) =
+            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(call.budget.timeout_ms),
+                call.budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let args: SubscriptionApplyArgs = decode(call.arguments)?;
+        Ok(PreparedManagedSubscription {
+            input: crate::models::subscription::ManagedSubscriptionApply {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                source_name: args.source_name,
+                subscription_name: args.subscription_name,
+                content: args.content,
+                format: args.format,
+                revision: args.revision,
+            },
+            authorization: ManagedSubscriptionAuthorization {
+                lease,
+                request: call.request,
+            },
+        })
+    }
+
+    pub(crate) fn prepare_managed_subscription_removal(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        call: Call,
+    ) -> AppResult<PreparedManagedSubscriptionRemoval> {
+        if !call.validate()
+            || call.method != Method::SubscriptionRemove
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅移除请求无效"));
+        }
+        let (component, authority) =
+            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(call.budget.timeout_ms),
+                call.budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let args: SubscriptionRemoveArgs = decode(call.arguments)?;
+        Ok(PreparedManagedSubscriptionRemoval {
+            subscription_id: args.subscription_id,
+            remove_associated_config: args.remove_associated_config,
+            authorization: ManagedSubscriptionAuthorization {
+                lease,
+                request: call.request,
+            },
+        })
+    }
+
+    pub(super) fn configured_origin(
+        &self,
+        plugin_id: &str,
+        component_id: &str,
+        field: &str,
+        request_url: &str,
+    ) -> AppResult<String> {
+        let key = format!("{plugin_id}/{component_id}");
+        let state = self.state.lock().unwrap();
+        let loaded = state.loaded.get(&key).ok_or_else(stale)?;
+        let schema = loaded
+            .component
+            .manifest()
+            .configuration
+            .as_ref()
+            .ok_or_else(|| AppError::invalid_argument("插件没有声明配置模式"))?;
+        let mut values = schema.defaults();
+        values.extend(loaded.configuration.clone());
+        schema
+            .validate_values(&values)
+            .map_err(|_| AppError::invalid_argument("插件来源配置尚未完成"))?;
+        let value = values
+            .get(field)
+            .ok_or_else(|| AppError::invalid_argument("声明的来源配置字段不存在"))?;
+        let configuration_field = schema
+            .fields
+            .iter()
+            .find(|candidate| candidate.id == field)
+            .ok_or_else(|| AppError::invalid_argument("声明的来源配置字段不存在"))?;
+        let requested_origin =
+            znet_client_capabilities::network::origin(request_url).map_err(io::failure)?;
+        let allowed = configuration_field
+            .https_origins(value)
+            .ok_or_else(|| AppError::invalid_argument("已配置来源必须是精确的 HTTPS origin"))?;
+        allowed
+            .into_iter()
+            .find(|origin| origin == &requested_origin)
+            .ok_or_else(|| AppError::invalid_argument("请求地址不在插件已配置的 HTTPS 来源中"))
+    }
+
     fn sdk_context(
         &self,
         manager: &Manager,
@@ -187,14 +497,54 @@ impl Host {
         component_id: &str,
         call: Call,
     ) -> AppResult<Value> {
+        self.sdk_call_with_network_proxy(manager, plugin_id, component_id, call, None)
+    }
+
+    pub(crate) fn sdk_call_with_network_proxy(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        call: Call,
+        network_proxy: Option<String>,
+    ) -> AppResult<Value> {
+        if !call.validate() || !method_matches(call.method, call.request.capability) {
+            return Err(AppError::invalid_argument("插件 SDK 请求格式或能力不匹配"));
+        }
+        let budget = call.budget;
+        let (component, authority) =
+            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(budget.timeout_ms),
+                budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
+        self.sdk_call_with_lease(
+            manager,
+            plugin_id,
+            component_id,
+            &lease,
+            call,
+            network_proxy,
+        )
+    }
+
+    pub(crate) fn sdk_call_with_lease(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        lease: &znet_plugin_sandbox::policy::Lease,
+        call: Call,
+        network_proxy: Option<String>,
+    ) -> AppResult<Value> {
         if !call.validate() || !method_matches(call.method, call.request.capability) {
             return Err(AppError::invalid_argument("插件 SDK 请求格式或能力不匹配"));
         }
         let budget = call.budget;
         let started = Instant::now();
-        let (component, authority) =
-            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
-        let lease = authority.begin(&component).map_err(io::failure)?;
         lease.check(Some(&call.request)).map_err(io::failure)?;
         let value = match call.method {
             Method::StorageGet => {
@@ -407,6 +757,244 @@ impl Host {
                 )?;
                 json!({"handle":handle,"expiresAtUnixMs":expires_at_unix_ms,"contentType":content_type})
             }
+            Method::ConfiguredRequest => {
+                let args: ConfiguredRequestArgs = decode(call.arguments)?;
+                let origin = self.configured_origin(
+                    plugin_id,
+                    component_id,
+                    &call.request.scope,
+                    &args.url,
+                )?;
+                let body = match (args.body, args.body_base64) {
+                    (Some(value), None) => value.into_bytes(),
+                    (None, Some(value)) => STANDARD
+                        .decode(value)
+                        .map_err(|_| AppError::invalid_argument("请求正文不是有效的 Base64"))?,
+                    (None, None) => Vec::new(),
+                    (Some(_), Some(_)) => {
+                        return Err(AppError::invalid_argument("请求正文只能使用一种编码"))
+                    }
+                };
+                let route = match args.route.as_str() {
+                    "direct" => znet_client_capabilities::network::Route::Direct,
+                    "system" => znet_client_capabilities::network::Route::System,
+                    "core" => znet_client_capabilities::network::Route::Proxy(
+                        network_proxy.clone().ok_or_else(|| {
+                            AppError::invalid_argument("客户端代理内核端点不可用")
+                        })?,
+                    ),
+                    _ => return Err(AppError::invalid_argument("插件网络路由无效")),
+                };
+                let host_lease = znet_client_capabilities::host::operation(
+                    manager,
+                    &format!("plugin.network.configured:{plugin_id}/{component_id}"),
+                    Permission::new("network.configured.request", &call.request.scope),
+                    1,
+                    8 * 1024 * 1024,
+                    Duration::from_millis(budget.timeout_ms),
+                )
+                .map_err(io::failure)?;
+                let response = znet_client_capabilities::network::configured_request(
+                    &host_lease,
+                    &znet_client_capabilities::network::Request {
+                        method: args.method,
+                        url: args.url,
+                        headers: args.headers,
+                        body,
+                    },
+                    &call.request.scope,
+                    &origin,
+                    route,
+                    8 * 1024 * 1024,
+                )
+                .and_then(|resource| resource.take(&host_lease))
+                .map_err(io::failure)?;
+                let body = String::from_utf8(response.body)
+                    .map_err(|_| AppError::invalid_argument("插件网络响应不是 UTF-8 文本"))?;
+                json!({
+                    "status": response.status,
+                    "headers": response.headers,
+                    "body": body,
+                })
+            }
+            Method::PersistentSecretGet => {
+                let _operation = self.operation.lock().unwrap();
+                let args: PersistentSecretArgs = decode(call.arguments)?;
+                match self.vault_get(plugin_id, &args.key)? {
+                    Some(value) => json!({"valueBase64":STANDARD.encode(value.as_slice())}),
+                    None => Value::Null,
+                }
+            }
+            Method::PersistentSecretPut => {
+                let _operation = self.operation.lock().unwrap();
+                let args: PersistentSecretArgs = decode(call.arguments)?;
+                let value = args
+                    .value_base64
+                    .ok_or_else(|| AppError::invalid_argument("缺少凭据内容"))?;
+                let value = STANDARD
+                    .decode(value)
+                    .map_err(|_| AppError::invalid_argument("凭据内容不是有效的 Base64"))?;
+                self.vault_put(plugin_id, &args.key, &value)?;
+                Value::Bool(true)
+            }
+            Method::PersistentSecretDelete => {
+                let _operation = self.operation.lock().unwrap();
+                let args: PersistentSecretArgs = decode(call.arguments)?;
+                Value::Bool(self.vault_delete(plugin_id, &args.key)?)
+            }
+            Method::CryptoKeyGenerate => {
+                let _operation = self.operation.lock().unwrap();
+                let args: CryptoKeyArgs = decode(call.arguments)?;
+                let vault_key = format!("keys/{}", args.key_name);
+                let seed = match self.vault_get(plugin_id, &vault_key)? {
+                    Some(value) => value,
+                    None => {
+                        let mut seed = vec![0u8; 32];
+                        getrandom::fill(&mut seed).map_err(io::failure)?;
+                        self.vault_put(plugin_id, &vault_key, &seed)?;
+                        zeroize::Zeroizing::new(seed)
+                    }
+                };
+                let seed: [u8; 32] = seed
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| AppError::invalid_argument("设备签名密钥无效"))?;
+                let signing = SigningKey::from_bytes(&seed);
+                json!({"algorithm":"ed25519","publicKeyBase64":STANDARD.encode(signing.verifying_key().as_bytes())})
+            }
+            Method::CryptoSign => {
+                let _operation = self.operation.lock().unwrap();
+                let args: CryptoKeyArgs = decode(call.arguments)?;
+                let data = STANDARD
+                    .decode(
+                        args.data_base64
+                            .ok_or_else(|| AppError::invalid_argument("缺少待签名数据"))?,
+                    )
+                    .map_err(|_| AppError::invalid_argument("待签名数据不是有效的 Base64"))?;
+                let seed = self
+                    .vault_get(plugin_id, &format!("keys/{}", args.key_name))?
+                    .ok_or_else(|| {
+                        AppError::not_found("plugin_device_key", args.key_name.clone())
+                    })?;
+                let seed: [u8; 32] = seed
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| AppError::invalid_argument("设备签名密钥无效"))?;
+                json!({"signatureBase64":STANDARD.encode(SigningKey::from_bytes(&seed).sign(&data).to_bytes())})
+            }
+            Method::CryptoVerify => {
+                let args: CryptoVerifyArgs = decode(call.arguments)?;
+                let public: [u8; 32] = STANDARD
+                    .decode(args.public_key_base64)
+                    .map_err(|_| AppError::invalid_argument("签名公钥无效"))?
+                    .try_into()
+                    .map_err(|_| AppError::invalid_argument("签名公钥无效"))?;
+                let data = STANDARD
+                    .decode(args.data_base64)
+                    .map_err(|_| AppError::invalid_argument("验签数据无效"))?;
+                let signature: [u8; 64] = STANDARD
+                    .decode(args.signature_base64)
+                    .map_err(|_| AppError::invalid_argument("签名无效"))?
+                    .try_into()
+                    .map_err(|_| AppError::invalid_argument("签名无效"))?;
+                let valid = VerifyingKey::from_bytes(&public).is_ok_and(|key| {
+                    key.verify(&data, &Signature::from_bytes(&signature))
+                        .is_ok()
+                });
+                json!({"valid":valid})
+            }
+            Method::CryptoDigest => {
+                let args: CryptoDigestArgs = decode(call.arguments)?;
+                let data = STANDARD
+                    .decode(args.data_base64)
+                    .map_err(|_| AppError::invalid_argument("摘要数据无效"))?;
+                json!({"digestBase64":STANDARD.encode(Sha256::digest(data))})
+            }
+            Method::CryptoHpkeKeyGenerate => {
+                let (private, public) = HpkeKem::gen_keypair();
+                let private_bytes = private.to_bytes().to_vec();
+                let (handle, expires_at_unix_ms) = self.sensitive.insert(
+                    format!("{plugin_id}/{component_id}"),
+                    "hpke-private".into(),
+                    private_bytes,
+                    10 * 60 * 1000,
+                )?;
+                json!({
+                    "privateKeyHandle":handle,
+                    "publicKeyBase64":STANDARD.encode(public.to_bytes()),
+                    "expiresAtUnixMs":expires_at_unix_ms,
+                })
+            }
+            Method::CryptoHpkeSeal => {
+                let args: HpkeSealArgs = decode(call.arguments)?;
+                let recipient = <<HpkeKem as KemTrait>::PublicKey as Deserializable>::from_bytes(
+                    &STANDARD
+                        .decode(args.recipient_public_key_base64)
+                        .map_err(|_| AppError::invalid_argument("HPKE 公钥无效"))?,
+                )
+                .map_err(|_| AppError::invalid_argument("HPKE 公钥无效"))?;
+                let info = STANDARD
+                    .decode(args.info_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE info 无效"))?;
+                let aad = STANDARD
+                    .decode(args.aad_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE AAD 无效"))?;
+                let plaintext = STANDARD
+                    .decode(args.plaintext_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE 明文无效"))?;
+                let (encapsulation, mut context) =
+                    setup_sender::<HpkeAead, HpkeKdf, HpkeKem>(&OpModeS::Base, &recipient, &info)
+                        .map_err(|_| AppError::invalid_argument("HPKE 请求上下文无效"))?;
+                let ciphertext = context
+                    .seal(&plaintext, &aad)
+                    .map_err(|_| AppError::invalid_argument("HPKE 请求加密失败"))?;
+                json!({"encapsulationBase64":STANDARD.encode(encapsulation.to_bytes()),"ciphertextBase64":STANDARD.encode(ciphertext)})
+            }
+            Method::CryptoHpkeOpen => {
+                let args: HpkeOpenArgs = decode(call.arguments)?;
+                let owner = format!("{plugin_id}/{component_id}");
+                let private = self.sensitive.clone_bytes(
+                    &owner,
+                    &args.private_key_handle,
+                    Some("hpke-private"),
+                )?;
+                let private =
+                    <<HpkeKem as KemTrait>::PrivateKey as Deserializable>::from_bytes(&private)
+                        .map_err(|_| AppError::invalid_argument("HPKE 临时私钥无效"))?;
+                let sender = <<HpkeKem as KemTrait>::PublicKey as Deserializable>::from_bytes(
+                    &STANDARD
+                        .decode(args.sender_public_key_base64)
+                        .map_err(|_| AppError::invalid_argument("HPKE 发送方公钥无效"))?,
+                )
+                .map_err(|_| AppError::invalid_argument("HPKE 发送方公钥无效"))?;
+                let encapsulation =
+                    <<HpkeKem as KemTrait>::EncappedKey as Deserializable>::from_bytes(
+                        &STANDARD
+                            .decode(args.encapsulation_base64)
+                            .map_err(|_| AppError::invalid_argument("HPKE 封装密钥无效"))?,
+                    )
+                    .map_err(|_| AppError::invalid_argument("HPKE 封装密钥无效"))?;
+                let info = STANDARD
+                    .decode(args.info_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE info 无效"))?;
+                let aad = STANDARD
+                    .decode(args.aad_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE AAD 无效"))?;
+                let ciphertext = STANDARD
+                    .decode(args.ciphertext_base64)
+                    .map_err(|_| AppError::invalid_argument("HPKE 密文无效"))?;
+                let mut context = setup_receiver::<HpkeAead, HpkeKdf, HpkeKem>(
+                    &OpModeR::Auth(sender),
+                    &private,
+                    &encapsulation,
+                    &info,
+                )
+                .map_err(|_| AppError::invalid_argument("HPKE 响应上下文无效"))?;
+                let plaintext = context
+                    .open(&ciphertext, &aad)
+                    .map_err(|_| AppError::invalid_argument("HPKE 响应校验或解密失败"))?;
+                json!({"plaintextBase64":STANDARD.encode(plaintext)})
+            }
             Method::CryptoUse => {
                 let args: CryptoArgs = decode(call.arguments)?;
                 let owner = format!("{plugin_id}/{component_id}");
@@ -527,7 +1115,13 @@ impl Host {
         let args: HandleArgs = decode(call.arguments)?;
         let (component, authority) =
             self.sdk_context(manager, plugin_id, component_id, &call.request)?;
-        let lease = authority.begin(&component).map_err(io::failure)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(call.budget.timeout_ms),
+                call.budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
         lease.check(Some(&call.request)).map_err(io::failure)?;
         let bytes = self.sensitive.take(
             &format!("{plugin_id}/{component_id}"),
@@ -552,6 +1146,38 @@ impl Host {
             return Err(AppError::invalid_argument("插件通知内容或类型无效"));
         }
         let duration_ms = args.duration_ms.unwrap_or(5_000).clamp(2_000, 15_000);
+        let action = if let Some(action) = args.action {
+            let safe = |value: &str, maximum: usize| {
+                !value.is_empty()
+                    && value.len() <= maximum
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            };
+            if !safe(&action.page_id, 80)
+                || !safe(&action.route, 80)
+                || action
+                    .reference
+                    .as_deref()
+                    .is_some_and(|value| !safe(value, 160))
+                || !self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .pages
+                    .get(plugin_id)
+                    .is_some_and(|pages| pages.contains_key(&action.page_id))
+            {
+                return Err(AppError::invalid_argument("插件通知的内部跳转目标无效"));
+            }
+            Some(json!({
+                "pageId": action.page_id,
+                "route": action.route,
+                "reference": action.reference,
+            }))
+        } else {
+            None
+        };
         let now = now_unix_ms();
         let key = format!("{plugin_id}/{component_id}");
         let mut notifications = self.notification_times.lock().unwrap();
@@ -574,11 +1200,22 @@ impl Host {
             });
         }
         times.push_back(now);
+        let source = self
+            .state
+            .lock()
+            .unwrap()
+            .loaded
+            .get(&format!("{plugin_id}/{component_id}"))
+            .map(|loaded| loaded.name.clone())
+            .unwrap_or_else(|| plugin_id.to_owned());
         Ok(json!({
             "kind": args.kind,
             "message": message,
             "durationMs": duration_ms,
-            "source": plugin_id,
+            "source": source,
+            "pluginId": plugin_id,
+            "componentId": component_id,
+            "action": action,
         }))
     }
 }
@@ -612,9 +1249,79 @@ fn method_matches(method: Method, capability: Capability) -> bool {
                 Capability::MaterialsSubmit
             )
             | (Method::SecretReceive, Capability::SecretsSessionReceive)
+            | (
+                Method::ConfiguredRequest,
+                Capability::NetworkConfiguredRequest
+            )
             | (Method::CryptoUse, Capability::CryptoSessionUse)
+            | (
+                Method::PersistentSecretGet,
+                Capability::PersistentSecretsRead
+            )
+            | (
+                Method::PersistentSecretPut | Method::PersistentSecretDelete,
+                Capability::PersistentSecretsWrite
+            )
+            | (
+                Method::CryptoKeyGenerate
+                    | Method::CryptoSign
+                    | Method::CryptoVerify
+                    | Method::CryptoDigest
+                    | Method::CryptoHpkeKeyGenerate
+                    | Method::CryptoHpkeSeal
+                    | Method::CryptoHpkeOpen,
+                Capability::CryptoDeviceUse
+            )
+            | (
+                Method::SubscriptionApply | Method::SubscriptionRemove,
+                Capability::SubscriptionsManage
+            )
             | (Method::ProtectedLoad, Capability::RuntimeProtectedLoad)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use znet_plugin_sandbox::distribution::package::{PageKind, VerifiedPage};
+
+    #[test]
+    fn notification_navigation_accepts_only_a_signed_page_and_safe_route() {
+        let host = Host::default();
+        let arguments = || {
+            json!({
+                "kind":"info",
+                "message":"new message",
+                "action":{"pageId":"manage","route":"messages","reference":"message-1"}
+            })
+        };
+        assert!(host
+            .notification("org.example.plugin", "worker", arguments())
+            .is_err());
+        host.state.lock().unwrap().pages.insert(
+            "org.example.plugin".into(),
+            BTreeMap::from([(
+                "manage".into(),
+                VerifiedPage {
+                    id: "manage".into(),
+                    title: "Manage".into(),
+                    kind: PageKind::Management,
+                    html: "<main></main>".into(),
+                },
+            )]),
+        );
+        let value = host
+            .notification("org.example.plugin", "worker", arguments())
+            .unwrap();
+        assert_eq!(value["action"]["reference"], "message-1");
+        assert!(host
+            .notification(
+                "org.example.plugin",
+                "worker",
+                json!({"message":"bad","action":{"pageId":"manage","route":"../escape"}}),
+            )
+            .is_err());
+    }
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> AppResult<T> {

@@ -8,11 +8,20 @@ use znet_plugin_sandbox::{
         package::{self, Payload, SourceComponent},
     },
 };
+
+#[derive(serde::Deserialize)]
+struct ExternalPluginBootstrap {
+    configuration: BTreeMap<String, String>,
+    state: BTreeMap<String, String>,
+    vault_base64: BTreeMap<String, String>,
+    scheduled_action: String,
+    expected: serde_json::Value,
+}
 const SEED: [u8; 32] = [17; 32];
 // Fixtures exercise the real Host, which checks the compiled client version.
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
-    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","records.summary.read"]})).unwrap()
+    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read"]})).unwrap()
 }
 fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
@@ -133,6 +142,75 @@ fn declarative_configuration_is_validated_persisted_and_passed_to_the_guest() {
         "https://panel.example.com"
     );
 }
+
+#[test]
+fn configured_https_origin_lists_only_authorize_declared_members() {
+    let schema = serde_json::json!({
+        "title":"Provider sources",
+        "fields":[
+            {"id":"origins","label":"Origins","kind":"https_origin_list","required":true}
+        ]
+    });
+    let (_root, host, manager) = setup_component_with_configuration(
+        "true",
+        serde_json::json!({"capability":"network.configured.request","scope":"origins"}),
+        schema,
+    );
+    assert!(host
+        .configure(
+            &manager,
+            "org.example.plugin/identity",
+            BTreeMap::from([(
+                "origins".into(),
+                serde_json::to_string(&["https://one.example.com", "https://two.example.com"])
+                    .unwrap(),
+            )]),
+        )
+        .is_ok());
+    assert_eq!(
+        host.configured_origin(
+            "org.example.plugin",
+            "identity",
+            "origins",
+            "https://two.example.com/connect",
+        )
+        .unwrap(),
+        "https://two.example.com"
+    );
+    assert!(host
+        .configured_origin(
+            "org.example.plugin",
+            "identity",
+            "origins",
+            "https://other.example.com/connect",
+        )
+        .is_err());
+    assert!(host
+        .configure(
+            &manager,
+            "org.example.plugin/identity",
+            BTreeMap::from([(
+                "origins".into(),
+                "[\"https://one.example.com\",\"https://one.example.com\"]".into(),
+            )]),
+        )
+        .is_err());
+    assert!(host
+        .configure(
+            &manager,
+            "org.example.plugin/identity",
+            BTreeMap::from([("origins".into(), "[]".into())]),
+        )
+        .is_ok());
+    assert!(host
+        .configured_origin(
+            "org.example.plugin",
+            "identity",
+            "origins",
+            "https://one.example.com/connect",
+        )
+        .is_err());
+}
 fn approve(host: &Host, manager: &Manager) -> Review {
     let snapshot = host.snapshot(manager);
     let row = &snapshot.components[0];
@@ -146,6 +224,221 @@ fn approve(host: &Host, manager: &Manager) -> Review {
         .review
         .clone()
         .unwrap()
+}
+
+/// Generic installed-package acceptance hook for an external publisher. It is
+/// inert during the ordinary suite and exercises the same local-import path as
+/// the desktop file picker when the two environment variables are provided.
+#[test]
+fn external_local_package_import_runs_in_vm_when_requested() {
+    let Ok(package_path) = std::env::var("ZNET_EXTERNAL_PLUGIN_PACKAGE") else {
+        return;
+    };
+    let plugin_id = std::env::var("ZNET_EXTERNAL_PLUGIN_ID")
+        .expect("ZNET_EXTERNAL_PLUGIN_ID is required with ZNET_EXTERNAL_PLUGIN_PACKAGE");
+    let bytes = std::fs::read(&package_path).expect("read external plugin package");
+    let bootstrap = std::env::var("ZNET_EXTERNAL_PLUGIN_BOOTSTRAP")
+        .ok()
+        .map(|path| {
+            serde_json::from_slice::<ExternalPluginBootstrap>(
+                &std::fs::read(path).expect("read external plugin bootstrap"),
+            )
+            .expect("decode external plugin bootstrap")
+        });
+    #[cfg(feature = "acceptance-test-utils")]
+    if bootstrap.is_some() {
+        let ca_path = std::env::var("ZNET_EXTERNAL_PLUGIN_CA")
+            .expect("ZNET_EXTERNAL_PLUGIN_CA is required with a bootstrap fixture");
+        znet_client_capabilities::network::install_acceptance_root_certificate(
+            std::fs::read(ca_path).expect("read external plugin acceptance CA"),
+        )
+        .expect("install external plugin acceptance CA");
+    }
+    let root = tempfile::tempdir().unwrap();
+    let host = std::sync::Arc::new(Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    });
+    let manager = std::sync::Arc::new(Manager::default());
+
+    let review = host
+        .preview_local_bytes(&manager, &bytes, &plugin_id)
+        .expect("preview signed local package");
+    assert!(review.first_install);
+    assert!(review.local_trust);
+    assert!(review.requires_approval);
+    assert!(host
+        .install_local_bytes(&manager, &bytes, &plugin_id, None)
+        .is_err());
+    let mut installed = host
+        .install_local_bytes(&manager, &bytes, &plugin_id, Some(&review.candidate_digest))
+        .expect("install explicitly approved local package");
+    if let Some(bootstrap) = &bootstrap {
+        installed = host
+            .configure(
+                &manager,
+                &format!("{plugin_id}/provider-source"),
+                bootstrap.configuration.clone(),
+            )
+            .expect("configure external plugin acceptance source");
+    }
+    assert_eq!(installed.components.len(), 1);
+    assert_eq!(installed.pages.len(), 1);
+    assert_eq!(installed.pages[0].plugin_id, plugin_id);
+
+    let component = &installed.components[0];
+    assert_eq!(component.plugin_id, plugin_id);
+    assert!(component
+        .configuration
+        .as_ref()
+        .is_some_and(|value| value.configured));
+    let review = component
+        .review
+        .clone()
+        .expect("installed component review");
+    assert!(host.run(&manager, review.clone()).is_err());
+    let grants = component
+        .permissions
+        .iter()
+        .map(|permission| permission.request.clone())
+        .collect();
+    let authorized = host
+        .authorize(&manager, review, grants)
+        .expect("authorize declared external plugin permissions");
+    let review = authorized.components[0]
+        .review
+        .clone()
+        .expect("authorized component review");
+    let raw = host
+        .run(&manager, review.clone())
+        .expect("execute external plugin in QuickJS VM");
+    assert_eq!(raw["znet_plugin_result"], 1);
+    assert_eq!(raw["value"]["phase"], "needs-configuration");
+    let status = host
+        .invoke(
+            &manager,
+            &plugin_id,
+            "provider-source",
+            "status.get".into(),
+            serde_json::Value::Null,
+        )
+        .expect("invoke installed external plugin");
+    assert_eq!(status["phase"], "needs-configuration");
+
+    if let Some(bootstrap) = bootstrap {
+        for (key, value) in bootstrap.state {
+            host.storage_put(
+                &plugin_id,
+                namespace::Area::State,
+                key,
+                STANDARD.encode(value.as_bytes()),
+            )
+            .expect("seed external plugin state");
+        }
+        for (key, value) in bootstrap.vault_base64 {
+            let value = STANDARD
+                .decode(value)
+                .expect("decode external plugin vault fixture");
+            host.vault_put(&plugin_id, &key, &value)
+                .expect("seed external plugin vault");
+        }
+        let (component, authority, configuration, publisher, plugin_state) = {
+            let state = host.state.lock().unwrap();
+            let loaded = state.loaded.get(&review.key).unwrap();
+            let mut configuration = loaded
+                .component
+                .manifest()
+                .configuration
+                .as_ref()
+                .map_or_else(BTreeMap::new, |schema| schema.defaults());
+            configuration.extend(loaded.configuration.clone());
+            (
+                loaded.component.clone(),
+                loaded.authority.clone().unwrap(),
+                configuration,
+                loaded.publisher_fingerprint.clone(),
+                namespace::runtime_state(root.path(), &loaded.publisher_fingerprint, &plugin_id)
+                    .unwrap(),
+            )
+        };
+        let dispatch_host = host.clone();
+        let dispatch_manager = manager.clone();
+        let dispatch_plugin = plugin_id.clone();
+        let dispatcher: znet_plugin_sandbox::runtime::HostSdkDispatcher = std::sync::Arc::new(
+            move |lease, input| {
+                let result = serde_json::from_str::<znet_plugin_sandbox::sdk::Call>(input)
+                    .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
+                    .and_then(|call| {
+                        dispatch_host
+                            .sdk_call_with_lease(
+                                &dispatch_manager,
+                                &dispatch_plugin,
+                                "provider-source",
+                                lease,
+                                call,
+                                None,
+                            )
+                            .map_err(|_| znet_plugin_sandbox::contract::Error::PermissionDenied)
+                    });
+                let reply = match result {
+                    Ok(value) => serde_json::json!({"version":1,"ok":true,"value":value}),
+                    Err(_) => serde_json::json!({
+                        "version":1,"ok":false,
+                        "error":{"code":"acceptance_host_call_failed","message":"acceptance host call failed"}
+                    }),
+                };
+                serde_json::to_string(&reply)
+                    .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
+            },
+        );
+        let output = znet_plugin_sandbox::runtime::execute_scheduled_for_host_with_input(
+            &component,
+            &authority,
+            serde_json::json!({
+                "configuration": configuration,
+                "state": plugin_state,
+                "invocation": {
+                    "action": bootstrap.scheduled_action,
+                    "payload": {},
+                    "now_unix_ms": crate::services::common::now_unix_ms()
+                }
+            }),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            HOST_VERSION,
+            dispatcher,
+        )
+        .expect("execute external plugin cross-host scheduled action");
+        let envelope: serde_json::Value = output;
+        assert_eq!(envelope["znet_plugin_result"], 1);
+        assert_eq!(envelope["value"], bootstrap.expected);
+        let updates: BTreeMap<String, Option<String>> =
+            serde_json::from_value(envelope["state_updates"].clone()).unwrap();
+        namespace::apply_runtime_updates(root.path(), &publisher, &plugin_id, updates).unwrap();
+        let summary = host
+            .storage_get(
+                &plugin_id,
+                namespace::Area::State,
+                "source/source-1/messages/summary",
+            )
+            .unwrap()
+            .expect("scheduled message summary update");
+        let summary = STANDARD.decode(summary).unwrap();
+        assert!(String::from_utf8(summary).unwrap().contains("checked_at"));
+    }
+
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let restarted_manager = Manager::default();
+    let restarted_snapshot = restarted.snapshot(&restarted_manager);
+    assert_eq!(restarted_snapshot.components.len(), 1);
+    assert_eq!(restarted_snapshot.pages.len(), 1);
+    assert!(restarted_snapshot.components[0].enabled);
+    restarted
+        .stop(&restarted_manager, &review.key)
+        .expect("stop external plugin after restart");
+    assert!(restarted.run(&restarted_manager, review).is_err());
 }
 
 #[test]

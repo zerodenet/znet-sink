@@ -24,6 +24,29 @@ fn lease(manager: &Manager, url: &str, capability: &str) -> Lease {
         )
         .unwrap()
 }
+
+fn scoped_lease(manager: &Manager, capability: &str, scope: &str) -> Lease {
+    let grants = BTreeSet::from([Permission::new(capability, scope)]);
+    let policy = manager
+        .admit(
+            "plugin-configured".into(),
+            grants.clone(),
+            grants.clone(),
+            &grants,
+        )
+        .unwrap();
+    policy.authorize(grants, Duration::from_secs(10)).unwrap();
+    policy
+        .begin(
+            Budget {
+                calls: 2,
+                resource_bytes: 4096,
+                timeout: Duration::from_secs(5),
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+}
 #[test]
 fn post_delivers_binary_body_and_never_forwards_credentials_on_redirect() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -96,6 +119,42 @@ fn get_permission_cannot_be_escalated_to_post_and_transport_headers_are_rejected
         .insert("Host".into(), "another.internal".into());
     assert!(matches!(
         network::request(&lease(&manager, url, "network.request"), &request, 100),
+        Err(Error::PermissionDenied)
+    ));
+}
+
+#[test]
+fn configured_request_is_bound_to_declared_field_and_exact_https_origin() {
+    let manager = Manager::default();
+    let request = Request {
+        url: "https://other.example.com/connect".into(),
+        method: "POST".into(),
+        headers: BTreeMap::new(),
+        body: b"{}".to_vec(),
+    };
+    assert!(matches!(
+        network::configured_request(
+            &scoped_lease(&manager, "network.configured.request", "provider_origin"),
+            &request,
+            "provider_origin",
+            "https://panel.example.com",
+            network::Route::Direct,
+            1024,
+        ),
+        Err(Error::PermissionDenied)
+    ));
+    assert!(matches!(
+        network::configured_request(
+            &scoped_lease(&manager, "network.configured.request", "another_field"),
+            &Request {
+                url: "https://panel.example.com/connect".into(),
+                ..request
+            },
+            "provider_origin",
+            "https://panel.example.com",
+            network::Route::Direct,
+            1024,
+        ),
         Err(Error::PermissionDenied)
     ));
 }

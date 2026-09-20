@@ -12,6 +12,7 @@ export function permissionLabel(capability: string): string {
     'plugin.self.read': '读取插件自身信息',
     'network.get': '读取网络内容',
     'network.request': '发送和读取网络请求',
+    'network.configured.request': '访问插件已配置的服务来源',
     'records.summary.read': '读取选定记录摘要',
     'plugin.storage.read': '读取插件自己的本地数据',
     'plugin.storage.write': '修改插件自己的本地数据',
@@ -24,6 +25,10 @@ export function permissionLabel(capability: string): string {
     'materials.submit': '提交配置材料',
     'secrets.session.receive': '接收临时敏感响应',
     'crypto.session.use': '在当前会话使用敏感材料',
+    'crypto.device.use': '使用本机设备密钥执行密码学操作',
+    'secrets.persistent.read': '读取本机加密凭据',
+    'secrets.persistent.write': '保存或删除本机加密凭据',
+    'subscriptions.manage': '管理插件提供的托管订阅',
     'runtime.protected.load': '向当前内核运行实例提交受保护配置',
   } as Record<string, string>)[capability] ?? capability;
 }

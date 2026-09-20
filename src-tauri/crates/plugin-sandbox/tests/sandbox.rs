@@ -6,7 +6,7 @@ use std::{
 use znet_plugin_sandbox::{
     contract::*,
     policy::Authority,
-    runtime::{execute, Summary},
+    runtime::{execute, execute_scheduled_for_host_with_input, Summary},
 };
 fn request() -> Request {
     Request {
@@ -156,6 +156,83 @@ fn leases_bind_digest_and_serialize_execution() {
     a.authorize(BTreeSet::from([request()]), Duration::from_secs(1))
         .unwrap();
     assert!(a.begin(&c).is_ok());
+}
+
+#[test]
+fn native_host_call_budget_is_separate_from_guest_vm_output_limit() {
+    let c = component("1");
+    let a = authority(&c);
+    let lease = a
+        .begin_host_call(&c, Duration::from_secs(120), 8 * 1024 * 1024)
+        .unwrap();
+    assert_eq!(lease.check(Some(&request())), Ok(()));
+    drop(lease);
+    assert!(matches!(
+        a.begin_host_call(&c, Duration::from_secs(121), 8 * 1024 * 1024),
+        Err(Error::BudgetExceeded)
+    ));
+    assert!(matches!(
+        a.begin_host_call(&c, Duration::from_secs(1), 8 * 1024 * 1024 + 1),
+        Err(Error::BudgetExceeded)
+    ));
+}
+
+#[test]
+fn scheduled_typed_host_calls_pause_guest_cpu_budget_but_keep_vm_limits() {
+    let source = "JSON.parse(hostSdkCall('request')).value";
+    let c = component(source);
+    let request = request();
+    let dispatcher = Arc::new(
+        move |lease: &znet_plugin_sandbox::policy::Lease, input: &str| {
+            assert_eq!(input, "request");
+            lease.check(Some(&request))?;
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(r#"{"version":1,"ok":true,"value":42}"#.to_string())
+        },
+    );
+    assert_eq!(
+        execute_scheduled_for_host_with_input(
+            &c,
+            &authority(&c),
+            serde_json::json!({}),
+            Arc::new(AtomicBool::new(false)),
+            "0.0.1",
+            dispatcher,
+        )
+        .unwrap(),
+        42
+    );
+}
+
+#[test]
+fn scheduled_typed_host_call_carries_the_max_subscription_payload() {
+    let source = "JSON.parse(hostSdkCall('request')).value.length";
+    let c = component(source);
+    let request = request();
+    let dispatcher = Arc::new(
+        move |lease: &znet_plugin_sandbox::policy::Lease, input: &str| {
+            assert_eq!(input, "request");
+            lease.check(Some(&request))?;
+            serde_json::to_string(&serde_json::json!({
+                "version": 1,
+                "ok": true,
+                "value": "x".repeat(5 * 1024 * 1024),
+            }))
+            .map_err(|_| Error::InvalidOutput)
+        },
+    );
+    assert_eq!(
+        execute_scheduled_for_host_with_input(
+            &c,
+            &authority(&c),
+            serde_json::json!({}),
+            Arc::new(AtomicBool::new(false)),
+            "0.0.1",
+            dispatcher,
+        )
+        .unwrap(),
+        5 * 1024 * 1024
+    );
 }
 #[test]
 fn revoked_running_guest_and_pre_cancelled_guest_release_no_result() {

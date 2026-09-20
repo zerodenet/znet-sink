@@ -678,6 +678,7 @@ mod tests {
             kernel: "zero".to_string(),
             format: "auto".to_string(),
             target_proxy_config_id,
+            managed_source: None,
             policy_selections: Default::default(),
             update_interval_secs: None,
             user_agent: None,

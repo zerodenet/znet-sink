@@ -6,7 +6,11 @@ export type PluginSdkMethod =
   | 'notification_post' | 'schedule_put' | 'schedule_list' | 'schedule_delete'
   | 'browser_open' | 'callback_create' | 'callback_poll' | 'callback_cancel'
   | 'file_read' | 'file_write' | 'material_submit' | 'material_drop'
-  | 'secret_receive' | 'crypto_use' | 'protected_load';
+  | 'secret_receive' | 'configured_request' | 'crypto_use'
+  | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
+  | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest'
+  | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
+  | 'subscription_apply' | 'subscription_remove' | 'protected_load';
 export interface PluginSdkBudget { timeout_ms?: number; max_result_bytes?: number }
 export interface PluginSdkCall { version: 1; request: PluginPermission; method: PluginSdkMethod; budget?: PluginSdkBudget; arguments?: unknown }
 export interface PluginSdkReply<T = unknown> {
@@ -16,7 +20,7 @@ export interface PluginSdkReply<T = unknown> {
 export interface PluginReview { key: string; identity: string; registration: number; revision: number }
 export interface PluginConfigurationOption { value: string; label: string }
 export interface PluginConfigurationField {
-  id: string; label: string; description?: string; kind: 'text' | 'https_origin' | 'select';
+  id: string; label: string; description?: string; kind: 'text' | 'https_origin' | 'https_origin_list' | 'select';
   required: boolean; default?: string; options: PluginConfigurationOption[];
 }
 export interface PluginConfiguration {
