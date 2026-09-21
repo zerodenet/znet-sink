@@ -1,5 +1,34 @@
 # 插件注册与分发适配
 
+## 2026-09-21：`.zspkg v3` 应用包基础
+
+客户端现已同时识别旧 JSON 信封包 v1/v2 和多文件 ZIP 应用包 v3。v3 的目标是保留单文件安装体验，同时不再把 JavaScript、HTML 和资源作为 Base64 字符串塞进 payload：
+
+```text
+plugin.json
+components/<id>/manifest.json
+components/<id>/index.js
+components/<id>/...
+ui/<id>/index.html
+ui/<id>/...
+assets/...
+META-INF/signature.json
+```
+
+`plugin.json` 声明组件与页面入口，并记录除自身及签名信封以外每个文件的 SHA-256 和原始字节数。Ed25519 签名覆盖根清单原始字节；根清单再覆盖所有内容文件，因此增删、替换或重命名任一文件都会使安装失败。客户端拒绝重复路径、绝对路径、`..`、反斜杠、控制字符、目录项、符号链接、加密 ZIP、未知压缩算法、未列入清单的文件及超出数量/单文件/总解压大小的归档。归档只在内存中验证，不解压到宿主可执行路径。
+
+压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；旧 v1/v2 的 2 MiB payload、256 KiB 单组件和 512 KiB 单页限制保持不变。v3 当前仍用 `javascript-v1` 执行声明的组件入口，管理页入口也仍要求自包含；包内 ES Module、页面资源解析、worker/service 生命周期和 UI RPC 属于后续运行时阶段，不能因“文件已能入包”而宣称已经可运行。
+
+安装存储现以 SHA-256 命名保存原始二进制 `.zspkg`，`installed.json` 只保存当前/上一版本的内容引用；旧版内联 JSON 状态仍可读取。写入先落原子 blob、再原子更新状态，失败不会切换已安装版本。
+
+作者可以使用：
+
+```sh
+znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
+```
+
+`APP_ROOT/plugin.json` 中的 `files` 必须为空，由工具遍历真实文件、拒绝符号链接并生成签名文件索引。私钥、发布者登记和输出路径必须位于应用根目录之外，避免把签名材料误装入包。带 `REGISTRATION_JSON` 时包可走显式本地发布者信任流程；不带时由线上登记提供验签公钥和能力上限。
+
 ## 2026-09-15：仓库分发与客户端界面统一
 
 ### 中心与发布者的责任
@@ -11,7 +40,7 @@
 - 本地信任按发布者指纹和包 ID 单独持久化，不写回也不扩张线上目录。后续升级必须沿用同一公钥；更换发布者需先卸载。新增权限或管理页面必须再次显式确认，安装后仍保持未授权状态。
 - 客户端只使用中心快照中已登记、且兼容当前宿主版本与设备的发行记录。首次安装自动选择最新兼容正式版；已安装插件进入版本管理后才允许选择其他已登记版本。
 - 发行记录中的下载地址必须指向登记作者仓库的 GitHub Release 资产。客户端直接下载该地址并核对登记的大小、SHA-256、签名和插件身份；发行说明链接打开登记的仓库 Release 页面。
-- 兼容旧单包清单和新版多宿主清单。多宿主清单核对产品、仓库、发布者与 tag，只选取唯一 `znet-sink` 目标，按实际客户端版本 `[min, max_exclusive)` 和本机系统/架构检查兼容性。`any` 仍受签名包内设备/版本检查约束；多个产物匹配、包超过 4 MiB 或权限越界均拒绝安装。
+- 兼容旧单包清单和新版多宿主清单。多宿主清单核对产品、仓库、发布者与 tag，只选取唯一 `znet-sink` 目标，按实际客户端版本 `[min, max_exclusive)` 和本机系统/架构检查兼容性。`any` 仍受签名包内设备/版本检查约束；多个产物匹配、包超过 16 MiB 或权限越界均拒绝安装。
 - 下载后核对实际字节数、SHA-256、清单签名与包内 Ed25519 签名，并用中心登记公钥独立验签。产物必须属于同一登记仓库和选定 tag；不信任任意下载链接。
 - 安装前再次读取完整登记并复用已有存储与授权流程。安装不自动授权，升级保留原存储布局；自动升级与 GUI 回滚尚未开放。
 
@@ -102,6 +131,7 @@ znet-plugin inspect STORE_DIR PLUGIN_ID
 znet-plugin rollback STORE_DIR PLUGIN_ID
 znet-plugin remove STORE_DIR PLUGIN_ID
 znet-plugin pack MANIFEST SOURCE PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
+znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
 ```
 
 `pack` 使用作者提供的 32 字节原始 Ed25519 私钥 seed 文件，输出新包和元数据，并打印公钥；不打印私钥，不覆盖已有输出。传入 `REGISTRATION_JSON` 时生成可独立侧载的 v2 包，登记与 payload 一同纳入签名；省略时保留兼容线上目录的 v1 包。作者可把包上传到自己的 Release，也可只分发本地包；命令不自动注册、上传或发布。

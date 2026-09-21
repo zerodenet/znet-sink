@@ -2,10 +2,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::SigningKey;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    io::{Cursor, Read, Write},
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 use znet_plugin_sandbox::{
     contract::*,
     distribution::{
@@ -20,6 +22,225 @@ use znet_plugin_sandbox::{
 #[path = "support/distribution.rs"]
 mod support;
 use support::*;
+
+fn application(version: &str) -> (package::ApplicationManifest, BTreeMap<String, Vec<u8>>) {
+    let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        "schema_version":1,"host":"znet-sink","plugin_id":"org.example.plugin","component_id":"identity","version":version,"requires_host":"=0.0.1","api_version":1,"runtime":"javascript-v1","minimum_isolation":"vm","targets":"any",
+        "required":[{"capability":"plugin.self.read","scope":"self"}],"optional":[],"source_sha256":sha256(source.as_bytes()),"limits":Limits::default()
+    })).unwrap();
+    let files = BTreeMap::from([
+        (
+            "components/identity/manifest.json".into(),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        ),
+        (
+            "components/identity/index.js".into(),
+            source.as_bytes().to_vec(),
+        ),
+        (
+            "components/identity/lib/state.js".into(),
+            b"export const state = {};".to_vec(),
+        ),
+        (
+            "ui/manage/index.html".into(),
+            b"<!doctype html><main>Manage</main>".to_vec(),
+        ),
+        (
+            "ui/manage/style.css".into(),
+            b"main { display: grid; }".to_vec(),
+        ),
+        ("assets/icon.svg".into(), b"<svg></svg>".to_vec()),
+    ]);
+    (
+        package::ApplicationManifest {
+            schema_version: 3,
+            host: "znet-sink".into(),
+            plugin_id: "org.example.plugin".into(),
+            version: version.into(),
+            components: vec![package::ApplicationComponent {
+                id: "identity".into(),
+                manifest: "components/identity/manifest.json".into(),
+                entry: "components/identity/index.js".into(),
+            }],
+            pages: vec![package::ApplicationPage {
+                id: "manage".into(),
+                title: "Manage".into(),
+                kind: package::PageKind::Management,
+                entry: "ui/manage/index.html".into(),
+            }],
+            files: BTreeMap::new(),
+        },
+        files,
+    )
+}
+
+fn rewrite_application(bytes: &[u8], path: &str, replacement: &[u8]) -> Vec<u8> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        let name = file.name().to_owned();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        if name == path {
+            data = replacement.to_vec();
+        }
+        entries.push((name, data));
+    }
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    for (name, data) in entries {
+        writer.start_file(name, options).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn v3_application_package_preserves_modules_assets_and_embedded_identity() {
+    let (manifest, files) = application("1.0.0");
+    let mut reg = registration();
+    reg.surfaces.push("znet-sink.ui.management.v1".into());
+    let bytes =
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap();
+    assert!(bytes.starts_with(b"PK\x03\x04"));
+    assert_eq!(package::package_id(&bytes).unwrap(), reg.id);
+    assert_eq!(
+        package::embedded_registration(&bytes).unwrap().unwrap().id,
+        reg.id
+    );
+    let verified = package::verify(&bytes, &reg).unwrap();
+    assert_eq!(verified.components.len(), 1);
+    assert_eq!(verified.pages.len(), 1);
+    assert_eq!(verified.pages[0].html, "<!doctype html><main>Manage</main>");
+    assert_eq!(
+        verified.resources["components/identity/lib/state.js"],
+        b"export const state = {};"
+    );
+    assert_eq!(verified.resources["assets/icon.svg"], b"<svg></svg>");
+}
+
+#[test]
+fn v3_application_rejects_tampered_unlisted_and_unsafe_entries() {
+    let (manifest, files) = application("1.0.0");
+    let reg = registration();
+    let bytes =
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap();
+    let tampered = rewrite_application(
+        &bytes,
+        "components/identity/lib/state.js",
+        b"export const state = {tampered:true};",
+    );
+    assert!(package::verify_local(&tampered, &reg).is_err());
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("../plugin.json", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"{}").unwrap();
+    writer
+        .start_file("META-INF/signature.json", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"{}").unwrap();
+    let unsafe_package = writer.finish().unwrap().into_inner();
+    assert!(package::embedded_registration(&unsafe_package).is_err());
+
+    let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        writer
+            .start_file(file.name(), SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    writer
+        .start_file("assets/unlisted.txt", SimpleFileOptions::default())
+        .unwrap();
+    writer.write_all(b"not signed by the file index").unwrap();
+    let unlisted = writer.finish().unwrap().into_inner();
+    assert!(package::verify_local(&unlisted, &reg).is_err());
+}
+
+#[test]
+fn v3_binary_packages_survive_install_restart_upgrade_and_rollback() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut reg = registration();
+    reg.surfaces.push("znet-sink.ui.management.v1".into());
+    let target = Target::native_desktop().unwrap();
+    let first = {
+        let (manifest, files) = application("1.0.0");
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap()
+    };
+    let second = {
+        let (manifest, files) = application("1.1.0");
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap()
+    };
+    let third = {
+        let (manifest, files) = application("1.2.0");
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap()
+    };
+    let store = Store::new(temp.path()).unwrap();
+    store.install(&first, &reg, &target, "0.0.1").unwrap();
+    assert_eq!(
+        Store::new(temp.path())
+            .unwrap()
+            .current(&reg)
+            .unwrap()
+            .version,
+        "1.0.0"
+    );
+    store.install(&second, &reg, &target, "0.0.1").unwrap();
+    assert_eq!(store.current(&reg).unwrap().version, "1.1.0");
+    assert_eq!(
+        store.rollback(&reg, &target, "0.0.1").unwrap().version,
+        "1.0.0"
+    );
+    store.install(&third, &reg, &target, "0.0.1").unwrap();
+    assert_eq!(store.current(&reg).unwrap().version, "1.2.0");
+    let state = std::fs::read_to_string(temp.path().join("installed.json")).unwrap();
+    assert!(state.contains("sha256"));
+    assert!(!state.contains("znet-sink.plugin-package.v3"));
+    assert_eq!(
+        std::fs::read_dir(temp.path().join("packages"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn content_addressed_store_reads_and_upgrades_legacy_inline_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let reg = registration();
+    let legacy = signed(&payload("1.0.0", serde_json::json!("any")));
+    std::fs::write(
+        temp.path().join("installed.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "packages": {
+                reg.id.clone(): {
+                    "current": String::from_utf8(legacy).unwrap(),
+                    "previous": null
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let store = Store::new(temp.path()).unwrap();
+    assert_eq!(store.current(&reg).unwrap().version, "1.0.0");
+    let next = signed(&payload("1.1.0", serde_json::json!("any")));
+    let target = Target::native_desktop().unwrap();
+    store.install(&next, &reg, &target, "0.0.1").unwrap();
+    assert_eq!(store.current(&reg).unwrap().version, "1.1.0");
+    assert_eq!(
+        store.rollback(&reg, &target, "0.0.1").unwrap().version,
+        "1.0.0"
+    );
+}
 #[test]
 fn any_devices_still_enforce_runtime_isolation_and_version() {
     let bytes = signed(&payload("1.0.0", serde_json::json!("any")));
@@ -311,6 +532,67 @@ fn author_cli_emits_verifiable_package_and_release_metadata_without_private_key(
     validate_download(&bytes, &meta, &registration()).unwrap();
     assert!(!run().status.success());
     assert_eq!(std::fs::read(out).unwrap(), bytes);
+}
+
+#[test]
+fn author_cli_packs_a_v3_application_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("app");
+    std::fs::create_dir_all(root.join("components/identity/lib")).unwrap();
+    std::fs::create_dir_all(root.join("ui/manage")).unwrap();
+    let (manifest, files) = application("1.0.0");
+    std::fs::write(
+        root.join("plugin.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    for (path, bytes) in files {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    let seed = temp.path().join("private.seed");
+    let registration_path = temp.path().join("registration.json");
+    let output = temp.path().join("application.zspkg");
+    let metadata = temp.path().join("marketplace-entry.json");
+    std::fs::write(&seed, SEED).unwrap();
+    let mut reg = registration();
+    reg.surfaces.push("znet-sink.ui.management.v1".into());
+    std::fs::write(&registration_path, serde_json::to_vec_pretty(&reg).unwrap()).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
+        .arg("pack-app")
+        .args([&root, &seed, &output, &metadata, &registration_path])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let bytes = std::fs::read(&output).unwrap();
+    let verified = package::verify(&bytes, &reg).unwrap();
+    assert_eq!(verified.version, "1.0.0");
+    assert!(verified
+        .resources
+        .contains_key("components/identity/lib/state.js"));
+    let release: ReleaseMetadata =
+        serde_json::from_slice(&std::fs::read(metadata).unwrap()).unwrap();
+    validate_download(&bytes, &release, &reg).unwrap();
+
+    let unsafe_seed = root.join("private.seed");
+    std::fs::write(&unsafe_seed, SEED).unwrap();
+    let rejected = std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
+        .arg("pack-app")
+        .args([
+            &root,
+            &unsafe_seed,
+            &temp.path().join("unsafe.zspkg"),
+            &temp.path().join("unsafe.json"),
+            &registration_path,
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
 }
 #[cfg(unix)]
 #[test]

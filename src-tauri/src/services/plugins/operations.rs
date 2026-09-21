@@ -609,15 +609,10 @@ impl Host {
             .map_err(io::failure)
     }
     pub fn preview_install(&self, manager: &Manager, path: String) -> AppResult<InstallReview> {
-        use base64::Engine;
         let _operation = self.operation.lock().unwrap();
         let bytes = self.selected_package(manager, path)?;
-        let envelope: package::Envelope = serde_json::from_slice(&bytes).map_err(io::failure)?;
-        let payload = base64::engine::general_purpose::STANDARD
-            .decode(envelope.payload)
-            .map_err(io::failure)?;
-        let payload: package::Payload = serde_json::from_slice(&payload).map_err(io::failure)?;
-        self.preview_local_bytes(manager, &bytes, &payload.plugin_id)
+        let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
+        self.preview_local_bytes(manager, &bytes, &plugin_id)
     }
     pub fn install(
         &self,
@@ -625,20 +620,10 @@ impl Host {
         path: String,
         approval_digest: Option<String>,
     ) -> AppResult<Snapshot> {
-        use base64::Engine;
         let _operation = self.operation.lock().unwrap();
         let bytes = self.selected_package(manager, path)?;
-        let envelope: package::Envelope = serde_json::from_slice(&bytes).map_err(io::failure)?;
-        let payload = base64::engine::general_purpose::STANDARD
-            .decode(envelope.payload)
-            .map_err(io::failure)?;
-        let payload: package::Payload = serde_json::from_slice(&payload).map_err(io::failure)?;
-        self.install_local_bytes(
-            manager,
-            &bytes,
-            &payload.plugin_id,
-            approval_digest.as_deref(),
-        )
+        let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
+        self.install_local_bytes(manager, &bytes, &plugin_id, approval_digest.as_deref())
     }
 
     fn local_candidate(
@@ -659,7 +644,7 @@ impl Host {
                 };
                 central.find(id).map_err(|_| {
                     AppError::invalid_argument(
-                        "此旧版插件包未携带发布者公钥，且插件中心没有可用于验签的登记；请发布者重新生成支持本地安装的 v2 包",
+                        "此插件包未携带发布者公钥，且插件中心没有可用于验签的登记；请发布者重新生成带发布者登记的 v2/v3 包",
                     )
                 })?.clone()
             }

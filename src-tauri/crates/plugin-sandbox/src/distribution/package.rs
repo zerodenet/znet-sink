@@ -1,9 +1,16 @@
+mod application;
+
 use super::{directory::Registration, Result, MAX_PACKAGE_BYTES};
 use crate::contract::{sha256, Component, Manifest, Target};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub use application::{
+    sign_application, sign_application_with_registration, ApplicationComponent,
+    ApplicationManifest, ApplicationPage, FileDigest,
+};
 const DOMAIN_V1: &[u8] = b"znet-sink.plugin-package.v1\0";
 const DOMAIN_V2: &[u8] = b"znet-sink.plugin-package.v2\0";
 #[derive(Serialize, Deserialize)]
@@ -60,6 +67,9 @@ pub struct VerifiedPackage {
     pub digest: String,
     pub components: Vec<Component>,
     pub pages: Vec<VerifiedPage>,
+    /// Signed v3 files other than component/page entrypoints. Legacy packages
+    /// leave this empty. Runtime consumers must still apply capability checks.
+    pub resources: BTreeMap<String, Vec<u8>>,
 }
 
 /// Author-side packaging. The private seed is never part of a package or directory.
@@ -115,6 +125,9 @@ pub fn embedded_registration(bytes: &[u8]) -> Result<Option<Registration>> {
     if bytes.len() > MAX_PACKAGE_BYTES {
         return Err("package exceeds limit".into());
     }
+    if application::is_application(bytes) {
+        return application::embedded_registration(bytes);
+    }
     let envelope: Envelope = serde_json::from_slice(bytes)?;
     match envelope.format.as_str() {
         "znet-sink.plugin-package.v1" if envelope.registration.is_none() => Ok(None),
@@ -124,6 +137,24 @@ pub fn embedded_registration(bytes: &[u8]) -> Result<Option<Registration>> {
             .ok_or_else(|| "package has no embedded publisher registration".into()),
         _ => Err("unsupported package format".into()),
     }
+}
+
+/// Read only the package identity needed to select a trust root. This does not
+/// authenticate the package; callers must always follow it with `verify` or
+/// `verify_local` before using any package content.
+pub fn package_id(bytes: &[u8]) -> Result<String> {
+    if bytes.len() > MAX_PACKAGE_BYTES {
+        return Err("package exceeds limit".into());
+    }
+    if application::is_application(bytes) {
+        return application::package_id(bytes);
+    }
+    let envelope: Envelope = serde_json::from_slice(bytes)?;
+    let payload = STANDARD.decode(envelope.payload)?;
+    if payload.len() > 2 * 1024 * 1024 {
+        return Err("payload exceeds limit".into());
+    }
+    Ok(serde_json::from_slice::<Payload>(&payload)?.plugin_id)
 }
 
 pub fn verify(bytes: &[u8], registration: &Registration) -> Result<VerifiedPackage> {
@@ -145,6 +176,9 @@ fn verify_with_policy(
     registration.validate()?;
     if bytes.len() > MAX_PACKAGE_BYTES {
         return Err("package exceeds limit".into());
+    }
+    if application::is_application(bytes) {
+        return application::verify(bytes, registration, enforce_marketplace_ceiling);
     }
     let envelope: Envelope = serde_json::from_slice(bytes)?;
     let payload = STANDARD.decode(envelope.payload)?;
@@ -179,6 +213,22 @@ fn verify_with_policy(
     message.extend_from_slice(&payload);
     VerifyingKey::from_bytes(&public_key)?.verify_strict(&message, &signature)?;
     let payload: Payload = serde_json::from_slice(&payload)?;
+    verify_payload(
+        payload,
+        registration,
+        enforce_marketplace_ceiling,
+        sha256(bytes),
+        BTreeMap::new(),
+    )
+}
+
+pub(super) fn verify_payload(
+    payload: Payload,
+    registration: &Registration,
+    enforce_marketplace_ceiling: bool,
+    digest: String,
+    resources: BTreeMap<String, Vec<u8>>,
+) -> Result<VerifiedPackage> {
     if payload.schema_version != 1
         || payload.host != "znet-sink"
         || payload.plugin_id != registration.id
@@ -247,9 +297,10 @@ fn verify_with_policy(
     Ok(VerifiedPackage {
         id: payload.plugin_id,
         version: payload.version,
-        digest: sha256(bytes),
+        digest,
         components,
         pages,
+        resources,
     })
 }
 impl VerifiedPackage {
