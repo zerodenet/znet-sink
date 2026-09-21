@@ -8,6 +8,7 @@ use crate::models::core_process::CoreProcessState;
 use crate::models::proxy_config::{
     ProxyConfigCapabilities, ProxyConfigImport, ProxyConfigProfile, ProxyConfigUpsert,
 };
+use crate::models::subscription::{ManagedSubscriptionSource, SubscriptionProfile};
 use crate::services::common::{
     generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
@@ -68,7 +69,7 @@ pub fn upsert(
     Ok(profile)
 }
 
-fn build_upsert_profiles(
+pub(crate) fn build_upsert_profiles(
     previous: &[ProxyConfigProfile],
     input: ProxyConfigUpsert,
 ) -> AppResult<(Vec<ProxyConfigProfile>, ProxyConfigProfile)> {
@@ -95,6 +96,10 @@ fn build_upsert_profiles(
         path,
         content: input.content,
         active,
+        managed_source: previous
+            .iter()
+            .find(|profile| profile.id == id)
+            .and_then(|profile| profile.managed_source.clone()),
         updated_at_unix_ms,
         capabilities,
     };
@@ -164,10 +169,125 @@ pub(crate) async fn upsert_runtime_locked(
     app_handle: AppHandle,
     input: ProxyConfigUpsert,
 ) -> AppResult<ProxyConfigProfile> {
+    upsert_runtime_transition(app_handle, input, None, ProfilePublication::ProfilesOnly).await
+}
+
+pub(crate) async fn upsert_managed_subscription_runtime_locked(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    owner: ManagedSubscriptionSource,
+    previous_subscriptions: Vec<SubscriptionProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+) -> AppResult<ProxyConfigProfile> {
+    upsert_runtime_transition(
+        app_handle,
+        input,
+        Some(owner),
+        ProfilePublication::Relational {
+            previous_subscriptions,
+            next_subscriptions,
+        },
+    )
+    .await
+}
+
+enum ProfilePublication {
+    ProfilesOnly,
+    Relational {
+        previous_subscriptions: Vec<SubscriptionProfile>,
+        next_subscriptions: Vec<SubscriptionProfile>,
+    },
+}
+
+impl ProfilePublication {
+    fn commit(
+        &self,
+        state: &AppState,
+        previous: &[ProxyConfigProfile],
+        next: Vec<ProxyConfigProfile>,
+    ) -> AppResult<()> {
+        match self {
+            Self::ProfilesOnly => persist_profile_transition(state, previous, next),
+            Self::Relational {
+                previous_subscriptions,
+                next_subscriptions,
+            } => crate::configuration::persistence::commit_relational(
+                state,
+                previous,
+                previous_subscriptions,
+                next,
+                next_subscriptions.clone(),
+            ),
+        }
+    }
+
+    fn restore(&self, state: &AppState, previous: &[ProxyConfigProfile]) -> AppResult<()> {
+        match self {
+            Self::ProfilesOnly => restore_profiles(state, previous),
+            Self::Relational {
+                previous_subscriptions,
+                ..
+            } => {
+                let current_profiles = lock(state.proxy_configs(), "proxy_config")?.clone();
+                let current_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
+                crate::configuration::persistence::commit_relational(
+                    state,
+                    &current_profiles,
+                    &current_subscriptions,
+                    previous.to_vec(),
+                    previous_subscriptions.clone(),
+                )
+            }
+        }
+    }
+}
+
+async fn upsert_runtime_transition(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    managed_owner: Option<ManagedSubscriptionSource>,
+    publication: ProfilePublication,
+) -> AppResult<ProxyConfigProfile> {
     let state = app_handle.state::<AppState>();
     let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
     let previous_active = previous.iter().find(|profile| profile.active).cloned();
-    let (next, profile) = build_upsert_profiles(&previous, input)?;
+    let (mut next, mut profile) = build_upsert_profiles(&previous, input)?;
+    let previous_target = previous.iter().find(|item| item.id == profile.id);
+    match (
+        &managed_owner,
+        previous_target.and_then(|item| item.managed_source.as_ref()),
+    ) {
+        (Some(expected), Some(actual)) if !actual.same_namespace(expected) => {
+            return Err(managed_config_ownership_conflict(
+                &profile.id,
+                expected,
+                Some(actual),
+            ));
+        }
+        (Some(expected), None) if previous_target.is_some() => {
+            return Err(managed_config_ownership_conflict(
+                &profile.id,
+                expected,
+                None,
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AppError::conflict(
+                "proxy_config",
+                profile.id,
+                "managed proxy configuration is owned by its plugin source",
+            ));
+        }
+        _ => {}
+    }
+    if let Some(owner) = managed_owner {
+        profile.managed_source = Some(owner.clone());
+        let target = next
+            .iter_mut()
+            .find(|item| item.id == profile.id)
+            .ok_or_else(|| AppError::internal("failed to prepare managed proxy config"))?;
+        target.managed_source = Some(owner);
+    }
     let next_active = next.iter().find(|item| item.active).cloned();
     let runtime_changed = previous_active
         .as_ref()
@@ -176,12 +296,12 @@ pub(crate) async fn upsert_runtime_locked(
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
 
     if !running || !runtime_changed {
-        persist_profile_transition(state.inner(), &previous, next)?;
+        publication.commit(state.inner(), &previous, next)?;
         if let Err(mut error) = retarget_active(state.clone()) {
             append_recovery(
                 &mut error,
                 "profile storage",
-                restore_profiles(state.inner(), &previous),
+                publication.restore(state.inner(), &previous),
             );
             append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
             return Err(error);
@@ -213,7 +333,7 @@ pub(crate) async fn upsert_runtime_locked(
         .await?;
     match crate::services::config_apply::apply(state.capabilities(), content, options).await {
         Ok(_) => {
-            if let Err(mut error) = persist_profile_transition(state.inner(), &previous, next) {
+            if let Err(mut error) = publication.commit(state.inner(), &previous, next) {
                 if let Some(previous_active) = previous_active.as_ref() {
                     append_recovery(
                         &mut error,
@@ -227,7 +347,7 @@ pub(crate) async fn upsert_runtime_locked(
                 append_recovery(
                     &mut error,
                     "profile storage",
-                    restore_profiles(state.inner(), &previous),
+                    publication.restore(state.inner(), &previous),
                 );
                 if let Some(previous_active) = previous_active.as_ref() {
                     append_recovery(
@@ -242,6 +362,23 @@ pub(crate) async fn upsert_runtime_locked(
             Ok(profile)
         }
         Err(error) => Err(error),
+    }
+}
+
+fn managed_config_ownership_conflict(
+    id: &str,
+    expected: &ManagedSubscriptionSource,
+    actual: Option<&ManagedSubscriptionSource>,
+) -> AppError {
+    AppError {
+        code: "conflict",
+        message: "managed proxy configuration namespace is already owned".into(),
+        details: Some(serde_json::json!({
+            "resource": "proxy_config",
+            "id": id,
+            "expectedOwner": expected,
+            "actualOwner": actual,
+        })),
     }
 }
 
@@ -384,6 +521,22 @@ async fn activate_runtime_locked(
 }
 
 pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> {
+    remove_runtime_owned(app_handle, id, None).await
+}
+
+pub(crate) async fn remove_managed_runtime(
+    app_handle: AppHandle,
+    id: String,
+    owner: ManagedSubscriptionSource,
+) -> AppResult<()> {
+    remove_runtime_owned(app_handle, id, Some(owner)).await
+}
+
+async fn remove_runtime_owned(
+    app_handle: AppHandle,
+    id: String,
+    managed_owner: Option<ManagedSubscriptionSource>,
+) -> AppResult<()> {
     let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
     let id = normalize_required(id, "id")?;
@@ -400,6 +553,24 @@ pub async fn remove_runtime(app_handle: AppHandle, id: String) -> AppResult<()> 
             .flatten();
         (removed, replacement)
     };
+    match (&managed_owner, removed.managed_source.as_ref()) {
+        (Some(expected), Some(actual)) if actual.same_namespace(expected) => {}
+        (Some(expected), actual) => {
+            return Err(managed_config_ownership_conflict(
+                &removed.id,
+                expected,
+                actual,
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AppError::conflict(
+                "proxy_config",
+                removed.id,
+                "managed proxy configuration can only be removed by its owning plugin source",
+            ));
+        }
+        (None, None) => {}
+    }
     if !removed.active {
         return remove(state.clone(), id);
     }
@@ -794,6 +965,7 @@ mod tests {
             path: None,
             content: Some(json!({ "id": id })),
             active,
+            managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: Default::default(),
         }

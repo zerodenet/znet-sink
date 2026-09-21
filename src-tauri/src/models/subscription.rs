@@ -56,6 +56,18 @@ pub struct ManagedSubscriptionSource {
     pub remote_subscription_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// Human-readable provider label for display only. It is deliberately
+    /// excluded from the ownership namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+}
+
+impl ManagedSubscriptionSource {
+    pub fn same_namespace(&self, other: &Self) -> bool {
+        self.plugin_id == other.plugin_id
+            && self.provider_id == other.provider_id
+            && self.remote_subscription_id == other.remote_subscription_id
+    }
 }
 
 #[derive(Clone, Debug)]

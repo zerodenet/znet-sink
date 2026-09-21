@@ -14,8 +14,43 @@ pub(crate) fn commit(
     previous: &[ProxyConfigProfile],
     next: Vec<ProxyConfigProfile>,
 ) -> AppResult<()> {
-    let previous_active = previous.iter().find(|profile| profile.active);
-    let next_active = next.iter().find(|profile| profile.active);
+    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
+    let mut next_subscriptions = previous_subscriptions.clone();
+    let profile_ids = next
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for subscription in &mut next_subscriptions {
+        if subscription
+            .target_proxy_config_id
+            .as_deref()
+            .is_some_and(|id| !profile_ids.contains(id))
+        {
+            subscription.target_proxy_config_id = None;
+        }
+    }
+    commit_relational(
+        state,
+        previous,
+        &previous_subscriptions,
+        next,
+        next_subscriptions,
+    )
+}
+
+/// Atomically publish proxy configurations and subscriptions as one SQLite
+/// relationship graph, then project the active profile and update both
+/// in-memory collections. Callers must provide complete before/after
+/// snapshots so a projection failure can restore the exact prior state.
+pub(crate) fn commit_relational(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+) -> AppResult<()> {
+    let previous_active = previous_profiles.iter().find(|profile| profile.active);
+    let next_active = next_profiles.iter().find(|profile| profile.active);
     let active_config_changed = match (previous_active, next_active) {
         (Some(previous), Some(next)) => {
             previous.id != next.id
@@ -28,41 +63,22 @@ pub(crate) fn commit(
         _ => true,
     };
     let next_active_profile = next_active.cloned();
-
-    if let Some(active) = next.iter().find(|profile| profile.active) {
+    if let Some(active) = next_active {
         ensure_managed_system_proxy_compatible(active.content.as_ref())?;
     }
-    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
-    let mut next_subscriptions = previous_subscriptions.clone();
-    let mut subscriptions_changed = false;
-    let profile_ids = next
-        .iter()
-        .map(|profile| profile.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    for subscription in &mut next_subscriptions {
-        if subscription
-            .target_proxy_config_id
-            .as_deref()
-            .is_some_and(|id| !profile_ids.contains(id))
-        {
-            subscription.target_proxy_config_id = None;
-            subscriptions_changed = true;
-        }
-    }
+
     let transaction = LocalPublication {
         state,
-        previous,
-        next: &next,
-        previous_subscriptions: &previous_subscriptions,
+        previous: previous_profiles,
+        next: &next_profiles,
+        previous_subscriptions,
         next_subscriptions: &next_subscriptions,
     };
     znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
     let mut profiles_guard = lock(state.proxy_configs(), "proxy_config")?;
     let mut subscriptions_guard = lock(state.subscriptions(), "subscription")?;
-    *profiles_guard = next;
-    if subscriptions_changed {
-        *subscriptions_guard = next_subscriptions;
-    }
+    *profiles_guard = next_profiles;
+    *subscriptions_guard = next_subscriptions;
     drop(profiles_guard);
     drop(subscriptions_guard);
     if active_config_changed {

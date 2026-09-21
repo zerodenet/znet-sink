@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::subscription::ManagedSubscriptionSource;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyConfigProfile {
@@ -11,6 +13,10 @@ pub struct ProxyConfigProfile {
     pub path: Option<String>,
     pub content: Option<Value>,
     pub active: bool,
+    /// Stable plugin ownership for a configuration projected from a managed
+    /// subscription. Manual configurations never populate this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_source: Option<ManagedSubscriptionSource>,
     pub updated_at_unix_ms: u64,
     pub capabilities: ProxyConfigCapabilities,
 }

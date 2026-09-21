@@ -8,8 +8,17 @@ export interface ProxyConfigProfile {
   path?: string;
   content?: unknown;
   active: boolean;
+  managedSource?: ManagedSubscriptionSource;
   updatedAtUnixMs: number;
   capabilities: ProxyConfigCapabilities;
+}
+
+export interface ManagedSubscriptionSource {
+  pluginId: string;
+  providerId: string;
+  remoteSubscriptionId: string;
+  revision?: string;
+  sourceName?: string;
 }
 
 export interface ProxyConfigUpsert {
@@ -50,12 +59,7 @@ export interface SubscriptionProfile {
   kernel: string;
   format: string;
   targetProxyConfigId?: string;
-  managedSource?: {
-    pluginId: string;
-    providerId: string;
-    remoteSubscriptionId: string;
-    revision?: string;
-  };
+  managedSource?: ManagedSubscriptionSource;
   /** Persisted selector choices keyed by policy-group tag. */
   policySelections: Record<string, string>;
   /** Auto-sync interval in seconds. When set and enabled, the

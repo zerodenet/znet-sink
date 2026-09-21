@@ -130,7 +130,7 @@
   }
 
   function openEdit(profile: ProxyConfigProfile) {
-    if (busy) return;
+    if (busy || profile.managedSource) return;
     draft = {
       name: profile.name,
       sourceMode: profile.path ? 'file' : 'inline',
@@ -286,7 +286,14 @@
   }
 
   function getSourceLabel(profile: ProxyConfigProfile): string {
+    if (profile.managedSource) return `由 ${managedPluginLabel(profile.managedSource.pluginId)} 托管`;
     return profile.path ? '文件' : 'JSON';
+  }
+
+  function managedPluginLabel(pluginId: string): string {
+    if (pluginId === 'org.zerodenet.connect.znet-sink') return 'Connect';
+    const segment = pluginId.split('.').filter(Boolean).at(-1) ?? pluginId;
+    return segment.charAt(0).toUpperCase() + segment.slice(1);
   }
 
   function getSaveLabel(): string {
@@ -355,8 +362,8 @@
               type="button"
               class="row-open"
               onclick={() => openEdit(config)}
-              disabled={busy}
-              aria-label={`编辑代理配置 ${config.name}`}
+              disabled={busy || Boolean(config.managedSource)}
+              aria-label={config.managedSource ? `插件托管代理配置 ${config.name}` : `编辑代理配置 ${config.name}`}
             >
               <div class="row-main">
               <div class="row-top">
@@ -375,6 +382,10 @@
                 <span>{formatDate(config.updatedAtUnixMs)}</span>
                 <span>·</span>
                 <span class="row-path">{config.path ?? '内嵌 JSON'}</span>
+                {#if config.managedSource}
+                  <span>·</span>
+                  <span>来源: {config.managedSource.sourceName ?? config.managedSource.providerId}</span>
+                {/if}
               </div>
               </div>
             </button>
@@ -395,7 +406,7 @@
                 {/if}
               {/if}
 
-              {#if canRemove}
+              {#if canRemove && !config.managedSource}
                 <Button
                   variant="ghost"
                   size="icon-sm"

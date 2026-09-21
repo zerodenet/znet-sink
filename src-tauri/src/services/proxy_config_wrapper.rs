@@ -1,14 +1,17 @@
 #[path = "proxy_config.rs"]
 mod original;
 
+#[cfg(test)]
+pub(crate) use original::build_upsert_profiles;
 pub use original::{
     activate_runtime, analyze_capabilities, extract_local_proxy, get, import, import_runtime, list,
     parse_config_content, remove, remove_runtime, set_active, update_active_content, upsert,
     LocalProxyEndpoint,
 };
 pub(crate) use original::{
-    clear_local_proxy_source, ensure_managed_system_proxy_compatible, restore_profiles,
-    retarget_managed_system_proxy, sync_local_proxy_from_profile, upsert_runtime_locked,
+    clear_local_proxy_source, ensure_managed_system_proxy_compatible, remove_managed_runtime,
+    restore_profiles, retarget_managed_system_proxy, sync_local_proxy_from_profile,
+    upsert_runtime_locked,
 };
 
 use serde_json::{json, Value};
@@ -17,6 +20,7 @@ use tauri::{AppHandle, Manager};
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::AppLocalProxyConfig;
 use crate::models::proxy_config::{ProxyConfigProfile, ProxyConfigUpsert};
+use crate::models::subscription::{ManagedSubscriptionSource, SubscriptionProfile};
 use crate::services::common::lock;
 use crate::state::app_state::AppState;
 
@@ -257,6 +261,29 @@ pub async fn upsert_runtime(
         clear_managed_source(state.inner())?;
     }
     Ok(profile)
+}
+
+pub(crate) async fn upsert_managed_subscription_runtime(
+    app_handle: AppHandle,
+    mut input: ProxyConfigUpsert,
+    owner: ManagedSubscriptionSource,
+    previous_subscriptions: Vec<SubscriptionProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+) -> AppResult<ProxyConfigProfile> {
+    {
+        let state = app_handle.state::<AppState>();
+        prepare_subscription_upsert(state.inner(), &mut input)?;
+    }
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    original::upsert_managed_subscription_runtime_locked(
+        app_handle.clone(),
+        input,
+        owner,
+        previous_subscriptions,
+        next_subscriptions,
+    )
+    .await
 }
 
 #[cfg(test)]

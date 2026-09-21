@@ -153,6 +153,7 @@ fn settings_show_bind_address_while_system_proxy_uses_connectable_address() {
             path: None,
             content: Some(base),
             active: true,
+            managed_source: None,
             updated_at_unix_ms: 0,
             capabilities: Default::default(),
         }],

@@ -1,6 +1,10 @@
 #[path = "subscription.rs"]
 mod original;
 
+#[cfg(test)]
+pub(crate) use original::{
+    apply_managed_to_acceptance_store, remove_managed_from_acceptance_store,
+};
 pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
 
 use base64::{engine::general_purpose, Engine as _};

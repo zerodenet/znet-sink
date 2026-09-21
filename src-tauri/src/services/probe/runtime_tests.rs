@@ -186,6 +186,7 @@ fn host() -> AppState {
         path: None,
         content: Some(serde_json::json!({})),
         active: true,
+        managed_source: None,
         updated_at_unix_ms: 1,
         capabilities: Default::default(),
     };

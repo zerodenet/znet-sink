@@ -111,6 +111,19 @@
     }
   }
 
+  function managedPluginLabel(pluginId: string): string {
+    const segments = pluginId.split('.').filter(Boolean);
+    const hostSuffix = segments.at(-1)?.toLowerCase();
+    const candidate = hostSuffix === 'znet-sink' && segments.length > 1
+      ? segments.at(-2)!
+      : segments.at(-1) ?? pluginId;
+    return candidate
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
   function emptyForm(): FormState {
     return {
       name: '',
@@ -475,7 +488,7 @@
               <span class="row-name">{sub.name}</span>
 
               {#if sub.managedSource}
-                <span class="row-tag info-tag">插件托管</span>
+                <span class="row-tag info-tag">由 {managedPluginLabel(sub.managedSource.pluginId)} 托管</span>
               {/if}
 
               {#if sub.lastError}
@@ -500,6 +513,14 @@
             <div class="row-meta">
               <span class="font-mono row-url" title={sub.url}>{sub.url}</span>
             </div>
+
+            {#if sub.managedSource}
+              <div class="row-meta-line">
+                <span>来源: {sub.managedSource.sourceName ?? sub.managedSource.providerId}</span>
+                <span class="row-sep">·</span>
+                <span class="font-mono">{sub.managedSource.remoteSubscriptionId}</span>
+              </div>
+            {/if}
 
             <div class="row-meta-line">
               <span>同步: {formatTime(sub.lastSyncAtUnixMs)}</span>
@@ -565,17 +586,18 @@
                 </svg>
               </Button>
             {/if}
-            <Button variant="destructive" size="icon-sm"
-
-              onclick={(e: MouseEvent) => { e.stopPropagation(); requestRemove(sub); }}
-              disabled={busy}
-              title="删除订阅"
-              aria-label="删除订阅"
-            >
-              <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-                <path d="M2 3h8M4.5 3V2h3v1M3 3l.5 7h5L9 3"/>
-              </svg>
-            </Button>
+            {#if !sub.managedSource}
+              <Button variant="destructive" size="icon-sm"
+                onclick={(e: MouseEvent) => { e.stopPropagation(); requestRemove(sub); }}
+                disabled={busy}
+                title="删除订阅"
+                aria-label="删除订阅"
+              >
+                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                  <path d="M2 3h8M4.5 3V2h3v1M3 3l.5 7h5L9 3"/>
+                </svg>
+              </Button>
+            {/if}
           </div>
         </div>
       {/each}

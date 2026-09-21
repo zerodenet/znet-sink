@@ -1,5 +1,6 @@
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use znet_plugin_sandbox::{
     contract::{sha256, Limits, Manifest},
@@ -16,6 +17,70 @@ struct ExternalPluginBootstrap {
     vault_base64: BTreeMap<String, String>,
     scheduled_action: String,
     expected: serde_json::Value,
+}
+
+struct ExternalManagedAcceptanceStore {
+    dir: std::path::PathBuf,
+    profiles: Vec<crate::models::proxy_config::ProxyConfigProfile>,
+    subscriptions: Vec<crate::models::subscription::SubscriptionProfile>,
+    apply_count: usize,
+    managed_subscription_id: Option<String>,
+}
+
+impl ExternalManagedAcceptanceStore {
+    fn new(dir: std::path::PathBuf) -> Self {
+        Self {
+            dir,
+            profiles: Vec::new(),
+            subscriptions: Vec::new(),
+            apply_count: 0,
+            managed_subscription_id: None,
+        }
+    }
+
+    fn seed_manual_collision(
+        &mut self,
+        input: &crate::models::subscription::ManagedSubscriptionApply,
+    ) {
+        if !self.profiles.is_empty() || !self.subscriptions.is_empty() {
+            return;
+        }
+        self.profiles
+            .push(crate::models::proxy_config::ProxyConfigProfile {
+                id: "manual-config".into(),
+                name: "Manual active".into(),
+                kernel: "zero".into(),
+                format: "json".into(),
+                path: None,
+                content: Some(serde_json::json!({"outbounds": []})),
+                active: true,
+                managed_source: None,
+                updated_at_unix_ms: 1,
+                capabilities: Default::default(),
+            });
+        self.subscriptions
+            .push(crate::models::subscription::SubscriptionProfile {
+                id: "manual-subscription".into(),
+                name: format!("{} / {}", input.source_name, input.subscription_name),
+                url: input.provider_id.clone(),
+                enabled: true,
+                kernel: "zero".into(),
+                format: input.format.clone(),
+                target_proxy_config_id: Some("manual-config".into()),
+                managed_source: None,
+                policy_selections: Default::default(),
+                update_interval_secs: None,
+                user_agent: None,
+                node_count: None,
+                upload_bytes: None,
+                download_bytes: None,
+                total_bytes: None,
+                expire_at_unix_ms: None,
+                updated_at_unix_ms: 1,
+                last_sync_at_unix_ms: None,
+                last_error: None,
+            });
+    }
 }
 const SEED: [u8; 32] = [17; 32];
 // Fixtures exercise the real Host, which checks the compiled client version.
@@ -237,7 +302,8 @@ fn external_local_package_import_runs_in_vm_when_requested() {
     let plugin_id = std::env::var("ZNET_EXTERNAL_PLUGIN_ID")
         .expect("ZNET_EXTERNAL_PLUGIN_ID is required with ZNET_EXTERNAL_PLUGIN_PACKAGE");
     let bytes = std::fs::read(&package_path).expect("read external plugin package");
-    let bootstrap = std::env::var("ZNET_EXTERNAL_PLUGIN_BOOTSTRAP")
+    let managed_acceptance = std::env::var_os("ZNET_EXTERNAL_PLUGIN_MANAGED_ACCEPTANCE").is_some();
+    let mut bootstrap = std::env::var("ZNET_EXTERNAL_PLUGIN_BOOTSTRAP")
         .ok()
         .map(|path| {
             serde_json::from_slice::<ExternalPluginBootstrap>(
@@ -245,6 +311,20 @@ fn external_local_package_import_runs_in_vm_when_requested() {
             )
             .expect("decode external plugin bootstrap")
         });
+    if managed_acceptance {
+        let bootstrap = bootstrap
+            .as_mut()
+            .expect("managed subscription acceptance requires a bootstrap fixture");
+        let binding = bootstrap
+            .state
+            .get_mut("source/source-1/subscription/binding")
+            .expect("managed subscription acceptance binding");
+        let mut value: serde_json::Value =
+            serde_json::from_str(binding).expect("decode managed subscription binding");
+        value["revision"] = serde_json::Value::Null;
+        *binding = serde_json::to_string(&value).unwrap();
+        bootstrap.expected = serde_json::json!({"ok":true,"changed":true,"unread":1});
+    }
     #[cfg(feature = "acceptance-test-utils")]
     if bootstrap.is_some() {
         let ca_path = std::env::var("ZNET_EXTERNAL_PLUGIN_CA")
@@ -260,6 +340,11 @@ fn external_local_package_import_runs_in_vm_when_requested() {
         ..Host::default()
     });
     let manager = std::sync::Arc::new(Manager::default());
+    let managed_store = managed_acceptance.then(|| {
+        Arc::new(Mutex::new(ExternalManagedAcceptanceStore::new(
+            root.path().join("managed-subscription-store"),
+        )))
+    });
 
     let review = host
         .preview_local_bytes(&manager, &bytes, &plugin_id)
@@ -364,11 +449,51 @@ fn external_local_package_import_runs_in_vm_when_requested() {
         let dispatch_host = host.clone();
         let dispatch_manager = manager.clone();
         let dispatch_plugin = plugin_id.clone();
+        let dispatch_managed_store = managed_store.clone();
         let dispatcher: znet_plugin_sandbox::runtime::HostSdkDispatcher = std::sync::Arc::new(
             move |lease, input| {
                 let result = serde_json::from_str::<znet_plugin_sandbox::sdk::Call>(input)
                     .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
                     .and_then(|call| {
+                        if call.method == znet_plugin_sandbox::sdk::Method::SubscriptionApply {
+                            if let Some(store) = &dispatch_managed_store {
+                                let (managed, _) = dispatch_host
+                                    .managed_subscription_input_with_lease(
+                                        &dispatch_plugin,
+                                        lease,
+                                        call,
+                                    )
+                                    .map_err(|_| {
+                                        znet_plugin_sandbox::contract::Error::PermissionDenied
+                                    })?;
+                                let managed_debug = (
+                                    managed.format.clone(),
+                                    managed.content.chars().take(80).collect::<String>(),
+                                );
+                                let mut store = store.lock().unwrap();
+                                store.seed_manual_collision(&managed);
+                                let (profiles, subscriptions, committed) =
+                                    crate::services::subscription::apply_managed_to_acceptance_store(
+                                        &store.dir,
+                                        store.profiles.clone(),
+                                        store.subscriptions.clone(),
+                                        managed,
+                                    )
+                                    .unwrap_or_else(|error| {
+                                        panic!(
+                                            "managed subscription acceptance apply failed for {:?}: {} ({}) {:?}",
+                                            managed_debug, error.message, error.code, error.details
+                                        )
+                                    });
+                                store.profiles = profiles;
+                                store.subscriptions = subscriptions;
+                                store.apply_count += 1;
+                                store.managed_subscription_id = Some(committed.id.clone());
+                                return serde_json::to_value(committed).map_err(|_| {
+                                    znet_plugin_sandbox::contract::Error::InvalidOutput
+                                });
+                            }
+                        }
                         dispatch_host
                             .sdk_call_with_lease(
                                 &dispatch_manager,
@@ -391,26 +516,28 @@ fn external_local_package_import_runs_in_vm_when_requested() {
                     .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
             },
         );
-        let output = znet_plugin_sandbox::runtime::execute_scheduled_for_host_with_input(
-            &component,
-            &authority,
-            serde_json::json!({
-                "configuration": configuration,
-                "state": plugin_state,
-                "invocation": {
-                    "action": bootstrap.scheduled_action,
-                    "payload": {},
-                    "now_unix_ms": crate::services::common::now_unix_ms()
-                }
-            }),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            HOST_VERSION,
-            dispatcher,
-        )
-        .expect("execute external plugin cross-host scheduled action");
-        let envelope: serde_json::Value = output;
-        assert_eq!(envelope["znet_plugin_result"], 1);
-        assert_eq!(envelope["value"], bootstrap.expected);
+        let mut envelope = serde_json::Value::Null;
+        for _ in 0..if managed_acceptance { 2 } else { 1 } {
+            envelope = znet_plugin_sandbox::runtime::execute_scheduled_for_host_with_input(
+                &component,
+                &authority,
+                serde_json::json!({
+                    "configuration": configuration,
+                    "state": plugin_state,
+                    "invocation": {
+                        "action": bootstrap.scheduled_action,
+                        "payload": {},
+                        "now_unix_ms": crate::services::common::now_unix_ms()
+                    }
+                }),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                HOST_VERSION,
+                dispatcher.clone(),
+            )
+            .expect("execute external plugin cross-host scheduled action");
+            assert_eq!(envelope["znet_plugin_result"], 1);
+            assert_eq!(envelope["value"], bootstrap.expected);
+        }
         let updates: BTreeMap<String, Option<String>> =
             serde_json::from_value(envelope["state_updates"].clone()).unwrap();
         namespace::apply_runtime_updates(root.path(), &publisher, &plugin_id, updates).unwrap();
@@ -424,6 +551,70 @@ fn external_local_package_import_runs_in_vm_when_requested() {
             .expect("scheduled message summary update");
         let summary = STANDARD.decode(summary).unwrap();
         assert!(String::from_utf8(summary).unwrap().contains("checked_at"));
+
+        if let Some(store) = &managed_store {
+            let mut store = store.lock().unwrap();
+            assert_eq!(store.apply_count, 2, "real package must apply twice");
+            assert_eq!(store.profiles.len(), 2);
+            assert_eq!(store.subscriptions.len(), 2);
+            let manual_profile = store
+                .profiles
+                .iter()
+                .find(|profile| profile.id == "manual-config")
+                .unwrap();
+            assert!(manual_profile.active);
+            assert!(manual_profile.managed_source.is_none());
+            let manual_subscription = store
+                .subscriptions
+                .iter()
+                .find(|subscription| subscription.id == "manual-subscription")
+                .unwrap();
+            assert!(manual_subscription.managed_source.is_none());
+            let managed_id = store.managed_subscription_id.clone().unwrap();
+            let managed = store
+                .subscriptions
+                .iter()
+                .find(|subscription| subscription.id == managed_id)
+                .unwrap();
+            assert_eq!(
+                managed.managed_source.as_ref().unwrap().plugin_id,
+                plugin_id
+            );
+            let managed_config = store
+                .profiles
+                .iter()
+                .find(|profile| {
+                    managed.target_proxy_config_id.as_deref() == Some(profile.id.as_str())
+                })
+                .unwrap();
+            assert!(!managed_config.active);
+
+            let wrong_owner = crate::services::subscription::remove_managed_from_acceptance_store(
+                &store.dir,
+                store.profiles.clone(),
+                store.subscriptions.clone(),
+                &managed_id,
+                "org.example.foreign",
+            )
+            .unwrap_err();
+            assert_eq!(wrong_owner.code, "conflict");
+            let (profiles, subscriptions) =
+                crate::services::subscription::remove_managed_from_acceptance_store(
+                    &store.dir,
+                    store.profiles.clone(),
+                    store.subscriptions.clone(),
+                    &managed_id,
+                    &plugin_id,
+                )
+                .expect("remove managed subscription with exact package owner");
+            store.profiles = profiles;
+            store.subscriptions = subscriptions;
+            assert_eq!(store.profiles.len(), 1);
+            assert_eq!(store.subscriptions.len(), 1);
+            assert_eq!(store.profiles[0].id, "manual-config");
+            assert!(store.profiles[0].active);
+            assert_eq!(store.subscriptions[0].id, "manual-subscription");
+        }
     }
 
     let restarted = Host {

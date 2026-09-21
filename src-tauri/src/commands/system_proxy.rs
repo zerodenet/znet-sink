@@ -204,6 +204,7 @@ mod tests {
                     json!({ "outbounds": [], "route": { "final": { "type": "direct" } } }),
                 ),
                 active: true,
+                managed_source: None,
                 updated_at_unix_ms: 1,
                 capabilities: ProxyConfigCapabilities::default(),
             }],

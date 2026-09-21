@@ -19,6 +19,7 @@ fn domain_store_roundtrips_profiles() {
             path: None,
             content: None,
             active: true,
+            managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: ProxyConfigCapabilities::default(),
         }],
@@ -212,6 +213,7 @@ fn proxy_profile(id: &str) -> ProxyConfigProfile {
         path: None,
         content: Some(serde_json::json!({ "outbounds": [] })),
         active: true,
+        managed_source: None,
         updated_at_unix_ms: 1,
         capabilities: ProxyConfigCapabilities::default(),
     }

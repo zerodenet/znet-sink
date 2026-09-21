@@ -623,6 +623,7 @@ mod tests {
             path: None,
             content: None,
             active,
+            managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: ProxyConfigCapabilities::default(),
         }

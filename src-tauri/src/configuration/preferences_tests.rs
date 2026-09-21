@@ -151,6 +151,7 @@ fn manual_probe_uses_profile_public_url_and_native_proxy_does_not_add_client_exc
         format: "zero-json".into(),
         path: None,
         active: true,
+        managed_source: None,
         updated_at_unix_ms: 0,
         capabilities: Default::default(),
         content: Some(

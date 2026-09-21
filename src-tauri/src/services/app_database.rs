@@ -651,6 +651,114 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn relational_first_create_inserts_config_before_foreign_key_subscription() {
+        let dir = test_dir("sqlite-managed-first-create");
+        let proxy = proxy_profile("managed-config");
+        let subscription = subscription_profile(
+            "managed-subscription",
+            "https://panel.example.com",
+            Some(proxy.id.clone()),
+        );
+        save_domain_data(&dir, &[proxy], &[subscription]).unwrap();
+        let reloaded = load_domain_data(&dir).unwrap();
+        assert_eq!(reloaded.proxy_configs.len(), 1);
+        assert_eq!(reloaded.subscriptions.len(), 1);
+        assert_eq!(
+            reloaded.subscriptions[0].target_proxy_config_id.as_deref(),
+            Some("managed-config")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_insert_failure_rolls_back_subscription_insert() {
+        let dir = test_dir("sqlite-managed-config-failure");
+        let mut invalid_proxy = proxy_profile("managed-config");
+        invalid_proxy.id.clear();
+        let subscription = subscription_profile(
+            "managed-subscription",
+            "https://panel.example.com",
+            Some(String::new()),
+        );
+        assert!(save_domain_data(&dir, &[invalid_proxy], &[subscription]).is_err());
+        let reloaded = load_domain_data(&dir).unwrap();
+        assert!(reloaded.proxy_configs.is_empty());
+        assert!(reloaded.subscriptions.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subscription_insert_failure_rolls_back_config_insert() {
+        let dir = test_dir("sqlite-managed-subscription-failure");
+        let proxy = proxy_profile("managed-config");
+        let subscription = subscription_profile("managed-subscription", "", Some(proxy.id.clone()));
+        assert!(save_domain_data(&dir, &[proxy], &[subscription]).is_err());
+        let reloaded = load_domain_data(&dir).unwrap();
+        assert!(reloaded.proxy_configs.is_empty());
+        assert!(reloaded.subscriptions.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn managed_delete_snapshot_preserves_manual_and_foreign_records() {
+        let dir = test_dir("sqlite-managed-delete-isolation");
+        let manual_proxy = proxy_profile("manual-config");
+        let mut managed_proxy = proxy_profile("managed-config");
+        managed_proxy.active = false;
+        let mut foreign_proxy = proxy_profile("foreign-config");
+        foreign_proxy.active = false;
+        let manual_subscription = subscription_profile(
+            "manual-subscription",
+            "https://manual.example.com",
+            Some(manual_proxy.id.clone()),
+        );
+        let managed_subscription = subscription_profile(
+            "managed-subscription",
+            "https://panel.example.com",
+            Some(managed_proxy.id.clone()),
+        );
+        let foreign_subscription = subscription_profile(
+            "foreign-subscription",
+            "https://foreign.example.com",
+            Some(foreign_proxy.id.clone()),
+        );
+        save_domain_data(
+            &dir,
+            &[manual_proxy.clone(), managed_proxy, foreign_proxy.clone()],
+            &[
+                manual_subscription.clone(),
+                managed_subscription,
+                foreign_subscription.clone(),
+            ],
+        )
+        .unwrap();
+        save_domain_data(
+            &dir,
+            &[manual_proxy, foreign_proxy],
+            &[manual_subscription, foreign_subscription],
+        )
+        .unwrap();
+        let reloaded = load_domain_data(&dir).unwrap();
+        assert_eq!(
+            reloaded
+                .proxy_configs
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["manual-config", "foreign-config"]
+        );
+        assert_eq!(
+            reloaded
+                .subscriptions
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["manual-subscription", "foreign-subscription"]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn proxy_profile(id: &str) -> ProxyConfigProfile {
         ProxyConfigProfile {
             id: id.to_string(),
@@ -660,6 +768,7 @@ mod tests {
             path: None,
             content: Some(serde_json::json!({ "outbounds": [] })),
             active: true,
+            managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: Default::default(),
         }
