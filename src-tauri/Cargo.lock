@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.2-dev.202609171424"
+version = "0.0.2-dev.202609210148"
 dependencies = [
  "base64 0.22.1",
  "dirs",
