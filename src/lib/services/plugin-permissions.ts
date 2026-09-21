@@ -1,5 +1,20 @@
 import type { PluginComponent, PluginPermission } from './plugins';
 export const permissionKey = (p: PluginPermission) => JSON.stringify([p.capability, p.scope]);
+export function initialPermissionSelection(component: PluginComponent): string[] {
+  return component.permissions
+    .filter(permission => permission.supported && (permission.granted || permission.required))
+    .map(permission => permissionKey(permission.request));
+}
+export function supportedPermissionSelection(component: PluginComponent): string[] {
+  return component.permissions
+    .filter(permission => permission.supported)
+    .map(permission => permissionKey(permission.request));
+}
+export function requiredPermissionSelection(component: PluginComponent): string[] {
+  return component.permissions
+    .filter(permission => permission.supported && permission.required)
+    .map(permission => permissionKey(permission.request));
+}
 export function canApprove(component: PluginComponent, selected: string[]): boolean {
   if (component.blocked || !component.review || component.configuration?.configured === false) return false;
   return component.permissions.every(p => !p.required || (p.supported && selected.includes(permissionKey(p.request))));

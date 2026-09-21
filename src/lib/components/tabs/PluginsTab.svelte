@@ -16,7 +16,7 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import { getAppErrorInfo } from '$lib/services/core';
   import { pluginApi, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot } from '$lib/services/plugins';
-  import { canApprove, selectedGrants, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
+  import { canApprove, initialPermissionSelection, requiredPermissionSelection, selectedGrants, supportedPermissionSelection, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
   import * as toast from '$lib/services/toast.svelte';
   import { pluginNavigation, type PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
 
@@ -162,14 +162,16 @@
   }
   async function confirmLocalUpgrade() {
     if (!localInstallReview || !localInstallPath) return;
+    const pluginId = localInstallReview.plugin_id;
     busy = true; error = ''; message = ''; localInstallError = '';
     try {
       snapshot = await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
       installOpen = false;
       localInstallPath = '';
       localInstallReview = null;
-      message = '插件已安装；权限尚未批准';
-      toast.success('本地插件已安装');
+      openPermissionGuide(pluginId);
+      message = '插件已安装；必需权限已预选，请确认后启用';
+      toast.success('本地插件已安装，请确认权限');
     } catch (reason) {
       localInstallError = getAppErrorInfo(reason, '本地插件安装失败').message;
       toast.error(localInstallError);
@@ -184,7 +186,7 @@
     selectedPluginId = plugin.id;
     initialRoute = route;
     detailSection = tab;
-    permissionSelections = Object.fromEntries(plugin.components.map(component => [componentKey(component), component.permissions.filter(permission => permission.supported && permission.granted).map(permission => permissionKey(permission.request))]));
+    permissionSelections = Object.fromEntries(plugin.components.map(component => [componentKey(component), initialPermissionSelection(component)]));
     configurationDrafts = Object.fromEntries(plugin.components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
     configurationErrors = {};
     message = ''; error = ''; clearResult();
@@ -235,6 +237,24 @@
     const id = componentKey(component);
     const current = permissionSelections[id] ?? [];
     permissionSelections = { ...permissionSelections, [id]: checked ? [...current.filter(value => value !== key), key] : current.filter(value => value !== key) };
+  }
+  function setPermissionSelection(component: PluginComponent, selection: 'required' | 'all') {
+    const id = componentKey(component);
+    permissionSelections = {
+      ...permissionSelections,
+      [id]: selection === 'all' ? supportedPermissionSelection(component) : requiredPermissionSelection(component),
+    };
+  }
+  function openPermissionGuide(pluginId: string) {
+    const components = snapshot.components.filter(component => component.plugin_id === pluginId);
+    reloadGeneration++;
+    selectedPluginId = pluginId;
+    initialRoute = null;
+    detailSection = 'permissions';
+    permissionSelections = Object.fromEntries(components.map(component => [componentKey(component), initialPermissionSelection(component)]));
+    configurationDrafts = Object.fromEntries(components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
+    configurationErrors = {};
+    clearResult();
   }
   async function approve(component: PluginComponent) {
     if (!component.review) return;
@@ -383,9 +403,21 @@
       {:else if detailSection === 'permissions'}
         <section class="plugin-detail-section">
           <div class="plugin-section-heading"><div><h3>访问权限</h3><p>权限名称、访问范围和授权状态由客户端固定展示，插件不能修改或隐藏。</p></div></div>
+          {#if selectedPlugin.components.some(component => !component.enabled && component.permissions.some(permission => permission.required))}
+            <p class="plugins-notice">启用组件前需要确认权限。必需权限已预选；你可以直接启用，也可以一键选择全部可用权限。</p>
+          {/if}
           {#each selectedPlugin.components as component (componentKey(component))}
             <div class="plugin-permission-group">
               <div class="plugin-section-heading"><div><strong>{componentLabel(component)}</strong><p>批准结果由客户端持久化；新增权限或扩大范围时必须重新确认。</p></div><span class="plugin-status" class:authorized={component.enabled}>{component.enabled ? '已启用' : component.permissions.some(permission => permission.granted) ? '已停用' : '未授权'}</span></div>
+              {#if component.permissions.some(permission => permission.supported)}
+                <div class="plugin-permission-tools">
+                  <span>已选择 {(permissionSelections[componentKey(component)] ?? []).length} / {component.permissions.filter(permission => permission.supported).length} 项</span>
+                  <div>
+                    <Button size="sm" variant="ghost" disabled={busy || component.enabled} onclick={() => setPermissionSelection(component, 'required')}>仅选必需</Button>
+                    <Button size="sm" variant="outline" disabled={busy || component.enabled} onclick={() => setPermissionSelection(component, 'all')}>全选可用权限</Button>
+                  </div>
+                </div>
+              {/if}
               {#each component.permissions as permission}
                 <label class="permission-row"><Choice checked={(permissionSelections[componentKey(component)] ?? []).includes(permissionKey(permission.request))} onchange={(event) => changePermission(component, permissionKey(permission.request), event.currentTarget.checked)} disabled={!permission.supported || component.enabled} /><span>{permissionLabel(permission.request.capability)}{permission.required ? '（必需）' : '（可选）'}<small>{permission.request.scope === 'self' ? '仅此插件的身份信息' : permission.request.scope}{permission.supported ? '' : ' · 暂不可用'}</small></span></label>
               {/each}
@@ -490,6 +522,8 @@
 </Dialog.Root>
 
 <style>
+  .plugin-permission-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted-foreground); font-size: 11px; }
+  .plugin-permission-tools > div { display: flex; align-items: center; gap: 6px; }
   .permission-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
   .permission-row :global([data-slot='choice']) { margin-top: 3px; flex-shrink: 0; }
   .permission-row span { min-width: 0; }

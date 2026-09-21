@@ -30,7 +30,7 @@
     "test:lite-session": "node scripts/test-lite-session-traffic.mjs",
     "test:cross-mode-state": "node scripts/test-cross-mode-state.mjs && node --test scripts/test-ui-mode-state.mjs",
     "test:desktop-shell": "node --experimental-strip-types scripts/test-desktop-shell.mjs",
-    "test:ui-controls": "node scripts/test-ui-controls.mjs",
+    "test:ui-controls": "node scripts/test-ui-controls.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-plugin-permissions.mjs",
     "test:ui-browser": "playwright test",
     "test:runtime-lifecycle": "node scripts/test-runtime-lifecycle.mjs",
     "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:product-composition && pnpm test:feature-owners && pnpm test:config-workspace && pnpm test:release-version && pnpm test:app-update && pnpm test:overview && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",

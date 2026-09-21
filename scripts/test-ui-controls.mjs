@@ -45,4 +45,7 @@ for (const name of ['DraggableModal', 'ActionConfirmDialog', 'ConnectionDetailsD
   assert.ok(read(`src/lib/components/${name}.svelte`).includes('if (isNestedOverlayEvent(event)) return;'), `${name}: do not consume menu Escape/Tab`);
 }
 assert.ok(read('src/lib/components/tabs/RulesTab.svelte').includes('Number(value)'), 'update intervals must remain numeric across the string-valued selector');
+const plugins = read('src/lib/components/tabs/PluginsTab.svelte');
+assert.ok(plugins.includes('全选可用权限') && plugins.includes('仅选必需'), 'plugin permissions must provide bulk selection');
+assert.ok(plugins.includes('openPermissionGuide(pluginId)'), 'local installation must lead into permission review');
 console.log(`UI control contract passed (${scanned} consumer components scanned).`);
