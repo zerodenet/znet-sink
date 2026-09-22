@@ -1307,6 +1307,8 @@ mod tests {
                     title: "Manage".into(),
                     kind: PageKind::Management,
                     html: "<main></main>".into(),
+                    styles: Vec::new(),
+                    scripts: Vec::new(),
                 },
             )]),
         );

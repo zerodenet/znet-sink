@@ -187,7 +187,7 @@
   }
 
   function wrap(html: string, channelId: string) {
-    const head = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">${hostUi()}${sdk(channelId)}`;
+    const head = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; script-src 'unsafe-inline' data:; connect-src 'none'; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">${hostUi()}${sdk(channelId)}`;
     if (/<head(?:\s[^>]*)?>/i.test(html)) {
       return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}${head}`);
     }

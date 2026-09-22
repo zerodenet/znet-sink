@@ -50,6 +50,10 @@ fn application(version: &str) -> (package::ApplicationManifest, BTreeMap<String,
             "ui/manage/style.css".into(),
             b"main { display: grid; }".to_vec(),
         ),
+        (
+            "ui/manage/page.js".into(),
+            b"globalThis.pageReady = true;".to_vec(),
+        ),
         ("assets/icon.svg".into(), b"<svg></svg>".to_vec()),
     ]);
     (
@@ -68,6 +72,8 @@ fn application(version: &str) -> (package::ApplicationManifest, BTreeMap<String,
                 title: "Manage".into(),
                 kind: package::PageKind::Management,
                 entry: "ui/manage/index.html".into(),
+                styles: vec!["ui/manage/style.css".into()],
+                scripts: vec!["ui/manage/page.js".into()],
             }],
             files: BTreeMap::new(),
         },
@@ -114,11 +120,132 @@ fn v3_application_package_preserves_modules_assets_and_embedded_identity() {
     assert_eq!(verified.components.len(), 1);
     assert_eq!(verified.pages.len(), 1);
     assert_eq!(verified.pages[0].html, "<!doctype html><main>Manage</main>");
+    assert_eq!(verified.pages[0].styles, ["main { display: grid; }"]);
+    assert_eq!(verified.pages[0].scripts, ["globalThis.pageReady = true;"]);
     assert_eq!(
         verified.resources["components/identity/lib/state.js"],
         b"export const state = {};"
     );
     assert_eq!(verified.resources["assets/icon.svg"], b"<svg></svg>");
+}
+
+fn module_application(
+    source: &str,
+    imported: &str,
+) -> (package::ApplicationManifest, BTreeMap<String, Vec<u8>>) {
+    let (manifest, mut files) = application("1.0.0");
+    let path = "components/identity/manifest.json";
+    let mut component: Manifest = serde_json::from_slice(&files[path]).unwrap();
+    component.runtime = "javascript-v2".into();
+    component.required.clear();
+    component.source_sha256 = sha256(source.as_bytes());
+    files.insert(path.into(), serde_json::to_vec(&component).unwrap());
+    files.insert(
+        "components/identity/index.js".into(),
+        source.as_bytes().to_vec(),
+    );
+    files.insert(
+        "components/identity/lib/state.js".into(),
+        imported.as_bytes().to_vec(),
+    );
+    (manifest, files)
+}
+
+#[test]
+fn v3_relative_es_modules_execute_without_host_io() {
+    let (manifest, files) = module_application(
+        "import { state } from './lib/state.js'; export default function () { return { value: state, input: pluginInput }; }",
+        "export const state = 42;",
+    );
+    let reg = registration();
+    let bytes =
+        package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap();
+    let verified = package::verify_local(&bytes, &reg).unwrap();
+    let component = &verified.components[0];
+    let auth = Authority::admit(component, &BTreeSet::new()).unwrap();
+    auth.authorize(BTreeSet::new(), Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        execute(component, &auth, None, Arc::new(AtomicBool::new(false))).unwrap()["value"],
+        42
+    );
+    let invoked = znet_plugin_sandbox::runtime::execute_for_host_with_input(
+        component,
+        &auth,
+        serde_json::json!({"action":"sync"}),
+        Arc::new(AtomicBool::new(false)),
+        "0.0.1",
+    )
+    .unwrap();
+    assert_eq!(invoked["input"]["action"], "sync");
+}
+
+#[test]
+fn v3_modules_reject_external_and_escaping_imports() {
+    for import in [
+        "https://example.com/code.js",
+        "../../../other.js",
+        "state.js",
+    ] {
+        let source = format!("import {{ state }} from '{import}'; export default () => state;");
+        let (manifest, files) = module_application(&source, "export const state = 42;");
+        let reg = registration();
+        let bytes =
+            package::sign_application_with_registration(manifest, files, &SEED, reg.clone())
+                .unwrap();
+        let verified = package::verify_local(&bytes, &reg).unwrap();
+        let component = &verified.components[0];
+        let auth = Authority::admit(component, &BTreeSet::new()).unwrap();
+        auth.authorize(BTreeSet::new(), Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            execute(component, &auth, None, Arc::new(AtomicBool::new(false))),
+            Err(Error::GuestException)
+        );
+    }
+}
+
+#[test]
+fn v3_page_rejects_missing_or_external_resource_paths() {
+    let (mut manifest, files) = application("1.0.0");
+    for path in [
+        "ui/manage/missing.js",
+        "https://example.com/page.js",
+        "assets/icon.svg",
+    ] {
+        manifest.pages[0].scripts = vec![path.into()];
+        assert!(package::sign_application(manifest.clone(), files.clone(), &SEED).is_err());
+    }
+    manifest.pages[0].scripts = vec!["ui/manage/page.js".into()];
+    let mut oversized = files;
+    oversized.insert("ui/manage/page.js".into(), vec![b'a'; 512 * 1024 + 1]);
+    assert!(package::sign_application(manifest, oversized, &SEED).is_err());
+}
+
+#[test]
+fn legacy_package_cannot_claim_module_runtime_without_signed_file_tree() {
+    let (manifest, files) =
+        module_application("export default () => 1;", "export const state = 42;");
+    let source: Manifest =
+        serde_json::from_slice(&files["components/identity/manifest.json"]).unwrap();
+    let payload = package::Payload {
+        schema_version: 1,
+        host: manifest.host,
+        plugin_id: manifest.plugin_id,
+        version: manifest.version,
+        components: vec![package::SourceComponent {
+            manifest: source,
+            source: "export default () => 1;".into(),
+        }],
+        pages: Vec::new(),
+    };
+    let bytes = package::sign_with_registration(
+        &serde_json::to_vec(&payload).unwrap(),
+        &SEED,
+        registration(),
+    )
+    .unwrap();
+    assert!(package::verify_local(&bytes, &registration()).is_err());
 }
 
 #[test]
@@ -133,6 +260,9 @@ fn v3_application_rejects_tampered_unlisted_and_unsafe_entries() {
         b"export const state = {tampered:true};",
     );
     assert!(package::verify_local(&tampered, &reg).is_err());
+    let tampered_style =
+        rewrite_application(&bytes, "ui/manage/style.css", b"main { display: none; }");
+    assert!(package::verify_local(&tampered_style, &reg).is_err());
 
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     writer

@@ -42,6 +42,10 @@ pub struct ApplicationPage {
     pub title: String,
     pub kind: PageKind,
     pub entry: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<String>,
 }
 
 /// Signed root manifest for the v3 application package. `files` is generated
@@ -187,15 +191,83 @@ pub(super) fn verify(
     }
     verify_signature(&archive, registration)?;
     verify_files(&manifest.files, &archive.files)?;
+    validate_content(&manifest, &archive.files)?;
 
     let payload = build_payload(&manifest, &archive.files)?;
-    verify_payload(
+    let mut package = verify_payload(
         payload,
         registration,
         enforce_marketplace_ceiling,
         sha256(bytes),
-        archive.files,
-    )
+        archive.files.clone(),
+        component_modules(&manifest, &archive.files)?,
+    )?;
+    for (page, descriptor) in package.pages.iter_mut().zip(&manifest.pages) {
+        page.styles = descriptor
+            .styles
+            .iter()
+            .map(|path| page_resource(&archive.files, path, "css"))
+            .collect::<Result<Vec<_>>>()?;
+        page.scripts = descriptor
+            .scripts
+            .iter()
+            .map(|path| page_resource(&archive.files, path, "js"))
+            .collect::<Result<Vec<_>>>()?;
+    }
+    Ok(package)
+}
+
+fn page_resource(files: &BTreeMap<String, Vec<u8>>, path: &str, extension: &str) -> Result<String> {
+    if !path.starts_with("ui/") || !path.ends_with(&format!(".{extension}")) {
+        return Err("invalid page resource path".into());
+    }
+    let bytes = files.get(path).ok_or("page resource is missing")?;
+    if bytes.len() > 512 * 1024 {
+        return Err("page resource exceeds limit".into());
+    }
+    Ok(String::from_utf8(bytes.clone())?)
+}
+
+fn component_modules(
+    manifest: &ApplicationManifest,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, (String, BTreeMap<String, String>)>> {
+    let mut result = BTreeMap::new();
+    for descriptor in &manifest.components {
+        let component_manifest: Manifest = serde_json::from_slice(
+            files
+                .get(&descriptor.manifest)
+                .ok_or("component manifest is missing")?,
+        )?;
+        if component_manifest.runtime != "javascript-v2" {
+            continue;
+        }
+        let root = descriptor
+            .manifest
+            .rsplit_once('/')
+            .ok_or("component manifest path invalid")?
+            .0;
+        if root != format!("components/{}", descriptor.id) {
+            return Err("module component directory does not match component ID".into());
+        }
+        let prefix = format!("{root}/");
+        if !descriptor.entry.starts_with(&prefix) {
+            return Err("component entry is outside its component directory".into());
+        }
+        let modules = files
+            .iter()
+            .filter(|(path, _)| {
+                path.starts_with(&prefix) && (path.ends_with(".js") || path.ends_with(".mjs"))
+            })
+            .map(|(path, bytes)| Ok((path.clone(), String::from_utf8(bytes.clone())?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        if modules.len() > 64 || modules.values().map(String::len).sum::<usize>() > 4 * 1024 * 1024
+        {
+            return Err("component module budget exceeded".into());
+        }
+        result.insert(descriptor.id.clone(), (descriptor.entry.clone(), modules));
+    }
+    Ok(result)
 }
 
 fn build_payload(
@@ -254,11 +326,19 @@ fn validate_content(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
     let payload = build_payload(manifest, files)?;
+    let modules = component_modules(manifest, files)?;
     for component in payload.components {
-        crate::contract::Component::load(
-            &serde_json::to_vec(&component.manifest)?,
-            &component.source,
-        )?;
+        let manifest_bytes = serde_json::to_vec(&component.manifest)?;
+        if let Some((entry, sources)) = modules.get(&component.manifest.component_id) {
+            crate::contract::Component::load_application(
+                &manifest_bytes,
+                &component.source,
+                entry.clone(),
+                sources.clone(),
+            )?;
+        } else {
+            crate::contract::Component::load(&manifest_bytes, &component.source)?;
+        }
     }
     let mut page_ids = BTreeSet::new();
     for page in payload.pages {
@@ -275,6 +355,21 @@ fn validate_content(
             || page.html.len() > 512 * 1024
         {
             return Err("invalid application page".into());
+        }
+    }
+    for page in &manifest.pages {
+        if page.styles.len() > 8 || page.scripts.len() > 8 {
+            return Err("page resource count exceeded".into());
+        }
+        let mut total_bytes = 0_usize;
+        for path in &page.styles {
+            total_bytes += page_resource(files, path, "css")?.len();
+        }
+        for path in &page.scripts {
+            total_bytes += page_resource(files, path, "js")?.len();
+        }
+        if total_bytes > 2 * 1024 * 1024 {
+            return Err("page resources exceed limit".into());
         }
     }
     Ok(())

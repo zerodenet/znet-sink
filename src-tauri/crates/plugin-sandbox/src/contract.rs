@@ -400,9 +400,36 @@ pub struct Component {
     pub(crate) manifest: Manifest,
     pub(crate) source: String,
     pub(crate) digest: String,
+    pub(crate) module_entry: Option<String>,
+    pub(crate) modules: BTreeMap<String, String>,
 }
 impl Component {
     pub fn load(manifest_bytes: &[u8], source: &str) -> Result<Self, Error> {
+        Self::load_inner(manifest_bytes, source, None, BTreeMap::new())
+    }
+
+    /// Load an application component with its package-local module sources.
+    /// The verifier authenticates the file index before passing these sources;
+    /// the author-side packer uses the same validation before signing.
+    pub(crate) fn load_application(
+        manifest_bytes: &[u8],
+        source: &str,
+        entry: String,
+        modules: BTreeMap<String, String>,
+    ) -> Result<Self, Error> {
+        if !modules.contains_key(&entry) || modules.get(&entry).map(String::as_str) != Some(source)
+        {
+            return Err(Error::InvalidManifest);
+        }
+        Self::load_inner(manifest_bytes, source, Some(entry), modules)
+    }
+
+    fn load_inner(
+        manifest_bytes: &[u8],
+        source: &str,
+        module_entry: Option<String>,
+        modules: BTreeMap<String, String>,
+    ) -> Result<Self, Error> {
         if manifest_bytes.len() > MAX_MANIFEST_BYTES || source.len() > MAX_SOURCE_BYTES {
             return Err(Error::BudgetExceeded);
         }
@@ -413,7 +440,11 @@ impl Component {
         }
         if manifest.schema_version != 1
             || manifest.api_version != 1
-            || manifest.runtime != "javascript-v1"
+            || match manifest.runtime.as_str() {
+                "javascript-v1" => module_entry.is_some(),
+                "javascript-v2" => module_entry.is_none(),
+                _ => true,
+            }
             || !identifier(&manifest.plugin_id)
             || !identifier(&manifest.component_id)
             || Version::parse(&manifest.version).is_err()
@@ -444,10 +475,18 @@ impl Component {
         hasher.update(manifest_bytes);
         hasher.update([0]);
         hasher.update(source.as_bytes());
+        for (path, source) in &modules {
+            hasher.update([0]);
+            hasher.update(path.as_bytes());
+            hasher.update([0]);
+            hasher.update(source.as_bytes());
+        }
         Ok(Self {
             manifest,
             source: source.into(),
             digest: format!("{:x}", hasher.finalize()),
+            module_entry,
+            modules,
         })
     }
     pub fn manifest(&self) -> &Manifest {

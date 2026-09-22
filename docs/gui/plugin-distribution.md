@@ -17,7 +17,11 @@ META-INF/signature.json
 
 `plugin.json` 声明组件与页面入口，并记录除自身及签名信封以外每个文件的 SHA-256 和原始字节数。Ed25519 签名覆盖根清单原始字节；根清单再覆盖所有内容文件，因此增删、替换或重命名任一文件都会使安装失败。客户端拒绝重复路径、绝对路径、`..`、反斜杠、控制字符、目录项、符号链接、加密 ZIP、未知压缩算法、未列入清单的文件及超出数量/单文件/总解压大小的归档。归档只在内存中验证，不解压到宿主可执行路径。
 
-压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；旧 v1/v2 的 2 MiB payload、256 KiB 单组件和 512 KiB 单页限制保持不变。v3 当前仍用 `javascript-v1` 执行声明的组件入口，管理页入口也仍要求自包含；包内 ES Module、页面资源解析、worker/service 生命周期和 UI RPC 属于后续运行时阶段，不能因“文件已能入包”而宣称已经可运行。
+压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；旧 v1/v2 的 2 MiB payload、256 KiB 单组件和 512 KiB 单页限制保持不变。
+
+v3 组件可继续使用 `javascript-v1`；改用 `javascript-v2` 时，入口和相对导入的 `.js`/`.mjs` 文件须位于同一 `components/<id>/` 目录，入口须 `export default` 一个同步函数。函数可读取既有 `pluginInput` 并调用现有宿主桥；返回值仍受 JSON、大小和执行预算限制。包内模块总源码最多 4 MiB、64 个文件。裸模块名、网络 URL、跨目录导入、导入属性以及待决 Promise 均不开放。v1/v2 JSON 信封不能声明 `javascript-v2`。
+
+v3 页面可在 `plugin.json` 的页面描述符中声明 `styles` 和 `scripts` 路径，最多各 8 个，均须指向签名包内 `ui/` 下的 UTF-8 `.css` / `.js`；单项最多 512 KiB、单页合计最多 2 MiB。客户端在验签后将其作为 data URL 注入隔离 iframe，不从文件系统或网络加载。页面脚本是经典脚本，不提供浏览器端 ES Module 解析；页面调用后台仍经现有 `znetPlugin.invoke(componentId, action, payload)` RPC、宿主授权与调用预算。任意资源 URL、常驻 worker/service 和本地监听服务尚未开放。
 
 安装存储现以 SHA-256 命名保存原始二进制 `.zspkg`，`installed.json` 只保存当前/上一版本的内容引用；旧版内联 JSON 状态仍可读取。写入先落原子 blob、再原子更新状态，失败不会切换已安装版本。
 

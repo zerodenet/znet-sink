@@ -60,6 +60,8 @@ pub struct VerifiedPage {
     pub title: String,
     pub kind: PageKind,
     pub html: String,
+    pub styles: Vec<String>,
+    pub scripts: Vec<String>,
 }
 pub struct VerifiedPackage {
     pub id: String,
@@ -219,6 +221,7 @@ fn verify_with_policy(
         enforce_marketplace_ceiling,
         sha256(bytes),
         BTreeMap::new(),
+        BTreeMap::new(),
     )
 }
 
@@ -228,6 +231,7 @@ pub(super) fn verify_payload(
     enforce_marketplace_ceiling: bool,
     digest: String,
     resources: BTreeMap<String, Vec<u8>>,
+    application_modules: BTreeMap<String, (String, BTreeMap<String, String>)>,
 ) -> Result<VerifiedPackage> {
     if payload.schema_version != 1
         || payload.host != "znet-sink"
@@ -258,7 +262,19 @@ pub(super) fn verify_payload(
                 return Err("package exceeds registered capability ceiling".into());
             }
         }
-        components.push(Component::load(&serde_json::to_vec(m)?, &source.source)?);
+        let manifest_bytes = serde_json::to_vec(m)?;
+        components.push(
+            if let Some((entry, modules)) = application_modules.get(&m.component_id) {
+                Component::load_application(
+                    &manifest_bytes,
+                    &source.source,
+                    entry.clone(),
+                    modules.clone(),
+                )?
+            } else {
+                Component::load(&manifest_bytes, &source.source)?
+            },
+        );
     }
     if payload.pages.len() > 4
         || (enforce_marketplace_ceiling
@@ -292,6 +308,8 @@ pub(super) fn verify_payload(
             title: page.title,
             kind: page.kind,
             html: page.html,
+            styles: Vec::new(),
+            scripts: Vec::new(),
         });
     }
     Ok(VerifiedPackage {

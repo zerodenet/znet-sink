@@ -3,9 +3,13 @@ use crate::{
     contract::{Component, Error, Isolation, Target},
     policy::Authority,
 };
-use rquickjs::{Context, Function, Runtime};
+use rquickjs::{
+    loader::{BuiltinLoader, ImportAttributes, Resolver},
+    Context, Ctx, Function, Module, Runtime,
+};
 use std::{
     cell::Cell,
+    collections::BTreeSet,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -13,6 +17,45 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+struct PackageResolver {
+    names: BTreeSet<String>,
+    root: String,
+}
+
+impl Resolver for PackageResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        if attributes.is_some() || !(name.starts_with("./") || name.starts_with("../")) {
+            return Err(rquickjs::Error::new_resolving(base, name));
+        }
+        let mut parts: Vec<&str> = base
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.split('/').collect())
+            .unwrap_or_default();
+        for segment in name.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." if !parts.is_empty() => {
+                    parts.pop();
+                }
+                ".." => return Err(rquickjs::Error::new_resolving(base, name)),
+                value => parts.push(value),
+            }
+        }
+        let resolved = parts.join("/");
+        if resolved.starts_with(&self.root) && self.names.contains(&resolved) {
+            Ok(resolved)
+        } else {
+            Err(rquickjs::Error::new_resolving(base, name))
+        }
+    }
+}
 
 pub type HostSdkDispatcher =
     Arc<dyn Fn(&crate::policy::Lease, &str) -> Result<String, Error> + Send + Sync + 'static>;
@@ -142,6 +185,19 @@ fn execute_inner(
     let runtime = Runtime::new().map_err(|_| Error::BudgetExceeded)?;
     runtime.set_memory_limit(limits.memory_bytes);
     runtime.set_max_stack_size(limits.stack_bytes);
+    if component.module_entry.is_some() {
+        let mut loader = BuiltinLoader::default();
+        for (path, source) in &component.modules {
+            loader.add_module(path.clone(), source.as_bytes());
+        }
+        runtime.set_loader(
+            PackageResolver {
+                names: component.modules.keys().cloned().collect(),
+                root: format!("components/{}/", component.manifest.component_id),
+            },
+            loader,
+        );
+    }
     let check_lease = lease.clone();
     let check_cancel = cancelled.clone();
     let check_failure = failure.clone();
@@ -175,7 +231,7 @@ fn execute_inner(
     )>(&runtime)
     .map_err(|_| Error::BudgetExceeded)?;
     let result = context.with(|ctx| -> Result<serde_json::Value, Error> {
-        // No module loader, std/os, native modules, async jobs, or host IO are installed.
+        // V2 loads only signed package-relative modules; no std/os, native modules, jobs, or host IO.
         ctx.eval::<(), _>(r#"
             for (const f of [function(){}, function*(){}, async function(){}, async function*(){}]) {
                 Object.defineProperty(Object.getPrototypeOf(f), 'constructor', {value: undefined, writable:false, configurable:false});
@@ -259,7 +315,15 @@ fn execute_inner(
             ctx.globals().set("hostSdkCall", callback).map_err(|_| Error::GuestException)?;
             ctx.eval::<(), _>("Object.defineProperty(globalThis,'hostSdkCall',{writable:false,configurable:false});").map_err(|_| Error::GuestException)?;
         }
-        let value: rquickjs::Value = ctx.eval(component.source.as_bytes()).map_err(|_| Error::GuestException)?;
+        let value: rquickjs::Value = if let Some(entry) = &component.module_entry {
+            let declared = Module::declare(ctx.clone(), entry.as_str(), component.source.as_bytes()).map_err(|_| Error::GuestException)?;
+            let (module, promise) = declared.eval().map_err(|_| Error::GuestException)?;
+            promise.result::<()>().ok_or(Error::InvalidOutput)?.map_err(|_| Error::GuestException)?;
+            let entrypoint: Function = module.get("default").map_err(|_| Error::GuestException)?;
+            entrypoint.call(()).map_err(|_| Error::GuestException)?
+        } else {
+            ctx.eval(component.source.as_bytes()).map_err(|_| Error::GuestException)?
+        };
         if value.is_promise() { return Err(Error::InvalidOutput); }
         let json = ctx.json_stringify(value).map_err(|_| Error::InvalidOutput)?.ok_or(Error::InvalidOutput)?;
         let bytes = json.to_cstring().map_err(|_| Error::InvalidOutput)?;

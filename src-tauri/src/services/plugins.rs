@@ -390,7 +390,7 @@ impl Host {
             .pages
             .get(plugin_id)
             .and_then(|pages| pages.get(page_id))
-            .map(|page| page.html.clone())
+            .map(render_page)
             .ok_or_else(|| AppError::invalid_argument("插件管理页面不存在"))
     }
     fn current_review(
@@ -409,6 +409,39 @@ impl Host {
                     && !p.retired
             })
             .ok_or_else(stale)
+    }
+}
+
+fn render_page(page: &VerifiedPage) -> String {
+    let mut html = page.html.clone();
+    let mut styles = String::new();
+    for style in &page.styles {
+        styles.push_str(&format!(
+            "<link rel=\"stylesheet\" href=\"data:text/css;base64,{}\">",
+            STANDARD.encode(style)
+        ));
+    }
+    insert_before_end(&mut html, "head", &styles);
+    let mut scripts = String::new();
+    for script in &page.scripts {
+        scripts.push_str(&format!(
+            "<script src=\"data:text/javascript;base64,{}\"></script>",
+            STANDARD.encode(script)
+        ));
+    }
+    insert_before_end(&mut html, "body", &scripts);
+    html
+}
+
+fn insert_before_end(html: &mut String, tag: &str, content: &str) {
+    if content.is_empty() {
+        return;
+    }
+    let closing = format!("</{tag}>");
+    if let Some(index) = html.to_ascii_lowercase().rfind(&closing) {
+        html.insert_str(index, content);
+    } else {
+        html.push_str(content);
     }
 }
 #[cfg(test)]

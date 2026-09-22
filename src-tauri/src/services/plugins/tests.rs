@@ -83,6 +83,31 @@ impl ExternalManagedAcceptanceStore {
     }
 }
 const SEED: [u8; 32] = [17; 32];
+
+#[test]
+fn signed_page_resources_render_without_filesystem_or_network_urls() {
+    let page = VerifiedPage {
+        id: "manage".into(),
+        title: "Manage".into(),
+        kind: package::PageKind::Management,
+        html: "<!doctype html><html><head></head><body><main>Manage</main></body></html>".into(),
+        styles: vec!["main { color: red; }".into()],
+        scripts: vec!["globalThis.ready = true;".into()],
+    };
+    let rendered = render_page(&page);
+    assert!(rendered.contains(&format!(
+        "data:text/css;base64,{}",
+        STANDARD.encode(&page.styles[0])
+    )));
+    assert!(rendered.contains(&format!(
+        "data:text/javascript;base64,{}",
+        STANDARD.encode(&page.scripts[0])
+    )));
+    assert!(rendered.find("data:text/css").unwrap() < rendered.find("</head>").unwrap());
+    assert!(rendered.find("data:text/javascript").unwrap() < rendered.find("</body>").unwrap());
+    assert!(!rendered.contains("file://"));
+    assert!(!rendered.contains("http://"));
+}
 // Fixtures exercise the real Host, which checks the compiled client version.
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
