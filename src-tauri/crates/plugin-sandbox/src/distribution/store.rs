@@ -30,7 +30,7 @@ struct Installed {
 enum StoredPackage {
     /// Compatibility with the original JSON-envelope installation store.
     Inline(String),
-    /// v3 and newly installed legacy packages are kept as exact binary blobs.
+    /// Application packages and newly installed legacy packages are kept as exact binary blobs.
     Blob { sha256: String },
 }
 /// Atomic metadata plus content-addressed package blobs. Packages are verified

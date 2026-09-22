@@ -1,8 +1,8 @@
 # 插件注册与分发适配
 
-## 2026-09-21：`.zspkg v3` 应用包基础
+## `.zspkg` 应用包 v1
 
-客户端现已同时识别旧 JSON 信封包 v1/v2 和多文件 ZIP 应用包 v3。v3 的目标是保留单文件安装体验，同时不再把 JavaScript、HTML 和资源作为 Base64 字符串塞进 payload：
+新插件以多文件 ZIP 应用包作为 v1 契约。旧 JSON 信封包仅为现有开发插件保留过渡读取能力，不属于应用包的版本演进。应用包保留单文件安装体验，同时不把 JavaScript、HTML 和资源作为 Base64 字符串塞进 payload：
 
 ```text
 plugin.json
@@ -17,11 +17,11 @@ META-INF/signature.json
 
 `plugin.json` 声明组件与页面入口，并记录除自身及签名信封以外每个文件的 SHA-256 和原始字节数。Ed25519 签名覆盖根清单原始字节；根清单再覆盖所有内容文件，因此增删、替换或重命名任一文件都会使安装失败。客户端拒绝重复路径、绝对路径、`..`、反斜杠、控制字符、目录项、符号链接、加密 ZIP、未知压缩算法、未列入清单的文件及超出数量/单文件/总解压大小的归档。归档只在内存中验证，不解压到宿主可执行路径。
 
-压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；旧 v1/v2 的 2 MiB payload、256 KiB 单组件和 512 KiB 单页限制保持不变。
+根清单 `schema_version` 为 `1`，签名信封 `format` 为 `znet-sink.plugin-package.v1`。ZIP 签名使用独立的 `znet-sink.plugin-package.v1.zip` 域，与早期 JSON 信封隔离。压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；早期 JSON 信封保留原有较小限额。
 
-v3 组件可继续使用 `javascript-v1`；改用 `javascript-v2` 时，入口和相对导入的 `.js`/`.mjs` 文件须位于同一 `components/<id>/` 目录，入口须 `export default` 一个同步函数。函数可读取既有 `pluginInput` 并调用现有宿主桥；返回值仍受 JSON、大小和执行预算限制。包内模块总源码最多 4 MiB、64 个文件。裸模块名、网络 URL、跨目录导入、导入属性以及待决 Promise 均不开放。v1/v2 JSON 信封不能声明 `javascript-v2`。
+应用包组件可继续使用 `javascript-v1`；改用 `javascript-v2` 时，入口和相对导入的 `.js`/`.mjs` 文件须位于同一 `components/<id>/` 目录，入口须 `export default` 一个同步函数。函数可读取既有 `pluginInput` 并调用现有宿主桥；返回值仍受 JSON、大小和执行预算限制。包内模块总源码最多 4 MiB、64 个文件。裸模块名、网络 URL、跨目录导入、导入属性以及待决 Promise 均不开放。早期 JSON 信封不能声明 `javascript-v2`。
 
-v3 页面可在 `plugin.json` 的页面描述符中声明 `styles` 和 `scripts` 路径，最多各 8 个，均须指向签名包内 `ui/` 下的 UTF-8 `.css` / `.js`；单项最多 512 KiB、单页合计最多 2 MiB。客户端在验签后将其作为 data URL 注入隔离 iframe，不从文件系统或网络加载。页面脚本是经典脚本，不提供浏览器端 ES Module 解析；页面调用后台仍经现有 `znetPlugin.invoke(componentId, action, payload)` RPC、宿主授权与调用预算。任意资源 URL、常驻 worker/service 和本地监听服务尚未开放。
+应用包页面可在 `plugin.json` 的页面描述符中声明 `styles` 和 `scripts` 路径，最多各 8 个，均须指向签名包内 `ui/` 下的 UTF-8 `.css` / `.js`；单项最多 512 KiB、单页合计最多 2 MiB。客户端在验签后将其作为 data URL 注入隔离 iframe，不从文件系统或网络加载。页面脚本是经典脚本，不提供浏览器端 ES Module 解析；页面调用后台仍经现有 `znetPlugin.invoke(componentId, action, payload)` RPC、宿主授权与调用预算。任意资源 URL、常驻 worker/service 和本地监听服务尚未开放。
 
 安装存储现以 SHA-256 命名保存原始二进制 `.zspkg`，`installed.json` 只保存当前/上一版本的内容引用；旧版内联 JSON 状态仍可读取。写入先落原子 blob、再原子更新状态，失败不会切换已安装版本。
 
@@ -40,7 +40,7 @@ znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGIST
 插件中心提供产品、客户端包 ID、仓库地址、发布者公钥、版本、兼容范围、摘要和能力上限等元数据。安装包始终存放在作者 GitHub Release；客户端根据中心登记的发行记录直接下载对应 `.zspkg`，中心不承担安装包托管、下载或代理。
 
 - 桌面端和 `znet-plugin` 共用登记读取器，优先读取 `https://plugins.zerodenet.org/api/plugins.json`，只选取 `znet-sink` 目标。接口不可用或无效时，读取自动生成的 `https://raw.githubusercontent.com/zerodenet/plugins/main/catalogs/znet-sink.json` 兼容登记。有效空登记或已撤回产品不会被旧目录重新填充。
-- 线上发现与在线安装以插件中心登记为信任根和声明上限。本地安装是独立的显式信任路径：v2 安装包携带由同一签名覆盖的发布者登记和公钥，客户端展示发布者指纹、权限及管理页面声明后由用户确认，不要求插件先进入线上目录。旧 v1 包可使用缓存或线上登记的公钥迁移，但本地声明不受线上 `surfaces`/`capabilities` 上限约束。
+- 线上发现与在线安装以插件中心登记为信任根和声明上限。本地安装是独立的显式信任路径：应用包可携带由同一签名覆盖的发布者登记和公钥，客户端展示发布者指纹、权限及管理页面声明后由用户确认，不要求插件先进入线上目录。早期未携带登记的 JSON 包可使用缓存或线上登记的公钥过渡；本地声明不受线上 `surfaces`/`capabilities` 上限约束。
 - 本地信任按发布者指纹和包 ID 单独持久化，不写回也不扩张线上目录。后续升级必须沿用同一公钥；更换发布者需先卸载。新增权限或管理页面必须再次显式确认，安装后仍保持未授权状态。
 - 客户端只使用中心快照中已登记、且兼容当前宿主版本与设备的发行记录。首次安装自动选择最新兼容正式版；已安装插件进入版本管理后才允许选择其他已登记版本。
 - 发行记录中的下载地址必须指向登记作者仓库的 GitHub Release 资产。客户端直接下载该地址并核对登记的大小、SHA-256、签名和插件身份；发行说明链接打开登记的仓库 Release 页面。
@@ -95,15 +95,15 @@ znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGIST
 
 `any` 仅取消设备限制，不豁免宿主版本、运行时 API、能力授权和最低隔离要求。缺失、null、空列表、`all` 等未定义字符串拒绝。明确列表匹配完整 OS/架构/设备形态组合。安装至少要求有一个组件适配当前设备与宿主版本；执行前还必须按实际执行域检查隔离。安装检查不会虚报已有 process 沙箱。
 
-一个包最多八个不同 ID 的组件，各自声明设备与能力；当前没有组件依赖或“整个插件必需组件”的发布语义。组件不可用时不能跨设备借用另一组件授权。当前命令行 pack 一次生成单组件包，Rust 包模型支持多组件。
+一个包最多八个不同 ID 的组件，各自声明设备与能力；当前没有组件依赖或“整个插件必需组件”的发布语义。组件不可用时不能跨设备借用另一组件授权。`pack-app` 支持多组件；过渡命令 `pack` 仅生成单组件 JSON 包。
 
-## 签名包 v1：已实现
+## 早期 JSON 信封兼容
 
-扩展名 `.zspkg`，内容是有界 JSON，不是压缩包；没有解压、任意路径、符号链接或原生动态库入口。现阶段只装载 JS 组件资源，不提供任意前端页面/原生二进制资源。
+早期开发插件的 `.zspkg` 是有界 JSON 信封，不是当前应用包 v1。客户端暂时保留验签与安装读取，以免现有 Connect 离线包失效；新插件应使用上面的 ZIP 应用包。
 
-外层字段固定为 `format: "znet-sink.plugin-package.v1"`、`payload`、`signature`。后两者为标准 Base64。Ed25519 签名消息为 ASCII 域 `znet-sink.plugin-package.v1`、一个零字节、payload 解码后的**原始字节**，不重新序列化后验签。公钥只使用中央登记值；包不携带可自我授权的公钥。
+旧 JSON 信封的外层字段为 `format`、`payload`、`signature`。后两者为标准 Base64。早期未嵌入发布者登记的包需由中央登记提供公钥；客户端始终对原始字节验签，不仅凭 SHA-256 接受安装。
 
-payload 固定包含 `schema_version: 1`、`host`、`plugin_id`、`version`、`components`。每个组件包含 `manifest` 与 `source`。验证所有组件 ID 唯一、插件 ID/版本一致、源码摘要和 manifest 契约合法、声明能力不超过中央上限。当前无 UI surface 声明能力；未知字段拒绝。
+旧 payload 固定包含 `schema_version: 1`、`host`、`plugin_id`、`version`、`components`。每个组件包含 `manifest` 与 `source`。客户端仍验证组件 ID 唯一、身份/版本一致、源码摘要、manifest 契约和线上能力上限；未知字段拒绝。
 
 限制：包 4 MiB、解码 payload 2 MiB、组件最多 8 个，单源码 256 KiB、单 manifest 16 KiB。SHA-256 负责发布资源完整性，Ed25519 负责发布者身份；只检查 SHA-256 不足以安装。
 
@@ -138,7 +138,7 @@ znet-plugin pack MANIFEST SOURCE PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REG
 znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
 ```
 
-`pack` 使用作者提供的 32 字节原始 Ed25519 私钥 seed 文件，输出新包和元数据，并打印公钥；不打印私钥，不覆盖已有输出。传入 `REGISTRATION_JSON` 时生成可独立侧载的 v2 包，登记与 payload 一同纳入签名；省略时保留兼容线上目录的 v1 包。作者可把包上传到自己的 Release，也可只分发本地包；命令不自动注册、上传或发布。
+`pack-app` 是新插件的应用包 v1 打包命令。`pack` 暂作现有 JSON 插件的过渡工具。二者均使用作者提供的 32 字节原始 Ed25519 私钥 seed 文件，输出包和元数据、打印公钥，不打印私钥、不覆盖已有输出，也不自动注册、上传或发布。
 
 发现最多读取最近 100 个 published Releases，包括预发布；旧版可按精确 tag 获取，不宣称列出了全部历史。草稿拒绝。资源必须来自登记的 GitHub 仓库；下载仅允许 HTTPS GitHub/API/githubusercontent 域及有界重定向，具有连接/总时间、响应字节限制。不提供任意下载 URL 或外部仓库替代入口。
 

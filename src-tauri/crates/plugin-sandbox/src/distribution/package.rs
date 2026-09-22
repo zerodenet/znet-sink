@@ -69,7 +69,7 @@ pub struct VerifiedPackage {
     pub digest: String,
     pub components: Vec<Component>,
     pub pages: Vec<VerifiedPage>,
-    /// Signed v3 files other than component/page entrypoints. Legacy packages
+    /// Signed application files other than component/page entrypoints. Legacy packages
     /// leave this empty. Runtime consumers must still apply capability checks.
     pub resources: BTreeMap<String, Vec<u8>>,
 }

@@ -12,7 +12,8 @@ use std::{
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
-const DOMAIN_V3: &[u8] = b"znet-sink.plugin-package.v3\0";
+// Keep the ZIP signature domain distinct from the early JSON-envelope v1.
+const DOMAIN_APPLICATION_V1: &[u8] = b"znet-sink.plugin-package.v1.zip\0";
 const MANIFEST_PATH: &str = "plugin.json";
 const SIGNATURE_PATH: &str = "META-INF/signature.json";
 const MAX_FILES: usize = 256;
@@ -48,7 +49,7 @@ pub struct ApplicationPage {
     pub scripts: Vec<String>,
 }
 
-/// Signed root manifest for the v3 application package. `files` is generated
+/// Signed root manifest for the application package v1. `files` is generated
 /// by the packer and covers every archive member other than this manifest and
 /// the detached signature envelope.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -137,7 +138,7 @@ fn sign(
         return Err("application manifest exceeds limit".into());
     }
     let signature = SignatureEnvelope {
-        format: "znet-sink.plugin-package.v3".into(),
+        format: "znet-sink.plugin-package.v1".into(),
         signature: STANDARD.encode(
             key.sign(&message(&registration, &manifest_bytes)?)
                 .to_bytes(),
@@ -376,7 +377,7 @@ fn validate_content(
 }
 
 fn verify_signature(archive: &Archive, registration: &Registration) -> Result<()> {
-    if archive.signature.format != "znet-sink.plugin-package.v3" {
+    if archive.signature.format != "znet-sink.plugin-package.v1" {
         return Err("unsupported package format".into());
     }
     if let Some(embedded) = archive.signature.registration.as_ref() {
@@ -400,7 +401,7 @@ fn verify_signature(archive: &Archive, registration: &Registration) -> Result<()
 }
 
 fn message(registration: &Option<Registration>, manifest: &[u8]) -> Result<Vec<u8>> {
-    let mut message = DOMAIN_V3.to_vec();
+    let mut message = DOMAIN_APPLICATION_V1.to_vec();
     if let Some(registration) = registration {
         message.extend_from_slice(&serde_json::to_vec(registration)?);
         message.push(0);
@@ -470,7 +471,7 @@ fn read_archive(bytes: &[u8]) -> Result<Archive> {
 }
 
 fn validate_root(manifest: &ApplicationManifest) -> Result<()> {
-    if manifest.schema_version != 3
+    if manifest.schema_version != 1
         || manifest.host != "znet-sink"
         || !identifier(&manifest.plugin_id)
         || semver::Version::parse(&manifest.version).is_err()

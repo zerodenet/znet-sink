@@ -58,7 +58,7 @@ fn application(version: &str) -> (package::ApplicationManifest, BTreeMap<String,
     ]);
     (
         package::ApplicationManifest {
-            schema_version: 3,
+            schema_version: 1,
             host: "znet-sink".into(),
             plugin_id: "org.example.plugin".into(),
             version: version.into(),
@@ -104,13 +104,20 @@ fn rewrite_application(bytes: &[u8], path: &str, replacement: &[u8]) -> Vec<u8> 
 }
 
 #[test]
-fn v3_application_package_preserves_modules_assets_and_embedded_identity() {
+fn application_v1_preserves_modules_assets_and_embedded_identity() {
     let (manifest, files) = application("1.0.0");
     let mut reg = registration();
     reg.surfaces.push("znet-sink.ui.management.v1".into());
     let bytes =
         package::sign_application_with_registration(manifest, files, &SEED, reg.clone()).unwrap();
     assert!(bytes.starts_with(b"PK\x03\x04"));
+    let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let root: serde_json::Value =
+        serde_json::from_reader(archive.by_name("plugin.json").unwrap()).unwrap();
+    assert_eq!(root["schema_version"], 1);
+    let signature: serde_json::Value =
+        serde_json::from_reader(archive.by_name("META-INF/signature.json").unwrap()).unwrap();
+    assert_eq!(signature["format"], "znet-sink.plugin-package.v1");
     assert_eq!(package::package_id(&bytes).unwrap(), reg.id);
     assert_eq!(
         package::embedded_registration(&bytes).unwrap().unwrap().id,
@@ -152,7 +159,7 @@ fn module_application(
 }
 
 #[test]
-fn v3_relative_es_modules_execute_without_host_io() {
+fn application_v1_relative_es_modules_execute_without_host_io() {
     let (manifest, files) = module_application(
         "import { state } from './lib/state.js'; export default function () { return { value: state, input: pluginInput }; }",
         "export const state = 42;",
@@ -181,7 +188,7 @@ fn v3_relative_es_modules_execute_without_host_io() {
 }
 
 #[test]
-fn v3_modules_reject_external_and_escaping_imports() {
+fn application_v1_modules_reject_external_and_escaping_imports() {
     for import in [
         "https://example.com/code.js",
         "../../../other.js",
@@ -206,7 +213,7 @@ fn v3_modules_reject_external_and_escaping_imports() {
 }
 
 #[test]
-fn v3_page_rejects_missing_or_external_resource_paths() {
+fn application_v1_page_rejects_missing_or_external_resource_paths() {
     let (mut manifest, files) = application("1.0.0");
     for path in [
         "ui/manage/missing.js",
@@ -220,6 +227,13 @@ fn v3_page_rejects_missing_or_external_resource_paths() {
     let mut oversized = files;
     oversized.insert("ui/manage/page.js".into(), vec![b'a'; 512 * 1024 + 1]);
     assert!(package::sign_application(manifest, oversized, &SEED).is_err());
+}
+
+#[test]
+fn application_v1_rejects_non_v1_schema() {
+    let (mut manifest, files) = application("1.0.0");
+    manifest.schema_version = 3;
+    assert!(package::sign_application(manifest, files, &SEED).is_err());
 }
 
 #[test]
@@ -249,7 +263,7 @@ fn legacy_package_cannot_claim_module_runtime_without_signed_file_tree() {
 }
 
 #[test]
-fn v3_application_rejects_tampered_unlisted_and_unsafe_entries() {
+fn application_v1_rejects_tampered_unlisted_and_unsafe_entries() {
     let (manifest, files) = application("1.0.0");
     let reg = registration();
     let bytes =
@@ -296,7 +310,7 @@ fn v3_application_rejects_tampered_unlisted_and_unsafe_entries() {
 }
 
 #[test]
-fn v3_binary_packages_survive_install_restart_upgrade_and_rollback() {
+fn application_v1_binary_packages_survive_install_restart_upgrade_and_rollback() {
     let temp = tempfile::tempdir().unwrap();
     let mut reg = registration();
     reg.surfaces.push("znet-sink.ui.management.v1".into());
@@ -333,7 +347,7 @@ fn v3_binary_packages_survive_install_restart_upgrade_and_rollback() {
     assert_eq!(store.current(&reg).unwrap().version, "1.2.0");
     let state = std::fs::read_to_string(temp.path().join("installed.json")).unwrap();
     assert!(state.contains("sha256"));
-    assert!(!state.contains("znet-sink.plugin-package.v3"));
+    assert!(!state.contains("znet-sink.plugin-package.v1"));
     assert_eq!(
         std::fs::read_dir(temp.path().join("packages"))
             .unwrap()
@@ -665,7 +679,7 @@ fn author_cli_emits_verifiable_package_and_release_metadata_without_private_key(
 }
 
 #[test]
-fn author_cli_packs_a_v3_application_directory() {
+fn author_cli_packs_an_application_v1_directory() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("app");
     std::fs::create_dir_all(root.join("components/identity/lib")).unwrap();

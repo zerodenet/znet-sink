@@ -635,16 +635,15 @@ impl Host {
         let base = match package::embedded_registration(bytes).map_err(io::failure)? {
             Some(registration) => registration,
             None => {
-                // Legacy v1 packages did not embed a key. They can still migrate
-                // through a cached/public publisher key, but new unpublished
-                // packages must use v2 so local installation is self-contained.
+                // Early JSON packages without an embedded key can migrate through
+                // a cached/public publisher key. New local packages embed identity.
                 let central = match local_state::load_directory(&self.root()?)? {
                     Some(cached) => cached,
                     None => io::directory(manager)?,
                 };
                 central.find(id).map_err(|_| {
                     AppError::invalid_argument(
-                        "此插件包未携带发布者公钥，且插件中心没有可用于验签的登记；请发布者重新生成带发布者登记的 v2/v3 包",
+                        "此插件包未携带发布者公钥，且插件中心没有可用于验签的登记；请发布者重新生成携带发布者登记的应用包",
                     )
                 })?.clone()
             }
