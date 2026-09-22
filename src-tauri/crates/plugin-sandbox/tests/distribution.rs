@@ -143,7 +143,7 @@ fn module_application(
     let (manifest, mut files) = application("1.0.0");
     let path = "components/identity/manifest.json";
     let mut component: Manifest = serde_json::from_slice(&files[path]).unwrap();
-    component.runtime = "javascript-v2".into();
+    component.runtime = "javascript-module-v1".into();
     component.required.clear();
     component.source_sha256 = sha256(source.as_bytes());
     files.insert(path.into(), serde_json::to_vec(&component).unwrap());
@@ -260,6 +260,17 @@ fn legacy_package_cannot_claim_module_runtime_without_signed_file_tree() {
     )
     .unwrap();
     assert!(package::verify_local(&bytes, &registration()).is_err());
+}
+
+#[test]
+fn application_v1_rejects_obsolete_module_runtime_label() {
+    let (manifest, mut files) =
+        module_application("export default () => 1;", "export const state = 42;");
+    let path = "components/identity/manifest.json";
+    let mut component: Manifest = serde_json::from_slice(&files[path]).unwrap();
+    component.runtime = "javascript-v2".into();
+    files.insert(path.into(), serde_json::to_vec(&component).unwrap());
+    assert!(package::sign_application(manifest, files, &SEED).is_err());
 }
 
 #[test]
@@ -642,7 +653,7 @@ fn tampered_installed_store_is_not_trusted() {
 }
 
 #[test]
-fn author_cli_emits_verifiable_package_and_release_metadata_without_private_key() {
+fn legacy_author_cli_emits_verifiable_package_and_release_metadata_without_private_key() {
     let temp = tempfile::tempdir().unwrap();
     let p = payload("1.0.0", serde_json::json!("any"));
     let manifest = temp.path().join("manifest.json");
@@ -659,7 +670,7 @@ fn author_cli_emits_verifiable_package_and_release_metadata_without_private_key(
     std::fs::write(&seed, SEED).unwrap();
     let run = || {
         std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
-            .arg("pack")
+            .arg("pack-legacy")
             .args([&manifest, &source, &seed, &out, &metadata])
             .output()
             .unwrap()
@@ -704,7 +715,7 @@ fn author_cli_packs_an_application_v1_directory() {
     reg.surfaces.push("znet-sink.ui.management.v1".into());
     std::fs::write(&registration_path, serde_json::to_vec_pretty(&reg).unwrap()).unwrap();
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
-        .arg("pack-app")
+        .arg("pack")
         .args([&root, &seed, &output, &metadata, &registration_path])
         .output()
         .unwrap();
@@ -726,7 +737,7 @@ fn author_cli_packs_an_application_v1_directory() {
     let unsafe_seed = root.join("private.seed");
     std::fs::write(&unsafe_seed, SEED).unwrap();
     let rejected = std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
-        .arg("pack-app")
+        .arg("pack")
         .args([
             &root,
             &unsafe_seed,
@@ -737,6 +748,71 @@ fn author_cli_packs_an_application_v1_directory() {
         .output()
         .unwrap();
     assert!(!rejected.status.success());
+}
+
+#[test]
+fn documented_application_v1_packs_installs_and_executes_offline() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples/plugin-package-v1");
+    let temp = tempfile::tempdir().unwrap();
+    let seed = temp.path().join("private.seed");
+    let registration_path = temp.path().join("registration.json");
+    let output = temp.path().join("example.zspkg");
+    let metadata = temp.path().join("marketplace-entry.json");
+    std::fs::write(&seed, SEED).unwrap();
+    let mut reg = registration();
+    reg.surfaces.push("znet-sink.ui.management.v1".into());
+    std::fs::write(&registration_path, serde_json::to_vec(&reg).unwrap()).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_znet-plugin"))
+        .arg("pack")
+        .args([&root, &seed, &output, &metadata, &registration_path])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let bytes = std::fs::read(&output).unwrap();
+    let release: ReleaseMetadata =
+        serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
+    validate_download(&bytes, &release, &reg).unwrap();
+    let verified = Store::new(temp.path().join("store"))
+        .unwrap()
+        .install(&bytes, &reg, &Target::native_desktop().unwrap(), "0.0.1")
+        .unwrap();
+    assert_eq!(verified.pages.len(), 1);
+    assert_eq!(verified.pages[0].styles.len(), 1);
+    assert_eq!(verified.pages[0].scripts.len(), 1);
+    let component = &verified.components[0];
+    let auth = Authority::admit(component, &BTreeSet::new()).unwrap();
+    auth.authorize(BTreeSet::new(), Duration::from_secs(5))
+        .unwrap();
+    let output = znet_plugin_sandbox::runtime::execute_for_host_with_input(
+        component,
+        &auth,
+        serde_json::json!({"invocation":{"action":"ping","payload":{}}}),
+        Arc::new(AtomicBool::new(false)),
+        "0.0.1",
+    )
+    .unwrap();
+    assert_eq!(output["action"], "ping");
+    assert_eq!(output["message"], "Hello from a signed application package");
+}
+
+#[test]
+fn external_legacy_package_verifies_offline_when_requested() {
+    let Ok(path) = std::env::var("ZNET_EXTERNAL_PLUGIN_VERIFY_PACKAGE") else {
+        return;
+    };
+    let bytes = std::fs::read(path).unwrap();
+    let registration = package::embedded_registration(&bytes)
+        .unwrap()
+        .expect("embedded publisher registration");
+    let verified = package::verify_local(&bytes, &registration).unwrap();
+    assert_eq!(verified.id, registration.id);
+    assert!(!verified.components.is_empty());
 }
 #[cfg(unix)]
 #[test]

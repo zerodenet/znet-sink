@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "host": "znet-sink",
+  "plugin_id": "org.example.plugin",
+  "version": "0.1.0",
+  "components": [
+    {
+      "id": "main",
+      "manifest": "components/main/manifest.json",
+      "entry": "components/main/index.js"
+    }
+  ],
+  "pages": [
+    {
+      "id": "manage",
+      "title": "Example",
+      "kind": "management",
+      "entry": "ui/manage/index.html",
+      "styles": ["ui/manage/style.css"],
+      "scripts": ["ui/manage/page.js"]
+    }
+  ],
+  "files": {}
+}

@@ -240,7 +240,7 @@ fn component_modules(
                 .get(&descriptor.manifest)
                 .ok_or("component manifest is missing")?,
         )?;
-        if component_manifest.runtime != "javascript-v2" {
+        if component_manifest.runtime != "javascript-module-v1" {
             continue;
         }
         let root = descriptor

@@ -442,7 +442,7 @@ impl Component {
             || manifest.api_version != 1
             || match manifest.runtime.as_str() {
                 "javascript-v1" => module_entry.is_some(),
-                "javascript-v2" => module_entry.is_none(),
+                "javascript-module-v1" => module_entry.is_none(),
                 _ => true,
             }
             || !identifier(&manifest.plugin_id)

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "host": "znet-sink",
+  "plugin_id": "org.example.plugin",
+  "component_id": "main",
+  "version": "0.1.0",
+  "requires_host": ">=0.0.1",
+  "api_version": 1,
+  "runtime": "javascript-module-v1",
+  "minimum_isolation": "vm",
+  "targets": "any",
+  "required": [],
+  "optional": [],
+  "source_sha256": "bcdf9a2afaf896d2374c795b5b75316e30b5d7dfda3c6558066b68cf807d033b",
+  "limits": {
+    "memory_bytes": 33554432,
+    "stack_bytes": 524288,
+    "timeout_ms": 2000,
+    "max_calls": 32,
+    "output_bytes": 65536
+  }
+}

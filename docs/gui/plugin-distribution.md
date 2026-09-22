@@ -19,7 +19,7 @@ META-INF/signature.json
 
 根清单 `schema_version` 为 `1`，签名信封 `format` 为 `znet-sink.plugin-package.v1`。ZIP 签名使用独立的 `znet-sink.plugin-package.v1.zip` 域，与早期 JSON 信封隔离。压缩包上限为 16 MiB，文件最多 256 个，单文件最多 4 MiB，总解压内容最多 32 MiB；早期 JSON 信封保留原有较小限额。
 
-应用包组件可继续使用 `javascript-v1`；改用 `javascript-v2` 时，入口和相对导入的 `.js`/`.mjs` 文件须位于同一 `components/<id>/` 目录，入口须 `export default` 一个同步函数。函数可读取既有 `pluginInput` 并调用现有宿主桥；返回值仍受 JSON、大小和执行预算限制。包内模块总源码最多 4 MiB、64 个文件。裸模块名、网络 URL、跨目录导入、导入属性以及待决 Promise 均不开放。早期 JSON 信封不能声明 `javascript-v2`。
+应用包组件可使用过渡脚本运行时 `javascript-v1`；新插件使用 `javascript-module-v1`，入口和相对导入的 `.js`/`.mjs` 文件须位于同一 `components/<id>/` 目录，入口须 `export default` 一个同步函数。函数可读取既有 `pluginInput` 并调用现有宿主桥；返回值仍受 JSON、大小和执行预算限制。包内模块总源码最多 4 MiB、64 个文件。裸模块名、网络 URL、跨目录导入、导入属性以及待决 Promise 均不开放。早期 JSON 信封不能声明模块运行时。
 
 应用包页面可在 `plugin.json` 的页面描述符中声明 `styles` 和 `scripts` 路径，最多各 8 个，均须指向签名包内 `ui/` 下的 UTF-8 `.css` / `.js`；单项最多 512 KiB、单页合计最多 2 MiB。客户端在验签后将其作为 data URL 注入隔离 iframe，不从文件系统或网络加载。页面脚本是经典脚本，不提供浏览器端 ES Module 解析；页面调用后台仍经现有 `znetPlugin.invoke(componentId, action, payload)` RPC、宿主授权与调用预算。任意资源 URL、常驻 worker/service 和本地监听服务尚未开放。
 
@@ -28,10 +28,10 @@ META-INF/signature.json
 作者可以使用：
 
 ```sh
-znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
+znet-plugin pack APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
 ```
 
-`APP_ROOT/plugin.json` 中的 `files` 必须为空，由工具遍历真实文件、拒绝符号链接并生成签名文件索引。私钥、发布者登记和输出路径必须位于应用根目录之外，避免把签名材料误装入包。带 `REGISTRATION_JSON` 时包可走显式本地发布者信任流程；不带时由线上登记提供验签公钥和能力上限。
+`APP_ROOT/plugin.json` 中的 `files` 必须为空，由工具遍历真实文件、拒绝符号链接并生成签名文件索引。私钥、发布者登记和输出路径必须位于应用根目录之外，避免把签名材料误装入包。带 `REGISTRATION_JSON` 时包可走显式本地发布者信任流程；不带时由线上登记提供验签公钥和能力上限。完整字段与示例见 [应用包 v1 规范](plugin-package-v1.md)。
 
 ## 2026-09-15：仓库分发与客户端界面统一
 
@@ -95,7 +95,7 @@ znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGIST
 
 `any` 仅取消设备限制，不豁免宿主版本、运行时 API、能力授权和最低隔离要求。缺失、null、空列表、`all` 等未定义字符串拒绝。明确列表匹配完整 OS/架构/设备形态组合。安装至少要求有一个组件适配当前设备与宿主版本；执行前还必须按实际执行域检查隔离。安装检查不会虚报已有 process 沙箱。
 
-一个包最多八个不同 ID 的组件，各自声明设备与能力；当前没有组件依赖或“整个插件必需组件”的发布语义。组件不可用时不能跨设备借用另一组件授权。`pack-app` 支持多组件；过渡命令 `pack` 仅生成单组件 JSON 包。
+一个包最多八个不同 ID 的组件，各自声明设备与能力；当前没有组件依赖或“整个插件必需组件”的发布语义。组件不可用时不能跨设备借用另一组件授权。`pack` 支持多组件；过渡命令 `pack-legacy` 仅生成单组件 JSON 包。
 
 ## 早期 JSON 信封兼容
 
@@ -134,11 +134,11 @@ znet-plugin list STORE_DIR
 znet-plugin inspect STORE_DIR PLUGIN_ID
 znet-plugin rollback STORE_DIR PLUGIN_ID
 znet-plugin remove STORE_DIR PLUGIN_ID
-znet-plugin pack MANIFEST SOURCE PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
-znet-plugin pack-app APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
+znet-plugin pack APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
+znet-plugin pack-legacy MANIFEST SOURCE PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATION_JSON]
 ```
 
-`pack-app` 是新插件的应用包 v1 打包命令。`pack` 暂作现有 JSON 插件的过渡工具。二者均使用作者提供的 32 字节原始 Ed25519 私钥 seed 文件，输出包和元数据、打印公钥，不打印私钥、不覆盖已有输出，也不自动注册、上传或发布。
+`pack` 是新插件的应用包 v1 打包命令。`pack-legacy` 暂作现有 JSON 插件的过渡工具。二者均使用作者提供的 32 字节原始 Ed25519 私钥 seed 文件，输出包和元数据、打印公钥，不打印私钥、不覆盖已有输出，也不自动注册、上传或发布。
 
 发现最多读取最近 100 个 published Releases，包括预发布；旧版可按精确 tag 获取，不宣称列出了全部历史。草稿拒绝。资源必须来自登记的 GitHub 仓库；下载仅允许 HTTPS GitHub/API/githubusercontent 域及有界重定向，具有连接/总时间、响应字节限制。不提供任意下载 URL 或外部仓库替代入口。
 
