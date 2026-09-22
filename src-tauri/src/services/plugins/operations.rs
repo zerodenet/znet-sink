@@ -45,6 +45,99 @@ fn deliver_system_plugin_notification(app: &tauri::AppHandle, value: &serde_json
     let _ = notification.builder().title(title).body(body).show();
 }
 
+fn sdk_dispatcher(
+    app: tauri::AppHandle,
+    plugin_id: &str,
+    component_id: &str,
+) -> runtime::HostSdkDispatcher {
+    let plugin_id = plugin_id.to_owned();
+    let component_id = component_id.to_owned();
+    Arc::new(move |lease, input| {
+        let mut observed_method = None;
+        let result = (|| -> AppResult<serde_json::Value> {
+            let call: Call = serde_json::from_str(input)
+                .map_err(|_| AppError::invalid_argument("插件 SDK 请求格式无效"))?;
+            observed_method = Some(call.method);
+            let notification = call.method == Method::NotificationPost;
+            let state = app.state::<crate::state::app_state::AppState>();
+            if call.method == Method::SubscriptionApply {
+                let (managed, request) = state
+                    .plugins()
+                    .managed_subscription_input_with_lease(&plugin_id, lease, call)?;
+                return tauri::async_runtime::block_on(
+                    crate::services::subscription::apply_managed_authorized(
+                        app.clone(),
+                        managed,
+                        || lease.check(Some(&request)).map_err(io::failure),
+                    ),
+                )
+                .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
+            }
+            if call.method == Method::SubscriptionRemove {
+                let (subscription_id, remove_associated_config, request) = state
+                    .plugins()
+                    .managed_subscription_removal_with_lease(lease, call)?;
+                return tauri::async_runtime::block_on(
+                    crate::services::subscription::remove_managed_authorized(
+                        app.clone(),
+                        subscription_id,
+                        remove_associated_config,
+                        plugin_id.clone(),
+                        || lease.check(Some(&request)).map_err(io::failure),
+                    ),
+                )
+                .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
+            }
+            let network_proxy = crate::configuration::preferences::endpoint(state.inner())
+                .ok()
+                .map(|(host, port)| format!("http://{host}:{port}"));
+            let value = state.plugins().sdk_call_with_lease(
+                state.capabilities(),
+                &plugin_id,
+                &component_id,
+                lease,
+                call,
+                network_proxy,
+                Some(state.inner()),
+            )?;
+            if notification {
+                let _ = app.emit("plugin:notification", value.clone());
+                deliver_system_plugin_notification(&app, &value);
+            }
+            Ok(value)
+        })();
+        if result.is_err()
+            || matches!(
+                observed_method,
+                Some(
+                    Method::SubscriptionApply | Method::SubscriptionRemove | Method::ProtectedLoad
+                )
+            )
+        {
+            let state = app.state::<crate::state::app_state::AppState>();
+            let action = observed_method
+                .map_or_else(|| "sdk_call".to_owned(), |method| format!("sdk.{method:?}"));
+            crate::services::logs::plugin_host_event(
+                state.inner(),
+                &plugin_id,
+                &component_id,
+                &action,
+                result.as_ref().map(|_| ()),
+            );
+        }
+        let reply = match result {
+            Ok(value) => serde_json::json!({"version":1,"ok":true,"value":value}),
+            Err(error) => serde_json::json!({
+                "version":1,
+                "ok":false,
+                "error":{"code":error.code,"message":error.message}
+            }),
+        };
+        serde_json::to_string(&reply)
+            .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
+    })
+}
+
 impl Host {
     pub fn refresh(&self, manager: &Manager) -> AppResult<Snapshot> {
         let _operation = self.operation.lock().unwrap();
@@ -204,6 +297,15 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn run(&self, manager: &Manager, review: Review) -> AppResult<serde_json::Value> {
+        self.run_with_host(manager, review, None)
+    }
+
+    pub fn run_with_host(
+        &self,
+        manager: &Manager,
+        review: Review,
+        app: Option<tauri::AppHandle>,
+    ) -> AppResult<serde_json::Value> {
         let (component, authority, configuration) = {
             let _operation = self.operation.lock().unwrap();
             self.checked_rescan(manager)?;
@@ -223,14 +325,30 @@ impl Host {
                 configuration,
             )
         };
-        runtime::execute_for_host_with_input(
-            &component,
-            &authority,
-            serde_json::json!({ "configuration": configuration }),
-            Arc::new(AtomicBool::new(false)),
-            env!("CARGO_PKG_VERSION"),
-        )
-        .map_err(|error| {
+        let input = serde_json::json!({ "configuration": configuration });
+        let result = if let Some(app) = app {
+            runtime::execute_for_host_with_input_and_sdk(
+                &component,
+                &authority,
+                input,
+                Arc::new(AtomicBool::new(false)),
+                env!("CARGO_PKG_VERSION"),
+                sdk_dispatcher(
+                    app,
+                    &component.manifest().plugin_id,
+                    &component.manifest().component_id,
+                ),
+            )
+        } else {
+            runtime::execute_for_host_with_input(
+                &component,
+                &authority,
+                input,
+                Arc::new(AtomicBool::new(false)),
+                env!("CARGO_PKG_VERSION"),
+            )
+        };
+        result.map_err(|error| {
             use znet_plugin_sandbox::contract::Error;
             AppError::invalid_argument(match error {
                 Error::Revoked | Error::Expired | Error::Disabled | Error::PermissionDenied => {
@@ -246,6 +364,7 @@ impl Host {
     pub fn invoke(
         &self,
         manager: &Manager,
+        app: Option<tauri::AppHandle>,
         plugin_id: &str,
         component_id: &str,
         action: String,
@@ -289,17 +408,29 @@ impl Host {
             )
         };
         let digest = component.digest().to_owned();
-        let output = runtime::execute_for_host_with_input(
-            &component,
-            &authority,
-            serde_json::json!({
-                "configuration": configuration,
-                "state": plugin_state,
-                "invocation": { "action": action, "payload": payload }
-            }),
-            Arc::new(AtomicBool::new(false)),
-            env!("CARGO_PKG_VERSION"),
-        )
+        let input = serde_json::json!({
+            "configuration": configuration,
+            "state": plugin_state,
+            "invocation": { "action": action, "payload": payload }
+        });
+        let output = if let Some(app) = app {
+            runtime::execute_for_host_with_input_and_sdk(
+                &component,
+                &authority,
+                input,
+                Arc::new(AtomicBool::new(false)),
+                env!("CARGO_PKG_VERSION"),
+                sdk_dispatcher(app, plugin_id, component_id),
+            )
+        } else {
+            runtime::execute_for_host_with_input(
+                &component,
+                &authority,
+                input,
+                Arc::new(AtomicBool::new(false)),
+                env!("CARGO_PKG_VERSION"),
+            )
+        }
         .map_err(|error| {
             use znet_plugin_sandbox::contract::Error;
             AppError::invalid_argument(match error {
@@ -380,71 +511,7 @@ impl Host {
             )
         };
         let digest = component.digest().to_owned();
-        let dispatch_app = app.clone();
-        let dispatch_plugin = plugin_id.to_owned();
-        let dispatch_component = component_id.to_owned();
-        let dispatcher: runtime::HostSdkDispatcher = Arc::new(move |lease, input| {
-            let result = (|| -> AppResult<serde_json::Value> {
-                let call: Call = serde_json::from_str(input)
-                    .map_err(|_| AppError::invalid_argument("插件后台 SDK 请求格式无效"))?;
-                let notification = call.method == Method::NotificationPost;
-                let state = dispatch_app.state::<crate::state::app_state::AppState>();
-                if call.method == Method::SubscriptionApply {
-                    let (managed, request) = state
-                        .plugins()
-                        .managed_subscription_input_with_lease(&dispatch_plugin, lease, call)?;
-                    return tauri::async_runtime::block_on(
-                        crate::services::subscription::apply_managed_authorized(
-                            dispatch_app.clone(),
-                            managed,
-                            || lease.check(Some(&request)).map_err(io::failure),
-                        ),
-                    )
-                    .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
-                }
-                if call.method == Method::SubscriptionRemove {
-                    let (subscription_id, remove_associated_config, request) = state
-                        .plugins()
-                        .managed_subscription_removal_with_lease(lease, call)?;
-                    return tauri::async_runtime::block_on(
-                        crate::services::subscription::remove_managed_authorized(
-                            dispatch_app.clone(),
-                            subscription_id,
-                            remove_associated_config,
-                            dispatch_plugin.clone(),
-                            || lease.check(Some(&request)).map_err(io::failure),
-                        ),
-                    )
-                    .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
-                }
-                let network_proxy = crate::configuration::preferences::endpoint(state.inner())
-                    .ok()
-                    .map(|(host, port)| format!("http://{host}:{port}"));
-                let value = state.plugins().sdk_call_with_lease(
-                    state.capabilities(),
-                    &dispatch_plugin,
-                    &dispatch_component,
-                    lease,
-                    call,
-                    network_proxy,
-                )?;
-                if notification {
-                    let _ = dispatch_app.emit("plugin:notification", value.clone());
-                    deliver_system_plugin_notification(&dispatch_app, &value);
-                }
-                Ok(value)
-            })();
-            let reply = match result {
-                Ok(value) => serde_json::json!({"version":1,"ok":true,"value":value}),
-                Err(error) => serde_json::json!({
-                    "version":1,
-                    "ok":false,
-                    "error":{"code":error.code,"message":error.message}
-                }),
-            };
-            serde_json::to_string(&reply)
-                .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)
-        });
+        let dispatcher = sdk_dispatcher(app.clone(), plugin_id, component_id);
         let output = runtime::execute_scheduled_for_host_with_input(
             &component,
             &authority,
@@ -519,6 +586,7 @@ impl Host {
         for (plugin_id, component_id) in lifecycle {
             if let Err(error) = self.invoke(
                 manager,
+                None,
                 &plugin_id,
                 &component_id,
                 "lifecycle.host_start".into(),

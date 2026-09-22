@@ -31,6 +31,7 @@ export function permissionLabel(capability: string): string {
     'records.summary.read': '读取选定记录摘要',
     'plugin.storage.read': '读取插件自己的本地数据',
     'plugin.storage.write': '修改插件自己的本地数据',
+    'plugin.logs.write': '写入带插件来源标识的运行日志',
     'notifications.post': '显示有来源标识的通知',
     'tasks.schedule': '注册受限后台任务',
     'browser.open': '打开指定网站',

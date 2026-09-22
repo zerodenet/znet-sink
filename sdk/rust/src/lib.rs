@@ -28,6 +28,8 @@ pub enum Capability {
     StorageRead,
     #[serde(rename = "plugin.storage.write")]
     StorageWrite,
+    #[serde(rename = "plugin.logs.write")]
+    LogsWrite,
     #[serde(rename = "notifications.post")]
     NotificationsPost,
     #[serde(rename = "tasks.schedule")]
@@ -68,6 +70,7 @@ impl Capability {
             Self::NetworkConfiguredRequest => "network.configured.request",
             Self::StorageRead => "plugin.storage.read",
             Self::StorageWrite => "plugin.storage.write",
+            Self::LogsWrite => "plugin.logs.write",
             Self::NotificationsPost => "notifications.post",
             Self::TasksSchedule => "tasks.schedule",
             Self::BrowserOpen => "browser.open",
@@ -90,6 +93,7 @@ impl Capability {
             Self::SelfRead
             | Self::StorageRead
             | Self::StorageWrite
+            | Self::LogsWrite
             | Self::NotificationsPost
             | Self::TasksSchedule
             | Self::BrowserCallback
@@ -173,6 +177,7 @@ impl Default for Budget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
+    LogWrite,
     StorageGet,
     StoragePut,
     StorageDelete,
@@ -324,6 +329,14 @@ impl<T: Transport> Client<T> {
             "self",
             Method::StorageGet,
             json!({"area":area,"key":key}),
+        )
+    }
+    pub fn log(&self, level: &str, message: &str, fields: Value) -> Result<Reply, T::Error> {
+        self.call(
+            Capability::LogsWrite,
+            "self",
+            Method::LogWrite,
+            json!({"level": level, "message": message, "fields": fields}),
         )
     }
     pub fn storage_put(&self, area: &str, key: &str, value: &str) -> Result<Reply, T::Error> {

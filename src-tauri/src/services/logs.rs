@@ -1,4 +1,7 @@
-use std::sync::OnceLock;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::{Mutex, OnceLock},
+};
 
 use crate::errors::AppResult;
 use crate::models::logs::{LogAppend, LogEntry, LogLevel, LogPage, LogQuery, LogSource};
@@ -8,6 +11,7 @@ use crate::state::app_state::AppState;
 
 /// Minimum log level for stderr output, controlled by `ZNET_LOG` env var.
 static MIN_STDERR_LEVEL: OnceLock<LogLevel> = OnceLock::new();
+static PLUGIN_HOST_EVENT_TIMES: OnceLock<Mutex<BTreeMap<String, VecDeque<u64>>>> = OnceLock::new();
 
 fn stderr_level() -> LogLevel {
     MIN_STDERR_LEVEL
@@ -121,6 +125,64 @@ pub(crate) fn append_entry(
     log_store::append(&entry, max_entries)?;
 
     Ok(entry)
+}
+
+/// Host-owned plugin execution telemetry. Never accepts a guest-provided source
+/// or identity, and never records invocation payloads or SDK arguments.
+pub(crate) fn plugin_host_event(
+    state: &AppState,
+    plugin_id: &str,
+    component_id: &str,
+    action: &str,
+    result: Result<(), &crate::errors::AppError>,
+) {
+    if plugin_id.is_empty()
+        || component_id.is_empty()
+        || plugin_id.len() > 128
+        || component_id.len() > 128
+        || action.len() > 128
+    {
+        return;
+    }
+    let now = now_unix_ms();
+    let owner = format!("{plugin_id}/{component_id}");
+    let mut guard = PLUGIN_HOST_EVENT_TIMES
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap();
+    guard.retain(|_, times| {
+        while times
+            .front()
+            .is_some_and(|time| now.saturating_sub(*time) >= 60_000)
+        {
+            times.pop_front();
+        }
+        !times.is_empty()
+    });
+    let times = guard.entry(owner).or_default();
+    if times.len() >= 120 {
+        return;
+    }
+    times.push_back(now);
+    drop(guard);
+    let (level, outcome, code) = match result {
+        Ok(()) => (LogLevel::Info, "ok", None),
+        Err(error) => (LogLevel::Error, "failed", Some(error.code)),
+    };
+    let _ = append_entry(
+        state,
+        LogSource::Plugin,
+        level,
+        format!("插件操作 {action} {outcome}"),
+        Some(serde_json::json!({
+            "pluginId": plugin_id,
+            "componentId": component_id,
+            "action": action,
+            "outcome": outcome,
+            "errorCode": code,
+            "origin": "host",
+        })),
+    );
 }
 
 pub fn clear(state: &AppState) -> AppResult<()> {

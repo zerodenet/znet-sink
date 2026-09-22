@@ -30,7 +30,9 @@ mod desktop {
                         "not_found" => ErrorCode::NotFound,
                         "conflict" => ErrorCode::Busy,
                         "unavailable" | "plugin_secret_transport" => ErrorCode::Transport,
-                        "plugin_notification_rate_limited" => ErrorCode::BudgetExceeded,
+                        "plugin_notification_rate_limited" | "plugin_log_rate_limited" => {
+                            ErrorCode::BudgetExceeded
+                        }
                         "plugin_sdk_deadline" => ErrorCode::Deadline,
                         "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
                         "config_apply_uncertain" | "plugin_storage_migration_uncertain" => {
@@ -47,6 +49,31 @@ mod desktop {
                 }),
             },
         }
+    }
+
+    fn sdk_reply_with_log(
+        app: &AppHandle,
+        plugin_id: &str,
+        component_id: &str,
+        method: Method,
+        result: AppResult<serde_json::Value>,
+    ) -> Reply {
+        if result.is_err()
+            || matches!(
+                method,
+                Method::SubscriptionApply | Method::SubscriptionRemove | Method::ProtectedLoad
+            )
+        {
+            let state = app.state::<AppState>();
+            crate::services::logs::plugin_host_event(
+                state.inner(),
+                plugin_id,
+                component_id,
+                &format!("sdk.{method:?}"),
+                result.as_ref().map(|_| ()),
+            );
+        }
+        sdk_reply(result)
     }
     async fn blocking<T: Send + 'static>(
         app: AppHandle,
@@ -150,8 +177,21 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn plugins_run(app: AppHandle, review: Review) -> AppResult<serde_json::Value> {
-        blocking(app, move |state| {
-            state.plugins().run(state.capabilities(), review)
+        blocking(app.clone(), move |state| {
+            let owner = review.key.clone();
+            let result = state
+                .plugins()
+                .run_with_host(state.capabilities(), review, Some(app));
+            if let Some((plugin_id, component_id)) = owner.split_once('/') {
+                crate::services::logs::plugin_host_event(
+                    state,
+                    plugin_id,
+                    component_id,
+                    "run",
+                    result.as_ref().map(|_| ()),
+                );
+            }
+            result
         })
         .await
     }
@@ -163,14 +203,32 @@ mod desktop {
         action: String,
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
-        blocking(app, move |state| {
-            state.plugins().invoke(
+        blocking(app.clone(), move |state| {
+            let result = state.plugins().invoke(
                 state.capabilities(),
+                Some(app.clone()),
                 &plugin_id,
                 &component_id,
-                action,
+                action.clone(),
                 payload,
-            )
+            );
+            let log_action = if action.len() <= 128
+                && action
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            {
+                action.as_str()
+            } else {
+                "invalid-action"
+            };
+            crate::services::logs::plugin_host_event(
+                state,
+                &plugin_id,
+                &component_id,
+                log_action,
+                result.as_ref().map(|_| ()),
+            );
+            result
         })
         .await
     }
@@ -198,11 +256,15 @@ mod desktop {
             })
             .await;
             return match prepared {
-                Ok(prepared) => sdk_reply(
+                Ok(prepared) => sdk_reply_with_log(
+                    &app,
+                    &plugin_id,
+                    &component_id,
+                    call.method,
                     match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), {
                         let (input, authorization) = prepared.into_parts();
                         crate::services::subscription::apply_managed_authorized(
-                            app,
+                            app.clone(),
                             input,
                             move || authorization.check(),
                         )
@@ -223,7 +285,9 @@ mod desktop {
                         }),
                     },
                 ),
-                Err(error) => sdk_reply(Err(error)),
+                Err(error) => {
+                    sdk_reply_with_log(&app, &plugin_id, &component_id, call.method, Err(error))
+                }
             };
         }
         if call.method == Method::SubscriptionRemove {
@@ -243,14 +307,18 @@ mod desktop {
             })
             .await;
             return match prepared {
-                Ok(prepared) => sdk_reply(
+                Ok(prepared) => sdk_reply_with_log(
+                    &app,
+                    &plugin_id,
+                    &component_id,
+                    call.method,
                     match tokio::time::timeout(
                         std::time::Duration::from_millis(timeout_ms),
                         crate::services::subscription::remove_managed_authorized(
-                            app,
+                            app.clone(),
                             prepared.subscription_id,
                             prepared.remove_associated_config,
-                            plugin_id,
+                            plugin_id.clone(),
                             move || prepared.authorization.check(),
                         ),
                     )
@@ -270,24 +338,29 @@ mod desktop {
                         }),
                     },
                 ),
-                Err(error) => sdk_reply(Err(error)),
+                Err(error) => {
+                    sdk_reply_with_log(&app, &plugin_id, &component_id, call.method, Err(error))
+                }
             };
         }
-        sdk_reply(
-            blocking(app, move |state| {
-                let network_proxy = crate::configuration::preferences::endpoint(state)
-                    .ok()
-                    .map(|(host, port)| format!("http://{host}:{port}"));
-                state.plugins().sdk_call_with_network_proxy(
-                    state.capabilities(),
-                    &plugin_id,
-                    &component_id,
-                    call,
-                    network_proxy,
-                )
-            })
-            .await,
-        )
+        let method = call.method;
+        let log_plugin_id = plugin_id.clone();
+        let log_component_id = component_id.clone();
+        let result = blocking(app.clone(), move |state| {
+            let network_proxy = crate::configuration::preferences::endpoint(state)
+                .ok()
+                .map(|(host, port)| format!("http://{host}:{port}"));
+            state.plugins().sdk_call_with_network_proxy(
+                state.capabilities(),
+                &plugin_id,
+                &component_id,
+                call,
+                network_proxy,
+                Some(state),
+            )
+        })
+        .await;
+        sdk_reply_with_log(&app, &log_plugin_id, &log_component_id, method, result)
     }
 
     #[tauri::command]
@@ -315,7 +388,15 @@ mod desktop {
         .await;
         let (lease, bytes) = match extracted {
             Ok(value) => value,
-            Err(error) => return sdk_reply(Err(error)),
+            Err(error) => {
+                return sdk_reply_with_log(
+                    &app,
+                    &plugin_id,
+                    &component_id,
+                    Method::ProtectedLoad,
+                    Err(error),
+                )
+            }
         };
         let result = async {
             let content: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
@@ -366,13 +447,25 @@ mod desktop {
         }
         .await;
         if started.elapsed() > std::time::Duration::from_millis(budget.timeout_ms) {
-            return sdk_reply(Err(crate::errors::AppError {
-                code: "plugin_sdk_deadline",
-                message: "插件 SDK 操作超过声明的时间预算".into(),
-                details: None,
-            }));
+            return sdk_reply_with_log(
+                &app,
+                &plugin_id,
+                &component_id,
+                Method::ProtectedLoad,
+                Err(crate::errors::AppError {
+                    code: "plugin_sdk_deadline",
+                    message: "插件 SDK 操作超过声明的时间预算".into(),
+                    details: None,
+                }),
+            );
         }
-        sdk_reply(result)
+        sdk_reply_with_log(
+            &app,
+            &plugin_id,
+            &component_id,
+            Method::ProtectedLoad,
+            result,
+        )
     }
     #[tauri::command]
     pub async fn plugins_preview_install(app: AppHandle, path: String) -> AppResult<InstallReview> {

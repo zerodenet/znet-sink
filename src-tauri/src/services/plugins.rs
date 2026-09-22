@@ -44,6 +44,7 @@ pub struct Host {
     restore: Mutex<()>,
     state: Mutex<State>,
     notification_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
+    log_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
     callbacks: callback::Store,
     sensitive: sensitive::Store,
 }

@@ -33,6 +33,33 @@ struct NotificationArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginLogArgs {
+    level: crate::models::logs::LogLevel,
+    message: String,
+    #[serde(default)]
+    fields: Option<Value>,
+}
+
+impl PluginLogArgs {
+    fn validate(&self) -> AppResult<()> {
+        if self.message.trim().is_empty() || self.message.len() > 2_048 {
+            return Err(AppError::invalid_argument("插件日志消息为空或超过 2 KiB"));
+        }
+        if self.fields.as_ref().is_some_and(|fields| {
+            serde_json::to_vec(fields).map_or(true, |bytes| bytes.len() > 4_096)
+        }) {
+            return Err(AppError::invalid_argument("插件日志字段超过 4 KiB"));
+        }
+        Ok(())
+    }
+
+    fn trusted_fields(&self, plugin_id: &str, component_id: &str) -> Value {
+        json!({"pluginId": plugin_id, "componentId": component_id, "data": self.fields})
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NotificationActionArgs {
     page_id: String,
@@ -288,6 +315,49 @@ type HpkeAead = ChaCha20Poly1305;
 type HpkeKdf = HkdfSha256;
 
 impl Host {
+    fn write_plugin_log(
+        &self,
+        state: &crate::state::app_state::AppState,
+        plugin_id: &str,
+        component_id: &str,
+        arguments: Value,
+    ) -> AppResult<()> {
+        use crate::models::logs::LogSource;
+        let args: PluginLogArgs = decode(arguments)?;
+        args.validate()?;
+        let now = now_unix_ms();
+        let owner = format!("{plugin_id}/{component_id}");
+        {
+            let mut limits = self.log_times.lock().unwrap();
+            let times = limits.entry(owner).or_default();
+            while times
+                .front()
+                .is_some_and(|time| now.saturating_sub(*time) >= 60_000)
+            {
+                times.pop_front();
+            }
+            if times.len() >= 120 {
+                return Err(AppError {
+                    code: "plugin_log_rate_limited",
+                    message: "插件日志写入过于频繁，请稍后重试".into(),
+                    details: Some(json!({"retryAfterMs": 60_000})),
+                });
+            }
+            times.push_back(now);
+        }
+        // Identity is host-derived; plugin-provided fields remain nested and cannot
+        // impersonate another component or a client/kernel log source.
+        let fields = args.trusted_fields(plugin_id, component_id);
+        crate::services::logs::append_entry(
+            state,
+            LogSource::Plugin,
+            args.level,
+            args.message.trim().to_owned(),
+            Some(fields),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn managed_subscription_input_with_lease(
         &self,
         plugin_id: &str,
@@ -497,7 +567,7 @@ impl Host {
         component_id: &str,
         call: Call,
     ) -> AppResult<Value> {
-        self.sdk_call_with_network_proxy(manager, plugin_id, component_id, call, None)
+        self.sdk_call_with_network_proxy(manager, plugin_id, component_id, call, None, None)
     }
 
     pub(crate) fn sdk_call_with_network_proxy(
@@ -507,6 +577,7 @@ impl Host {
         component_id: &str,
         call: Call,
         network_proxy: Option<String>,
+        log_state: Option<&crate::state::app_state::AppState>,
     ) -> AppResult<Value> {
         if !call.validate() || !method_matches(call.method, call.request.capability) {
             return Err(AppError::invalid_argument("插件 SDK 请求格式或能力不匹配"));
@@ -528,6 +599,7 @@ impl Host {
             &lease,
             call,
             network_proxy,
+            log_state,
         )
     }
 
@@ -539,6 +611,7 @@ impl Host {
         lease: &znet_plugin_sandbox::policy::Lease,
         call: Call,
         network_proxy: Option<String>,
+        log_state: Option<&crate::state::app_state::AppState>,
     ) -> AppResult<Value> {
         if !call.validate() || !method_matches(call.method, call.request.capability) {
             return Err(AppError::invalid_argument("插件 SDK 请求格式或能力不匹配"));
@@ -547,6 +620,12 @@ impl Host {
         let started = Instant::now();
         lease.check(Some(&call.request)).map_err(io::failure)?;
         let value = match call.method {
+            Method::LogWrite => {
+                let state =
+                    log_state.ok_or_else(|| AppError::invalid_argument("插件日志宿主不可用"))?;
+                self.write_plugin_log(state, plugin_id, component_id, call.arguments)?;
+                Value::Bool(true)
+            }
             Method::StorageGet => {
                 let args: StorageGetArgs = decode(call.arguments)?;
                 serde_json::to_value(self.storage_get(plugin_id, args.area, &args.key)?)
@@ -1223,16 +1302,19 @@ impl Host {
 fn method_matches(method: Method, capability: Capability) -> bool {
     matches!(
         (method, capability),
-        (
-            Method::StorageGet | Method::StorageList | Method::StorageExport,
-            Capability::StorageRead
-        ) | (
-            Method::StoragePut
-                | Method::StorageDelete
-                | Method::StorageClear
-                | Method::StorageMigrate,
-            Capability::StorageWrite
-        ) | (Method::NotificationPost, Capability::NotificationsPost)
+        (Method::LogWrite, Capability::LogsWrite)
+            | (
+                Method::StorageGet | Method::StorageList | Method::StorageExport,
+                Capability::StorageRead
+            )
+            | (
+                Method::StoragePut
+                    | Method::StorageDelete
+                    | Method::StorageClear
+                    | Method::StorageMigrate,
+                Capability::StorageWrite
+            )
+            | (Method::NotificationPost, Capability::NotificationsPost)
             | (
                 Method::SchedulePut | Method::ScheduleList | Method::ScheduleDelete,
                 Capability::TasksSchedule
@@ -1284,6 +1366,48 @@ fn method_matches(method: Method, capability: Capability) -> bool {
 mod tests {
     use super::*;
     use znet_plugin_sandbox::distribution::package::{PageKind, VerifiedPage};
+
+    #[test]
+    fn plugin_logs_require_exact_capability_and_trusted_identity() {
+        assert!(method_matches(Method::LogWrite, Capability::LogsWrite));
+        assert!(!method_matches(Method::LogWrite, Capability::StorageWrite));
+        let args: PluginLogArgs = serde_json::from_value(json!({
+            "level": "warn", "message": "provider unavailable",
+            "fields": {"pluginId": "forged", "token": "secret"}
+        }))
+        .unwrap();
+        args.validate().unwrap();
+        let fields = args.trusted_fields("real.plugin", "worker");
+        assert_eq!(fields["pluginId"], "real.plugin");
+        assert_eq!(fields["componentId"], "worker");
+        assert_eq!(fields["data"]["pluginId"], "forged");
+        assert!(serde_json::from_value::<PluginLogArgs>(json!({
+            "level": "error", "message": "bad", "pluginId": "forged"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<PluginLogArgs>(json!({
+            "level": "fatal", "message": "bad"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<PluginLogArgs>(json!({
+            "level": "info", "message": "x".repeat(2_049)
+        }))
+        .unwrap()
+        .validate()
+        .is_err());
+        assert!(serde_json::from_value::<PluginLogArgs>(json!({
+            "level": "info", "message": "   "
+        }))
+        .unwrap()
+        .validate()
+        .is_err());
+        assert!(serde_json::from_value::<PluginLogArgs>(json!({
+            "level": "info", "message": "ready", "fields": {"large": "x".repeat(4_096)}
+        }))
+        .unwrap()
+        .validate()
+        .is_err());
+    }
 
     #[test]
     fn notification_navigation_accepts_only_a_signed_page_and_safe_route() {

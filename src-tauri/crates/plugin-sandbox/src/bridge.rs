@@ -123,6 +123,7 @@ impl Bridge {
                     }
                     Capability::StorageRead
                     | Capability::StorageWrite
+                    | Capability::LogsWrite
                     | Capability::NotificationsPost
                     | Capability::TasksSchedule
                     | Capability::BrowserOpen

@@ -67,3 +67,16 @@ fn typed_client_constructs_capability_requests() {
     assert_eq!(calls[0].request.scope, "self");
     assert_eq!(calls[0].method, Method::StoragePut);
 }
+
+#[test]
+fn typed_client_constructs_plugin_log_request() {
+    let client = Client::new(Capture::default());
+    client
+        .log("info", "ready", serde_json::json!({"phase":"startup"}))
+        .unwrap();
+    let calls = client.transport().0.lock().unwrap();
+    assert_eq!(calls[0].request.capability, Capability::LogsWrite);
+    assert_eq!(calls[0].request.scope, "self");
+    assert_eq!(calls[0].method, Method::LogWrite);
+    assert_eq!(calls[0].arguments["message"], "ready");
+}

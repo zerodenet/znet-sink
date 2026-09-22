@@ -32,6 +32,12 @@ export default function () {
 
 宿主在调用前设置只读全局 `pluginInput`。页面调用 `znetPlugin.invoke(componentId, action, payload)` 时，其值包含 `configuration`、`state`、`invocation: { action, payload }`；后台计划任务同样使用宿主提供的调用输入。返回值必须可序列化为 JSON。若要原子提交插件命名空间状态，可返回 `{ "znet_plugin_result": 1, "state_updates": { "key": "value" }, "value": ... }`；否则返回值会直接交给调用方。不要在模块内依赖文件系统、`fetch`、Node API、动态导入、待决 Promise 或长期驻留进程；它们未开放。宿主能力只能经已授权的宿主桥/SDK 调用。
 
+## 插件运行日志
+
+组件 manifest 需在 `required` 或 `optional` 声明 `{ "capability": "plugin.logs.write", "scope": "self" }`，并由用户授权。管理页面可调用 `await znetPlugin.logs.write(componentId, 'info', '同步完成', { count: 3 })`。组件 VM 的普通调用和计划任务都可同步调用 `hostSdkCall(JSON.stringify({ version: 1, request: { capability: 'plugin.logs.write', scope: 'self' }, method: 'log_write', arguments: { level: 'info', message: '同步完成', fields: { count: 3 } } }))`，返回 SDK `Reply` JSON 字符串；应检查 `ok`，失败时处理 `error.code`。Rust SDK 提供 `Client::log(level, message, fields)`。
+
+允许级别为 `trace`、`debug`、`info`、`warn`、`error`。消息最多 2 KiB，结构化字段 JSON 最多 4 KiB，每组件每分钟最多 120 条。宿主会附加可信的 `pluginId`、`componentId` 并使用独立的 `plugin` 日志来源，插件不能指定来源或冒充其他插件；自定义字段嵌套在 `data`。日志使用客户端现有的脱敏、留存和清理策略。不要写入令牌、订阅内容、私钥或响应正文，脱敏是最后一道防线。宿主还会记录页面调用、手动运行和后台计划任务的结果以及 SDK 失败（不记录输入负载）；运行日志页可筛选“插件”，并显示所属组件。旧包若未声明此权限，必须重新打包并经用户重新授权后才能主动写日志。
+
 组件 manifest 的 `source_sha256` 是入口文件**原始字节**的 SHA-256；每次修改入口后必须重算。根清单的文件索引另行覆盖导入模块和 UI 文件。组件 manifest 还需声明 `requires_host`、`api_version: 1`、`minimum_isolation: "vm"`、`targets`、`required`、`optional` 与 `limits`；精确示例见仓库样本。早期 `javascript-v1` 单脚本只用于旧插件过渡，不是新插件模板。
 
 ## 管理页面

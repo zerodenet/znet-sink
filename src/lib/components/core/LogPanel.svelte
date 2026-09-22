@@ -83,6 +83,7 @@
     { value: 'all', label: '全部' },
     { value: 'app', label: '应用' },
     { value: 'core', label: '内核' },
+    { value: 'plugin', label: '插件' },
   ];
 
   const levels: Array<{ value: LogLevel | 'all'; label: string; title: string }> = [
@@ -276,11 +277,22 @@
       : null;
   }
 
+  function pluginOwner(log: LogEntry): string | null {
+    if (log.source !== 'plugin') return null;
+    const fields = fieldObject(log);
+    const pluginId = fields?.['pluginId'];
+    const componentId = fields?.['componentId'];
+    return typeof pluginId === 'string'
+      ? typeof componentId === 'string' ? `${pluginId} / ${componentId}` : pluginId
+      : null;
+  }
+
   function structuredFields(log: LogEntry): Array<[string, unknown]> {
     const fields = fieldObject(log);
     if (!fields) return [];
     return Object.entries(fields).filter(([key]) =>
       !['message', 'timestamp', 'level', 'raw_line'].includes(key)
+      && !(log.source === 'plugin' && ['pluginId', 'componentId'].includes(key))
     );
   }
 
@@ -751,7 +763,8 @@
           >
             <ChevronDown class={`row-chevron h-3 w-3 ${expandedLogId === log.id ? 'open' : ''}`} />
             <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
-            <span class="log-source {log.source}">{log.source === 'app' ? 'APP' : 'CORE'}</span>
+            <span class="log-source {log.source}">{log.source === 'app' ? 'APP' : log.source === 'core' ? 'CORE' : 'PLUGIN'}</span>
+            {#if pluginOwner(log)}<span class="log-owner" title={pluginOwner(log) ?? ''}>{pluginOwner(log)}</span>{/if}
             <span class="log-level {log.level}">{levelLabel(log.level)}</span>
             <span class="log-message">{displayMessage(log)}</span>
             {#if previewFields.length > 0}
@@ -1091,6 +1104,8 @@
 
   .log-source.app { background: color-mix(in srgb, #8b5cf6 12%, transparent); color: #7c3aed; }
   .log-source.core { background: color-mix(in srgb, #3b82f6 12%, transparent); color: #2563eb; }
+  .log-source.plugin { background: color-mix(in srgb, #16a34a 12%, transparent); color: #15803d; }
+  .log-owner { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted-foreground); }
   .log-level { color: var(--muted-foreground); background: var(--card); }
   .log-level.error { color: #dc2626; background: color-mix(in srgb, #ef4444 11%, transparent); }
   .log-level.warn { color: #d97706; background: color-mix(in srgb, #f59e0b 11%, transparent); }

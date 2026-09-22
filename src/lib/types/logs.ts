@@ -1,6 +1,6 @@
 // Mirror of Rust models::logs
 
-export type LogSource = 'app' | 'core';
+export type LogSource = 'app' | 'core' | 'plugin';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 

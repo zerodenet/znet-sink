@@ -75,6 +75,7 @@ pub fn execute(
         false,
         env!("CARGO_PKG_VERSION"),
         None,
+        false,
     )
 }
 
@@ -95,6 +96,7 @@ pub fn execute_for_host(
         true,
         host_version,
         None,
+        false,
     )
 }
 
@@ -115,6 +117,30 @@ pub fn execute_for_host_with_input(
         true,
         host_version,
         None,
+        false,
+    )
+}
+
+/// Native page invocation with the same permission-checked SDK bridge as a
+/// scheduled action, but ordinary execution limits and lease semantics.
+pub fn execute_for_host_with_input_and_sdk(
+    component: &Component,
+    authority: &Authority,
+    input: serde_json::Value,
+    cancelled: Arc<AtomicBool>,
+    host_version: &str,
+    dispatcher: HostSdkDispatcher,
+) -> Result<serde_json::Value, Error> {
+    execute_inner(
+        component,
+        authority,
+        None,
+        Some(input),
+        cancelled,
+        true,
+        host_version,
+        Some(dispatcher),
+        false,
     )
 }
 
@@ -138,6 +164,7 @@ pub fn execute_scheduled_for_host_with_input(
         true,
         host_version,
         Some(dispatcher),
+        true,
     )
 }
 
@@ -157,6 +184,7 @@ pub fn execute_network_lab(
         true,
         env!("CARGO_PKG_VERSION"),
         None,
+        false,
     )
 }
 
@@ -169,9 +197,9 @@ fn execute_inner(
     network_enabled: bool,
     host_version: &str,
     sdk_dispatcher: Option<HostSdkDispatcher>,
+    scheduled: bool,
 ) -> Result<serde_json::Value, Error> {
     component.compatible(&Target::native_desktop()?, host_version, Isolation::Vm)?;
-    let scheduled = sdk_dispatcher.is_some();
     let lease = Arc::new(if scheduled {
         authority.begin_scheduled(component, cancelled.clone())?
     } else {

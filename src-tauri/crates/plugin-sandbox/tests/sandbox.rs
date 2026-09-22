@@ -6,7 +6,10 @@ use std::{
 use znet_plugin_sandbox::{
     contract::*,
     policy::Authority,
-    runtime::{execute, execute_scheduled_for_host_with_input, Summary},
+    runtime::{
+        execute, execute_for_host_with_input_and_sdk, execute_scheduled_for_host_with_input,
+        Summary,
+    },
 };
 fn request() -> Request {
     Request {
@@ -201,6 +204,31 @@ fn scheduled_typed_host_calls_pause_guest_cpu_budget_but_keep_vm_limits() {
         )
         .unwrap(),
         42
+    );
+}
+
+#[test]
+fn ordinary_invocation_can_use_permission_checked_typed_host_call() {
+    let c = component("JSON.parse(hostSdkCall('request')).value");
+    let requested = request();
+    let dispatcher = Arc::new(
+        move |lease: &znet_plugin_sandbox::policy::Lease, input: &str| {
+            assert_eq!(input, "request");
+            lease.check(Some(&requested))?;
+            Ok(r#"{"version":1,"ok":true,"value":"logged"}"#.to_string())
+        },
+    );
+    assert_eq!(
+        execute_for_host_with_input_and_sdk(
+            &c,
+            &authority(&c),
+            serde_json::json!({}),
+            Arc::new(AtomicBool::new(false)),
+            "0.0.1",
+            dispatcher,
+        )
+        .unwrap(),
+        "logged"
     );
 }
 

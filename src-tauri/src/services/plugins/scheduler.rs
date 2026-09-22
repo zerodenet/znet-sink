@@ -304,6 +304,19 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
                             value.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
                         });
                         let succeeded = result.is_ok() && !declared_failure;
+                        let retry_error = AppError::invalid_argument("插件请求后台任务重试");
+                        let execution_result = if declared_failure {
+                            Err(&retry_error)
+                        } else {
+                            result.as_ref().map(|_| ())
+                        };
+                        crate::services::logs::plugin_host_event(
+                            state.inner(),
+                            &task.plugin_id,
+                            &task.component_id,
+                            &format!("scheduled.{}", task.action),
+                            execution_result,
+                        );
                         if let Err(error) = state.plugins().record_schedule_result(
                             &task,
                             succeeded,

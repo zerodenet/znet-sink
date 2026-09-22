@@ -123,6 +123,9 @@
       clear: (componentId, area) => sdkCall(componentId, 'plugin.storage.write', 'self', 'storage_clear', { area }),
       migrate: (componentId, area, from, to, values) => sdkCall(componentId, 'plugin.storage.write', 'self', 'storage_migrate', { area, from, to, values })
     }),
+    logs: Object.freeze({
+      write: (componentId, level, message, fields = null) => sdkCall(componentId, 'plugin.logs.write', 'self', 'log_write', { level, message, fields })
+    }),
     notifications: Object.freeze({
       post: (componentId, message, options = {}) => sdkCall(componentId, 'notifications.post', 'self', 'notification_post', { message, ...options })
     }),

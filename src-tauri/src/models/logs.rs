@@ -6,6 +6,7 @@ use serde_json::Value;
 pub enum LogSource {
     App,
     Core,
+    Plugin,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -427,6 +427,7 @@ fn external_local_package_import_runs_in_vm_when_requested() {
     let status = host
         .invoke(
             &manager,
+            None,
             &plugin_id,
             "provider-source",
             "status.get".into(),
@@ -526,6 +527,7 @@ fn external_local_package_import_runs_in_vm_when_requested() {
                                 "provider-source",
                                 lease,
                                 call,
+                                None,
                                 None,
                             )
                             .map_err(|_| znet_plugin_sandbox::contract::Error::PermissionDenied)

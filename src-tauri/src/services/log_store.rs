@@ -297,6 +297,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plugin_entries_persist_and_filter_separately() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        for (id, source) in [
+            (1, LogSource::App),
+            (2, LogSource::Plugin),
+            (3, LogSource::Core),
+        ] {
+            append_to_path(
+                &path,
+                &LogEntry {
+                    id,
+                    source,
+                    level: LogLevel::Info,
+                    message: format!("entry-{id}"),
+                    fields: (id == 2).then(|| serde_json::json!({"pluginId":"org.example.plugin","componentId":"worker"})),
+                    occurred_at_unix_ms: id,
+                },
+            )
+            .unwrap();
+        }
+        let page = query_page_from_path(
+            &path,
+            &LogQuery {
+                source: Some(LogSource::Plugin),
+                ..LogQuery::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, 2);
+        assert_eq!(
+            page.items[0].fields.as_ref().unwrap()["pluginId"],
+            "org.example.plugin"
+        );
+        assert_eq!(load_recent_from_path(&path, 3).unwrap().len(), 3);
+    }
+
+    #[test]
     fn log_store_appends_and_loads_recent_entries() {
         let dir = std::env::temp_dir().join(format!("znet-log-store-{}", std::process::id()));
         let path = dir.join("logs.jsonl");
