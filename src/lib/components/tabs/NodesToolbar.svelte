@@ -200,18 +200,26 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .toolbar-right {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
   }
 
   .node-title {
     font-size: 13px;
     font-weight: 600;
     color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .node-count {
@@ -272,6 +280,9 @@
     position: relative;
     display: flex;
     align-items: center;
+    flex: 1 1 180px;
+    min-width: 120px;
+    max-width: 240px;
   }
 
   .search-icon {

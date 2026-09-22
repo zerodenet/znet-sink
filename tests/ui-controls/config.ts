@@ -144,9 +144,15 @@ export const guiSelectPolicy = async (_policy: string, tag: string) => {
 };
 export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
+  const compactLayout = new URLSearchParams(location.search).get('layout') === 'compact';
+  const tags = compactLayout
+    ? ['日本 SS [01] [Lite]', '日本 IX [0x01] [Lite]', '日本 ME [01] [Lite]', '日本 HY [01] [Lite]', '日本 TR [01] [Lite]', '日本 VM [01] [Lite]']
+    : ['node-a', 'node-b'];
+  const policyTag = compactLayout ? 'AI Suite' : 'proxy';
+  const selected = compactLayout && selectedNode === 'node-a' ? tags[1] : selectedNode;
   return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs: [],
-    groups: [{id: {profileId:'fixture', configRevision:1, tag:'proxy'}, tag:'proxy', kind:'selector', selected:selectedNode, memberTags:['node-a','node-b'], runtimeAvailable:true, available:true}],
-    nodes: ['node-a','node-b'].map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:['proxy'], selectedIn:tag === selectedNode ? ['proxy'] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
+    groups: [{id: {profileId:'fixture', configRevision:1, tag:policyTag}, tag:policyTag, kind:'selector', selected, memberTags:tags, runtimeAvailable:true, available:true}],
+    nodes: tags.map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:[policyTag], selectedIn:tag === selected ? [policyTag] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
       history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
 };
 

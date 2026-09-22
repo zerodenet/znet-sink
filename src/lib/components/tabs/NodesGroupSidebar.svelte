@@ -55,7 +55,7 @@
           {#if group.selected}
             <span class="group-selected truncate" title={group.selected}>
               <span class="group-selected-dot"></span>
-              {group.selected}
+              <span class="group-selected-name">{group.selected}</span>
             </span>
           {/if}
         </div>
@@ -75,7 +75,7 @@
 
 <style>
   .group-sidebar {
-    width: 168px;
+    width: 216px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -209,6 +209,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+  }
+
+  .group-selected-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .group-selected-dot {
@@ -250,7 +258,7 @@
 
   @media (max-width: 700px) {
     .group-sidebar {
-      width: 120px;
+      width: 160px;
       padding: 8px 6px;
     }
   }

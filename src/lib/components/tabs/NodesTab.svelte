@@ -944,7 +944,7 @@
     min-height: 0;
     padding: 10px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
     gap: 10px;
     align-content: start;
   }
@@ -957,10 +957,4 @@
     pointer-events: auto;
   }
 
-  /* Responsive layout */
-  @media (max-width: 700px) {
-    .node-grid {
-      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    }
-  }
 </style>
