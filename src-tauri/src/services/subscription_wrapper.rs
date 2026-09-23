@@ -4,6 +4,7 @@ mod original;
 #[cfg(test)]
 pub(crate) use original::{
     apply_managed_to_acceptance_store, remove_managed_from_acceptance_store,
+    update_managed_metadata_in_acceptance_store,
 };
 pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
 
@@ -13,8 +14,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::errors::{AppError, AppResult};
 use crate::models::subscription::{
-    ManagedSubscriptionApply, SubscriptionProfile, SubscriptionRemovalOutcome,
-    SubscriptionRemovalPreview, SubscriptionUpsert,
+    ManagedSubscriptionApply, ManagedSubscriptionMetadataUpdate, SubscriptionProfile,
+    SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionUpsert,
 };
 use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
@@ -220,6 +221,17 @@ where
     original::apply_managed_authorized(app_handle, input, authorize)
         .await
         .map(present_profile)
+}
+
+pub fn update_managed_metadata_authorized<F>(
+    app_handle: AppHandle,
+    input: ManagedSubscriptionMetadataUpdate,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    original::update_managed_metadata_authorized(app_handle, input, authorize).map(present_profile)
 }
 
 pub fn removal_preview(

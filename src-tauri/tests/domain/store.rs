@@ -42,8 +42,9 @@ fn domain_store_roundtrips_profiles() {
             node_count: None,
             upload_bytes: None,
             download_bytes: None,
-            total_bytes: None,
-            expire_at_unix_ms: None,
+            used_bytes: Some(375),
+            total_bytes: Some(1000),
+            expire_at_unix_ms: Some(1_800_000_000_000),
             updated_at_unix_ms: 1,
             last_sync_at_unix_ms: None,
             last_error: None,
@@ -79,6 +80,12 @@ fn domain_store_roundtrips_profiles() {
 
     assert_eq!(data.proxy_configs.len(), 1);
     assert_eq!(data.subscriptions.len(), 1);
+    assert_eq!(data.subscriptions[0].used_bytes, Some(375));
+    assert_eq!(data.subscriptions[0].total_bytes, Some(1000));
+    assert_eq!(
+        data.subscriptions[0].expire_at_unix_ms,
+        Some(1_800_000_000_000)
+    );
     assert_eq!(data.rule_sets.len(), 1);
     assert!(dir.join("znet-sink.db").is_file());
     assert!(!dir.join("proxy-configs.json").exists());
@@ -239,6 +246,7 @@ fn subscription_profile(
         node_count: None,
         upload_bytes: None,
         download_bytes: None,
+        used_bytes: None,
         total_bytes: None,
         expire_at_unix_ms: None,
         updated_at_unix_ms: 1,

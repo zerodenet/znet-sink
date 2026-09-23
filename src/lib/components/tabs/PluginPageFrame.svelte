@@ -59,6 +59,31 @@
     return components.find(value => value.component_id === componentId) ?? components[0];
   }
 
+  type PublicPluginError = {
+    code: string;
+    message: string;
+    field_path?: string;
+    diagnostics?: string[];
+    retry_after_ms?: number;
+  };
+
+  function publicPluginError(reason: unknown, fallback: string): PublicPluginError {
+    const info = getAppErrorInfo(reason, fallback);
+    const value = reason && typeof reason === 'object' ? reason as Record<string, unknown> : {};
+    const details = value.details && typeof value.details === 'object'
+      ? value.details as Record<string, unknown>
+      : {};
+    const diagnostics = Array.isArray(info.diagnostics) ? info.diagnostics : [];
+    const retryAfter = Number(value.retry_after_ms ?? value.retryAfterMs ?? details.retry_after_ms ?? details.retryAfterMs);
+    return {
+      code: info.code ?? 'host_operation_failed',
+      message: info.message,
+      ...(info.fieldPath ? { field_path: info.fieldPath } : {}),
+      ...(diagnostics.length ? { diagnostics: diagnostics.slice(0, 8) } : {}),
+      ...(Number.isSafeInteger(retryAfter) && retryAfter >= 0 ? { retry_after_ms: retryAfter } : {}),
+    };
+  }
+
   function sdk(channelId: string) {
     const plugin = JSON.stringify(pluginId);
     const channelValue = JSON.stringify(channelId);
@@ -86,7 +111,21 @@
     const item = pending.get(value.id);
     if (!item) return;
     pending.delete(value.id);
-    value.ok ? item.resolve(value.value) : item.reject(new Error(value.error || '插件宿主操作失败'));
+    if (value.ok) {
+      item.resolve(value.value);
+      return;
+    }
+    const failure = value.error && typeof value.error === 'object'
+      ? value.error
+      : { code: 'host_operation_failed', message: String(value.error || '插件宿主操作失败') };
+    const error = new Error(failure.message || '插件宿主操作失败');
+    Object.assign(error, {
+      code: failure.code,
+      fieldPath: failure.field_path,
+      diagnostics: Array.isArray(failure.diagnostics) ? failure.diagnostics : [],
+      retryAfterMs: failure.retry_after_ms
+    });
+    item.reject(error);
   });
   const utf8 = {
     encode(value) { const bytes = new TextEncoder().encode(JSON.stringify(value)); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary); },
@@ -98,7 +137,12 @@
     const reply = await request('sdk.call', { componentId, call });
     if (!reply || reply.version !== 1 || !reply.ok) {
       const error = new Error(reply && reply.error ? reply.error.message : '插件 SDK 操作失败');
-      if (reply && reply.error) Object.assign(error, { code: reply.error.code, retryAfterMs: reply.error.retry_after_ms });
+      if (reply && reply.error) Object.assign(error, {
+        code: reply.error.code,
+        fieldPath: reply.error.field_path,
+        diagnostics: Array.isArray(reply.error.diagnostics) ? reply.error.diagnostics : [],
+        retryAfterMs: reply.error.retry_after_ms
+      });
       throw error;
     }
     return reply.value;
@@ -133,6 +177,15 @@
       put: (componentId, taskId, action, intervalSeconds) => sdkCall(componentId, 'tasks.schedule', 'self', 'schedule_put', { taskId, action, intervalSeconds }),
       list: componentId => sdkCall(componentId, 'tasks.schedule', 'self', 'schedule_list'),
       delete: (componentId, taskId) => sdkCall(componentId, 'tasks.schedule', 'self', 'schedule_delete', { taskId })
+    }),
+    subscriptions: Object.freeze({
+      updateMetadata: (componentId, providerId, remoteSubscriptionId, usage) => sdkCall(
+        componentId,
+        'subscriptions.manage',
+        'self',
+        'subscription_metadata_update',
+        { providerId, remoteSubscriptionId, usage }
+      )
     }),
     browser: Object.freeze({
       open: (componentId, origin, url) => sdkCall(componentId, 'browser.open', origin, 'browser_open', { url }),
@@ -281,13 +334,19 @@
         return;
       }
       if (messageCount++ >= 512 || inFlight >= 8) {
-        frame?.contentWindow?.postMessage({ source: 'znet-plugin-host-v1', channel, id: value.id, ok: false, error: '插件页面请求超过客户端限制' }, '*');
+        frame?.contentWindow?.postMessage({
+          source: 'znet-plugin-host-v1', channel, id: value.id, ok: false,
+          error: { code: 'budget_exceeded', message: '插件页面请求超过客户端限制' }
+        }, '*');
         return;
       }
       inFlight++;
       void dispatch(String(value.method ?? ''), value.args && typeof value.args === 'object' ? value.args : {})
         .then(result => frame?.contentWindow?.postMessage({ source: 'znet-plugin-host-v1', channel, id: value.id, ok: true, value: messageValue(result) }, '*'))
-        .catch(reason => frame?.contentWindow?.postMessage({ source: 'znet-plugin-host-v1', channel, id: value.id, ok: false, error: getAppErrorInfo(reason, '插件宿主操作失败').message }, '*'))
+        .catch(reason => frame?.contentWindow?.postMessage({
+          source: 'znet-plugin-host-v1', channel, id: value.id, ok: false,
+          error: publicPluginError(reason, '插件宿主操作失败')
+        }, '*'))
         .finally(() => { inFlight--; });
     };
     addEventListener('message', receive);

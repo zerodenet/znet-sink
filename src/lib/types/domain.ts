@@ -71,6 +71,8 @@ export interface SubscriptionProfile {
   nodeCount?: number;
   uploadBytes?: number;
   downloadBytes?: number;
+  /** Provider-reported aggregate use for a managed subscription. */
+  usedBytes?: number;
   totalBytes?: number;
   /** Subscription expiry (ms since epoch). */
   expireAtUnixMs?: number;

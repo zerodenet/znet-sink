@@ -8,9 +8,9 @@ use crate::errors::{AppError, AppResult};
 use crate::models::logs::LogLevel;
 use crate::models::proxy_config::{ProxyConfigProfile, ProxyConfigUpsert};
 use crate::models::subscription::{
-    ManagedSubscriptionApply, ManagedSubscriptionSource, SubscriptionProfile,
-    SubscriptionRemovalOutcome, SubscriptionRemovalPreview, SubscriptionRemovalTarget,
-    SubscriptionUpsert, SyncMetadata,
+    ManagedSubscriptionApply, ManagedSubscriptionMetadataUpdate, ManagedSubscriptionSource,
+    ManagedSubscriptionUsage, SubscriptionProfile, SubscriptionRemovalOutcome,
+    SubscriptionRemovalPreview, SubscriptionRemovalTarget, SubscriptionUpsert, SyncMetadata,
 };
 use crate::services::common::{
     begin_in_flight, generated_store_id, is_in_flight, lock, normalize_optional,
@@ -145,6 +145,7 @@ pub fn upsert(
                 node_count: None,
                 upload_bytes: None,
                 download_bytes: None,
+                used_bytes: None,
                 total_bytes: None,
                 expire_at_unix_ms: None,
                 updated_at_unix_ms: now_unix_ms(),
@@ -826,6 +827,177 @@ where
     Ok(committed)
 }
 
+/// Refresh provider-reported quota without reapplying (or even receiving)
+/// proxy configuration content. Ownership is checked against the same stable
+/// namespace used by managed subscription apply/remove.
+pub fn update_managed_metadata_authorized<F>(
+    app_handle: AppHandle,
+    input: ManagedSubscriptionMetadataUpdate,
+    authorize: F,
+) -> AppResult<SubscriptionProfile>
+where
+    F: Fn() -> AppResult<()>,
+{
+    let (id, owner, usage) = validate_managed_metadata_input(input)?;
+    let state = app_handle.state::<AppState>();
+    let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
+    authorize()?;
+    let mut subscriptions = lock(state.subscriptions(), "subscription")?;
+    authorize()?;
+    let (next, updated) = commit_managed_metadata(
+        &subscriptions,
+        &id,
+        &owner,
+        &usage,
+        now_unix_ms(),
+        domain_store::save_subscriptions,
+    )?;
+    *subscriptions = next;
+    Ok(updated)
+}
+
+fn managed_metadata_invalid(field_path: &'static str, message: &'static str) -> AppError {
+    AppError {
+        code: "invalid_argument",
+        message: message.into(),
+        details: Some(json!({"fieldPath": field_path})),
+    }
+}
+
+fn validate_managed_metadata_input(
+    input: ManagedSubscriptionMetadataUpdate,
+) -> AppResult<(String, ManagedSubscriptionSource, ManagedSubscriptionUsage)> {
+    let raw_provider_id = input.provider_id;
+    let provider_id = normalize_required(raw_provider_id.clone(), "provider_id")?;
+    if raw_provider_id != provider_id {
+        return Err(managed_metadata_invalid(
+            "providerId",
+            "providerId must be a normalized HTTPS origin",
+        ));
+    }
+    let parsed_provider = reqwest::Url::parse(&provider_id).map_err(|_| {
+        managed_metadata_invalid("providerId", "providerId must be an exact HTTPS origin")
+    })?;
+    if parsed_provider.scheme() != "https"
+        || parsed_provider.path() != "/"
+        || parsed_provider.query().is_some()
+        || parsed_provider.fragment().is_some()
+        || parsed_provider.origin().ascii_serialization() != provider_id
+    {
+        return Err(managed_metadata_invalid(
+            "providerId",
+            "providerId must be an exact HTTPS origin",
+        ));
+    }
+    let plugin_id = normalize_required(input.plugin_id, "plugin_id")?;
+    let raw_remote_subscription_id = input.remote_subscription_id;
+    let remote_subscription_id =
+        normalize_required(raw_remote_subscription_id.clone(), "remote_subscription_id")?;
+    if raw_remote_subscription_id != remote_subscription_id
+        || remote_subscription_id.len() > 160
+        || !remote_subscription_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        return Err(managed_metadata_invalid(
+            "remoteSubscriptionId",
+            "remoteSubscriptionId is invalid",
+        ));
+    }
+    const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
+    if input.usage.used_bytes > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.usedBytes",
+            "usedBytes must be a JSON safe integer",
+        ));
+    }
+    if input.usage.total_bytes == 0 || input.usage.total_bytes > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.totalBytes",
+            "totalBytes must be a positive JSON safe integer",
+        ));
+    }
+    if input.usage.expire_at_unix_ms == 0 || input.usage.expire_at_unix_ms > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.expireAtUnixMs",
+            "expireAtUnixMs must be a positive JSON safe integer",
+        ));
+    }
+    let (id, _) = managed_subscription_ids(&plugin_id, &provider_id, &remote_subscription_id);
+    Ok((
+        id,
+        ManagedSubscriptionSource {
+            plugin_id,
+            provider_id,
+            remote_subscription_id,
+            revision: None,
+            source_name: None,
+        },
+        input.usage,
+    ))
+}
+
+fn commit_managed_metadata(
+    previous: &[SubscriptionProfile],
+    id: &str,
+    owner: &ManagedSubscriptionSource,
+    usage: &ManagedSubscriptionUsage,
+    now: u64,
+    persist: impl FnOnce(&[SubscriptionProfile]) -> AppResult<()>,
+) -> AppResult<(Vec<SubscriptionProfile>, SubscriptionProfile)> {
+    let (next, updated) = stage_managed_metadata(previous, id, owner, usage, now)?;
+    persist(&next)?;
+    Ok((next, updated))
+}
+
+fn stage_managed_metadata(
+    previous: &[SubscriptionProfile],
+    id: &str,
+    owner: &ManagedSubscriptionSource,
+    usage: &ManagedSubscriptionUsage,
+    now: u64,
+) -> AppResult<(Vec<SubscriptionProfile>, SubscriptionProfile)> {
+    let mut next = previous.to_vec();
+    let profile = next
+        .iter_mut()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| AppError::not_found("subscription", id.to_owned()))?;
+    if profile
+        .managed_source
+        .as_ref()
+        .is_none_or(|actual| !actual.same_namespace(owner))
+    {
+        return Err(AppError::conflict(
+            "subscription",
+            id.to_owned(),
+            "managed subscription is owned by another source",
+        ));
+    }
+    profile.used_bytes = Some(usage.used_bytes);
+    profile.total_bytes = Some(usage.total_bytes);
+    profile.expire_at_unix_ms = Some(usage.expire_at_unix_ms);
+    profile.updated_at_unix_ms = now;
+    let updated = profile.clone();
+    Ok((next, updated))
+}
+
+#[cfg(test)]
+pub(crate) fn update_managed_metadata_in_acceptance_store(
+    dir: &std::path::Path,
+    previous_subscriptions: Vec<SubscriptionProfile>,
+    input: ManagedSubscriptionMetadataUpdate,
+) -> AppResult<(Vec<SubscriptionProfile>, SubscriptionProfile)> {
+    let (id, owner, usage) = validate_managed_metadata_input(input)?;
+    commit_managed_metadata(
+        &previous_subscriptions,
+        &id,
+        &owner,
+        &usage,
+        now_unix_ms(),
+        |next| domain_store::save_subscriptions_to_dir(dir, next),
+    )
+}
+
 fn managed_subscription_ids(
     plugin_id: &str,
     provider_id: &str,
@@ -897,6 +1069,7 @@ fn stage_managed_subscription(
                 node_count: None,
                 upload_bytes: None,
                 download_bytes: None,
+                used_bytes: None,
                 total_bytes: None,
                 expire_at_unix_ms: None,
                 updated_at_unix_ms: now,
@@ -2809,6 +2982,171 @@ mod tests {
     }
 
     #[test]
+    fn managed_usage_refresh_changes_only_owned_metadata() {
+        let owner = managed_source("org.example.plugin", "primary", Some("same-revision"));
+        let (id, config_id) = managed_subscription_ids(
+            &owner.plugin_id,
+            &owner.provider_id,
+            &owner.remote_subscription_id,
+        );
+        let mut profile = subscription_with_target(&id, Some(&config_id));
+        profile.managed_source = Some(owner.clone());
+        profile.node_count = Some(19);
+        profile.last_sync_at_unix_ms = Some(10);
+        let usage = ManagedSubscriptionUsage {
+            used_bytes: 375,
+            total_bytes: 1000,
+            expire_at_unix_ms: 1_800_000_000_000,
+        };
+        let (next, updated) =
+            stage_managed_metadata(&[profile.clone()], &id, &owner, &usage, 20).unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(updated.used_bytes, Some(375));
+        assert_eq!(updated.total_bytes, Some(1000));
+        assert_eq!(updated.expire_at_unix_ms, Some(1_800_000_000_000));
+        assert_eq!(updated.node_count, profile.node_count);
+        assert_eq!(updated.last_sync_at_unix_ms, profile.last_sync_at_unix_ms);
+        assert_eq!(
+            updated.target_proxy_config_id,
+            profile.target_proxy_config_id
+        );
+        assert_eq!(updated.managed_source, profile.managed_source);
+
+        let exhausted = ManagedSubscriptionUsage {
+            used_bytes: 1200,
+            ..usage.clone()
+        };
+        let (_, exhausted_profile) =
+            stage_managed_metadata(&[profile.clone()], &id, &owner, &exhausted, 21).unwrap();
+        assert_eq!(exhausted_profile.used_bytes, Some(1200));
+        assert_eq!(exhausted_profile.total_bytes, Some(1000));
+
+        let foreign = managed_source("org.other.plugin", "primary", None);
+        assert_eq!(
+            stage_managed_metadata(&[profile.clone()], &id, &foreign, &usage, 30)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        let mut manual = profile.clone();
+        manual.managed_source = None;
+        assert_eq!(
+            stage_managed_metadata(&[manual], &id, &owner, &usage, 30)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+
+        assert_eq!(
+            stage_managed_metadata(&[], &id, &owner, &usage, 30)
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
+
+        for mismatched in [
+            managed_source("org.example.plugin", "other-provider", None),
+            ManagedSubscriptionSource {
+                remote_subscription_id: "other-remote".into(),
+                ..owner.clone()
+            },
+        ] {
+            assert_eq!(
+                stage_managed_metadata(&[profile.clone()], &id, &mismatched, &usage, 30)
+                    .unwrap_err()
+                    .code,
+                "conflict"
+            );
+        }
+    }
+
+    #[test]
+    fn managed_usage_input_is_strict_and_field_specific() {
+        let valid = || ManagedSubscriptionMetadataUpdate {
+            plugin_id: "org.example.plugin".into(),
+            provider_id: "https://example.com".into(),
+            remote_subscription_id: "1".into(),
+            usage: ManagedSubscriptionUsage {
+                used_bytes: 123,
+                total_bytes: 1000,
+                expire_at_unix_ms: 1_800_000_000_000,
+            },
+        };
+        assert!(validate_managed_metadata_input(valid()).is_ok());
+
+        let mut invalid = valid();
+        invalid.provider_id = "http://example.com".into();
+        assert_eq!(
+            validate_managed_metadata_input(invalid)
+                .unwrap_err()
+                .details
+                .unwrap()["fieldPath"],
+            "providerId"
+        );
+        let mut invalid = valid();
+        invalid.remote_subscription_id = "foreign/id".into();
+        assert_eq!(
+            validate_managed_metadata_input(invalid)
+                .unwrap_err()
+                .details
+                .unwrap()["fieldPath"],
+            "remoteSubscriptionId"
+        );
+        let mut invalid = valid();
+        invalid.usage.total_bytes = 0;
+        assert_eq!(
+            validate_managed_metadata_input(invalid)
+                .unwrap_err()
+                .details
+                .unwrap()["fieldPath"],
+            "usage.totalBytes"
+        );
+        let mut invalid = valid();
+        invalid.usage.expire_at_unix_ms = 9_007_199_254_740_992;
+        assert_eq!(
+            validate_managed_metadata_input(invalid)
+                .unwrap_err()
+                .details
+                .unwrap()["fieldPath"],
+            "usage.expireAtUnixMs"
+        );
+    }
+
+    #[test]
+    fn managed_usage_persistence_failure_does_not_change_memory_snapshot() {
+        let owner = managed_source("org.example.plugin", "primary", Some("rev-1"));
+        let (id, config_id) = managed_subscription_ids(
+            &owner.plugin_id,
+            &owner.provider_id,
+            &owner.remote_subscription_id,
+        );
+        let mut profile = subscription_with_target(&id, Some(&config_id));
+        profile.managed_source = Some(owner.clone());
+        profile.used_bytes = Some(5);
+        profile.total_bytes = Some(10);
+        profile.expire_at_unix_ms = Some(20);
+        let previous = vec![profile.clone()];
+        let error = commit_managed_metadata(
+            &previous,
+            &id,
+            &owner,
+            &ManagedSubscriptionUsage {
+                used_bytes: 375,
+                total_bytes: 1000,
+                expire_at_unix_ms: 1_800_000_000_000,
+            },
+            30,
+            |_| Err(AppError::internal("injected persistence failure")),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "internal");
+        assert_eq!(previous[0].used_bytes, profile.used_bytes);
+        assert_eq!(previous[0].total_bytes, profile.total_bytes);
+        assert_eq!(previous[0].expire_at_unix_ms, profile.expire_at_unix_ms);
+        assert_eq!(previous[0].updated_at_unix_ms, profile.updated_at_unix_ms);
+    }
+
+    #[test]
     fn managed_subscription_removal_is_limited_to_the_owning_plugin() {
         let owner = managed_source("org.example.plugin", "primary", None);
         let (subscription_id, config_id) = managed_subscription_ids(
@@ -3090,6 +3428,7 @@ mod tests {
             node_count: None,
             upload_bytes: None,
             download_bytes: None,
+            used_bytes: None,
             total_bytes: None,
             expire_at_unix_ms: None,
             updated_at_unix_ms: 1,
@@ -3433,6 +3772,7 @@ rule-providers:
             node_count: None,
             upload_bytes: None,
             download_bytes: None,
+            used_bytes: None,
             total_bytes: None,
             expire_at_unix_ms: None,
             updated_at_unix_ms: 1,
@@ -3657,6 +3997,7 @@ proxy-groups:
                 node_count: None,
                 upload_bytes: None,
                 download_bytes: None,
+                used_bytes: None,
                 total_bytes: None,
                 expire_at_unix_ms: None,
                 updated_at_unix_ms: now,
@@ -3718,6 +4059,7 @@ proxy-groups:
                 node_count: None,
                 upload_bytes: None,
                 download_bytes: None,
+                used_bytes: None,
                 total_bytes: None,
                 expire_at_unix_ms: None,
                 updated_at_unix_ms: initial_now,
@@ -3813,6 +4155,7 @@ proxy-groups:
                 node_count: None,
                 upload_bytes: None,
                 download_bytes: None,
+                used_bytes: None,
                 total_bytes: None,
                 expire_at_unix_ms: None,
                 updated_at_unix_ms: 1,

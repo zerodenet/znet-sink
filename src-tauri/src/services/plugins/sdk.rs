@@ -17,8 +17,85 @@ use std::{
 };
 use znet_plugin_sandbox::{
     contract::{Capability, Request},
-    sdk::{Call, Method},
+    sdk::{Call, ErrorCode, Failure, Method},
 };
+
+fn public_detail_string(details: Option<&Value>, keys: &[&str]) -> Option<String> {
+    let details = details?.as_object()?;
+    keys.iter()
+        .find_map(|key| details.get(*key).and_then(Value::as_str))
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-[]".contains(&byte))
+        })
+        .map(ToOwned::to_owned)
+}
+
+/// Convert an internal application error into the deliberately small public
+/// plugin failure envelope. Arbitrary details, paths, database messages and
+/// causes are never copied into the guest boundary.
+pub(crate) fn public_failure(error: AppError) -> Failure {
+    let code = match error.code {
+        "invalid_argument" => ErrorCode::InvalidRequest,
+        "not_found" => ErrorCode::NotFound,
+        "conflict" => ErrorCode::Busy,
+        "unavailable" | "plugin_secret_transport" => ErrorCode::Transport,
+        "plugin_notification_rate_limited" | "plugin_log_rate_limited" => ErrorCode::BudgetExceeded,
+        "plugin_sdk_deadline" => ErrorCode::Deadline,
+        "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
+        "config_apply_uncertain" | "plugin_storage_migration_uncertain" => ErrorCode::Uncertain,
+        _ => ErrorCode::PermissionDenied,
+    };
+    let field_path = public_detail_string(error.details.as_ref(), &["fieldPath", "field_path"]);
+    let diagnostics = error
+        .details
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|details| {
+            details
+                .get("publicDiagnostics")
+                .or_else(|| details.get("diagnostics"))
+        })
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .take(8)
+        .map(|value| value.chars().take(240).collect())
+        .collect();
+    let retry_after_ms = error
+        .details
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|details| {
+            details
+                .get("retryAfterMs")
+                .or_else(|| details.get("retry_after_ms"))
+                .and_then(Value::as_u64)
+        });
+    let message = match error.code {
+        "invalid_argument"
+        | "not_found"
+        | "conflict"
+        | "authorization_cancelled"
+        | "plugin_notification_rate_limited"
+        | "plugin_log_rate_limited"
+        | "plugin_sdk_deadline"
+        | "plugin_sdk_result_budget" => error.message,
+        _ => "插件宿主拒绝了本次操作".into(),
+    };
+    Failure {
+        code,
+        message,
+        field_path,
+        diagnostics,
+        retry_after_ms,
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -271,6 +348,14 @@ struct SubscriptionApplyArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubscriptionMetadataUpdateArgs {
+    provider_id: String,
+    remote_subscription_id: String,
+    usage: crate::models::subscription::ManagedSubscriptionUsage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubscriptionRemoveArgs {
     subscription_id: String,
     #[serde(default)]
@@ -280,6 +365,11 @@ struct SubscriptionRemoveArgs {
 pub(crate) struct PreparedManagedSubscription {
     input: crate::models::subscription::ManagedSubscriptionApply,
     authorization: ManagedSubscriptionAuthorization,
+}
+
+pub(crate) struct PreparedManagedSubscriptionMetadataUpdate {
+    pub(crate) input: crate::models::subscription::ManagedSubscriptionMetadataUpdate,
+    pub(crate) authorization: ManagedSubscriptionAuthorization,
 }
 
 impl PreparedManagedSubscription {
@@ -408,6 +498,35 @@ impl Host {
         Ok((args.subscription_id, args.remove_associated_config, request))
     }
 
+    pub(crate) fn managed_subscription_metadata_with_lease(
+        &self,
+        plugin_id: &str,
+        lease: &znet_plugin_sandbox::policy::Lease,
+        call: Call,
+    ) -> AppResult<(
+        crate::models::subscription::ManagedSubscriptionMetadataUpdate,
+        Request,
+    )> {
+        if !call.validate()
+            || call.method != Method::SubscriptionMetadataUpdate
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅用量请求无效"));
+        }
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let request = call.request;
+        let args: SubscriptionMetadataUpdateArgs = decode(call.arguments)?;
+        Ok((
+            crate::models::subscription::ManagedSubscriptionMetadataUpdate {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                usage: args.usage,
+            },
+            request,
+        ))
+    }
+
     pub(crate) fn prepare_managed_subscription(
         &self,
         manager: &Manager,
@@ -477,6 +596,44 @@ impl Host {
         Ok(PreparedManagedSubscriptionRemoval {
             subscription_id: args.subscription_id,
             remove_associated_config: args.remove_associated_config,
+            authorization: ManagedSubscriptionAuthorization {
+                lease,
+                request: call.request,
+            },
+        })
+    }
+
+    pub(crate) fn prepare_managed_subscription_metadata_update(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        call: Call,
+    ) -> AppResult<PreparedManagedSubscriptionMetadataUpdate> {
+        if !call.validate()
+            || call.method != Method::SubscriptionMetadataUpdate
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅用量请求无效"));
+        }
+        let (component, authority) =
+            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(call.budget.timeout_ms),
+                call.budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let args: SubscriptionMetadataUpdateArgs = decode(call.arguments)?;
+        Ok(PreparedManagedSubscriptionMetadataUpdate {
+            input: crate::models::subscription::ManagedSubscriptionMetadataUpdate {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                usage: args.usage,
+            },
             authorization: ManagedSubscriptionAuthorization {
                 lease,
                 request: call.request,
@@ -1300,66 +1457,7 @@ impl Host {
 }
 
 fn method_matches(method: Method, capability: Capability) -> bool {
-    matches!(
-        (method, capability),
-        (Method::LogWrite, Capability::LogsWrite)
-            | (
-                Method::StorageGet | Method::StorageList | Method::StorageExport,
-                Capability::StorageRead
-            )
-            | (
-                Method::StoragePut
-                    | Method::StorageDelete
-                    | Method::StorageClear
-                    | Method::StorageMigrate,
-                Capability::StorageWrite
-            )
-            | (Method::NotificationPost, Capability::NotificationsPost)
-            | (
-                Method::SchedulePut | Method::ScheduleList | Method::ScheduleDelete,
-                Capability::TasksSchedule
-            )
-            | (Method::BrowserOpen, Capability::BrowserOpen)
-            | (
-                Method::CallbackCreate | Method::CallbackPoll | Method::CallbackCancel,
-                Capability::BrowserCallback
-            )
-            | (Method::FileRead, Capability::FilesSelectionRead)
-            | (Method::FileWrite, Capability::FilesSelectionWrite)
-            | (
-                Method::MaterialSubmit | Method::MaterialDrop,
-                Capability::MaterialsSubmit
-            )
-            | (Method::SecretReceive, Capability::SecretsSessionReceive)
-            | (
-                Method::ConfiguredRequest,
-                Capability::NetworkConfiguredRequest
-            )
-            | (Method::CryptoUse, Capability::CryptoSessionUse)
-            | (
-                Method::PersistentSecretGet,
-                Capability::PersistentSecretsRead
-            )
-            | (
-                Method::PersistentSecretPut | Method::PersistentSecretDelete,
-                Capability::PersistentSecretsWrite
-            )
-            | (
-                Method::CryptoKeyGenerate
-                    | Method::CryptoSign
-                    | Method::CryptoVerify
-                    | Method::CryptoDigest
-                    | Method::CryptoHpkeKeyGenerate
-                    | Method::CryptoHpkeSeal
-                    | Method::CryptoHpkeOpen,
-                Capability::CryptoDeviceUse
-            )
-            | (
-                Method::SubscriptionApply | Method::SubscriptionRemove,
-                Capability::SubscriptionsManage
-            )
-            | (Method::ProtectedLoad, Capability::RuntimeProtectedLoad)
-    )
+    method.capability() == capability
 }
 
 #[cfg(test)]
@@ -1370,6 +1468,14 @@ mod tests {
     #[test]
     fn plugin_logs_require_exact_capability_and_trusted_identity() {
         assert!(method_matches(Method::LogWrite, Capability::LogsWrite));
+        assert!(method_matches(
+            Method::SubscriptionMetadataUpdate,
+            Capability::SubscriptionsManage
+        ));
+        assert!(!method_matches(
+            Method::SubscriptionMetadataUpdate,
+            Capability::StorageWrite
+        ));
         assert!(!method_matches(Method::LogWrite, Capability::StorageWrite));
         let args: PluginLogArgs = serde_json::from_value(json!({
             "level": "warn", "message": "provider unavailable",
@@ -1407,6 +1513,36 @@ mod tests {
         .unwrap()
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn public_plugin_failures_preserve_only_safe_structured_fields() {
+        let failure = public_failure(AppError {
+            code: "invalid_argument",
+            message: "totalBytes must be positive".into(),
+            details: Some(json!({
+                "fieldPath": "usage.totalBytes",
+                "publicDiagnostics": ["provider returned zero quota"],
+                "retryAfterMs": 250,
+                "databasePath": "/Users/private/znet-sink.db",
+                "token": "secret"
+            })),
+        });
+        assert_eq!(failure.code, ErrorCode::InvalidRequest);
+        assert_eq!(failure.field_path.as_deref(), Some("usage.totalBytes"));
+        assert_eq!(failure.diagnostics, ["provider returned zero quota"]);
+        assert_eq!(failure.retry_after_ms, Some(250));
+        let encoded = serde_json::to_string(&failure).unwrap();
+        assert!(!encoded.contains("/Users/private"));
+        assert!(!encoded.contains("secret"));
+
+        let internal = public_failure(AppError {
+            code: "internal",
+            message: "sqlite failed at /private/path with token".into(),
+            details: None,
+        });
+        assert_eq!(internal.message, "插件宿主拒绝了本次操作");
+        assert_eq!(internal.code, ErrorCode::PermissionDenied);
     }
 
     #[test]

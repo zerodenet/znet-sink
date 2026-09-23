@@ -73,6 +73,17 @@ fn sdk_dispatcher(
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
+            if call.method == Method::SubscriptionMetadataUpdate {
+                let (input, request) = state
+                    .plugins()
+                    .managed_subscription_metadata_with_lease(&plugin_id, lease, call)?;
+                return crate::services::subscription::update_managed_metadata_authorized(
+                    app.clone(),
+                    input,
+                    || lease.check(Some(&request)).map_err(io::failure),
+                )
+                .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
+            }
             if call.method == Method::SubscriptionRemove {
                 let (subscription_id, remove_associated_config, request) = state
                     .plugins()
@@ -110,7 +121,10 @@ fn sdk_dispatcher(
             || matches!(
                 observed_method,
                 Some(
-                    Method::SubscriptionApply | Method::SubscriptionRemove | Method::ProtectedLoad
+                    Method::SubscriptionApply
+                        | Method::SubscriptionMetadataUpdate
+                        | Method::SubscriptionRemove
+                        | Method::ProtectedLoad
                 )
             )
         {
@@ -127,11 +141,13 @@ fn sdk_dispatcher(
         }
         let reply = match result {
             Ok(value) => serde_json::json!({"version":1,"ok":true,"value":value}),
-            Err(error) => serde_json::json!({
-                "version":1,
-                "ok":false,
-                "error":{"code":error.code,"message":error.message}
-            }),
+            Err(error) => serde_json::to_value(znet_plugin_sandbox::sdk::Reply {
+                version: znet_plugin_sandbox::sdk::SDK_VERSION,
+                ok: false,
+                value: None,
+                error: Some(super::sdk::public_failure(error)),
+            })
+            .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)?,
         };
         serde_json::to_string(&reply)
             .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput)

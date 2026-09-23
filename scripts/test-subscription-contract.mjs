@@ -24,6 +24,10 @@ assert.doesNotMatch(editor, /DraggableModal/);
 assert.match(editor, /\$lib\/components\/ui\/dialog/);
 assert.match(editor, /填写后完全覆盖默认 User-Agent/);
 assert.match(editor, /<Dialog\.Body class="grid gap-\[15px\]">/);
+assert.match(editor, /sub\.usedBytes \?\? \(\(sub\.uploadBytes \?\? 0\) \+ \(sub\.downloadBytes \?\? 0\)\)/);
+assert.match(editor, /\{#if sub\.usedBytes !== undefined\}/);
+assert.match(editor, /已用 \{formatBytes\(sub\.usedBytes\)\} \/ 总量/);
+assert.match(editor, /\{usagePercent\(sub\)!\.toFixed\(1\)\}%/);
 
 console.log('subscription contract checks passed');
 

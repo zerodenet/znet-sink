@@ -40,6 +40,14 @@ export default function () {
 
 组件 manifest 的 `source_sha256` 是入口文件**原始字节**的 SHA-256；每次修改入口后必须重算。根清单的文件索引另行覆盖导入模块和 UI 文件。组件 manifest 还需声明 `requires_host`、`api_version: 1`、`minimum_isolation: "vm"`、`targets`、`required`、`optional` 与 `limits`；精确示例见仓库样本。早期 `javascript-v1` 单脚本只用于旧插件过渡，不是新插件模板。
 
+组件若依赖某个具体 SDK 方法，还必须在 `requires_methods` 中列出 snake_case 方法名，例如 `"subscription_metadata_update"`。宿主在安装时反序列化并校验这些方法，且要求它们对应的 capability 同时出现在 `required` 或 `optional` 权限声明中。旧客户端因 manifest 拒绝未知字段而不会安装带此声明的新包，当前客户端也会拒绝未知方法或缺少匹配权限的包；因此方法缺失会在安装期暴露，而不是运行到同步流程后才失败。`requires_host` 仍用于声明最低产品版本，两者应同时维护。
+
+## 托管订阅只读元数据
+
+拥有 `{ "capability": "subscriptions.manage", "scope": "self" }` 且在 manifest 声明 `requires_methods: ["subscription_metadata_update"]` 的组件，可以独立更新自己命名空间下已有托管订阅的服务元数据。管理页面调用 `znetPlugin.subscriptions.updateMetadata(componentId, providerId, remoteSubscriptionId, usage)`；组件 VM 使用同名 SDK method，Rust SDK 使用 `Client::update_subscription_metadata`，TypeScript SDK 使用 `subscriptions.updateMetadata`。`usage` 仅包含 `usedBytes`、`totalBytes`、`expireAtUnixMs`；`usedBytes` 是服务端报告的累计总用量，不会被拆成上传/下载。
+
+宿主从已验证会话推导插件身份，并以 `plugin_id + provider_id + remote_subscription_id` 查找目标。此方法不会接收订阅内容、重建配置、改变活动配置或覆盖策略选择。失败对象只公开 `code`、`message`、可选 `field_path`、`diagnostics` 和 `retry_after_ms`。
+
 ## 管理页面
 
 页面的 HTML、CSS 和经典 JS 分别存文件，`styles` / `scripts` 在 `plugin.json` 中显式列出。客户端验签后把这些资源装入隔离 iframe；页面只能通过注入的 `znetPlugin` API 与宿主交互。`znetPlugin.invoke` 的 `action` 限 128 字节且只接受 ASCII 字母、数字、点、下划线和连字符，`payload` 的 JSON 不超过 16 KiB。页面资源不能直接访问本机文件或网络；页面端 ES Module、常驻 worker/service 和本地监听尚未开放。线上发布管理页面时，插件中心登记还需声明 `znet-sink.ui.management.v1` surface。

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-pub use znet_sink_plugin_sdk::{Capability, Request};
+pub use znet_sink_plugin_sdk::{Capability, Method, Request};
 
 pub const MAX_SOURCE_BYTES: usize = 256 * 1024;
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
@@ -385,6 +385,12 @@ pub struct Manifest {
     pub targets: Targets,
     pub required: Vec<Request>,
     pub optional: Vec<Request>,
+    /// SDK methods the component requires at runtime. Older hosts reject this
+    /// field because manifests deny unknown fields; current hosts reject an
+    /// unknown method during deserialization. This turns method availability
+    /// into an install-time boundary instead of a late runtime surprise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_methods: Vec<Method>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration: Option<ConfigurationSchema>,
     /// Host-owned lifecycle triggers. They schedule a bounded component
@@ -452,6 +458,21 @@ impl Component {
             || !manifest.targets.valid()
             || !manifest.limits.valid()
             || manifest.required.len() + manifest.optional.len() > 16
+            || manifest.requires_methods.len() > 32
+            || manifest
+                .requires_methods
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != manifest.requires_methods.len()
+            || manifest.requires_methods.iter().any(|method| {
+                let capability = method.capability();
+                !manifest
+                    .required
+                    .iter()
+                    .chain(&manifest.optional)
+                    .any(|request| request.capability == capability)
+            })
             || manifest.lifecycle.len() > 4
             || manifest.lifecycle.iter().collect::<BTreeSet<_>>().len() != manifest.lifecycle.len()
             || manifest

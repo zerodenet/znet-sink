@@ -37,6 +37,10 @@ pub struct SubscriptionProfile {
     pub upload_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_bytes: Option<u64>,
+    /// Aggregate provider-reported usage for managed subscriptions. This is
+    /// not an upload/download measurement and must not be presented as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_bytes: Option<u64>,
     /// Subscription expiry, as a Unix timestamp in milliseconds
@@ -80,6 +84,22 @@ pub struct ManagedSubscriptionApply {
     pub content: String,
     pub format: String,
     pub revision: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedSubscriptionUsage {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub expire_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManagedSubscriptionMetadataUpdate {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub remote_subscription_id: String,
+    pub usage: ManagedSubscriptionUsage,
 }
 
 #[derive(Clone, Debug, Deserialize)]

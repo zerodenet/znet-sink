@@ -174,7 +174,7 @@ impl Default for Budget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
     LogWrite,
@@ -211,8 +211,53 @@ pub enum Method {
     CryptoHpkeSeal,
     CryptoHpkeOpen,
     SubscriptionApply,
+    SubscriptionMetadataUpdate,
     SubscriptionRemove,
     ProtectedLoad,
+}
+
+impl Method {
+    /// Capability that must be declared and granted for this method. Keeping
+    /// this mapping in the public contract lets package admission and both
+    /// host execution paths enforce exactly the same boundary.
+    pub const fn capability(self) -> Capability {
+        match self {
+            Self::LogWrite => Capability::LogsWrite,
+            Self::StorageGet | Self::StorageList | Self::StorageExport => Capability::StorageRead,
+            Self::StoragePut | Self::StorageDelete | Self::StorageClear | Self::StorageMigrate => {
+                Capability::StorageWrite
+            }
+            Self::NotificationPost => Capability::NotificationsPost,
+            Self::SchedulePut | Self::ScheduleList | Self::ScheduleDelete => {
+                Capability::TasksSchedule
+            }
+            Self::BrowserOpen => Capability::BrowserOpen,
+            Self::CallbackCreate | Self::CallbackPoll | Self::CallbackCancel => {
+                Capability::BrowserCallback
+            }
+            Self::FileRead => Capability::FilesSelectionRead,
+            Self::FileWrite => Capability::FilesSelectionWrite,
+            Self::MaterialSubmit | Self::MaterialDrop => Capability::MaterialsSubmit,
+            Self::SecretReceive => Capability::SecretsSessionReceive,
+            Self::ConfiguredRequest => Capability::NetworkConfiguredRequest,
+            Self::CryptoUse => Capability::CryptoSessionUse,
+            Self::PersistentSecretGet => Capability::PersistentSecretsRead,
+            Self::PersistentSecretPut | Self::PersistentSecretDelete => {
+                Capability::PersistentSecretsWrite
+            }
+            Self::CryptoKeyGenerate
+            | Self::CryptoSign
+            | Self::CryptoVerify
+            | Self::CryptoDigest
+            | Self::CryptoHpkeKeyGenerate
+            | Self::CryptoHpkeSeal
+            | Self::CryptoHpkeOpen => Capability::CryptoDeviceUse,
+            Self::SubscriptionApply
+            | Self::SubscriptionMetadataUpdate
+            | Self::SubscriptionRemove => Capability::SubscriptionsManage,
+            Self::ProtectedLoad => Capability::RuntimeProtectedLoad,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,7 +305,19 @@ pub struct Failure {
     pub code: ErrorCode,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedSubscriptionUsage {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub expire_at_unix_ms: u64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -427,6 +484,24 @@ impl<T: Transport> Client<T> {
             "active-runtime",
             Method::ProtectedLoad,
             json!({"handle":handle}),
+        )
+    }
+
+    pub fn update_subscription_metadata(
+        &self,
+        provider_id: &str,
+        remote_subscription_id: &str,
+        usage: ManagedSubscriptionUsage,
+    ) -> Result<Reply, T::Error> {
+        self.call(
+            Capability::SubscriptionsManage,
+            "self",
+            Method::SubscriptionMetadataUpdate,
+            json!({
+                "providerId": provider_id,
+                "remoteSubscriptionId": remote_subscription_id,
+                "usage": usage,
+            }),
         )
     }
 }

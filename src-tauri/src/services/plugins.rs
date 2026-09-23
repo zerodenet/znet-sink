@@ -8,7 +8,7 @@ mod model;
 pub(crate) mod namespace;
 mod operations;
 mod scheduler;
-mod sdk;
+pub(crate) mod sdk;
 mod sensitive;
 mod vault;
 use crate::errors::{AppError, AppResult};

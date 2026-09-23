@@ -13,9 +13,7 @@ mod desktop {
     use std::collections::BTreeMap;
     use tauri::{AppHandle, Emitter, Manager, State};
     use znet_plugin_sandbox::contract::Request;
-    use znet_plugin_sandbox::sdk::{
-        Call as SdkCall, ErrorCode, Failure, Method, Reply, SDK_VERSION,
-    };
+    use znet_plugin_sandbox::sdk::{Call as SdkCall, Method, Reply, SDK_VERSION};
 
     fn sdk_reply(result: AppResult<serde_json::Value>) -> Reply {
         match result {
@@ -24,29 +22,7 @@ mod desktop {
                 version: SDK_VERSION,
                 ok: false,
                 value: None,
-                error: Some(Failure {
-                    code: match error.code {
-                        "invalid_argument" => ErrorCode::InvalidRequest,
-                        "not_found" => ErrorCode::NotFound,
-                        "conflict" => ErrorCode::Busy,
-                        "unavailable" | "plugin_secret_transport" => ErrorCode::Transport,
-                        "plugin_notification_rate_limited" | "plugin_log_rate_limited" => {
-                            ErrorCode::BudgetExceeded
-                        }
-                        "plugin_sdk_deadline" => ErrorCode::Deadline,
-                        "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
-                        "config_apply_uncertain" | "plugin_storage_migration_uncertain" => {
-                            ErrorCode::Uncertain
-                        }
-                        _ => ErrorCode::PermissionDenied,
-                    },
-                    retry_after_ms: error
-                        .details
-                        .as_ref()
-                        .and_then(|value| value.get("retryAfterMs"))
-                        .and_then(serde_json::Value::as_u64),
-                    message: error.message,
-                }),
+                error: Some(crate::services::plugins::sdk::public_failure(error)),
             },
         }
     }
@@ -61,7 +37,10 @@ mod desktop {
         if result.is_err()
             || matches!(
                 method,
-                Method::SubscriptionApply | Method::SubscriptionRemove | Method::ProtectedLoad
+                Method::SubscriptionApply
+                    | Method::SubscriptionMetadataUpdate
+                    | Method::SubscriptionRemove
+                    | Method::ProtectedLoad
             )
         {
             let state = app.state::<AppState>();
@@ -281,6 +260,61 @@ mod desktop {
                         Err(_) => Err(crate::errors::AppError {
                             code: "plugin_sdk_deadline",
                             message: "插件托管订阅操作超时".into(),
+                            details: None,
+                        }),
+                    },
+                ),
+                Err(error) => {
+                    sdk_reply_with_log(&app, &plugin_id, &component_id, call.method, Err(error))
+                }
+            };
+        }
+        if call.method == Method::SubscriptionMetadataUpdate {
+            let timeout_ms = call.budget.timeout_ms;
+            let metadata_call = call.clone();
+            let prepared = blocking(app.clone(), {
+                let plugin_id = plugin_id.clone();
+                let component_id = component_id.clone();
+                move |state| {
+                    state
+                        .plugins()
+                        .prepare_managed_subscription_metadata_update(
+                            state.capabilities(),
+                            &plugin_id,
+                            &component_id,
+                            metadata_call,
+                        )
+                }
+            })
+            .await;
+            return match prepared {
+                Ok(prepared) => sdk_reply_with_log(
+                    &app,
+                    &plugin_id,
+                    &component_id,
+                    call.method,
+                    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), {
+                        let app = app.clone();
+                        blocking(app.clone(), move |_| {
+                            crate::services::subscription::update_managed_metadata_authorized(
+                                app,
+                                prepared.input,
+                                move || prepared.authorization.check(),
+                            )
+                        })
+                    })
+                    .await
+                    {
+                        Ok(result) => result.and_then(|profile| {
+                            serde_json::to_value(profile).map_err(|error| {
+                                crate::errors::AppError::internal(format!(
+                                    "无法序列化托管订阅用量结果：{error}",
+                                ))
+                            })
+                        }),
+                        Err(_) => Err(crate::errors::AppError {
+                            code: "plugin_sdk_deadline",
+                            message: "插件托管订阅用量操作超时".into(),
                             details: None,
                         }),
                     },

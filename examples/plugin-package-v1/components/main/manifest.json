@@ -11,6 +11,7 @@
   "targets": "any",
   "required": [],
   "optional": [],
+  "requires_methods": [],
   "source_sha256": "bcdf9a2afaf896d2374c795b5b75316e30b5d7dfda3c6558066b68cf807d033b",
   "limits": {
     "memory_bytes": 33554432,

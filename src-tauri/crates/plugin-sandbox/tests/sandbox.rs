@@ -31,6 +31,7 @@ fn manifest(source: &str) -> Manifest {
         targets: Targets::Only(vec![Target::native_desktop().unwrap()]),
         required: vec![request()],
         optional: vec![],
+        requires_methods: vec![],
         configuration: None,
         lifecycle: vec![],
         source_sha256: sha256(source.as_bytes()),
@@ -42,6 +43,34 @@ fn manifest(source: &str) -> Manifest {
 }
 fn component(source: &str) -> Component {
     Component::load(&serde_json::to_vec(&manifest(source)).unwrap(), source).unwrap()
+}
+
+#[test]
+fn required_sdk_methods_are_an_install_time_contract() {
+    let source = "1";
+    let mut declared = manifest(source);
+    declared.required = vec![Request {
+        capability: Capability::SubscriptionsManage,
+        scope: "self".into(),
+    }];
+    declared.requires_methods = vec![znet_sink_plugin_sdk::Method::SubscriptionMetadataUpdate];
+    assert!(Component::load(&serde_json::to_vec(&declared).unwrap(), source).is_ok());
+
+    let mut missing_permission = declared.clone();
+    missing_permission.required = vec![request()];
+    assert!(matches!(
+        Component::load(&serde_json::to_vec(&missing_permission).unwrap(), source),
+        Err(Error::InvalidManifest)
+    ));
+
+    let mut duplicate = declared;
+    duplicate
+        .requires_methods
+        .push(znet_sink_plugin_sdk::Method::SubscriptionMetadataUpdate);
+    assert!(matches!(
+        Component::load(&serde_json::to_vec(&duplicate).unwrap(), source),
+        Err(Error::InvalidManifest)
+    ));
 }
 fn authority(component: &Component) -> Authority {
     let grants = BTreeSet::from([request()]);

@@ -357,7 +357,7 @@
   }
 
   function usedBytes(sub: SubscriptionProfile): number {
-    return (sub.uploadBytes ?? 0) + (sub.downloadBytes ?? 0);
+    return sub.usedBytes ?? ((sub.uploadBytes ?? 0) + (sub.downloadBytes ?? 0));
   }
 
   function usagePercent(sub: SubscriptionProfile): number | null {
@@ -547,8 +547,13 @@
                   ></div>
                 </div>
                 <span class="traffic-label">
-                  {formatBytes(usedBytes(sub))} / {formatBytes(sub.totalBytes)}
-                  (↑{formatBytes(sub.uploadBytes)} ↓{formatBytes(sub.downloadBytes)})
+                  {#if sub.usedBytes !== undefined}
+                    已用 {formatBytes(sub.usedBytes)} / 总量 {formatBytes(sub.totalBytes)}
+                  {:else}
+                    {formatBytes(usedBytes(sub))} / {formatBytes(sub.totalBytes)}
+                    (↑{formatBytes(sub.uploadBytes)} ↓{formatBytes(sub.downloadBytes)})
+                  {/if}
+                  <span class="traffic-percent">{usagePercent(sub)!.toFixed(1)}%</span>
                 </span>
               </div>
             {/if}
@@ -853,6 +858,7 @@
   .traffic-bar-fill { height: 100%; background: var(--success); border-radius: 3px; transition: width 0.3s ease, background 0.2s ease; min-width: 2px; }
   .traffic-bar-fill.warn { background: var(--destructive); }
   .traffic-label { font-size: 10px; color: var(--muted-foreground); font-family: var(--font-mono); white-space: nowrap; }
+  .traffic-percent { margin-left: 6px; }
   .row-error { font-size: 10.5px; color: var(--destructive); opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; opacity: 0.35; transition: opacity 0.12s ease; }
   .list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }

@@ -22,7 +22,7 @@ export type Method =
   | 'secret_receive' | 'configured_request' | 'crypto_use'
   | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
   | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest' | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
-  | 'subscription_apply' | 'subscription_remove' | 'protected_load';
+  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_remove' | 'protected_load';
 
 export interface Call {
   version: typeof SDK_VERSION;
@@ -32,11 +32,22 @@ export interface Call {
   arguments?: unknown;
 }
 export interface Budget { timeout_ms?: number; max_result_bytes?: number }
+export interface ManagedSubscriptionUsage {
+  usedBytes: number;
+  totalBytes: number;
+  expireAtUnixMs: number;
+}
 export type ErrorCode =
   | 'invalid_request' | 'unsupported' | 'permission_denied' | 'disabled'
   | 'revoked' | 'busy' | 'expired' | 'cancelled' | 'deadline'
   | 'budget_exceeded' | 'not_found' | 'transport' | 'uncertain';
-export interface Failure { code: ErrorCode; message: string; retry_after_ms?: number }
+export interface Failure {
+  code: ErrorCode;
+  message: string;
+  field_path?: string;
+  diagnostics?: string[];
+  retry_after_ms?: number;
+}
 export interface Reply<T = unknown> { version: typeof SDK_VERSION; ok: boolean; value?: T; error?: Failure }
 export type Transport = <T = unknown>(call: Call) => Promise<Reply<T>>;
 
@@ -45,7 +56,12 @@ export function createSdk(transport: Transport) {
     const reply = await transport<T>({ version: SDK_VERSION, request, method, arguments: argumentsValue, ...(budget ? { budget } : {}) });
     if (!reply.ok) {
       const error = new Error(reply.error?.message || 'Plugin host operation failed');
-      Object.assign(error, { code: reply.error?.code, retryAfterMs: reply.error?.retry_after_ms });
+      Object.assign(error, {
+        code: reply.error?.code,
+        fieldPath: reply.error?.field_path,
+        diagnostics: reply.error?.diagnostics ?? [],
+        retryAfterMs: reply.error?.retry_after_ms,
+      });
       throw error;
     }
     return reply.value as T;
@@ -74,6 +90,14 @@ export function createSdk(transport: Transport) {
       put: (taskId: string, action: string, intervalSeconds: number) => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_put', { taskId, action, intervalSeconds }),
       list: () => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_list'),
       delete: (taskId: string) => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_delete', { taskId }),
+    }),
+    subscriptions: Object.freeze({
+      updateMetadata: (providerId: string, remoteSubscriptionId: string, usage: ManagedSubscriptionUsage) =>
+        call({ capability: 'subscriptions.manage', scope: 'self' }, 'subscription_metadata_update', {
+          providerId,
+          remoteSubscriptionId,
+          usage,
+        }),
     }),
     browser: Object.freeze({
       open: (origin: string, url: string) => call({ capability: 'browser.open', scope: origin }, 'browser_open', { url }),

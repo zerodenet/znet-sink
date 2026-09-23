@@ -794,6 +794,7 @@ mod tests {
             node_count: None,
             upload_bytes: None,
             download_bytes: None,
+            used_bytes: None,
             total_bytes: None,
             expire_at_unix_ms: None,
             updated_at_unix_ms: 1,

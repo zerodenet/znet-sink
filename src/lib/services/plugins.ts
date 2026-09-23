@@ -10,12 +10,12 @@ export type PluginSdkMethod =
   | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
   | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest'
   | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
-  | 'subscription_apply' | 'subscription_remove' | 'protected_load';
+  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_remove' | 'protected_load';
 export interface PluginSdkBudget { timeout_ms?: number; max_result_bytes?: number }
 export interface PluginSdkCall { version: 1; request: PluginPermission; method: PluginSdkMethod; budget?: PluginSdkBudget; arguments?: unknown }
 export interface PluginSdkReply<T = unknown> {
   version: 1; ok: boolean; value?: T;
-  error?: { code: string; message: string; retry_after_ms?: number };
+  error?: { code: string; message: string; field_path?: string; diagnostics?: string[]; retry_after_ms?: number };
 }
 export interface PluginReview { key: string; identity: string; registration: number; revision: number }
 export interface PluginConfigurationOption { value: string; label: string }

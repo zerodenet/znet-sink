@@ -4,6 +4,8 @@
 
 `SubscriptionProfile.id` 和 `targetProxyConfigId` 都是 GUI 存储主键，用于管理订阅记录和其生成的代理配置记录；它们不是 zero 内核 `tag`。
 
+插件托管订阅通过 `subscriptions.manage` 权限调用 `subscription_apply` 写入配置。配置未变化时，插件可调用 `subscription_metadata_update`，传入 `providerId`、`remoteSubscriptionId` 和 `usage: { usedBytes, totalBytes, expireAtUnixMs }`，只更新同一插件命名空间下已有订阅的只读用量。宿主拒绝不存在、手动创建或由其他插件/来源拥有的订阅；该调用不接收配置内容，也不会重置节点数、配置同步时间、用户策略选择或当前活动配置。`usedBytes` 是服务方报告的累计总用量，不被解释成上传或下载。依赖此方法的插件包必须在组件 manifest 声明 `requires_methods: ["subscription_metadata_update"]`，并用 `requires_host` 指定包含该方法的最低客户端版本。
+
 ## 命令
 
 | 命令 | 说明 |

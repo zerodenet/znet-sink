@@ -44,7 +44,13 @@ export function getAppErrorInfo(error: unknown, fallbackMessage: string): AppErr
         })
         .filter(Boolean)
     : [];
-  const fieldPath = typeof coreError?.field_path === 'string' ? coreError.field_path : undefined;
+  const fieldPath = typeof coreError?.field_path === 'string'
+    ? coreError.field_path
+    : typeof envelope?.field_path === 'string'
+      ? envelope.field_path
+      : typeof envelope?.fieldPath === 'string'
+        ? envelope.fieldPath
+        : undefined;
   const cause = typeof coreError?.cause === 'string' ? coreError.cause : undefined;
   return { code, message, fieldPath, diagnostics, cause };
 }

@@ -89,9 +89,21 @@ const profiles: ProxyConfigProfile[] = ['main', 'work'].map((id, i) => ({
   capabilities: {} as ProxyConfigProfile['capabilities'],
 }));
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
-export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => new URLSearchParams(location.search).get('mode') === 'source-failure'
-  ? profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}))
-  : [];
+export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
+  const mode = new URLSearchParams(location.search).get('mode');
+  if (mode === 'source-failure') {
+    return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
+  }
+  if (mode === 'managed-usage') {
+    return [{
+      id: 'managed-connect', name: '狗梯 / Developer Licenses', url: 'https://example.com', enabled: true,
+      kernel: 'zero', format: 'zero', targetProxyConfigId: 'work', policySelections: {}, updatedAtUnixMs: 1,
+      usedBytes: 375, totalBytes: 1000, expireAtUnixMs: 1_800_000_000_000,
+      managedSource: { pluginId: 'org.zerodenet.connect.znet-sink', providerId: 'https://example.com', remoteSubscriptionId: '1', sourceName: '狗梯', revision: 'r1' },
+    }];
+  }
+  return [];
+};
 export const setActiveProxyConfig = async (id: string) => {
   if (new URLSearchParams(location.search).get('mode') === 'source-failure' && id === 'work') throw new Error('配置未通过校验');
   for (const profile of profiles) profile.active = profile.id === id;
@@ -102,6 +114,10 @@ export const importProxyConfig = async () => structuredClone(profiles[0]);
 export const upsertProxyConfig = async () => structuredClone(profiles[0]);
 export const removeProxyConfig = async () => {};
 export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
+export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
+export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
+export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
+export const syncAllSubscriptions = async () => ({ total: 0, updated: 0, unchanged: 0, failed: 0 });
 
 export const guiLogPaths = async () => ({ logFile: '/fixture/logs/gui.log.jsonl', coreLogFile: '/fixture/logs/core.log.jsonl', logsDir: '/fixture/logs', dataDir: '/fixture' });
 export const appendLog = async (_input: unknown) => {};
