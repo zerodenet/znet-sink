@@ -47,5 +47,5 @@ for (const name of ['DraggableModal', 'ActionConfirmDialog', 'ConnectionDetailsD
 assert.ok(read('src/lib/components/tabs/RulesTab.svelte').includes('Number(value)'), 'update intervals must remain numeric across the string-valued selector');
 const plugins = read('src/lib/components/tabs/PluginsTab.svelte');
 assert.ok(plugins.includes('全选可用权限') && plugins.includes('仅选必需'), 'plugin permissions must provide bulk selection');
-assert.ok(plugins.includes('openPermissionGuide(pluginId)'), 'local installation must lead into permission review');
+assert.ok(plugins.includes('检查权限并启用') && plugins.includes('openPermissionGuide(pendingAuthorization!)'), 'installation must offer an explicit permission review step');
 console.log(`UI control contract passed (${scanned} consumer components scanned).`);

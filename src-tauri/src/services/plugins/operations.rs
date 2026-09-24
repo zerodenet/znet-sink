@@ -2,8 +2,7 @@ use super::*;
 use crate::services::common::now_unix_ms;
 use serde::Deserialize;
 use std::sync::atomic::AtomicBool;
-use tauri::{Emitter as _, Manager as _};
-use tauri_plugin_notification::NotificationExt as _;
+use tauri::Manager as _;
 use znet_plugin_sandbox::{
     contract::{Capability, LifecycleEvent},
     distribution::{package, MAX_PACKAGE_BYTES},
@@ -20,31 +19,6 @@ struct InvocationEnvelope {
     value: serde_json::Value,
 }
 
-fn deliver_system_plugin_notification(app: &tauri::AppHandle, value: &serde_json::Value) {
-    use tauri::plugin::PermissionState;
-
-    let notification = app.notification();
-    let permission = match notification.permission_state() {
-        Ok(PermissionState::Prompt | PermissionState::PromptWithRationale) => {
-            notification.request_permission().ok()
-        }
-        Ok(state) => Some(state),
-        Err(_) => None,
-    };
-    if permission != Some(PermissionState::Granted) {
-        return;
-    }
-    let title = value
-        .get("source")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("ZNet Sink");
-    let body = value
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("插件有一条新通知");
-    let _ = notification.builder().title(title).body(body).show();
-}
-
 fn sdk_dispatcher(
     app: tauri::AppHandle,
     plugin_id: &str,
@@ -58,7 +32,7 @@ fn sdk_dispatcher(
             let call: Call = serde_json::from_str(input)
                 .map_err(|_| AppError::invalid_argument("插件 SDK 请求格式无效"))?;
             observed_method = Some(call.method);
-            let notification = call.method == Method::NotificationPost;
+            let method = call.method;
             let state = app.state::<crate::state::app_state::AppState>();
             if call.method == Method::SubscriptionApply {
                 let (managed, request) = state
@@ -111,11 +85,9 @@ fn sdk_dispatcher(
                 network_proxy,
                 Some(state.inner()),
             )?;
-            if notification {
-                let _ = app.emit("plugin:notification", value.clone());
-                deliver_system_plugin_notification(&app, &value);
-            }
-            Ok(value)
+            super::notification::deliver_if_post(method, value, |value| {
+                super::notification::publish(&app, value)
+            })
         })();
         if result.is_err()
             || matches!(

@@ -126,20 +126,37 @@ fn save(root: &Path, registry: &Registry) -> AppResult<()> {
     Ok(())
 }
 
-pub(super) fn consent(
+/// A removed declaration cannot retain a grant. Keep the user's previous
+/// enabled intent when all remaining permissions were already approved.
+pub(super) fn restrict_consent(
     root: &Path,
     publisher_fingerprint: &str,
     plugin_id: &str,
     component_id: &str,
+    declaration: &BTreeSet<Request>,
 ) -> AppResult<ComponentConsent> {
-    let registry = load(root)?;
-    Ok(registry
+    let mut registry = load(root)?;
+    let Some(consent) = registry
         .plugins
-        .get(plugin_id)
+        .get_mut(plugin_id)
         .filter(|plugin| plugin.publisher_fingerprint == publisher_fingerprint)
-        .and_then(|plugin| plugin.components.get(component_id))
-        .cloned()
-        .unwrap_or_default())
+        .and_then(|plugin| plugin.components.get_mut(component_id))
+    else {
+        return Ok(ComponentConsent::default());
+    };
+    let old_grants = consent.grants.len();
+    let old_approved = consent.approved_declaration.len();
+    consent
+        .grants
+        .retain(|request| declaration.contains(request));
+    consent
+        .approved_declaration
+        .retain(|request| declaration.contains(request));
+    let next = consent.clone();
+    if next.grants.len() != old_grants || next.approved_declaration.len() != old_approved {
+        save(root, &registry)?;
+    }
+    Ok(next)
 }
 
 pub(super) fn approve(

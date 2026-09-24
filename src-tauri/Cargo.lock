@@ -1767,12 +1767,17 @@ name = "gui"
 version = "0.0.2-dev.202609230255"
 dependencies = [
  "base64 0.22.1",
+ "block2",
  "dirs",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hpke",
  "libc",
  "minisign-verify",
+ "notify-rust",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
  "reqwest 0.12.28",
  "ring",
  "rusqlite",
@@ -2908,7 +2913,10 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.11.1",
+ "block2",
  "objc2",
+ "objc2-core-location",
  "objc2-foundation",
 ]
 

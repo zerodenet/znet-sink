@@ -34,6 +34,7 @@ pub struct ComponentView {
     pub review: Option<Review>,
     pub permissions: Vec<PermissionView>,
     pub enabled: bool,
+    pub permission_review_required: bool,
     pub running: bool,
     pub blocked: Option<String>,
     pub configuration: Option<ConfigurationView>,

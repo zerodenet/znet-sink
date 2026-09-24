@@ -309,9 +309,8 @@
       const reply = call.method === 'protected_load'
         ? await pluginApi.protectedLoad<Record<string, unknown>>(pluginId, selected.component_id, call)
         : await pluginApi.sdk<Record<string, unknown>>(pluginId, selected.component_id, call);
-      if (reply.ok && call.method === 'notification_post' && reply.value) {
-        const kind = String(reply.value.kind ?? 'info') as 'info' | 'success' | 'warning' | 'error';
-        toast.showToast(kind, `${selected.name}：${String(reply.value.message ?? '')}`, Number(reply.value.durationMs ?? 5000));
+      if (!reply.ok && call.method === 'notification_post' && reply.error?.message?.startsWith('系统通知')) {
+        toast.warning(`${selected.name}：${reply.error.message}`);
       }
       if (reply.ok && call.method === 'browser_open' && reply.value?.url) await openExternalUrl(String(reply.value.url));
       return reply;

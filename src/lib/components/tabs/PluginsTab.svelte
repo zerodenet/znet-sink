@@ -3,7 +3,7 @@
   import PluginPageFrame from './PluginPageFrame.svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import './plugins.css';
-  import { ArrowLeft, ExternalLink, LayoutGrid, List, Play, Plus, Puzzle, RefreshCw, Search, ShieldCheck, Square, Trash2 } from '@lucide/svelte';
+  import { ArrowLeft, ArrowUpCircle, ExternalLink, LayoutGrid, List, Play, Plus, Puzzle, RefreshCw, Search, ShieldCheck, Square, Trash2 } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Input } from '$lib/components/ui/input';
   import FieldSelect from '$lib/components/ui/select/field-select.svelte';
@@ -19,6 +19,8 @@
   import { canApprove, initialPermissionSelection, requiredPermissionSelection, selectedGrants, supportedPermissionSelection, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
   import * as toast from '$lib/services/toast.svelte';
   import { pluginNavigation, type PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
+  import { availablePluginUpdate, pluginChannelLabel, type PluginChannel } from '$lib/services/plugin-update-policy';
+  import type { PluginListing, PluginRelease } from '$lib/services/plugins';
 
   type InstalledPlugin = {
     id: string;
@@ -36,10 +38,18 @@
   };
 
   const INSTALLED_VIEW_MODE_KEY = 'znet-installed-plugins-view-mode';
+  const RELEASE_CHANNEL_KEY = 'znet-plugin-release-channel';
   type ViewMode = 'card' | 'list';
 
   let installedQuery = $state('');
   let installedViewMode = $state<ViewMode>('list');
+  let releaseChannel = $state<PluginChannel>('stable');
+  let updateCandidates = $state<Record<string, PluginRelease>>({});
+  let updateCheckMessage = $state('');
+  let updateCheckError = $state('');
+  let checkingUpdates = $state(false);
+  let requestedUpdate = $state<{ pluginId: string; tag: string } | null>(null);
+  let pendingAuthorization = $state<string | null>(null);
   let selectedPluginId = $state<string | null>(null);
   let initialRoute = $state<PluginNavigationRequest | null>(null);
   let detailSection = $state<'manage' | 'permissions' | 'about'>('manage');
@@ -62,6 +72,7 @@
   let localInstallReview = $state<PluginInstallReview | null>(null);
   let localInstallError = $state('');
   let runGeneration = 0;
+  let updateGeneration = 0;
   let alive = true;
 
   const allPlugins = $derived.by(() => {
@@ -105,12 +116,16 @@
     alive = true;
     try { installedViewMode = localStorage.getItem(INSTALLED_VIEW_MODE_KEY) === 'card' ? 'card' : 'list'; }
     catch { installedViewMode = 'list'; }
-    void pluginApi.supported().then(async value => { if (!alive) return; supported = value; if (value) await reload(); })
+    try {
+      const savedChannel = localStorage.getItem(RELEASE_CHANNEL_KEY);
+      releaseChannel = savedChannel === 'rc' || savedChannel === 'dev' ? savedChannel : 'stable';
+    } catch { releaseChannel = 'stable'; }
+    void pluginApi.supported().then(async value => { if (!alive) return; supported = value; if (value) { await reload(); void checkUpdates(); } })
       .catch(reason => { error = getAppErrorInfo(reason, '无法读取插件状态').message; });
     const timer = setInterval(() => {
       if (supported && selectedPluginId === null) void reload().catch(() => {});
     }, 3000);
-    return () => { alive = false; runGeneration++; reloadGeneration++; clearInterval(timer); };
+    return () => { alive = false; runGeneration++; reloadGeneration++; updateGeneration++; clearInterval(timer); };
   });
   function clearResult() {
     result = ''; resultTitle = ''; resultDescription = '';
@@ -122,10 +137,81 @@
     catch { /* View preference persistence is best effort. */ }
   }
   function openInstallModal() {
+    requestedUpdate = null;
     localInstallPath = '';
     localInstallReview = null;
     localInstallError = '';
     installOpen = true;
+  }
+  async function checkUpdates(catalog?: PluginListing[], components = snapshot.components) {
+    const generation = ++updateGeneration;
+    checkingUpdates = true;
+    updateCheckMessage = '';
+    updateCheckError = '';
+    updateCandidates = {};
+    try {
+      const listings = catalog ?? await pluginApi.catalog();
+      const registered = new Set(listings.map(listing => listing.id));
+      const versions = new Map(components.map(component => [component.plugin_id, component.version]));
+      const ids = [...versions.keys()].filter(id => registered.has(id));
+      const checked = await Promise.allSettled(ids.map(id => pluginApi.releases(id)));
+      const found: Record<string, PluginRelease> = {};
+      let unavailable = 0;
+      for (const [index, outcome] of checked.entries()) {
+        if (outcome.status === 'rejected') { unavailable++; continue; }
+        const candidate = availablePluginUpdate(versions.get(ids[index])!, outcome.value, releaseChannel);
+        if (candidate) found[ids[index]] = candidate;
+      }
+      if (!alive || generation !== updateGeneration) return;
+      updateCandidates = found;
+      const unpublished = versions.size - ids.length;
+      const result = Object.keys(found).length ? `${Object.keys(found).length} 个有更新` : '没有发现适用更新';
+      updateCheckMessage = unavailable
+        ? `已按${pluginChannelLabel[releaseChannel]}检查 ${ids.length - unavailable} 个插件：${result}；${unavailable} 个发行信息暂不可用，无法判断其更新状态${unpublished ? `；${unpublished} 个未在市场登记` : ''}。`
+        : `已按${pluginChannelLabel[releaseChannel]}检查 ${versions.size} 个已安装插件：${result}${unpublished ? `；${unpublished} 个未在市场登记` : ''}。`;
+    } catch (reason) {
+      if (alive && generation === updateGeneration) updateCheckError = `市场不可用，暂时无法判断插件更新：${getAppErrorInfo(reason, '检查失败').message}`;
+    } finally { if (alive && generation === updateGeneration) checkingUpdates = false; }
+  }
+  async function refreshInstalled() {
+    busy = true; error = ''; message = '';
+    try {
+      const next = await pluginApi.refresh();
+      snapshot = next;
+      await checkUpdates(undefined, next.components);
+    } catch (reason) {
+      updateCandidates = {};
+      updateCheckMessage = '';
+      updateCheckError = `检查已安装插件失败：${getAppErrorInfo(reason, '检查失败').message}`;
+    } finally { busy = false; }
+  }
+  function selectReleaseChannel(value: string) {
+    if (value !== 'stable' && value !== 'rc' && value !== 'dev') return;
+    releaseChannel = value;
+    try { localStorage.setItem(RELEASE_CHANNEL_KEY, value); } catch { /* Preference is best effort. */ }
+    void checkUpdates();
+  }
+  function openUpdate(pluginId: string, tag: string) {
+    requestedUpdate = { pluginId, tag };
+    localInstallReview = null;
+    installOpen = true;
+  }
+  function installationFinished(next: PluginSnapshot, review: PluginInstallReview) {
+    snapshot = next;
+    installOpen = false;
+    requestedUpdate = null;
+    localInstallError = '';
+    const requiresAuthorization = review.first_install || !review.current_version || review.added_permissions.length > 0
+      || next.components.some(component => component.plugin_id === review.plugin_id && !component.enabled
+        && component.permissions.some(permission => permission.required && !permission.granted));
+    pendingAuthorization = requiresAuthorization ? review.plugin_id : null;
+    message = requiresAuthorization
+      ? `${review.first_install || !review.current_version ? '插件包已安装' : '安装包已更新'}，运行权限尚未确认。请检查权限后启用插件。`
+      : next.components.some(component => component.plugin_id === review.plugin_id && component.enabled)
+        ? '插件已更新，原有启用状态和权限已保留。'
+        : '插件已更新，仍保持原来的停用状态。';
+    error = '';
+    void checkUpdates(undefined, next.components);
   }
   async function action(work: () => Promise<PluginSnapshot>, success: string): Promise<boolean> {
     busy = true; error = ''; message = ''; clearResult();
@@ -162,16 +248,13 @@
   }
   async function confirmLocalUpgrade() {
     if (!localInstallReview || !localInstallPath) return;
-    const pluginId = localInstallReview.plugin_id;
     busy = true; error = ''; message = ''; localInstallError = '';
     try {
-      snapshot = await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
-      installOpen = false;
+      const next = await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
+      installationFinished(next, localInstallReview);
       localInstallPath = '';
       localInstallReview = null;
-      openPermissionGuide(pluginId);
-      message = '插件已安装；必需权限已预选，请确认后启用';
-      toast.success('本地插件已安装，请确认权限');
+      toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新');
     } catch (reason) {
       localInstallError = getAppErrorInfo(reason, '本地插件安装失败').message;
       toast.error(localInstallError);
@@ -212,6 +295,7 @@
   function pluginStatus(plugin: InstalledPlugin) {
     if (plugin.components.every(component => !!component.blocked)) return '暂不可用';
     if (plugin.components.some(component => component.configuration?.configured === false)) return '待配置';
+    if (plugin.components.some(component => component.permission_review_required)) return '待确认权限';
     const count = plugin.components.filter(component => component.enabled || component.running).length;
     if (!count) return '未启用';
     return count === plugin.components.length ? '已启用' : '部分启用';
@@ -251,6 +335,7 @@
     selectedPluginId = pluginId;
     initialRoute = null;
     detailSection = 'permissions';
+    pendingAuthorization = null;
     permissionSelections = Object.fromEntries(components.map(component => [componentKey(component), initialPermissionSelection(component)]));
     configurationDrafts = Object.fromEntries(components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
     configurationErrors = {};
@@ -260,7 +345,8 @@
     if (!component.review) return;
     const selected = permissionSelections[componentKey(component)] ?? [];
     if (!canApprove(component, selected)) return;
-    await action(() => pluginApi.authorize(component.review!, selectedGrants(component, selected)), '组件已启用');
+    const succeeded = await action(() => pluginApi.authorize(component.review!, selectedGrants(component, selected)), '组件已启用');
+    if (succeeded && !snapshot.components.some(value => value.plugin_id === component.plugin_id && value.permission_review_required)) pendingAuthorization = null;
   }
   async function run(component: PluginComponent) {
     if (!component.review) return;
@@ -360,6 +446,12 @@
   {:else if !supported}<div class="plugins-empty"><Puzzle size={28} />当前设备尚未开放插件运行。</div>
   {:else if selectedPlugin}
     <div class="plugins-detail-scroll" class:plugin-management-active={detailSection === 'manage' && !!selectedManagementPage}>
+      {#if updateCandidates[selectedPlugin.id]}
+        <div class="plugin-update-banner" role="status"><ArrowUpCircle size={17} /><span>可更新至 {updateCandidates[selectedPlugin.id].tag_name}（{pluginChannelLabel[releaseChannel]}）</span><Button size="sm" onclick={() => openUpdate(selectedPlugin.id, updateCandidates[selectedPlugin.id].tag_name)}>查看更新</Button></div>
+      {/if}
+      {#if selectedPlugin.components.some(component => component.permission_review_required)}
+        <div class="plugin-authorization-notice" role="status"><span>新版插件已安装，但新增或必需的运行权限尚未确认，因此暂未启用。</span><Button size="sm" onclick={() => { detailSection = 'permissions'; }}>检查权限</Button></div>
+      {/if}
       <div class="plugin-detail-toolbar">
         <SegmentedControl.Root value={detailSection} onValueChange={(value) => { detailSection = value as typeof detailSection; }} aria-label="插件详情栏目">
           <SegmentedControl.Item value="manage">管理</SegmentedControl.Item><SegmentedControl.Item value="permissions">权限</SegmentedControl.Item><SegmentedControl.Item value="about">关于</SegmentedControl.Item>
@@ -403,7 +495,7 @@
       {:else if detailSection === 'permissions'}
         <section class="plugin-detail-section">
           <div class="plugin-section-heading"><div><h3>访问权限</h3><p>权限名称、访问范围和授权状态由客户端固定展示，插件不能修改或隐藏。</p></div></div>
-          {#if selectedPlugin.components.some(component => !component.enabled && component.permissions.some(permission => permission.required))}
+          {#if selectedPlugin.components.some(component => component.permission_review_required || !component.enabled && component.permissions.some(permission => permission.required))}
             <p class="plugins-notice">启用组件前需要确认权限。必需权限已预选；你可以直接启用，也可以一键选择全部可用权限。</p>
           {/if}
           {#each selectedPlugin.components as component (componentKey(component))}
@@ -452,11 +544,18 @@
           </SegmentedControl.Root>
         {/if}
         <div class="plugins-search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索已安装插件" placeholder="搜索已安装插件…" bind:value={installedQuery} /></div>
-        <Button variant="outline" size="sm" disabled={busy || runningKey !== null} onclick={() => action(pluginApi.refresh, '已核验中央登记与已安装插件')}><RefreshCw size={14} class={busy ? 'animate-spin' : ''} />检查已安装插件</Button>
+        <FieldSelect aria-label="插件发行通道" value={releaseChannel} onValueChange={selectReleaseChannel} options={[
+          { value: 'stable', label: '正式版' }, { value: 'rc', label: '候选版' }, { value: 'dev', label: '开发版' },
+        ]} />
+        <Button variant="outline" size="sm" disabled={busy || checkingUpdates || runningKey !== null} onclick={refreshInstalled}><RefreshCw size={14} class={busy || checkingUpdates ? 'animate-spin' : ''} />检查已安装插件</Button>
       </div>
     </div>
     <div class="plugins-scroll">
       <p class="plugins-hint">每个条目代表一个完整插件。点击条目进入详情；状态、权限和卸载始终由客户端管理。</p>
+      {#if checkingUpdates}<p class="plugins-notice" role="status">正在核对{pluginChannelLabel[releaseChannel]}发行包…</p>{/if}
+      {#if updateCheckMessage}<p class="plugins-notice" role="status">{updateCheckMessage}</p>{/if}
+      {#if updateCheckError}<p class="plugins-notice plugins-error" role="alert">{updateCheckError}</p>{/if}
+      {#if pendingAuthorization}<div class="plugin-authorization-notice" role="status"><span>插件包已安装，运行权限尚未确认，因此暂未启用。</span><Button size="sm" onclick={() => openPermissionGuide(pendingAuthorization!)}>检查权限并启用</Button></div>{/if}
       {#if !snapshot.checked}<p class="plugins-notice">请先检查插件登记，再确认访问权限。</p>{/if}
       {#each snapshot.notices as notice}<p class="plugins-notice">{notice}</p>{/each}
       {#if snapshot.checked && allPlugins.length === 0}
@@ -468,7 +567,8 @@
           {#each installedPlugins as plugin (plugin.id)}
             <article class="plugin-card installed-plugin-card">
               <button class="plugin-card-open" data-slot="surface-button" type="button" aria-label={`打开 ${plugin.name} 详情`} onclick={() => openDetails(plugin)}></button>
-              <div class="plugin-card-heading"><div class="plugin-icon"><Puzzle size={18} /></div><div class="plugin-identity"><strong title={plugin.name}>{plugin.name}</strong><span class="plugin-meta" title={`发布者 ${plugin.publisher}`}>发布者 {plugin.publisher}</span></div><span class="plugin-version" title={plugin.version}>{plugin.version}</span></div>
+              <div class="plugin-card-heading"><div class="plugin-icon"><Puzzle size={18} /></div><div class="plugin-identity"><strong title={plugin.name}>{plugin.name}</strong><span class="plugin-meta" title={`发布者 ${plugin.publisher}`}>发布者 {plugin.publisher} · 当前 {plugin.version}</span></div>{#if !updateCandidates[plugin.id]}<span class="plugin-version" title={plugin.version}>{plugin.version}</span>{/if}</div>
+              {#if updateCandidates[plugin.id]}<Button variant="outline" size="sm" class="plugin-update-indicator" aria-label={`${plugin.name}有更新：${pluginChannelLabel[releaseChannel]} ${updateCandidates[plugin.id].tag_name}`} title={`更新到 ${updateCandidates[plugin.id].tag_name}（${pluginChannelLabel[releaseChannel]}）`} onclick={() => openUpdate(plugin.id, updateCandidates[plugin.id].tag_name)}><ArrowUpCircle size={13} />更新</Button>{/if}
               <p class="plugin-description">{plugin.description}</p><div class="plugin-card-id" title={plugin.id}>ID：{plugin.id}</div>
               <div class="plugin-card-actions plugin-toggle-action"><label class="plugin-card-toggle"><span>{pluginStatus(plugin)}</span><Switch size="sm" checked={pluginEnabled(plugin)} disabled={busy || runningKey !== null || !snapshot.checked} onCheckedChange={(checked) => void togglePlugin(plugin, checked)} aria-label={`${plugin.name}${pluginEnabled(plugin) ? '停用' : '启用'}`} /></label></div>
             </article>
@@ -491,7 +591,7 @@
 >
   <div class="plugin-install-modal-body">
     <div class="plugin-install-market" class:plugin-install-hidden={!!localInstallReview}>
-      <PluginCatalog installed={snapshot.components} onlocalinstall={installLocal} onmanage={() => { installOpen = false; }} disabled={busy || runningKey !== null} oninstalled={(value) => { snapshot = value; installOpen = false; message = '插件已安装'; error = ''; localInstallError = ''; toast.success('插件已安装'); }} />
+      <PluginCatalog installed={snapshot.components} channel={releaseChannel} {requestedUpdate} onrefresh={(catalog) => checkUpdates(catalog)} onlocalinstall={installLocal} onmanage={() => { installOpen = false; }} disabled={busy || runningKey !== null} oninstalled={(value, review) => { installationFinished(value, review); toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新'); }} />
     </div>
     {#if localInstallReview}
       <div class="plugin-local-review">

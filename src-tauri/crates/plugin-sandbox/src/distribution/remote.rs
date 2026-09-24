@@ -146,9 +146,23 @@ impl<'a> Remote<'a> {
     }
 
     pub fn releases(&self, registration: &Registration) -> Result<Vec<Release>> {
+        let native = crate::contract::Target::native_desktop()?;
+        let (os, arch) = marketplace_platform(&native)?;
         registration
             .releases
             .iter()
+            .filter(|record| {
+                record
+                    .artifacts
+                    .iter()
+                    .filter(|artifact| {
+                        (artifact.os == "any" || artifact.os == os)
+                            && (artifact.arch == "any" || artifact.arch == arch)
+                            && artifact.size <= MAX_PACKAGE_BYTES as u64
+                    })
+                    .count()
+                    == 1
+            })
             .map(|record| {
                 Ok(Release {
                     channel: Some(record.channel.clone()),

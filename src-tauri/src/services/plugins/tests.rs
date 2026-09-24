@@ -1134,6 +1134,100 @@ fn verified_install_upgrade_preserves_compatible_consent_and_invalid_bytes_prese
 }
 
 #[test]
+fn removing_a_declared_permission_retracts_its_grant_and_preserves_enabled_intent() {
+    let (root, host, manager) = setup(false);
+    approve(&host, &manager);
+    let directory = host.state.lock().unwrap().directory.clone().unwrap();
+    let mut manifest = host
+        .state
+        .lock()
+        .unwrap()
+        .loaded
+        .values()
+        .next()
+        .unwrap()
+        .component
+        .manifest()
+        .clone();
+    manifest.version = "1.1.0".into();
+    manifest.required.clear();
+    let source = "true";
+    manifest.source_sha256 = sha256(source.as_bytes());
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.1.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+        pages: Vec::new(),
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let review = host
+        .preview_bytes(&bytes, &directory, "org.example.plugin")
+        .unwrap();
+    assert_eq!(review.added_permissions.len(), 0);
+    assert_eq!(review.removed_permissions.len(), 1);
+    let next = host
+        .install_bytes(&manager, &bytes, directory, "org.example.plugin", None)
+        .unwrap();
+    assert!(next.components[0].enabled);
+    assert!(next.components[0].permissions.is_empty());
+    let consent = local_state::restrict_consent(
+        root.path(),
+        &publisher_fingerprint(&registration()).unwrap(),
+        "org.example.plugin",
+        "identity",
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert!(consent.enabled);
+    assert!(consent.grants.is_empty());
+    assert!(consent.approved_declaration.is_empty());
+}
+
+#[test]
+fn unchanged_permission_upgrade_keeps_a_stopped_component_stopped() {
+    let (_root, host, manager) = setup(false);
+    let review = approve(&host, &manager);
+    host.stop(&manager, &review.key).unwrap();
+    let directory = host.state.lock().unwrap().directory.clone().unwrap();
+    let mut manifest = host
+        .state
+        .lock()
+        .unwrap()
+        .loaded
+        .values()
+        .next()
+        .unwrap()
+        .component
+        .manifest()
+        .clone();
+    manifest.version = "1.1.0".into();
+    let source = "true";
+    manifest.source_sha256 = sha256(source.as_bytes());
+    let payload = Payload {
+        schema_version: 1,
+        host: "znet-sink".into(),
+        plugin_id: "org.example.plugin".into(),
+        version: "1.1.0".into(),
+        components: vec![SourceComponent {
+            manifest,
+            source: source.into(),
+        }],
+        pages: Vec::new(),
+    };
+    let bytes = package::sign(&serde_json::to_vec(&payload).unwrap(), &SEED).unwrap();
+    let next = host
+        .install_bytes(&manager, &bytes, directory, "org.example.plugin", None)
+        .unwrap();
+    assert!(!next.components[0].enabled);
+    assert!(next.components[0].permissions[0].granted);
+}
+
+#[test]
 fn opaque_plugin_state_is_namespaced_bounded_and_survives_restart() {
     let (root, host, manager) = setup(false);
     let value = STANDARD.encode(br#"{"device_credential":"opaque"}"#);

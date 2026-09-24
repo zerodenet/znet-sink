@@ -23,6 +23,13 @@
 .installed-plugin-card > .plugin-card-actions { pointer-events: none; }
 .installed-plugin-card .plugin-card-toggle { pointer-events: auto; }
 .plugin-card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.installed-plugin-card .plugin-update-indicator { position: absolute; top: 10px; right: 10px; z-index: 2; pointer-events: auto; }
+.card-view .installed-plugin-card:has(.plugin-update-indicator) .plugin-card-heading { padding-right: 54px; }
+.plugin-update-indicator { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 3px 6px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 10%, var(--card)); color: var(--primary); font-size: 10px; font-weight: 650; cursor: pointer; }
+.plugin-update-indicator:hover { background: color-mix(in srgb, var(--primary) 17%, var(--card)); }
+.plugin-update-indicator:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.plugin-update-banner, .plugin-authorization-notice { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--primary) 7%, var(--card)); color: var(--foreground); font-size: 11px; }
+.plugin-update-banner span, .plugin-authorization-notice span { flex: 1; min-width: 0; }
 .plugin-icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex-shrink: 0; color: var(--muted-foreground); border-radius: 8px; background: var(--muted); }
 .plugin-identity { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .plugin-identity strong, .plugin-identity .plugin-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -40,9 +47,10 @@
 .plugin-card-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--muted-foreground); }
 .plugin-toggle-action { justify-content: flex-end; }
 .plugin-card-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 11px; }
-.list-view .plugin-card { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(220px, 2fr) auto; grid-template-areas: "heading description actions" "heading secondary actions"; align-items: center; gap: 3px 14px; min-height: 64px; padding: 9px 11px; border-color: transparent; background: transparent; box-shadow: none; }
+.list-view .plugin-card { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(180px, 2fr) auto auto; grid-template-areas: "heading description update actions" "heading secondary update actions"; align-items: center; gap: 3px 14px; min-height: 64px; padding: 9px 11px; border-color: transparent; background: transparent; box-shadow: none; }
 .list-view .plugin-card:hover, .list-view .plugin-card:focus-within { background: var(--muted); border-color: var(--border); box-shadow: none; }
 .list-view .plugin-card-heading { grid-area: heading; }
+.list-view .installed-plugin-card .plugin-update-indicator { position: relative; top: auto; right: auto; grid-area: update; justify-self: end; }
 .list-view .plugin-description { grid-area: description; min-height: 0; -webkit-line-clamp: 1; white-space: normal; }
 .list-view .plugin-card-id, .list-view .plugin-foundation { grid-area: secondary; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; }
 .list-view .plugin-card-actions { grid-area: actions; flex-wrap: nowrap; align-self: stretch; margin: 0; padding: 0 0 0 10px; border-top: 0; border-left: 1px solid var(--border); }

@@ -394,6 +394,29 @@ mod desktop {
             )
         })
         .await;
+        let result = if method == Method::NotificationPost {
+            match result {
+                Ok(value) => {
+                    let delivery_app = app.clone();
+                    blocking(app.clone(), move |_| {
+                        crate::services::plugins::notification::deliver_if_post(
+                            method,
+                            value,
+                            |value| {
+                                crate::services::plugins::notification::publish(
+                                    &delivery_app,
+                                    value,
+                                )
+                            },
+                        )
+                    })
+                    .await
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            result
+        };
         sdk_reply_with_log(&app, &log_plugin_id, &log_component_id, method, result)
     }
 

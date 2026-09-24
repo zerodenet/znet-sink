@@ -42,7 +42,10 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         "invalid_argument" => ErrorCode::InvalidRequest,
         "not_found" => ErrorCode::NotFound,
         "conflict" => ErrorCode::Busy,
-        "unavailable" | "plugin_secret_transport" => ErrorCode::Transport,
+        "unavailable" | "plugin_secret_transport" | "plugin_system_notification_unavailable" => {
+            ErrorCode::Transport
+        }
+        "plugin_system_notification_denied" => ErrorCode::PermissionDenied,
         "plugin_notification_rate_limited" | "plugin_log_rate_limited" => ErrorCode::BudgetExceeded,
         "plugin_sdk_deadline" => ErrorCode::Deadline,
         "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
@@ -83,9 +86,13 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         | "conflict"
         | "authorization_cancelled"
         | "plugin_notification_rate_limited"
+        | "plugin_system_notification_denied"
         | "plugin_log_rate_limited"
         | "plugin_sdk_deadline"
         | "plugin_sdk_result_budget" => error.message,
+        "plugin_system_notification_unavailable" => {
+            "系统通知暂不可用，请检查系统通知设置或稍后重试".into()
+        }
         _ => "插件宿主拒绝了本次操作".into(),
     };
     Failure {
@@ -1464,6 +1471,28 @@ fn method_matches(method: Method, capability: Capability) -> bool {
 mod tests {
     use super::*;
     use znet_plugin_sandbox::distribution::package::{PageKind, VerifiedPage};
+
+    #[test]
+    fn native_notification_failures_have_a_safe_plugin_error() {
+        let failure = public_failure(AppError {
+            code: "plugin_system_notification_unavailable",
+            message: "system detail that must not cross the plugin boundary".into(),
+            details: None,
+        });
+        assert_eq!(failure.code, ErrorCode::Transport);
+        assert_eq!(
+            failure.message,
+            "系统通知暂不可用，请检查系统通知设置或稍后重试"
+        );
+
+        let denied = public_failure(AppError {
+            code: "plugin_system_notification_denied",
+            message: "系统通知未获允许，请在系统设置中允许 ZNet Sink 发送通知".into(),
+            details: None,
+        });
+        assert_eq!(denied.code, ErrorCode::PermissionDenied);
+        assert!(denied.message.contains("系统设置"));
+    }
 
     #[test]
     fn plugin_logs_require_exact_capability_and_trusted_identity() {

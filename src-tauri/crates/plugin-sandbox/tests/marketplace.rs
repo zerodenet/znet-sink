@@ -157,6 +157,24 @@ fn incompatible_and_foreign_release_metadata_is_rejected_before_download() {
 }
 
 #[test]
+fn release_discovery_excludes_packages_for_another_platform() {
+    let bytes = signed(&payload("1.0.0", json!("any")));
+    let mut value = snapshot("1.0.0", "stable", &bytes);
+    let foreign_os = if cfg!(target_os = "windows") {
+        "darwin"
+    } else {
+        "windows"
+    };
+    let artifact = &mut value["products"][0]["targets"][0]["releases"][0]["artifacts"][0];
+    artifact["os"] = json!(foreign_os);
+    artifact["arch"] = json!("amd64");
+    let directory = directory(&value, "0.0.1");
+    let remote = Remote::new().unwrap();
+    assert!(remote.releases(&directory.plugins[0]).unwrap().is_empty());
+    assert!(remote.release(&directory.plugins[0], "v1.0.0").is_err());
+}
+
+#[test]
 fn marketplace_ranges_treat_prerelease_clients_as_their_base_release() {
     let bytes = signed(&payload("1.0.0", json!("any")));
     let value = snapshot("1.0.0", "stable", &bytes);

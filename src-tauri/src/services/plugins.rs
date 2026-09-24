@@ -6,6 +6,7 @@ mod io;
 mod local_state;
 mod model;
 pub(crate) mod namespace;
+pub(crate) mod notification;
 mod operations;
 mod scheduler;
 pub(crate) mod sdk;
@@ -70,6 +71,7 @@ struct Loaded {
     blocked: Option<String>,
     configuration: BTreeMap<String, String>,
     consent: local_state::ComponentConsent,
+    permission_review_required: bool,
 }
 fn publisher_fingerprint(registration: &Registration) -> AppResult<String> {
     let key = STANDARD
@@ -183,6 +185,7 @@ impl Host {
                             })
                             .collect(),
                         enabled: policy.is_some_and(|p| p.enabled),
+                        permission_review_required: loaded.permission_review_required,
                         running: policy.is_some_and(|p| p.running),
                         blocked: loaded.blocked.clone(),
                         configuration,
@@ -272,23 +275,30 @@ impl Host {
                 let manifest = component.manifest();
                 let key = format!("{}/{}", manifest.plugin_id, manifest.component_id);
                 let configuration = configuration::values(&self.root()?, &key)?;
-                let consent = local_state::consent(
-                    &self.root()?,
-                    &publisher_fingerprint,
-                    &manifest.plugin_id,
-                    &manifest.component_id,
-                )?;
                 let declaration: BTreeSet<_> = manifest
                     .required
                     .iter()
                     .chain(&manifest.optional)
                     .cloned()
                     .collect();
-                let permission_expanded = !consent.approved_declaration.is_empty()
+                let consent = local_state::restrict_consent(
+                    &self.root()?,
+                    &publisher_fingerprint,
+                    &manifest.plugin_id,
+                    &manifest.component_id,
+                    &declaration,
+                )?;
+                let permission_expanded = (consent.enabled
+                    || !consent.approved_declaration.is_empty())
                     && declaration
                         .difference(&consent.approved_declaration)
                         .next()
                         .is_some();
+                let required_unapproved = manifest
+                    .required
+                    .iter()
+                    .any(|request| !consent.grants.contains(request));
+                let must_suspend = permission_expanded || (consent.enabled && required_unapproved);
                 let blocked = if component
                     .compatible(
                         &Target::native_desktop().map_err(io::failure)?,
@@ -318,11 +328,12 @@ impl Host {
                     blocked,
                     configuration,
                     consent,
+                    permission_review_required: permission_expanded || required_unapproved,
                 };
-                if permission_expanded {
+                if must_suspend {
                     loaded.consent.enabled = false;
                     notices.push(format!(
-                        "{}：新版本申请了新增或扩大权限，请重新查看并确认",
+                        "{}：新版本的权限需要重新确认，组件暂未启用",
                         registration.name.chars().take(128).collect::<String>()
                     ));
                 }

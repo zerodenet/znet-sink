@@ -136,6 +136,8 @@ pub fn run() {
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
             crate::services::file_logger::line("runtime: setup begin");
+            #[cfg(target_os = "macos")]
+            crate::services::plugins::notification::install_foreground_delegate();
             let ipc_observer =
                 std::sync::Arc::new(crate::services::ipc_observability::IpcLogObserver::default());
             let observer_app = app.handle().clone();

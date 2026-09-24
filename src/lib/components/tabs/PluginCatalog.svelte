@@ -9,25 +9,31 @@
   import { onPluginDownloadProgress, pluginApi, type PluginComponent, type PluginDownloadProgress, type PluginInstallReview, type PluginListing, type PluginRelease, type PluginSnapshot } from '$lib/services/plugins';
   import { permissionLabel } from '$lib/services/plugin-permissions';
   import { compareAppVersions } from '$lib/services/app-update-policy';
+  import { releasesInChannel, releaseChannel, pluginChannelLabel, type PluginChannel } from '$lib/services/plugin-update-policy';
   import { getAppErrorInfo } from '$lib/services/core';
 
   const VIEW_MODE_KEY = 'znet-plugin-market-view-mode';
   type ViewMode = 'card' | 'list';
 
-  let { oninstalled, onmanage, onlocalinstall, installed = [], disabled = false }: {
-    oninstalled: (snapshot: PluginSnapshot) => void;
+  let { oninstalled, onmanage, onlocalinstall, onrefresh, requestedUpdate = null, channel = 'stable', installed = [], disabled = false }: {
+    oninstalled: (snapshot: PluginSnapshot, review: PluginInstallReview) => void;
     onmanage: () => void;
     onlocalinstall: () => void | Promise<void>;
+    onrefresh?: (catalog: PluginListing[]) => void | Promise<void>;
+    requestedUpdate?: { pluginId: string; tag: string } | null;
+    channel?: PluginChannel;
     installed?: PluginComponent[];
     disabled?: boolean;
   } = $props();
   let catalog = $state<PluginListing[]>([]);
   let loading = $state(true);
   let error = $state('');
+  let refreshMessage = $state('');
   let query = $state('');
   let viewMode = $state<ViewMode>('list');
   let selected = $state<PluginListing | null>(null);
   let releases = $state<PluginRelease[]>([]);
+  const channelReleases = $derived(releasesInChannel(releases, channel));
   let versionsLoading = $state(false);
   let versionError = $state('');
   let tag = $state('');
@@ -46,6 +52,13 @@
     const comparison = compareAppVersions(release.tag_name, installedVersion);
     return comparison > 0 ? 'upgrade' as const : comparison < 0 ? 'older' as const : 'current' as const;
   });
+  $effect(() => {
+    if (selected && !channelReleases.some(candidate => candidate.tag_name === tag)) {
+      tag = channelReleases[0]?.tag_name ?? '';
+      permissionReview = null;
+      permissionReviewKey = '';
+    }
+  });
 
   function loadViewMode(): ViewMode {
     try { return localStorage.getItem(VIEW_MODE_KEY) === 'card' ? 'card' : 'list'; }
@@ -56,11 +69,15 @@
     try { localStorage.setItem(VIEW_MODE_KEY, mode); }
     catch { /* View preference persistence is best effort. */ }
   }
-  async function load() {
-    loading = true; error = '';
+  async function load(notify = false) {
+    loading = true; error = ''; refreshMessage = '';
     try {
       const value = await pluginApi.catalog();
-      if (alive) catalog = Array.from(new Map(value.map(plugin => [plugin.id, plugin])).values());
+      if (alive) {
+        catalog = Array.from(new Map(value.map(plugin => [plugin.id, plugin])).values());
+        if (notify) await onrefresh?.(catalog);
+        if (notify) refreshMessage = `市场已刷新，发现 ${catalog.length} 个已登记插件；已安装插件的更新结果可在管理页查看。`;
+      }
     } catch (reason) {
       if (alive) error = getAppErrorInfo(reason, '无法加载插件目录').message;
     } finally {
@@ -70,10 +87,15 @@
   onMount(() => {
     alive = true;
     viewMode = loadViewMode();
-    void load();
+    void load().then(() => {
+      if (requestedUpdate) {
+        const plugin = catalog.find(value => value.id === requestedUpdate.pluginId);
+        if (plugin) void choose(plugin, requestedUpdate.tag);
+      }
+    });
     return () => { alive = false; generation++; };
   });
-  async function choose(plugin: PluginListing) {
+  async function choose(plugin: PluginListing, preferredTag?: string) {
     selected = plugin;
     releases = [];
     tag = '';
@@ -86,7 +108,8 @@
       const value = await pluginApi.releases(plugin.id);
       if (alive && current === generation) {
         releases = value;
-        tag = value.find(candidate => candidate.channel ? candidate.channel === 'stable' : !candidate.prerelease)?.tag_name ?? value[0]?.tag_name ?? '';
+        const matching = releasesInChannel(value, channel);
+        tag = matching.find(candidate => candidate.tag_name === preferredTag)?.tag_name ?? matching[0]?.tag_name ?? '';
       }
     } catch (reason) {
       if (alive && current === generation) versionError = getAppErrorInfo(reason, '无法读取发布版本').message;
@@ -120,7 +143,8 @@
       const review = permissionReviewKey === key && permissionReview
         ? permissionReview
         : await pluginApi.previewRelease(selected.id, tag);
-      if (review.added_permissions.length && permissionReviewKey !== key) {
+      if ((review.added_permissions.length || review.removed_permissions.length || review.requires_approval)
+        && permissionReviewKey !== key) {
         permissionReview = review;
         permissionReviewKey = key;
         progress = null;
@@ -129,9 +153,9 @@
       const snapshot = await pluginApi.installRelease(
         selected.id,
         tag,
-        review.added_permissions.length ? review.candidate_digest : undefined,
+        review.requires_approval ? review.candidate_digest : undefined,
       );
-      if (alive) oninstalled(snapshot);
+      if (alive) oninstalled(snapshot, review);
     } catch (reason) {
       if (alive) versionError = getAppErrorInfo(reason, '在线安装失败').message;
     } finally {
@@ -146,8 +170,7 @@
   }
   function channelLabel(value?: PluginRelease) {
     if (!value) return '';
-    if (value.channel === 'stable' || (!value.channel && !value.prerelease)) return '正式版';
-    return value.channel === 'rc' ? '候选版' : '开发版';
+    return pluginChannelLabel[releaseChannel(value)];
   }
 </script>
 
@@ -164,14 +187,15 @@
           <div><strong>{selected.name}</strong><span>发布者 {selected.publisher.id}</span></div>
         </section>
         <p>{selected.description}</p>
+        <p>当前选择{pluginChannelLabel[channel]}通道。安装包安装与运行权限授权分为两个步骤；权限有变化时，安装后可能需要再次确认才能启用。</p>
         <div class="release-source"><span>发布仓库</span><strong>{selected.repository.replace('https://github.com/', '')}</strong></div>
 
         {#if versionsLoading}
           <div class="plugins-empty compact" role="status"><RefreshCw size={20} class="animate-spin" />正在读取最新兼容版本…</div>
-        {:else if releases.length}
+        {:else if channelReleases.length}
           {#if installedVersion}
             <label class="version-label" for="plugin-version">目标版本</label>
-            <FieldSelect id="plugin-version" aria-label="目标版本" bind:value={tag} disabled={installing} options={releases.map(version => ({ value: version.tag_name, label: `${version.tag_name}（${channelLabel(version)}）` }))} />
+            <FieldSelect id="plugin-version" aria-label="目标版本" bind:value={tag} disabled={installing} options={channelReleases.map(version => ({ value: version.tag_name, label: `${version.tag_name}（${channelLabel(version)}）` }))} />
           {:else}
             <div class="release-version-summary"><span>安装版本</span><strong>{release?.tag_name}（{channelLabel(release)}）</strong><em>最新兼容版本</em></div>
           {/if}
@@ -182,13 +206,16 @@
           {:else if releaseRelation === 'current'}
             <p class="version-notice" role="status">当前已经安装这个版本，无需重复下载。</p>
           {/if}
-          {#if permissionReview && permissionReviewKey === `${selected.id}@${tag}` && permissionReview.added_permissions.length}
+          {#if permissionReview && permissionReviewKey === `${selected.id}@${tag}` && (permissionReview.added_permissions.length || permissionReview.removed_permissions.length || permissionReview.requires_approval)}
             <div class="permission-change-review" role="alert">
-              <strong>{installedVersion ? '此更新申请新增或扩大权限' : '安装包申请以下宿主权限'}</strong>
-              <p>安装完成后插件保持停用；请在插件权限页选择并批准实际权限。</p>
+              <strong>{permissionReview.added_permissions.length ? installedVersion ? '此更新申请新增或扩大权限' : '安装包申请以下宿主权限' : '此更新移除了权限声明'}</strong>
+              <p>{permissionReview.added_permissions.length ? '确认安装包后，还需在插件权限页批准运行权限；确认更新并不会直接授权。' : '移除的权限会被撤销；若其余权限不变，原有启用状态会尽量保留。'}</p>
               <ul>
                 {#each permissionReview.added_permissions as change}
                   <li><span>{change.component_id}</span><b>{permissionLabel(change.request.capability)}</b><code title={change.request.scope}>{change.request.scope}</code>{change.required ? '（必需）' : '（可选）'}</li>
+                {/each}
+                {#each permissionReview.removed_permissions as change}
+                  <li><span>{change.component_id}</span><b>移除 {permissionLabel(change.request.capability)}</b><code title={change.request.scope}>{change.request.scope}</code></li>
                 {/each}
               </ul>
             </div>
@@ -201,7 +228,7 @@
             }}>查看发行说明</Button>
           {/if}
         {:else if !versionError}
-          <p>发布者尚未发布可安装版本。</p>
+          <p>市场尚无适用于当前客户端与平台的{pluginChannelLabel[channel]}发行包。</p>
         {/if}
         {#if versionError}<p class="error" role="alert">{versionError}</p>{/if}
         {#if versionError && !releases.length}<Button variant="outline" disabled={installing} onclick={() => { if (selected) void choose(selected); }}>重试</Button>{/if}
@@ -216,7 +243,7 @@
       <div class="plugin-release-footer">
         <Button variant="outline" disabled={installing} onclick={closeDetail}>返回</Button>
         <Button disabled={!tag || versionsLoading || installing || disabled || releaseRelation === 'older' || releaseRelation === 'current'} onclick={install}>
-          {installing ? '正在校验并安装…' : releaseRelation === 'older' ? '不能安装旧版本' : releaseRelation === 'current' ? '当前版本已安装' : permissionReview && permissionReviewKey === `${selected.id}@${tag}` && permissionReview.added_permissions.length ? installedVersion ? '确认权限变化并更新' : '确认来源并安装' : installedVersion ? '下载并更新' : `安装 ${release?.tag_name ?? ''}`}
+          {installing ? '正在校验并安装…' : releaseRelation === 'older' ? '不能安装旧版本' : releaseRelation === 'current' ? '当前版本已安装' : permissionReview && permissionReviewKey === `${selected.id}@${tag}` && (permissionReview.added_permissions.length || permissionReview.removed_permissions.length || permissionReview.requires_approval) ? installedVersion ? '确认变更并更新安装包' : '确认安装包' : installedVersion ? '下载并更新' : `安装 ${release?.tag_name ?? ''}`}
         </Button>
       </div>
     </div>
@@ -231,13 +258,14 @@
           </SegmentedControl.Root>
         {/if}
         <div class="plugins-search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索插件" placeholder="搜索插件名称或简介…" bind:value={query} /></div>
-        <Button variant="outline" size="sm" disabled={loading || installing} onclick={load}><RefreshCw size={14} class={loading ? 'animate-spin' : ''} />刷新目录</Button>
+        <Button variant="outline" size="sm" disabled={loading || installing} onclick={() => load(true)}><RefreshCw size={14} class={loading ? 'animate-spin' : ''} />刷新市场</Button>
         <Button variant="outline" size="sm" disabled={disabled || loading || installing} onclick={() => { void onlocalinstall(); }}><Upload size={14} />从本地安装</Button>
       </div>
     </div>
     <div class="plugin-catalog-scroll">
+      {#if refreshMessage}<p class="version-notice" role="status">{refreshMessage}</p>{/if}
       {#if loading}<div class="plugins-empty" role="status"><RefreshCw size={24} class="animate-spin" />正在加载插件目录…</div>
-      {:else if error}<div class="plugins-empty" role="alert"><Puzzle size={28} /><p class="plugins-error">{error}</p><Button variant="outline" size="sm" onclick={load}>重试</Button></div>
+      {:else if error}<div class="plugins-empty" role="alert"><Puzzle size={28} /><p class="plugins-error">{error}</p><Button variant="outline" size="sm" onclick={() => load()}>重试</Button></div>
       {:else if !catalog.length}<div class="plugins-empty"><Puzzle size={28} /><strong>暂时没有已登记的插件</strong><p>插件中心登记后，可在这里安装最新兼容版本。</p></div>
       {:else if !filtered.length}<div class="plugins-empty"><Search size={28} /><p>没有找到匹配的插件。</p><Button variant="ghost" size="sm" onclick={() => { query = ''; }}>清除搜索</Button></div>
       {:else}

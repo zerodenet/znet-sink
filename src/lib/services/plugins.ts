@@ -31,7 +31,7 @@ export interface PluginConfiguration {
 export interface PluginComponent {
   plugin_id: string; name: string; description?: string; component_id: string; version: string; publisher: string;
   repository?: string; homepage?: string | null; documentation?: string | null; license?: string; surfaces?: string[];
-  review: PluginReview | null; enabled: boolean; running: boolean; blocked: string | null;
+  review: PluginReview | null; enabled: boolean; permission_review_required?: boolean; running: boolean; blocked: string | null;
   permissions: Array<{ request: PluginPermission; required: boolean; supported: boolean; granted: boolean }>;
   configuration: PluginConfiguration | null;
 }
