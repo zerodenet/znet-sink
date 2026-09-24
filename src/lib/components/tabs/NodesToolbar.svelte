@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Input } from '$lib/components/ui/input';
   import { onMount } from 'svelte';
-  import { ArrowUpDown, EyeOff } from '@lucide/svelte';
+  import { ArrowUpDown, EyeOff, Gauge, LoaderCircle, Square } from '@lucide/svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Button } from '$lib/components/ui/button';
   import { nodesDisplayPreferences } from '$lib/components/tabs/nodes-display-preferences.svelte';
@@ -93,124 +93,149 @@
       />
     </div>
 
-    <Button
-      variant="outline"
-      size="icon-sm"
-      aria-pressed={hideTimeout}
-      aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
-      title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
-      onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
-    >
-      <EyeOff class="h-3.5 w-3.5" />
-    </Button>
-
-    {#if canSortByDelay}
+    <div class="toolbar-actions">
       <Button
         variant="outline"
         size="icon-sm"
-        aria-pressed={sortByDelay}
-        aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
-        title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
-        onclick={() => nodesDisplayPreferences.setSortByDelay(!sortByDelay)}
+        aria-pressed={hideTimeout}
+        aria-label={hideTimeout ? '显示超时节点' : '隐藏超时节点'}
+        title={hideTimeout ? '当前已隐藏测速超时或离线节点；点击恢复显示' : '隐藏已经测速确认超时或离线的节点'}
+        onclick={() => nodesDisplayPreferences.setHideTimeout(!hideTimeout)}
       >
-        <ArrowUpDown class="h-3.5 w-3.5" />
+        <EyeOff class="h-3.5 w-3.5" />
       </Button>
-    {/if}
 
-    <SegmentedControl.Root
-      value={viewMode}
-      onValueChange={(value) => onViewModeChange(value as ViewMode)}
-      aria-label="节点显示方式"
-    >
-      <SegmentedControl.Item
-        value="list"
-        size="icon"
-        title={'列表视图'}
-        aria-label={'列表视图'}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="8" y1="6" x2="21" y2="6"></line>
-          <line x1="8" y1="12" x2="21" y2="12"></line>
-          <line x1="8" y1="18" x2="21" y2="18"></line>
-          <line x1="3" y1="6" x2="3.01" y2="6"></line>
-          <line x1="3" y1="12" x2="3.01" y2="12"></line>
-          <line x1="3" y1="18" x2="3.01" y2="18"></line>
-        </svg>
-      </SegmentedControl.Item>
-      <SegmentedControl.Item
-        value="grid"
-        size="icon"
-        title={'网格视图'}
-        aria-label={'网格视图'}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <rect x="14" y="3" width="7" height="7"></rect>
-          <rect x="3" y="14" width="7" height="7"></rect>
-          <rect x="14" y="14" width="7" height="7"></rect>
-        </svg>
-      </SegmentedControl.Item>
-    </SegmentedControl.Root>
-
-    {#if onStopProbes}
-      <Button variant="outline" size="sm" onclick={onStopProbes} disabled={stoppingProbes}
-        title="停止当前配置的手动测速：清除排队目标，已发送请求等待内核返回或超时">
-        {stoppingProbes ? '正在停止…' : '停止测速'}
-      </Button>
-    {/if}
-    {#if onProbeAll}
-      <Button variant="default" size="sm"
-      onclick={onProbeAll}
-      disabled={!canProbeAll}
-      title={probeDisabledReason ?? undefined}
-    >
-      {#if probing}
-        <span class="probe-spinner">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="animate-spin">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-          </svg>
-        </span>
-        <span class="probe-progress-text">
-          {probeProgress.total > 0 ? `${probeProgress.done}/${probeProgress.total}` : '测速中'}
-        </span>
-      {:else}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-        </svg>
-        <span>{`测速`}</span>
+      {#if canSortByDelay}
+        <Button
+          variant="outline"
+          size="icon-sm"
+          aria-pressed={sortByDelay}
+          aria-label={sortByDelay ? '恢复节点配置顺序' : '按节点延迟排序'}
+          title={sortByDelay ? '当前按延迟排序；点击恢复配置顺序' : '按测速延迟从低到高排列 URLTest 节点'}
+          onclick={() => nodesDisplayPreferences.setSortByDelay(!sortByDelay)}
+        >
+          <ArrowUpDown class="h-3.5 w-3.5" />
+        </Button>
       {/if}
-    </Button>
-    {/if}
+
+      <SegmentedControl.Root
+        value={viewMode}
+        onValueChange={(value) => onViewModeChange(value as ViewMode)}
+        aria-label="节点显示方式"
+      >
+        <SegmentedControl.Item
+          value="list"
+          size="icon"
+          title={'列表视图'}
+          aria-label={'列表视图'}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+        </SegmentedControl.Item>
+        <SegmentedControl.Item
+          value="grid"
+          size="icon"
+          title={'网格视图'}
+          aria-label={'网格视图'}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+          </svg>
+        </SegmentedControl.Item>
+      </SegmentedControl.Root>
+
+      {#if onProbeAll || onStopProbes}
+        <div class="probe-controls">
+          <Button
+            class="probe-action"
+            variant={probing ? 'outline' : 'default'}
+            size="icon-sm"
+            onclick={probing ? onStopProbes : onProbeAll}
+            disabled={probing ? stoppingProbes || !onStopProbes : !canProbeAll}
+            aria-label={stoppingProbes ? '正在停止节点测速' : probing ? '停止全部节点测速' : '测试全部节点延迟'}
+            title={probing
+              ? '停止当前配置的手动测速：清除排队目标，已发送请求等待内核返回或超时'
+              : probeDisabledReason ?? '测试当前列表全部节点的延迟'}
+          >
+            {#if stoppingProbes}
+              <LoaderCircle class="animate-spin" />
+            {:else if probing}
+              <Square />
+            {:else}
+              <Gauge />
+            {/if}
+          </Button>
+
+          {#if probing}
+            <span
+              class="probe-progress"
+              role="status"
+              aria-live="polite"
+              aria-label={probeProgress.total > 0
+                ? `节点测速进度 ${probeProgress.done}/${probeProgress.total}`
+                : '节点测速进行中'}
+              title={probeProgress.total > 0
+                ? `节点测速进度：${probeProgress.done}/${probeProgress.total}`
+                : '节点测速进行中'}
+            >
+              <LoaderCircle class="probe-spinner animate-spin" />
+              <span class="probe-progress-text">
+                {probeProgress.total > 0 ? `${probeProgress.done}/${probeProgress.total}` : '进行中'}
+              </span>
+            </span>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 
 <style>
   .node-toolbar {
-    display: flex;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas: 'identity controls';
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: 8px 14px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    min-width: 0;
   }
 
   .toolbar-left {
+    grid-area: identity;
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-    max-width: 100%;
   }
 
   .toolbar-right {
-    display: flex;
+    grid-area: controls;
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) max-content;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    max-width: 100%;
-    flex-wrap: wrap;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    flex-wrap: nowrap;
   }
 
   .node-title {
@@ -280,9 +305,8 @@
     position: relative;
     display: flex;
     align-items: center;
-    flex: 1 1 180px;
-    min-width: 120px;
-    max-width: 240px;
+    width: 100%;
+    min-width: 0;
   }
 
   .search-icon {
@@ -293,19 +317,68 @@
     pointer-events: none;
   }
 
+  .probe-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  :global(.probe-action svg) {
+    width: 15px;
+    height: 15px;
+  }
+
+  .probe-progress {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 96px;
+    height: 30px;
+    padding: 0 7px;
+    border-radius: 7px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    overflow: hidden;
+    flex: 0 0 96px;
+    box-sizing: border-box;
+  }
+
   .probe-progress-text {
     font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .probe-spinner {
-    display: inline-flex;
-    color: var(--accent-foreground);
+  :global(.probe-spinner) {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
   }
 
-  @media (max-width: 700px) {
+  @container (max-width: 660px) {
+    .node-toolbar {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        'identity'
+        'controls';
+    }
+  }
 
+  @container (max-width: 430px) {
+    .toolbar-right {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .toolbar-actions {
+      justify-content: flex-start;
+    }
   }
 </style>

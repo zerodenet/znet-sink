@@ -160,14 +160,28 @@ export const guiSelectPolicy = async (_policy: string, tag: string) => {
 };
 export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
-  const compactLayout = new URLSearchParams(location.search).get('layout') === 'compact';
+  const params = new URLSearchParams(location.search);
+  const compactLayout = params.get('layout') === 'compact';
   const tags = compactLayout
     ? ['日本 SS [01] [Lite]', '日本 IX [0x01] [Lite]', '日本 ME [01] [Lite]', '日本 HY [01] [Lite]', '日本 TR [01] [Lite]', '日本 VM [01] [Lite]']
     : ['node-a', 'node-b'];
   const policyTag = compactLayout ? 'AI Suite' : 'proxy';
   const selected = compactLayout && selectedNode === 'node-a' ? tags[1] : selectedNode;
-  return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs: [],
-    groups: [{id: {profileId:'fixture', configRevision:1, tag:policyTag}, tag:policyTag, kind:'selector', selected, memberTags:tags, runtimeAvailable:true, available:true}],
+  const largeProbeTargets = params.get('probe') === 'large'
+    ? Array.from({length: 1234}, (_, index) => `probe-node-${index + 1}`)
+    : [];
+  const activeProbeJobs = largeProbeTargets.length > 0 ? [{
+    id: 99, scope, kind: 'outbound' as const, state: 'running' as const,
+    targetTags: largeProbeTargets,
+    results: largeProbeTargets.slice(0, 987).map(targetTag => ({
+      targetTag, reachable: true, latencyMs: 42, source: 'manual_outbound' as const,
+      observedAtUnixMs: Date.now(),
+    })),
+    completed: 987, succeeded: 987, failed: 0,
+    startedAtUnixMs: 1, updatedAtUnixMs: 2, deadlineAtUnixMs: 60_000,
+  }] : [];
+  return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs,
+    groups: [{id: {profileId:'fixture', configRevision:1, tag:policyTag}, tag:policyTag, kind:compactLayout ? 'urltest' : 'selector', selected, memberTags:tags, runtimeAvailable:true, available:true}],
     nodes: tags.map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:[policyTag], selectedIn:tag === selected ? [policyTag] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
       history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
 };

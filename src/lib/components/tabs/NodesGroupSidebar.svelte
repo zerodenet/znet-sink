@@ -75,7 +75,7 @@
 
 <style>
   .group-sidebar {
-    width: 216px;
+    width: 168px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -258,7 +258,7 @@
 
   @media (max-width: 700px) {
     .group-sidebar {
-      width: 160px;
+      width: 120px;
       padding: 8px 6px;
     }
   }

@@ -17,13 +17,13 @@ test('node page stops a backend-owned job and prevents a duplicate stop click', 
     }}});
   });
   await page.goto('/?panel=nodes', {waitUntil:'domcontentloaded', timeout:60000});
-  await page.getByRole('button',{name:'测速',exact:true}).click();
-  const stop = page.getByRole('button',{name:'停止测速',exact:true});
+  await page.getByRole('button',{name:'测试全部节点延迟',exact:true}).click();
+  const stop = page.getByRole('button',{name:'停止全部节点测速',exact:true});
   await expect(stop).toBeVisible();
   await expect(stop).toHaveAttribute('title', /已发送请求等待内核返回或超时/);
   await stop.click();
-  await expect(page.getByRole('button',{name:'正在停止…'})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'正在停止节点测速'})).toBeDisabled();
   await expect(page.getByLabel('保存结果')).toContainText('"jobId":1');
   await expect(stop).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'测速',exact:true})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'测试全部节点延迟',exact:true})).toBeEnabled();
 });
