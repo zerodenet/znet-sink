@@ -60,6 +60,9 @@ pub struct ProxyBackup {
     /// Original bypass entries per macOS network service, including empty lists.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub macos_bypass: std::collections::BTreeMap<String, Vec<String>>,
+    /// Raw GSettings values from before enabling the Linux desktop proxy.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub linux_settings: std::collections::BTreeMap<String, String>,
 }
 
 pub fn enable(host: &str, port: u16) -> AppResult<SystemProxyStatus> {
@@ -198,6 +201,133 @@ fn windows_restore_server(backup: &ProxyBackup) -> Option<String> {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_bypass_equal(actual: Option<&str>, expected: &[String]) -> bool {
+    let entries = |value: &str| -> std::collections::BTreeSet<String> {
+        value
+            .split(';')
+            .map(|item| item.trim().to_ascii_lowercase())
+            .filter(|item| !item.is_empty())
+            .collect()
+    };
+    entries(actual.unwrap_or_default()) == entries(&expected.join(";"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_bypass_values(bypass: &[String]) -> AppResult<Vec<String>> {
+    let mut values = Vec::new();
+    for entry in bypass {
+        let value = entry.trim();
+        if value.eq_ignore_ascii_case("<local>") {
+            // GNOME has no Windows-style "all unqualified names" token.
+            // The default list also includes localhost explicitly.
+            continue;
+        }
+        let value = value
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .unwrap_or(value);
+        let converted = if let Some(prefix) = value.strip_suffix(".*") {
+            let parts: Vec<_> = prefix.split('.').collect();
+            if parts.is_empty() || parts.len() > 3 {
+                return Err(AppError::invalid_argument(format!(
+                    "Linux proxy cannot represent bypass pattern: {value}"
+                )));
+            }
+            let octets: Vec<u8> = parts
+                .iter()
+                .map(|part| part.parse::<u8>())
+                .collect::<Result<_, _>>()
+                .map_err(|_| {
+                    AppError::invalid_argument(format!(
+                        "Linux proxy cannot represent bypass pattern: {value}"
+                    ))
+                })?;
+            let mut address = [0u8; 4];
+            address[..octets.len()].copy_from_slice(&octets);
+            format!("{}/{}", std::net::Ipv4Addr::from(address), octets.len() * 8)
+        } else if value.contains('*') && !value.starts_with("*.") {
+            return Err(AppError::invalid_argument(format!(
+                "Linux proxy cannot represent bypass pattern: {value}"
+            )));
+        } else {
+            value.to_string()
+        };
+        if !values
+            .iter()
+            .any(|item: &String| item.eq_ignore_ascii_case(&converted))
+        {
+            values.push(converted);
+        }
+    }
+    Ok(values)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_bypass_literal(values: &[String]) -> String {
+    // GVariant accepts JSON-style double-quoted strings when the schema
+    // supplies the array-of-strings type, including the empty array.
+    serde_json::to_string(values).expect("string list serialization cannot fail")
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_bypass_literal(raw: &str) -> AppResult<Vec<String>> {
+    let raw = raw.trim().strip_prefix("@as ").unwrap_or(raw.trim());
+    let body = raw
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or_else(|| AppError::internal("invalid GNOME proxy ignore-hosts value"))?;
+    let mut chars = body.chars().peekable();
+    let mut values = Vec::new();
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        let Some(quote @ ('\'' | '"')) = chars.next() else {
+            if values.is_empty() && body.trim().is_empty() {
+                return Ok(values);
+            }
+            return Err(AppError::internal("invalid GNOME proxy ignore-hosts value"));
+        };
+        let mut value = String::new();
+        loop {
+            match chars.next() {
+                Some(c) if c == quote => break,
+                Some('\\') => match chars.next() {
+                    Some('n') => value.push('\n'),
+                    Some('r') => value.push('\r'),
+                    Some('t') => value.push('\t'),
+                    Some(c) => value.push(c),
+                    None => {
+                        return Err(AppError::internal(
+                            "invalid GNOME proxy ignore-hosts escape",
+                        ))
+                    }
+                },
+                Some(c) => value.push(c),
+                None => {
+                    return Err(AppError::internal(
+                        "unterminated GNOME proxy ignore-hosts value",
+                    ))
+                }
+            }
+        }
+        values.push(value);
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        match chars.next() {
+            None => return Ok(values),
+            Some(',') => {
+                if chars.peek().is_none() {
+                    return Err(AppError::internal("invalid GNOME proxy ignore-hosts value"));
+                }
+            }
+            _ => return Err(AppError::internal("invalid GNOME proxy ignore-hosts value")),
+        }
+    }
+}
+
 // ── macOS ──
 
 #[cfg(target_os = "macos")]
@@ -287,6 +417,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         override_bypass: None,
         auto_config_url: None,
         macos_bypass: Default::default(),
+        linux_settings: Default::default(),
     };
     macos_bypass::capture_missing(&mut backup)?;
     Ok(backup)
@@ -526,6 +657,19 @@ fn set_proxy_platform(
     }
 
     notify_settings_changed();
+    if enable {
+        let actual = status_platform()?;
+        if !actual.enabled
+            || actual.host != host
+            || actual.port != port
+            || !bypass_matches(bypass)?
+            || query_internet_setting("AutoConfigURL").is_some()
+        {
+            return Err(AppError::internal(
+                "Windows proxy settings did not match after setting them",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -578,6 +722,7 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         override_bypass: query_internet_setting("ProxyOverride"),
         auto_config_url: query_internet_setting("AutoConfigURL"),
         macos_bypass: Default::default(),
+        linux_settings: Default::default(),
     })
 }
 
@@ -605,6 +750,15 @@ fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
 
     write_internet_setting_dword("ProxyEnable", if backup.enabled { 1 } else { 0 })?;
     notify_settings_changed();
+    if status_platform()?.enabled != backup.enabled
+        || query_internet_setting("ProxyServer") != windows_restore_server(backup)
+        || query_internet_setting("ProxyOverride") != backup.override_bypass
+        || query_internet_setting("AutoConfigURL") != backup.auto_config_url
+    {
+        return Err(AppError::internal(
+            "Windows proxy settings did not match after restoring them",
+        ));
+    }
     Ok(())
 }
 
@@ -755,116 +909,158 @@ fn parse_named_server(server: &str, name: &str) -> (String, u16) {
 // ── Linux ──
 
 #[cfg(target_os = "linux")]
+const LINUX_PROXY_SETTINGS: &[(&str, &str)] = &[
+    ("org.gnome.system.proxy", "mode"),
+    ("org.gnome.system.proxy", "ignore-hosts"),
+    ("org.gnome.system.proxy.http", "host"),
+    ("org.gnome.system.proxy.http", "port"),
+    ("org.gnome.system.proxy.https", "host"),
+    ("org.gnome.system.proxy.https", "port"),
+    ("org.gnome.system.proxy.socks", "host"),
+    ("org.gnome.system.proxy.socks", "port"),
+];
+
+#[cfg(target_os = "linux")]
+fn linux_setting_key(schema: &str, key: &str) -> String {
+    format!("{schema}/{key}")
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_output(
+    operation: &str,
+    schema: &str,
+    key: &str,
+    value: Option<&str>,
+) -> AppResult<String> {
+    let mut command = common::background_command("gsettings");
+    command.args([operation, schema, key]);
+    if let Some(value) = value {
+        command.arg(value);
+    }
+    let output = command.output().map_err(|error| {
+        AppError::internal(format!(
+            "failed to run gsettings {operation} {schema} {key}: {error}"
+        ))
+    })?;
+    checked_gsettings_output(operation, schema, key, output)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn checked_gsettings_output(
+    operation: &str,
+    schema: &str,
+    key: &str,
+    output: std::process::Output,
+) -> AppResult<String> {
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "gsettings {operation} {schema} {key} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_get(schema: &str, key: &str) -> AppResult<String> {
+    gsettings_output("get", schema, key, None)
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_set(schema: &str, key: &str, value: &str) -> AppResult<()> {
+    gsettings_output("set", schema, key, Some(value)).map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn set_linux_proxy_fields(
+    host: &str,
+    port: u16,
+    socks_enabled: bool,
+    bypass: Option<&[String]>,
+) -> AppResult<()> {
+    for schema in [
+        "org.gnome.system.proxy.http",
+        "org.gnome.system.proxy.https",
+    ] {
+        gsettings_set(schema, "host", host)?;
+        gsettings_set(schema, "port", &port.to_string())?;
+    }
+    let socks = "org.gnome.system.proxy.socks";
+    gsettings_set(socks, "host", if socks_enabled { host } else { "" })?;
+    gsettings_set(
+        socks,
+        "port",
+        &if socks_enabled { port } else { 0 }.to_string(),
+    )?;
+    if let Some(bypass) = bypass {
+        let values = linux_bypass_values(bypass)?;
+        gsettings_set(
+            "org.gnome.system.proxy",
+            "ignore-hosts",
+            &linux_bypass_literal(&values),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn set_proxy_platform(
     host: &str,
     port: u16,
     enable: bool,
     socks_enabled: bool,
-    _bypass: &[String],
+    bypass: &[String],
 ) -> AppResult<()> {
-    let mode = if enable { "manual" } else { "none" };
-    let proxy_url = if enable {
-        format!("http://{host}:{port}/")
-    } else {
-        String::new()
-    };
-
-    // Try gsettings (GNOME)
-    let gsettings_result = common::background_command("gsettings")
-        .args(["set", "org.gnome.system.proxy", "mode", mode])
-        .output();
-
-    if gsettings_result.is_ok() && enable {
-        let _ = common::background_command("gsettings")
-            .args(["set", "org.gnome.system.proxy.http", "host", host])
-            .output();
-        let _ = common::background_command("gsettings")
-            .args([
-                "set",
-                "org.gnome.system.proxy.http",
-                "port",
-                &port.to_string(),
-            ])
-            .output();
-        let _ = common::background_command("gsettings")
-            .args(["set", "org.gnome.system.proxy.https", "host", host])
-            .output();
-        let _ = common::background_command("gsettings")
-            .args([
-                "set",
-                "org.gnome.system.proxy.https",
-                "port",
-                &port.to_string(),
-            ])
-            .output();
-        if socks_enabled {
-            let _ = common::background_command("gsettings")
-                .args(["set", "org.gnome.system.proxy.socks", "host", host])
-                .output();
-            let _ = common::background_command("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.system.proxy.socks",
-                    "port",
-                    &port.to_string(),
-                ])
-                .output();
-        } else {
-            let _ = common::background_command("gsettings")
-                .args(["set", "org.gnome.system.proxy.socks", "host", ""])
-                .output();
+    if enable {
+        // Apply all fields before switching GNOME into manual mode.
+        set_linux_proxy_fields(host, port, socks_enabled, Some(bypass))?;
+    }
+    let desired_mode = if enable { "manual" } else { "none" };
+    gsettings_set("org.gnome.system.proxy", "mode", desired_mode)?;
+    let actual_mode = gsettings_get("org.gnome.system.proxy", "mode")?;
+    if actual_mode.trim_matches('\'') != desired_mode {
+        return Err(AppError::internal(
+            "Linux proxy mode did not match after setting it",
+        ));
+    }
+    if enable {
+        let actual = status_platform()?;
+        if actual.host != host
+            || actual.port != port
+            || actual.socks_enabled != socks_enabled
+            || (socks_enabled && (actual.socks_host != host || actual.socks_port != port))
+            || !bypass_matches(bypass)?
+        {
+            return Err(AppError::internal(
+                "Linux proxy settings did not match after setting them",
+            ));
         }
     }
-
-    gsettings_result
-        .map(|_| ())
-        .map_err(|e| AppError::internal(format!("failed to configure Linux proxy: {e}")))
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn status_platform() -> AppResult<SystemProxyStatus> {
-    let output = common::background_command("gsettings")
-        .args(["get", "org.gnome.system.proxy", "mode"])
-        .output()
-        .map_err(|e| AppError::internal(format!("failed to query Linux proxy: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let enabled = stdout.contains("manual");
+    let mode = gsettings_get("org.gnome.system.proxy", "mode")?;
+    let enabled = mode.trim_matches('\'') == "manual";
 
     if enabled {
-        let host_output = common::background_command("gsettings")
-            .args(["get", "org.gnome.system.proxy.http", "host"])
-            .output()
-            .unwrap_or_else(|_| output.clone());
-        let host = String::from_utf8_lossy(&host_output.stdout)
-            .trim()
+        let host = gsettings_get("org.gnome.system.proxy.http", "host")?
             .trim_matches('\'')
             .to_string();
-
-        let port_output = common::background_command("gsettings")
-            .args(["get", "org.gnome.system.proxy.http", "port"])
-            .output()
-            .unwrap_or_else(|_| output.clone());
-        let port: u16 = String::from_utf8_lossy(&port_output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0);
-        let socks_host_output = common::background_command("gsettings")
-            .args(["get", "org.gnome.system.proxy.socks", "host"])
-            .output()
-            .unwrap_or_else(|_| output.clone());
-        let socks_host = String::from_utf8_lossy(&socks_host_output.stdout)
-            .trim()
+        let port = gsettings_get("org.gnome.system.proxy.http", "port")?
+            .parse::<u16>()
+            .map_err(|error| {
+                AppError::internal(format!("invalid Linux HTTP proxy port: {error}"))
+            })?;
+        let socks_host = gsettings_get("org.gnome.system.proxy.socks", "host")?
             .trim_matches('\'')
             .to_string();
-        let socks_port_output = common::background_command("gsettings")
-            .args(["get", "org.gnome.system.proxy.socks", "port"])
-            .output()
-            .unwrap_or_else(|_| output.clone());
-        let socks_port: u16 = String::from_utf8_lossy(&socks_port_output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0);
+        let socks_port = gsettings_get("org.gnome.system.proxy.socks", "port")?
+            .parse::<u16>()
+            .map_err(|error| {
+                AppError::internal(format!("invalid Linux SOCKS proxy port: {error}"))
+            })?;
 
         Ok(SystemProxyStatus {
             enabled: true,
@@ -889,6 +1085,10 @@ fn status_platform() -> AppResult<SystemProxyStatus> {
 #[cfg(target_os = "linux")]
 fn capture_backup_platform() -> AppResult<ProxyBackup> {
     let status = status_platform()?;
+    let mut linux_settings = std::collections::BTreeMap::new();
+    for (schema, key) in LINUX_PROXY_SETTINGS {
+        linux_settings.insert(linux_setting_key(schema, key), gsettings_get(schema, key)?);
+    }
     Ok(ProxyBackup {
         enabled: status.enabled,
         host: status.host.clone(),
@@ -900,47 +1100,66 @@ fn capture_backup_platform() -> AppResult<ProxyBackup> {
         override_bypass: None,
         auto_config_url: None,
         macos_bypass: Default::default(),
+        linux_settings,
     })
 }
 
 #[cfg(target_os = "linux")]
 fn restore_platform(backup: &ProxyBackup) -> AppResult<()> {
-    if backup.enabled {
-        set_proxy_platform(&backup.host, backup.port, true, backup.socks_enabled, &[])?;
-        if backup.socks_enabled {
-            let _ = common::background_command("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.system.proxy.socks",
-                    "host",
-                    &backup.socks_host,
-                ])
-                .output();
-            let _ = common::background_command("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.system.proxy.socks",
-                    "port",
-                    &backup.socks_port.to_string(),
-                ])
-                .output();
+    if !backup.linux_settings.is_empty() {
+        for (schema, key) in LINUX_PROXY_SETTINGS {
+            if *key == "mode" {
+                continue;
+            }
+            if let Some(value) = backup.linux_settings.get(&linux_setting_key(schema, key)) {
+                gsettings_set(schema, key, value)?;
+            }
+        }
+        let mode = backup
+            .linux_settings
+            .get(&linux_setting_key("org.gnome.system.proxy", "mode"))
+            .ok_or_else(|| AppError::internal("Linux proxy backup is missing its original mode"))?;
+        gsettings_set("org.gnome.system.proxy", "mode", mode)?;
+        for (schema, key) in LINUX_PROXY_SETTINGS {
+            if let Some(expected) = backup.linux_settings.get(&linux_setting_key(schema, key)) {
+                if gsettings_get(schema, key)? != *expected {
+                    return Err(AppError::internal(format!(
+                        "Linux proxy setting {schema}/{key} did not restore"
+                    )));
+                }
+            }
         }
         Ok(())
     } else {
-        set_proxy_platform("", 0, false, false, &[])
+        // Legacy markers did not capture ignore-hosts. Leave that key alone.
+        if backup.enabled {
+            set_linux_proxy_fields(&backup.host, backup.port, backup.socks_enabled, None)?;
+        }
+        gsettings_set(
+            "org.gnome.system.proxy",
+            "mode",
+            if backup.enabled { "manual" } else { "none" },
+        )
     }
 }
 
 #[cfg(target_os = "linux")]
 fn local_bypass_configured_platform() -> Option<bool> {
-    None
+    let actual = gsettings_get("org.gnome.system.proxy", "ignore-hosts").ok()?;
+    let actual = parse_linux_bypass_literal(&actual).ok()?;
+    Some(["localhost", "127.0.0.0/8", "::1"].iter().all(|required| {
+        actual
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(required))
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        macos_proxy_commands, networksetup_requires_admin, parse_network_services,
-        windows_proxy_server, windows_restore_server, ProxyBackup,
+        checked_gsettings_output, linux_bypass_literal, linux_bypass_values, macos_proxy_commands,
+        networksetup_requires_admin, parse_linux_bypass_literal, parse_network_services,
+        windows_bypass_equal, windows_proxy_server, windows_restore_server, ProxyBackup,
     };
 
     #[test]
@@ -1009,6 +1228,83 @@ mod tests {
             Some("127.0.0.1:1080")
         );
     }
+
+    #[test]
+    fn windows_bypass_readback_compares_values_instead_of_assuming_success() {
+        let expected = vec!["<local>".into(), "127.*".into(), "*.example.org".into()];
+        assert!(windows_bypass_equal(
+            Some(" 127.* ; *.EXAMPLE.ORG ; <LOCAL> "),
+            &expected
+        ));
+        assert!(!windows_bypass_equal(Some("<local>;127.*"), &expected));
+        assert!(!windows_bypass_equal(None, &expected));
+        assert!(windows_bypass_equal(None, &[]));
+    }
+
+    #[test]
+    fn linux_bypass_uses_gnome_network_ranges_and_round_trips_literals() {
+        let bypass = vec![
+            "<local>".into(),
+            "localhost".into(),
+            "127.*".into(),
+            "[::1]".into(),
+            "192.168.*".into(),
+            "172.31.*".into(),
+            "*.example.org".into(),
+        ];
+        let values = linux_bypass_values(&bypass).unwrap();
+        assert_eq!(
+            values,
+            [
+                "localhost",
+                "127.0.0.0/8",
+                "::1",
+                "192.168.0.0/16",
+                "172.31.0.0/16",
+                "*.example.org"
+            ]
+        );
+        assert_eq!(
+            parse_linux_bypass_literal(&linux_bypass_literal(&values)).unwrap(),
+            values
+        );
+        assert_eq!(
+            parse_linux_bypass_literal("@as []").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_linux_bypass_literal("['localhost', '127.0.0.0/8']").unwrap(),
+            ["localhost", "127.0.0.0/8"]
+        );
+        assert!(linux_bypass_values(&["example.*".into()]).is_err());
+    }
+
+    #[test]
+    fn linux_backup_preserves_raw_gsettings_and_old_markers_remain_readable() {
+        let mut backup = ProxyBackup::default();
+        backup.linux_settings.insert(
+            "org.gnome.system.proxy/ignore-hosts".into(),
+            "['custom.example', '::1']".into(),
+        );
+        backup
+            .linux_settings
+            .insert("org.gnome.system.proxy/mode".into(), "'auto'".into());
+        let encoded = serde_json::to_string(&backup).unwrap();
+        let restored: ProxyBackup = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.linux_settings, backup.linux_settings);
+        let old: ProxyBackup =
+            serde_json::from_str(r#"{"enabled":false,"host":"","port":0}"#).unwrap();
+        assert!(old.linux_settings.is_empty());
+    }
+
+    #[test]
+    fn linux_gsettings_nonzero_exit_is_an_error() {
+        let output = std::process::Command::new("rustc")
+            .arg("--invalid-proxy-test-option")
+            .output()
+            .unwrap();
+        assert!(checked_gsettings_output("set", "org.gnome.system.proxy", "mode", output).is_err());
+    }
 }
 
 /// Capture only previously untouched service lists before extending ownership.
@@ -1045,9 +1341,24 @@ pub fn bypass_matches(bypass: &[String]) -> AppResult<bool> {
         }
         Ok(true)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        let _ = bypass;
-        Ok(true)
+        Ok(windows_bypass_equal(
+            query_internet_setting("ProxyOverride").as_deref(),
+            bypass,
+        ))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let expected = linux_bypass_values(bypass)?;
+        let actual = gsettings_get("org.gnome.system.proxy", "ignore-hosts")?;
+        let actual = parse_linux_bypass_literal(&actual)?;
+        let canonical = |entries: Vec<String>| -> std::collections::BTreeSet<String> {
+            entries
+                .into_iter()
+                .map(|entry| entry.to_ascii_lowercase())
+                .collect()
+        };
+        Ok(canonical(actual) == canonical(expected))
     }
 }
