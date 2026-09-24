@@ -126,6 +126,25 @@ test('logs remain interactive with large structured records and repeated refresh
   expect(errors).toEqual([]);
 });
 
+test('log rows give metadata and message separate readable lines', async ({ page }) => {
+  await page.goto('/?panel=logs');
+  await expect(page.locator('.log-row').first()).toBeVisible();
+  for (const width of [900, 620]) {
+    await page.setViewportSize({ width, height: 700 });
+    const layout = await page.locator('.log-row').first().evaluate(row => {
+      const meta = row.querySelector('.log-meta')!.getBoundingClientRect();
+      const message = row.querySelector('.log-message')!.getBoundingClientRect();
+      const summary = row.querySelector('.log-summary')!.getBoundingClientRect();
+      return { separateLines: message.top >= meta.bottom, messageFits: message.right <= summary.right + 1, rowHeight: row.getBoundingClientRect().height };
+    });
+    expect(layout.separateLines).toBe(true);
+    expect(layout.messageFits).toBe(true);
+    expect(layout.rowHeight).toBeLessThan(100);
+    await expect(page.locator('.log-fields')).toHaveCount(0);
+  }
+  await page.screenshot({ path: test.info().outputPath('logs-readable.png') });
+});
+
 test('overview displays the bundled flag and readable network region',async ({page})=>{
   await page.goto('/?panel=overview');
   await expect(page.getByText('美国 · California · Los Angeles',{exact:true})).toBeVisible();

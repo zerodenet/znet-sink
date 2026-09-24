@@ -287,27 +287,9 @@
       : null;
   }
 
-  function structuredFields(log: LogEntry): Array<[string, unknown]> {
-    const fields = fieldObject(log);
-    if (!fields) return [];
-    return Object.entries(fields).filter(([key]) =>
-      !['message', 'timestamp', 'level', 'raw_line'].includes(key)
-      && !(log.source === 'plugin' && ['pluginId', 'componentId'].includes(key))
-    );
-  }
-
   function displayMessage(log: LogEntry): string {
     const message = fieldObject(log)?.['message'];
     return typeof message === 'string' && message.length > 0 ? message : log.message;
-  }
-
-  function formatFieldValue(value: unknown): string {
-    if (typeof value === 'string') return value;
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
   }
 
   function formattedFields(log: LogEntry): string {
@@ -746,8 +728,6 @@
     {:else}
       <div aria-hidden="true" style:height={`${windowed.top}px`}></div>
       {#each renderedLogs as log (log.id)}
-        {@const fields = structuredFields(log)}
-        {@const previewFields = fields.slice(0, 3)}
         <article
           class="log-row level-{log.level}"
           data-log-id={log.id}
@@ -762,24 +742,13 @@
             title={`${formatTime(log.occurredAtUnixMs)} [${log.source.toUpperCase()}] ${displayMessage(log)}`}
           >
             <ChevronDown class={`row-chevron h-3 w-3 ${expandedLogId === log.id ? 'open' : ''}`} />
-            <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
-            <span class="log-source {log.source}">{log.source === 'app' ? 'APP' : log.source === 'core' ? 'CORE' : 'PLUGIN'}</span>
-            {#if pluginOwner(log)}<span class="log-owner" title={pluginOwner(log) ?? ''}>{pluginOwner(log)}</span>{/if}
-            <span class="log-level {log.level}">{levelLabel(log.level)}</span>
+            <span class="log-meta">
+              <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
+              <span class="log-source {log.source}">{log.source === 'app' ? 'APP' : log.source === 'core' ? 'CORE' : 'PLUGIN'}</span>
+              <span class="log-level {log.level}">{levelLabel(log.level)}</span>
+              {#if pluginOwner(log)}<span class="log-owner" title={pluginOwner(log) ?? ''}>{pluginOwner(log)}</span>{/if}
+            </span>
             <span class="log-message">{displayMessage(log)}</span>
-            {#if previewFields.length > 0}
-              <span class="log-fields" aria-label="结构化字段预览">
-                {#each previewFields as [key, value]}
-                  <span class="log-field" title={`${key}=${formatFieldValue(value)}`}>
-                    <span class="field-key">{key}</span>
-                    <span class="field-value">{formatFieldValue(value)}</span>
-                  </span>
-                {/each}
-                {#if fields.length > previewFields.length}
-                  <span class="more-fields">+{fields.length - previewFields.length}</span>
-                {/if}
-              </span>
-            {/if}
           </button>
 
           <Button variant="ghost" size="icon-xs"
@@ -1052,10 +1021,13 @@
 
   .log-summary {
     min-width: 0;
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 5px 4px 5px 5px;
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    column-gap: 8px;
+    row-gap: 3px;
+    padding: 7px 4px 7px 6px;
     border: 0;
     background: transparent;
     color: inherit;
@@ -1064,9 +1036,9 @@
     cursor: pointer;
   }
 
-  .wrap .log-summary { align-items: flex-start; }
-
   :global(.row-chevron) {
+    grid-row: 1 / 3;
+    align-self: start;
     margin-top: 3px;
     color: var(--muted-foreground);
     opacity: 0.35;
@@ -1079,7 +1051,7 @@
   .log-row:hover :global(.row-chevron) { opacity: 0.8; }
 
   .log-time {
-    width: 118px;
+    width: auto;
     color: var(--muted-foreground);
     font-size: 10.5px;
     font-variant-numeric: tabular-nums;
@@ -1105,7 +1077,8 @@
   .log-source.app { background: color-mix(in srgb, #8b5cf6 12%, transparent); color: #7c3aed; }
   .log-source.core { background: color-mix(in srgb, #3b82f6 12%, transparent); color: #2563eb; }
   .log-source.plugin { background: color-mix(in srgb, #16a34a 12%, transparent); color: #15803d; }
-  .log-owner { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted-foreground); }
+  .log-meta { grid-column: 2; display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; }
+  .log-owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted-foreground); }
   .log-level { color: var(--muted-foreground); background: var(--card); }
   .log-level.error { color: #dc2626; background: color-mix(in srgb, #ef4444 11%, transparent); }
   .log-level.warn { color: #d97706; background: color-mix(in srgb, #f59e0b 11%, transparent); }
@@ -1113,8 +1086,8 @@
   .log-level.debug { color: #0891b2; background: color-mix(in srgb, #06b6d4 9%, transparent); }
 
   .log-message {
-    min-width: 120px;
-    flex: 1;
+    grid-column: 2;
+    min-width: 0;
     color: var(--foreground);
     font-size: 11.5px;
     line-height: 1.5;
@@ -1125,51 +1098,12 @@
 
   .wrap .log-message {
     white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .log-fields {
-    min-width: 0;
-    max-width: 42%;
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    overflow: hidden;
-    flex-shrink: 1;
-  }
-
-  .log-field {
-    min-width: 0;
-    max-width: 170px;
-    display: inline-flex;
-    height: 18px;
-    border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-    border-radius: 4px;
-    overflow: hidden;
-    font-size: 9.5px;
-    flex-shrink: 1;
-  }
-
-  .field-key {
-    padding: 1px 4px;
-    background: color-mix(in srgb, var(--muted) 80%, var(--card));
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-  }
-
-  .field-value {
-    min-width: 0;
-    padding: 1px 4px;
-    color: var(--foreground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .more-fields {
-    color: var(--muted-foreground);
-    font-size: 9.5px;
-    flex-shrink: 0;
+    overflow-wrap: break-word;
+    word-break: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .log-details {
