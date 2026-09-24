@@ -15,11 +15,12 @@
   const VIEW_MODE_KEY = 'znet-plugin-market-view-mode';
   type ViewMode = 'card' | 'list';
 
-  let { oninstalled, onmanage, onlocalinstall, onrefresh, requestedUpdate = null, channel = 'stable', installed = [], disabled = false }: {
+  let { oninstalled, onmanage, onlocalinstall, onrefresh, onchannelchange, requestedUpdate = null, channel = 'stable', installed = [], disabled = false }: {
     oninstalled: (snapshot: PluginSnapshot, review: PluginInstallReview) => void;
     onmanage: () => void;
     onlocalinstall: () => void | Promise<void>;
     onrefresh?: (catalog: PluginListing[]) => void | Promise<void>;
+    onchannelchange?: (value: string) => void;
     requestedUpdate?: { pluginId: string; tag: string } | null;
     channel?: PluginChannel;
     installed?: PluginComponent[];
@@ -187,7 +188,10 @@
           <div><strong>{selected.name}</strong><span>发布者 {selected.publisher.id}</span></div>
         </section>
         <p>{selected.description}</p>
-        <p>当前选择{pluginChannelLabel[channel]}通道。安装包安装与运行权限授权分为两个步骤；权限有变化时，安装后可能需要再次确认才能启用。</p>
+        <p>安装包安装与运行权限授权分为两个步骤；权限有变化时，安装后可能需要再次确认才能启用。</p>
+        <div class="plugin-release-channel"><label for="plugin-release-channel">发行通道</label><FieldSelect id="plugin-release-channel" aria-label="插件发行通道" value={channel} onValueChange={onchannelchange} disabled={installing} options={[
+          { value: 'stable', label: '正式版' }, { value: 'rc', label: '候选版' }, { value: 'dev', label: '开发版' },
+        ]} /></div>
         <div class="release-source"><span>发布仓库</span><strong>{selected.repository.replace('https://github.com/', '')}</strong></div>
 
         {#if versionsLoading}

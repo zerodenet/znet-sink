@@ -544,9 +544,6 @@
           </SegmentedControl.Root>
         {/if}
         <div class="plugins-search"><Search size={14} aria-hidden="true" /><Input class="pl-8" aria-label="搜索已安装插件" placeholder="搜索已安装插件…" bind:value={installedQuery} /></div>
-        <FieldSelect aria-label="插件发行通道" value={releaseChannel} onValueChange={selectReleaseChannel} options={[
-          { value: 'stable', label: '正式版' }, { value: 'rc', label: '候选版' }, { value: 'dev', label: '开发版' },
-        ]} />
         <Button variant="outline" size="sm" disabled={busy || checkingUpdates || runningKey !== null} onclick={refreshInstalled}><RefreshCw size={14} class={busy || checkingUpdates ? 'animate-spin' : ''} />检查已安装插件</Button>
       </div>
     </div>
@@ -591,7 +588,7 @@
 >
   <div class="plugin-install-modal-body">
     <div class="plugin-install-market" class:plugin-install-hidden={!!localInstallReview}>
-      <PluginCatalog installed={snapshot.components} channel={releaseChannel} {requestedUpdate} onrefresh={(catalog) => checkUpdates(catalog)} onlocalinstall={installLocal} onmanage={() => { installOpen = false; }} disabled={busy || runningKey !== null} oninstalled={(value, review) => { installationFinished(value, review); toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新'); }} />
+      <PluginCatalog installed={snapshot.components} channel={releaseChannel} onchannelchange={selectReleaseChannel} {requestedUpdate} onrefresh={(catalog) => checkUpdates(catalog)} onlocalinstall={installLocal} onmanage={() => { installOpen = false; }} disabled={busy || runningKey !== null} oninstalled={(value, review) => { installationFinished(value, review); toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新'); }} />
     </div>
     {#if localInstallReview}
       <div class="plugin-local-review">

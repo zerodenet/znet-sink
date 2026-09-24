@@ -369,6 +369,9 @@ test('installed check reports the selected channel and opens the target update f
   await page.screenshot({ path: test.info().outputPath('installed-plugin-update-card.png') });
   await page.getByRole('button', { name: '检查已安装插件' }).click();
   await expect(page.getByText('1 个有更新', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: '插件发行通道' })).toHaveCount(0);
+  const searchWidth = await page.getByRole('textbox', { name: '搜索已安装插件' }).evaluate(element => element.getBoundingClientRect().width);
+  expect(searchWidth).toBeGreaterThanOrEqual(180);
   await page.getByRole('button', { name: '安装插件', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '刷新市场' }).click();
   await expect(page.getByRole('dialog').getByText('市场已刷新，发现 1 个已登记插件', { exact: false })).toBeVisible();
@@ -376,7 +379,9 @@ test('installed check reports the selected channel and opens the target update f
   await card.locator('.plugin-update-indicator').click();
   await expect(page.getByRole('dialog').getByText('v1.1.0（正式版）', { exact: false }).first()).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '插件发行通道' }).click();
+  await page.getByRole('button', { name: '安装插件', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '版本管理', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '插件发行通道' }).click();
   await page.getByRole('option', { name: '开发版' }).click();
   await expect(card.locator('.plugin-update-indicator')).toHaveAttribute('aria-label', '示例插件有更新：开发版 v2.0.0-beta');
 });
