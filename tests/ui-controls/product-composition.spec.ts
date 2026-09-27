@@ -21,7 +21,7 @@ test('node browsing and selection survive manual probe trimming', async ({page})
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?panel=nodes', {waitUntil:'domcontentloaded',timeout:60_000});
   await expect(page.getByRole('button', {name:/^node-a VLESS 42 ms/})).toBeVisible();
-  await expect(page.getByRole('button', {name:'测速',exact:true})).toHaveCount(enabled ? 1 : 0);
+  await expect(page.getByRole('button', {name:'测试全部节点延迟',exact:true})).toHaveCount(enabled ? 1 : 0);
   await expect(page.getByRole('button', {name:'测试 node-a 延迟',exact:true})).toHaveCount(enabled ? 1 : 0);
   await page.getByText('node-b', {exact:true}).click();
   await expect(page.getByLabel('保存结果')).toContainText('"selected":"node-b"');
