@@ -183,7 +183,17 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Run client core tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'client-core-tests.log'
+          cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1 2>&1 | Tee-Object -FilePath $log
+          $status = $LASTEXITCODE
+          if ($status -ne 0) {
+            $diagnostic = ((Get-Content -LiteralPath $log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows client core tests failed::$diagnostic"
+            exit $status
+          }
 
       - name: Verify readiness against released Windows kernel
         shell: pwsh
