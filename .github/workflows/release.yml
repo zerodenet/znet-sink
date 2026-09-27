@@ -278,6 +278,29 @@ jobs:
           fi
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${args[@]}"
 
+      - name: Retire affected RC after replacement is published
+        if: startsWith(github.ref_name, 'v0.0.2-rc.') && github.ref_name != 'v0.0.2-rc.202609271205'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          OLD_TAG=v0.0.2-rc.202609271205
+          if gh release view "$OLD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$OLD_TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          REMOTE_TAG=$(git ls-remote --tags --refs origin "refs/tags/$OLD_TAG")
+          if [ -n "$REMOTE_TAG" ]; then
+            git push origin ":refs/tags/$OLD_TAG"
+          fi
+          if gh release view "$OLD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::affected release $OLD_TAG still exists"
+            exit 1
+          fi
+          if [ -n "$(git ls-remote --tags --refs origin "refs/tags/$OLD_TAG")" ]; then
+            echo "::error::affected tag $OLD_TAG still exists"
+            exit 1
+          fi
+
       - name: Cleanup promoted prereleases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
