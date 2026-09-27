@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn unrelated_files_in_backup_root_do_not_block_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    fs::create_dir(&backups).unwrap();
+    fs::write(backups.join(".DS_Store"), b"Finder metadata").unwrap();
+    ensure_no_interrupted_upgrade(&backups).unwrap();
+
+    fs::write(dir.path().join("zero"), b"old").unwrap();
+    let transaction = BundleTransaction::prepare(dir.path(), &backups, &["zero".into()]).unwrap();
+    drop(transaction);
+    assert_eq!(
+        ensure_no_interrupted_upgrade(&backups).unwrap_err().code,
+        "kernel_upgrade_recovery_required"
+    );
+}
+
+#[test]
+fn malformed_upgrade_entry_still_blocks_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    fs::create_dir(&backups).unwrap();
+    fs::write(backups.join("upgrade-broken"), b"not a backup directory").unwrap();
+    assert!(ensure_no_interrupted_upgrade(&backups).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_to_pending_upgrade_still_blocks_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    fs::write(dir.path().join("zero"), b"old").unwrap();
+    let transaction = BundleTransaction::prepare(dir.path(), &backups, &["zero".into()]).unwrap();
+    std::os::unix::fs::symlink(transaction.backup_path(), backups.join("backup-link")).unwrap();
+    assert_eq!(
+        ensure_no_interrupted_upgrade(&backups).unwrap_err().code,
+        "kernel_upgrade_recovery_required"
+    );
+}
+
+#[test]
 fn interrupted_upgrade_blocks_launch_and_overwrite_even_with_same_owner_pid() {
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");

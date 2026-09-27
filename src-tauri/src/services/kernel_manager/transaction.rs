@@ -52,7 +52,16 @@ pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
         Err(error) => return Err(storage_error(error)),
     };
     for entry in directories {
-        let backup = entry.map_err(storage_error)?.path();
+        let entry = entry.map_err(storage_error)?;
+        // Finder and other tools may leave unrelated ordinary files here.
+        // Keep examining upgrade-* entries and symlinks as before, so an
+        // interrupted transaction cannot be hidden by changing its type.
+        if entry.file_type().map_err(storage_error)?.is_file()
+            && !entry.file_name().to_string_lossy().starts_with("upgrade-")
+        {
+            continue;
+        }
+        let backup = entry.path();
         if active()
             .lock()
             .map_err(|_| AppError::internal("kernel transaction lock poisoned"))?
