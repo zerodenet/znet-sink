@@ -153,8 +153,38 @@ jobs:
             echo EOF_NOTES
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  prepare:
+    name: Prepare verified release draft
     needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create draft for existing immutable tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            exit 0
+          fi
+          # GitHub also checks target_commitish workflow permissions when the
+          # tag exists. Use the owning branch; checkout/build remains tag-bound.
+          branch=main
+          if [[ "$GITHUB_REF_NAME" == *-dev.* ]]; then branch=develop; fi
+          printf '%s\n' "$RELEASE_BODY" > "$RUNNER_TEMP/release-notes.md"
+          args=(--draft --verify-tag --target "$branch")
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md" "${args[@]}"
+
+  build:
+    needs: [changelog, prepare]
     strategy:
       fail-fast: false
       matrix:
