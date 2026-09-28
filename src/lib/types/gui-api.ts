@@ -421,6 +421,7 @@ export interface GuiTunFamilyEgress {
 }
 
 export interface GuiTunStatus extends GuiFeatureStatus {
+  hostDns?: { state: 'inactive' | 'pending' | 'configured' | 'error'; server?: string | null; error?: string | null } | null;
   name?: string;
   addr?: string;
   addresses: string[];

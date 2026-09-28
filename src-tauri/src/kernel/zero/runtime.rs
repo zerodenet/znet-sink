@@ -50,6 +50,9 @@ pub(crate) async fn enable_tun_params(
 }
 
 pub async fn recover_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
+    tokio::task::spawn_blocking(crate::capture::dns::retry_failed)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
     commands::run_command("tun.recover", json!({}), options.clone()).await?;
     tun_status(options).await
 }
@@ -57,10 +60,17 @@ pub async fn recover_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunSta
 pub async fn disable_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {
     if let Ok(status) = tun_status(options.clone()).await {
         if !status.enabled {
+            tokio::task::spawn_blocking(crate::capture::dns::release)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))??;
             return Ok(status);
         }
     }
 
+    // Restore the host resolver while its TUN destination is still alive.
+    tokio::task::spawn_blocking(crate::capture::dns::release)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
     commands::run_command("tun.stop", json!({}), options.clone()).await?;
     tun_status(options).await
 }
@@ -114,7 +124,7 @@ pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
     }
     .to_string();
 
-    Ok(GuiTunStatus {
+    let mut status = GuiTunStatus {
         key: "tun".to_string(),
         supported,
         enabled: running,
@@ -177,7 +187,10 @@ pub(crate) fn parse_tun_status(value: &Value) -> AppResult<GuiTunStatus> {
         last_error,
         managed_by_config: bool_at(value, &["managed_by_config", "managedByConfig"])
             .unwrap_or(false),
-    })
+        host_dns: None,
+    };
+    status.host_dns = Some(crate::capture::dns::status(&status));
+    Ok(status)
 }
 
 fn parse_tun_family_egress(

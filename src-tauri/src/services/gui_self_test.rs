@@ -32,7 +32,30 @@ pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapsh
     }
     checks.push(check_core_config(&core_config));
     checks.push(check_local_proxy(&connection));
+    let tun = if connection.core_available {
+        let options = {
+            let config = lock(state.app_config(), "app_config")?;
+            core_config::ipc_options_from_app_config(&config.core)
+        };
+        Some(crate::kernel::zero::runtime::tun_status(Some(options)).await)
+    } else {
+        None
+    };
     checks.push(check_system_proxy(&connection));
+    if let Some(check) = check_capture(connection.connected, tun.as_ref()) {
+        checks.push(check);
+    }
+    if let Some(Ok(tun)) = tun.as_ref() {
+        if let Some(dns) = tun.host_dns.as_ref().filter(|dns| dns.state == "error") {
+            checks.push(warn(
+                "hostDns",
+                dns.error
+                    .clone()
+                    .unwrap_or_else(|| "系统 DNS 尚未接管到 TUN".into()),
+                Some(json!(dns)),
+            ));
+        }
+    }
     if let Some(check) = check_internet_sharing(&connection) {
         checks.push(check);
     }
@@ -215,11 +238,52 @@ fn check_system_proxy(connection: &GuiConnectionStatus) -> GuiSelfTestCheck {
         );
     }
 
-    warn(
+    pass(
         "systemProxy",
-        "system proxy is disabled; call gui_connect during self-test",
+        "系统代理未开启，可通过 TUN 或应用内代理使用内核",
         Some(json!(status)),
     )
+}
+
+fn check_capture(
+    proxy_connected: bool,
+    tun: Option<&AppResult<crate::models::zero_runtime::GuiTunStatus>>,
+) -> Option<GuiSelfTestCheck> {
+    let tun = tun?;
+    Some(match tun {
+        Ok(status) if status.enabled && status.healthy && status.auto_route => pass(
+            "trafficCapture",
+            "TUN 已开启并安装自动路由，系统代理可保持关闭",
+            Some(json!(status)),
+        ),
+        Ok(status) if status.enabled => warn(
+            "trafficCapture",
+            status.last_error.clone().unwrap_or_else(|| {
+                if status.healthy {
+                    "TUN 使用手动路由，请确认需要接管的流量已配置路由"
+                } else {
+                    "TUN 已开启但运行不健康，请检查路由和权限"
+                }
+                .into()
+            }),
+            Some(json!(status)),
+        ),
+        Ok(status) if proxy_connected => pass(
+            "trafficCapture",
+            "系统代理已接管请求，TUN 未开启",
+            Some(json!(status)),
+        ),
+        Ok(status) => pass(
+            "trafficCapture",
+            "内核监听中，系统代理与 TUN 均未开启，可使用应用内代理",
+            Some(json!(status)),
+        ),
+        Err(error) => warn(
+            "trafficCapture",
+            format!("TUN 接管状态无法确认：{}", error.message),
+            None,
+        ),
+    })
 }
 
 fn check_internet_sharing(connection: &GuiConnectionStatus) -> Option<GuiSelfTestCheck> {
@@ -348,6 +412,46 @@ fn check(
 mod tests {
     use super::{check_active_proxy_config, check_active_proxy_content};
     use crate::models::gui_core::GuiSelfTestCheckStatus;
+
+    #[test]
+    fn healthy_tun_does_not_require_system_proxy_but_failures_remain_visible() {
+        use crate::models::zero_runtime::GuiTunStatus;
+        let healthy = Ok(GuiTunStatus {
+            enabled: true,
+            healthy: true,
+            auto_route: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            super::check_capture(false, Some(&healthy)).unwrap().status,
+            GuiSelfTestCheckStatus::Pass
+        );
+        let broken = Ok(GuiTunStatus {
+            enabled: true,
+            healthy: false,
+            last_error: Some("route failed".into()),
+            ..Default::default()
+        });
+        let check = super::check_capture(false, Some(&broken)).unwrap();
+        assert_eq!(check.status, GuiSelfTestCheckStatus::Warn);
+        assert_eq!(check.message, "route failed");
+        let unknown = Err(crate::errors::AppError::internal("IPC timeout"));
+        assert_eq!(
+            super::check_capture(false, Some(&unknown)).unwrap().status,
+            GuiSelfTestCheckStatus::Warn
+        );
+        let manual = Ok(GuiTunStatus {
+            enabled: true,
+            healthy: true,
+            auto_route: false,
+            ..Default::default()
+        });
+        assert_eq!(
+            super::check_capture(false, Some(&manual)).unwrap().status,
+            GuiSelfTestCheckStatus::Warn
+        );
+        assert!(super::check_capture(false, None).is_none());
+    }
 
     #[test]
     fn missing_active_proxy_config_blocks_startup() {

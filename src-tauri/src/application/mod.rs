@@ -237,6 +237,7 @@ pub fn run() {
             // Spawn the traffic sampler so the overview chart updates live —
             // the kernel doesn't push traffic events on its own (TODO P5).
             crate::services::traffic_sampler::spawn(app.handle().clone());
+            crate::capture::dns::spawn(app.handle().clone());
 
             Ok(())
         })

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { flagTextParts } from '../src/lib/services/flag-text.ts';
 import { buildOverview, capturePresentation, trafficUnavailableReason, formatUptime } from '../src/lib/components/overview/model.ts';
 const now = 1000000;
 const baseline = () => ({ now, connectionAt: now, connectionError: null, connection: { processState: 'running', coreAvailable: true, systemProxyEnabled: false, processPid: 42 }, tun: null, tunError: null, core: null, selfTest: null, selfTestAt: 0, mode: null, groups: [] });
@@ -108,11 +109,11 @@ test('failed policy reads stay actionable while age-only refreshes stay neutral'
 
 test('Lite shares the professional freshness, partial capture and cleanup semantics', () => {
   for (const proxy of [false, true]) for (const enabled of [false, true]) for (const desired of [false, true]) {
-    const input = { ...baseline(), connection: { ...baseline().connection, systemProxyEnabled: proxy }, tun: { enabled, desiredEnabled: desired, healthy: true, supported: true } };
+    const input = { ...baseline(), connection: { ...baseline().connection, systemProxyEnabled: proxy }, tun: { enabled, desiredEnabled: desired, healthy: true, supported: true, autoRoute: true } };
     const model = buildOverview(input);
     const lite = capturePresentation(model, proxy, enabled, desired, false);
     assert.equal(lite.powerOn, proxy || enabled || desired);
-    assert.equal(lite.healthy, proxy && enabled);
+    assert.equal(lite.healthy, (proxy || enabled) && (!desired || enabled));
     const stale = buildOverview({ ...input, connectionAt: now - 16000 });
     assert.equal(capturePresentation(stale, proxy, enabled, desired, false).healthy, false);
     assert.equal(capturePresentation(stale, proxy, enabled, desired, false).label, '运行状态待确认');
@@ -192,4 +193,29 @@ test('stopped TUN cleanup errors stay visible in both overview modes', () => {
   assert.equal(lite.failed,true);
   assert.equal(lite.warning,true);
   assert.equal(lite.label,'TUN 停止后仍有错误');
+});
+
+
+test('TUN-only capture suppresses only the obsolete disabled-proxy warning', () => {
+  const legacy = 'system proxy is disabled; call gui_connect during self-test';
+  const input = {...baseline(), tun: { enabled:true, healthy:true, autoRoute:true }, selfTestAt:now, selfTest: { ready:true, blockingIssues:[], checks:[{key:'systemProxy',status:'warn',message:legacy}] }};
+  assert.equal(buildOverview(input).findings.length, 0);
+  assert.equal(buildOverview({...input, tun:{...input.tun,healthy:false}}).findings.some(f=>f.detail===legacy),true);
+  assert.equal(buildOverview({...input, tun:{...input.tun,autoRoute:false}}).findings.some(f=>f.detail===legacy),true);
+  const mismatch = {...input,selfTest:{...input.selfTest,checks:[{key:'systemProxy',status:'warn',message:'wrong endpoint'}]}};
+  assert.equal(buildOverview(mismatch).findings.some(f=>f.detail==='wrong endpoint'),true);
+  const failedDns=buildOverview({...input,tun:{...input.tun,hostDns:{state:'error',error:'DNS guardian failed'}}});
+  assert.equal(failedDns.findings.some(f=>f.target==='dns' && f.detail==='DNS guardian failed'),true);
+});
+
+test('embedded country flags use separate presentation without changing policy tags', () => {
+  const raw = '自动选择 → 🇯🇵 日本 IX / 🇺🇸 US';
+  const parts = flagTextParts(raw);
+  assert.equal(parts.map(part => part.text).join(''), raw);
+  assert.deepEqual(parts.filter(part => part.countryCode).map(part => part.countryCode), ['jp', 'us']);
+  assert.deepEqual(flagTextParts('plain <tag>'), [{text:'plain <tag>'}]);
+});
+test('host DNS cleanup failures remain visible after TUN stops', () => {
+  const model = buildOverview({...baseline(), tun:{enabled:false, healthy:false, hostDns:{state:'error',error:'restore failed'}}});
+  assert.ok(model.findings.some(finding => finding.title === '系统 DNS 恢复未完成' && finding.detail === 'restore failed'));
 });

@@ -37,6 +37,7 @@ pub(super) fn stop_with_proxy_restore(
 ) -> AppResult<CoreProcessStatus> {
     // Cancel the old watchdog even when the child already exited or is in backoff.
     state.next_core_process_monitor_generation();
+    crate::capture::dns::release()?;
     let proxy_result = if restore_system_proxy {
         system_proxy_guard::disable_with_guard()
     } else {

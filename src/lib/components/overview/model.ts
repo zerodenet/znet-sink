@@ -83,11 +83,15 @@ export function buildOverview(input: OverviewInput) {
   if (ready && tun?.enabled && !input.tunError) {
     if (egress.issue && tun.healthy) add(egress.issue.title, egress.issue.detail, 'tun');
   }
+  if (ready && !input.tunError && tun?.hostDns?.state === 'error') add(tun.enabled ? '系统 DNS 尚未接管' : '系统 DNS 恢复未完成', tun.hostDns.error || '查看 DNS 设置和接管错误。', 'dns', 'error');
   // Self-test is a separate observation: only fresh failures affect the header.
   if (input.selfTestAt && now - input.selfTestAt <= 60_000) {
     for (const detail of input.selfTest?.blockingIssues ?? []) add('就绪检查未通过', detail, input.selfTest?.activeProxyConfigId ? 'logs' : 'profiles', 'error');
     for (const check of input.selfTest?.checks ?? []) {
-      if (check.status === 'warn') add('就绪检查提醒', check.message || check.key, check.key === 'internetSharing' ? 'network' : 'logs');
+      if (check.key === 'systemProxy' && check.status === 'warn' && !c?.systemProxyEnabled
+        && ready && !input.tunError && tun?.enabled && tun.healthy && tun.autoRoute
+        && check.message === 'system proxy is disabled; call gui_connect during self-test') continue;
+      if (check.status === 'warn') add('就绪检查提醒', check.message || check.key, check.key === 'internetSharing' ? 'network' : check.key === 'hostDns' ? 'dns' : 'logs');
     }
   }
   // A paused background poll makes the last policy snapshot old without
@@ -136,7 +140,7 @@ export function buildOverview(input: OverviewInput) {
     uptime: !stale && running && c?.startedAtUnixMs != null ? formatUptime(now - c.startedAtUnixMs) : '—',
     proxy, endpoint, tunLabel,
     tunDetails: tun?.enabled && ready && !input.tunError ? [tun.name, `MTU ${tun.mtu ?? '—'}`, tun.autoRoute ? '自动路由' : '手动路由', tun.strictRoute ? '严格路由' : null].filter(Boolean).join(' · ') : '接管状态由内核确认',
-    dns: !ready || input.tunError || !tun?.enabled ? 'TUN 未确认接管' : !tun.dnsHijack ? '不拦截 · 跟随系统 DNS' : tun.fakeIpEnabled ? 'Fake-IP 拦截' : 'Real DNS 拦截',
+    dns: !ready || input.tunError || !tun?.enabled ? 'TUN 未确认接管' : !tun.dnsHijack ? '不拦截 · 跟随系统 DNS' : tun.hostDns?.state === 'error' ? '系统 DNS 接管失败' : tun.hostDns?.state === 'pending' ? '系统 DNS 接管中' : tun.fakeIpEnabled ? 'Fake-IP 拦截' : 'Real DNS 拦截',
     ipv4: family('ipv4Egress'), ipv6: family('ipv6Egress'),
     networkGeneration: !ready || input.tunError || !tun?.enabled ? '—' : String(tun.networkGeneration),
     selfTest: input.selfTest,
@@ -156,14 +160,14 @@ export function trafficUnavailableReason(model: OverviewModel, supported: boolea
 export function capturePresentation(model: OverviewModel, systemProxy: boolean, tunEnabled: boolean, tunDesired: boolean, busy: boolean) {
   const powerOn = systemProxy || tunEnabled || tunDesired;
   const stopError = model.tunConfirmed && !tunEnabled && !!model.tunSnapshot?.lastError;
-  const tunFailed = model.tunSnapshot?.healthy === false || !!model.egress.issue;
-  const healthy = model.ready && model.tunConfirmed && systemProxy && tunEnabled && model.tunSnapshot?.healthy === true && !tunFailed;
+  const tunFailed = model.tunSnapshot?.healthy === false || !!model.egress.issue || model.tunSnapshot?.hostDns?.state === 'error';
+  const healthy = model.ready && model.tunConfirmed && (!tunDesired || tunEnabled) && (systemProxy || tunEnabled && model.tunSnapshot?.autoRoute === true) && (!tunEnabled || model.tunSnapshot?.healthy === true && !tunFailed);
   const label = busy ? '正在更新代理状态'
     : model.stale || (model.ready && !model.tunConfirmed) ? '运行状态待确认'
     : stopError ? 'TUN 停止后仍有错误'
     : powerOn && !model.ready ? '内核未就绪'
     : tunEnabled && (model.tunSnapshot?.healthy !== true || tunFailed) ? 'TUN 运行异常'
-    : healthy ? '系统代理与 TUN 已开启'
+    : healthy && systemProxy && tunEnabled ? '系统代理与 TUN 已开启'
     : systemProxy ? '仅系统代理已开启'
     : tunEnabled ? '仅 TUN 已开启'
     : tunDesired ? 'TUN 等待恢复' : '代理已关闭';

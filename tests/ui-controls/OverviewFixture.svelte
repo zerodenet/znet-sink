@@ -22,6 +22,12 @@
     groups: [{ name: '自动选择', kind: 'urltest', selected: '新加坡 01', outbounds: [{ tag: '新加坡 01', type: 'vless', alive: true, delayMs: 38, lastCheckedUnixMs: now }] }, { name: '工作网络', kind: 'selector', selected: '日本 02', outbounds: [{ tag: '日本 02', type: 'trojan', alive: scenario !== 'failure', delayMs: 72, lastCheckedUnixMs: now }, { tag: '备用节点', type: 'trojan', alive: true, delayMs: 52, lastCheckedUnixMs: now }] }],
     groupsAt: scenario === 'policy-stale' ? now - 20000 : now,
   });
+  if (scenario === 'tun-only-flags') {
+    input.connection!.systemProxyEnabled = false;
+    input.groups[0].selected = input.groups[0].outbounds[0].tag = '🇯🇵 日本 01';
+    input.groups[1].selected = input.groups[1].outbounds[0].tag = '🇺🇸 美国 02';
+    input.selfTest!.checks = [{key:'systemProxy',status:'warn',message:'system proxy is disabled; call gui_connect during self-test'}];
+  }
   if (scenario === 'nested-policy') input.groups.unshift({ name: '节点选择', kind: 'selector', selected: '自动选择', outbounds: [{tag:'自动选择',type:'urltest'}] });
   if (scenario === 'empty') { input.groups = []; input.selfTest = null; }
   if (scenario === 'ipv4-only-network' || scenario === 'ipv6-required') { input.tun!.ipv6Egress = { availability:'unavailable' }; input.tun!.addressFamilyPolicy = scenario === 'ipv6-required' ? 'ipv6_only' : 'prefer_ipv4'; }

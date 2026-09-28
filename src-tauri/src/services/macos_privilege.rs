@@ -1,9 +1,11 @@
 //! Process-lifetime macOS authorization helper.
 //!
-//! The GUI stays unprivileged. On the first system-proxy mutation it starts
+//! The GUI stays unprivileged. On the first proxy or host DNS mutation it starts
 //! one narrowly-scoped root helper through the native macOS authorization
 //! dialog, then reuses that helper until the GUI exits. The helper accepts
-//! only the fixed `networksetup` mutations used by the system-proxy backend.
+//! fixed `networksetup` proxy mutations and validated, temporary TUN DNS sessions.
+
+mod tun_dns;
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -38,7 +40,14 @@ static PRIVILEGED_HELPER: OnceLock<Mutex<Option<UnixStream>>> = OnceLock::new();
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HelperRequest {
-    NetworkSetup { commands: Vec<Vec<String>> },
+    NetworkSetup {
+        commands: Vec<Vec<String>>,
+    },
+    TunDns {
+        interface: Option<String>,
+        server: Option<String>,
+        pid: u32,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -123,6 +132,54 @@ pub(crate) fn run_networksetup_commands(commands: &[Vec<String>]) -> AppResult<(
     })?;
     *slot = Some(stream);
     response_result(response)
+}
+
+pub(crate) fn set_tun_dns(
+    interface: Option<&str>,
+    server: Option<&str>,
+    pid: u32,
+) -> AppResult<()> {
+    let mut slot = helper_slot()
+        .lock()
+        .map_err(|_| AppError::internal("DNS helper lock poisoned"))?;
+    if interface.is_none() && slot.is_none() {
+        return Ok(());
+    }
+    if slot.is_none() {
+        *slot = Some(launch_authorized_helper()?);
+    }
+    let stream = slot.as_mut().unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let result = (|| -> io::Result<HelperResponse> {
+        serde_json::to_writer(
+            &mut *stream,
+            &HelperRequest::TunDns {
+                interface: interface.map(str::to_owned),
+                server: server.map(str::to_owned),
+                pid,
+            },
+        )
+        .map_err(io::Error::other)?;
+        stream.write_all(b"\n")?;
+        stream.flush()?;
+        let mut line = String::new();
+        BufReader::new(stream.try_clone()?).read_line(&mut line)?;
+        serde_json::from_str(&line).map_err(io::Error::other)
+    })();
+    let _ = stream.set_read_timeout(None);
+    let _ = stream.set_write_timeout(None);
+    match result {
+        Ok(response) => response_result(response),
+        Err(error) => {
+            slot.take();
+            Err(AppError::internal(format!("TUN DNS helper: {error}")))
+        }
+    }
 }
 
 pub(crate) fn has_authorized_helper() -> bool {
@@ -251,7 +308,29 @@ fn run_helper(socket_path: &Path) -> io::Result<()> {
     }
     let mut stream = UnixStream::connect(socket_path)?;
     let mut reader = BufReader::new(stream.try_clone()?);
+    let mut dns: Option<tun_dns::Resolver> = None;
     loop {
+        if dns
+            .as_ref()
+            .is_some_and(|guard| !tun_dns::Resolver::alive(&guard.interface, guard.pid))
+        {
+            dns.take();
+        }
+        let mut poll = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut poll, 1, 1000) };
+        if ready == 0 {
+            continue;
+        }
+        if ready < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if ready < 0 {
+            return Err(io::Error::last_os_error());
+        }
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
             return Ok(());
@@ -259,6 +338,41 @@ fn run_helper(socket_path: &Path) -> io::Result<()> {
         let request: HelperRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
         let response = match request {
             HelperRequest::NetworkSetup { commands } => run_networksetup_as_root(&commands),
+            HelperRequest::TunDns {
+                interface,
+                server,
+                pid,
+            } => {
+                let result = match (interface, server) {
+                    (Some(interface), Some(server)) => {
+                        if dns.as_ref().is_some_and(|guard| {
+                            guard.interface == interface
+                                && guard.server == server
+                                && guard.pid == pid
+                        }) {
+                            dns.as_ref().unwrap().refresh()
+                        } else {
+                            tun_dns::Resolver::install(&interface, &server, pid).map(|guard| {
+                                dns = Some(guard);
+                            })
+                        }
+                    }
+                    (None, None) => {
+                        dns.take();
+                        Ok(())
+                    }
+                    _ => Err(io::Error::other("invalid TUN DNS request")),
+                };
+                HelperResponse {
+                    success: result.is_ok(),
+                    code: if result.is_ok() { 0 } else { 1 },
+                    stdout: Vec::new(),
+                    stderr: result
+                        .err()
+                        .map(|error| error.to_string().into_bytes())
+                        .unwrap_or_default(),
+                }
+            }
         };
         serde_json::to_writer(&mut stream, &response).map_err(io::Error::other)?;
         stream.write_all(b"\n")?;
@@ -485,7 +599,9 @@ mod tests {
                     .read_line(&mut line)
                     .expect("read helper request");
                 let request: HelperRequest = serde_json::from_str(&line).expect("parse request");
-                let HelperRequest::NetworkSetup { commands } = request;
+                let HelperRequest::NetworkSetup { commands } = request else {
+                    panic!("expected proxy request")
+                };
                 assert_eq!(commands[0][2], expected_state);
 
                 serde_json::to_writer(
