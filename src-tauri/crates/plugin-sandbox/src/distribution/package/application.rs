@@ -172,6 +172,10 @@ pub(super) fn embedded_registration(bytes: &[u8]) -> Result<Option<Registration>
     Ok(read_archive(bytes)?.signature.registration)
 }
 
+pub(super) fn signature(bytes: &[u8]) -> Result<String> {
+    Ok(read_archive(bytes)?.signature.signature)
+}
+
 pub(super) fn package_id(bytes: &[u8]) -> Result<String> {
     let archive = read_archive(bytes)?;
     let manifest: ApplicationManifest = serde_json::from_slice(&archive.manifest_bytes)?;

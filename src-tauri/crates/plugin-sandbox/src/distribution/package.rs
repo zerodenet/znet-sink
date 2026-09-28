@@ -163,6 +163,18 @@ pub fn verify(bytes: &[u8], registration: &Registration) -> Result<VerifiedPacka
     verify_with_policy(bytes, registration, true)
 }
 
+/// Read the declared signature for comparison with release metadata. This is
+/// not authentication; the package must still pass `verify` before use.
+pub(super) fn signature(bytes: &[u8]) -> Result<String> {
+    if bytes.len() > MAX_PACKAGE_BYTES {
+        return Err("package exceeds limit".into());
+    }
+    if application::is_application(bytes) {
+        return application::signature(bytes);
+    }
+    Ok(serde_json::from_slice::<Envelope>(bytes)?.signature)
+}
+
 /// Verify a package selected directly by the user. Publisher identity and the
 /// signature are still mandatory, while marketplace capability/surface
 /// ceilings do not apply to this explicit local trust path.
