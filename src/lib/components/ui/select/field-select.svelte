@@ -2,6 +2,7 @@
   import type { ComponentProps } from 'svelte';
   import * as Select from './index';
   import { cn } from '$lib/utils.js';
+  import FlaggedText from '$lib/components/FlaggedText.svelte';
 
   let {
     value = $bindable(''),
@@ -22,12 +23,12 @@
 
 <Select.Root type="single" bind:value {onValueChange} {disabled}>
   <Select.Trigger class={cn('w-full min-w-0', className)} {...triggerProps}>
-    <span class="min-w-0 truncate">{options.find((option) => option.value === value)?.label ?? placeholder}</span>
+    <span class="min-w-0 truncate"><FlaggedText text={options.find((option) => option.value === value)?.label ?? placeholder} /></span>
   </Select.Trigger>
   <Select.Content>
     {#each options as option (option.value)}
       <Select.Item value={option.value} label={option.label} disabled={option.disabled}>
-        {option.label}
+        <FlaggedText text={option.label} />
       </Select.Item>
     {/each}
   </Select.Content>

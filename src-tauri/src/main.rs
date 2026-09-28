@@ -2,6 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(result) = gui_lib::capture::dns::run_if_requested() {
+        if let Err(error) = result {
+            eprintln!("TUN DNS guardian: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     #[cfg(target_os = "macos")]
     if let Some(result) = gui_lib::services::macos_privilege::run_if_requested() {
         if let Err(error) = result {

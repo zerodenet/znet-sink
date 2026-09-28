@@ -86,6 +86,16 @@ impl Host {
     pub(super) fn process(&self) -> &Mutex<ManagedCoreProcess> {
         &self.process
     }
+    /// Return identity only for the child and endpoint currently owned by this host.
+    pub(crate) fn owned_endpoint(&self) -> Option<(u32, String)> {
+        let mut process = self.process.lock().ok()?;
+        if process.child.as_mut()?.try_wait().ok()?.is_some() {
+            return None;
+        }
+        let child = process.child.as_ref()?;
+        let endpoint = process.endpoint.as_ref()?;
+        Some((child.id(), endpoint.path.clone()))
+    }
     pub(crate) fn process_status(&self) -> AppResult<CoreProcessStatus> {
         self.process
             .lock()

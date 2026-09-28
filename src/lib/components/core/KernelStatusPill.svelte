@@ -9,6 +9,7 @@
   const isProcessStarting = $derived(c?.processState === 'starting');
   const isProcessFailed = $derived(c?.processState === 'failed');
   const isCrashed = $derived(c?.processExitReason === 'crashed');
+  const tunCapturing = $derived(!guiState.connectionError && !guiState.tunStatusError && guiState.connection?.coreAvailable === true && guiState.tunStatus?.enabled === true && guiState.tunStatus.healthy && guiState.tunStatus.autoRoute && guiState.tunStatus.hostDns?.state !== 'error');
   const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
   const isBusy = $derived(
     guiState.isConnecting
@@ -25,8 +26,8 @@
     if (guiState.isInitializing) {
       return { tone: 'busy', label: '初始化', title: '正在加载应用状态' };
     }
-    if (isSystemProxyEnabled) {
-      return { tone: 'on', label: '服务中', title: '系统代理已开启，内核运行中' };
+    if (isSystemProxyEnabled && c?.coreAvailable && !guiState.connectionError || tunCapturing) {
+      return { tone: 'on', label: '服务中', title: tunCapturing ? 'TUN 自动路由已开启，系统代理可保持关闭' : '系统代理已开启，内核运行中' };
     }
     if (isBusy) {
       return {

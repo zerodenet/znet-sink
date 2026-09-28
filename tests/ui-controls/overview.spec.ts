@@ -198,3 +198,18 @@ test('manual network recovery keeps TUN enabled and does not restart the kernel'
   await expect(page.getByRole('switch', {name:'关闭 TUN 并取消自动恢复'})).toBeChecked();
   await expect(page.getByLabel('TUN 与网络栈').locator('.feature-main')).toContainText('已开启 · 健康');
 });
+
+
+test('TUN-only overview keeps proxy optional and renders embedded flags with SVG assets', async ({page}) => {
+  await page.goto('/?panel=overview&mode=tun-only-flags');
+  await expect(page.getByRole('region',{name:'需要处理'})).toHaveCount(0);
+  const shortcut=page.getByRole('button',{name:'查看与切换策略组'});
+  const flag=shortcut.locator('.fi-jp');
+  await expect(flag).toBeVisible();
+  expect(await flag.evaluate(el=>getComputedStyle(el).backgroundImage)).toMatch(/jp\.svg|flag-icons-jp/);
+  await shortcut.click();
+  const chosen=page.getByRole('button',{name:'工作网络 当前出口'});
+  await expect(chosen.locator('.fi-us')).toBeVisible();
+  await chosen.click();
+  await expect(page.getByRole('option').filter({has:page.locator('.fi-us')})).toBeVisible();
+});

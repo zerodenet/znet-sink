@@ -18,6 +18,7 @@
   const isProcessFailed = $derived(c?.processState === 'failed');
   const isCrashed = $derived(c?.processExitReason === 'crashed');
   const isStopped = $derived(c?.processExitReason === 'stopped');
+  const tunCapturing = $derived(!guiState.connectionError && !guiState.tunStatusError && guiState.connection?.coreAvailable === true && guiState.tunStatus?.enabled === true && guiState.tunStatus.healthy && guiState.tunStatus.autoRoute && guiState.tunStatus.hostDns?.state !== 'error');
   const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
   const missingActiveConfig = $derived(
     guiState.selfTest !== null && !guiState.selfTest.activeProxyConfigId,
@@ -111,7 +112,7 @@
             ? '启动中'
             : guiState.isStoppingCore
               ? '停止中'
-              : isSystemProxyEnabled
+              : isSystemProxyEnabled || tunCapturing
                 ? c?.coreAvailable ? '服务中' : '未就绪'
                 : isCoreAvailable
                   ? '监听中'
@@ -125,7 +126,7 @@
   );
 
   const dotColor = $derived(
-    stateUnknown ? '#F59E0B' : isSystemProxyEnabled && c?.coreAvailable
+    stateUnknown ? '#F59E0B' : (isSystemProxyEnabled || tunCapturing) && c?.coreAvailable
       ? '#22C55E'
       : isCoreAvailable
         ? '#F59E0B'

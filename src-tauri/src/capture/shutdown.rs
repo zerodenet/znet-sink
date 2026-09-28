@@ -22,6 +22,7 @@ pub(crate) async fn stop_owned_tun(pid: u32, endpoint: String) -> AppResult<()> 
             "TUN cleanup skipped: endpoint is not the owned child",
         ));
     }
+    crate::capture::dns::release()?;
     let before = control.tun_status().await?;
     if !before.enabled {
         return stopped_without_error(before);

@@ -6,6 +6,7 @@
   import type { OverviewModel } from './model';
   import type { OverviewActions, OverviewFeedback, OverviewNetwork } from './types';
   import OperationFeedback from './OperationFeedback.svelte';
+  import FlaggedText from '$lib/components/FlaggedText.svelte';
   let { model, network, feedback, actions, busy, refreshing, canDisableTun, inspect = $bindable(false), policies = $bindable(false), version = $bindable(false), detailTab = $bindable('capture') }: {
     model: OverviewModel; network: OverviewNetwork; feedback: OverviewFeedback; actions: OverviewActions;
     busy: boolean; refreshing: boolean; canDisableTun: boolean; inspect?: boolean; policies?: boolean; version?: boolean; detailTab?: string;
@@ -23,9 +24,9 @@
     <Dialog.Body>
       {#each model.groups as group (group.name)}
         <div class="policy-edit">
-          <div class="policy-name"><strong>{group.name}</strong><span>{group.switchable ? '手动选择' : ['urltest', 'url_test'].includes(group.kind.toLowerCase()) ? '自动测速' : '策略管理'}</span></div>
-          {#if group.switchable}<FieldSelect aria-label={`${group.name} 当前出口`} bind:value={() => group.selectedTag, (value) => actions.choosePolicy(group.name, value)} disabled={busy || !model.groupsReady} options={group.options} placeholder="等待选择" />{:else}<p class="automatic-choice">{group.selectionLabel} · {group.delay}</p>{/if}
-          <p>已确认：{group.selectionLabel} · {group.health}</p><OperationFeedback {feedback} target={`policy:${group.name}`} />
+          <div class="policy-name"><strong><FlaggedText text={group.name} /></strong><span>{group.switchable ? '手动选择' : ['urltest', 'url_test'].includes(group.kind.toLowerCase()) ? '自动测速' : '策略管理'}</span></div>
+          {#if group.switchable}<FieldSelect aria-label={`${group.name} 当前出口`} bind:value={() => group.selectedTag, (value) => actions.choosePolicy(group.name, value)} disabled={busy || !model.groupsReady} options={group.options} placeholder="等待选择" />{:else}<p class="automatic-choice"><FlaggedText text={group.selectionLabel} /> · {group.delay}</p>{/if}
+          <p>已确认：<FlaggedText text={group.selectionLabel} /> · {group.health}</p><OperationFeedback {feedback} target={`policy:${group.name}`} />
         </div>
       {:else}<p class="hint">{model.ready ? '当前没有运行策略组。静态直连出站不会生成策略组。' : '内核未就绪，暂时无法取得实际策略选择。'}</p>{/each}
     </Dialog.Body>
@@ -51,6 +52,7 @@
           {#if tunIssue}<div><dt>异常原因</dt><dd class="danger">{tunIssue.detail}</dd></div>{/if}
         {:else if detailTab === 'dns'}
           <div><dt>当前解析路径</dt><dd>{model.dns}</dd></div><div><dt>DNS 拦截次数</dt><dd>{model.tunConfirmed && tun?.enabled ? tun.dnsHijackedQueries : '—'}</dd></div>
+          {#if tun?.hostDns}<div><dt>系统解析入口</dt><dd>{tun.hostDns.state === 'configured' ? `已配置到 ${tun.hostDns.server}` : tun.hostDns.state === 'error' ? tun.hostDns.error : tun.hostDns.state === 'pending' ? '正在确认 DNS 接管' : '未启用系统 DNS 接管'}</dd></div>{/if}
           <div><dt>判断范围</dt><dd>以上表示配置与接管状态，不能代替具体域名的解析测试。</dd></div>
         {:else if detailTab === 'egress'}
           <div><dt>IPv4 出口</dt><dd>{model.ipv4}</dd></div><div><dt>IPv6 出口</dt><dd>{model.ipv6}</dd></div>

@@ -26,6 +26,7 @@ impl Default for GuiTunFamilyEgress {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiTunStatus {
+    pub host_dns: Option<crate::capture::dns::Status>,
     pub key: String,
     pub supported: bool,
     pub enabled: bool,
