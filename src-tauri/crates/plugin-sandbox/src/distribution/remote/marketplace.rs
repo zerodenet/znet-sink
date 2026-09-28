@@ -36,8 +36,7 @@ impl Remote<'_> {
             .signature
             .as_ref()
             .ok_or("marketplace artifact has no signature")?;
-        let envelope: super::super::package::Envelope = serde_json::from_slice(&bytes)?;
-        if envelope.signature != signature.value {
+        if super::super::package::signature(&bytes)? != signature.value {
             return Err("package signature differs from marketplace metadata".into());
         }
         let metadata = ReleaseMetadata {

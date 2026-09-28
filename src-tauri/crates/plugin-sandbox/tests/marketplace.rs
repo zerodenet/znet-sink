@@ -1,6 +1,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::BTreeMap, io::Cursor};
+use zip::ZipArchive;
 use znet_plugin_sandbox::{
     contract::{sha256, Target},
     distribution::{
@@ -17,7 +18,16 @@ use support::*;
 
 fn snapshot(version: &str, channel: &str, bytes: &[u8]) -> Value {
     let reg = registration();
-    let envelope: package::Envelope = serde_json::from_slice(bytes).unwrap();
+    let signature = if bytes.starts_with(b"PK\x03\x04") {
+        let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let envelope: Value =
+            serde_json::from_reader(zip.by_name("META-INF/signature.json").unwrap()).unwrap();
+        envelope["signature"].as_str().unwrap().to_owned()
+    } else {
+        serde_json::from_slice::<package::Envelope>(bytes)
+            .unwrap()
+            .signature
+    };
     json!({
         "schema_version": 1,
         "snapshot_version": format!("sha256:{}", "a".repeat(64)),
@@ -50,12 +60,71 @@ fn snapshot(version: &str, channel: &str, bytes: &[u8]) -> Value {
                         "url": format!("https://github.com/example/plugin/releases/download/v{version}/plugin.zspkg"),
                         "size": bytes.len(),
                         "sha256": sha256(bytes),
-                        "signature": {"algorithm": "ed25519", "value": envelope.signature}
+                        "signature": {"algorithm": "ed25519", "value": signature}
                     }]
                 }]
             }]
         }]
     })
+}
+
+fn signed_application(version: &str) -> Vec<u8> {
+    let payload = payload(version, json!("any"));
+    let component = &payload.components[0];
+    let manifest = package::ApplicationManifest {
+        schema_version: 1,
+        host: payload.host.clone(),
+        plugin_id: payload.plugin_id.clone(),
+        version: payload.version.clone(),
+        components: vec![package::ApplicationComponent {
+            id: component.manifest.component_id.clone(),
+            manifest: "components/identity/manifest.json".into(),
+            entry: "components/identity/index.js".into(),
+        }],
+        pages: Vec::new(),
+        files: BTreeMap::new(),
+    };
+    let files = BTreeMap::from([
+        (
+            "components/identity/manifest.json".into(),
+            serde_json::to_vec(&component.manifest).unwrap(),
+        ),
+        (
+            "components/identity/index.js".into(),
+            component.source.as_bytes().to_vec(),
+        ),
+    ]);
+    package::sign_application_with_registration(manifest, files, &SEED, registration()).unwrap()
+}
+
+#[test]
+fn online_upgrade_from_json_to_zip_preserves_rollback() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path()).unwrap();
+    let target = Target::native_desktop().unwrap();
+    let old = signed(&payload("1.0.0", json!("any")));
+    store
+        .install(&old, &registration(), &target, "0.0.1")
+        .unwrap();
+    let bytes = signed_application("1.1.0");
+    let directory = directory(&snapshot("1.1.0", "stable", &bytes), "0.0.1");
+    let registration = &directory.plugins[0];
+    let remote = Remote::new()
+        .unwrap()
+        .with_package_fetch(|_, _, _| Ok(bytes.clone()));
+    let release = remote.release(registration, "v1.1.0").unwrap();
+    let downloaded = remote.download(registration, &release).unwrap();
+    store
+        .install(&downloaded, registration, &target, "0.0.1")
+        .unwrap();
+    assert_eq!(store.current(registration).unwrap().version, "1.1.0");
+    assert_eq!(
+        store
+            .rollback(registration, &target, "0.0.1")
+            .unwrap()
+            .version,
+        "1.0.0"
+    );
 }
 
 fn directory(value: &Value, host_version: &str) -> Directory {
@@ -191,36 +260,40 @@ fn marketplace_ranges_treat_prerelease_clients_as_their_base_release() {
 
 #[test]
 fn package_size_digest_signature_and_identity_must_match_the_marketplace() {
-    let bytes = signed(&payload("1.0.0", json!("any")));
-    for fault in ["size", "digest", "signature", "version"] {
-        let mut value = snapshot("1.0.0", "stable", &bytes);
-        let artifact = &mut value["products"][0]["targets"][0]["releases"][0]["artifacts"][0];
-        match fault {
-            "size" => artifact["size"] = json!(bytes.len() + 1),
-            "digest" => artifact["sha256"] = json!("0".repeat(64)),
-            "signature" => {
-                artifact["signature"]["value"] =
-                    json!(base64::engine::general_purpose::STANDARD.encode([0_u8; 64]))
+    for bytes in [
+        signed(&payload("1.0.0", json!("any"))),
+        signed_application("1.0.0"),
+    ] {
+        for fault in ["size", "digest", "signature", "version"] {
+            let mut value = snapshot("1.0.0", "stable", &bytes);
+            let artifact = &mut value["products"][0]["targets"][0]["releases"][0]["artifacts"][0];
+            match fault {
+                "size" => artifact["size"] = json!(bytes.len() + 1),
+                "digest" => artifact["sha256"] = json!("0".repeat(64)),
+                "signature" => {
+                    artifact["signature"]["value"] =
+                        json!(base64::engine::general_purpose::STANDARD.encode([0_u8; 64]))
+                }
+                "version" => {
+                    value["products"][0]["targets"][0]["releases"][0]["version"] = json!("1.0.1")
+                }
+                _ => unreachable!(),
             }
-            "version" => {
-                value["products"][0]["targets"][0]["releases"][0]["version"] = json!("1.0.1")
-            }
-            _ => unreachable!(),
+            let Ok(directory) =
+                Directory::parse_marketplace(&serde_json::to_vec(&value).unwrap(), "0.0.1")
+            else {
+                continue;
+            };
+            let registration = &directory.plugins[0];
+            let remote = Remote::new()
+                .unwrap()
+                .with_package_fetch(|_, _, _| Ok(bytes.clone()));
+            let release = remote.releases(registration).unwrap().remove(0);
+            assert!(
+                remote.download(registration, &release).is_err(),
+                "accepted {fault}"
+            );
         }
-        let Ok(directory) =
-            Directory::parse_marketplace(&serde_json::to_vec(&value).unwrap(), "0.0.1")
-        else {
-            continue;
-        };
-        let registration = &directory.plugins[0];
-        let remote = Remote::new()
-            .unwrap()
-            .with_package_fetch(|_, _, _| Ok(bytes.clone()));
-        let release = remote.releases(registration).unwrap().remove(0);
-        assert!(
-            remote.download(registration, &release).is_err(),
-            "accepted {fault}"
-        );
     }
 }
 
