@@ -88,6 +88,9 @@ jobs:
       - name: Run DNS configuration regression
         run: pnpm test:dns-config
 
+      - name: Check both kernel generations and additive health contracts
+        run: node --experimental-strip-types --test scripts/test-kernel-compatibility.mjs
+
       - name: Run app update ownership and restart regression
         run: pnpm test:app-update
 
@@ -168,6 +171,9 @@ jobs:
       - name: Run Windows DNS capability and mode matrix
         run: pnpm test:dns-config
 
+      - name: Check both kernel generations and additive health contracts
+        run: node --experimental-strip-types --test scripts/test-kernel-compatibility.mjs
+
       - name: Run Windows portable kernel settings contract
         run: pnpm test:kernel-settings
 
@@ -214,17 +220,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   windows-zero-dns-contract:
-    name: Windows Zero DNS contract
+    name: Windows Zero DNS contract (${{ matrix.core_ref }})
+    strategy:
+      fail-fast: false
+      matrix:
+        core_ref: [v0.0.2-dev.202609181034, develop]
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check out current Zero develop
+      - name: Check out compatibility baseline
         uses: actions/checkout@v4
         with:
           repository: zerodenet/core
-          ref: develop
+          ref: ${{ matrix.core_ref }}
           path: zero-core
 
       - uses: pnpm/action-setup@v4
@@ -445,3 +455,6 @@ jobs:
 
       - name: Verify kernel startup readiness
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib runtime_host::readiness -j 2
+
+      - name: Verify kernel adapter and route composition compatibility
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib compatibility_tests -j 2

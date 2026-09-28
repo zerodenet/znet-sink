@@ -70,6 +70,7 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 &["build_id", "version", "engine_version"],
             )),
             started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
+            outbound_devices: Vec::new(),
         }),
         "engine.stopped" => GuiEventData::CoreStatus(GuiCoreHealth {
             healthy: false,
@@ -78,6 +79,7 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 &["build_id", "version", "engine_version"],
             )),
             started_at_unix_ms: u64_at(payload, &["started_at_unix_ms", "startedAtUnixMs"]),
+            outbound_devices: Vec::new(),
         }),
         "engine.warning" => GuiEventData::CoreWarning(GuiWarningEvent {
             code: string_at(payload, &["code"]),

@@ -1,12 +1,15 @@
 <script lang="ts">
   import { RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
-  import { getAppErrorMessage, getGuiCapabilitiesSnapshot, getGuiZeroCapabilities } from '$lib/services/core';
+  import { getAppErrorMessage, getGuiCapabilitiesSnapshot, getGuiZeroCapabilities, getGuiCoreHealth } from '$lib/services/core';
+  import { healthAgeLabel, outboundDeviceStateLabel } from '$lib/services/kernel-health';
   import type { GuiCapabilitySnapshot } from '$lib/types/capability';
-  import type { GuiCapabilityState, GuiZeroCapabilities } from '$lib/types/gui-api';
+  import type { GuiCapabilityState, GuiZeroCapabilities, GuiCoreHealth } from '$lib/types/gui-api';
 
   let snapshot = $state<GuiCapabilitySnapshot | null>(null);
   let kernelCaps = $state<GuiZeroCapabilities | null>(null);
+  let health = $state<GuiCoreHealth | null>(null);
+  let healthError = $state<string | null>(null);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let partialError = $state<string | null>(null);
@@ -23,14 +26,17 @@
   async function refresh() {
     const generation = ++refreshGeneration;
     loading = true;
-    const [capSnap, zeroCaps] = await Promise.allSettled([
+    const [capSnap, zeroCaps, coreHealth] = await Promise.allSettled([
       getGuiCapabilitiesSnapshot(),
       getGuiZeroCapabilities(),
+      getGuiCoreHealth(),
     ]);
     if (generation !== refreshGeneration) return;
 
-    if (capSnap.status === 'fulfilled') snapshot = capSnap.value;
-    if (zeroCaps.status === 'fulfilled') kernelCaps = zeroCaps.value;
+    snapshot = capSnap.status === 'fulfilled' ? capSnap.value : null;
+    kernelCaps = zeroCaps.status === 'fulfilled' ? zeroCaps.value : null;
+    health = coreHealth.status === 'fulfilled' ? coreHealth.value : null;
+    healthError = coreHealth.status === 'rejected' ? getAppErrorMessage(coreHealth.reason, '设备状态查询失败') : null;
     const errors = [capSnap, zeroCaps]
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map((result) => getAppErrorMessage(result.reason, '能力查询失败'));
@@ -108,6 +114,7 @@
                 <tr class="text-muted-foreground border-b border-card-border">
                   <th class="text-left py-1 pr-2">协议</th>
                   <th class="text-center py-1 px-1">状态</th>
+                  <th class="text-center py-1 px-1">已编译</th>
                   <th class="text-center py-1 px-1">入站TCP</th>
                   <th class="text-center py-1 px-1">入站UDP</th>
                   <th class="text-center py-1 px-1">出站TCP</th>
@@ -119,13 +126,14 @@
               <tbody>
                 {#each kernelCaps.protocols as proto (proto.name)}
                   <tr class="border-b border-card-border/50">
-                    <td class="py-1 pr-2 font-medium text-foreground">{proto.name}</td>
+                    <td class="py-1 pr-2 font-medium text-foreground" title={proto.compatibilityBaseline ?? ''}>{proto.name}</td>
                     <td class="py-1 px-1 text-center">
                       <span class="inline-flex items-center gap-1">
                         <span class="w-1.5 h-1.5 rounded-full {statusColor(proto.status)}"></span>
                         {statusLabel(proto.status)}
                       </span>
                     </td>
+                    <td class="py-1 px-1 text-center">{proto.compiled == null ? '未知' : proto.compiled ? '是' : '否'}</td>
                     <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.inboundTcpState)}>{proto.inboundTcp ? '✓' : '—'}</td>
                     <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.inboundUdpState)}>{proto.inboundUdp ? '✓' : '—'}</td>
                     <td class="py-1 px-1 text-center" title={capabilityStateTitle(proto.outboundTcpState)}>{proto.outboundTcp ? '✓' : '—'}</td>
@@ -144,6 +152,40 @@
             </table>
           </div>
         </div>
+      {/if}
+
+      {#if health?.outboundDevices?.length}
+        <div>
+          <h4 class="text-xs font-medium text-foreground mb-2">隧道设备状态</h4>
+          <p class="text-[10px] text-muted-foreground mb-2">握手和认证数据记录用于排查隧道状态；应用是否可访问仍需实际验证。</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-[10px]" aria-label="隧道设备状态">
+              <thead>
+                <tr class="text-muted-foreground border-b border-card-border">
+                  <th class="text-left py-1 pr-2">出站 / Peer</th>
+                  <th class="text-left py-1 px-2">状态</th>
+                  <th class="text-left py-1 px-2">最近握手</th>
+                  <th class="text-left py-1 px-2">最近认证数据</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each health.outboundDevices as device, index (index)}
+                  <tr class="border-b border-card-border/50">
+                    <td class="py-1 pr-2">{device.tag} / {device.peerIndex + 1}</td>
+                    <td class="py-1 px-2">
+                      {outboundDeviceStateLabel(device)}
+                      {#if device.endpointResolutionFailed}<span class="text-destructive">；最近端点解析失败</span>{/if}
+                    </td>
+                    <td class="py-1 px-2">{healthAgeLabel(device.lastHandshakeAgeMs)}</td>
+                    <td class="py-1 px-2">{healthAgeLabel(device.lastAuthenticatedPacketAgeMs)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {:else if healthError}
+        <div class="capability-warning" role="status">隧道设备状态暂不可用：{healthError}</div>
       {/if}
 
       {#if kernelCaps?.contracts}

@@ -76,12 +76,12 @@ pub(crate) fn compose_with(
         let tag = common_tag(&profile.id);
         definitions
             .push(json!({ "tag": tag, "type": "file", "path": artifact.path, "format": "zrs" }));
-        let action = match &profile
+        let binding_action = &profile
             .common_binding
             .as_ref()
             .expect("eligible profile has binding")
-            .action
-        {
+            .action;
+        let action = match binding_action {
             CommonRuleAction::Final => final_action.clone(),
             CommonRuleAction::Proxy => json!({
                 "type": "route",
@@ -90,7 +90,15 @@ pub(crate) fn compose_with(
             CommonRuleAction::Direct => json!({ "type": "direct" }),
             CommonRuleAction::Reject => json!({ "type": "reject" }),
         };
-        rules.push(json!({ "condition": { "type": "rule_set", "tag": tag }, "action": action }));
+        let mut rule = json!({ "condition": { "type": "rule_set", "tag": tag }, "action": action });
+        // Following the final route includes its data path. Omitting this on
+        // older configs also keeps their schema unchanged (no synthetic auto).
+        if matches!(binding_action, CommonRuleAction::Final) {
+            if let Some(mode) = base.pointer("/route/final_mode") {
+                rule["mode"] = mode.clone();
+            }
+        }
+        rules.push(rule);
     }
     let injected_count = rules.len();
     rule_sets.extend(definitions);
@@ -180,3 +188,7 @@ fn array_field<'a>(root: &'a mut Map<String, Value>, key: &str) -> AppResult<&'a
         .and_then(Value::as_array_mut)
         .ok_or_else(|| AppError::invalid_argument(format!("route.{key} must be an array")))
 }
+
+#[cfg(test)]
+#[path = "rules_compatibility_tests.rs"]
+mod compatibility_tests;

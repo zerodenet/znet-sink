@@ -106,6 +106,18 @@ pub struct GuiCoreHealth {
     pub healthy: bool,
     pub engine_version: Option<String>,
     pub started_at_unix_ms: Option<u64>,
+    pub outbound_devices: Vec<GuiOutboundDeviceHealth>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiOutboundDeviceHealth {
+    pub tag: String,
+    pub peer_index: u64,
+    pub state: String,
+    pub last_handshake_age_ms: Option<u64>,
+    pub last_authenticated_packet_age_ms: Option<u64>,
+    pub endpoint_resolution_failed: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -206,6 +218,10 @@ pub struct GuiProtocolCapability {
     pub name: String,
     /// "supported" | "partial" | "experimental"
     pub status: String,
+    pub compiled: Option<bool>,
+    pub feature: Option<String>,
+    pub compatibility_baseline: Option<String>,
+    pub transports: Vec<String>,
     pub inbound_tcp: bool,
     pub inbound_udp: bool,
     pub outbound_tcp: bool,

@@ -22,7 +22,8 @@ export interface ClientKernelFeatures {
 
 function supportsCapabilityContractV1(capabilities: GuiZeroCapabilities): boolean {
   const contract = capabilities.contracts?.capabilities;
-  return Boolean(contract && contract.minimumSupported <= 1 && contract.current >= 1);
+  return Boolean(contract && Number.isInteger(contract.current)
+    && contract.minimumSupported === 1 && contract.current >= 1);
 }
 
 export function kernelFeatureSupport(

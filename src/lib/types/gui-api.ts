@@ -314,6 +314,17 @@ export interface GuiCoreHealth {
   healthy: boolean;
   engineVersion?: string;
   startedAtUnixMs?: number;
+  /** Absent on older kernels; an empty list is not peer reachability proof. */
+  outboundDevices?: GuiOutboundDeviceHealth[];
+}
+
+export interface GuiOutboundDeviceHealth {
+  tag: string;
+  peerIndex: number;
+  state: string;
+  lastHandshakeAgeMs?: number;
+  lastAuthenticatedPacketAgeMs?: number;
+  endpointResolutionFailed: boolean;
 }
 
 export interface GuiZeroCapabilities {
@@ -358,6 +369,10 @@ export interface GuiCapabilityState {
 export interface GuiProtocolCapability {
   name: string;
   status: 'supported' | 'partial' | 'experimental' | 'unsupported';
+  compiled?: boolean;
+  feature?: string;
+  compatibilityBaseline?: string;
+  transports?: string[];
   inboundTcp: boolean;
   inboundUdp: boolean;
   outboundTcp: boolean;

@@ -65,6 +65,7 @@ pub async fn core_readiness_health(options: Option<CoreIpcOptions>) -> AppResult
             healthy: true,
             engine_version: None,
             started_at_unix_ms: None,
+            outbound_devices: Vec::new(),
         }),
     }
 }
