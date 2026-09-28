@@ -615,7 +615,7 @@
 </DraggableModal>
 
 <Dialog.Root bind:open={removeOpen}>
-  <Dialog.Content class="sm:max-w-[420px]"><Dialog.Header><Dialog.Title>卸载插件</Dialog.Title><Dialog.Description>卸载 {removePlugin?.name} 的全部组件，并清除配置、插件状态、缓存和已批准权限？</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { removeOpen = false; }}>取消</Button><Button variant="destructive" onclick={() => { const id = removePlugin?.id; removeOpen = false; if (id) void action(() => pluginApi.uninstall(id), '插件已卸载').then(success => { if (success) selectedPluginId = null; }); }}>卸载</Button></Dialog.Footer></Dialog.Content>
+  <Dialog.Content class="sm:max-w-[420px]"><Dialog.Header><Dialog.Title>卸载插件</Dialog.Title><Dialog.Description>卸载 {removePlugin?.name} 的全部组件，并删除它托管的订阅、关联配置和规则，以及插件状态、缓存和已批准权限。正在使用其配置时将切换到剩余配置；没有可用配置时会停止代理。是否继续？</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { removeOpen = false; }}>取消</Button><Button variant="destructive" onclick={() => { const id = removePlugin?.id; removeOpen = false; if (id) void action(() => pluginApi.uninstall(id), '插件已卸载').then(success => { if (success) selectedPluginId = null; }); }}>卸载</Button></Dialog.Footer></Dialog.Content>
 </Dialog.Root>
 
 <style>

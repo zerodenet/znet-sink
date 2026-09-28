@@ -626,7 +626,12 @@ impl Host {
         self.rescan(manager, &self.store()?)?;
         Ok(self.snapshot(manager))
     }
-    pub fn uninstall(&self, manager: &Manager, id: &str) -> AppResult<Snapshot> {
+    pub fn uninstall(
+        &self,
+        manager: &Manager,
+        id: &str,
+        cleanup: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<Snapshot> {
         let _operation = self.operation.lock().unwrap();
         let (keys, publisher) = {
             let state = self.state.lock().unwrap();
@@ -644,8 +649,30 @@ impl Host {
                     .map(|value| value.publisher_fingerprint.clone()),
             )
         };
+        // Revoke old leases before deleting host-owned projections. Keep the
+        // package and its private data available for retry if cleanup fails.
         for key in keys {
+            if let Some(loaded) = self.state.lock().unwrap().loaded.get_mut(&key) {
+                local_state::set_enabled(
+                    &self.root()?,
+                    &loaded.publisher_fingerprint,
+                    id,
+                    &loaded.component.manifest().component_id,
+                    false,
+                )?;
+                loaded.consent.enabled = false;
+            }
             manager.remove_component(&key);
+        }
+        self.remove_plugin_schedules(id)?;
+        self.callbacks.cancel_plugin(id);
+        self.sensitive.clear_plugin(id);
+        if let Err(mut error) = cleanup() {
+            error.message = format!(
+                "卸载清理未完成，插件已停用并保留，请重试：{}",
+                error.message
+            );
+            return Err(error);
         }
         io::manage(manager, || self.store()?.uninstall(id).map_err(io::failure))?;
         configuration::remove_plugin(&self.root()?, id)?;

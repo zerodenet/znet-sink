@@ -1081,7 +1081,8 @@ fn tampering_or_registry_withdrawal_revokes_an_already_authorized_component() {
 fn uninstall_prevents_execution_and_cached_registry_survives_restart() {
     let (_root, host, manager) = setup(false);
     let review = approve(&host, &manager);
-    host.uninstall(&manager, "org.example.plugin").unwrap();
+    host.uninstall(&manager, "org.example.plugin", || Ok(()))
+        .unwrap();
     assert!(host.run(&manager, review).is_err());
     let (root, host, manager) = setup(false);
     let _review = approve(&host, &manager);
@@ -1093,6 +1094,45 @@ fn uninstall_prevents_execution_and_cached_registry_survives_restart() {
     let snapshot = restarted.snapshot(&restarted_manager);
     assert!(snapshot.checked);
     assert!(snapshot.components[0].enabled);
+}
+
+#[test]
+fn uninstall_cleanup_failure_keeps_package_disabled_and_allows_retry() {
+    let (root, host, manager) = setup(false);
+    let review = approve(&host, &manager);
+    let error = host
+        .uninstall(&manager, "org.example.plugin", || {
+            assert!(manager.component_snapshots().iter().all(|p| !p.enabled));
+            Err(AppError::internal("cleanup failed"))
+        })
+        .err()
+        .unwrap();
+    assert!(error.message.contains("插件已停用并保留"));
+    assert!(host
+        .store()
+        .unwrap()
+        .list()
+        .unwrap()
+        .contains(&"org.example.plugin".into()));
+    assert!(host.run(&manager, review).is_err());
+    let restarted = Host {
+        root: Some(root.path().into()),
+        ..Host::default()
+    };
+    let restarted_manager = Manager::default();
+    let snapshot = restarted.snapshot(&restarted_manager);
+    assert_eq!(snapshot.components.len(), 1);
+    assert!(!snapshot.components[0].enabled);
+    let snapshot = host
+        .uninstall(&manager, "org.example.plugin", || Ok(()))
+        .unwrap();
+    assert!(snapshot.components.is_empty());
+    assert!(!host
+        .store()
+        .unwrap()
+        .list()
+        .unwrap()
+        .contains(&"org.example.plugin".into()));
 }
 
 #[test]

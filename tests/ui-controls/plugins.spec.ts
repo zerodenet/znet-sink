@@ -81,6 +81,11 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
           return state();
         }
         if (command === 'platform_open_url') { (window as any).__openedPluginUrl = args.url; return; }
+        if (command === 'app_config_get') return { tun: { enabled: false } };
+        if (command === 'gui_tun_status') {
+          calls.push({ command, args });
+          return { enabled: false, healthy: false };
+        }
         if (command === 'plugins_supported') return true;
         if (command === 'plugins_snapshot' || command === 'plugins_refresh') {
           if (command === 'plugins_snapshot') snapshotCalls++;
@@ -168,8 +173,10 @@ test('permissions are explicit and unsupported access cannot be selected; stoppi
   await expect(page.getByRole('button', { name: '运行诊断', exact: true })).toBeDisabled();
   await page.getByRole('radio', { name: '关于', exact: true }).click();
   await page.getByRole('button', { name: '卸载', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('托管的订阅、关联配置和规则');
   await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click();
   await expect(page.getByText('插件已卸载', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__pluginFixture.calls.some((call: { command: string }) => call.command === 'gui_tun_status'))).toBe(true);
 });
 test('a stale permission review displays rejection instead of enabling the component', async ({ page }) => {
   await fixture(page);

@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { proxyConfigSignal } from './proxy-config-signal.svelte';
+import { ruleSetSignal } from './rule-set-signal.svelte';
+import { reconcileGuiTunRuntime } from './tun';
 export interface PluginPermission { capability: string; scope: string }
 export type PluginSdkMethod =
   | 'storage_get' | 'storage_put' | 'storage_delete' | 'storage_list' | 'storage_export' | 'storage_clear' | 'storage_migrate'
@@ -79,5 +82,14 @@ export const pluginApi = {
   invoke: (pluginId: string, componentId: string, action: string, payload: unknown) => invoke<unknown>('plugins_invoke', { pluginId, componentId, action, payload }),
   sdk: <T>(pluginId: string, componentId: string, call: PluginSdkCall) => invoke<PluginSdkReply<T>>('plugins_sdk_call', { pluginId, componentId, call }),
   protectedLoad: <T>(pluginId: string, componentId: string, call: PluginSdkCall) => invoke<PluginSdkReply<T>>('plugins_protected_load', { pluginId, componentId, call }),
-  uninstall: (id: string) => invoke<PluginSnapshot>('plugins_uninstall', { id }),
+  uninstall: async (id: string): Promise<PluginSnapshot> => {
+    try {
+      return await invoke<PluginSnapshot>('plugins_uninstall', { id });
+    } finally {
+      // Cleanup can partially complete before a retryable failure.
+      proxyConfigSignal.markChanged(true);
+      ruleSetSignal.markChanged();
+      await reconcileGuiTunRuntime().catch(error => console.warn('[plugins] TUN reconciliation after uninstall failed', error));
+    }
+  },
 };
