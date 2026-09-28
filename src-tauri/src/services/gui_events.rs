@@ -93,6 +93,9 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
         // remain buffered for this consumer instead of being dropped.
         let mut receiver = conn.subscribe_events();
         let observer = FlowObservation::from_connection(subscription.binding.clone(), conn.clone());
+        let mut traffic_binding = subscription.binding.clone();
+        traffic_binding.timeout = traffic_binding.timeout.min(Duration::from_millis(500));
+        let traffic_observer = FlowObservation::from_connection(traffic_binding, conn.clone());
         let snapshot = match resync_snapshot(&app, subscription, &observer) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -114,6 +117,8 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
         backoff = MIN_RECONNECT_BACKOFF;
         emit_status(&app, generation, "subscribed", None, Some(snapshot));
         let mut next_active_flow_reconcile = Instant::now() + ACTIVE_FLOW_RECONCILE_INTERVAL;
+        let mut traffic_recovery = crate::services::traffic_sampler::Recovery::new(Instant::now());
+        let mut traffic_error = None;
 
         let mut closed = false;
         while subscription.is_current() {
@@ -160,12 +165,16 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
                             // Reuse the normalized typed payload for tray rates,
                             // traffic-ball updates and the one-off snapshot baseline
                             // instead of issuing a second periodic stats query.
+                            let sampled_at = event
+                                .occurred_at_unix_ms
+                                .unwrap_or_else(crate::services::common::now_unix_ms);
+                            traffic_recovery.pushed(
+                                Instant::now(),
+                                sampled_at,
+                                crate::services::common::now_unix_ms(),
+                            );
                             crate::services::traffic_sampler::handle_stats_sample(
-                                &app,
-                                stats,
-                                event
-                                    .occurred_at_unix_ms
-                                    .unwrap_or_else(crate::services::common::now_unix_ms),
+                                &app, stats, sampled_at,
                             );
                         }
                         _ => {}
@@ -197,6 +206,39 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty) => true,
             };
+
+            if !conn.has_pending_requests() && traffic_recovery.due(Instant::now()) {
+                // A live transport and successful flow queries do not prove
+                // that traffic pushes are still arriving. Recover only this
+                // missing observation, without restarting the shared stream.
+                let result = tauri::async_runtime::block_on(traffic_observer.traffic());
+                if !subscription.is_current() {
+                    return Ok(());
+                }
+                match result {
+                    Ok((identity, stats)) => {
+                        if !event_matches_runtime(&identity, &runtime) {
+                            closed = true;
+                            break;
+                        }
+                        crate::services::traffic_sampler::handle_stats_sample(
+                            &app,
+                            &stats,
+                            crate::services::common::now_unix_ms(),
+                        );
+                        traffic_error = None;
+                    }
+                    Err(error) => {
+                        if traffic_error.as_ref() != Some(&error.message) {
+                            crate::services::file_logger::line(&format!(
+                                "traffic recovery query failed: {}",
+                                error.message
+                            ));
+                            traffic_error = Some(error.message);
+                        }
+                    }
+                }
+            }
 
             if Instant::now() >= next_active_flow_reconcile {
                 // Flow pushes remain the low-latency path, but the active-flow

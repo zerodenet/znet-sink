@@ -114,6 +114,24 @@ impl<T: QueryTransport> ObservationClient<T> {
             connections,
         })
     }
+
+    /// Recover traffic without fetching policy or flow lists. Keep all reads
+    /// on the pinned peer and reject a runtime/configuration change mid-read.
+    pub async fn traffic(&self) -> Result<(Value, Value), ObservationError<T::Error>> {
+        let before = self.query("runtime", json!({})).await?;
+        let stats = self.query("stats", json!({})).await?;
+        let after = self.query("runtime", json!({})).await?;
+        let before_id = identity(&before).ok_or(ObservationError::InvalidResponse(
+            "runtime identity missing",
+        ))?;
+        let after_id = identity(&after).ok_or(ObservationError::InvalidResponse(
+            "runtime identity missing",
+        ))?;
+        if before_id != after_id {
+            return Err(ObservationError::RuntimeChanged);
+        }
+        Ok((after, stats))
+    }
 }
 
 fn identity(value: &Value) -> Option<(&str, u64)> {
