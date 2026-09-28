@@ -87,6 +87,18 @@ impl FlowObservation {
             "connections": parsing::parse_connection_list(&snapshot.connections, 500),
         }))
     }
+
+    pub async fn traffic(&self) -> AppResult<(Value, crate::models::gui_core::GuiTrafficStats)> {
+        let (runtime, stats) = self.client.traffic().await.map_err(map_error)?;
+        for field in ["bytes_up", "bytes_down", "active_sessions"] {
+            if stats.get(field).and_then(Value::as_u64).is_none() {
+                return Err(AppError::internal(
+                    "traffic query returned incomplete counters",
+                ));
+            }
+        }
+        Ok((runtime, parsing::parse_stats(&stats)))
+    }
 }
 
 fn filter(options: Option<GuiConnectionListOptions>) -> FlowFilter {

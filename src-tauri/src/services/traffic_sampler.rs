@@ -6,7 +6,8 @@
 //! kernel poll and no second JSON parse on the high-volume event path.
 //!
 //! The same sample drives the macOS / best-effort Linux tray rate and is
-//! forwarded only to an active traffic-ball window.
+//! forwarded to the overview and an active traffic-ball window. Missing pushes
+//! trigger bounded recovery reads owned by the existing GUI event stream.
 //!
 //! The traffic-ball WebView is created lazily from the static Tauri window
 //! config, then hidden and reused. Reusing the surface avoids racing a later
@@ -23,6 +24,9 @@ use tauri::{AppHandle, Emitter, Listener, Manager};
 use crate::kernel::zero::{build_traffic_snapshot, TrafficSample};
 use crate::models::gui_core::GuiTrafficStats;
 use crate::state::app_state::AppState;
+
+mod recovery;
+pub(crate) use recovery::Recovery;
 
 const CORE_PROCESS_EXITED_EVENT: &str = "core:process-exited";
 const TRAFFIC_RATE_SAMPLE_EVENT: &str = "traffic:rate-sampled";
@@ -54,9 +58,9 @@ pub(crate) fn handle_stats_sample(
         let mut baseline = tray_baseline()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let snapshot =
-            build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
-        *baseline = Some(current.clone());
+        let Some(snapshot) = rate_sample(&mut baseline, totals, sampled_at_unix_ms) else {
+            return;
+        };
         snapshot
     };
 
@@ -94,6 +98,33 @@ pub(crate) fn handle_stats_sample(
     if app.get_webview_window(TRAFFIC_BALL_LABEL).is_some() {
         let _ = app.emit_to(TRAFFIC_BALL_LABEL, TRAFFIC_RATE_SAMPLE_EVENT, payload);
     }
+}
+
+fn rate_sample(
+    baseline: &mut Option<TrafficSample>,
+    totals: &GuiTrafficStats,
+    sampled_at_unix_ms: u64,
+) -> Option<crate::models::gui_core::GuiTrafficSnapshot> {
+    if baseline.as_ref().is_some_and(|prev| {
+        sampled_at_unix_ms <= prev.sampled_at_unix_ms
+            || sampled_at_unix_ms - prev.sampled_at_unix_ms < 500
+    }) {
+        return None;
+    }
+    // A long gap is not a current speed. Re-establish the baseline, then
+    // the next real sample restores the rate instead of averaging a pause.
+    if baseline
+        .as_ref()
+        .is_some_and(|prev| sampled_at_unix_ms.saturating_sub(prev.sampled_at_unix_ms) > 10_000)
+    {
+        *baseline = None;
+    }
+    let snapshot = build_traffic_snapshot(totals.clone(), baseline.as_ref(), sampled_at_unix_ms);
+    *baseline = Some(TrafficSample {
+        stats: totals.clone(),
+        sampled_at_unix_ms,
+    });
+    Some(snapshot)
 }
 
 pub(crate) fn clear_runtime_traffic_state(app: &AppHandle) {
@@ -236,7 +267,51 @@ fn clear_tray_rate_title(_app_handle: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {
-    use super::compact_rate;
+    use super::{compact_rate, rate_sample};
+
+    #[test]
+    fn delayed_or_duplicate_samples_never_replace_current_rates() {
+        use crate::models::gui_core::GuiTrafficStats;
+        let stats = |bytes| GuiTrafficStats {
+            bytes_down: bytes,
+            ..Default::default()
+        };
+        let mut baseline = None;
+        assert!(
+            !rate_sample(&mut baseline, &stats(100), 1000)
+                .unwrap()
+                .stable
+        );
+        assert_eq!(
+            rate_sample(&mut baseline, &stats(1100), 2000)
+                .unwrap()
+                .rates
+                .download_bps,
+            1000
+        );
+        assert!(rate_sample(&mut baseline, &stats(500), 1500).is_none());
+        assert!(rate_sample(&mut baseline, &stats(1100), 2000).is_none());
+        assert!(rate_sample(&mut baseline, &stats(1200), 2100).is_none());
+        assert_eq!(
+            rate_sample(&mut baseline, &stats(2100), 3000)
+                .unwrap()
+                .rates
+                .download_bps,
+            1000
+        );
+        assert!(
+            !rate_sample(&mut baseline, &stats(9999), 20000)
+                .unwrap()
+                .stable
+        );
+        assert_eq!(
+            rate_sample(&mut baseline, &stats(10999), 21000)
+                .unwrap()
+                .rates
+                .download_bps,
+            1000
+        );
+    }
 
     #[test]
     fn tray_rate_format_stays_compact_across_units() {

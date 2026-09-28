@@ -59,6 +59,41 @@ fn baseline(after: Value, optional_fail: bool) -> ObservationClient<FakeTranspor
 }
 
 #[tokio::test]
+async fn traffic_recovery_is_pinned_and_rejects_a_runtime_change() {
+    for replacement in [false, true] {
+        let client = client(vec![
+            (json!({"runtime":{}}), Ok(json!({"runtime":runtime("a",1)}))),
+            (
+                json!({"stats":{}}),
+                Ok(json!({"stats":{"bytes_up":20,"bytes_down":40}})),
+            ),
+            (
+                json!({"runtime":{}}),
+                Ok(json!({"runtime":runtime(if replacement {"b"} else {"a"},1)})),
+            ),
+        ]);
+        let result = client.traffic().await;
+        if replacement {
+            assert!(matches!(result, Err(ObservationError::RuntimeChanged)));
+        } else {
+            assert_eq!(result.unwrap().1["bytes_down"], 40);
+        }
+    }
+}
+
+#[tokio::test]
+async fn failed_traffic_query_never_publishes_zero_counters_or_retries_inline() {
+    let client = client(vec![
+        (json!({"runtime":{}}), Ok(runtime("a", 1))),
+        (json!({"stats":{}}), Err("timeout")),
+    ]);
+    assert!(matches!(
+        client.traffic().await,
+        Err(ObservationError::Transport("timeout"))
+    ));
+}
+
+#[tokio::test]
 async fn lists_preserve_wire_contract_and_normalize_bounds_and_filters() {
     let client = client(vec![
         (
