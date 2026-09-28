@@ -39,16 +39,19 @@ pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
             // Also support flat format: {"tag":"...", "type":"shadowsocks"}
             let protocol = resolve_outbound_protocol(node).to_string();
             let protocol_obj = node.get("protocol").and_then(|p| p.as_object());
+            let endpoint = wireguard_endpoint(node);
             Some(ConfigProxyNode {
                 tag: tag.to_string(),
                 protocol: protocol.clone(),
                 is_selector: protocol.eq_ignore_ascii_case("selector"),
                 server: protocol_obj
                     .and_then(|o| string_at_obj(o, &["server", "address", "host"]))
-                    .or_else(|| string_at(node, &["server", "address", "host"])),
+                    .or_else(|| string_at(node, &["server", "address", "host"]))
+                    .or_else(|| endpoint.as_ref().map(|(host, _)| host.clone())),
                 port: protocol_obj
                     .and_then(|o| u16_at_obj(o, &["port"]))
-                    .or_else(|| u16_at_value(node, &["port"])),
+                    .or_else(|| u16_at_value(node, &["port"]))
+                    .or_else(|| endpoint.as_ref().map(|(_, port)| *port)),
                 udp: resolve_udp(&protocol, protocol_obj, node),
                 network: protocol_obj
                     .and_then(|o| string_at_obj(o, &["network", "transport"]))
@@ -63,6 +66,33 @@ pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
             })
         })
         .collect()
+}
+
+/// A single peer has one display endpoint. Multi-peer devices deliberately do
+/// not present the first peer as the endpoint for the whole outbound. This is
+/// a display projection only; key/endpoint validation remains kernel-owned.
+fn wireguard_endpoint(node: &Value) -> Option<(String, u16)> {
+    if resolve_outbound_protocol(node) != "wireguard" {
+        return None;
+    }
+    let protocol = node
+        .get("protocol")
+        .filter(|p| p.is_object())
+        .unwrap_or(node);
+    let peers = protocol.get("peers")?.as_array()?;
+    if peers.len() != 1 {
+        return None;
+    }
+    let endpoint = peers[0].get("endpoint")?.as_str()?;
+    let (host, port) = endpoint.rsplit_once(':')?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_owned(), port.parse().ok()?))
 }
 
 /// Resolve the protocol name from an outbound definition.
@@ -287,3 +317,7 @@ pub fn outbound_kind_map(value: &Value) -> std::collections::HashMap<String, Str
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "config_compatibility_tests.rs"]
+mod compatibility_tests;

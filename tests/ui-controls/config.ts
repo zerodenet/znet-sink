@@ -58,7 +58,9 @@ export const getAppConfig = async () => {
 };
 export const getCoreConfigSnapshot = async (): Promise<CoreKernelInfo> => ({ kernel:'zero', executableExists:true, executablePath:'/fixture/zero', recommendedInstallDir:'/fixture', hasActiveConfig:true, warnings:[] });
 export const getCoreProcessStatus = async () => ({ state:'running' });
-export const getGuiCoreHealth = async () => ({ engineVersion:'0.0.17-rc.1' });
+import { capabilityFixture, healthFixture } from './kernel-capabilities';
+const isCapabilitiesPanel = () => new URLSearchParams(location.search).get('panel') === 'capabilities';
+export const getGuiCoreHealth = async () => isCapabilitiesPanel() ? healthFixture() : ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
   if (new URLSearchParams(location.search).get('mode') === 'precedence') {
     precedenceOverrides = {...precedenceOverrides,...(input as {overrides:typeof precedenceOverrides}).overrides};
@@ -140,7 +142,8 @@ window.addEventListener('fixture-append-log', () => {
 export const getEffectiveRuleSetOptions = async () => [];
 export const getConfigPolicyGroups = async () => [];
 export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
-export const getGuiZeroCapabilities = async () => ({ available: false, globalLimitations: [] });
+export const getGuiZeroCapabilities = async () => isCapabilitiesPanel() ? capabilityFixture() : ({ available: false, globalLimitations: [] });
+export const getGuiCapabilitiesSnapshot = async () => ({ management: [], proxyFeatures: [] });
 export const getCoreRuntime = async () => null;
 export const getCoreStats = async () => null;
 export const guiValidateConfig = async () => ({ valid: true, errors: [] });

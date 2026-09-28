@@ -17,8 +17,8 @@ use crate::models::gui_core::{
     GuiConnectionCloseResult, GuiConnectionEgressContext, GuiConnectionList,
     GuiConnectionNetworkContext, GuiConnectionNetworkInterface, GuiConnectionRouteLookup,
     GuiConnectionSocketBinding, GuiContractVersionRange, GuiCoreHealth, GuiFeatureStatus,
-    GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult, GuiProtocolCapability,
-    GuiTrafficStats, GuiZeroCapabilities,
+    GuiOutboundDeviceHealth, GuiPolicyGroup, GuiPolicyMember, GuiPolicySelectionResult,
+    GuiProtocolCapability, GuiTrafficStats, GuiZeroCapabilities,
 };
 
 // ── Response envelope helpers ───────────────────────────────────────
@@ -96,6 +96,36 @@ pub fn parse_health(value: &Value) -> GuiCoreHealth {
             value,
             &["started_at_unix_ms", "startedAtUnixMs", "started_at"],
         ),
+        outbound_devices: value
+            .get("outbound_devices")
+            .or_else(|| value.get("outboundDevices"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|device| {
+                Some(GuiOutboundDeviceHealth {
+                    tag: string_at(device, &["tag"])?,
+                    peer_index: u64_at(device, &["peer_index", "peerIndex"])?,
+                    state: string_at(device, &["state"]).unwrap_or_else(|| "unknown".into()),
+                    last_handshake_age_ms: u64_at(
+                        device,
+                        &["last_handshake_age_ms", "lastHandshakeAgeMs"],
+                    ),
+                    last_authenticated_packet_age_ms: u64_at(
+                        device,
+                        &[
+                            "last_authenticated_packet_age_ms",
+                            "lastAuthenticatedPacketAgeMs",
+                        ],
+                    ),
+                    endpoint_resolution_failed: bool_at(
+                        device,
+                        &["endpoint_resolution_failed", "endpointResolutionFailed"],
+                    )
+                    .unwrap_or(false),
+                })
+            })
+            .collect(),
     }
 }
 
@@ -944,6 +974,13 @@ fn protocol_array_at(value: &Value, key: &str) -> Vec<GuiProtocolCapability> {
                         name: string_at(item, &["name", "protocol"])?,
                         status: string_at(item, &["status"])
                             .unwrap_or_else(|| "supported".to_string()),
+                        compiled: bool_at(item, &["compiled"]),
+                        feature: string_at(item, &["feature"]),
+                        compatibility_baseline: string_at(
+                            item,
+                            &["compatibility_baseline", "compatibilityBaseline"],
+                        ),
+                        transports: string_array_at(item, &["transports"]),
                         inbound_tcp: inbound_tcp_state.supported,
                         inbound_udp: inbound_udp_state.supported,
                         outbound_tcp: outbound_tcp_state.supported,
@@ -999,3 +1036,7 @@ fn protocol_capability_state(
 #[cfg(test)]
 #[path = "parsing_policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "compatibility_tests.rs"]
+mod compatibility_tests;
