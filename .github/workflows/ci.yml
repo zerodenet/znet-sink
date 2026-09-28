@@ -224,7 +224,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        core_ref: [v0.0.2-dev.202609181034, develop]
+        # The v0.0.2 dev tag can be retired by release promotion. Pin its
+        # immutable source commit so the compatibility baseline remains usable.
+        core_ref: [de92dc8f855ca78d94790e3541455c36f767efe8, develop]
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
