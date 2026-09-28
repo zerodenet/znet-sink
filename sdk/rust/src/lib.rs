@@ -212,6 +212,7 @@ pub enum Method {
     CryptoHpkeOpen,
     SubscriptionApply,
     SubscriptionMetadataUpdate,
+    SubscriptionSyncComplete,
     SubscriptionRemove,
     ProtectedLoad,
 }
@@ -254,6 +255,7 @@ impl Method {
             | Self::CryptoHpkeOpen => Capability::CryptoDeviceUse,
             Self::SubscriptionApply
             | Self::SubscriptionMetadataUpdate
+            | Self::SubscriptionSyncComplete
             | Self::SubscriptionRemove => Capability::SubscriptionsManage,
             Self::ProtectedLoad => Capability::RuntimeProtectedLoad,
         }
@@ -484,6 +486,21 @@ impl<T: Transport> Client<T> {
             "active-runtime",
             Method::ProtectedLoad,
             json!({"handle":handle}),
+        )
+    }
+
+    /// Confirm that a successful provider check matched the applied revision.
+    pub fn complete_subscription_sync(
+        &self,
+        provider_id: &str,
+        remote_subscription_id: &str,
+        revision: &str,
+    ) -> Result<Reply, T::Error> {
+        self.call(
+            Capability::SubscriptionsManage,
+            "self",
+            Method::SubscriptionSyncComplete,
+            json!({"providerId": provider_id, "remoteSubscriptionId": remote_subscription_id, "revision": revision}),
         )
     }
 

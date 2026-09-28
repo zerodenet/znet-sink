@@ -1,5 +1,5 @@
 use std::{collections::HashMap, time::Duration};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Map, Value};
@@ -19,6 +19,12 @@ use crate::services::common::{
 use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
 use sha2::{Digest, Sha256};
+
+#[path = "subscription/sync_complete.rs"]
+mod sync_complete;
+pub use sync_complete::complete_managed_sync_authorized;
+#[cfg(test)]
+pub(crate) use sync_complete::complete_managed_sync_in_acceptance_store;
 
 /// Default auto-sync check cadence for the background scheduler.
 const AUTO_SYNC_TICK_SECONDS: u64 = 60;
@@ -824,6 +830,7 @@ where
         .find(|candidate| candidate.id == id)
         .cloned()
         .ok_or_else(|| AppError::internal("managed subscription was not committed"))?;
+    let _ = app_handle.emit("subscriptions:updated", json!({"subscriptionId": id}));
     Ok(committed)
 }
 
@@ -853,6 +860,8 @@ where
         domain_store::save_subscriptions,
     )?;
     *subscriptions = next;
+    drop(subscriptions);
+    let _ = app_handle.emit("subscriptions:updated", json!({"subscriptionId": id}));
     Ok(updated)
 }
 
@@ -867,7 +876,38 @@ fn managed_metadata_invalid(field_path: &'static str, message: &'static str) -> 
 fn validate_managed_metadata_input(
     input: ManagedSubscriptionMetadataUpdate,
 ) -> AppResult<(String, ManagedSubscriptionSource, ManagedSubscriptionUsage)> {
-    let raw_provider_id = input.provider_id;
+    let (id, owner) = validate_managed_owner(
+        input.plugin_id,
+        input.provider_id,
+        input.remote_subscription_id,
+    )?;
+    const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
+    if input.usage.used_bytes > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.usedBytes",
+            "usedBytes must be a JSON safe integer",
+        ));
+    }
+    if input.usage.total_bytes == 0 || input.usage.total_bytes > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.totalBytes",
+            "totalBytes must be a positive JSON safe integer",
+        ));
+    }
+    if input.usage.expire_at_unix_ms == 0 || input.usage.expire_at_unix_ms > MAX_SAFE_JSON_INTEGER {
+        return Err(managed_metadata_invalid(
+            "usage.expireAtUnixMs",
+            "expireAtUnixMs must be a positive JSON safe integer",
+        ));
+    }
+    Ok((id, owner, input.usage))
+}
+
+fn validate_managed_owner(
+    plugin_id: String,
+    raw_provider_id: String,
+    raw_remote_subscription_id: String,
+) -> AppResult<(String, ManagedSubscriptionSource)> {
     let provider_id = normalize_required(raw_provider_id.clone(), "provider_id")?;
     if raw_provider_id != provider_id {
         return Err(managed_metadata_invalid(
@@ -889,8 +929,7 @@ fn validate_managed_metadata_input(
             "providerId must be an exact HTTPS origin",
         ));
     }
-    let plugin_id = normalize_required(input.plugin_id, "plugin_id")?;
-    let raw_remote_subscription_id = input.remote_subscription_id;
+    let plugin_id = normalize_required(plugin_id, "plugin_id")?;
     let remote_subscription_id =
         normalize_required(raw_remote_subscription_id.clone(), "remote_subscription_id")?;
     if raw_remote_subscription_id != remote_subscription_id
@@ -904,25 +943,6 @@ fn validate_managed_metadata_input(
             "remoteSubscriptionId is invalid",
         ));
     }
-    const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
-    if input.usage.used_bytes > MAX_SAFE_JSON_INTEGER {
-        return Err(managed_metadata_invalid(
-            "usage.usedBytes",
-            "usedBytes must be a JSON safe integer",
-        ));
-    }
-    if input.usage.total_bytes == 0 || input.usage.total_bytes > MAX_SAFE_JSON_INTEGER {
-        return Err(managed_metadata_invalid(
-            "usage.totalBytes",
-            "totalBytes must be a positive JSON safe integer",
-        ));
-    }
-    if input.usage.expire_at_unix_ms == 0 || input.usage.expire_at_unix_ms > MAX_SAFE_JSON_INTEGER {
-        return Err(managed_metadata_invalid(
-            "usage.expireAtUnixMs",
-            "expireAtUnixMs must be a positive JSON safe integer",
-        ));
-    }
     let (id, _) = managed_subscription_ids(&plugin_id, &provider_id, &remote_subscription_id);
     Ok((
         id,
@@ -933,7 +953,6 @@ fn validate_managed_metadata_input(
             revision: None,
             source_name: None,
         },
-        input.usage,
     ))
 }
 

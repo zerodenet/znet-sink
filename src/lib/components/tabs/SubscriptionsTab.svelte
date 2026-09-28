@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Choice } from '$lib/components/ui/choice';
   import { onMount } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { LayoutGrid, List } from '@lucide/svelte';
   import { getAppErrorMessage, handleAppError } from '$lib/services/core';
   import {
@@ -137,7 +139,10 @@
     };
   }
 
+  const refreshGate = createLatestRequestGate();
+
   async function refresh(showLoading = true) {
+    const request = refreshGate.begin();
     if (showLoading) loading = true;
     loadError = null;
     proxyConfigsError = null;
@@ -145,6 +150,7 @@
       listSubscriptions(),
       listProxyConfigs(),
     ]);
+    if (!refreshGate.canApply(request)) return;
 
     if (subscriptionsResult.status === 'fulfilled') {
       subscriptions = subscriptionsResult.value;
@@ -158,7 +164,7 @@
       proxyConfigs = [];
       proxyConfigsError = getAppErrorMessage(configsResult.reason, '加载关联配置失败');
     }
-    if (showLoading) loading = false;
+    if (refreshGate.isLatest(request)) loading = false;
   }
 
   async function handleSync(id: string) {
@@ -394,7 +400,17 @@
 
   onMount(() => {
     viewMode = loadViewMode();
-    void refresh();
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    // Attach before loading so a background completion cannot be missed.
+    void listen('subscriptions:updated', () => { void refresh(false); })
+      .then(stop => {
+        if (disposed) { stop(); return; }
+        unlisten = stop;
+        void refresh();
+      })
+      .catch(() => { if (!disposed) void refresh(); });
+    return () => { disposed = true; refreshGate.reset(); unlisten?.(); };
   });
 </script>
 

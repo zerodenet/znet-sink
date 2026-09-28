@@ -10,7 +10,7 @@ export type PluginSdkMethod =
   | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
   | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest'
   | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
-  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_remove' | 'protected_load';
+  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_sync_complete' | 'subscription_remove' | 'protected_load';
 export interface PluginSdkBudget { timeout_ms?: number; max_result_bytes?: number }
 export interface PluginSdkCall { version: 1; request: PluginPermission; method: PluginSdkMethod; budget?: PluginSdkBudget; arguments?: unknown }
 export interface PluginSdkReply<T = unknown> {

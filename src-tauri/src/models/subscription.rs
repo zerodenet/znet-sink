@@ -102,6 +102,14 @@ pub struct ManagedSubscriptionMetadataUpdate {
     pub usage: ManagedSubscriptionUsage,
 }
 
+#[derive(Clone, Debug)]
+pub struct ManagedSubscriptionSyncComplete {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub remote_subscription_id: String,
+    pub revision: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionUpsert {

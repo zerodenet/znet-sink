@@ -91,6 +91,10 @@ const profiles: ProxyConfigProfile[] = ['main', 'work'].map((id, i) => ({
   capabilities: {} as ProxyConfigProfile['capabilities'],
 }));
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
+let managedLastSync = 1;
+window.addEventListener('fixture-subscription-synced', (event) => {
+  managedLastSync = (event as CustomEvent<number>).detail;
+});
 export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
   const mode = new URLSearchParams(location.search).get('mode');
   if (mode === 'source-failure') {
@@ -100,6 +104,7 @@ export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
     return [{
       id: 'managed-connect', name: '狗梯 / Developer Licenses', url: 'https://example.com', enabled: true,
       kernel: 'zero', format: 'zero', targetProxyConfigId: 'work', policySelections: {}, updatedAtUnixMs: 1,
+      lastSyncAtUnixMs: managedLastSync,
       usedBytes: 375, totalBytes: 1000, expireAtUnixMs: 1_800_000_000_000,
       managedSource: { pluginId: 'org.zerodenet.connect.znet-sink', providerId: 'https://example.com', remoteSubscriptionId: '1', sourceName: '狗梯', revision: 'r1' },
     }];

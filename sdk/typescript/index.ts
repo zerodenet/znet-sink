@@ -22,7 +22,7 @@ export type Method =
   | 'secret_receive' | 'configured_request' | 'crypto_use'
   | 'persistent_secret_get' | 'persistent_secret_put' | 'persistent_secret_delete'
   | 'crypto_key_generate' | 'crypto_sign' | 'crypto_verify' | 'crypto_digest' | 'crypto_hpke_key_generate' | 'crypto_hpke_seal' | 'crypto_hpke_open'
-  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_remove' | 'protected_load';
+  | 'subscription_apply' | 'subscription_metadata_update' | 'subscription_sync_complete' | 'subscription_remove' | 'protected_load';
 
 export interface Call {
   version: typeof SDK_VERSION;
@@ -92,6 +92,10 @@ export function createSdk(transport: Transport) {
       delete: (taskId: string) => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_delete', { taskId }),
     }),
     subscriptions: Object.freeze({
+      completeSync: (providerId: string, remoteSubscriptionId: string, revision: string) =>
+        call({ capability: 'subscriptions.manage', scope: 'self' }, 'subscription_sync_complete', {
+          providerId, remoteSubscriptionId, revision,
+        }),
       updateMetadata: (providerId: string, remoteSubscriptionId: string, usage: ManagedSubscriptionUsage) =>
         call({ capability: 'subscriptions.manage', scope: 'self' }, 'subscription_metadata_update', {
           providerId,

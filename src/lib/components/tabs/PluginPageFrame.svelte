@@ -179,6 +179,10 @@
       delete: (componentId, taskId) => sdkCall(componentId, 'tasks.schedule', 'self', 'schedule_delete', { taskId })
     }),
     subscriptions: Object.freeze({
+      completeSync: (componentId, providerId, remoteSubscriptionId, revision) => sdkCall(
+        componentId, 'subscriptions.manage', 'self', 'subscription_sync_complete',
+        { providerId, remoteSubscriptionId, revision }
+      ),
       updateMetadata: (componentId, providerId, remoteSubscriptionId, usage) => sdkCall(
         componentId,
         'subscriptions.manage',

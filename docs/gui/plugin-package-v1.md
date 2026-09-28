@@ -65,3 +65,7 @@ znet-plugin pack APP_ROOT PRIVATE_SEED_FILE PACKAGE_OUT METADATA_OUT [REGISTRATI
 交接给客户端验收时提供 `.zspkg`、元数据 JSON、发布者登记/公钥、预期 `plugin_id` 和所需权限。客户端对真实插件的安装、授权、页面 RPC、后台任务和业务操作仍需单独端到端验收；打包成功不等于运行验收通过。
 
 包上限 16 MiB、256 个文件、单文件 4 MiB、总解压 32 MiB；模块源码最多 64 个文件/4 MiB，入口源码最多 256 KiB；页面 CSS/JS 最多各 8 个，单项 512 KiB、单页合计 2 MiB。旧 JSON 包仅作读取和 `pack-legacy` 过渡，不能声明模块运行时。
+
+### 托管订阅的成功检查
+
+`subscription_sync_complete` 使用 `subscriptions.manage/self`，只接受 `{ providerId, remoteSubscriptionId, revision }`。远端确认内容未变化且 revision 与宿主已有订阅一致时，插件可记录一次成功同步。宿主校验可信插件身份、来源命名空间、已应用版本和有效授权后，以宿主时间持久化 `lastSyncAtUnixMs` 并清除同步错误；不接收插件自报时间，不写入配置或用量。插件须在 `requires_methods` 声明该方法，旧客户端会在安装时拒绝未知方法。内容应用、用量写入和成功检查记录均在持久化后发送 `subscriptions:updated`，页面可订阅以刷新显示。

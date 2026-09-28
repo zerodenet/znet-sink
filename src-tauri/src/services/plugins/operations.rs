@@ -58,6 +58,17 @@ fn sdk_dispatcher(
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
+            if call.method == Method::SubscriptionSyncComplete {
+                let (input, request) = state
+                    .plugins()
+                    .managed_subscription_sync_complete_with_lease(&plugin_id, lease, call)?;
+                return crate::services::subscription::complete_managed_sync_authorized(
+                    app.clone(),
+                    input,
+                    || lease.check(Some(&request)).map_err(io::failure),
+                )
+                .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
+            }
             if call.method == Method::SubscriptionRemove {
                 let (subscription_id, remove_associated_config, request) = state
                     .plugins()
@@ -95,6 +106,7 @@ fn sdk_dispatcher(
                 Some(
                     Method::SubscriptionApply
                         | Method::SubscriptionMetadataUpdate
+                        | Method::SubscriptionSyncComplete
                         | Method::SubscriptionRemove
                         | Method::ProtectedLoad
                 )
