@@ -363,6 +363,14 @@ struct SubscriptionMetadataUpdateArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubscriptionSyncCompleteArgs {
+    provider_id: String,
+    remote_subscription_id: String,
+    revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubscriptionRemoveArgs {
     subscription_id: String,
     #[serde(default)]
@@ -376,6 +384,11 @@ pub(crate) struct PreparedManagedSubscription {
 
 pub(crate) struct PreparedManagedSubscriptionMetadataUpdate {
     pub(crate) input: crate::models::subscription::ManagedSubscriptionMetadataUpdate,
+    pub(crate) authorization: ManagedSubscriptionAuthorization,
+}
+
+pub(crate) struct PreparedManagedSubscriptionSyncComplete {
+    pub(crate) input: crate::models::subscription::ManagedSubscriptionSyncComplete,
     pub(crate) authorization: ManagedSubscriptionAuthorization,
 }
 
@@ -534,6 +547,35 @@ impl Host {
         ))
     }
 
+    pub(crate) fn managed_subscription_sync_complete_with_lease(
+        &self,
+        plugin_id: &str,
+        lease: &znet_plugin_sandbox::policy::Lease,
+        call: Call,
+    ) -> AppResult<(
+        crate::models::subscription::ManagedSubscriptionSyncComplete,
+        Request,
+    )> {
+        if !call.validate()
+            || call.method != Method::SubscriptionSyncComplete
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅同步完成请求无效"));
+        }
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let request = call.request;
+        let args: SubscriptionSyncCompleteArgs = decode(call.arguments)?;
+        Ok((
+            crate::models::subscription::ManagedSubscriptionSyncComplete {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                revision: args.revision,
+            },
+            request,
+        ))
+    }
+
     pub(crate) fn prepare_managed_subscription(
         &self,
         manager: &Manager,
@@ -640,6 +682,44 @@ impl Host {
                 provider_id: args.provider_id,
                 remote_subscription_id: args.remote_subscription_id,
                 usage: args.usage,
+            },
+            authorization: ManagedSubscriptionAuthorization {
+                lease,
+                request: call.request,
+            },
+        })
+    }
+
+    pub(crate) fn prepare_managed_subscription_sync_complete(
+        &self,
+        manager: &Manager,
+        plugin_id: &str,
+        component_id: &str,
+        call: Call,
+    ) -> AppResult<PreparedManagedSubscriptionSyncComplete> {
+        if !call.validate()
+            || call.method != Method::SubscriptionSyncComplete
+            || call.request.capability != Capability::SubscriptionsManage
+        {
+            return Err(AppError::invalid_argument("插件托管订阅同步完成请求无效"));
+        }
+        let (component, authority) =
+            self.sdk_context(manager, plugin_id, component_id, &call.request)?;
+        let lease = authority
+            .begin_host_call(
+                &component,
+                Duration::from_millis(call.budget.timeout_ms),
+                call.budget.max_result_bytes,
+            )
+            .map_err(io::failure)?;
+        lease.check(Some(&call.request)).map_err(io::failure)?;
+        let args: SubscriptionSyncCompleteArgs = decode(call.arguments)?;
+        Ok(PreparedManagedSubscriptionSyncComplete {
+            input: crate::models::subscription::ManagedSubscriptionSyncComplete {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: args.provider_id,
+                remote_subscription_id: args.remote_subscription_id,
+                revision: args.revision,
             },
             authorization: ManagedSubscriptionAuthorization {
                 lease,

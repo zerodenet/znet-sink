@@ -6,6 +6,10 @@
 
 插件托管订阅通过 `subscriptions.manage` 权限调用 `subscription_apply` 写入配置。配置未变化时，插件可调用 `subscription_metadata_update`，传入 `providerId`、`remoteSubscriptionId` 和 `usage: { usedBytes, totalBytes, expireAtUnixMs }`，只更新同一插件命名空间下已有订阅的只读用量。宿主拒绝不存在、手动创建或由其他插件/来源拥有的订阅；该调用不接收配置内容，也不会重置节点数、配置同步时间、用户策略选择或当前活动配置。`usedBytes` 是服务方报告的累计总用量，不被解释成上传或下载。依赖此方法的插件包必须在组件 manifest 声明 `requires_methods: ["subscription_metadata_update"]`，并用 `requires_host` 指定包含该方法的最低客户端版本。
 
+`lastSyncAtUnixMs` 表示最近一次成功的配置同步检查，包括远端确认内容未变化的检查；它不是配置最后发生变化的时间。插件获得与已应用 revision 一致的 `not_modified` 响应后，调用 `subscription_sync_complete`，参数为 `{ providerId, remoteSubscriptionId, revision }`。宿主从授权会话获取插件身份，并核对已有订阅的所属来源和已应用版本；通过校验后使用宿主时钟更新时间并清除旧同步错误，持久化失败或授权撤销时不提交。该操作不修改配置、节点、用量或用户策略，也不重载内核。
+
+依赖成功检查记录的插件必须声明 `requires_methods: ["subscription_sync_complete"]`。管理页面使用 `znetPlugin.subscriptions.completeSync(componentId, providerId, remoteSubscriptionId, revision)`；Rust SDK 使用 `Client::complete_subscription_sync`，TypeScript SDK 使用 `subscriptions.completeSync`。托管内容应用、用量更新及成功检查记录在持久化后发送 `subscriptions:updated` 事件，订阅页据此刷新。
+
 ## 命令
 
 | 命令 | 说明 |

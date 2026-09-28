@@ -39,6 +39,7 @@ mod desktop {
                 method,
                 Method::SubscriptionApply
                     | Method::SubscriptionMetadataUpdate
+                    | Method::SubscriptionSyncComplete
                     | Method::SubscriptionRemove
                     | Method::ProtectedLoad
             )
@@ -315,6 +316,59 @@ mod desktop {
                         Err(_) => Err(crate::errors::AppError {
                             code: "plugin_sdk_deadline",
                             message: "插件托管订阅用量操作超时".into(),
+                            details: None,
+                        }),
+                    },
+                ),
+                Err(error) => {
+                    sdk_reply_with_log(&app, &plugin_id, &component_id, call.method, Err(error))
+                }
+            };
+        }
+        if call.method == Method::SubscriptionSyncComplete {
+            let timeout_ms = call.budget.timeout_ms;
+            let completion_call = call.clone();
+            let prepared = blocking(app.clone(), {
+                let plugin_id = plugin_id.clone();
+                let component_id = component_id.clone();
+                move |state| {
+                    state.plugins().prepare_managed_subscription_sync_complete(
+                        state.capabilities(),
+                        &plugin_id,
+                        &component_id,
+                        completion_call,
+                    )
+                }
+            })
+            .await;
+            return match prepared {
+                Ok(prepared) => sdk_reply_with_log(
+                    &app,
+                    &plugin_id,
+                    &component_id,
+                    call.method,
+                    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), {
+                        let app = app.clone();
+                        blocking(app.clone(), move |_| {
+                            crate::services::subscription::complete_managed_sync_authorized(
+                                app,
+                                prepared.input,
+                                move || prepared.authorization.check(),
+                            )
+                        })
+                    })
+                    .await
+                    {
+                        Ok(result) => result.and_then(|profile| {
+                            serde_json::to_value(profile).map_err(|error| {
+                                crate::errors::AppError::internal(format!(
+                                    "无法序列化托管订阅同步完成结果：{error}",
+                                ))
+                            })
+                        }),
+                        Err(_) => Err(crate::errors::AppError {
+                            code: "plugin_sdk_deadline",
+                            message: "插件托管订阅同步完成操作超时".into(),
                             details: None,
                         }),
                     },

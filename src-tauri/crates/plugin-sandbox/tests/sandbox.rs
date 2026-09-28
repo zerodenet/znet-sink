@@ -53,7 +53,10 @@ fn required_sdk_methods_are_an_install_time_contract() {
         capability: Capability::SubscriptionsManage,
         scope: "self".into(),
     }];
-    declared.requires_methods = vec![znet_sink_plugin_sdk::Method::SubscriptionMetadataUpdate];
+    declared.requires_methods = vec![
+        znet_sink_plugin_sdk::Method::SubscriptionMetadataUpdate,
+        znet_sink_plugin_sdk::Method::SubscriptionSyncComplete,
+    ];
     assert!(Component::load(&serde_json::to_vec(&declared).unwrap(), source).is_ok());
 
     let mut missing_permission = declared.clone();
@@ -66,7 +69,7 @@ fn required_sdk_methods_are_an_install_time_contract() {
     let mut duplicate = declared;
     duplicate
         .requires_methods
-        .push(znet_sink_plugin_sdk::Method::SubscriptionMetadataUpdate);
+        .push(znet_sink_plugin_sdk::Method::SubscriptionSyncComplete);
     assert!(matches!(
         Component::load(&serde_json::to_vec(&duplicate).unwrap(), source),
         Err(Error::InvalidManifest)

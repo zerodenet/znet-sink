@@ -25,6 +25,7 @@ struct ExternalManagedAcceptanceStore {
     subscriptions: Vec<crate::models::subscription::SubscriptionProfile>,
     apply_count: usize,
     metadata_update_count: usize,
+    sync_complete_count: usize,
     managed_subscription_id: Option<String>,
 }
 
@@ -36,6 +37,7 @@ impl ExternalManagedAcceptanceStore {
             subscriptions: Vec::new(),
             apply_count: 0,
             metadata_update_count: 0,
+            sync_complete_count: 0,
             managed_subscription_id: None,
         }
     }
@@ -560,6 +562,23 @@ fn external_local_package_import_runs_in_vm_when_requested() {
                                 });
                             }
                         }
+                        if call.method == znet_plugin_sandbox::sdk::Method::SubscriptionSyncComplete {
+                            if let Some(store) = &dispatch_managed_store {
+                                let (input, request) = dispatch_host
+                                    .managed_subscription_sync_complete_with_lease(&dispatch_plugin, lease, call)
+                                    .map_err(|_| znet_plugin_sandbox::contract::Error::PermissionDenied)?;
+                                let mut store = store.lock().unwrap();
+                                let (subscriptions, committed) =
+                                    crate::services::subscription::complete_managed_sync_in_acceptance_store(
+                                        &store.dir, &store.subscriptions, input,
+                                        || lease.check(Some(&request)).map_err(super::io::failure),
+                                    ).map_err(|_| znet_plugin_sandbox::contract::Error::PermissionDenied)?;
+                                store.subscriptions = subscriptions;
+                                store.sync_complete_count += 1;
+                                return serde_json::to_value(committed)
+                                    .map_err(|_| znet_plugin_sandbox::contract::Error::InvalidOutput);
+                            }
+                        }
                         dispatch_host
                             .sdk_call_with_lease(
                                 &dispatch_manager,
@@ -673,6 +692,7 @@ fn external_local_package_import_runs_in_vm_when_requested() {
                 store.metadata_update_count, 2,
                 "scheduled usage refresh must remain independent of content changes"
             );
+            assert_eq!(store.sync_complete_count, 1);
             assert_eq!(store.profiles.len(), 2);
             assert_eq!(store.subscriptions.len(), 2);
             let manual_profile = store
@@ -965,6 +985,70 @@ fn managed_metadata_call_derives_plugin_identity_and_obeys_revocation() {
     host.revoke_permissions(&manager, &review.key).unwrap();
     assert!(host
         .prepare_managed_subscription_metadata_update(
+            &manager,
+            "org.example.plugin",
+            "identity",
+            call(),
+        )
+        .is_err());
+}
+#[test]
+fn managed_sync_completion_derives_plugin_identity_and_obeys_revocation() {
+    use znet_plugin_sandbox::sdk::{Budget, Call, Method, SDK_VERSION};
+
+    let request = Request {
+        capability: Capability::SubscriptionsManage,
+        scope: "self".into(),
+    };
+    let (_root, host, manager) = setup_component("true", serde_json::to_value(&request).unwrap());
+    let call = || Call {
+        version: SDK_VERSION,
+        request: request.clone(),
+        method: Method::SubscriptionSyncComplete,
+        budget: Budget::default(),
+        arguments: serde_json::json!({
+            "providerId": "https://example.com",
+            "remoteSubscriptionId": "1",
+            "revision": "rev-2"
+        }),
+    };
+
+    assert!(host
+        .prepare_managed_subscription_sync_complete(
+            &manager,
+            "org.example.plugin",
+            "identity",
+            call(),
+        )
+        .is_err());
+
+    let review = approve(&host, &manager);
+    let prepared = host
+        .prepare_managed_subscription_sync_complete(
+            &manager,
+            "org.example.plugin",
+            "identity",
+            call(),
+        )
+        .unwrap();
+    assert_eq!(prepared.input.plugin_id, "org.example.plugin");
+    assert_eq!(prepared.input.revision, "rev-2");
+    let mut forged = call();
+    forged.arguments["pluginId"] = serde_json::json!("another-plugin");
+    assert!(host
+        .prepare_managed_subscription_sync_complete(
+            &manager,
+            "org.example.plugin",
+            "identity",
+            forged,
+        )
+        .is_err());
+
+    assert!(prepared.authorization.check().is_ok());
+    host.revoke_permissions(&manager, &review.key).unwrap();
+    assert!(prepared.authorization.check().is_err());
+    assert!(host
+        .prepare_managed_subscription_sync_complete(
             &manager,
             "org.example.plugin",
             "identity",

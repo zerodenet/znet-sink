@@ -106,3 +106,17 @@ fn typed_client_constructs_managed_subscription_metadata_request() {
         Capability::SubscriptionsManage
     );
 }
+
+#[test]
+fn typed_client_constructs_revision_checked_sync_completion() {
+    let client = Client::new(Capture::default());
+    client
+        .complete_subscription_sync("https://example.com", "1", "rev-2")
+        .unwrap();
+    let calls = client.transport().0.lock().unwrap();
+    assert_eq!(calls[0].request.capability, Capability::SubscriptionsManage);
+    assert_eq!(calls[0].request.scope, "self");
+    assert_eq!(calls[0].method, Method::SubscriptionSyncComplete);
+    assert_eq!(calls[0].arguments["revision"], "rev-2");
+    assert!(calls[0].arguments.get("lastSyncAtUnixMs").is_none());
+}
