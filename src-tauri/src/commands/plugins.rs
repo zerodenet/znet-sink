@@ -687,8 +687,22 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn plugins_uninstall(app: AppHandle, id: String) -> AppResult<Snapshot> {
+        let cleanup_app = app.clone();
         blocking(app, move |state| {
-            state.plugins().uninstall(state.capabilities(), &id)
+            let result = state.plugins().uninstall(state.capabilities(), &id, || {
+                tauri::async_runtime::block_on(crate::services::subscription::remove_plugin_owned(
+                    cleanup_app,
+                    &id,
+                ))
+            });
+            crate::services::logs::plugin_host_event(
+                state,
+                &id,
+                "host",
+                "uninstall",
+                result.as_ref().map(|_| ()),
+            );
+            result
         })
         .await
     }

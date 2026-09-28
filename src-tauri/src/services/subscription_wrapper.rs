@@ -1,6 +1,7 @@
 #[path = "subscription.rs"]
 mod original;
 
+pub(crate) use original::remove_plugin_owned;
 #[cfg(test)]
 pub(crate) use original::{
     apply_managed_to_acceptance_store, complete_managed_sync_in_acceptance_store,

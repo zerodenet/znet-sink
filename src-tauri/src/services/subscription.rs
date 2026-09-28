@@ -20,6 +20,10 @@ use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
 use sha2::{Digest, Sha256};
 
+#[path = "subscription/plugin_cleanup.rs"]
+mod plugin_cleanup;
+pub(crate) use plugin_cleanup::remove_plugin_owned;
+
 #[path = "subscription/sync_complete.rs"]
 mod sync_complete;
 pub use sync_complete::complete_managed_sync_authorized;
