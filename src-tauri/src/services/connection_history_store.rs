@@ -241,7 +241,7 @@ fn rotate_path(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn is_completed_connection_frame(frame: &DebugFrame) -> bool {
+pub(crate) fn is_completed_connection_frame(frame: &DebugFrame) -> bool {
     if frame.frame_type != "event" {
         return false;
     }
