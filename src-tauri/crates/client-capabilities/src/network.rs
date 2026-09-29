@@ -442,10 +442,23 @@ struct Options<'a> {
     follow: bool,
     route: Route,
 }
+mod diagnostics;
+pub use diagnostics::{get_with_diagnostics, RequestFailure, TransportFailure};
+
 fn exchange(
     lease: &Lease,
     input: &Request,
     options: Options<'_>,
+) -> Result<Resource<Response>, Error> {
+    exchange_diagnosed(lease, input, options, None, &mut None)
+}
+
+fn exchange_diagnosed(
+    lease: &Lease,
+    input: &Request,
+    options: Options<'_>,
+    timeout: Option<std::time::Duration>,
+    transport_failure: &mut Option<TransportFailure>,
 ) -> Result<Resource<Response>, Error> {
     let Options {
         capability,
@@ -457,6 +470,8 @@ fn exchange(
         route,
     } = options;
     let mut url = parse(&input.url)?;
+    let request_deadline =
+        timeout.and_then(|timeout| std::time::Instant::now().checked_add(timeout));
     let permission = Permission::new(
         capability,
         permission_scope
@@ -529,6 +544,15 @@ fn exchange(
         };
         let client = builder.build().map_err(|_| Error::InvalidRequest)?;
         for hop in 0..=10 {
+            let mut request_timeout = lease.remaining()?;
+            if let Some(deadline) = request_deadline {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    *transport_failure = Some(TransportFailure::Timeout);
+                    return Err(Error::Transport);
+                }
+                request_timeout = request_timeout.min(remaining);
+            }
             let current_permission = Permission::new(
                 capability,
                 permission_scope
@@ -542,9 +566,12 @@ fn exchange(
                 .request(method, url.clone())
                 .headers(request_headers.clone())
                 .body(input.body.clone())
-                .timeout(lease.remaining()?)
+                .timeout(request_timeout)
                 .send()
-                .map_err(|_| Error::Transport)?;
+                .map_err(|error| {
+                    *transport_failure = Some(diagnostics::sending(&error));
+                    Error::Transport
+                })?;
             lease.check(None)?;
             if follow && matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
                 if hop == 10 {
@@ -590,7 +617,10 @@ fn exchange(
             let mut buffer = [0u8; 8192];
             loop {
                 lease.check(None)?;
-                let count = response.read(&mut buffer).map_err(|_| Error::Transport)?;
+                let count = response.read(&mut buffer).map_err(|error| {
+                    *transport_failure = Some(diagnostics::reading(&error));
+                    Error::Transport
+                })?;
                 if count == 0 {
                     break;
                 }
