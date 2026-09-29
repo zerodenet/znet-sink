@@ -2,6 +2,7 @@
   import { Check, LoaderCircle, RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import type { ProxyNode } from '$lib/types/protocol';
+  import WireGuardEndpointSummary from './WireGuardEndpointSummary.svelte';
   import {
     delayBarWidth,
     formatDelay,
@@ -53,6 +54,7 @@
 >
   <button data-slot="surface-button"
     class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
+    class:device-card={node.protocol.toLowerCase() === 'wireguard'}
     onclick={() => onSelectNode(node)}
     disabled={selectDisabled}
   >
@@ -83,6 +85,7 @@
         <span class="attr-chip tone-{chip.tone}" title={chip.title}>{chip.label}</span>
       {/each}
     </div>
+    <WireGuardEndpointSummary {node} />
 
     <div
       class="grid-history-trigger"
@@ -184,6 +187,10 @@
   .grid-card:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .grid-card.device-card:disabled {
+    opacity: 1;
+    cursor: default;
   }
 
   .grid-card-header {

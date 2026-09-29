@@ -62,6 +62,44 @@ fn redirected_host_dns_cannot_be_used_as_a_kernel_upstream() {
 }
 
 #[test]
+fn recommended_dns_remains_independent_after_host_capture() {
+    let mut app = crate::models::app_config::AppConfig::default();
+    app.dns.enabled = true;
+    app.overrides.dns = true;
+    let source = json!({"outbounds":[{"tag":"proxy"}],
+        "route":{"final":{"type":"route","outbound":"proxy"}}});
+    let dns = super::preflight::effective_dns(&app, &source).unwrap();
+    explicit_upstreams(&dns, "10.66.0.2").unwrap();
+    for tag in ["alidns", "114dns"] {
+        assert!(dns["servers"][tag].get("detour").is_none());
+    }
+    assert_eq!(dns["servers"]["cloudflare"]["detour"], "proxy");
+}
+
+#[test]
+fn independent_literal_doh_profile_is_preserved_and_accepted_for_capture() {
+    let value = json!({
+        "servers":{"alidns":{"type":"doh","host":"223.5.5.5","port":443,
+            "path":"/dns-query","server_name":"dns.alidns.com"}},
+        "default_server":"alidns", "dispatch":[],
+        "answer":{"type":"fake_ip","cidr":"198.18.0.0/15"},
+        "policy":{"address_family":"prefer_ipv4"}
+    });
+    let mut profile: crate::models::dns_config::ClientDnsConfig =
+        serde_json::from_value(value.clone()).unwrap();
+    profile.validate_client_shape().unwrap();
+    let before = profile.clone();
+    assert!(!profile.migrate_missing_builtin_domestic_resolvers());
+    assert!(!profile.migrate_legacy_recommended_node_resolution());
+    assert_eq!(profile, before);
+    let app = crate::models::app_config::AppConfig::default();
+    let source = json!({"runtime":{"dns":value}});
+    let dns = super::preflight::effective_dns(&app, &source).unwrap();
+    assert_eq!(dns, source["runtime"]["dns"]);
+    explicit_upstreams(&dns, "10.66.0.2").unwrap();
+}
+
+#[test]
 fn disabled_global_dns_cannot_authorize_capture_using_a_saved_configuration() {
     let mut app = crate::models::app_config::AppConfig::default();
     app.dns.enabled = false;

@@ -7,15 +7,13 @@
     groups: PolicyGroup[];
     allNodesCount: number;
     selectedGroup: string | null;
-    proxyMode?: string | null;
+    wireguardCount: number;
+    viewingWireguard: boolean;
+    onSelectWireguard: () => void;
     onSelectGroup: (groupName: string | null) => void;
   }
 
-  let { groups, allNodesCount, selectedGroup, proxyMode, onSelectGroup }: Props = $props();
-
-  // "全部节点" 仅在全局模式下显示 — 非全局时用户按具体分组筛选；
-  // 不在此处回退到"全部"，否则会和全局模式语义混淆。
-  const showAllNodes = $derived(proxyMode === 'global');
+  let { groups, allNodesCount, selectedGroup, wireguardCount, viewingWireguard, onSelectWireguard, onSelectGroup }: Props = $props();
 </script>
 
 <aside class="group-sidebar">
@@ -25,15 +23,23 @@
   </div>
 
   <div class="group-list">
-    {#if showAllNodes}
       <button data-slot="surface-button"
-        class="group-item {!selectedGroup ? 'active' : ''}"
+        class="group-item {!selectedGroup && !viewingWireguard ? 'active' : ''}"
         onclick={() => onSelectGroup(null)}
       >
         <div class="group-info">
           <span class="group-name">{`全部节点`}</span>
         </div>
         <span class="group-count">{allNodesCount}</span>
+      </button>
+    {#if wireguardCount > 0}
+      <button data-slot="surface-button"
+        class="group-item {viewingWireguard ? 'active' : ''}"
+        onclick={onSelectWireguard}
+        aria-label="WireGuard 端点"
+      >
+        <div class="group-info"><span class="group-name">WireGuard 端点</span></div>
+        <span class="group-count">{wireguardCount}</span>
       </button>
     {/if}
 

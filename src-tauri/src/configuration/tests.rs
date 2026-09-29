@@ -159,16 +159,56 @@ fn recommended_dns_follows_route_final_without_proxying_node_resolution() {
         ] {
             assert_eq!(value["servers"][tag]["detour"].as_str(), expected);
         }
-        for tag in ["system", "alidns", "114dns"] {
+        for tag in ["alidns", "114dns"] {
             assert!(value["servers"][tag].get("detour").is_none());
         }
-        assert_eq!(value["policy"]["node_server"], "system");
-        assert_eq!(
-            value["policy"]["node_fallback_servers"],
-            json!(["alidns", "114dns"])
-        );
+        assert!(value["servers"].get("system").is_none());
+        assert_eq!(value["policy"]["node_server"], "alidns");
+        assert_eq!(value["policy"]["node_fallback_servers"], json!(["114dns"]));
         let model: crate::models::dns_config::ClientDnsConfig =
             serde_json::from_value(value.clone()).unwrap();
         model.validate_client_shape().unwrap();
     }
+}
+
+#[test]
+fn wireguard_dns_local_edit_preserves_the_device_and_source_configuration() {
+    let base = json!({"inbounds":[],"outbounds":[{
+        "tag":"wg-a","protocol":{"type":"wireguard","private_key":"private-key",
+        "addresses":["10.10.0.11/32"],"peers":[
+            {"public_key":"peer-key","endpoint":"gateway.test:51820","allowed_ips":["192.168.0.0/23"]},
+            {"public_key":"other-key","endpoint":"[2001:db8::1]:51820","allowed_ips":["10.0.0.0/8"]}
+        ]}}],"route":{"auto_outbounds":["wg-a"],"rules":[],"bypass":[],"final":{"type":"reject"}},
+        "runtime":{"dns":{"servers":{"system":{"type":"system"}},"default_server":"system"}}});
+    let original = base.clone();
+    let mut context = inputs();
+    let edited_dns = json!({"enabled":true,"dnsHijack":false,"config":{
+        "servers":{"system":{"type":"system"},"wg-a-dns":{
+            "type":"udp","host":"192.168.1.180","detour":"wg-a"}},
+        "default_server":"system","policy":{"node_server":"system"},
+        "dispatch":[{"condition":{"type":"domain","values":["office.internal.test"]},"server":"wg-a-dns"}]}});
+    context.app = super::local_edits::candidate(
+        &context.app,
+        "profile-a",
+        BTreeMap::from([("dns".into(), edited_dns)]),
+        &[],
+    )
+    .unwrap();
+    let (resolved, edited) =
+        super::local_edits::resolve(&context.app, Some("profile-a"), &base).unwrap();
+    context.app = resolved;
+    let candidate = finalize(&base, edited, &context).unwrap();
+    assert_eq!(base, original);
+    assert_eq!(candidate.config["outbounds"], original["outbounds"]);
+    assert_eq!(candidate.config["route"], original["route"]);
+    let dns = &candidate.config["runtime"]["dns"];
+    assert_eq!(dns["servers"]["wg-a-dns"]["detour"], "wg-a");
+    assert_eq!(dns["dispatch"][0]["server"], "wg-a-dns");
+    let contract: crate::models::dns_config::ClientDnsConfig =
+        serde_json::from_value(dns.clone()).unwrap();
+    contract.validate_client_shape().unwrap();
+
+    let mut without_device = original.clone();
+    without_device["outbounds"] = json!([]);
+    assert!(finalize(&without_device, without_device.clone(), &context).is_err());
 }
