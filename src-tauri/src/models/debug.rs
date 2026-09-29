@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod worker;
+
 /// A captured IPC frame for the debug diagnostic page.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +65,7 @@ static DEBUG_FRAME_ID: AtomicU64 = AtomicU64::new(0);
 
 type DebugFrameObserver = Arc<dyn Fn(&DebugFrame) + Send + Sync + 'static>;
 static DEBUG_FRAME_OBSERVER: OnceLock<DebugFrameObserver> = OnceLock::new();
+static DEBUG_WORKER: OnceLock<Option<worker::Worker<DebugFrame>>> = OnceLock::new();
 
 /// Install one process-wide observer for captured IPC frames. The transport
 /// remains independent of application state; the Tauri composition root
@@ -82,6 +85,29 @@ pub(crate) fn push_debug_frame(frame: DebugFrame) {
             frames.remove(0);
         }
         frames.push(frame);
+    }
+    // Disk rotation and log projection must never stall the IPC reader or a
+    // request writer. Keep live inspection synchronous; persist on one bounded
+    // worker so slow storage cannot create an unbounded memory backlog either.
+    let worker = DEBUG_WORKER.get_or_init(|| {
+        worker::Worker::new(128, persist_debug_frame)
+            .map_err(|error| eprintln!("debug capture worker unavailable: {error}"))
+            .ok()
+    });
+    if let Some(worker) = worker {
+        if let Err(frame) = worker.submit(persisted) {
+            if crate::services::connection_history_store::is_completed_connection_frame(&frame) {
+                crate::services::connection_history_store::record_write_failure();
+            }
+        }
+    }
+}
+
+fn persist_debug_frame(persisted: DebugFrame, dropped: u64) {
+    if dropped > 0 {
+        crate::services::file_logger::line(&format!(
+            "debug capture skipped {dropped} frames because its bounded worker was unavailable or busy"
+        ));
     }
     let _ = crate::services::debug_store::append(&persisted);
     if crate::services::connection_history_store::append_if_completed(&persisted).is_err() {

@@ -12,6 +12,16 @@ A changed runtime/configuration during the read rejects the result; a different 
 
 Recovery samples use the existing Rust traffic bridge for the overview, tray and traffic ball, keeping their rate calculation shared.
 
+## Installed-client regression 2026-09-29
+
+The installed build 426 was retrying an obsolete observation endpoint after a kernel installation changed the executable from a desktop test binary to the managed core directory. On Unix the private socket lives beside that executable, so ordinary queries used the new address while the event forwarder retained the old one. The recovery watchdog belongs to the forwarder and could not run before that old connection succeeded.
+
+Kernel installation and rollback completion now rebuild the observation subscription from current settings. Committed settings changes that alter the resolved endpoint notify the same lifecycle owner. Stop/start is serialized, late notifications cannot revive a disposed stream, and rate events from an older generation are rejected. Normal network changes keep the subscription intact.
+
+Read-only process sampling also found the IPC reader blocked in synchronous diagnostic log rotation, with received stats events about twenty seconds behind their kernel timestamps. Disk writes, rotation, connection-history persistence and log projection now run on one bounded diagnostic worker. The reader retains the live in-memory ring and never waits for storage. Queue overflow drops diagnostics rather than traffic events, reports the skipped count from the worker, and records lost completed-flow history in the existing failure counter. Abrupt application termination may lose queued diagnostic frames.
+
+Validation: 12 frontend observation lifecycle tests passed; frontend type checking and production build passed; Rust workspace tests reported 758 passed, zero failed and seven ignored. The new two-peer IPC rebind test and an explicit contract check against the installed Zero executable both passed. The latter launches only a private no-inbound child; the running kernel, TUN, system proxy and installed application were not restarted or replaced during validation. Restored rates in the user's installed application still require installation of the corrected client.
+
 ## Files
 
 - src-tauri/src/services/gui_events.rs
