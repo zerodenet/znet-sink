@@ -89,6 +89,14 @@ async fn supplied_zero_accepts_the_production_observation_contract() {
         .is_empty());
     assert!(baseline["stats"].is_object());
     assert!(!baseline["policies"].is_null());
+    let (identity, stats) = observer.traffic().await.unwrap();
+    assert_eq!(
+        identity["core_instance_id"],
+        baseline["runtime"]["core_instance_id"]
+    );
+    assert_eq!(stats.bytes_up, 0);
+    assert_eq!(stats.bytes_down, 0);
+    assert_eq!(stats.active_sessions, 0);
     assert!(observer.active(None).await.unwrap().items.is_empty());
     assert!(observer.recent(None).await.unwrap().items.is_empty());
     assert!(observer

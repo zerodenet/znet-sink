@@ -35,17 +35,39 @@ const TRAFFIC_BALL_LABEL: &str = "traffic-ball";
 const TRAFFIC_BALL_CREATE_REQUEST_EVENT: &str = "traffic-ball:create-request";
 const TRAFFIC_BALL_READY_EVENT: &str = "traffic-ball:ready";
 
-static TRAY_BASELINE: OnceLock<Mutex<Option<TrafficSample>>> = OnceLock::new();
+static TRAY_BASELINE: OnceLock<Mutex<RateBaseline>> = OnceLock::new();
 static TRAFFIC_BALL_CREATING: AtomicBool = AtomicBool::new(false);
 
-fn tray_baseline() -> &'static Mutex<Option<TrafficSample>> {
-    TRAY_BASELINE.get_or_init(|| Mutex::new(None))
+#[derive(Default)]
+struct RateBaseline {
+    generation: u64,
+    sample: Option<TrafficSample>,
+}
+
+impl RateBaseline {
+    fn next(
+        &mut self,
+        generation: u64,
+        totals: &GuiTrafficStats,
+        sampled_at: u64,
+    ) -> Option<crate::models::gui_core::GuiTrafficSnapshot> {
+        if self.generation != generation {
+            self.generation = generation;
+            self.sample = None;
+        }
+        rate_sample(&mut self.sample, totals, sampled_at)
+    }
+}
+
+fn tray_baseline() -> &'static Mutex<RateBaseline> {
+    TRAY_BASELINE.get_or_init(|| Mutex::new(RateBaseline::default()))
 }
 
 pub(crate) fn handle_stats_sample(
     app: &AppHandle,
     totals: &GuiTrafficStats,
     sampled_at_unix_ms: u64,
+    generation: u64,
 ) {
     let current = TrafficSample {
         stats: totals.clone(),
@@ -58,7 +80,14 @@ pub(crate) fn handle_stats_sample(
         let mut baseline = tray_baseline()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let Some(snapshot) = rate_sample(&mut baseline, totals, sampled_at_unix_ms) else {
+        if !app
+            .state::<AppState>()
+            .observations()
+            .is_current(generation)
+        {
+            return;
+        }
+        let Some(snapshot) = baseline.next(generation, totals, sampled_at_unix_ms) else {
             return;
         };
         snapshot
@@ -86,6 +115,7 @@ pub(crate) fn handle_stats_sample(
     // Compute it once in Rust and send the flattened result to the two UI
     // surfaces instead of letting each WebView maintain its own delta clock.
     let payload = json!({
+        "generation": generation,
         "uploadBytesPerSec": rate_snapshot.rates.upload_bps,
         "downloadBytesPerSec": rate_snapshot.rates.download_bps,
         "totalUploadBytes": rate_snapshot.totals.bytes_up,
@@ -130,7 +160,7 @@ fn rate_sample(
 pub(crate) fn clear_runtime_traffic_state(app: &AppHandle) {
     *tray_baseline()
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = None;
+        .unwrap_or_else(|error| error.into_inner()) = RateBaseline::default();
 
     let state = app.state::<AppState>();
     if let Ok(mut sample) = state.traffic_sample().lock() {
@@ -267,7 +297,25 @@ fn clear_tray_rate_title(_app_handle: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_rate, rate_sample};
+    use super::{compact_rate, rate_sample, RateBaseline};
+
+    #[test]
+    fn new_subscription_rebuilds_rates_from_its_own_counters() {
+        use crate::models::gui_core::GuiTrafficStats;
+        let stats = |bytes| GuiTrafficStats {
+            bytes_down: bytes,
+            ..Default::default()
+        };
+        let mut baseline = RateBaseline::default();
+        assert!(!baseline.next(1, &stats(1000), 1000).unwrap().stable);
+        assert!(baseline.next(1, &stats(2000), 2000).unwrap().stable);
+        // A new peer can start within 500 ms and have lower counters. It must
+        // not be dropped or measured against the previous peer's baseline.
+        assert!(!baseline.next(2, &stats(10), 2100).unwrap().stable);
+        let restored = baseline.next(2, &stats(5010), 3100).unwrap();
+        assert!(restored.stable);
+        assert_eq!(restored.rates.download_bps, 5000);
+    }
 
     #[test]
     fn delayed_or_duplicate_samples_never_replace_current_rates() {

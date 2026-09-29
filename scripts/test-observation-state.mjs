@@ -12,18 +12,18 @@ const snapshot = (id='engine-a',flows=[flow()]) => ({runtime:{core_instance_id:i
 // Execute actual stores and lifecycle code. Only the Tauri and sibling-feature
 // adapters are substituted; no DOM, host network, or installed kernel is used.
 async function harness() {
-  const state={generation:1,callbacks:new Map(),startGate:null,policyGate:null,readGate:null,reads:0,stats:[],runtimes:[],stopCalls:0,startEntered:deferred()};
+  const state={generation:1,callbacks:new Map(),startGate:null,policyGate:null,readGate:null,reads:0,stats:[],rates:[],runtimes:[],stopCalls:0,startCalls:0,endpoint:'desktop/zero-control.sock',bindings:[],startEntered:deferred()};
   const context=createContext({$state:value=>value,console,Date,Map,Set,setTimeout,clearTimeout});
   const noOp=async()=>{};
   const core={
-    startGuiEvents:async()=>{state.startEntered.resolve();if(state.startGate)await state.startGate;return {generation:state.generation};},
-    stopGuiEvents:async()=>{state.stopCalls++;},appendLog:noOp,
+    startGuiEvents:async()=>{state.startCalls++;state.bindings.push(state.endpoint);state.startEntered.resolve();if(state.startGate)await state.startGate;return {generation:state.generation};},
+    stopGuiEvents:async()=>{state.stopCalls++;state.generation++;},appendLog:noOp,
     getGuiObservationSnapshot:async()=>{state.reads++;return state.readGate ? await state.readGate : snapshot();},
   };
   const adapters={
     '@tauri-apps/api/event':{listen:async(name,callback)=>{state.callbacks.set(name,callback);return ()=>state.callbacks.delete(name);}},
     '$lib/services/core':core,
-    '$lib/services/overview-data.svelte':{overviewData:{applyStatsEvent:value=>state.stats.push(copy(value)),applyRuntimeEvent:value=>state.runtimes.push(copy(value)),applyPolicyEvent(){},applyTrafficRateSample(){},refreshPolicyNodes:noOp}},
+    '$lib/services/overview-data.svelte':{overviewData:{applyStatsEvent:value=>state.stats.push(copy(value)),applyRuntimeEvent:value=>state.runtimes.push(copy(value)),applyPolicyEvent(){},applyTrafficRateSample:value=>state.rates.push(copy(value)),refreshPolicyNodes:noOp}},
     '$lib/services/gui-state.svelte':{guiState:{refreshPolicyGroups:async()=>{if(state.policyGate)await state.policyGate;},refreshNodeStateAfterConfigChange:noOp,applyPolicyProbeCompleted(){},probeNetwork:noOp,refreshSelfTest:noOp}},
     '$lib/services/toast.svelte':{warning(){}},
   };
@@ -144,4 +144,34 @@ test('an invalid fallback response does not recursively issue more queries',asyn
   h.state.readGate=Promise.resolve(null);h.event('core.statusChanged',{healthy:true});
   await Promise.resolve();await Promise.resolve();await Promise.resolve();
   assert.equal(h.state.reads,1);
+});
+
+test('kernel installation, rollback and endpoint edits rebind the stream and restore rates',async()=>{
+  for(const reason of ['core.version_restarted','core.version_rollback','core.endpoint_changed']) {
+    const h=await harness();await h.service.start();h.status('offline');
+    const oldGeneration=h.state.generation;
+    h.state.endpoint='installed/zero-control.sock';
+    h.state.callbacks.get('host-network:changed')({payload:{reason}});
+    // The queued start waits for the notification's stop/start transaction.
+    await h.service.start();
+    assert.deepEqual(h.state.bindings,['desktop/zero-control.sock','installed/zero-control.sock']);
+    assert.equal(h.state.stopCalls,1);
+    h.status('offline',undefined,oldGeneration);h.status('subscribed',snapshot('new-kernel'));
+    const rate=h.state.callbacks.get('traffic:rate-sampled');
+    rate({payload:{generation:oldGeneration,stable:true,downloadBytesPerSec:999999}});
+    assert.equal(h.state.rates.length,0);
+    rate({payload:{generation:h.state.generation,stable:true,sampledAtUnixMs:Date.now(),downloadBytesPerSec:12000}});
+    assert.equal(h.service.status,'subscribed');assert.equal(h.state.rates.at(-1).downloadBytesPerSec,12000);
+    assert.equal(h.state.callbacks.size,5);
+  }
+});
+
+test('ordinary host network changes preserve the stream and late notifications cannot revive a stopped stream',async()=>{
+  const h=await harness();await h.service.start();h.status('subscribed',snapshot());
+  const callback=h.state.callbacks.get('host-network:changed');
+  callback({payload:{reason:'system_proxy.enabled'}});await h.service.start();
+  assert.equal(h.state.startCalls,1);assert.equal(h.state.stopCalls,0);
+  const stopping=h.service.stop();callback({payload:{reason:'core.version_restarted'}});
+  await stopping;await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(h.state.startCalls,1);assert.equal(h.state.callbacks.size,0);
 });
