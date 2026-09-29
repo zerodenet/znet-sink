@@ -79,6 +79,7 @@ fn serve_peer(stream: std::os::unix::net::UnixStream, name: &str, instance: usiz
         .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     let mut writer = stream.try_clone().unwrap();
+    let mut samples = 0;
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { break };
         let request: Value = serde_json::from_str(&line).unwrap();
@@ -96,7 +97,10 @@ fn serve_peer(stream: std::os::unix::net::UnixStream, name: &str, instance: usiz
                 "runtime" => {
                     json!({"core_instance_id": format!("{name}-{instance}"), "config_revision": 1})
                 }
-                "stats" => json!({"connections": 1}),
+                "stats" => {
+                    samples += 1;
+                    json!({"active_sessions":1,"bytes_up":samples * 100,"bytes_down":samples * 5000})
+                }
                 "policies" => json!([]),
                 "active_flows" | "recent_flows" => {
                     assert!(args["limit"].as_u64().unwrap() <= 500);
@@ -158,4 +162,31 @@ async fn observation_queries_are_pinned_and_endpoint_reset_is_scoped() {
     // The old reader cannot silently migrate onto a new engine connection.
     assert!(observer.active(None).await.is_err());
     assert_eq!(first.accepts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn installation_rebind_reads_fresh_counters_from_the_new_endpoint_only() {
+    let desktop = Peer::start("desktop");
+    let installed = Peer::start("installed");
+    let old = FlowObservation::connect(desktop.binding.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        old.traffic().await.unwrap().0["core_instance_id"],
+        "desktop-1"
+    );
+    connection::reset_endpoint(&desktop.binding.endpoint);
+    assert!(old.traffic().await.is_err());
+    // The lifecycle must select the new settings explicitly; the old pinned
+    // observer is never allowed to attach silently to a different peer.
+    let current = FlowObservation::connect(installed.binding.clone())
+        .await
+        .unwrap();
+    let (identity, first) = current.traffic().await.unwrap();
+    assert_eq!(identity["core_instance_id"], "installed-1");
+    let (_, second) = current.traffic().await.unwrap();
+    assert_eq!(second.bytes_down - first.bytes_down, 5000);
+    assert_eq!(installed.accepts.load(Ordering::SeqCst), 1);
+    assert!(old.traffic().await.is_err());
+    assert_eq!(desktop.accepts.load(Ordering::SeqCst), 1);
 }

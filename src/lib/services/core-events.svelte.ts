@@ -116,16 +116,29 @@ class CoreEventsService {
       if (!this._unlistenHostNetwork) {
         this._unlistenHostNetwork = await listen<{ reason: string; occurredAtUnixMs: number }>(
           HOST_NETWORK_CHANGED_EVENT,
-          () => {
+          (event) => {
+            if (event.payload.reason === 'core.version_restarted'
+              || event.payload.reason === 'core.version_rollback'
+              || event.payload.reason === 'core.endpoint_changed') {
+              // The managed socket can move when an installation replaces a
+              // manually selected executable. Retrying the old pinned address
+              // cannot recover it: select a new generation from current settings.
+              void this._restartForRuntimeChange().catch((error) => {
+                console.warn('[ZNet] runtime event stream rebind failed', error);
+              });
+            }
             void guiState.probeNetwork();
             void guiState.refreshSelfTest();
           },
         );
       }
       if (!this._unlistenTrafficRate) {
-        this._unlistenTrafficRate = await listen<TrafficRateSample>(
+        this._unlistenTrafficRate = await listen<TrafficRateSample & { generation: number }>(
           TRAFFIC_RATE_SAMPLE_EVENT,
-          (event) => overviewData.applyTrafficRateSample(event.payload),
+          (event) => {
+            if (this._stopped || event.payload.generation !== this._activeGeneration) return;
+            overviewData.applyTrafficRateSample(event.payload);
+          },
         );
       }
 
@@ -144,6 +157,15 @@ class CoreEventsService {
 
   stop(): Promise<void> {
     return this._lifecycle.enqueue(() => this._stop());
+  }
+
+  private _restartForRuntimeChange(): Promise<void> {
+    return this._lifecycle.enqueue(async () => {
+      // A pending runtime notification must not revive a disposed app stream.
+      if (this._stopped) return;
+      await this._stop();
+      await this._start();
+    });
   }
 
   private async _stop() {

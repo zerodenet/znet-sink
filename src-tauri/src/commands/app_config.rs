@@ -138,6 +138,7 @@ pub async fn app_config_import_kernel_settings(
         }
     }
 
+    emit_endpoint_change(&app_handle, &old_config, &new_config);
     Ok(new_config)
 }
 
@@ -304,7 +305,16 @@ pub(crate) async fn apply_candidate(
         }
     }
 
+    emit_endpoint_change(&app_handle, &old_config, &new_config);
     Ok(new_config)
+}
+
+fn emit_endpoint_change(app: &AppHandle, old: &AppConfig, next: &AppConfig) {
+    if crate::services::core_config::resolve_socket(&old.core)
+        != crate::services::core_config::resolve_socket(&next.core)
+    {
+        crate::services::network_probe::emit_host_network_changed(app, "core.endpoint_changed");
+    }
 }
 
 fn restore_proxy_settings(state: &AppState, app: &AppConfig) -> AppResult<()> {

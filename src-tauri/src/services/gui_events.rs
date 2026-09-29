@@ -174,7 +174,7 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
                                 crate::services::common::now_unix_ms(),
                             );
                             crate::services::traffic_sampler::handle_stats_sample(
-                                &app, stats, sampled_at,
+                                &app, stats, sampled_at, generation,
                             );
                         }
                         _ => {}
@@ -225,6 +225,7 @@ fn subscribe_and_forward_events(app: AppHandle, subscription: &Subscription) -> 
                             &app,
                             &stats,
                             crate::services::common::now_unix_ms(),
+                            generation,
                         );
                         traffic_error = None;
                     }
