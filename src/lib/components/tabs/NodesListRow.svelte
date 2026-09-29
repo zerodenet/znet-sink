@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
+  import WireGuardEndpointSummary from './WireGuardEndpointSummary.svelte';
   import {
     delayBarWidth,
     formatDelay,
@@ -48,6 +49,7 @@
 <div class="node-row {isActive ? 'active' : ''}" role="listitem">
   <button data-slot="surface-button"
     class="node-main"
+    class:device-card={node.protocol.toLowerCase() === 'wireguard'}
     onclick={() => onSelectNode(node)}
     disabled={selectDisabled}
   >
@@ -83,6 +85,7 @@
           <span class="node-unavailable">离线</span>
         {/if}
       </div>
+      <WireGuardEndpointSummary {node} />
     </div>
   </button>
 
@@ -173,6 +176,10 @@
   .node-main:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .node-main.device-card:disabled {
+    opacity: 1;
+    cursor: default;
   }
 
   .node-radio {

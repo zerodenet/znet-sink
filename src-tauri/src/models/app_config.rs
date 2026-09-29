@@ -697,7 +697,7 @@ mod tests {
         assert!(dns.servers.contains_key("google-bootstrap"));
         assert!(dns.servers.contains_key("alidns"));
         assert!(dns.servers.contains_key("114dns"));
-        assert!(dns.servers.contains_key("system"));
+        assert!(!dns.servers.contains_key("system"));
         assert!(matches!(
             dns.answer,
             crate::models::dns_config::ClientDnsAnswer::FakeIp { .. }

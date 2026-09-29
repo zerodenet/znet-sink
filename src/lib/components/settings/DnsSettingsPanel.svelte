@@ -49,11 +49,13 @@
     validateDnsDraft,
   } from '$lib/services/dns-config';
   import { getEffectiveRuleSetOptions } from '$lib/services/config';
+  import { dnsRouteTargetOptions, type DnsRouteTargetOption } from '$lib/services/dns-route-targets';
   import {
     getProfileSettings,
     getAppErrorInfo,
     getAppErrorMessage,
     getConfigPolicyGroups,
+    getConfigProxyNodes,
     guiInspectDnsEffectiveConfig,
     type DnsEffectiveConfigInspection,
   } from '$lib/services/core';
@@ -93,7 +95,7 @@
   let dispatchDialogError = $state('');
   let compatibility = $state<DnsKernelCompatibility>({ status: 'unknown' });
   let ruleSetOptions = $state<EffectiveRuleSetOption[]>([]);
-  let routeTargetOptions = $state<Array<{ tag: string; label: string }>>([]);
+  let routeTargetOptions = $state<DnsRouteTargetOption[]>([]);
   let routeTargetsKnown = $state(false);
   let advancedOpen = $state(false);
   let effectiveDialogOpen = $state(false);
@@ -405,12 +407,12 @@
     error = '';
     errorCode = undefined;
     try {
-      const [result, kernelCompatibility, tunStatus, effectiveRuleSets, configGroups] = await Promise.all([
+      const [result, kernelCompatibility, tunStatus, effectiveRuleSets, configTargets] = await Promise.all([
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
         getGuiTunStatus().catch(() => null),
         getEffectiveRuleSetOptions().catch(() => []),
-        getConfigPolicyGroups().catch(() => null),
+        Promise.all([getConfigProxyNodes(), getConfigPolicyGroups()]).catch(() => null),
       ]);
       automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
         tunStatus?.ipv4Egress.availability ?? 'unknown',
@@ -429,13 +431,8 @@
       draft = nextDraft;
       compatibility = kernelCompatibility;
       ruleSetOptions = effectiveRuleSets;
-      routeTargetsKnown = configGroups !== null;
-      const targets = new Map<string, { tag: string; label: string }>();
-      targets.set('block', { tag: 'block', label: '阻断' });
-      for (const group of configGroups ?? []) {
-        targets.set(group.name, { tag: group.name, label: group.name });
-      }
-      routeTargetOptions = [...targets.values()].sort((left, right) => left.tag.localeCompare(right.tag, 'zh-CN'));
+      routeTargetsKnown = configTargets !== null;
+      routeTargetOptions = configTargets ? dnsRouteTargetOptions(...configTargets) : [];
       jsonDialogOpen = false;
       nativeJson = JSON.stringify(result.source.config ?? nextDraft.dns, null, 2);
       nativeError = '';
@@ -1301,13 +1298,16 @@
                   <Select.Content>
                     <Select.Item value={unsetSelection} label="直接连接">直接连接</Select.Item>
                     <Select.Item value={DNS_DETOUR_ROUTE_FINAL} label="跟随默认出站">跟随默认出站</Select.Item>
-                    {#each routeTargetOptions as target}
-                      <Select.Item value={target.tag} label={target.tag === 'block' ? target.label : `策略组 · ${target.label}`}>
-                        {target.tag === 'block' ? target.label : `策略组 · ${target.label}`}
+                    {#each routeTargetOptions.filter((target) => target.tag !== 'direct') as target}
+                      <Select.Item value={target.tag} label={target.label}>
+                        {target.label}
                       </Select.Item>
                     {/each}
-                    {#if serverDraft.detour && serverDraft.detour !== DNS_DETOUR_ROUTE_FINAL && !routeTargetTags.has(serverDraft.detour)}
-                      <Select.Item value={serverDraft.detour} label={`${serverDraft.detour}（已失效）`}>{serverDraft.detour}（已失效）</Select.Item>
+                    {#if serverDraft.detour === 'direct'}
+                      <Select.Item value="direct" label="直接连接">直接连接</Select.Item>
+                    {:else if serverDraft.detour && serverDraft.detour !== DNS_DETOUR_ROUTE_FINAL && !routeTargetTags.has(serverDraft.detour)}
+                      {@const missingLabel = `${serverDraft.detour}（${routeTargetsKnown ? '已失效' : '待确认'}）`}
+                      <Select.Item value={serverDraft.detour} label={missingLabel}>{missingLabel}</Select.Item>
                     {/if}
                   </Select.Content>
                 </Select.Root>

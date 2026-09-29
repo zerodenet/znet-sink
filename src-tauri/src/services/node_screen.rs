@@ -554,6 +554,39 @@ mod tests {
     }
 
     #[test]
+    fn independent_wireguard_outbounds_survive_projection_without_policy_membership() {
+        let groups = vec![group(
+            "proxy",
+            "selector",
+            vec![member("regular", Some("socks5"), false, None)],
+        )];
+        let nodes = project_nodes(
+            &scope(),
+            vec![
+                config_node("regular", "socks5"),
+                config_node("wg-a", "wireguard"),
+                config_node("wg-b", "wireguard"),
+            ],
+            &groups,
+            false,
+        );
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.tag.as_str())
+                .collect::<Vec<_>>(),
+            vec!["regular", "wg-a", "wg-b"]
+        );
+        assert_eq!(nodes[0].group_tags, vec!["proxy"]);
+        for node in &nodes[1..] {
+            assert!(node.group_tags.is_empty());
+            assert!(node.selected_in.is_empty());
+            assert_eq!(node.protocol, "wireguard");
+            assert!(!node.runtime_available);
+        }
+    }
+
+    #[test]
     fn config_and_runtime_groups_merge_into_one_authoritative_projection() {
         let scope = scope();
         let config = vec![group(

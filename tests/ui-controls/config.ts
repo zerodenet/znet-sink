@@ -37,6 +37,13 @@ const endpointConfig = () => ({ localProxy: {
 let precedenceOverrides = {listener:false,dns:false,tun:false,urlTest:false,bypass:false,rules:false};
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
+  if (panel === 'dns') return { dns: { enabled: true, dnsHijack: false, config: {
+    servers: { system: { type: 'system' }, 'wg-a-dns': {
+      type: 'udp', host: '192.168.1.180', port: 53, detour: 'wg-a',
+    } }, default_server: 'system', answer: { type: 'real' },
+    policy: { node_server: 'system' },
+    dispatch: [{ condition: { type: 'domain', values: ['office.internal.test'] }, server: 'wg-a-dns' }],
+  } } };
   if (panel === 'settings' && new URLSearchParams(location.search).get('mode') === 'precedence') {
     return { ...(await getTunConfig()), core: {cleanupProxyOnExit:true}, localProxy: {host:'127.0.0.1',port:7890,bypass:[]},
       overrides:precedenceOverrides, urlTest:{url:'https://client.test/204',toleranceMs:50},
@@ -145,7 +152,14 @@ window.addEventListener('fixture-append-log', () => {
   logFixture.push({ id, occurredAtUnixMs: Date.now(), source: 'app', level: 'info', message: `新日志 ${id}`, fields: {stage:'new'} });
 });
 export const getEffectiveRuleSetOptions = async () => [];
-export const getConfigPolicyGroups = async () => [];
+export const getConfigPolicyGroups = async () => new URLSearchParams(location.search).get('panel') === 'dns'
+  ? [{ name: 'Proxy', kind: 'selector', outbounds: [], available: true }] : [];
+export const getConfigProxyNodes = async () => {
+  const params = new URLSearchParams(location.search);
+  if (params.get('panel') !== 'dns' || params.get('mode') === 'missing-target') return [];
+  if (params.get('mode') === 'target-read-failure') throw new Error('Cannot read active config');
+  return [{ tag: 'wg-a', protocol: 'wireguard', udp: true }, { tag: 'node-a', protocol: 'socks5' }];
+};
 export const guiInspectDnsEffectiveConfig = async () => { throw new Error('No kernel in UI fixture'); };
 export const getGuiZeroCapabilities = async () => isCapabilitiesPanel() ? capabilityFixture() : ({ available: false, globalLimitations: [] });
 export const getGuiCapabilitiesSnapshot = async () => ({ management: [], proxyFeatures: [] });
@@ -174,6 +188,9 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
     ? ['日本 SS [01] [Lite]', '日本 IX [0x01] [Lite]', '日本 ME [01] [Lite]', '日本 HY [01] [Lite]', '日本 TR [01] [Lite]', '日本 VM [01] [Lite]']
     : ['node-a', 'node-b'];
   const policyTag = compactLayout ? 'AI Suite' : 'proxy';
+  const wireguard = params.get('endpoints') === 'wireguard' && params.get('version') !== 'v002';
+  const groupedWireguard = params.get('mode') === 'wg-in-group';
+  const memberTags = groupedWireguard ? [...tags, 'wg-a'] : tags;
   const selected = compactLayout && selectedNode === 'node-a' ? tags[1] : selectedNode;
   const largeProbeTargets = params.get('probe') === 'large'
     ? Array.from({length: 1234}, (_, index) => `probe-node-${index + 1}`)
@@ -189,9 +206,16 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
     startedAtUnixMs: 1, updatedAtUnixMs: 2, deadlineAtUnixMs: 60_000,
   }] : [];
   return {revision: 1, scope, sourceStatus: 'ready', activeProbeJobs,
-    groups: [{id: {profileId:'fixture', configRevision:1, tag:policyTag}, tag:policyTag, kind:compactLayout ? 'urltest' : 'selector', selected, memberTags:tags, runtimeAvailable:true, available:true}],
-    nodes: tags.map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:[policyTag], selectedIn:tag === selected ? [policyTag] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy',activeProbeJobIds:[],actionValid:true,
-      history:[{scope,jobKind:'scheduled_policy_observation',targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy',observedAtUnixMs:Date.now()}]}))};
+    groups: [{id: {profileId:'fixture', configRevision:1, tag:policyTag}, tag:policyTag, kind:compactLayout ? 'urltest' : 'selector', selected, memberTags, runtimeAvailable:true, available:true}],
+    nodes: [...tags.map((tag,index) => ({id: {profileId:'fixture',configRevision:1,tag},tag, protocol:'vless', groupTags:[policyTag], selectedIn:tag === selected ? [policyTag] : [], runtimeAvailable:true,alive:true,latencyMs:42+index,lastObservedAtUnixMs:Date.now(),lastObservationSource:'scheduled_policy' as const,activeProbeJobIds:[],actionValid:true,
+      history:[{scope,jobKind:'scheduled_policy_observation' as const,targetTag:tag,reachable:true,latencyMs:42+index,source:'scheduled_policy' as const,observedAtUnixMs:Date.now()}]})),
+      ...(wireguard ? ['wg-a', 'wg-multi'].map((tag, index) => ({
+        id: {profileId:'fixture',configRevision:1,tag},tag,protocol:'wireguard',
+        server: index === 0 ? '2001:db8::1' : undefined, port: index === 0 ? 51820 : undefined,
+        udp:true, groupTags: groupedWireguard && index === 0 ? [policyTag] : [], selectedIn: tag === selected ? [policyTag] : [],
+        runtimeAvailable:true, activeProbeJobIds:[],actionValid:true,history:[],
+      })) : []),
+    ]};
 };
 
 let localFieldEdits: Record<string, unknown> = {};

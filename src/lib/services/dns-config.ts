@@ -173,14 +173,13 @@ export function createRecommendedDnsConfig(
       host: '114.114.114.114',
       port: 53,
     },
-    system: createDnsServer('system'),
   };
   dns.default_server = 'cloudflare';
   dns.policy = {
     ...dns.policy,
-    fallback_servers: ['google', 'system'],
-    node_server: 'system',
-    node_fallback_servers: ['alidns', '114dns'],
+    fallback_servers: ['google', 'alidns'],
+    node_server: 'alidns',
+    node_fallback_servers: ['114dns'],
   };
   return dns;
 }

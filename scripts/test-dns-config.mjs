@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { effectiveConfigDiff } from '../src/lib/services/config-diff.ts';
 import { projectClientKernelFeatures } from '../src/lib/services/kernel-capabilities.ts';
+import { dnsRouteTargetOptions } from '../src/lib/services/dns-route-targets.ts';
 import {
   DNS_DETOUR_ROUTE_FINAL,
   createDefaultDnsConfig,
@@ -73,10 +74,10 @@ assert.match(panel, /aria-label="节点解析服务器"/);
 assert.match(panel, /aria-label="直连解析服务器"/);
 assert.match(panel, /通用回退链/);
 assert.match(panel, /单独超时/);
-assert.doesNotMatch(panel, /getConfigProxyNodes/);
+assert.match(panel, /getConfigProxyNodes/);
 assert.match(panel, /getConfigPolicyGroups/);
-assert.match(panel, /targets\.set\('block'/);
-assert.match(panel, /策略组 ·/);
+assert.match(panel, /Promise\.all\(\[getConfigProxyNodes\(\), getConfigPolicyGroups\(\)\]\)/);
+assert.match(panel, /dnsRouteTargetOptions\(\.\.\.configTargets\)/);
 assert.match(panel, /aria-label="真实地址映射"/);
 assert.match(panel, /changeReverseMapping\('max_domains_per_address'/);
 assert.match(panel, /getGuiTunStatus/);
@@ -203,13 +204,13 @@ assert.deepEqual(Object.keys(recommendedDns.servers), [
   'google-bootstrap',
   'alidns',
   '114dns',
-  'system',
 ]);
 assert.equal(recommendedDns.servers.cloudflare.detour, DNS_DETOUR_ROUTE_FINAL);
 assert.equal(recommendedDns.servers.google.detour, DNS_DETOUR_ROUTE_FINAL);
-assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'system']);
-assert.equal(recommendedDns.policy?.node_server, 'system');
-assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['alidns', '114dns']);
+assert.deepEqual(recommendedDns.policy?.fallback_servers, ['google', 'alidns']);
+assert.equal(recommendedDns.policy?.node_server, 'alidns');
+assert.deepEqual(recommendedDns.policy?.node_fallback_servers, ['114dns']);
+assert.equal(Object.values(recommendedDns.servers).some((server) => server.type === 'system'), false);
 assert.equal(recommendedDns.servers['cloudflare-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
 assert.equal(recommendedDns.servers['google-bootstrap'].detour, DNS_DETOUR_ROUTE_FINAL);
 assert.deepEqual(recommendedDns.servers.alidns, {
@@ -226,6 +227,24 @@ assert.deepEqual(recommendedDns.servers['114dns'], {
 });
 assert.equal(recommendedDns.servers.alidns.detour, undefined);
 assert.equal(recommendedDns.servers['114dns'].detour, undefined);
+
+const literalAliDns = {
+  servers: {
+    alidns: {
+      type: 'doh', host: '223.5.5.5', port: 443,
+      path: '/dns-query', server_name: 'dns.alidns.com',
+    },
+  },
+  default_server: 'alidns',
+  dispatch: [],
+  cache: { max_entries: 1024 },
+  answer: { type: 'fake_ip', cidr: '198.18.0.0/15', ttl_seconds: 86400, exclude_domains: [] },
+  policy: { address_family: 'prefer_ipv4' },
+};
+const literalAliDraft = readDnsSettings({ enabled: true, dnsHijack: true, config: literalAliDns });
+assert.deepEqual(JSON.parse(JSON.stringify(literalAliDraft.dns)), literalAliDns,
+  'custom literal DoH must not be replaced with a template');
+assert.equal(validateDnsDraft(literalAliDraft).some((issue) => issue.severity === 'error'), false);
 
 const repeatedPrimaryFallback = readDnsSettings({
   enabled: true,
@@ -284,6 +303,30 @@ assert.equal(
   false,
   'client-only route.final detour must not be reported as a stale concrete target',
 );
+
+const detourTargets = dnsRouteTargetOptions([
+  { tag: 'wg-a', protocol: 'wireguard' },
+  { tag: 'multi-peer', protocol: 'wireguard' },
+  { tag: 'node-a', protocol: 'socks5' },
+], [{ name: 'Proxy' }]);
+const targetTags = new Set(detourTargets.map(target => target.tag));
+assert.deepEqual([...targetTags].sort(), ['Proxy', 'block', 'direct', 'multi-peer', 'node-a', 'wg-a'].sort());
+for (const detour of ['wg-a', 'multi-peer', 'node-a', 'Proxy', 'direct', 'block']) {
+  const candidate = readDnsSettings({enabled: true, dnsHijack: false, config: {
+    servers: {system: {type: 'system'}, private: {type: 'udp', host: '192.168.1.180', detour}},
+    default_server: 'system', policy: {node_server: 'system'},
+    dispatch: [{condition: {type: 'domain', values: ['office.internal.test']}, server: 'private'}],
+  }});
+  assert.equal(validateDnsDraft(candidate, {routeTargetTags: targetTags})
+    .some(issue => issue.field === 'servers.private.detour'), false, detour);
+  assert.equal(projectDnsSettings({enabled: true, dnsHijack: false, config: candidate.dns}, candidate)
+    .config.servers.private.detour, detour);
+  candidate.dns.servers.private.detour = 'removed-wireguard';
+  assert.equal(validateDnsDraft(candidate, {routeTargetTags: targetTags})
+    .some(issue => issue.field === 'servers.private.detour' && issue.severity === 'error'), true);
+  assert.equal(validateDnsDraft(candidate)
+    .some(issue => issue.field === 'servers.private.detour'), false, 'unavailable inventory is not evidence of deletion');
+}
 
 const realMode = setDnsMode(loaded, 'real', {
   features: fullFeatures,

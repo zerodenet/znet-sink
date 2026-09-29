@@ -324,13 +324,6 @@ impl ClientDnsConfig {
         );
         servers.insert("alidns".to_string(), recommended_alidns_server());
         servers.insert("114dns".to_string(), recommended_114dns_server());
-        servers.insert(
-            "system".to_string(),
-            ClientDnsServer::System {
-                extra: BTreeMap::new(),
-            },
-        );
-
         Self {
             servers,
             default_server: "cloudflare".to_string(),
@@ -355,9 +348,11 @@ impl ClientDnsConfig {
             policy: Some(ClientDnsPolicy {
                 timeout_ms: None,
                 server_timeout_ms: None,
-                fallback_servers: Some(vec!["google".to_string(), "system".to_string()]),
-                node_server: Some("system".to_string()),
-                node_fallback_servers: Some(vec!["alidns".to_string(), "114dns".to_string()]),
+                // Host DNS may point to TUN after capture. Neither the node
+                // bootstrap chain nor its fallbacks may depend on host DNS.
+                fallback_servers: Some(vec!["google".to_string(), "alidns".to_string()]),
+                node_server: Some("alidns".to_string()),
+                node_fallback_servers: Some(vec!["114dns".to_string()]),
                 direct_server: None,
                 direct_fallback_servers: None,
                 reject_address_cidrs: None,
@@ -445,13 +440,20 @@ impl ClientDnsConfig {
                 .insert(tag.to_string(), recommended.servers[tag].clone());
         }
         let policy = self.policy.as_mut().expect("matched node policy");
-        policy.node_server = Some("system".to_string());
-        policy.node_fallback_servers = Some(vec!["alidns".to_string(), "114dns".to_string()]);
+        let recommended_policy = recommended.policy.expect("recommended node policy");
+        policy.node_server = recommended_policy.node_server;
+        policy.node_fallback_servers = recommended_policy.node_fallback_servers;
         true
     }
 
     fn legacy_recommended_default() -> Self {
         let mut config = Self::recommended_default();
+        config.servers.insert(
+            "system".to_string(),
+            ClientDnsServer::System {
+                extra: BTreeMap::new(),
+            },
+        );
         for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
             if let Some(ClientDnsServer::Doh { detour, .. }) = config.servers.get_mut(tag) {
                 *detour = None;
@@ -462,6 +464,7 @@ impl ClientDnsConfig {
             .as_mut()
             .expect("recommended DNS configuration has a policy");
         policy.node_server = Some("cloudflare-bootstrap".to_string());
+        policy.fallback_servers = Some(vec!["google".to_string(), "system".to_string()]);
         policy.node_fallback_servers =
             Some(vec!["google-bootstrap".to_string(), "system".to_string()]);
         config
@@ -1117,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn recommended_default_uses_public_dns_with_system_as_final_fallback() {
+    fn recommended_default_uses_independent_upstreams_for_host_dns_capture() {
         let model = ClientDnsConfig::recommended_default();
         model.validate_client_shape().unwrap();
         let value = serde_json::to_value(model).unwrap();
@@ -1133,13 +1136,11 @@ mod tests {
         );
         assert_eq!(
             value["policy"]["fallback_servers"],
-            json!(["google", "system"])
+            json!(["google", "alidns"])
         );
-        assert_eq!(value["policy"]["node_server"], "system");
-        assert_eq!(
-            value["policy"]["node_fallback_servers"],
-            json!(["alidns", "114dns"])
-        );
+        assert!(value["servers"].get("system").is_none());
+        assert_eq!(value["policy"]["node_server"], "alidns");
+        assert_eq!(value["policy"]["node_fallback_servers"], json!(["114dns"]));
         for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
             assert_eq!(
                 value["servers"][tag]["detour"],
@@ -1199,10 +1200,10 @@ mod tests {
         let mut legacy = ClientDnsConfig::legacy_recommended_default();
         assert!(legacy.migrate_legacy_recommended_node_resolution());
         let policy = legacy.policy.as_ref().unwrap();
-        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(policy.node_server.as_deref(), Some("alidns"));
         assert_eq!(
             policy.node_fallback_servers.as_deref(),
-            Some(["alidns".to_string(), "114dns".to_string()].as_slice())
+            Some(["114dns".to_string()].as_slice())
         );
         assert!(!legacy.migrate_legacy_recommended_node_resolution());
 

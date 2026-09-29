@@ -37,6 +37,8 @@
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
   let searchQuery = $state('');
   let selectedGroup = $state<string | null>(null);
+  let nodeView = $state<'groups' | 'all' | 'wireguard'>('groups');
+  const viewingWireguard = $derived(nodeView === 'wireguard');
 
   function loadViewMode(): ViewMode {
     try {
@@ -270,8 +272,9 @@
       groups,
       query: searchQuery.trim().toLowerCase(),
       selectedGroup,
-    });
+    }).filter((node) => !viewingWireguard || node.protocol.toLowerCase() === 'wireguard');
   });
+  const wireguardCount = $derived(allNodes.filter((node) => node.protocol.toLowerCase() === 'wireguard').length);
 
   // In the all-nodes view, partition nodes by policy group into collapsible sections.
   // A node can belong to multiple groups, so assign it to the first match
@@ -323,6 +326,7 @@
    *  policies.select sends the direct member tag, and the kernel resolves
    *  it recursively during engine resolve. */
   function isNodeSelectable(node: ProxyNode): boolean {
+    if (viewingWireguard) return false;
     // If user is browsing a specific group, check if that group is a selector
     if (selectedGroup) {
       const browsingGroup = groups.find((g) => g.name === selectedGroup);
@@ -336,7 +340,7 @@
 
     // Global view: find the node's parent group
     const parentGroup = groupForNode(node);
-    if (!parentGroup) return true; // fallback: allow selection
+    if (!parentGroup) return false;
     return parentGroup.kind?.toLowerCase() === 'selector';
   }
 
@@ -470,10 +474,9 @@
   }
 
   $effect(() => {
-    // Non-global mode hides the "全部节点" sidebar entry (gated to global
-    // in NodesGroupSidebar), so the page must land on a concrete group —
-    // default to the first one when groups load or when the current
-    // selection becomes stale. Global mode keeps the all-nodes view.
+    // Explicit browsing is independent of routing mode. Initial rule-mode
+    // visits still start at the first policy, but never override All/Endpoints.
+    if (nodeView !== 'groups') return;
     const proxyMode = guiState.proxyMode?.currentMode;
     if (proxyMode === 'global') return;
     if (groups.length === 0) return;
@@ -624,14 +627,16 @@
     {groups}
     allNodesCount={allNodes.length}
     {selectedGroup}
-    proxyMode={guiState.proxyMode?.currentMode}
-    onSelectGroup={(groupName) => (selectedGroup = groupName)}
+    {wireguardCount}
+    {viewingWireguard}
+    onSelectWireguard={() => { selectedGroup = null; nodeView = 'wireguard'; }}
+    onSelectGroup={(groupName) => { selectedGroup = groupName; nodeView = groupName === null ? 'all' : 'groups'; }}
   />
 
   <!-- Right: Node panel -->
   <div class="node-panel">
     <NodesToolbar
-      {selectedGroup}
+      selectedGroup={viewingWireguard ? 'WireGuard 端点' : selectedGroup}
       filteredCount={filteredNodes.length}
       isCoreAvailable={isCoreAvailable}
       {searchQuery}
@@ -647,6 +652,9 @@
       onStopProbes={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined}
       {stoppingProbes}
     />
+    {#if viewingWireguard}
+      <p class="endpoint-note">端点来自当前配置，可独立用于路由和 DNS。节点选择仍由策略组成员决定；此视图不会切换策略。</p>
+    {/if}
 
     <!-- Node content -->
     {#if filteredNodes.length === 0}
@@ -675,7 +683,7 @@
           <span class="empty-text">暂无节点数据</span>
         {/if}
       </div>
-    {:else if selectedGroup}
+    {:else if selectedGroup || viewingWireguard}
       <!-- Single group view -->
       {#if viewMode === 'list'}
         <div class="node-list node-list-scroll">
@@ -821,6 +829,13 @@
     min-width: 0;
     min-height: 0;
     position: relative;
+  }
+  .endpoint-note {
+    padding: 8px 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--muted-foreground);
+    border-bottom: 1px solid var(--border);
   }
 
   /* Empty state */

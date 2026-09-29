@@ -613,6 +613,12 @@ mod tests {
     fn migrates_only_the_previous_client_owned_node_dns_defaults() {
         let mut config = AppConfig::default();
         let dns = config.dns.config.as_mut().unwrap();
+        dns.servers.insert(
+            "system".into(),
+            crate::models::dns_config::ClientDnsServer::System {
+                extra: Default::default(),
+            },
+        );
         for tag in ["cloudflare-bootstrap", "google-bootstrap"] {
             if let Some(crate::models::dns_config::ClientDnsServer::Doh { detour, .. }) =
                 dns.servers.get_mut(tag)
@@ -626,10 +632,10 @@ mod tests {
 
         assert!(migrate_legacy_recommended_node_dns(&mut config));
         let policy = config.dns.config.unwrap().policy.unwrap();
-        assert_eq!(policy.node_server.as_deref(), Some("system"));
+        assert_eq!(policy.node_server.as_deref(), Some("alidns"));
         assert_eq!(
             policy.node_fallback_servers,
-            Some(vec!["alidns".to_string(), "114dns".to_string(),])
+            Some(vec!["114dns".to_string()])
         );
     }
 
