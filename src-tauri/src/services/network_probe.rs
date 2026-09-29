@@ -116,8 +116,8 @@ pub struct NetworkProbeResult {
 /// Detect the host machine's current public network environment.
 ///
 /// This GUI-side check never injects the managed kernel's local proxy address.
-/// The default HTTP client follows proxy variables inherited by this process;
-/// without them, it uses the host's direct network path.
+/// The HTTP client follows the host's system proxy and inherited proxy variables.
+/// TUN routing may also intercept the request; this is not forced direct access.
 pub fn probe_local_network(
     manager: &znet_client_core::capability::Manager,
     probe_urls: &[String],
@@ -145,29 +145,34 @@ fn try_probe_urls(
     )
     .map_err(|error| AppError::internal(format!("network probe capability failed: {error}")))?;
     let mut failures = Vec::new();
-    for url in probe_urls {
+    for (index, url) in probe_urls.iter().enumerate() {
         match fetch_probe_result(&lease, url) {
             Ok(result) => return Ok(result),
-            Err(error) => failures.push(format!("{url}: {}", error.message)),
+            Err(error) => failures.push(format!("探测 {}：{}", index + 1, error.message)),
         }
     }
 
-    Err(AppError::internal(failures.join("; ")))
+    Err(AppError::internal(format!(
+        "公网 IP 与位置检查失败（不代表网络完全不可用）：{}",
+        failures.join("；")
+    )))
 }
 
 fn fetch_probe_result(
     lease: &znet_client_core::capability::Lease,
     url: &str,
 ) -> AppResult<NetworkProbeResult> {
-    let response = znet_client_capabilities::network::get(
+    let response = znet_client_capabilities::network::get_with_diagnostics(
         lease,
         url,
         "znet-sink-network-probe",
         256 * 1024,
         &[],
+        std::time::Duration::from_secs(8),
     )
-    .and_then(|resource| resource.take(lease))
-    .map_err(|error| AppError::internal(format!("request failed: {error}")))?;
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .take(lease)
+    .map_err(|error| AppError::internal(format!("探测结果不可用：{error}")))?;
     if !(200..300).contains(&response.status) {
         return Err(AppError::internal(format!(
             "unexpected HTTP status {}",
@@ -216,6 +221,10 @@ fn first_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
         })
     })
 }
+
+#[cfg(test)]
+#[path = "network_probe/tests.rs"]
+mod probe_tests;
 
 fn normalize_ip(value: String) -> String {
     value
