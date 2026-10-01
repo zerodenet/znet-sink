@@ -21,7 +21,7 @@ async function harness(environment = {}, { ready = true } = {}) {
     getGuiSelfTestSnapshot: async()=>({ready:true,checks:[],blockingIssues:[],activeProxyConfigId:'main'}),
     getGuiConnectionStatus: async()=>{state.connectionReads++;const fail=state.connectionReadFailure;const snapshot=copy(state.connection);if(state.connectionWait)await state.connectionWait;if(fail)throw new Error('status timeout');return snapshot;},
     getGuiProxyModeStatus: async()=>{const snapshot=copy(state.mode);if(state.modeWait)await state.modeWait;return snapshot;},
-    guiSetProxyMode: async mode=>{await command('mode',()=>{state.mode.currentMode=mode;});return copy(state.mode);},
+    guiSetProxyMode: async (mode,_restart,globalOutbound)=>{await command('mode',()=>{state.mode.currentMode=mode;if(globalOutbound&&!state.ignoreTarget)state.mode.globalOutbound=globalOutbound;});return copy(state.mode);},
     guiSelectPolicy: async (group,target)=>{state.calls.push('policy');if(state.wait)await state.wait;if(state.reject)return {accepted:false,message:'not accepted'};state.groups.find(item=>item.name===group).selected=target;return {accepted:true};},
     getGuiCoreOverview: async()=>({coreState:'running'}),
     getGuiPolicyGroups: async()=>{if(state.readFailure)throw new Error('query failed');const snapshot=copy(state.groups);if(state.groupsWait)await state.groupsWait;return snapshot;},
@@ -281,4 +281,16 @@ test('view-owned notifications preserve command and readback semantics without d
   assert.equal(gui.isTunSwitchOn,true);
   assert.equal(gui.isSwitchingTun,false);
   assert.deepEqual(state.calls,['tun-recover']);
+});
+
+test('global target selection confirms the exact outbound without changing policy selections', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  const previous=structuredClone(state.groups);
+  assert.equal((await gui.setProxyMode('global',{globalOutbound:'a',notify:false})).ok,true);
+  assert.equal(gui.proxyMode.globalOutbound,'a');
+  assert.deepEqual(state.groups,previous);
+  assert.deepEqual(state.calls,['mode']);
+  state.ignoreTarget=true;
+  assert.equal((await gui.setProxyMode('global',{globalOutbound:'b',notify:false})).ok,false);
+  assert.equal(gui.proxyMode.globalOutbound,'a');
 });

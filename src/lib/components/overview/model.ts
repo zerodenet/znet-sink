@@ -116,7 +116,11 @@ export function buildOverview(input: OverviewInput) {
       }),
     };
   }).sort((a, b) => Number(b.failed) - Number(a.failed));
-  const failed = groups.filter((g) => g.failed);
+  const globalTarget = input.mode?.globalOutbound;
+  const globalGroup = groups.find(group => group.name === globalTarget);
+  const globalSelection = !ready ? '待内核确认' : !globalTarget ? '全局出口未确认'
+    : globalGroup ? `${globalTarget} → ${globalGroup.selectionLabel}` : globalTarget;
+  const failed = groups.filter(g => g.failed && (input.mode?.currentMode !== 'global' || g.name === globalTarget));
   if (failed.length) add('已选出口最近探测失败', failed.map((g) => `${g.name} → ${g.selected}`).join('；'), 'nodes');
   const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : groupsPending ? 'neutral' : ready ? 'good' : 'neutral';
   const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : groupsPending ? '策略状态正在更新' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
@@ -130,6 +134,7 @@ export function buildOverview(input: OverviewInput) {
   };
   return {
     ready, running, stale, title, tone, findings, groups, groupsReady, groupsPending, egress,
+    globalTarget, globalSelection, globalDelay: globalGroup?.delay ?? '—',
     tunSnapshot: tun,
     tunConfirmed: ready && !!tun && !input.tunError,
     availableModes: input.mode?.availableModes ?? [],

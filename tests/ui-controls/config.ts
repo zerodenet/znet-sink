@@ -175,14 +175,32 @@ export const getConfigCompositionReport = async () => null;
 
 // Node browsing and scheduled observations remain usable when manual probes are trimmed.
 let selectedNode = 'node-a';
-export const guiSelectPolicy = async (_policy: string, tag: string) => {
+const fixtureSelections: Record<string,string> = {proxy:'auto',ai:'node-b',auto:'node-a',standalone:'node-b'};
+export const guiSelectPolicy = async (policy: string, tag: string) => {
   selectedNode = tag;
-  window.dispatchEvent(new CustomEvent('fixture-save', {detail: {selected: tag}}));
+  fixtureSelections[policy] = tag;
+  window.dispatchEvent(new CustomEvent('fixture-save', {detail: {selected: tag,policy}}));
   return {accepted: true};
 };
 export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
   const params = new URLSearchParams(location.search);
+  if (params.get('layout') === 'global') {
+    const groups = [
+      {tag:'proxy',kind:'selector',memberTags:['auto','node-a','node-b']},
+      {tag:'ai',kind:'selector',memberTags:['node-a','node-b']},
+      {tag:'auto',kind:'url_test',memberTags:['node-a','node-b']},
+      {tag:'standalone',kind:'fallback',memberTags:['node-b']},
+      {tag:'bad-a',kind:'url_test',memberTags:['bad-b']},
+      {tag:'bad-b',kind:'fallback',memberTags:['bad-a']},
+      {tag:'empty',kind:'fallback',memberTags:[]},
+      {tag:'broken',kind:'url_test',memberTags:['missing']},
+    ].map(group=>({...group,id:{...scope,tag:group.tag},available:true,runtimeAvailable:true,selected:fixtureSelections[group.tag]}));
+    return {revision:1,scope,sourceStatus:'ready',activeProbeJobs:[],groups,
+      nodes:['node-a','node-b','wg-independent'].map(tag=>({id:{profileId:'fixture',configRevision:1,tag},tag,
+        protocol:tag.startsWith('wg')?'wireguard':'vless',groupTags:groups.filter(group=>group.memberTags.includes(tag)).map(group=>group.tag),
+        selectedIn:groups.filter(group=>group.selected===tag).map(group=>group.tag),runtimeAvailable:true,actionValid:true,activeProbeJobIds:[],history:[]}))};
+  }
   const compactLayout = params.get('layout') === 'compact';
   const tags = compactLayout
     ? ['日本 SS [01] [Lite]', '日本 IX [0x01] [Lite]', '日本 ME [01] [Lite]', '日本 HY [01] [Lite]', '日本 TR [01] [Lite]', '日本 VM [01] [Lite]']
@@ -273,3 +291,8 @@ export const getConfigWorkspaceSnapshot = async (): Promise<import('../../src/li
 });
 export const planConfigWorkspace = async () => { throw new Error('Workspace planning is not provided by this fixture'); };
 export const applyConfigWorkspace = async () => { throw new Error('The UI fixture cannot apply a workspace'); };
+
+export const getClientCoreSnapshot = async () => {
+  if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
+  return {scope:{profileId:'fixture',configRevision:1,coreInstanceId:1}};
+};

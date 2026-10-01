@@ -47,3 +47,25 @@ fn v002_regular_outbound_endpoint_projection_remains_unchanged() {
     assert_eq!(nodes[0].server.as_deref(), Some("localhost"));
     assert_eq!(nodes[0].port, Some(1080));
 }
+
+#[test]
+fn canonical_endpoints_project_only_declared_outbound_roles_even_when_disabled() {
+    let config = json!({"endpoints":[
+        {"tag":"wg-default","enabled":false,"protocol":{"type":"wireguard","peers":[{"endpoint":"example.test:51820"}],"private_key":"must-not-leak"}},
+        {"tag":"wg-in","directions":{"inbound":true,"outbound":false},"protocol":{"type":"wireguard"}},
+        {"tag":"future","directions":{"outbound":true},"protocol":{"type":"future_packet"}}
+    ]});
+    let nodes = proxy_nodes_from_config(&config);
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["wg-default", "future"]
+    );
+    assert_eq!(nodes[0].server.as_deref(), Some("example.test"));
+    assert_eq!(nodes[1].protocol, "future_packet");
+    assert!(!serde_json::to_string(&nodes)
+        .unwrap()
+        .contains("must-not-leak"));
+}

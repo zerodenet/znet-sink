@@ -15,16 +15,15 @@
   import NodesGroupSidebar from '$lib/components/tabs/NodesGroupSidebar.svelte';
   import NodesListRow from '$lib/components/tabs/NodesListRow.svelte';
   import NodesToolbar from '$lib/components/tabs/NodesToolbar.svelte';
+  import { nodeInventory, globalTargetReason } from './nodes-inventory';
   import { isUrlTestGroup } from '$lib/components/tabs/nodes-display-preferences.svelte';
   import { error as toastError } from '$lib/services/toast.svelte';
   import {
-    buildSections,
     collectProbingPolicyNodeTags,
     filterNodes,
     getActiveNodeTag,
     planProbeTargets,
     summarizeProbeProgress,
-    type NodeSection,
   } from '$lib/components/tabs/nodes-view-model';
   import {
     mergeActiveProbeJobs,
@@ -102,32 +101,6 @@
     }).catch((logError) => {
       console.error('[nodes] failed to persist probe failure', logError);
     });
-  }
-
-  // Collapsible group sections persisted to localStorage
-  const COLLAPSE_KEY = 'znet-nodes-collapsed';
-  let collapsedGroups = $state<Set<string>>(loadCollapsed());
-
-  function loadCollapsed(): Set<string> {
-    try {
-      const raw = localStorage.getItem(COLLAPSE_KEY);
-      if (!raw) return new Set();
-      return new Set(JSON.parse(raw) as string[]);
-    } catch {
-      return new Set();
-    }
-  }
-
-  function toggleCollapse(name: string) {
-    const next = new Set(collapsedGroups);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    collapsedGroups = next;
-    try {
-      localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
-    } catch {
-      // best-effort persistence
-    }
   }
 
   // Kernel connection state
@@ -254,7 +227,7 @@
       .flatMap((job) => job.targetTags),
   ));
   const probingNodeIds = $derived.by(() => new Set(
-    allNodes.filter((node) => probingNodeTags.has(node.tag)).map((node) => node.id),
+    inventory.filter((node) => probingNodeTags.has(node.tag)).map((node) => node.id),
   ));
   // Only an actual multi-target outbound job is a page-wide batch probe.
   // A single outbound or policy probe must not disable unrelated node actions.
@@ -266,9 +239,12 @@
     summarizeProbeProgress(groups, activeProbeJobs),
   );
 
+  const inventory = $derived(nodeInventory(allNodes, groups));
+  const isGlobalMode = $derived(guiState.proxyMode?.currentMode === 'global');
+  const leafInventory = $derived(inventory.filter(node => !groups.some(group => group.name === node.tag)));
   const filteredNodes = $derived.by(() => {
     return filterNodes({
-      allNodes,
+      allNodes: selectedGroup || isGlobalMode ? inventory : leafInventory,
       groups,
       query: searchQuery.trim().toLowerCase(),
       selectedGroup,
@@ -276,21 +252,17 @@
   });
   const wireguardCount = $derived(allNodes.filter((node) => node.protocol.toLowerCase() === 'wireguard').length);
 
-  // In the all-nodes view, partition nodes by policy group into collapsible sections.
-  // A node can belong to multiple groups, so assign it to the first match
-  // to avoid duplicates. Ungrouped nodes fall back to the default section.
-  const sections = $derived.by<NodeSection[]>(() => {
-    return buildSections({
-      allNodes,
-      groups,
-      query: searchQuery.trim().toLowerCase(),
-    });
-  });
-
-  // Active selected tag for row/card highlight
-  const activeNodeId = $derived.by(() => {
-    return getActiveNodeTag(groups, selectedGroup);
-  });
+  const viewingGlobal = $derived(isGlobalMode && nodeView === 'all');
+  const activeNodeId = $derived(viewingGlobal ? guiState.proxyMode?.globalOutbound ?? null
+    : selectedGroup ? getActiveNodeTag(groups, selectedGroup) : null);
+  function selectionHint(node: ProxyNode): string | undefined {
+    if (viewingGlobal) return globalTargetReason(node.tag, allNodes, groups) ?? '设为全局出口';
+    if (nodeView === 'all') return '查看和测速；请选择左侧策略组后切换节点';
+    return undefined;
+  }
+  const selectionOperable = $derived(viewingGlobal
+    ? !guiState.isSwitchingMode && !guiState.isSelectingPolicy
+    : store.isActionOperable('policies.select'));
 
   const plannedProbeTargets = $derived.by(() =>
     planProbeTargets({ groups, selectedGroup, visibleNodes: filteredNodes }),
@@ -305,22 +277,6 @@
   }
 
   // Actions
-  /** Resolve the policy group a node belongs to. */
-  function groupForNode(node: ProxyNode): PolicyGroup | undefined {
-    if (selectedGroup) {
-      return groups.find((group) => group.name === selectedGroup && group.outbounds.some((item) => item.tag === node.tag));
-    }
-    return groups.find((group) => group.outbounds.some((item) => item.tag === node.tag));
-  }
-
-  const GROUP_NODE_PROTOCOLS = new Set([
-    'selector', 'url_test', 'urltest', 'fallback', 'load_balance', 'loadbalance', 'relay',
-  ]);
-
-  function isGroupNode(node: ProxyNode): boolean {
-    return GROUP_NODE_PROTOCOLS.has((node.protocol ?? '').toLowerCase());
-  }
-
   /** Check if a node is a direct member of a selector group.
    *  A nested group (e.g. urltest) inside a selector is selectable —
    *  policies.select sends the direct member tag, and the kernel resolves
@@ -338,32 +294,31 @@
       return false;
     }
 
-    // Global view: find the node's parent group
-    const parentGroup = groupForNode(node);
-    if (!parentGroup) return false;
-    return parentGroup.kind?.toLowerCase() === 'selector';
+    // Inventory browsing never guesses a policy group to mutate.
+    return viewingGlobal && globalTargetReason(node.tag, allNodes, groups) === null;
   }
 
   async function handleSelect(node: ProxyNode) {
-    if (switching) return;
+    if (switching || !selectionOperable) return;
     if (!isCoreAvailable) {
       reportActionError('内核未就绪，无法切换节点');
       return;
     }
     if (!isNodeSelectable(node)) {
-      reportActionError('当前策略组为自动选择组，不支持手动切换节点');
+      reportActionError(selectionHint(node) ?? '当前策略组不支持手动切换节点');
       return;
     }
     switching = node.id;
     lastError = null;
     try {
-      // Resolve the selector group that contains this node as a direct member.
-      // For nested groups (e.g. urltest inside selector), we send the group tag
-      // as target — the kernel resolves it recursively during engine resolve.
-      const policyTag = resolvePolicyTag(node);
-      const result = await guiSelectPolicy(policyTag, node.tag);
-      if (!result.accepted) {
-        reportActionError(result.message ?? '内核未接受此选择');
+      if (viewingGlobal) {
+        const result = await guiState.setProxyMode('global', { globalOutbound: node.tag, notify: false });
+        if (!result.ok) reportActionError(result.message ?? '全局出口尚未确认生效');
+      } else {
+        // Only the explicitly opened selector receives a membership change.
+        const policyTag = selectedGroup!;
+        const result = await guiSelectPolicy(policyTag, node.tag);
+        if (!result.accepted) reportActionError(result.message ?? '内核未接受此选择');
       }
       await refreshNodeScreen('policy_select');
     } catch (e) {
@@ -371,24 +326,6 @@
     } finally {
       switching = null;
     }
-  }
-
-  /** Resolve the selector policy tag that contains the node as a direct member. */
-  function resolvePolicyTag(node: ProxyNode): string {
-    // 1. If user is browsing a specific selector group, use that
-    if (selectedGroup) {
-      const browsingGroup = groups.find((g) => g.name === selectedGroup);
-      if (browsingGroup?.kind?.toLowerCase() === 'selector') {
-        return selectedGroup;
-      }
-    }
-    // 2. Find first selector group containing this node
-    const selectorGroup = groups.find(
-      (g) => g.kind?.toLowerCase() === 'selector' && g.outbounds.some((o) => o.tag === node.tag),
-    );
-    if (selectorGroup) return selectorGroup.name;
-    // 3. Fallback
-    return 'proxy';
   }
 
   function isUrlTestPolicyNode(node: ProxyNode): boolean {
@@ -473,16 +410,20 @@
     }
   }
 
+  let previousMode: string | undefined;
   $effect(() => {
-    // Explicit browsing is independent of routing mode. Initial rule-mode
-    // visits still start at the first policy, but never override All/Endpoints.
-    if (nodeView !== 'groups') return;
-    const proxyMode = guiState.proxyMode?.currentMode;
-    if (proxyMode === 'global') return;
-    if (groups.length === 0) return;
-    if (!groups.some((g) => g.name === selectedGroup)) {
-      selectedGroup = groups[0].name;
+    const mode = guiState.proxyMode?.currentMode;
+    if (mode !== previousMode) {
+      const wasGlobal = previousMode === 'global';
+      previousMode = mode;
+      if (mode === 'global' && (nodeView === 'groups' || nodeView === 'all')) {
+        selectedGroup = null; nodeView = 'all';
+      } else if (wasGlobal && nodeView === 'all') {
+        nodeView = 'groups'; selectedGroup = groups[0]?.name ?? null;
+      }
     }
+    if (nodeView !== 'groups' || mode === 'global' || groups.length === 0) return;
+    if (!groups.some(group => group.name === selectedGroup)) selectedGroup = groups[0].name;
   });
 
   // Render the popover in document.body. Merely placing it after .nodes-root
@@ -625,7 +566,8 @@
 <div class="nodes-root animate-fade-in">
   <NodesGroupSidebar
     {groups}
-    allNodesCount={allNodes.length}
+    allNodesCount={isGlobalMode ? inventory.length : leafInventory.length}
+    allNodesLabel={isGlobalMode ? '全局出口' : '全部节点'}
     {selectedGroup}
     {wireguardCount}
     {viewingWireguard}
@@ -636,7 +578,7 @@
   <!-- Right: Node panel -->
   <div class="node-panel">
     <NodesToolbar
-      selectedGroup={viewingWireguard ? 'WireGuard 端点' : selectedGroup}
+      selectedGroup={viewingWireguard ? 'WireGuard 端点' : viewingGlobal ? '全局出口' : selectedGroup}
       filteredCount={filteredNodes.length}
       isCoreAvailable={isCoreAvailable}
       {searchQuery}
@@ -652,6 +594,12 @@
       onStopProbes={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined}
       {stoppingProbes}
     />
+    {#if lastError}<p role="alert" class="node-action-error">{lastError}</p>{/if}
+    {#if viewingGlobal}
+      <p class="endpoint-note">当前全局出口：{guiState.proxyMode?.globalOutbound ?? '未确认'}。选择节点或非 selector 组作为统一出口；手动选择组在左侧管理，循环引用的组不可选。</p>
+    {:else if nodeView === 'all'}
+      <p class="endpoint-note">全部出站节点的去重列表，节点组在左侧独立展示。此处用于查看和测速；切换节点请先选择左侧策略组。</p>
+    {/if}
     {#if viewingWireguard}
       <p class="endpoint-note">端点来自当前配置，可独立用于路由和 DNS。节点选择仍由策略组成员决定；此视图不会切换策略。</p>
     {/if}
@@ -683,8 +631,8 @@
           <span class="empty-text">暂无节点数据</span>
         {/if}
       </div>
-    {:else if selectedGroup || viewingWireguard}
-      <!-- Single group view -->
+    {:else}
+      <!-- A flat inventory or the direct members of an explicit group. -->
       {#if viewMode === 'list'}
         <div class="node-list node-list-scroll">
           {#each filteredNodes as node (node.id)}
@@ -695,7 +643,9 @@
               isProbing={isNodeProbing(node)}
               probingAll={probingAll}
               probeDisabled={!isCoreAvailable}
-              selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
+              selectDisabled={!isCoreAvailable || switching !== null || !selectionOperable || !isNodeSelectable(node)}
+              selectionHint={selectionHint(node)}
+              readOnly={nodeView === 'all' && !viewingGlobal}
               onSelectNode={handleSelect}
               onProbeNode={probeJobs ? handleProbe : undefined}
               onShowPopover={showPopover}
@@ -713,7 +663,9 @@
               isProbing={isNodeProbing(node)}
               probingAll={probingAll}
               probeDisabled={!isCoreAvailable}
-              selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
+              selectDisabled={!isCoreAvailable || switching !== null || !selectionOperable || !isNodeSelectable(node)}
+              selectionHint={selectionHint(node)}
+              readOnly={nodeView === 'all' && !viewingGlobal}
               onSelectNode={handleSelect}
               onProbeNode={probeJobs ? handleProbe : undefined}
               onShowPopover={showPopover}
@@ -722,68 +674,6 @@
           {/each}
         </div>
       {/if}
-    {:else}
-      <!-- All-nodes view with collapsible group sections -->
-      <div class="node-sections">
-        {#each sections as section (section.name)}
-          {@const isCollapsed = collapsedGroups.has(section.name)}
-          <section class="node-section">
-            <button data-slot="surface-button" class="section-header" onclick={() => toggleCollapse(section.name)}>
-              <span class="section-caret {isCollapsed ? 'collapsed' : ''}">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="9,18 15,12 9,6"/>
-                </svg>
-              </span>
-              <span class="section-title">{section.name}</span>
-              {#if getGroupKindStyle(section.kind)}
-                <span class="section-kind" style="color: {getGroupKindStyle(section.kind)?.color}">
-                  {getGroupKindStyle(section.kind)?.label}
-                </span>
-              {/if}
-              <span class="section-count">{section.nodes.length}</span>
-            </button>
-            {#if !isCollapsed}
-              {#if viewMode === 'list'}
-                <div class="node-list">
-                  {#each section.nodes as node (node.id)}
-                    <NodesListRow
-                      {node}
-                      isActive={activeNodeId === node.tag}
-                      isSwitching={switching === node.id}
-                      isProbing={isNodeProbing(node)}
-                      probingAll={probingAll}
-                      probeDisabled={!isCoreAvailable}
-                      selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
-                      onSelectNode={handleSelect}
-                      onProbeNode={probeJobs ? handleProbe : undefined}
-                      onShowPopover={showPopover}
-                      onHidePopover={hidePopover}
-                    />
-                  {/each}
-                </div>
-              {:else}
-                <div class="node-grid">
-                  {#each section.nodes as node (node.id)}
-                    <NodesGridCard
-                      {node}
-                      isActive={activeNodeId === node.tag}
-                      isSwitching={switching === node.id}
-                      isProbing={isNodeProbing(node)}
-                      probingAll={probingAll}
-                      probeDisabled={!isCoreAvailable}
-                      selectDisabled={!isCoreAvailable || switching !== null || !store.isActionOperable('policies.select') || !isNodeSelectable(node)}
-                      onSelectNode={handleSelect}
-                      onProbeNode={probeJobs ? handleProbe : undefined}
-                      onShowPopover={showPopover}
-                      onHidePopover={hidePopover}
-                    />
-                  {/each}
-                </div>
-              {/if}
-            {/if}
-          </section>
-        {/each}
-      </div>
     {/if}
 
   </div>
@@ -869,75 +759,7 @@
     text-align: center;
   }
 
-  /* Collapsible sections in the all-nodes view */
-  .node-sections {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 6px 8px;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .node-section {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .section-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    border-radius: 6px;
-    text-align: left;
-    transition: background 0.12s ease;
-  }
-
-  .section-header:hover { background: var(--muted); }
-
-  .section-caret {
-    display: inline-flex;
-    color: var(--muted-foreground);
-    transition: transform 0.15s ease;
-  }
-
-  .section-caret.collapsed {
-    transform: rotate(0deg);
-  }
-
-  .section-caret:not(.collapsed) {
-    transform: rotate(90deg);
-  }
-
-  .section-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--foreground);
-  }
-
-  .section-kind {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-    opacity: 0.8;
-  }
-
-  .section-count {
-    font-size: 10.5px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--muted);
-    color: var(--muted-foreground);
-    margin-left: auto;
-  }
+  .node-action-error { color:var(--destructive); padding:8px 12px; font-size:12px; }
 
   /* List view */
   .node-list {

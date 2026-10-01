@@ -590,19 +590,19 @@ class GuiStateStore {
     else return this.enableTun({ notify });
   }
 
-  async setProxyMode(mode: ProxyMode, { notify = true }: CommandOptions = {}): Promise<CommandResult> {
+  async setProxyMode(mode: ProxyMode, { notify = true, globalOutbound }: CommandOptions & { globalOutbound?: string } = {}): Promise<CommandResult> {
     if (this.isSwitchingMode || this.isCoreBusy || !this.connection?.coreAvailable || !this.proxyMode?.availableModes.includes(mode)) {
       return { ok: false, message: '当前无法切换代理模式，请检查内核状态与支持的模式' };
     }
     this.isSwitchingMode = true;
     try {
-      const confirmed = await guiSetProxyMode(mode);
+      const confirmed = await guiSetProxyMode(mode, false, globalOutbound);
       this.proxyModeRefreshGate.reset();
       this.proxyMode = confirmed;
       await this.refreshModeState();
-      return this.proxyMode?.currentMode === mode
+      return this.proxyMode?.currentMode === mode && (!globalOutbound || this.proxyMode.globalOutbound === globalOutbound)
         ? { ok: true }
-        : { ok: false, message: '模式请求已提交，但尚未确认生效，请重新检查' };
+        : { ok: false, message: globalOutbound ? '全局出口请求已提交，但尚未确认目标生效，请重新检查' : '模式请求已提交，但尚未确认生效，请重新检查' };
     } catch (e: any) {
       if (notify) toastError(`切换代理模式失败: ${this.errorMessage(e)}`);
       await this.refreshModeState();

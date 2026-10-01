@@ -219,3 +219,19 @@ test('host DNS cleanup failures remain visible after TUN stops', () => {
   const model = buildOverview({...baseline(), tun:{enabled:false, healthy:false, hostDns:{state:'error',error:'restore failed'}}});
   assert.ok(model.findings.some(finding => finding.title === '系统 DNS 恢复未完成' && finding.detail === 'restore failed'));
 });
+
+test('global overview follows its explicit target and ignores unrelated split policy failures',()=>{
+  const now=1_800_000_000_000;
+  const base={now,connection:{processState:'running',coreAvailable:true},connectionAt:now,connectionError:null,
+    core:{coreState:'running'},tun:null,tunError:null,selfTest:null,selfTestAt:0,groupsAt:now,groupsError:null,
+    mode:{currentMode:'global',globalOutbound:'independent',availableModes:['global','rule','direct']},
+    groups:[{name:'ai',kind:'selector',selected:'bad',outbounds:[{tag:'bad',alive:false,lastCheckedUnixMs:now}]}]};
+  const independent=buildOverview(base);
+  assert.equal(independent.globalSelection,'independent');
+  assert.equal(independent.globalDelay,'—');
+  assert.equal(independent.findings.some(f=>f.title==='已选出口最近探测失败'),false);
+  const automatic=buildOverview({...base,mode:{...base.mode,globalOutbound:'auto'},groups:[{name:'auto',kind:'url_test',selected:'leaf',outbounds:[{tag:'leaf',alive:true,delayMs:31,lastCheckedUnixMs:now}]}]});
+  assert.equal(automatic.globalSelection,'auto → leaf');
+  assert.equal(automatic.globalDelay,'31 ms');
+  assert.equal(buildOverview({...base,mode:{...base.mode,globalOutbound:undefined}}).globalSelection,'全局出口未确认');
+});
