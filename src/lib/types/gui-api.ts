@@ -231,6 +231,7 @@ export interface ConnectionStatus {
 export interface ProxyModeStatus {
   currentMode: ProxyMode;
   availableModes: ProxyMode[];
+  globalOutbound?: string;
   message?: string;
 }
 

@@ -213,3 +213,13 @@ test('TUN-only overview keeps proxy optional and renders embedded flags with SVG
   await chosen.click();
   await expect(page.getByRole('option').filter({has:page.locator('.fi-us')})).toBeVisible();
 });
+
+test('global overview identifies the explicit target and opens the dedicated target view',async({page})=>{
+  await page.goto('/?panel=overview&mode=global-target');
+  const shortcut=page.getByRole('button',{name:'查看与切换全局出口'});
+  await expect(shortcut).toContainText('独立 WireGuard');
+  await expect(shortcut).not.toContainText('新加坡');
+  await expect(page.getByRole('button',{name:'查看与切换策略组'})).toHaveCount(0);
+  await shortcut.click();
+  await expect(page.getByLabel('概览操作')).toHaveText('nodes');
+});

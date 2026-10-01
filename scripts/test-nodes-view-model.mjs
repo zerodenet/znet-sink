@@ -6,7 +6,6 @@ import assert from 'node:assert/strict';
 globalThis.$state = (value) => value;
 
 const {
-  buildSections,
   collectProbingPolicyNodeTags,
   filterNodes,
   getActiveNodeTag,
@@ -197,9 +196,9 @@ const group = (name, tags, kind = 'selector', selected) => ({
     group('Fallback', ['slow', 'fast'], 'fallback'),
   ];
   nodesDisplayPreferences.setSortByDelay(true);
-  const sections = buildSections({ allNodes: nodes, groups, query: '' });
+  const autoNodes = filterNodes({ allNodes: nodes, groups, query: '', selectedGroup: 'Auto' });
 
-  assert.deepEqual(sections[0].nodes.map((item) => item.tag), ['fast', 'slow']);
+  assert.deepEqual(autoNodes.map((item) => item.tag), ['fast', 'slow']);
   assert.deepEqual(filterNodes({
     allNodes: nodes,
     groups,
@@ -255,17 +254,6 @@ const group = (name, tags, kind = 'selector', selected) => ({
   });
 }
 
-{
-  const sections = buildSections({
-    allNodes: [node('HK'), node('orphan')],
-    groups: [group('Proxy', ['HK'])],
-    query: '',
-  });
-  assert.deepEqual(sections.map((section) => [section.name, section.nodes.map((item) => item.tag)]), [
-    ['Proxy', ['HK']],
-    ['其他', ['orphan']],
-  ]);
-}
 
 {
   const hk = { ...node('HK'), delay: 30, lastProbeAt: 1_000, alive: true };
@@ -321,3 +309,19 @@ const group = (name, tags, kind = 'selector', selected) => ({
 }
 
 console.log('nodes-view-model: ok');
+
+{
+  const { nodeInventory, globalTargetReason } = await import('../src/lib/components/tabs/nodes-inventory.ts');
+  const nodes = [node('a'), node('b'), node('wg-independent', 'wireguard')];
+  const groups = [group('manual',['auto','a'],'selector'),group('auto',['a','b'],'url_test','a'),group('standalone',['b'],'fallback')];
+  const inventory = nodeInventory([...nodes, node('a')],groups);
+  assert.deepEqual(inventory.map(node=>node.tag),['a','b','wg-independent','manual','auto','standalone']);
+  assert.equal(globalTargetReason('wg-independent',nodes,groups),null);
+  assert.equal(globalTargetReason('standalone',nodes,groups),null);
+  assert.match(globalTargetReason('manual',nodes,groups),/selector/);
+  const cyclic = [group('auto',['child'],'url_test'),group('child',['auto'],'selector')];
+  assert.match(globalTargetReason('auto',nodes,cyclic),/循环引用/);
+  assert.match(globalTargetReason('empty',nodes,[group('empty',[],'fallback')]),/没有可用成员/);
+  assert.match(globalTargetReason('broken',nodes,[group('broken',['missing'],'url_test')]),/不存在/);
+  assert.equal(groups[0].outbounds[0].tag,'auto');
+}

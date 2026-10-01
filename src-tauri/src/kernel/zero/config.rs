@@ -25,12 +25,28 @@ const UDP_BY_DEFAULT: &[&str] = &[
 
 /// Extract proxy nodes from the active proxy config file content.
 pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
-    let outbounds = config_content
+    let mut outbounds = config_content
         .get("outbounds")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
 
+    // Canonical endpoints project outbound roles in Zero. Keep them available
+    // to selectors and DNS detours even while disabled; admission stays kernel-owned.
+    outbounds.extend(
+        config_content
+            .get("endpoints")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|endpoint| {
+                endpoint
+                    .pointer("/directions/outbound")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(endpoint.get("directions").is_none())
+            })
+            .cloned(),
+    );
     outbounds
         .iter()
         .filter_map(|node| {

@@ -11,6 +11,7 @@
     gradeDelay,
     getProbeTimeStyle,
     getSpecialOutboundStyle,
+    getGroupKindStyle,
   } from '$lib/services/node-utils';
 
   interface Props {
@@ -21,6 +22,8 @@
     probingAll: boolean;
     probeDisabled: boolean;
     selectDisabled: boolean;
+    selectionHint?: string;
+    readOnly?: boolean;
     onSelectNode: (node: ProxyNode) => void | Promise<void>;
     onProbeNode?: (node: ProxyNode) => void | Promise<void>;
     onShowPopover: (event: MouseEvent, node: ProxyNode) => void;
@@ -35,6 +38,8 @@
     probingAll,
     probeDisabled,
     selectDisabled,
+    selectionHint,
+    readOnly = false,
     onSelectNode,
     onProbeNode,
     onShowPopover,
@@ -55,6 +60,8 @@
   <button data-slot="surface-button"
     class="grid-card {isActive ? 'active' : ''} {isSwitching ? 'switching' : ''}"
     class:device-card={node.protocol.toLowerCase() === 'wireguard'}
+    class:read-only={readOnly}
+    title={selectionHint}
     onclick={() => onSelectNode(node)}
     disabled={selectDisabled}
   >
@@ -80,7 +87,7 @@
     </div>
 
     <div class="grid-badges">
-      <span class="proto-label" style="background: {protocolStyle.bg}; color: {protocolStyle.color};">{protocolStyle.label}</span>
+      <span class="proto-label" style="background: {protocolStyle.bg}; color: {protocolStyle.color};">{getGroupKindStyle(node.protocol)?.label ?? protocolStyle.label}</span>
       {#each chips as chip (chip.key)}
         <span class="attr-chip tone-{chip.tone}" title={chip.title}>{chip.label}</span>
       {/each}
@@ -192,6 +199,7 @@
     opacity: 1;
     cursor: default;
   }
+  .grid-card.read-only:disabled { opacity:1; cursor:default; }
 
   .grid-card-header {
     display: flex;

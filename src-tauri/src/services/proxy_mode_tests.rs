@@ -172,3 +172,59 @@ fn detects_legacy_direct_final_as_direct() {
 
     assert_eq!(detected.mode, GuiProxyMode::Direct);
 }
+
+#[test]
+fn global_target_switch_preserves_rule_final_and_selector_membership() {
+    let mut config = json!({
+        "mode":{"type":"global","outbound":"node-a"},
+        "route":{"rules":[{"tag":"unchanged"}],"final":{"type":"route","outbound":"proxy"}},
+        "outbounds":[{"tag":"node-a"},{"tag":"node-b"}],
+        "outbound_groups":[
+            {"tag":"proxy","type":"selector","outbounds":["auto","node-a"]},
+            {"tag":"auto","type":"url_test","outbounds":["node-a","node-b"]}
+        ]
+    });
+    let original = config.clone();
+    apply_route_mode(&mut config, &GuiProxyMode::Global, Some("auto")).unwrap();
+    assert_eq!(config["mode"]["outbound"], "auto");
+    assert_eq!(config["route"], original["route"]);
+    assert_eq!(config["outbound_groups"], original["outbound_groups"]);
+    apply_route_mode(&mut config, &GuiProxyMode::Rule, None).unwrap();
+    assert_eq!(config["route"], original["route"]);
+}
+
+#[test]
+fn global_target_rejects_selector_missing_empty_and_cyclic_groups_without_edits() {
+    let original = json!({
+        "outbounds":[{"tag":"node-a"}],
+        "outbound_groups":[
+            {"tag":"manual","type":"selector","outbounds":["node-a"]},
+            {"tag":"auto","type":"url_test","outbounds":["child"]},
+            {"tag":"child","type":"selector","outbounds":["auto"]},
+            {"tag":"empty","type":"fallback","outbounds":[]},
+            {"tag":"broken","type":"url_test","outbounds":["missing"]}
+        ]
+    });
+    for target in ["manual", "unknown", "auto", "empty", "broken"] {
+        let mut candidate = original.clone();
+        assert!(
+            apply_route_mode(&mut candidate, &GuiProxyMode::Global, Some(target)).is_err(),
+            "{target}"
+        );
+        assert_eq!(candidate, original);
+    }
+}
+
+#[test]
+fn global_target_accepts_declared_outbound_endpoint_but_not_inbound_only_endpoint() {
+    let original = json!({"endpoints":[
+        {"tag":"wg-a","protocol":{"type":"wireguard"},"directions":{"inbound":false,"outbound":true}},
+        {"tag":"wg-in","protocol":{"type":"wireguard"},"directions":{"inbound":true,"outbound":false}}
+    ]});
+    let mut candidate = original.clone();
+    apply_route_mode(&mut candidate, &GuiProxyMode::Global, Some("wg-a")).unwrap();
+    assert_eq!(candidate["mode"]["outbound"], "wg-a");
+    let mut candidate = original.clone();
+    assert!(apply_route_mode(&mut candidate, &GuiProxyMode::Global, Some("wg-in")).is_err());
+    assert_eq!(candidate, original);
+}

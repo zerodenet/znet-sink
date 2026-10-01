@@ -11,12 +11,6 @@ export interface ProbeTargets {
   nodes: ProxyNode[];
 }
 
-export interface NodeSection {
-  name: string;
-  kind?: string;
-  nodes: ProxyNode[];
-}
-
 /**
  * Build one outbound diagnostic target for every visible node card.
  *
@@ -218,31 +212,6 @@ export function filterNodes(options: {
     .map((outbound) => byTag.get(outbound.tag))
     .filter((node): node is ProxyNode => node !== undefined);
   return sortGroupNodes(group, groupNodes);
-}
-
-export function buildSections(options: {
-  allNodes: ProxyNode[];
-  groups: PolicyGroup[];
-  query: string;
-  orphanSectionName?: string;
-}): NodeSection[] {
-  const { allNodes, groups, query, orphanSectionName = '其他' } = options;
-  const projected = projectNestedGroupNodes(allNodes, groups);
-  const filtered = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
-  const assigned = new Set<string>();
-  const sections: NodeSection[] = groups.flatMap((group) => {
-    const byTag = new Map(filtered.map((node) => [node.tag, node]));
-    const nodes = group.outbounds
-      .map((outbound) => byTag.get(outbound.tag))
-      .filter((node): node is ProxyNode => node !== undefined && !assigned.has(node.id));
-    for (const node of nodes) assigned.add(node.id);
-    return nodes.length > 0
-      ? [{ name: group.name, kind: group.kind, nodes: sortGroupNodes(group, nodes) }]
-      : [];
-  });
-  const orphan = filtered.filter((node) => !assigned.has(node.id));
-  if (orphan.length > 0) sections.push({ name: orphanSectionName, nodes: orphan });
-  return sections;
 }
 
 export interface EffectiveNodeSelection {

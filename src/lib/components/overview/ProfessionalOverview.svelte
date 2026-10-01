@@ -46,10 +46,17 @@
       </SegmentedControl.Root>
       <p class="mode-explanation">{!model.ready || !model.mode ? '等待内核确认代理模式' : model.mode === 'rule' ? '按规则选择直连或代理' : model.mode === 'global' ? '使用全局代理出口' : '直接连接目标服务器'}</p>
 
+      {#if model.mode === 'global'}
+      <button data-slot="surface-button" class="policy-shortcut" onclick={() => actions.navigate('nodes')} aria-label="查看与切换全局出口">
+        <span class="policy-heading"><span>全局出口</span><span>切换<ChevronRight size={12}/></span></span>
+        <span class="policy-selection"><strong title={model.globalSelection}><FlaggedText text={model.globalSelection} /></strong><span>{model.globalDelay === '—' ? '待探测' : model.globalDelay}</span></span>
+      </button>
+      {:else}
       <button data-slot="surface-button" class="policy-shortcut" onclick={() => policies = true} aria-label="查看与切换策略组">
         <span class="policy-heading"><span>{visiblePolicy?.name ?? '策略组'}{model.groups.length > 1 ? ` · 共 ${model.groups.length} 组` : ''}</span><span>{visiblePolicy?.switchable ? '切换' : '查看'}<ChevronRight size={12}/></span></span>
         <span class="policy-selection"><strong title={visiblePolicy?.selectionLabel}><FlaggedText text={visiblePolicy?.selectionLabel ?? (model.ready ? '尚未配置策略组' : '等待内核确认')} /></strong><span class:danger={visiblePolicy?.failed} title={visiblePolicy?.health}>{feedback.pending.startsWith('policy:') ? '切换中…' : model.mode === 'direct' && model.ready ? '直连模式' : visiblePolicy?.failed ? '探测失败' : visiblePolicy && visiblePolicy.delay !== '—' ? visiblePolicy.delay : '待探测'}</span></span>
       </button>
+      {/if}
     </section>
     {@render tun()}
   </div>

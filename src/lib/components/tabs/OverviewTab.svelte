@@ -200,10 +200,9 @@
     if (model.mode === 'direct') return { name: '直连', meta: '直接连接目标服务器', flagCode: undefined, emoji: undefined };
     const groups = guiState.policyGroups;
     const finalOutbound = routeFinalOutbound(activeProxyConfig?.content);
-    const rootTag = finalOutbound
-      ?? groups.find((group) => group.name.toLowerCase() === 'proxy')?.name
-      ?? groups.find((group) => group.selected)?.name
-      ?? null;
+    const rootTag = model.mode === 'global' ? guiState.proxyMode?.globalOutbound ?? null
+      : finalOutbound ?? groups.find((group) => group.name.toLowerCase() === 'proxy')?.name
+        ?? groups.find((group) => group.selected)?.name ?? null;
     const resolved = resolveEffectiveNodeSelection(groups, rootTag);
 
     if (resolved.leafTag) {

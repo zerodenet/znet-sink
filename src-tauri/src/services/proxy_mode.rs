@@ -9,6 +9,8 @@ use crate::models::{
 use crate::services::{common, core_process, proxy_config, system_proxy};
 use crate::state::app_state::AppState;
 
+mod target;
+
 const GROUP_KEYS: &[&str] = &[
     "outbound_groups",
     "policy_groups",
@@ -174,6 +176,11 @@ pub(crate) fn apply_route_mode(
     mode: &GuiProxyMode,
     global_outbound: Option<&str>,
 ) -> AppResult<()> {
+    if matches!(mode, GuiProxyMode::Global) {
+        if let Some(target) = global_outbound.filter(|tag| !tag.trim().is_empty()) {
+            target::validate(content, target.trim())?;
+        }
+    }
     let outbound = match mode {
         GuiProxyMode::Global | GuiProxyMode::Rule => {
             Some(resolve_global_outbound(content, global_outbound))

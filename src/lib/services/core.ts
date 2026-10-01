@@ -346,8 +346,8 @@ export async function getGuiProxyModeStatus(): Promise<ProxyModeStatus> {
   return mapProxyModeStatus(raw);
 }
 
-export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false): Promise<ProxyModeStatus> {
-  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore } });
+export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false, globalOutbound?: string): Promise<ProxyModeStatus> {
+  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore, globalOutbound } });
   return mapProxyModeStatus(raw);
 }
 
@@ -664,6 +664,7 @@ function mapProxyModeStatus(raw: Record<string, unknown>): ProxyModeStatus {
   return {
     currentMode: (stringFrom(raw, ['mode']) as ProxyMode) ?? 'rule',
     availableModes: ['global', 'rule', 'direct'],
+    globalOutbound: stringFrom(raw, ['global_outbound', 'globalOutbound']),
     message: stringFrom(raw, ['reason']),
   };
 }

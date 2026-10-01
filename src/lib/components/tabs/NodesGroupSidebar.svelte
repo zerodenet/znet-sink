@@ -6,6 +6,7 @@
   interface Props {
     groups: PolicyGroup[];
     allNodesCount: number;
+    allNodesLabel?: string;
     selectedGroup: string | null;
     wireguardCount: number;
     viewingWireguard: boolean;
@@ -13,7 +14,7 @@
     onSelectGroup: (groupName: string | null) => void;
   }
 
-  let { groups, allNodesCount, selectedGroup, wireguardCount, viewingWireguard, onSelectWireguard, onSelectGroup }: Props = $props();
+  let { groups, allNodesCount, allNodesLabel = '全部节点', selectedGroup, wireguardCount, viewingWireguard, onSelectWireguard, onSelectGroup }: Props = $props();
 </script>
 
 <aside class="group-sidebar">
@@ -28,7 +29,7 @@
         onclick={() => onSelectGroup(null)}
       >
         <div class="group-info">
-          <span class="group-name">{`全部节点`}</span>
+          <span class="group-name">{allNodesLabel}</span>
         </div>
         <span class="group-count">{allNodesCount}</span>
       </button>
