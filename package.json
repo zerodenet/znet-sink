@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test:network-endpoints": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-network-endpoints.mjs",
     "test:nodes": "pnpm test:nodes-view-model && pnpm test:nodes-probe-state && pnpm test:nodes-select",
     "test:nodes-view-model": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-nodes-view-model.mjs",
     "test:nodes-select": "node scripts/test-nodes-select-args.mjs",
@@ -33,7 +34,7 @@
     "test:ui-controls": "node scripts/test-ui-controls.mjs && node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs scripts/test-plugin-permissions.mjs",
     "test:ui-browser": "playwright test",
     "test:runtime-lifecycle": "node scripts/test-runtime-lifecycle.mjs",
-    "verify:frontend": "pnpm test:nodes && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:product-composition && pnpm test:feature-owners && pnpm test:config-workspace && pnpm test:release-version && pnpm test:app-update && pnpm test:overview && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
+    "verify:frontend": "pnpm test:nodes && pnpm test:network-endpoints && pnpm test:traffic-observation && pnpm test:notifications && pnpm test:diagnostic-copy && pnpm test:async-state && pnpm test:core-events && pnpm test:product-composition && pnpm test:feature-owners && pnpm test:config-workspace && pnpm test:release-version && pnpm test:app-update && pnpm test:overview && pnpm test:kernel-version && pnpm test:onboarding && pnpm test:subscriptions && pnpm test:connections && pnpm test:logs && pnpm test:config-validation && pnpm test:dns-config && pnpm test:kernel-settings && pnpm test:lite-session && pnpm test:tun-recovery && pnpm test:cross-mode-state && pnpm test:runtime-lifecycle && pnpm test:desktop-shell && pnpm test:ui-controls && pnpm check && pnpm build",
     "verify:backend": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo check --manifest-path src-tauri/Cargo.toml --workspace --locked --all-targets -j 1 && cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1",
     "verify": "pnpm verify:frontend && pnpm verify:backend && git diff --check",
     "verify:bundle": "pnpm verify && pnpm tauri build --no-sign",
@@ -51,7 +52,8 @@
     "test:config-workspace": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-profile-activation.mjs scripts/test-config-workspace.mjs",
     "test:feature-owners": "node --test scripts/test-feature-owners.mjs",
     "product": "node scripts/product.mjs",
-    "test:product-composition": "node --test scripts/test-product-composition.mjs"
+    "test:product-composition": "node --test scripts/test-product-composition.mjs",
+    "test:traffic-observation": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-traffic-observation.mjs"
   },
   "config": {
     "commitizen": {

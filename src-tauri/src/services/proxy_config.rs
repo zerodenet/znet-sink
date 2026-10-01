@@ -12,7 +12,7 @@ use crate::models::subscription::{ManagedSubscriptionSource, SubscriptionProfile
 use crate::services::common::{
     generated_store_id, lock, normalize_optional, normalize_required, now_unix_ms,
 };
-use crate::services::{app_config_store, core_config, core_process, system_proxy_guard};
+use crate::services::{core_config, core_process, system_proxy_guard};
 use crate::state::app_state::AppState;
 
 fn normalize_config_format(input: Option<String>) -> AppResult<String> {
@@ -553,6 +553,10 @@ async fn remove_runtime_owned(
             .flatten();
         (removed, replacement)
     };
+    let removed_edits = lock(state.app_config(), "app_config")?
+        .profile_edits
+        .get(&removed.id)
+        .cloned();
     match (&managed_owner, removed.managed_source.as_ref()) {
         (Some(expected), Some(actual)) if actual.same_namespace(expected) => {}
         (Some(expected), actual) => {
@@ -629,6 +633,21 @@ async fn remove_runtime_owned(
                 return Err(error);
             }
             if let Err(mut error) = retarget_managed_system_proxy(state.inner()) {
+                // Restore client intent as well as the removed profile before
+                // recomposing its runtime during a failed deletion rollback.
+                append_recovery(
+                    &mut error,
+                    "local endpoint preferences",
+                    (|| {
+                        let mut app = lock(state.app_config(), "app_config")?.clone();
+                        crate::configuration::endpoints::restore_profile(
+                            &mut app,
+                            &removed.id,
+                            removed_edits.as_ref(),
+                        );
+                        crate::configuration::endpoints::store(state.inner(), app)
+                    })(),
+                );
                 append_recovery(
                     &mut error,
                     "profile storage",
@@ -779,14 +798,6 @@ fn restore_managed_system_proxy_if_needed(state: &AppState, was_enabled: bool) -
     Ok(())
 }
 
-pub(crate) fn clear_local_proxy_source(state: &AppState) -> AppResult<()> {
-    let mut next = lock(state.app_config(), "app_config")?.clone();
-    next.local_proxy.source_proxy_config_id = None;
-    app_config_store::save(&app_config_store::default_config_path()?, &next)?;
-    *lock(state.app_config(), "app_config")? = next;
-    Ok(())
-}
-
 pub fn analyze_capabilities(config: Option<&Value>) -> ProxyConfigCapabilities {
     let mut capabilities = ProxyConfigCapabilities::default();
     let Some(config) = config else {
@@ -889,18 +900,6 @@ fn extract_inbound_endpoint(inbound: &Value) -> Option<LocalProxyEndpoint> {
         },
         port,
     })
-}
-
-pub(crate) fn sync_local_proxy_from_profile(
-    state: &AppState,
-    _profile: &ProxyConfigProfile,
-) -> AppResult<()> {
-    let mut next = lock(state.app_config(), "app_config")?.clone();
-    // Profile activation never replaces the client-owned listener settings.
-    next.local_proxy.source_proxy_config_id = None;
-    app_config_store::save(&app_config_store::default_config_path()?, &next)?;
-    *lock(state.app_config(), "app_config")? = next;
-    Ok(())
 }
 
 pub(crate) fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {

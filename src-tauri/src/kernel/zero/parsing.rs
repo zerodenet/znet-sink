@@ -155,6 +155,10 @@ pub fn parse_capabilities(value: &Value, error: Option<String>) -> GuiZeroCapabi
         global_limitations: string_array_at(value, &["global_limitations", "globalLimitations"]),
         features: string_array_at(value, &["features"]),
         permissions: string_array_at(value, &["permissions"]),
+        traffic_statistics: value
+            .get("traffic_statistics")
+            .filter(|v| !v.is_null())
+            .cloned(),
         adapters: endpoint_array_at(value, "adapters"),
         sinks: endpoint_array_at(value, "sinks"),
         protocols: protocol_array_at(value, "protocols"),

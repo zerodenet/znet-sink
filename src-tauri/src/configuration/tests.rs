@@ -212,3 +212,16 @@ fn wireguard_dns_local_edit_preserves_the_device_and_source_configuration() {
     without_device["outbounds"] = json!([]);
     assert!(finalize(&without_device, without_device.clone(), &context).is_err());
 }
+
+#[test]
+fn canonical_endpoint_dns_detour_accepts_declared_outbound_and_rejects_inbound_only() {
+    let config = json!({"endpoints":[
+        {"tag":"egress","enabled":false,"protocol":{"type":"wireguard"}},
+        {"tag":"ingress","directions":{"inbound":true,"outbound":false},"protocol":{"type":"wireguard"}}
+    ]});
+    let mut dns = json!({"servers":{"private":{"type":"udp","host":"10.0.0.1","detour":"egress"}}});
+    super::dns::resolve_dns_detours(&config, &mut dns).unwrap();
+    assert_eq!(dns["servers"]["private"]["detour"], "egress");
+    dns["servers"]["private"]["detour"] = json!("ingress");
+    assert!(super::dns::resolve_dns_detours(&config, &mut dns).is_err());
+}

@@ -108,3 +108,7 @@ pub mod bypass;
 pub mod plugins;
 
 pub(crate) mod schedule_store;
+
+pub mod network_endpoint;
+
+pub mod traffic_observation;

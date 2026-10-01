@@ -14,6 +14,7 @@ use crate::commands::gui_events as gui_events_commands;
 use crate::commands::gui_self_test as gui_self_test_commands;
 use crate::commands::kernel_version as kernel_version_commands;
 use crate::commands::logs as logs_commands;
+use crate::commands::network_endpoint as endpoint_commands;
 use crate::commands::platform as platform_commands;
 use crate::commands::plugins as plugin_commands;
 use crate::commands::proxy_config as proxy_config_commands;
@@ -23,6 +24,7 @@ use crate::commands::subscription as subscription_commands;
 use crate::commands::system_proxy as system_proxy_commands;
 #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
 use crate::commands::tool_jobs as tool_job_commands;
+use crate::commands::traffic_observation as traffic_commands;
 
 pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.invoke_handler(tauri::generate_handler![
@@ -98,6 +100,13 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_core_overview,
         gui_core_commands::gui_client_core_snapshot,
         gui_core_commands::gui_node_screen_snapshot,
+        traffic_commands::gui_traffic_discover,
+        traffic_commands::gui_traffic_page,
+        traffic_commands::gui_traffic_get,
+        traffic_commands::gui_traffic_reset,
+        endpoint_commands::gui_endpoint_catalog,
+        endpoint_commands::gui_endpoint_details,
+        endpoint_commands::gui_endpoint_control,
         #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
         tool_job_commands::gui_tool_job_start,
         #[cfg(any(feature = "tool-dns", feature = "tool-route"))]

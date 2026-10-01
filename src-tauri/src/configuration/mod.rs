@@ -61,3 +61,5 @@ pub(crate) mod preferences;
 pub(crate) mod local_edits;
 
 pub(crate) mod material;
+
+pub(crate) mod endpoints;

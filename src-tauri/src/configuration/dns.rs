@@ -106,6 +106,21 @@ fn route_target_tags(config: &Value) -> HashSet<String> {
             .filter(|tag| !tag.is_empty())
             .map(str::to_owned),
     );
+    targets.extend(
+        config
+            .get("endpoints")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|endpoint| {
+                endpoint
+                    .pointer("/directions/outbound")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(endpoint.get("directions").is_none())
+            })
+            .filter_map(|endpoint| endpoint.get("tag").and_then(Value::as_str))
+            .map(str::to_owned),
+    );
     targets
 }
 

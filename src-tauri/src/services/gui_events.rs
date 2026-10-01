@@ -353,6 +353,8 @@ fn emit_connection_snapshot(app: &AppHandle, generation: u64, connections: Vec<G
                 source_event_type: "gui.activeFlowsReconcile".to_string(),
                 event_id: None,
                 sequence: None,
+                sequence_exact: None,
+                core_instance_id: None,
                 occurred_at_unix_ms: Some(crate::services::common::now_unix_ms()),
                 payload: GuiEventData::Connections(connections),
             },

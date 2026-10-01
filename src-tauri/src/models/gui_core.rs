@@ -167,6 +167,7 @@ pub struct GuiZeroCapabilities {
     pub global_limitations: Vec<String>,
     pub features: Vec<String>,
     pub permissions: Vec<String>,
+    pub traffic_statistics: Option<Value>,
     pub adapters: Vec<GuiCapabilityEndpoint>,
     pub sinks: Vec<GuiCapabilityEndpoint>,
     /// Protocol capability matrix — inbound/outbound TCP/UDP support,
@@ -559,6 +560,8 @@ pub struct GuiEvent {
     pub source_event_type: String,
     pub event_id: Option<String>,
     pub sequence: Option<u64>,
+    pub sequence_exact: Option<String>,
+    pub core_instance_id: Option<String>,
     pub occurred_at_unix_ms: Option<u64>,
     pub payload: GuiEventData,
 }
@@ -574,6 +577,7 @@ pub enum GuiEventData {
     PolicySelected(GuiPolicySelectedEvent),
     PolicyProbeCompleted(GuiPolicyProbeCompletedEvent),
     TrafficStats(GuiTrafficStats),
+    TrafficObservation(Value),
     /// TUN virtual network interface lifecycle (v0.0.5+)
     TunStatus(GuiTunStatusEvent),
     /// Network stack status change — SystemStack / proxy stack (v0.0.5+)

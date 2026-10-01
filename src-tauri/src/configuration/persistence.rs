@@ -2,9 +2,7 @@
 //! application settings are a separate store with explicit recovery reporting.
 use crate::errors::{AppError, AppResult};
 use crate::models::{proxy_config::ProxyConfigProfile, subscription::SubscriptionProfile};
-use crate::services::proxy_config::{
-    clear_local_proxy_source, ensure_managed_system_proxy_compatible, sync_local_proxy_from_profile,
-};
+use crate::services::proxy_config::ensure_managed_system_proxy_compatible;
 use crate::services::{common::lock, domain_store};
 use crate::state::app_state::AppState;
 use znet_client_core::publication::{Publication, PublicationFailure};
@@ -100,10 +98,15 @@ impl Publication for LocalPublication<'_> {
         domain_store::save_relational_data(self.next, self.next_subscriptions)
     }
     fn project(&self) -> AppResult<()> {
-        match self.next.iter().find(|profile| profile.active) {
-            Some(active) => sync_local_proxy_from_profile(self.state, active),
-            None => clear_local_proxy_source(self.state),
-        }
+        let mut app = lock(self.state.app_config(), "app_config")?.clone();
+        app.local_proxy.source_proxy_config_id = None;
+        let retained = self
+            .next
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect();
+        super::endpoints::prune(&mut app, &retained);
+        super::endpoints::store(self.state, app)
     }
     fn restore(&self) -> AppResult<()> {
         domain_store::save_relational_data(self.previous, self.previous_subscriptions)
