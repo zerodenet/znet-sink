@@ -73,6 +73,8 @@ export type GuiEventType =
   | 'policy.selected'
   | 'policy.probeCompleted'
   | 'traffic.sampled'
+  | 'traffic.scopesSampled'
+  | 'traffic.reset'
   // v0.0.5+: TUN virtual network interface
   | 'tun.statusChanged'
   | 'tun.error'
@@ -87,6 +89,8 @@ export interface GuiEventEnvelope {
   sourceEventType: string;
   eventId?: string;
   sequence?: number;
+  sequenceExact?: string;
+  coreInstanceId?: string;
   occurredAtUnixMs?: number;
   payload?: {
     kind: string;

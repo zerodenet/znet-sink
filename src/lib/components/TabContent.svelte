@@ -15,6 +15,7 @@
   const loaders: Record<string, Loader> = {
     overview: () => import('./tabs/OverviewTab.svelte'),
     nodes: () => import('./tabs/NodesTab.svelte'),
+    endpoints: () => import('./tabs/EndpointsTab.svelte'),
     profiles: () => import('./tabs/ProfilesTab.svelte'),
     subscriptions: () => import('./tabs/SubscriptionsTab.svelte'),
     rules: () => import('./tabs/RulesTab.svelte'),

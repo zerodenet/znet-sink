@@ -337,6 +337,7 @@ export interface GuiZeroCapabilities {
   globalLimitations: string[];
   features: string[];
   permissions: string[];
+  trafficStatistics?: import('$lib/features/traffic/types').TrafficCapability;
   adapters: GuiCapabilityEndpoint[];
   sinks: GuiCapabilityEndpoint[];
   protocols: GuiProtocolCapability[];

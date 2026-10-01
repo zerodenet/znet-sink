@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EndpointsWorkspaceFixture from "./EndpointsWorkspaceFixture.svelte";
   import PluginsWorkspaceFixture from "./PluginsWorkspaceFixture.svelte";
   import CapabilitiesTab from '$lib/components/tabs/CapabilitiesTab.svelte';
   import PluginsTab from '$lib/components/tabs/PluginsTab.svelte';
@@ -48,6 +49,9 @@
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
 {#if selectedPanel === 'plugins-shell'}
   <div class="h-dvh overflow-hidden"><PluginsWorkspaceFixture /></div>
+{:else if selectedPanel === 'endpoints-shell'}
+  <div class="h-dvh overflow-hidden"><EndpointsWorkspaceFixture /></div>
+  <output class="sr-only" aria-label="保存结果">{saved}</output>
 {:else}
 <main class="flex min-h-screen flex-col gap-4 p-4">
   <section class="flex flex-wrap items-center gap-3" aria-label="基础控件">

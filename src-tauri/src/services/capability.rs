@@ -203,6 +203,7 @@ fn navigation_items(
         // 节点菜单：有活跃配置文件时才可见。Profiles（配置）选项卡在 Lite 和 Pro 模式均可访问，
         // 用于选择/激活配置 → 激活后节点菜单自动显示。
         has_config("nodes", "navigation", has_active_config),
+        pro_only("endpoints", "navigation", is_pro),
         pro_only("profiles", "navigation", is_pro),
         shared("subscriptions", "navigation"),
         pro_only("rules", "navigation", is_pro),
@@ -491,6 +492,21 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn endpoints_navigation_is_independent_pro_only_and_respects_visibility() {
+        for has_config in [false, true] {
+            for pro in [false, true] {
+                let items = navigation_items(pro, &[], has_config);
+                let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
+                assert_eq!(endpoint.visible, pro);
+                assert_eq!(endpoint.operable, pro);
+            }
+        }
+        let hidden = navigation_items(true, &["ENDPOINTS".into()], true);
+        let endpoint = hidden.iter().find(|item| item.key == "endpoints").unwrap();
+        assert!(!endpoint.visible && !endpoint.operable && endpoint.readonly);
+    }
+
     #[test]
     fn plugins_navigation_is_shared_and_respects_menu_visibility() {
         for pro in [false, true] {

@@ -124,6 +124,27 @@ pub async fn request(frame: Value, options: Option<CoreIpcOptions>) -> AppResult
     request_with_response_timeout(frame, options, None).await
 }
 
+/// Query-only embeddings can refuse subscription while retaining IPC requests.
+/// Callers decide whether replay is safe; this function itself never retries.
+pub(crate) async fn request_single_shot(
+    frame: Value,
+    options: Option<CoreIpcOptions>,
+) -> AppResult<CoreCallResult> {
+    let endpoint = endpoint_from_options(options.as_ref())?;
+    let timeout = timeout_from_options(options.as_ref())?;
+    let (frame, id) = ensure_request_id(frame)?;
+    let bytes = transport::serialize_frame(&frame)?;
+    let target = endpoint.clone();
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        transport::send_json_line_request(target, bytes, timeout)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("IPC request worker failed: {error}")))?;
+    let response =
+        response.and_then(|value| validate_response_id(&value, id.as_ref()).map(|_| value));
+    Ok(CoreCallResult::from_core_result(endpoint, id, response))
+}
+
 async fn request_with_response_timeout(
     frame: Value,
     options: Option<CoreIpcOptions>,

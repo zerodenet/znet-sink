@@ -31,6 +31,7 @@ pub(crate) fn resolve(
         .unwrap_or_default();
     for (key, value) in &edits {
         match key.as_str() {
+            "endpoints" => super::endpoints::apply(&mut source, value)?,
             "localProxy.host" | "localProxy.port" => {
                 proxy_config::project_endpoint(&mut source, &app.local_proxy, false)?;
                 let inbounds = source["inbounds"]
@@ -175,6 +176,9 @@ pub(crate) fn candidate(
 }
 
 fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
+    if key == "endpoints" {
+        return super::endpoints::validate(value);
+    }
     let (section, field) = key.split_once('.').unwrap_or((key, ""));
     let allowed = match section {
         "localProxy" => matches!(field, "host" | "port"),

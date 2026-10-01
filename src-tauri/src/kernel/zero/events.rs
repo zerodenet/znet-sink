@@ -25,6 +25,8 @@ pub fn normalize_event(source: &Value) -> GuiEvent {
         source_event_type,
         event_id: string_at(source, &["event_id", "eventId"]),
         sequence: u64_at(source, &["sequence"]),
+        sequence_exact: u64_at(source, &["sequence"]).map(|v| v.to_string()),
+        core_instance_id: string_at(source, &["core_instance_id"]),
         occurred_at_unix_ms: u64_at(source, &["occurred_at_unix_ms", "occurredAtUnixMs"]),
         payload: normalize_payload(
             string_at(source, &["event_type", "eventType", "type"])
@@ -49,6 +51,8 @@ pub fn gui_event_type(source_event_type: &str) -> &'static str {
         "policy.selected" => "policy.selected",
         "policy.probe.completed" => "policy.probeCompleted",
         "stats.sampled" => "traffic.sampled",
+        "stats.scopes_sampled" => "traffic.scopesSampled",
+        "stats.reset" => "traffic.reset",
         // TUN virtual network interface
         "tun.started" | "tun.stopped" => "tun.statusChanged",
         "tun.error" => "tun.error",
@@ -111,6 +115,9 @@ fn normalize_payload(source_event_type: &str, payload: &Value) -> GuiEventData {
                 unknown_payload("invalid policy.probe.completed event payload", payload)
             }),
         "stats.sampled" => GuiEventData::TrafficStats(parse_stats(payload)),
+        "stats.scopes_sampled" | "stats.reset" => {
+            GuiEventData::TrafficObservation(super::traffic::wire::exact(payload.clone()))
+        }
         // TUN virtual network interface events
         "tun.started" => GuiEventData::TunStatus(GuiTunStatusEvent {
             state: "started".to_string(),

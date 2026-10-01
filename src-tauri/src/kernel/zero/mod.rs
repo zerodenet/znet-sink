@@ -29,3 +29,5 @@ pub mod wintun_compat;
 pub use adapter::{
     build_traffic_snapshot, bytes_delta_per_second, calculate_rates, TrafficSample, ZeroAdapter,
 };
+
+pub(crate) mod traffic;

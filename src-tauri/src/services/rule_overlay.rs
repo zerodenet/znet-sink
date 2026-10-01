@@ -67,6 +67,7 @@ pub(crate) fn compose_effective_candidate_for(
         candidate.report.compare(
             "profile_local_edits",
             &[
+                "/endpoints",
                 "/inbounds",
                 "/runtime/latency_test_url",
                 "/runtime/tun",

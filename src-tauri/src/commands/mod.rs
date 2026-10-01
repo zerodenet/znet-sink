@@ -25,3 +25,7 @@ pub mod tool_jobs;
 pub mod profile_settings;
 
 pub mod plugins;
+
+pub mod network_endpoint;
+
+pub mod traffic_observation;
