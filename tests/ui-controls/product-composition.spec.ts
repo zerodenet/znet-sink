@@ -20,10 +20,16 @@ test('node browsing and selection survive manual probe trimming', async ({page})
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?panel=nodes', {waitUntil:'domcontentloaded',timeout:60_000});
-  await expect(page.getByRole('button', {name:/^node-a VLESS 42 ms/})).toBeVisible();
+  // Selection belongs to an explicit selector, not the readonly inventory.
+  await page.locator('.group-item').filter({has:page.locator('.group-name').getByText('proxy',{exact:true})}).click();
+  const card = (tag: string) => page.locator('.grid-card').filter({has:page.locator('.grid-card-name').getByText(tag,{exact:true})});
+  await expect(card('node-a')).toBeVisible();
+  await expect(card('node-a')).toBeEnabled();
+  await expect(card('node-a').locator('.proto-label')).toHaveText(/^vless$/i);
+  await expect(card('node-a').locator('.grid-delay')).toContainText(/42\s*ms/);
   await expect(page.getByRole('button', {name:'测试全部节点延迟',exact:true})).toHaveCount(enabled ? 1 : 0);
   await expect(page.getByRole('button', {name:'测试 node-a 延迟',exact:true})).toHaveCount(enabled ? 1 : 0);
-  await page.getByText('node-b', {exact:true}).click();
+  await card('node-b').click();
   await expect(page.getByLabel('保存结果')).toContainText('"selected":"node-b"');
   expect(errors).toEqual([]);
 });
