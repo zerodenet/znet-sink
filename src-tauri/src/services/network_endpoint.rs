@@ -276,8 +276,22 @@ async fn control_at_revision(
         Some(Duration::from_secs(40)),
     )
     .await?;
-    let response = crate::kernel::zero::parsing::unwrap_call_result(call.response, call.error)?;
+    let response = crate::kernel::zero::parsing::unwrap_call_result(call.response, call.error)
+        .map_err(control_error)?;
     confirmed(response, &input)
+}
+
+fn control_error(mut error: AppError) -> AppError {
+    if error.code == "unsupported"
+        && error
+            .message
+            .contains("endpoint control requires execute_acknowledged")
+    {
+        error.message =
+            "当前内核的 IPC 端点控制入口未接入确认执行，操作已被拒绝；请使用修复此问题的内核版本"
+                .into();
+    }
+    error
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Configuration workspace: composition, local publication and operation ownership.
 //! Kernel execution and database/file adapters retain their existing contracts.
 pub(crate) mod apply;
+pub(crate) mod capture_apply;
 pub(crate) mod composition;
 pub(crate) mod dns;
 pub(crate) mod persistence;
