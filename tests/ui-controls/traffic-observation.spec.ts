@@ -5,6 +5,34 @@ async function open(page:Page,params='&traffic-v1=1') {
 }
 const scope=(page:Page,name:string)=>page.getByRole('article',{name:`统计 ${name}`,exact:true});
 
+test('statistics footer hides one-page navigation and groups count with working multi-page controls',async({page})=>{
+  await open(page);
+  const footer=page.locator('.statistics footer');
+  await expect(footer).toHaveText('共 1 个范围');
+  await expect(page.getByRole('button',{name:'统计下一页',exact:true})).toHaveCount(0);
+  await open(page,'&traffic-v1=1&traffic-many-scopes=1');
+  await page.getByRole('radio',{name:/^出站\s*27$/}).click();
+  await expect(page.locator('.statistics .scope')).toHaveCount(24);
+  await expect(footer).toContainText('共 27 个范围');
+  await expect(footer.locator('.pagination')).toContainText('1 / 2');
+  const gap=await footer.evaluate(el=>{
+    const count=el.children[0].getBoundingClientRect(),pages=el.children[1].getBoundingClientRect();
+    return pages.left-count.right;
+  });
+  expect(gap).toBeLessThanOrEqual(13);
+  await page.getByRole('button',{name:'统计下一页',exact:true}).click();
+  await expect(page.locator('.statistics .scope')).toHaveCount(3);
+  await expect(footer.locator('.pagination')).toContainText('2 / 2');
+  await expect(page.getByRole('button',{name:'统计下一页',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'统计上一页',exact:true}).click();
+  await expect(page.locator('.statistics .scope')).toHaveCount(24);
+  await page.setViewportSize({width:360,height:800});
+  expect(await footer.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await open(page);
+  await page.setViewportSize({width:1100,height:800});
+  await page.screenshot({path:test.info().outputPath('traffic-footer.png')});
+});
+
 test('five scopes keep Flow Inner Outer separate and plot real fixture deltas',async({page})=>{
   await open(page);
   const global=scope(page,'全局');await expect(global).toContainText('10.7 KB');

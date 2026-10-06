@@ -45,15 +45,29 @@
   function confirm() { if (plan) { const submitted = plan; confirming = false; plan = null; void session.reset(submitted); } }
 </script>
 <section class="statistics" aria-label="流量统计">
-  <header><h2><Activity size={17}/>流量统计 <span class:live={view.streaming} class="mode">{view.streaming ? '实时' : '定时查询'}</span></h2><div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div></header>
+
   {#if localError || view.error}<p class="error" role="alert">{getAppErrorMessage(localError ?? view.error,'统计操作失败')}</p>{/if}
   {#if view.result}<p class="notice" role="status">{view.result}</p>{/if}
+  {#if !supported(view.discovery)}<div class="unsupported-actions"><div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div></div>{/if}
   {#if view.loading && !view.discovery}<p class="empty">正在读取内核统计能力…</p>
   {:else if view.discovery && !supported(view.discovery)}<p class="empty">当前内核未提供 Traffic Observation V1。升级内核后可查看分范围统计。</p>
   {:else if supported(view.discovery)}
     {#if view.stale}<p class="notice" role="status">{view.loading ? '正在同步统计…' : '采样中断，等待恢复'} · 上次累计值保留，速率暂不可用</p>{/if}
-    <div class="filters"><div class="kinds"><SegmentedControl.Root value={kind} onValueChange={value=>{kind=value as TrafficScope['kind'];offset=0;}} aria-label="统计范围" class="flex-wrap max-w-full">{#each kinds as item}<SegmentedControl.Item value={item.kind}>{item.label}<span>{view.order.filter(key=>view.rows[key].snapshot.scope.kind===item.kind).length}</span></SegmentedControl.Item>{/each}</SegmentedControl.Root></div><label class="search"><Search size={14}/><Input aria-label="搜索统计范围" placeholder="搜索" bind:value={query} oninput={()=>offset=0}/></label></div>
-    <div class="plane-controls"><SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={13}/><span class="legend">各平面独立统计</span></span></div>
+    <div class="toolbar">
+      <div class="kinds">
+        <SegmentedControl.Root value={kind} onValueChange={value=>{kind=value as TrafficScope['kind'];offset=0;}} aria-label="统计范围" class="flex-wrap max-w-full">
+          {#each kinds as item}<SegmentedControl.Item value={item.kind}>{item.label}<span>{view.order.filter(key=>view.rows[key].snapshot.scope.kind===item.kind).length}</span></SegmentedControl.Item>{/each}
+        </SegmentedControl.Root>
+      </div>
+      <div class="tools">
+        <label class="search"><Search size={15} aria-hidden="true"/><Input class="pl-8" aria-label="搜索统计范围" placeholder="搜索范围" bind:value={query} oninput={()=>offset=0}/></label>
+        <div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div>
+      </div>
+    </div>
+    <div class="plane-controls">
+      <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
+      <div class="sampling"><span class:live={view.streaming} class="mode"><span class="status-dot"></span>{view.streaming ? '实时' : '定时查询'}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
+    </div>
     <div class="scope-grid">
       {#each visible as key (key)}
         {@const row=view.rows[key]}
@@ -70,11 +84,56 @@
         </article>
       {:else}<p class="empty">{view.loading ? '正在读取统计…' : '没有匹配的统计范围'}</p>{/each}
     </div>
-    <footer><span>{filtered.length} 个范围{selected.length ? ` · 已选 ${selected.length}` : ''}</span><div><Button variant="ghost" size="icon-sm" aria-label="统计上一页" disabled={offset===0} onclick={()=>offset=Math.max(0,offset-24)}><ChevronLeft size={14}/></Button><span>{Math.floor(offset/24)+1} / {Math.max(1,Math.ceil(filtered.length/24))}</span><Button variant="ghost" size="icon-sm" aria-label="统计下一页" disabled={offset+24>=filtered.length} onclick={()=>offset+=24}><ChevronRight size={14}/></Button></div></footer>
+    {#if filtered.length}
+      <footer>
+        <span>共 {filtered.length} 个范围{selected.length ? ` · 已选 ${selected.length}` : ''}</span>
+        {#if filtered.length>24}<div class="pagination" aria-label="统计分页"><Button variant="ghost" size="icon-sm" aria-label="统计上一页" disabled={offset===0} onclick={()=>offset=Math.max(0,offset-24)}><ChevronLeft size={14}/></Button><span>{Math.floor(offset/24)+1} / {Math.ceil(filtered.length/24)}</span><Button variant="ghost" size="icon-sm" aria-label="统计下一页" disabled={offset+24>=filtered.length} onclick={()=>offset+=24}><ChevronRight size={14}/></Button></div>{/if}
+      </footer>
+    {/if}
   {/if}
 </section>
 <Dialog.Root bind:open={confirming}><Dialog.Content><Dialog.Header><Dialog.Title>清空所选统计？</Dialog.Title><Dialog.Description>开始新的统计周期。设备与连接继续运行；其他范围保持原值。</Dialog.Description></Dialog.Header><Dialog.Body><ul class="reset-targets">{#each plan?.targets ?? [] as target}<li><strong>{scopeLabel(target.scope)}</strong><span>{kinds.find(k=>k.kind===target.scope.kind)?.label}</span></li>{/each}</ul><p class="notice">清空这些范围全部可清空的累计指标。</p></Dialog.Body><Dialog.Footer><Button variant="outline" onclick={()=>confirming=false}>取消</Button><Button onclick={confirm}>确认清空</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 <Dialog.Root bind:open={detailOpen}><Dialog.Content class="sm:max-w-[720px]"><Dialog.Header><Dialog.Title>{inspected&&view.rows[inspected] ? scopeLabel(view.rows[inspected].snapshot.scope) : '统计详情'}</Dialog.Title><Dialog.Description>独立统计平面 · 当前统计周期</Dialog.Description></Dialog.Header><Dialog.Body>{#if inspected&&view.rows[inspected]}<TrafficScopeDetails observation={view.rows[inspected]} stale={view.stale}/>{:else}<p>此统计范围已不存在</p>{/if}</Dialog.Body></Dialog.Content></Dialog.Root>
 <style>
-  .statistics { flex:1; overflow:auto; min-width:0; padding:20px; } header,h2,.actions,.filters,.kinds,.plane-controls,.identity,.identity label,.activity,footer,footer>div { display:flex; align-items:center; gap:8px; } header { justify-content:space-between; gap:12px; flex-wrap:wrap; } h2 { font-size:16px; font-weight:600; } .mode { font-size:10px; font-weight:400; border-radius:5px; padding:3px 6px; color:var(--muted-foreground); background:var(--muted); } .mode.live { color:var(--success,#16a34a); } .error { color:var(--destructive); font-size:12px; margin:10px 0; overflow-wrap:anywhere; } .notice { font-size:12px; color:var(--muted-foreground); margin:10px 0; } .filters { flex-wrap:wrap; justify-content:space-between; margin:18px 0 12px; gap:12px; } .kinds { flex-wrap:wrap; gap:4px; } .kinds span { margin-left:6px; font-size:10px; opacity:.7; } .search { display:flex; align-items:center; gap:7px; border:1px solid var(--border); border-radius:7px; padding:6px 9px; color:var(--muted-foreground); } .search :global(input) { min-width:0; width:130px; background:transparent; font-size:12px; outline:none; } .plane-controls { margin-bottom:16px; flex-wrap:wrap; } .plane-controls>span { display:flex; gap:5px; align-items:center; color:var(--muted-foreground); font-size:10px; margin-left:auto; } .scope-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,255px),1fr)); gap:12px; } .scope { border:1px solid var(--border); border-radius:10px; min-width:0; padding:14px; } .identity { justify-content:space-between; } .identity label { min-width:0; cursor:pointer; } strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .role { font-size:10px; color:var(--muted-foreground); min-height:15px; overflow-wrap:anywhere; } .totals { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:14px 0 5px; } dt { font-size:10px; color:var(--muted-foreground); } dd { font-variant-numeric:tabular-nums; font-size:18px; font-weight:600; margin:0; overflow-wrap:anywhere; } .activity { font-size:10px; color:var(--muted-foreground); margin-top:10px; } footer { margin-top:16px; justify-content:space-between; font-size:11px; color:var(--muted-foreground); } .empty { font-size:12px; color:var(--muted-foreground); padding:30px 0; } .reset-targets { max-height:240px; overflow:auto; } .reset-targets li { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px solid var(--border); } .reset-targets span { font-size:11px; color:var(--muted-foreground); } @media(max-width:480px) { .statistics { padding:12px; } .legend { display:none; } }
+  .statistics { flex:1; overflow:auto; min-width:0; padding:20px; }
+  .toolbar,.tools,.actions,.kinds,.plane-controls,.sampling,.mode,.identity,.identity label,.activity,footer,footer>div { display:flex; align-items:center; gap:8px; }
+  .toolbar { justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
+  .kinds { min-width:0; }
+  .kinds span { margin-left:6px; font-size:10px; opacity:.7; }
+  .tools { flex:1; justify-content:flex-end; min-width:0; }
+  .actions { flex-shrink:0; }
+  .unsupported-actions { display:flex; justify-content:flex-end; }
+  .search { position:relative; display:block; flex:1; min-width:140px; max-width:220px; }
+  .search :global(svg) { position:absolute; top:50%; left:10px; transform:translateY(-50%); color:var(--muted-foreground); pointer-events:none; }
+  .search :global(input) { min-width:0; width:100%; padding-left:32px; }
+  .plane-controls { justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .sampling { color:var(--muted-foreground); gap:10px; margin-left:auto; }
+  .mode { font-size:11px; color:var(--muted-foreground); gap:5px; white-space:nowrap; }
+  .mode.live { color:var(--success,#16a34a); }
+  .status-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .error { color:var(--destructive); font-size:12px; margin:10px 0; overflow-wrap:anywhere; }
+  .notice { font-size:12px; color:var(--muted-foreground); margin:10px 0; }
+  .scope-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,255px),1fr)); gap:12px; }
+  .scope { border:1px solid var(--border); border-radius:10px; min-width:0; padding:14px; }
+  .identity { justify-content:space-between; }
+  .identity label { min-width:0; cursor:pointer; }
+  strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .role { font-size:10px; color:var(--muted-foreground); min-height:15px; overflow-wrap:anywhere; }
+  .totals { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:14px 0 5px; }
+  dt { font-size:10px; color:var(--muted-foreground); }
+  dd { font-variant-numeric:tabular-nums; font-size:18px; font-weight:600; margin:0; overflow-wrap:anywhere; }
+  .activity { font-size:10px; color:var(--muted-foreground); margin-top:10px; }
+  footer { margin-top:12px; justify-content:flex-end; flex-wrap:wrap; gap:12px; font-size:11px; color:var(--muted-foreground); }
+  footer>span { white-space:nowrap; }
+  .pagination { border-left:1px solid var(--border); padding-left:12px; }
+  .empty { font-size:12px; color:var(--muted-foreground); padding:30px 0; }
+  .reset-targets { max-height:240px; overflow:auto; }
+  .reset-targets li { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px solid var(--border); }
+  .reset-targets span { font-size:11px; color:var(--muted-foreground); }
+  @media(max-width:640px) {
+    .kinds { width:100%; }
+    .tools { width:100%; }
+    .search { max-width:none; min-width:0; }
+  }
+  @media(max-width:480px) { .statistics { padding:12px; } }
 </style>
