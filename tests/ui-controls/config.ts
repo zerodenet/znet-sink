@@ -294,5 +294,5 @@ export const applyConfigWorkspace = async () => { throw new Error('The UI fixtur
 
 export const getClientCoreSnapshot = async () => {
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
-  return {scope:{profileId:'fixture',configRevision:1,coreInstanceId:1}};
+  return {revision:1,scope:{profileId:'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
 };

@@ -2,12 +2,37 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { EndpointSession } from '../src/lib/features/endpoints/session.ts';
 import { operationReason, catalogSupported, directionRequiresRestart } from '../src/lib/features/endpoints/policy.ts';
+import { endpointObservation } from '../src/lib/features/endpoints/observation.ts';
+import { scopeKey } from '../src/lib/features/traffic/types.ts';
+import { observe } from '../src/lib/features/traffic/history.ts';
+import { sample } from '../tests/fixtures/traffic.ts';
 const caps = { available:true, features:['network_endpoint_catalog_v1','network_endpoint_control_v1','network_endpoint_control_preconditions_v1'], buildFeatures:[],globalLimitations:[],contracts:{capabilities:{current:1,minimumSupported:1},controlApi:{current:1,minimumSupported:1}} };
 const endpoint = () => ({ endpoint_id:'opaque:/a',tag:'a',protocol:'future',core_instance_id:'core-1',intent_revision:7,config_revision:1,generation:1,enabled:true,allowed:{inbound:true,outbound:true},effective:{inbound:true,outbound:true},state:'running',state_source:'config',supported:{operations:['set_state','set_directions','restart','details','clear_overrides'],directions:{inbound:true,outbound:true}},counters:{inner_rx_bytes:null,active_stream_flows:0} });
 const catalog = () => ({profileId:'profile-a',editableEndpointIds:['opaque:/a'],localOverrideIds:[],capabilities:structuredClone(caps),endpoints:[endpoint()]});
 const deferred = () => { let resolve; let reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 const gateway = () => ({ catalog:async () => catalog(), control:async () => endpoint(), details:async () => ({endpoint_id:'opaque:/a',generation:1,schema_id:'future',schema_version:1,details:{}}) });
 const stop = {operation:'set_state',enabled:false};
+
+test('legacy endpoint roles use declared single role tags without decoding opaque IDs or changing planes',()=>{
+ const e={...endpoint(),configuration:{origin:'legacy'},inbound_tags:[],outbound_tags:['declared-role']};
+ const snapshot=sample({kind:'outbound',tag:'declared-role'});snapshot.core_instance_id=e.core_instance_id;snapshot.config_revision=String(e.config_revision);
+ snapshot.planes[1].counters.rx_bytes=null;snapshot.planes[1].available_metrics=[];
+ const key=scopeKey(snapshot.scope),row=observe(undefined,snapshot,true),rows={[key]:row};
+ assert.equal(endpointObservation(e,rows).observation,row);assert.equal(endpointObservation(e,rows).key,key);
+ assert.equal(endpointObservation(e,rows).observation.snapshot.planes[1].counters.rx_bytes,null);
+ for(const next of [{...e,configuration:{origin:'canonical'}},{...e,configuration:undefined},{...e,outbound_tags:['declared-role','other']},{...e,inbound_tags:['also-inbound']},{...e,core_instance_id:'other'},{...e,config_revision:2}]) assert.equal(endpointObservation(next,rows).observation,undefined);
+ const inbound={...e,inbound_tags:['declared-role'],outbound_tags:[]};snapshot.scope={kind:'inbound',tag:'declared-role'};
+ const incoming=observe(undefined,snapshot,true);assert.equal(endpointObservation(inbound,{[scopeKey(snapshot.scope)]:incoming}).observation,incoming);
+});
+
+test('real endpoint observations take priority and reject mismatched instance revision or generation',()=>{
+ const e={...endpoint(),configuration:{origin:'legacy'},inbound_tags:[],outbound_tags:['a']};
+ const snapshot=sample({kind:'endpoint',endpoint_id:e.endpoint_id});snapshot.core_instance_id=e.core_instance_id;snapshot.config_revision=String(e.config_revision);snapshot.generation=String(e.generation);
+ const key=scopeKey(snapshot.scope),row=observe(undefined,snapshot,true),role=sample({kind:'outbound',tag:'a'});
+ const rows={[key]:row,[scopeKey(role.scope)]:observe(undefined,role,true)};
+ assert.equal(endpointObservation(e,rows).observation,row);
+ for(const next of [{...e,core_instance_id:'other'},{...e,config_revision:2},{...e,generation:2}]) assert.equal(endpointObservation(next,rows).observation,undefined);
+});
 
 test('compatibility is capability based; direction contraction follows kernel limitations', () => {
   const c = catalog(); const row = endpoint();
@@ -89,6 +114,61 @@ test('opened protocol facts update on polling and disappear on failed observatio
   g.details=async()=>{throw {message:'observer failed'};};await session.refresh(false);
   assert.equal(session.view.details,null);assert.equal(session.view.detailsError.message,'observer failed');
   assert.equal(session.view.stale,false);
+});
+
+test('background observation keeps catalog and compatible details visible without foreground loading', async () => {
+  const g = gateway(); const publications = [];
+  const session = new EndpointSession(g, view => publications.push(view));
+  await session.refresh(); await session.inspect(endpoint());
+  const previousCatalog = session.view.catalog;
+  const previousDetails = session.view.details;
+  publications.length = 0;
+  const directory = deferred(); const detail = deferred(); let reads = 0;
+  g.catalog = () => { reads++; return directory.promise; };
+  g.details = () => detail.promise;
+  const refresh = session.refresh(false, true);
+  await session.refresh(false, true);
+  assert.equal(reads, 1);
+  assert.equal(session.view.catalog, previousCatalog);
+  assert.equal(session.view.details, previousDetails);
+  directory.resolve(catalog()); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.view.details, previousDetails);
+  detail.resolve({...previousDetails, details:{sample:'new'}}); await refresh;
+  assert.equal(session.view.details.details.sample, 'new');
+  assert.ok(publications.every(view => !view.loading && !view.detailsLoading && view.catalog && view.details));
+});
+
+test('background reads are superseded by control and do not block its authoritative readback', async () => {
+  const g = gateway(); const session = new EndpointSession(g, () => {});
+  await session.refresh();
+  const old = deferred(); g.catalog = () => old.promise;
+  const refresh = session.refresh(false, true);
+  const updated = {...endpoint(),enabled:false,state:'stopped',intent_revision:8};
+  g.control = async () => updated;
+  g.catalog = async () => ({...catalog(),endpoints:[updated]});
+  await session.act(endpoint(),stop);
+  assert.equal(session.view.stale,false);
+  assert.equal(session.view.catalog.endpoints[0].enabled,false);
+  old.resolve(catalog()); await refresh;
+  assert.equal(session.view.catalog.endpoints[0].enabled,false);
+});
+
+test('background observation hides incompatible generation details and exposes failures', async () => {
+  const g = gateway(); const session = new EndpointSession(g, () => {});
+  await session.refresh(); await session.inspect(endpoint());
+  const current = {...endpoint(),generation:2};
+  g.catalog = async () => ({...catalog(),endpoints:[current]});
+  const detail = deferred(); g.details = () => detail.promise;
+  const refresh = session.refresh(false,true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.view.details,null);
+  detail.resolve({endpoint_id:current.endpoint_id,generation:2,details:{}}); await refresh;
+  g.catalog = async () => { throw {message:'offline'}; };
+  await session.refresh(false,true);
+  assert.equal(session.view.stale,true);
+  assert.equal(session.view.refreshError.message,'offline');
+  assert.equal(session.view.details,null);
+  assert.equal(session.view.catalog.endpoints[0].generation,2);
 });
 
 test('stale row actions are refused locally and disposal stops details publication', async () => {

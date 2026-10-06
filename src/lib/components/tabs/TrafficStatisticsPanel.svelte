@@ -13,12 +13,14 @@
   import { byteKeys, formatBytes, metric } from '$lib/features/traffic/history';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
+  import { useTrafficWorkspace } from '$lib/features/traffic/context';
   let { session, view }: { session: TrafficSession; view: TrafficView } = $props();
+  const workspace = useTrafficWorkspace();
   const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'}];
-  let kind = $state<TrafficScope['kind']>('global');
-  let plane = $state('flow');
-  let query = $state('');
-  let offset = $state(0);
+  let kind = $state(workspace.statistics.kind);
+  let plane = $state(workspace.statistics.plane);
+  let query = $state(workspace.statistics.query);
+  let offset = $state(workspace.statistics.offset);
   let selected = $state<string[]>([]);
   let plan = $state.raw<ResetInput | null>(null);
   let confirming = $state(false);
@@ -31,6 +33,7 @@
   const maximum = $derived(Math.min(256,view.discovery?.capabilities.trafficStatistics?.maximum_reset_targets ?? 0));
   const selectionReason = $derived(selected.length ? selected.map(key => view.rows[key] ? resetReason(view.discovery,view.rows[key].snapshot) : '统计范围已不存在').find(Boolean) : '先选择统计范围');
   $effect(() => { session.watch(visible); });
+  $effect(() => { workspace.statistics = { kind, plane, query, offset }; });
   $effect(() => {
     if (view.loading || view.stale) return;
     const remaining = selected.filter(key => !!view.rows[key]);

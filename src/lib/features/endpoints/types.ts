@@ -6,6 +6,7 @@ export interface NetworkEndpoint {
   endpoint_id: string;
   tag: string;
   protocol: string;
+  configuration?: { origin: string };
   inbound_tags: string[];
   outbound_tags: string[];
   supported: {

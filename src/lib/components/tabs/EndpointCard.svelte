@@ -45,7 +45,7 @@
   const outboundReason = $derived(operationReason(catalog, endpoint, directionAction('outbound')));
   const stateReason = $derived(operationReason(catalog, endpoint, stateAction));
   const restartReason = $derived(operationReason(catalog, endpoint, { operation: 'restart' }));
-  function count(key: string) { return observationAvailable ? observation?.snapshot.activity[key] ?? '—' : endpoint.counters[key] == null ? '—' : String(endpoint.counters[key]); }
+  function count(key: string) { return observationAvailable && observation ? observation.snapshot.activity[key] ?? '—' : endpoint.counters[key] == null ? '—' : String(endpoint.counters[key]); }
   function act(action: EndpointAction) { menuOpen = false; onAction(endpoint, action); }
   function showDetail(mode: 'protocol' | 'observation') {
     menuOpen = false; detailMode = mode; detailOpen = true;
@@ -72,7 +72,10 @@
     </div>
   </header>
   <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span>{#if endpoint.health === 'degraded'}<AlertTriangle size={13} aria-label="健康降级" />{/if}<span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
-  {#if observationAvailable}<TrafficMiniChart {observation} plane="inner" stale={stale || observationStale}/>{:else}<EndpointTrafficChart {traffic} {stale} />{/if}
+  {#if observationAvailable}
+    {#if observation?.snapshot.scope.kind === 'outbound' || observation?.snapshot.scope.kind === 'inbound'}<p class="observation-source" title={`内核声明的${observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} ${observation.snapshot.scope.tag} 统计；Inner 为内层流量，与 Flow、Outer 分开计量`}>{observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} · Inner</p>{:else if !observation}<p class="observation-source">暂无端点统计快照</p>{/if}
+    <TrafficMiniChart {observation} plane="inner" stale={stale || observationStale}/>
+  {:else}<EndpointTrafficChart {traffic} {stale} />{/if}
   <div class="connections" aria-label="活动连接">
     <span title="流连接"><Cable size={13} /><span class="sr-only">流 </span>{count('active_stream_flows')}</span>
     <span title="数据报连接"><Boxes size={13} /><span class="sr-only">数据报 </span>{count('active_datagram_flows')}</span>
@@ -111,6 +114,7 @@
   .power-switch:focus-visible,summary:focus-visible { outline:2px solid var(--ring); outline-offset:3px; } .temporary { gap:3px; font-size:10px; color:var(--muted-foreground); white-space:nowrap; }
   .status-row { gap:8px; margin-top:14px; font-size:11px; color:var(--muted-foreground); } .status { gap:5px; } .status i { width:6px; height:6px; border-radius:50%; background:var(--muted-foreground); } .running i { background:var(--success,#16a34a); } .failed i { background:var(--destructive); } .effective { margin-left:auto; }
   .connections { gap:16px; font-size:11px; color:var(--muted-foreground); margin:1px 0 14px; } .connections>span { gap:5px; font-variant-numeric:tabular-nums; }
+  .observation-source { font-size:10px; color:var(--muted-foreground); margin-top:8px; }
   footer { border-top:1px solid var(--border); padding-top:12px; justify-content:space-between; gap:10px; } .directions { gap:6px; } .directions>button { position:relative; gap:5px; padding:5px 8px; border-radius:6px; font-size:11px; color:var(--muted-foreground); cursor:pointer; background:var(--muted); }
   .directions>button.active { color:var(--primary); background:color-mix(in srgb,var(--primary) 9%,transparent); } .directions>button:focus-visible { outline:2px solid var(--ring); } .directions>button:disabled { opacity:.45; cursor:default; }
   .options { position:relative; } summary { display:flex; padding:4px; list-style:none; cursor:pointer; color:var(--muted-foreground); border-radius:6px; } summary::-webkit-details-marker { display:none; } summary:hover { background:var(--muted); }

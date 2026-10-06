@@ -18,6 +18,9 @@
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
   import { installDesktopWebviewGuards } from '$lib/services/desktop-webview';
+  import { provideTrafficWorkspace } from '$lib/features/traffic/context';
+
+  provideTrafficWorkspace();
 
   const EVENT_STREAM_RETRY_MIN_MS = 500;
   const EVENT_STREAM_RETRY_MAX_MS = 5_000;

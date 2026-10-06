@@ -25,6 +25,7 @@ export class EndpointSession {
   private epoch = 0;
   private disposed = false;
   private selectedDetailId: string | null = null;
+  private refreshRequest: number | null = null;
   private gateway: EndpointGateway;
   private changed: (view: EndpointView) => void;
   constructor(gateway: EndpointGateway, changed: (view: EndpointView) => void) {
@@ -39,15 +40,17 @@ export class EndpointSession {
   private current(epoch: number) { return !this.disposed && epoch === this.epoch; }
   invalidate() {
     this.epoch++;
+    this.refreshRequest = null;
     this.selectedDetailId = null;
     this.publish({ catalog: null, details: null, detailsLoading: false, detailsError: null,
       stale: true, loading: false, error: null, refreshError: null, result: null, traffic: {} });
   }
   dispose() { this.disposed = true; this.epoch++; }
-  async refresh(clearError = true) {
-    if (this.disposed || this.view.busy || this.view.loading || this.view.detailsLoading) return;
+  async refresh(clearError = true, background = false) {
+    if (this.disposed || this.view.busy || this.refreshRequest !== null || this.view.detailsLoading) return;
     const epoch = ++this.epoch;
-    this.publish({ loading: true });
+    this.refreshRequest = epoch;
+    if (!background) this.publish({ loading: true });
     try {
       const catalog = await this.gateway.catalog();
       if (!this.current(epoch)) return;
@@ -55,18 +58,23 @@ export class EndpointSession {
       const first = catalog.endpoints[0];
       const changedScope = old && first && (old.core_instance_id !== first.core_instance_id || old.config_revision !== first.config_revision);
       if (changedScope) this.selectedDetailId = null;
+      const selected = catalog.endpoints.find(row => row.endpoint_id === this.selectedDetailId);
+      const previousDetails = this.view.details;
+      const details = selected?.supported.operations.includes('details') && previousDetails
+        && selected.generation === previousDetails.generation
+        && selected.endpoint_id === previousDetails.endpoint_id ? previousDetails : null;
       const traffic = Object.fromEntries(catalog.endpoints.map(endpoint => [endpoint.endpoint_id,
         sampleEndpointTraffic(this.view.traffic[endpoint.endpoint_id], endpoint)]));
       this.publish({ catalog, stale: false, error: clearError ? null : this.view.error,
         refreshError: null, result: changedScope ? null : this.view.result,
-        details: null, detailsError: null, traffic });
-      const selected = catalog.endpoints.find(row => row.endpoint_id === this.selectedDetailId);
-      if (selected?.supported.operations.includes('details')) await this.readDetails(selected, epoch);
+        details, detailsError: null, traffic });
+      if (selected?.supported.operations.includes('details')) await this.readDetails(selected, epoch, background);
       else this.selectedDetailId = null;
     } catch (refreshError) {
       if (this.current(epoch)) this.publish({ stale: true, refreshError, details: null });
     } finally {
-      if (this.current(epoch)) this.publish({ loading: false });
+      if (this.refreshRequest === epoch) this.refreshRequest = null;
+      if (this.current(epoch) && !background) this.publish({ loading: false });
     }
   }
   private isCurrentEndpoint(endpoint: NetworkEndpoint): boolean {
@@ -81,6 +89,7 @@ export class EndpointSession {
       ? operationReason(this.view.catalog, endpoint, action) : '端点观测已变化，请刷新后重试';
     if (reason) { this.publish({ error: { message: reason } }); return; }
     const epoch = ++this.epoch;
+    this.refreshRequest = null;
     this.selectedDetailId = null;
     this.publish({ busy: endpoint.endpoint_id, stale: true, loading: false, error: null,
       refreshError: null, result: null, details: null, detailsLoading: false, detailsError: null });
@@ -100,8 +109,8 @@ export class EndpointSession {
       await this.refresh(false);
     }
   }
-  private async readDetails(endpoint: NetworkEndpoint, epoch: number) {
-    this.publish({ detailsLoading: true, detailsError: null });
+  private async readDetails(endpoint: NetworkEndpoint, epoch: number, background = false) {
+    if (!background) this.publish({ detailsLoading: true, detailsError: null });
     try {
       const details = await this.gateway.details(endpoint.endpoint_id, endpoint.core_instance_id);
       if (!this.current(epoch)) return;
@@ -112,7 +121,7 @@ export class EndpointSession {
     } catch (detailsError) {
       if (this.current(epoch)) this.publish({ details: null, detailsError });
     } finally {
-      if (this.current(epoch)) this.publish({ detailsLoading: false });
+      if (this.current(epoch) && !background) this.publish({ detailsLoading: false });
     }
   }
   async inspect(endpoint: NetworkEndpoint) {
@@ -120,6 +129,7 @@ export class EndpointSession {
     if (!this.isCurrentEndpoint(endpoint)) { this.publish({ detailsError: { message: '端点观测已变化，请刷新详情' } }); return; }
     this.selectedDetailId = endpoint.endpoint_id;
     const epoch = ++this.epoch;
+    this.refreshRequest = null;
     this.publish({ details: null });
     await this.readDetails(endpoint, epoch);
   }
