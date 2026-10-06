@@ -1,8 +1,9 @@
-import { FixtureGateway } from '../fixtures/traffic';
+import { FixtureGateway, sample } from '../fixtures/traffic';
 import type { TrafficGateway } from '$lib/features/traffic/types';
 const params = new URLSearchParams(window.location.search);
 const enabled = params.has('traffic-v1');
 const fixture = new FixtureGateway();
+if(params.has('traffic-many-scopes')) fixture.rows.push(...Array.from({length:26},(_,index)=>sample({kind:'outbound',tag:`extra-${index+1}`},index+5)));
 fixture.rows[3].scope = {kind:'endpoint',endpoint_id:'resource:wg-a'};
 fixture.rows[4].scope = {kind:'peer',endpoint_id:'resource:wg-a',peer_id:'peer-1'};
 fixture.pageLimit=2;
