@@ -10,7 +10,6 @@
     getProtocolStyle,
     gradeDelay,
     getProbeTimeStyle,
-    getSpecialOutboundStyle,
     getGroupKindStyle,
   } from '$lib/services/node-utils';
 
@@ -50,7 +49,6 @@
   const protocolStyle = $derived(getProtocolStyle(node.protocol));
   const chips = $derived(getNodeChips(node));
   const probeTimeState = $derived(getProbeTimeStyle(node.lastProbeAt));
-  const special = $derived(getSpecialOutboundStyle(node.protocol));
 </script>
 
 <div
@@ -82,7 +80,7 @@
         {:else if node.emoji}
           <span class="node-emoji">{node.emoji}</span>
         {/if}
-        {special?.label ?? (node.cleanName || node.name)}
+        {node.cleanName || node.name}
       </span>
     </div>
 
