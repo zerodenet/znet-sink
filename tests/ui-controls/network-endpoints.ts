@@ -11,6 +11,7 @@ const base = (tag: string, protocol: string): NetworkEndpoint => ({
   counters:{inner_rx_bytes:null,inner_tx_bytes:null,outer_rx_bytes:null,outer_tx_bytes:null,active_packet_routes:null,active_stream_flows:0,active_datagram_flows:2},last_error:null,
 });
 let endpoints=[base('wg-a','wireguard'),base('mesh-b','future_mesh')];
+if (params().has('legacy-role-stats')) endpoints=endpoints.map(row=>({...row,configuration:{origin:'legacy'},endpoint_id:`opaque-role/${row.tag}`,inbound_tags:[],allowed:{inbound:false,outbound:true},effective:{inbound:false,outbound:true},counters:{...row.counters,active_stream_flows:0,active_datagram_flows:0,active_packet_routes:null}}));
 if (params().has('long-details')) {
   endpoints[0].inbound_tags = ['endpoint/' + 'long-resource-name-'.repeat(8)];
   endpoints[0].outbound_tags = ['outbound/' + 'long-resource-name-'.repeat(8)];
@@ -51,6 +52,7 @@ window.addEventListener('fixture-reload-config', () => {
 export const endpointGateway: EndpointGateway = {
   async catalog(): Promise<EndpointCatalog> {
     window.dispatchEvent(new Event('fixture-endpoint-catalog-read'));
+    if (params().has('slow-observation')) await new Promise(resolve => setTimeout(resolve, 250));
     observeTraffic();
     const capabilities=capabilityFixture();
     if (params().get('version')==='v002') return {capabilities,endpoints:[],profileId:'profile-a',editableEndpointIds:[],localOverrideIds:[]};
@@ -91,6 +93,7 @@ export const endpointGateway: EndpointGateway = {
     return structuredClone(row);
   },
   async details(endpointId) {
+    if (params().has('slow-observation')) await new Promise(resolve => setTimeout(resolve, 250));
     const row=endpoints.find(row=>row.endpoint_id===endpointId)!;
     return {endpoint_id:endpointId,generation:row.generation,schema_id:row.protocol==='wireguard'?'zero.endpoint.wireguard.v1':'zero.endpoint.future.v1',schema_version:1,
       details:row.protocol==='wireguard'?{peers:[{peer_id:'peer-1',public_key:params().has('long-details') ? 'q3b2T3yN7WvK5sR8dM1xP4cL6jH9aF0uE2nG5zB7kVQ=' : 'public-only',allowed_ips:params().has('long-details') ? ['10.0.0.0/24','fd00:1234:5678:9abc::/64'] : ['10.0.0.0/24'],configured_endpoint:params().has('long-details') ? 'wireguard.' + 'long-hostname.'.repeat(6) + 'example.test:51820' : configuredPeer,authenticated_endpoint:null,source_known:null,health:null}]}:{connected:null}};

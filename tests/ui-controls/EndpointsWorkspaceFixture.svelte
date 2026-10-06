@@ -4,6 +4,9 @@
   import TabContent from '$lib/components/TabContent.svelte';
   import { store } from '$lib/services/store.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
+  import { provideTrafficWorkspace } from '$lib/features/traffic/context';
+
+  provideTrafficWorkspace();
 
   const params = new URLSearchParams(window.location.search);
   const preview = params.has('preview');

@@ -99,6 +99,48 @@ test('periodic protocol observation refreshes an already opened detail',async({p
   await expect(page.getByLabel('端点协议详情')).toContainText('changed.test:51820');
 });
 
+test('passive endpoint polling retains cards and protocol details without a loading flash', async ({page}) => {
+  await page.clock.install();
+  await open(page, '&slow-observation=1');
+  const row = page.getByRole('article', {name:'端点 wg-a',exact:true});
+  await menu(row, '协议详情');
+  await expect(page.getByLabel('端点协议详情')).toContainText('example.test:51820');
+  await page.evaluate(() => {
+    const card = document.querySelector('.endpoint-card')!;
+    const observer = new MutationObserver(() => {
+      if (!card.isConnected || !document.querySelector('[aria-label="端点协议详情"]')?.textContent?.includes('example.test:51820')
+        || document.querySelector('[aria-label="刷新端点"]')?.querySelector('.animate-spin')) {
+        observer.disconnect();
+        document.body.dataset.endpointFlash = 'true';
+      }
+    });
+    observer.observe(document.body,{subtree:true,childList:true,attributes:true});
+  });
+  await page.clock.runFor(11000);
+  await expect(page.getByLabel('端点目录查询次数')).toHaveText('3');
+  await expect(page.getByLabel('端点协议详情')).toContainText('example.test:51820');
+  await expect(page.locator('body')).not.toHaveAttribute('data-endpoint-flash','true');
+});
+
+test('equivalent and delayed host events do not replace endpoint cards or search state', async ({page}) => {
+  await open(page);
+  const row = page.getByRole('article', {name:'端点 wg-a',exact:true});
+  await expect(row).toBeVisible();
+  await page.getByRole('textbox', {name:'搜索端点'}).fill('wg');
+  await row.getByLabel('wg-a 更多操作').click();
+  const retained = await row.elementHandle();
+  await page.evaluate(() => {
+    // Field order is not scope identity; an older event is not a new scope.
+    for (const payload of [
+      {revision:2,scope:{coreInstanceId:1,configRevision:1,profileId:'fixture'}},
+      {revision:1,scope:{profileId:'other',configRevision:99,coreInstanceId:99}},
+    ]) window.dispatchEvent(new CustomEvent('client-core:updated',{detail:payload}));
+  });
+  await expect(row.getByRole('button',{name:'协议详情',exact:true})).toBeVisible();
+  await expect(page.getByRole('textbox',{name:'搜索端点'})).toHaveValue('wg');
+  expect(await retained!.evaluate(element => element === document.querySelector('.endpoint-card'))).toBe(true);
+});
+
 test('restart does not clear saved local preferences',async({page})=>{
   await open(page);
   const row=page.getByRole('article',{name:'端点 wg-a',exact:true});

@@ -3,15 +3,15 @@
   import { onMount } from 'svelte';
   import NetworkEndpointsPanel from './NetworkEndpointsPanel.svelte';
   import TrafficStatisticsPanel from './TrafficStatisticsPanel.svelte';
-  import { trafficGateway } from '$lib/features/traffic/client';
-  import { TrafficSession } from '$lib/features/traffic/session';
-  const session = new TrafficSession(trafficGateway, next => { view = next; });
+  import { useTrafficWorkspace } from '$lib/features/traffic/context';
+  const workspace = useTrafficWorkspace();
+  const session = workspace.session;
   let view = $state(session.view);
-  let tab = $state<'endpoints'|'traffic'>('endpoints');
-  onMount(()=> { void session.start(); return ()=>session.dispose(); });
+  let tab = $state(workspace.tab);
+  onMount(()=> workspace.connect(next => { view = next; }));
 </script>
 <div class="endpoints-workspace animate-fade-in">
-  <nav aria-label="端点工作区"><SegmentedControl.Root value={tab} onValueChange={value=>tab=value as typeof tab} aria-label="端点工作区视图"><SegmentedControl.Item value="endpoints">端点</SegmentedControl.Item><SegmentedControl.Item value="traffic">流量统计</SegmentedControl.Item></SegmentedControl.Root></nav>
+  <nav aria-label="端点工作区"><SegmentedControl.Root value={tab} onValueChange={value=>{tab=value as typeof tab;workspace.tab=tab;}} aria-label="端点工作区视图"><SegmentedControl.Item value="endpoints">端点</SegmentedControl.Item><SegmentedControl.Item value="traffic">流量统计</SegmentedControl.Item></SegmentedControl.Root></nav>
   {#if tab==='endpoints'}<NetworkEndpointsPanel trafficView={view} trafficSession={session}/>{:else}<TrafficStatisticsPanel {session} {view}/>{/if}
 </div>
 <style>

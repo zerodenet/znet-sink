@@ -11,29 +11,35 @@
   import type { ClientCoreSnapshot } from '$lib/types/gui-api';
   import EndpointCard from './EndpointCard.svelte';
   import type { TrafficView, TrafficSession } from '$lib/features/traffic/session';
-  import { scopeKey } from '$lib/features/traffic/types';
+  import { endpointObservation } from '$lib/features/endpoints/observation';
   import { supported } from '$lib/features/traffic/policy';
   let { trafficView, trafficSession }: { trafficView?: TrafficView; trafficSession?: TrafficSession } = $props();
   const session = new EndpointSession(endpointGateway, (next) => { view = next; });
   let view = $state(session.view);
   let query = $state('');
   const endpoints = $derived((view.catalog?.endpoints ?? []).filter(row => `${row.tag} ${row.protocol} ${row.endpoint_id}`.toLowerCase().includes(query.toLowerCase())));
-  $effect(() => { trafficSession?.watch(endpoints.map(row => scopeKey({kind:'endpoint',endpoint_id:row.endpoint_id}))); });
+  $effect(() => { trafficSession?.watch(endpoints.map(row => endpointObservation(row, trafficView?.rows ?? {}).key)); });
   let hostReady = $state(false);
   let hostError = $state<unknown>(null);
   let hostScope: string | undefined;
+  let hostRevision = -1;
   let hostListening = false;
   let scopeSequence = 0;
   let mounted = false;
+  function scopeKeyOf(snapshot: ClientCoreSnapshot) {
+    const { profileId, configRevision, coreInstanceId } = snapshot.scope;
+    return JSON.stringify([profileId ?? null, configRevision, coreInstanceId]);
+  }
   async function refreshHostAndDirectory() {
     const sequence = scopeSequence;
     try {
       const snapshot = await getClientCoreSnapshot();
       if (!mounted) return;
-      if (sequence === scopeSequence) {
-        const next = JSON.stringify(snapshot.scope);
+      if (sequence === scopeSequence && snapshot.revision >= hostRevision) {
+        const next = scopeKeyOf(snapshot);
         if (hostScope !== undefined && hostScope !== next) session.invalidate();
         hostScope = next;
+        hostRevision = snapshot.revision;
         hostReady = hostListening;
         if (hostListening) hostError = null;
       }
@@ -48,11 +54,13 @@
     let unlisten: (() => void) | undefined;
     // Poll only while this management view is mounted and visible. This also
     // works with kernels that have no endpoint event stream yet.
-    const timer = setInterval(() => { if (!document.hidden) void session.refresh(false); }, 5000);
-    const focused = () => { void session.refresh(false); };
+    const timer = setInterval(() => { if (!document.hidden) void session.refresh(false, true); }, 5000);
+    const focused = () => { void session.refresh(false, true); };
     window.addEventListener('focus', focused);
     void listen<ClientCoreSnapshot>('client-core:updated', event => {
-      const next = JSON.stringify(event.payload.scope);
+      if (event.payload.revision < hostRevision) return;
+      hostRevision = event.payload.revision;
+      const next = scopeKeyOf(event.payload);
       scopeSequence++;
       hostReady = true;
       hostError = null;
@@ -85,7 +93,7 @@
     <label class="search"><Search size={15} /><Input aria-label="搜索端点" placeholder="搜索端点" bind:value={query} /></label>
     <div class="endpoint-grid">
       {#each endpoints as endpoint (endpoint.core_instance_id + ':' + endpoint.endpoint_id)}
-        <EndpointCard {endpoint} observation={trafficView?.rows[scopeKey({kind:'endpoint',endpoint_id:endpoint.endpoint_id})]} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
+        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
       {:else}<p class="empty">{query ? '无匹配端点' : '当前内核配置没有声明端点'}</p>{/each}
     </div>
   {:else if view.loading}<p class="empty">正在读取内核端点目录…</p>{/if}

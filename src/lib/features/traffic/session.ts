@@ -56,7 +56,11 @@ export class TrafficSession {
     this.timer = setInterval(() => this.tick(), 1000);
   }
   watch(keys: string[]) {
-    this.watched = new Set(keys.slice(0, MAX_HISTORY_SCOPES));
+    // Retain recently viewed scopes across filters, pagination and navigation.
+    // Active scopes take priority; only LRU eviction drops local history.
+    const active = new Set(keys.slice(0, MAX_HISTORY_SCOPES));
+    this.watched = new Set([...this.watched].filter(key => !active.has(key))
+      .concat([...active]).slice(-MAX_HISTORY_SCOPES));
     const rows = { ...this.view.rows };
     let changed = false;
     for (const [key, row] of Object.entries(rows)) if (!this.watched.has(key) && row.points.length) {
@@ -163,6 +167,7 @@ export class TrafficSession {
     }
     // Only a complete, consistent inventory can remove identities.
     for (const key of this.retiredEpochs.keys()) if (!rows[key]) this.retiredEpochs.delete(key);
+    for (const key of this.watched) if (!rows[key]) this.watched.delete(key);
     this.emit({ rows, order: page.scopes.map(row => scopeKey(row.scope)) });
   }
   private event(event: TrafficEvent) {

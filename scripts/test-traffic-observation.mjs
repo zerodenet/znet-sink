@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FixtureGateway, sample, scopes, discovery } from '../tests/fixtures/traffic.ts';
 import { TrafficSession, MAX_HISTORY_SCOPES } from '../src/lib/features/traffic/session.ts';
+import { TrafficWorkspace } from '../src/lib/features/traffic/workspace.ts';
 import { scopeKey } from '../src/lib/features/traffic/types.ts';
 import { inventory } from '../src/lib/features/traffic/inventory.ts';
 import { observe, metric, rebaseline, formatBytes, MAX_POINTS } from '../src/lib/features/traffic/history.ts';
@@ -85,6 +86,39 @@ test('history scope limit and dispose prevent late completion and clean only loc
  const g=new FixtureGateway();g.rows=Array.from({length:90},(_,i)=>sample({kind:'outbound',tag:`out-${i}`},i));const s=await started(g);s.watch(g.rows.map(r=>scopeKey(r.scope)));g.advance();g.push();assert.equal(Object.values(s.view.rows).filter(r=>r.points.length).length,MAX_HISTORY_SCOPES);
  const view=s.view;s.dispose();g.advance();g.push();assert.equal(s.view,view);assert.equal(g.stops,1);
  const old=new FixtureGateway();old.caps.supported=false;const fallback=await started(old);assert.equal(old.queries.length,0);fallback.dispose();
+});
+
+test('switching watched scopes retains recent curves, prioritizes active scopes and evicts oldest histories',async()=>{
+ const g=new FixtureGateway();g.rows=Array.from({length:MAX_HISTORY_SCOPES+1},(_,i)=>sample({kind:'outbound',tag:`out-${i}`},i));const s=await started(g);
+ try {
+  const keys=g.rows.map(row=>scopeKey(row.scope));
+  s.watch([keys[0]]);g.advance();g.push();const previous=s.view.rows[keys[0]].points;
+  s.watch([keys[1]]);assert.deepEqual(s.view.rows[keys[0]].points,previous);
+  g.advance();g.push();assert(s.view.rows[keys[0]].points.length>previous.length);
+  s.watch(keys.slice(1));assert.equal(s.view.rows[keys[0]].points.length,0);
+  g.advance();g.push();assert.equal(Object.values(s.view.rows).filter(row=>row.points.length).length,MAX_HISTORY_SCOPES);
+  s.watch([keys[1]]);g.advance();g.push();assert.equal(Object.values(s.view.rows).filter(row=>row.points.length).length,MAX_HISTORY_SCOPES);
+  g.rows.splice(1,1);g.registry='2';await s.refresh();assert.equal(s.view.rows[keys[1]],undefined);
+ } finally {s.dispose();}
+});
+
+test('workspace retains sampling across page detach, reconnects once and disposes with the app',async()=>{
+ const g=new FixtureGateway(),workspace=new TrafficWorkspace(g);let notifications=0;
+ let subscriptions=0;const subscribe=g.subscribe.bind(g);g.subscribe=(...args)=>{subscriptions++;return subscribe(...args);};
+ try {
+ const detach=workspace.connect(()=>notifications++);await flush();
+ const key=scopeKey(scopes[0]);workspace.session.watch([key]);g.advance();g.push();
+ const previous=workspace.session.view.rows[key].points;detach();const before=notifications;
+ g.advance();g.push();assert.equal(notifications,before);assert(workspace.session.view.rows[key].points.length>previous.length);assert.equal(g.stops,0);
+ let restored;const detachAgain=workspace.connect(view=>restored=view);
+ assert.equal(restored,workspace.session.view);assert.equal(subscriptions,1);
+ const unaffected=restored.rows[key].points;await workspace.session.reset(workspace.session.plan([scopeKey(scopes[3])]));
+ assert.deepEqual(workspace.session.view.rows[key].points,unaffected);
+ await workspace.session.reset(workspace.session.plan([key]));assert.equal(workspace.session.view.rows[key].points.length,1);
+ g.advance();g.push();for(const row of g.rows){row.core_instance_id='core-b';row.stats_epoch='next-instance';}g.advance();g.push();await flush();
+ assert.equal(workspace.session.view.rows[key].snapshot.core_instance_id,'core-b');assert.equal(workspace.session.view.rows[key].points.length,1);
+ detachAgain();workspace.dispose();assert.equal(g.stops,1);assert.throws(()=>workspace.connect(()=>{}),/关闭/);
+ } finally {workspace.dispose();}
 });
 
 test('GUI delivery envelope decodes exact stats payload and detects gaps across all event types',async()=>{
