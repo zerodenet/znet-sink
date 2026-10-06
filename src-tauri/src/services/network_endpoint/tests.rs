@@ -233,3 +233,21 @@ fn endpoint_control_sends_atomic_core_condition_only_when_declared() {
         "core-1"
     );
 }
+
+#[test]
+fn unsupported_ipc_execution_error_is_actionable_and_retains_kernel_diagnostics() {
+    let raw = json!({"ok":false,"error":{"code":"unsupported","message":"endpoint control requires execute_acknowledged"}});
+    let error = super::control_error(crate::errors::AppError {
+        code: "unsupported",
+        message: "endpoint control requires execute_acknowledged".into(),
+        details: Some(raw.clone()),
+    });
+    assert!(error.message.contains("IPC 端点控制入口"));
+    assert_eq!(error.details, Some(raw));
+    let other = super::control_error(crate::errors::AppError {
+        code: "unsupported",
+        message: "another unsupported capability".into(),
+        details: None,
+    });
+    assert_eq!(other.message, "another unsupported capability");
+}

@@ -183,31 +183,21 @@ async fn apply_locked(
         ));
     }
     let previous_profiles = common::lock(state.proxy_configs(), "proxy_config")?.clone();
-    let previous_source = active
-        .content
-        .as_ref()
-        .ok_or_else(|| AppError::invalid_argument("当前活动配置没有可编辑的 JSON 内容"))?;
-    let previous_effective = rule_overlay::compose_effective_config_for(
-        state.inner(),
-        previous_source,
-        Some(&active.id),
-    )?;
-
     let applied_identity = match input.strategy {
         ConfigApplyStrategy::HotReload => {
-            let identity =
-                apply_effective_with_identity(state.inner(), plan.effective_config.clone()).await?;
+            let receipt = crate::configuration::capture_apply::apply_profile(
+                state.inner(),
+                &input.source_config,
+                Some(&active.id),
+                plan.effective_config.clone(),
+                ipc_options(state.inner())?,
+            )
+            .await?;
             if let Err(mut error) = persist_export_retarget(state.clone(), input.source_config) {
-                rollback_hot(
-                    state.clone(),
-                    &previous_profiles,
-                    previous_effective.clone(),
-                    &mut error,
-                )
-                .await;
+                rollback_hot(state.clone(), &previous_profiles, &receipt, &mut error).await;
                 return Err(error);
             }
-            Some(identity)
+            Some(receipt.identity)
         }
         ConfigApplyStrategy::Restart => {
             if let Err(mut error) =
@@ -227,21 +217,8 @@ async fn apply_locked(
             Err(mut error) => {
                 error.code = "config_apply_uncertain";
                 error.message = format!("配置已提交但最终运行态身份无法确认：{}", error.message);
-                match input.strategy {
-                    ConfigApplyStrategy::HotReload => {
-                        rollback_hot(
-                            state.clone(),
-                            &previous_profiles,
-                            previous_effective,
-                            &mut error,
-                        )
-                        .await;
-                    }
-                    ConfigApplyStrategy::Restart => {
-                        rollback_restart(app_handle, state.clone(), &previous_profiles, &mut error)
-                            .await;
-                    }
-                }
+                // Hot reload already carries its confirmed identity above.
+                rollback_restart(app_handle, state.clone(), &previous_profiles, &mut error).await;
                 return Err(error);
             }
         },
@@ -280,7 +257,7 @@ async fn persist_and_restart(
 async fn rollback_hot(
     state: State<'_, AppState>,
     previous_profiles: &[ProxyConfigProfile],
-    previous_effective: Value,
+    receipt: &crate::configuration::capture_apply::Receipt,
     error: &mut AppError,
 ) {
     append_recovery(
@@ -288,11 +265,7 @@ async fn rollback_hot(
         "profile storage",
         proxy_config::restore_profiles(state.inner(), previous_profiles),
     );
-    append_recovery_async(
-        error,
-        "runtime",
-        apply_effective(state.inner(), previous_effective).await,
-    );
+    append_recovery_async(error, "runtime", receipt.restore(state.inner()).await);
     append_recovery(
         error,
         "system proxy",
@@ -362,22 +335,6 @@ fn ensure_running(state: &AppState) -> AppResult<()> {
 fn ipc_options(state: &AppState) -> AppResult<CoreIpcOptions> {
     let app = common::lock(state.app_config(), "app_config")?;
     Ok(core_config::ipc_options_from_app_config(&app.core))
-}
-
-async fn apply_effective(state: &AppState, config: Value) -> AppResult<()> {
-    crate::services::config_apply::apply(state.capabilities(), config, ipc_options(state)?).await
-}
-
-async fn apply_effective_with_identity(
-    state: &AppState,
-    config: Value,
-) -> AppResult<queries::KernelRuntimeIdentity> {
-    crate::services::config_apply::apply_with_identity(
-        state.capabilities(),
-        config,
-        ipc_options(state)?,
-    )
-    .await
 }
 
 fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
@@ -459,11 +416,9 @@ fn classify_impact(
         }
     }
     if previous_source.pointer("/runtime/tun") != next_source.pointer("/runtime/tun")
-        && !requires_restart
-            .iter()
-            .any(|item| item.section == "runtime.tun")
+        && !hot_reload.iter().any(|item| item.section == "runtime.tun")
     {
-        requires_restart.push(impact_item(
+        hot_reload.push(impact_item(
             "runtime.tun",
             previous_source.pointer("/runtime/tun"),
             next_source.pointer("/runtime/tun"),
@@ -481,7 +436,14 @@ fn classify_impact(
 fn is_restart_section(section: &str) -> bool {
     !matches!(
         section,
-        "outbounds" | "outbound_groups" | "route" | "dns" | "log" | "event_sinks" | "extensions"
+        "outbounds"
+            | "outbound_groups"
+            | "endpoints"
+            | "route"
+            | "dns"
+            | "log"
+            | "event_sinks"
+            | "extensions"
     )
 }
 
@@ -491,7 +453,7 @@ fn classify_runtime(
     hot_reload: &mut Vec<GuiConfigImpactItem>,
     requires_restart: &mut Vec<GuiConfigImpactItem>,
 ) {
-    let restart_keys = ["tun", "api", "ipc"];
+    let restart_keys = ["api", "ipc"];
     for key in restart_keys {
         let old = before.and_then(|value| value.get(key));
         let new = after.and_then(|value| value.get(key));
@@ -559,7 +521,7 @@ mod tests {
     use super::classify_impact;
 
     #[test]
-    fn classifies_listener_and_tun_changes_as_restart_boundaries() {
+    fn classifies_listener_restart_separately_from_automatic_tun_transition() {
         let before = json!({"inbounds":[{"tag":"mixed"}],"route":{"rules":[]},"runtime":{"tun":{"mtu":1500}}});
         let source_after = json!({"inbounds":[{"tag":"socks"}],"route":{"rules":[1]},"runtime":{"tun":{"mtu":1400}}});
         let effective_before =
@@ -572,7 +534,7 @@ mod tests {
             .iter()
             .any(|item| item.section == "inbounds"));
         assert!(plan
-            .requires_restart
+            .hot_reload
             .iter()
             .any(|item| item.section == "runtime.tun"));
         assert!(plan.hot_reload.iter().any(|item| item.section == "route"));
@@ -597,5 +559,14 @@ mod tests {
         let plan = classify_impact(&before, &after, &before, &after);
         assert!(plan.hot_reload.is_empty());
         assert_eq!(plan.requires_restart[0].section, "future_contract");
+    }
+
+    #[test]
+    fn endpoint_changes_are_managed_reload_operations() {
+        let before = json!({"endpoints":[{"tag":"a","enabled":true}]});
+        let after = json!({"endpoints":[{"tag":"a","enabled":false}]});
+        let plan = classify_impact(&before, &after, &before, &after);
+        assert!(plan.requires_restart.is_empty());
+        assert_eq!(plan.hot_reload[0].section, "endpoints");
     }
 }

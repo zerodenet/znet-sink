@@ -315,12 +315,7 @@ async fn upsert_runtime_transition(
     let content = next_active.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot apply a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(
-        state.inner(),
-        &content,
-        Some(&next_active.id),
-    )
-    .await?;
+    let source = content.clone();
     let content = crate::services::rule_overlay::compose_effective_config_for(
         state.inner(),
         &content,
@@ -331,16 +326,18 @@ async fn upsert_runtime_transition(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
-        Ok(_) => {
+    match crate::configuration::capture_apply::apply_profile(
+        state.inner(),
+        &source,
+        Some(&next_active.id),
+        content,
+        options,
+    )
+    .await
+    {
+        Ok(receipt) => {
             if let Err(mut error) = publication.commit(state.inner(), &previous, next) {
-                if let Some(previous_active) = previous_active.as_ref() {
-                    append_recovery(
-                        &mut error,
-                        "runtime",
-                        reapply_profile(state.inner(), previous_active).await,
-                    );
-                }
+                append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 return Err(error);
             }
             if let Err(mut error) = retarget_active(state.clone()) {
@@ -349,13 +346,7 @@ async fn upsert_runtime_transition(
                     "profile storage",
                     publication.restore(state.inner(), &previous),
                 );
-                if let Some(previous_active) = previous_active.as_ref() {
-                    append_recovery(
-                        &mut error,
-                        "runtime",
-                        reapply_profile(state.inner(), previous_active).await,
-                    );
-                }
+                append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
                 return Err(error);
             }
@@ -485,12 +476,7 @@ async fn activate_runtime_locked(
     let content = target.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot activate a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(
-        state.inner(),
-        &content,
-        Some(&target.id),
-    )
-    .await?;
+    let source = content.clone();
     let content = crate::services::rule_overlay::compose_effective_config_for(
         state.inner(),
         &content,
@@ -501,18 +487,37 @@ async fn activate_runtime_locked(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
-        Ok(_) => match set_active(state.clone(), id) {
+    match crate::configuration::capture_apply::apply_profile(
+        state.inner(),
+        &source,
+        Some(&target.id),
+        content,
+        options,
+    )
+    .await
+    {
+        Ok(receipt) => match set_active(state.clone(), id) {
             Ok(active) => {
                 if let Err(mut error) = retarget_active(state.clone()) {
-                    rollback_hot_activation(state.clone(), previous_active.as_ref(), &mut error)
-                        .await;
+                    rollback_hot_activation(
+                        state.clone(),
+                        previous_active.as_ref(),
+                        &receipt,
+                        &mut error,
+                    )
+                    .await;
                     return Err(error);
                 }
                 Ok(active)
             }
             Err(mut error) => {
-                rollback_hot_activation(state.clone(), previous_active.as_ref(), &mut error).await;
+                rollback_hot_activation(
+                    state.clone(),
+                    previous_active.as_ref(),
+                    &receipt,
+                    &mut error,
+                )
+                .await;
                 Err(error)
             }
         },
@@ -606,12 +611,7 @@ async fn remove_runtime_owned(
     let content = replacement.content.clone().ok_or_else(|| {
         AppError::invalid_argument("cannot promote a proxy config without parsed content")
     })?;
-    crate::configuration::preferences::require_capture_compatible(
-        state.inner(),
-        &content,
-        Some(&replacement.id),
-    )
-    .await?;
+    let source = content.clone();
     let content = crate::services::rule_overlay::compose_effective_config_for(
         state.inner(),
         &content,
@@ -622,14 +622,18 @@ async fn remove_runtime_owned(
     adapter
         .validate_config(content.clone(), options.clone())
         .await?;
-    match crate::services::config_apply::apply(state.capabilities(), content, options).await {
-        Ok(_) => {
+    match crate::configuration::capture_apply::apply_profile(
+        state.inner(),
+        &source,
+        Some(&replacement.id),
+        content,
+        options,
+    )
+    .await
+    {
+        Ok(receipt) => {
             if let Err(mut error) = remove(state.clone(), id) {
-                append_recovery(
-                    &mut error,
-                    "runtime",
-                    reapply_profile(state.inner(), &removed).await,
-                );
+                append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 return Err(error);
             }
             if let Err(mut error) = retarget_managed_system_proxy(state.inner()) {
@@ -653,11 +657,7 @@ async fn remove_runtime_owned(
                     "profile storage",
                     restore_removed_profile(state.clone(), removed.clone()),
                 );
-                append_recovery(
-                    &mut error,
-                    "runtime",
-                    reapply_profile(state.inner(), &removed).await,
-                );
+                append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 append_recovery(
                     &mut error,
                     "system proxy",
@@ -690,31 +690,16 @@ fn ipc_options(state: &AppState) -> AppResult<crate::models::core::CoreIpcOption
     Ok(core_config::ipc_options_from_app_config(&config.core))
 }
 
-async fn reapply_profile(state: &AppState, profile: &ProxyConfigProfile) -> AppResult<()> {
-    let Some(content) = profile.content.clone() else {
-        return Ok(());
-    };
-    let content = crate::services::rule_overlay::compose_effective_config_for(
-        state,
-        &content,
-        Some(&profile.id),
-    )?;
-    crate::services::config_apply::apply(state.capabilities(), content, ipc_options(state)?).await
-}
-
 async fn rollback_hot_activation(
     state: State<'_, AppState>,
     previous: Option<&ProxyConfigProfile>,
+    receipt: &crate::configuration::capture_apply::Receipt,
     error: &mut AppError,
 ) {
     let Some(previous) = previous else {
         return;
     };
-    append_recovery(
-        error,
-        "runtime",
-        reapply_profile(state.inner(), previous).await,
-    );
+    append_recovery(error, "runtime", receipt.restore(state.inner()).await);
     append_recovery(
         error,
         "profile storage",
