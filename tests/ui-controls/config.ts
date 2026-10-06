@@ -186,6 +186,7 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
   const params = new URLSearchParams(location.search);
   if (params.get('layout') === 'global') {
+    const specialTags = params.has('special') ? ['direct', 'block', 'DIRECT', 'REJECT'] : [];
     const groups = [
       {tag:'proxy',kind:'selector',memberTags:['auto','node-a','node-b']},
       {tag:'ai',kind:'selector',memberTags:['node-a','node-b']},
@@ -197,8 +198,8 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
       {tag:'broken',kind:'url_test',memberTags:['missing']},
     ].map(group=>({...group,id:{...scope,tag:group.tag},available:true,runtimeAvailable:true,selected:fixtureSelections[group.tag]}));
     return {revision:1,scope,sourceStatus:'ready',activeProbeJobs:[],groups,
-      nodes:['node-a','node-b','wg-independent'].map(tag=>({id:{profileId:'fixture',configRevision:1,tag},tag,
-        protocol:tag.startsWith('wg')?'wireguard':'vless',groupTags:groups.filter(group=>group.memberTags.includes(tag)).map(group=>group.tag),
+      nodes:[...specialTags,'node-a','node-b','wg-independent'].map(tag=>({id:{profileId:'fixture',configRevision:1,tag},tag,
+        protocol:specialTags.includes(tag)?(tag === 'direct' || tag === 'DIRECT' ? 'direct' : 'block'):tag.startsWith('wg')?'wireguard':'vless',groupTags:groups.filter(group=>group.memberTags.includes(tag)).map(group=>group.tag),
         selectedIn:groups.filter(group=>group.selected===tag).map(group=>group.tag),runtimeAvailable:true,actionValid:true,activeProbeJobIds:[],history:[]}))};
   }
   const compactLayout = params.get('layout') === 'compact';

@@ -325,3 +325,13 @@ console.log('nodes-view-model: ok');
   assert.match(globalTargetReason('broken',nodes,[group('broken',['missing'],'url_test')]),/不存在/);
   assert.equal(groups[0].outbounds[0].tag,'auto');
 }
+
+{
+  const { nodeInventory } = await import('../src/lib/components/tabs/nodes-inventory.ts');
+  // Tags are case-sensitive references. Equal protocols must not merge
+  // independently configured targets or change their action identity.
+  const targets = [node('direct', 'direct'), node('DIRECT', 'direct'),
+    node('block', 'block'), node('REJECT', 'block')];
+  assert.deepEqual(nodeInventory([...targets, targets[0]], []).map(item => item.tag),
+    ['direct', 'DIRECT', 'block', 'REJECT']);
+}

@@ -1,6 +1,24 @@
 import {test,expect} from '@playwright/test';
 const card = (page:import('@playwright/test').Page,tag:string) => page.locator('.grid-card').filter({has:page.locator('.grid-card-name').getByText(tag,{exact:true})});
 
+test('special outbound cards retain distinct tags in grid, list and global selection',async({page})=>{
+  await page.goto('/?panel=nodes&layout=global&special=1');
+  await page.locator('.group-sidebar').getByRole('button',{name:/全部节点/}).click();
+  const names = ['direct','block','DIRECT','REJECT','node-a','node-b','wg-independent'];
+  await expect(page.locator('.grid-card-name')).toHaveText(names);
+  await expect(card(page,'direct').locator('.proto-label')).toHaveText('direct');
+  await expect(card(page,'DIRECT').locator('.proto-label')).toHaveText('direct');
+  await expect(card(page,'block').locator('.proto-label')).toHaveText('block');
+  await expect(card(page,'REJECT').locator('.proto-label')).toHaveText('block');
+  await page.getByRole('radio',{name:'列表视图'}).click();
+  await expect(page.locator('.node-name')).toHaveText(names);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-mode-changed',{detail:'global'})));
+  const reject = page.locator('.node-main').filter({has:page.locator('.node-name').getByText('REJECT',{exact:true})});
+  await reject.click();
+  await expect(page.getByLabel('保存结果')).toContainText('"globalOutbound":"REJECT"');
+  await expect(page.locator('.node-row.active .node-name')).toHaveText('REJECT');
+});
+
 test('global mode flattens all targets, distinguishes groups and blocks invalid references',async({page})=>{
   await page.goto('/?panel=nodes&layout=global&route=global');
   await expect(page.locator('.node-title')).toHaveText('全局出口');
