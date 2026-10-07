@@ -250,6 +250,7 @@ fn node_from_config(
         protocol: node.protocol,
         server: node.server,
         port: node.port.map(u64::from),
+        local_addresses: node.local_addresses,
         udp: node.udp,
         network: node.network,
         tls: node.tls,
@@ -416,6 +417,7 @@ fn node_from_member(
         protocol: member.kind.clone().unwrap_or_else(|| "unknown".to_string()),
         server: None,
         port: None,
+        local_addresses: Vec::new(),
         udp: None,
         network: None,
         tls: None,
@@ -482,7 +484,7 @@ fn action_valid(protocol: &str) -> bool {
 mod tests {
     use super::{action_valid, merge_policy_groups, project_nodes, snapshot_source_status};
     use crate::client_core::{
-        ClientScope, ConfigRevision, CoreInstanceId, ProfileId, SourceStatus,
+        ClientScope, ConfigRevision, CoreInstanceId, NodeSnapshot, ProfileId, SourceStatus,
     };
     use crate::models::gui_core::{ConfigProxyNode, GuiPolicyGroup, GuiPolicyMember};
 
@@ -529,12 +531,29 @@ mod tests {
             is_selector: false,
             server: Some(format!("{tag}.example.test")),
             port: Some(443),
+            local_addresses: Vec::new(),
             udp: Some(true),
             network: Some("tcp".to_string()),
             tls: Some(true),
             sni: Some(format!("{tag}.example.test")),
             cipher: Some("aes-256-gcm".to_string()),
         }
+    }
+
+    #[test]
+    fn local_tunnel_addresses_survive_node_snapshot_projection() {
+        let mut configured = config_node("wg-a", "wireguard");
+        configured.local_addresses = vec!["10.0.0.2/32".into(), "fd00::2/128".into()];
+        let nodes = project_nodes(&scope(), vec![configured], &[], true);
+        assert_eq!(nodes[0].local_addresses, ["10.0.0.2/32", "fd00::2/128"]);
+        let mut wire = serde_json::to_value(&nodes[0]).unwrap();
+        assert_eq!(
+            wire["localAddresses"],
+            serde_json::json!(["10.0.0.2/32", "fd00::2/128"])
+        );
+        wire.as_object_mut().unwrap().remove("localAddresses");
+        let legacy: NodeSnapshot = serde_json::from_value(wire).unwrap();
+        assert!(legacy.local_addresses.is_empty());
     }
 
     #[test]

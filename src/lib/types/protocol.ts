@@ -32,6 +32,8 @@ export interface ProxyNode {
   // ── Static attributes (from config) ──
   server?: string;
   port?: number;
+  /** Configured local tunnel IPs/CIDRs, distinct from remote peer endpoints. */
+  localAddresses?: string[];
   udp?: boolean;
   network?: string;
   tls?: boolean;

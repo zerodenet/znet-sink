@@ -231,6 +231,7 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
       ...(wireguard ? ['wg-a', 'wg-multi'].map((tag, index) => ({
         id: {profileId:'fixture',configRevision:1,tag},tag,protocol:'wireguard',
         server: index === 0 ? '2001:db8::1' : undefined, port: index === 0 ? 51820 : undefined,
+        localAddresses: params.has('no-local-address') ? [] : index === 0 ? ['10.0.0.2/32', 'fd00::2/128'] : ['10.1.0.2/32'],
         udp:true, groupTags: groupedWireguard && index === 0 ? [policyTag] : [], selectedIn: tag === selected ? [policyTag] : [],
         runtimeAvailable:true, activeProbeJobIds:[],actionValid:true,history:[],
       })) : []),

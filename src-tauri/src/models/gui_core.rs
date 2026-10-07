@@ -277,6 +277,9 @@ pub struct ConfigProxyNode {
     /// Remote port (from `protocol.port`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// Configured local tunnel addresses, distinct from remote peer endpoints.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub local_addresses: Vec<String>,
     /// Whether the outbound supports UDP relay (from `protocol.udp`).
     /// Defaults to `Some(true)` for protocols that are UDP-capable by design
     /// (e.g. `hysteria*`, `tuic`, `wireguard`) when the field is absent.

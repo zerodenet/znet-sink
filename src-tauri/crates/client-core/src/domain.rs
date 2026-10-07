@@ -196,6 +196,9 @@ pub struct NodeSnapshot {
     pub protocol: String,
     pub server: Option<String>,
     pub port: Option<u64>,
+    /// Configured local tunnel addresses; absent in older snapshots.
+    #[serde(default)]
+    pub local_addresses: Vec<String>,
     pub udp: Option<bool>,
     pub network: Option<String>,
     pub tls: Option<bool>,
