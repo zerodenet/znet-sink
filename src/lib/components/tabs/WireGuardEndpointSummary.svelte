@@ -1,14 +1,12 @@
 <script lang="ts">
   import type { ProxyNode } from '$lib/types/protocol';
   let { node }: { node: ProxyNode } = $props();
-  const endpoint = $derived(node.server && node.port
-    ? `${node.server.includes(':') ? `[${node.server}]` : node.server}:${node.port}`
-    : undefined);
+  const addresses = $derived((node.localAddresses ?? []).filter((address) => address.trim()).join(' · '));
 </script>
 
 {#if node.protocol.toLowerCase() === 'wireguard'}
-  <span class="wireguard-endpoint" title={endpoint ?? '多 Peer 或无固定地址的端点，请查看配置中的 peers'}>
-    {endpoint ?? '查看配置中的 Peer 端点'}
+  <span class="wireguard-endpoint" title={addresses ? `本机隧道 IP（配置值）：${addresses}` : '配置中未提供本机隧道地址'}>
+    本机 IP {addresses || '—'}
   </span>
 {/if}
 

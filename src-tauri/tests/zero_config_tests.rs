@@ -2,6 +2,37 @@ use gui_lib::kernel::zero::config;
 use serde_json::json;
 
 #[test]
+fn wireguard_projects_local_tunnel_addresses_separately_from_peer_endpoints() {
+    let nodes = config::proxy_nodes_from_config(&json!({
+        "endpoints": [
+            { "tag": "single", "protocol": { "type": "wireguard",
+                "addresses": ["10.0.0.2/32", "fd00::2/128"],
+                "peers": [{ "endpoint": "[2001:db8::1]:51820" }] } },
+            { "tag": "multi", "protocol": { "type": "wireguard",
+                "addresses": ["10.1.0.2/32"],
+                "peers": [{ "endpoint": "one.test:51820" }, { "endpoint": "two.test:51820" }] } },
+            { "tag": "missing", "protocol": { "type": "wireguard",
+                "peers": [{ "endpoint": "remote.test:51820", "allowed_ips": ["10.9.0.0/24"] }] } }
+        ],
+        "outbounds": [{ "tag": "flat", "type": "wireguard", "addresses": ["10.2.0.2/32"] }]
+    }));
+    let find = |tag| nodes.iter().find(|node| node.tag == tag).unwrap();
+    assert_eq!(
+        find("single").local_addresses,
+        ["10.0.0.2/32", "fd00::2/128"]
+    );
+    assert_eq!(find("single").server.as_deref(), Some("2001:db8::1"));
+    assert_eq!(find("multi").local_addresses, ["10.1.0.2/32"]);
+    assert!(find("multi").server.is_none());
+    assert!(find("missing").local_addresses.is_empty());
+    assert_eq!(find("flat").local_addresses, ["10.2.0.2/32"]);
+    assert_eq!(
+        serde_json::to_value(find("single")).unwrap()["localAddresses"],
+        json!(["10.0.0.2/32", "fd00::2/128"])
+    );
+}
+
+#[test]
 fn proxy_nodes_extracts_outbounds() {
     let nodes = config::proxy_nodes_from_config(&json!({
         "outbounds": [

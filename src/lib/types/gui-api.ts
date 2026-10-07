@@ -173,6 +173,7 @@ export interface NodeSnapshot {
   protocol: string;
   server?: string;
   port?: number;
+  localAddresses?: string[];
   udp?: boolean;
   network?: string;
   tls?: boolean;
@@ -264,6 +265,8 @@ export interface ConfigProxyNode {
   server?: string;
   /** Remote port (from `protocol.port`). */
   port?: number;
+  /** Configured local tunnel IPs/CIDRs. */
+  localAddresses?: string[];
   /** Whether the outbound supports UDP relay. */
   udp?: boolean;
   /** Transport network type: tcp / ws / grpc / h2. */

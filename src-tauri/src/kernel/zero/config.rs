@@ -68,6 +68,21 @@ pub fn proxy_nodes_from_config(config_content: &Value) -> Vec<ConfigProxyNode> {
                     .and_then(|o| u16_at_obj(o, &["port"]))
                     .or_else(|| u16_at_value(node, &["port"]))
                     .or_else(|| endpoint.as_ref().map(|(_, port)| *port)),
+                local_addresses: if protocol.eq_ignore_ascii_case("wireguard") {
+                    node.get("protocol")
+                        .filter(|value| value.is_object())
+                        .unwrap_or(node)
+                        .get("addresses")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .filter(|address| !address.trim().is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                } else {
+                    Vec::new()
+                },
                 udp: resolve_udp(&protocol, protocol_obj, node),
                 network: protocol_obj
                     .and_then(|o| string_at_obj(o, &["network", "transport"]))

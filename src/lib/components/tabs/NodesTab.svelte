@@ -200,6 +200,7 @@
         domain: node.groupTags[0] ?? 'default',
         server: node.server,
         port: node.port,
+        localAddresses: node.localAddresses,
         udp: node.udp,
         network: node.network,
         tls: node.tls,
