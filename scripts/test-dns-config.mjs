@@ -136,9 +136,10 @@ assert.ok(selectContent.includes('max-h-[min(20rem,calc(100dvh-1rem),var(--bits-
 assert.ok(selectContent.includes('min-h-0') && selectContent.includes('max-h-72'));
 assert.doesNotMatch(selectContent, /--bits-select-/);
 const activation = proxyConfig.slice(proxyConfig.indexOf('pub async fn activate_runtime'));
+const validateIndex = activation.indexOf('validate_config(content.clone(), options.clone())');
+const applyIndex = activation.indexOf('match crate::configuration::capture_apply::apply_profile(');
 assert.ok(
-  activation.indexOf('validate_config(content.clone(), options.clone())')
-    < activation.indexOf('match crate::services::config_apply::apply(state.capabilities(), content, options).await'),
+  validateIndex >= 0 && applyIndex >= 0 && validateIndex < applyIndex,
   'profile activation must validate the composed target config before confirmed hot apply',
 );
 
