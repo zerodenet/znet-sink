@@ -1,7 +1,7 @@
 import type { TrafficSnapshot, PlaneSnapshot } from '$lib/features/traffic/types';
 export const WINDOW_MS=120_000;
 export const MAX_POINTS=121;
-export interface Point { at:number; values:Record<string,number|null> }
+export interface Point { at:number; values:Record<string,number|null>; intervalMs?:number }
 export interface Observation { snapshot:TrafficSnapshot; rates:Record<string,number|null>; points:Point[]; seenAt:number; baselineValid:boolean }
 export function metric(plane:PlaneSnapshot|undefined,key:string):bigint|null {
   const value=plane?.counters[key];return plane?.available_metrics.includes(key)&&value!=null?BigInt(value):null;
@@ -18,7 +18,7 @@ export function observe(previous:Observation|undefined,snapshot:TrafficSnapshot,
   }
   const at=Number(BigInt(snapshot.sampled_at_unix_ms));
   // Wall clock is only a chart coordinate. Monotonic time owns the rates.
-  const points=retainHistory&&Number.isSafeInteger(at)?[...(same?previous?.points??[]:[]),{at,values:rates}].filter(p=>p.at<=at&&at-p.at<=WINDOW_MS).slice(-MAX_POINTS):[];
+  const points=retainHistory&&Number.isSafeInteger(at)?[...(same?previous?.points??[]:[]),{at,values:rates,intervalMs:Number(elapsed)/1_000_000}].filter(p=>p.at<=at&&at-p.at<=WINDOW_MS).slice(-MAX_POINTS):[];
   return {snapshot,rates,points,seenAt:now,baselineValid:true};
 }
 export function rebaseline(row:Observation):Observation {return {...row,rates:{},baselineValid:false};}
@@ -29,7 +29,7 @@ export function formatBytes(value:bigint|null):string {
   while(value>=scale*1024n&&index<units.length-1){scale*=1024n;index++;}
   const rounded=(value*10n+scale/2n)/scale;return `${rounded/10n}.${rounded%10n} ${units[index]}`;
 }
-export function formatRate(value:number|null|undefined):string {if(value==null||!Number.isFinite(value))return '—';if(value<1024)return `${Math.round(value)} B/s`;if(value<1048576)return `${(value/1024).toFixed(1)} KB/s`;return `${(value/1048576).toFixed(1)} MB/s`;}
+export function formatRate(value:number|null|undefined):string {if(value==null||!Number.isFinite(value)||value<0)return '—';if(value>0&&value<1)return '<1 B/s';if(value<1024)return `${Math.round(value)} B/s`;if(value<1048576)return `${(value/1024).toFixed(1)} KB/s`;return `${(value/1048576).toFixed(1)} MB/s`;}
 export function chartPath(points:Point[],metricKey:string,ceiling:number):string {
   const end=points.at(-1)?.at??0;let open=false;
   return points.map(p=>{const value=p.values[metricKey];if(value==null){open=false;return '';}

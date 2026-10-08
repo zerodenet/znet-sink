@@ -83,7 +83,7 @@
           <div class="role">{snapshot.scope.kind==='peer' ? snapshot.scope.endpoint_id : layer?.source_roles.join(' · ') || '—'}</div>
           <dl class="totals">{#each keys as field}<div><dt>{field==='bytes_down'?'下载':field==='bytes_up'?'上传':field==='rx_bytes'?'RX':'TX'}</dt><dd title={metric(layer,field)?.toString() ?? '内核未提供此指标'}>{formatBytes(metric(layer,field))}</dd></div>{/each}</dl>
           <TrafficMiniChart observation={row} {plane} stale={view.stale}/>
-          <div class="activity" title="活动流 / 数据报 / Packet 路由，清空累计统计不会修改这些值"><Activity size={12}/>{snapshot.activity.active_stream_flows ?? '—'} / {snapshot.activity.active_datagram_flows ?? '—'} / {snapshot.activity.active_packet_routes ?? '—'}</div>
+          <div class="activity" title="活动流 / 数据报 / Packet 路由，清空累计统计不会修改这些值"><Activity size={12}/><span>{snapshot.activity.active_stream_flows ?? '—'}</span> / <span>{snapshot.activity.active_datagram_flows ?? '—'}</span> / <span>{snapshot.activity.active_packet_routes ?? '—'}</span></div>
         </article>
       {:else}<p class="empty">{view.loading ? '正在读取统计…' : '没有匹配的统计范围'}</p>{/each}
     </div>
@@ -126,6 +126,7 @@
   dt { font-size:10px; color:var(--muted-foreground); }
   dd { font-variant-numeric:tabular-nums; font-size:18px; font-weight:600; margin:0; overflow-wrap:anywhere; }
   .activity { font-size:10px; color:var(--muted-foreground); margin-top:10px; }
+  .activity span { min-width:3ch; text-align:right; font-variant-numeric:tabular-nums; }
   footer { margin-top:12px; justify-content:flex-end; flex-wrap:wrap; gap:12px; font-size:11px; color:var(--muted-foreground); }
   footer>span { white-space:nowrap; }
   .pagination { border-left:1px solid var(--border); padding-left:12px; }
