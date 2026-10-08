@@ -9,7 +9,7 @@ test('editing a port applies only that field and restoring follows the source',a
   await page.getByRole('button',{name:'应用',exact:true}).click();
   await expect(page.getByLabel('保存结果')).toContainText('"localProxy.port":7877');
   await expect(page.getByLabel('保存结果')).not.toContainText('localProxy.host');
-  await expect(page.getByText('本地修改 · 仅当前配置')).toBeVisible();
+  await expect(page.getByText('客户端设置 · 全局生效')).toBeVisible();
   await page.getByRole('button',{name:'恢复配置值',exact:true}).click();
   await expect(port).toHaveValue('7891');
   await expect(page.getByRole('button',{name:'恢复配置值',exact:true})).toBeDisabled();

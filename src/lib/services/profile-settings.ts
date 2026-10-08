@@ -1,7 +1,7 @@
 import {applyProfileSettings, type ProfileSettings} from '$lib/services/core';
 export type {ProfileSettings} from '$lib/services/core';
 
-/** Diff the loaded form, so unchanged fields continue to follow the subscription. */
+/** Save changed fields globally; untouched fields continue to follow each source. */
 export async function saveProfileSettings(snapshot: ProfileSettings, patch: Record<string, unknown>): Promise<ProfileSettings> {
   const changes: Record<string,unknown> = {};
   const settings = snapshot.settings as unknown as Record<string,unknown>;

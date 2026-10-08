@@ -148,7 +148,7 @@
   });
 </script>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
-  <span>{isLocallyEdited(snapshot, 'tun') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</span>
+  <span>{isLocallyEdited(snapshot, 'tun') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreSource} disabled={saving || !isLocallyEdited(snapshot, 'tun')}>恢复配置值</Button>
 </div>
 
@@ -211,7 +211,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">主地址</span>
-        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。修改并应用后只替换当前配置中改动的参数。</span>
+        <span class="label-desc">TUN 主接口地址，使用 CIDR 表示。修改的参数对所有配置生效。</span>
       </div>
       <div class="field-control">
         <Input

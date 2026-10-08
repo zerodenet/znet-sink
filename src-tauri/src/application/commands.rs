@@ -177,6 +177,7 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         proxy_mode_commands::gui_proxy_mode_status,
         proxy_mode_commands::gui_set_proxy_mode,
         crate::commands::profile_settings::profile_settings_get,
+        crate::commands::profile_settings::client_settings_get,
         crate::commands::profile_settings::profile_settings_apply,
         app_config_commands::app_config_get,
         app_config_commands::app_config_update,

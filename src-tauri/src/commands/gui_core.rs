@@ -452,12 +452,13 @@ fn validate_dns_settings(input: &GuiDnsSettingsInput) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn gui_apply_dns_config(
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     input: GuiDnsSettingsInput,
 ) -> AppResult<serde_json::Value> {
     validate_dns_settings(&input)?;
     let _operation = state.proxy_config_operation().lock().await;
-    dns_apply::apply(state.clone(), input).await
+    dns_apply::apply(app_handle, state.clone(), input).await
 }
 
 /// Validate a config without applying it.

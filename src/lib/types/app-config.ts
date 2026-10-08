@@ -5,6 +5,7 @@ import type { DnsConfig } from './dns';
 export interface ConfigOverrides { listener: boolean; dns: boolean; tun: boolean; urlTest: boolean; bypass: boolean; rules: boolean; }
 
 export interface AppConfig {
+  clientEdits?: Record<string, unknown> | null;
   resolved?: { key: keyof ConfigOverrides; label: string; source: string; value: string }[];
   overrides?: ConfigOverrides;
   schemaVersion: string;

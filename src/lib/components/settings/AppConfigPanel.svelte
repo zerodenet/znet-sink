@@ -455,13 +455,13 @@
       </div>
 
       <div class="proxy-bypass-editor">
-        <p class="text-xs text-muted-foreground">{isLocallyEdited(networkSnapshot, 'bypass') ? '本地修改 · 仅当前配置' : '来自配置 · 下方表单用于设置本地替换规则'}</p>
+        <p class="text-xs text-muted-foreground">{isLocallyEdited(networkSnapshot, 'bypass') ? '客户端设置 · 全局生效' : '来自配置 · 下方表单用于设置本地替换规则'}</p>
         {#if networkSnapshot?.sourceBypass && !isLocallyEdited(networkSnapshot, 'bypass')}
           <details><summary>当前配置中的绕过规则</summary><pre class="text-xs whitespace-pre-wrap break-all">{JSON.stringify(networkSnapshot.sourceBypass, null, 2)}</pre></details>
         {/if}
         <div class="config-row-label">
           <span class="label-text">绕过规则</span>
-          <span class="label-desc">保存后替换当前配置的绕过规则，其他配置不受影响；恢复配置值会移除这项本地修改。</span>
+          <span class="label-desc">保存后覆盖所有配置的绕过规则；恢复配置值会移除全局覆盖。</span>
         </div>
         <div class="config-row-label">
           <label class="label-text" for="custom-bypass-rules">绕过地址与域名</label>

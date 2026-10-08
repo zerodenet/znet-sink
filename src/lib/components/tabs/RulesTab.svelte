@@ -488,7 +488,7 @@
   <div class="common-injection-row">
     <div class="common-injection-copy">
       <span class="common-injection-title">在规则模式下注入公共规则</span>
-      <span class="common-injection-hint">仅当前配置。{commonStatusCopy()}。机场订阅规则优先，公共规则作为补充，且不会写回订阅原配置。</span>
+      <span class="common-injection-hint">客户端全局设置。{commonStatusCopy()}。机场订阅规则优先，公共规则作为补充，且不会写回订阅原配置。</span>
     </div>
     <Button variant="outline" size="sm" onclick={restoreRuleSource} disabled={commonSaving || !isLocallyEdited(profileSnapshot, 'routing.injectCommonRules')}>恢复配置值</Button>
     <Switch

@@ -77,7 +77,7 @@ fn changing_public_probe_url_recomposes_without_restarting_or_retargeting_proxy(
 }
 
 #[test]
-fn profile_port_edit_and_reset_retarget_proxy_without_restarting_capture() {
+fn global_port_edit_and_reset_retarget_proxy_without_restarting_capture() {
     let old = AppConfig::default();
     let next = crate::configuration::local_edits::candidate(
         &old,
@@ -88,5 +88,26 @@ fn profile_port_edit_and_reset_retarget_proxy_without_restarting_capture() {
     .unwrap();
     for effects in [between(&old, &next), between(&next, &old)] {
         assert!(effects.recompose && effects.retarget_proxy && !effects.restart);
+    }
+}
+
+#[test]
+fn global_dns_and_tun_changes_rebuild_capture_with_unchanged_raw_defaults() {
+    let old = AppConfig::default();
+    for changes in [
+        std::collections::BTreeMap::from([("tun.mtu".into(), serde_json::json!(1280))]),
+        std::collections::BTreeMap::from([(
+            "dns".into(),
+            serde_json::json!({
+                "enabled":false,"config":null,"dnsHijack":false
+            }),
+        )]),
+    ] {
+        let next = crate::configuration::local_edits::candidate(&old, "a", changes, &[]).unwrap();
+        assert_eq!(old.tun, next.tun);
+        assert_eq!(old.dns, next.dns);
+        for effects in [between(&old, &next), between(&next, &old)] {
+            assert!(effects.restart && effects.recompose);
+        }
     }
 }

@@ -11,6 +11,13 @@ pub fn profile_settings_get(state: State<'_, AppState>) -> AppResult<Value> {
 }
 
 #[tauri::command]
+pub fn client_settings_get(state: State<'_, AppState>) -> AppResult<Value> {
+    let saved = lock(state.app_config(), "app_config")?.clone();
+    let (id, source) = local_edits::context(state.inner())?;
+    local_edits::settings(&saved, id.as_deref(), &source)
+}
+
+#[tauri::command]
 pub async fn profile_settings_apply(
     app_handle: AppHandle,
     state: State<'_, AppState>,
