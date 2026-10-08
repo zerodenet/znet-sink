@@ -43,6 +43,8 @@ export interface AppUiConfig {
   uiMode: string;       // "lite" | "pro"
   sidebarCollapsed: boolean;
   hiddenMenuKeys: string[];
+  /** Unset follows endpoint declarations in the active profile. */
+  endpointsMenuVisible?: boolean | null;
   trafficBallEnabled: boolean;
   defaultRoute?: string;
 }
@@ -134,6 +136,7 @@ export interface AppUiConfigPatch {
   uiMode?: string;
   sidebarCollapsed?: boolean;
   hiddenMenuKeys?: string[];
+  endpointsMenuVisible?: boolean;
   trafficBallEnabled?: boolean;
   defaultRoute?: string | null;
 }

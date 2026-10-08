@@ -6,6 +6,9 @@
   const params = new URLSearchParams(location.search);
   store.settingsSection = (params.get('section') || 'general') as SettingsSection;
   store.uiMode = params.get('uiMode') === 'lite' ? 'lite' : 'pro';
+  if (params.get('mode') === 'endpoint-menu') {
+    store.interactionSurface.navigation.set('endpoints', { key: 'endpoints', category: 'navigation', visible: params.has('menu-declared') && !params.has('menu-hidden'), operable: true, readonly: false });
+  }
   let showLogs = $state(params.get('panel') === 'logs');
 </script>
 <div class="fixture-navigation"><Button onclick={() => showLogs = !showLogs}>{showLogs ? '切到设置' : '切到日志'}</Button></div>

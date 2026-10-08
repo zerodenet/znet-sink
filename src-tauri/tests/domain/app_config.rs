@@ -13,6 +13,7 @@ fn default_app_config_is_gui_schema() {
     assert!(!config.ui.sidebar_collapsed);
     assert_eq!(config.ui.hidden_menu_keys, vec!["debug".to_string()]);
     assert!(config.ui.default_route.is_none());
+    assert_eq!(config.ui.endpoints_menu_visible, None);
     assert_eq!(config.local_proxy.host, "127.0.0.1");
     assert_eq!(config.local_proxy.port, 7890);
     assert!(config.local_proxy.source_proxy_config_id.is_none());
@@ -51,4 +52,26 @@ fn legacy_download_proxy_setting_is_ignored_and_not_persisted() {
     let saved = serde_json::to_value(config).unwrap();
 
     assert!(saved["core"].get("downloadProxyAuto").is_none());
+}
+
+#[test]
+fn endpoint_menu_preference_survives_reload_and_legacy_config_stays_automatic() {
+    let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+    value["ui"]
+        .as_object_mut()
+        .unwrap()
+        .remove("endpointsMenuVisible");
+    let legacy: AppConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(legacy.ui.endpoints_menu_visible, None);
+    for visible in [false, true] {
+        let mut config = legacy.clone();
+        config.ui.endpoints_menu_visible = Some(visible);
+        let saved = serde_json::to_value(config).unwrap();
+        let reloaded: AppConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(reloaded.ui.endpoints_menu_visible, Some(visible));
+        let patch: gui_lib::models::app_config::AppConfigPatch =
+            serde_json::from_value(serde_json::json!({"ui":{"endpointsMenuVisible":visible}}))
+                .unwrap();
+        assert_eq!(patch.ui.unwrap().endpoints_menu_visible, Some(visible));
+    }
 }

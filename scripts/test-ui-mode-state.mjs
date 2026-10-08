@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import ts from 'typescript';
 
 // Execute the production presentation store with controlled persistence.
-function harness() {
+function harness(surfaceQuery) {
   const requests = [], errors = [];
   const backend = { mode: 'pro' };
   const networkCalls = [];
@@ -15,7 +15,7 @@ function harness() {
       updateAppConfig: patch => new Promise((resolve, reject) => {
         requests.push({ mode: patch.ui.uiMode, reject, finish() { backend.mode = patch.ui.uiMode; resolve(); } });
       }),
-      getGuiInteractionSurfaceSnapshot: async () => ({ navigation: [{ key: 'overview', visible: true }], actions: [], features: [] }),
+      getGuiInteractionSurfaceSnapshot: surfaceQuery ?? (async () => ({ navigation: [{ key: 'overview', visible: true }], actions: [], features: [] })),
     },
     './gui-state.svelte': { guiState: gui },
     './toast.svelte': { error: message => errors.push(message) },
@@ -73,4 +73,26 @@ test('changing presentation preserves an active partial capture session without 
   await store.switchUIMode('pro'); await flush();
   requests[1].finish(); await flush();
   assert.deepEqual(networkCalls, []);
+});
+
+test('late navigation queries cannot undo the latest endpoint visibility or redirect its page', async () => {
+  const queries = [];
+  const { store } = harness(() => new Promise(resolve => queries.push(resolve)));
+  const old = store.refreshInteractionSurface();
+  const latest = store.refreshInteractionSurface();
+  const snapshot = visible => ({ navigation: [
+    {key:'overview',visible:true}, {key:'endpoints',visible},
+  ], actions: [], features: [] });
+  queries[1](snapshot(true));
+  await latest;
+  store.activeTab = 'endpoints';
+  queries[0](snapshot(false));
+  await old;
+  assert.equal(store.isNavVisible('endpoints'), true);
+  assert.equal(store.activeTab, 'endpoints');
+  const hide = store.refreshInteractionSurface();
+  queries[2](snapshot(false));
+  await hide;
+  assert.equal(store.isNavVisible('endpoints'), false);
+  assert.equal(store.activeTab, 'overview');
 });
