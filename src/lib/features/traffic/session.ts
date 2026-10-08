@@ -173,8 +173,16 @@ export class TrafficSession {
   private event(event: TrafficEvent) {
     if (!this.alive || this.retiredInstances.includes(event.instance) || (this.view.discovery && !supported(this.view.discovery))) return;
     const snapshots = event.type === 'sample' ? (event.payload as TrafficPage).scopes : (event.payload as ResetSnapshot).snapshots;
-    if (event.instance !== this.instance || (event.type === 'sample' && ((event.payload as TrafficPage).config_revision !== this.config || (event.payload as TrafficPage).registry_revision !== this.registry))) {
+    if (event.instance !== this.instance || (event.type === 'sample' && (event.payload as TrafficPage).config_revision !== this.config)) {
       this.recover(); return;
+    }
+    if (event.type === 'sample' && (event.payload as TrafficPage).registry_revision !== this.registry) {
+      // Registry revisions describe membership, not a scope's counter period.
+      // A completed query reconciles additions/removals and observe() checks
+      // each retained scope's instance, epoch and generation independently.
+      // Queued pages from the old inventory must not restart that recovery.
+      if (this.registry && BigInt((event.payload as TrafficPage).registry_revision) < BigInt(this.registry)) return;
+      this.recover(false); return;
     }
     for (const snapshot of snapshots) {
       if (this.work || this.view.resetting || this.view.stale) {
@@ -193,8 +201,11 @@ export class TrafficSession {
     const next = observe(previous, snapshot, this.watched.has(key), this.now());
     this.emit({ rows: { ...this.view.rows, [key]: next } });
   }
-  private recover() {
-    if (!this.view.stale) this.invalidate();
+  private recover(discardBaseline = true) {
+    if (!this.view.stale) {
+      if (discardBaseline) this.invalidate();
+      else { this.revision++; this.emit({ stale: true }); }
+    }
     this.pendingRecovery = true;
     if (!this.work && !this.view.resetting) { this.pendingRecovery = false; void this.refresh(true); }
   }

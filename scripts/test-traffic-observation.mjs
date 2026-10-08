@@ -99,6 +99,36 @@ test('period, generation and instance changes query authority; old events and no
   g.event({type:'reset',instance:'core-a',payload:{core_instance_id:'core-a',operation_id:'old',snapshots:[old]}});assert.equal(s.view.rows[key].snapshot.core_instance_id,'core-b');
  }finally{s.dispose();}
 });
+test('inventory membership changes preserve unchanged periods and ignore queued old registry pages',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]);s.watch([key]);g.advance();g.push();
+  const oldPage={core_instance_id:'core-a',config_revision:g.rows[0].config_revision,registry_revision:g.registry,sampled_at_unix_ms:g.rows[0].sampled_at_unix_ms,scopes:structuredClone(g.rows),total:g.rows.length,next_offset:null};
+  g.rows.push(sample({kind:'outbound',tag:'added'},5));g.registry='2';g.advance();g.push();await flush();
+  assert.equal(s.view.order.length,6);assert.equal(s.view.rows[key].rates['flow.bytes_down'],1000);
+  assert(s.view.rows[key].points.slice(1).every(p=>p.values['flow.bytes_down']!==null));
+  const count=g.queries.length,row=s.view.rows[key];g.event({type:'sample',instance:'core-a',payload:oldPage});await flush();
+  assert.equal(g.queries.length,count);assert.equal(s.view.rows[key],row);
+  g.rows.pop();g.registry='3';g.push();await flush();
+  assert.equal(s.view.order.length,5);assert.equal(s.view.rows[key],row);
+ }finally{s.dispose();}
+});
+test('inventory refresh still establishes new periods and genuine delivery gaps discard baselines',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]),changed=scopeKey(scopes[3]);s.watch([key,changed]);g.advance();g.push();
+  g.registry='2';g.rows[3].generation='9007199254740995';g.rows[3].stats_epoch='new-period';g.advance();g.push();await flush();
+  assert.equal(s.view.rows[key].rates['flow.bytes_down'],1000);
+  assert.equal(s.view.rows[changed].rates['inner.rx_bytes'],null);
+  assert.equal(s.view.rows[changed].points.length,1);
+  g.status('gap');g.advance();await flush();assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
+ }finally{s.dispose();}
+});
+test('failed inventory-only recovery invalidates rates until a successful query',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]);g.advance();g.push();const page=g.page.bind(g);g.page=async()=>{throw{code:'offline'};};
+  g.registry='2';g.advance();g.push();await flush();assert(s.view.stale);assert.equal(s.view.rows[key].baselineValid,false);
+  g.page=page;await s.refresh();assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
+ }finally{s.dispose();}
+});
 test('event gaps and reconnect establish fresh baselines; query-only operation polls bounded pages',async()=>{
  let now=10000;const g=new FixtureGateway(),s=await started(g,()=>now);try{
   const key=scopeKey(scopes[0]);g.advance();g.push();assert.equal(s.view.rows[key].rates['flow.bytes_down'],1000);
