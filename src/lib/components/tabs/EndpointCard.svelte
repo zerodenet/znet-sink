@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Network, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle } from '@lucide/svelte';
+  import { Network, MoreHorizontal, LoaderCircle, RotateCw, Info, ArrowDownToLine, ArrowUpFromLine, Cable, Boxes, Route, Pin, AlertTriangle, MapPin } from '@lucide/svelte';
   import EndpointObservationView from './EndpointObservationView.svelte';
   import EndpointDetailsView from './EndpointDetailsView.svelte';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
@@ -45,6 +45,7 @@
   const outboundReason = $derived(operationReason(catalog, endpoint, directionAction('outbound')));
   const stateReason = $derived(operationReason(catalog, endpoint, stateAction));
   const restartReason = $derived(operationReason(catalog, endpoint, { operation: 'restart' }));
+  const addresses = $derived(catalog.configuredAddresses?.[endpoint.endpoint_id] ?? []);
   function count(key: string) { return observationAvailable && observation ? observation.snapshot.activity[key] ?? '—' : endpoint.counters[key] == null ? '—' : String(endpoint.counters[key]); }
   function act(action: EndpointAction) { menuOpen = false; onAction(endpoint, action); }
   function showDetail(mode: 'protocol' | 'observation') {
@@ -71,15 +72,16 @@
       </details>
     </div>
   </header>
+  {#if addresses.length}<div class="local-addresses" aria-label="本机隧道 IP" title={`本机隧道 IP（当前配置值）：${addresses.join(' · ')}`}><MapPin size={12}/><span>{addresses.join(' · ')}</span></div>{/if}
   <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span>{#if endpoint.health === 'degraded'}<AlertTriangle size={13} aria-label="健康降级" />{/if}<span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
   {#if observationAvailable}
     {#if observation?.snapshot.scope.kind === 'outbound' || observation?.snapshot.scope.kind === 'inbound'}<p class="observation-source" title={`内核声明的${observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} ${observation.snapshot.scope.tag} 统计；Inner 为内层流量，与 Flow、Outer 分开计量`}>{observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} · Inner</p>{:else if !observation}<p class="observation-source">暂无端点统计快照</p>{/if}
     <TrafficMiniChart {observation} plane="inner" stale={stale || observationStale}/>
   {:else}<EndpointTrafficChart {traffic} {stale} />{/if}
   <div class="connections" aria-label="活动连接">
-    <span title="流连接"><Cable size={13} /><span class="sr-only">流 </span>{count('active_stream_flows')}</span>
-    <span title="数据报连接"><Boxes size={13} /><span class="sr-only">数据报 </span>{count('active_datagram_flows')}</span>
-    <span title="Packet 路由；各类计数不合并"><Route size={13} /><span class="sr-only">Packet </span>{count('active_packet_routes')}</span>
+    <span title="当前活动 TCP 流；不统计 Peer、握手或保活包"><Cable size={13} /><span class="sr-only">流 </span><span class="activity-count">{count('active_stream_flows')}</span></span>
+    <span title="当前活动 UDP 流；不统计 WireGuard 外层 UDP 套接字"><Boxes size={13} /><span class="sr-only">数据报 </span><span class="activity-count">{count('active_datagram_flows')}</span></span>
+    <span title="当前活动 Packet 路由；— 表示未提供计数，各类计数不合并"><Route size={13} /><span class="sr-only">Packet </span><span class="activity-count">{count('active_packet_routes')}</span></span>
   </div>
   {#if endpoint.last_error}<p role="alert" class="error">{endpoint.last_error.message}</p>{/if}
   <footer>
@@ -114,6 +116,10 @@
   .power-switch:focus-visible,summary:focus-visible { outline:2px solid var(--ring); outline-offset:3px; } .temporary { gap:3px; font-size:10px; color:var(--muted-foreground); white-space:nowrap; }
   .status-row { gap:8px; margin-top:14px; font-size:11px; color:var(--muted-foreground); } .status { gap:5px; } .status i { width:6px; height:6px; border-radius:50%; background:var(--muted-foreground); } .running i { background:var(--success,#16a34a); } .failed i { background:var(--destructive); } .effective { margin-left:auto; }
   .connections { gap:16px; font-size:11px; color:var(--muted-foreground); margin:1px 0 14px; } .connections>span { gap:5px; font-variant-numeric:tabular-nums; }
+  .activity-count { display:inline-block; min-width:3ch; text-align:right; }
+  .local-addresses { display:flex; align-items:center; gap:5px; margin-top:10px; color:var(--muted-foreground); font-size:11px; }
+  .local-addresses :global(svg) { flex-shrink:0; }
+  .local-addresses>span { min-width:0; overflow-wrap:anywhere; font-family:var(--font-mono); }
   .observation-source { font-size:10px; color:var(--muted-foreground); margin-top:8px; }
   footer { border-top:1px solid var(--border); padding-top:12px; justify-content:space-between; gap:10px; } .directions { gap:6px; } .directions>button { position:relative; gap:5px; padding:5px 8px; border-radius:6px; font-size:11px; color:var(--muted-foreground); cursor:pointer; background:var(--muted); }
   .directions>button.active { color:var(--primary); background:color-mix(in srgb,var(--primary) 9%,transparent); } .directions>button:focus-visible { outline:2px solid var(--ring); } .directions>button:disabled { opacity:.45; cursor:default; }
