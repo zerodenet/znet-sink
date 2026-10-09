@@ -15,7 +15,7 @@ use crate::config::{DEFAULT_IPC_TIMEOUT_MS, MAX_IPC_TIMEOUT_MS};
 use crate::errors::{AppError, AppResult};
 use crate::kernel::{connection, transport};
 use crate::models::core::{response_id, CoreCallResult, CoreEndpoint, CoreIpcOptions};
-use crate::models::debug::{push_debug_frame, DebugFrame};
+use crate::models::debug::{capture_payload, push_debug_frame, DebugFrame};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -189,7 +189,7 @@ async fn request_bound(
         at_ms: crate::services::common::now_unix_ms(),
         direction: "tx".to_string(),
         frame_type: frame_type.clone(),
-        payload: frame_value.clone(),
+        payload: capture_payload(&frame_value),
         elapsed_ms: None,
         error: None,
     });
@@ -238,7 +238,7 @@ async fn request_bound(
                 at_ms: crate::services::common::now_unix_ms(),
                 direction: "rx".to_string(),
                 frame_type,
-                payload: value.clone(),
+                payload: capture_payload(value),
                 elapsed_ms: Some(elapsed),
                 error: None,
             });

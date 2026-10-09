@@ -93,7 +93,7 @@ pub fn cleanup_on_startup() {
 
     // Only restore if the current system proxy still matches our endpoint —
     // otherwise the user changed it after the crash and we must not touch it.
-    match system_proxy::status() {
+    match system_proxy::status_fresh() {
         Ok(status)
             if status.enabled && status.host == marker.host && status.port == marker.port =>
         {
@@ -165,7 +165,7 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
     if path.exists() {
         match read_marker(&path) {
             Ok(mut marker) => {
-                let status = system_proxy::status()?;
+                let status = system_proxy::status_fresh()?;
                 if status.enabled && status.host == marker.host && status.port == marker.port {
                     let extended = system_proxy::complete_bypass_backup(&mut marker.previous)?;
                     if marker.host == host
@@ -283,7 +283,7 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
     let marker = read_marker(&path).map_err(|error| {
         crate::errors::AppError::internal(format!("failed to read proxy marker: {error}"))
     })?;
-    let status = system_proxy::status()?;
+    let status = system_proxy::status_fresh()?;
     if !status.enabled || status.host != marker.host || status.port != marker.port {
         return Ok(());
     }
@@ -339,7 +339,7 @@ fn disable_owned() -> AppResult<()> {
     };
 
     // An old marker is not authority over changes made by the user or another app.
-    let current = system_proxy::status()?;
+    let current = system_proxy::status_fresh()?;
     if !owns_endpoint(
         current.enabled,
         &current.host,

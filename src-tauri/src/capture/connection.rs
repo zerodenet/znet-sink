@@ -144,8 +144,13 @@ async fn build_status(
     let (local_proxy_host, local_proxy_port) = local_proxy_endpoint(state)?;
     let core_available = process.state == CoreProcessState::Running
         || health.as_ref().is_some_and(|health| health.healthy);
-    let mut system_proxy = system_proxy::status().ok();
-    let mut system_proxy_owned = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let mut system_proxy = system_proxy::status_async().await.ok();
+    let mut system_proxy_owned =
+        tauri::async_runtime::spawn_blocking(system_proxy_guard::is_enabled_by_guard)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(false);
 
     // Status polling must not undo an in-flight start/restart/upgrade that
     // deliberately preserves the owned proxy while its endpoint is replaced.
@@ -156,8 +161,13 @@ async fn build_status(
             system_proxy_guard::disable_with_guard,
         ) {
             Ok(true) => {
-                system_proxy = system_proxy::status().ok();
-                system_proxy_owned = system_proxy_guard::is_enabled_by_guard().unwrap_or(true);
+                system_proxy = system_proxy::status_async().await.ok();
+                system_proxy_owned =
+                    tauri::async_runtime::spawn_blocking(system_proxy_guard::is_enabled_by_guard)
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .unwrap_or(true);
             }
             Ok(false) => {}
             Err(error) => crate::services::file_logger::line(&format!(

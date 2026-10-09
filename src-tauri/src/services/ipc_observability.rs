@@ -1,11 +1,5 @@
-//! Projection of selected raw kernel IPC frames into the normal log stream.
-//!
-//! The protocol/connection layers already capture exact JSON frames in the
-//! debug store. This service observes that existing stream and mirrors only
-//! node/diagnostic-relevant traffic into logs, preserving source semantics:
-//! requests emitted by the GUI are `app`; successful responses and relevant
-//! events received from Zero are `core`. Client-generated transport errors are
-//! never mislabeled as kernel output.
+//! Compact kernel-control summaries in the running log. Polling responses and
+//! full JSON belong only in the bounded IPC store, never in a second log cache.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,6 +39,9 @@ impl IpcLogObserver {
             return;
         };
         if let Ok(mut requests) = self.requests.lock() {
+            if requests.len() >= 256 {
+                requests.clear();
+            }
             requests.insert(request_id.clone(), request.clone());
         }
         append_frame_log(
@@ -53,7 +50,7 @@ impl IpcLogObserver {
             frame,
             &request,
             Some(&request_id),
-            format!("内核 IPC 原始请求（{}）", request.label),
+            format!("内核 IPC 请求（{}）", request.label),
             "app_request",
         );
     }
@@ -73,7 +70,7 @@ impl IpcLogObserver {
                 frame,
                 &request,
                 frame_request_id(&frame.payload).as_deref(),
-                format!("内核 IPC 原始事件（{}）", request.label),
+                format!("内核 IPC 事件（{}）", request.label),
                 "core_event",
             );
             return;
@@ -104,7 +101,7 @@ impl IpcLogObserver {
                 frame,
                 &request,
                 Some(&request_id),
-                format!("内核 IPC 请求未收到原始响应（{}）", request.label),
+                format!("内核 IPC 请求失败（{}）", request.label),
                 "client_transport_error",
             );
         } else {
@@ -114,7 +111,7 @@ impl IpcLogObserver {
                 frame,
                 &request,
                 Some(&request_id),
-                format!("内核 IPC 原始响应（{}）", request.label),
+                format!("内核 IPC 响应（{}）", request.label),
                 "core_response",
             );
         }
@@ -133,14 +130,9 @@ fn classify_request(payload: &Value) -> Option<TrackedRequest> {
                 method: Some(method.to_string()),
             })
         }
-        "query" => payload
-            .get("request")
-            .and_then(Value::as_object)
-            .is_some_and(|request| request.contains_key("policies"))
-            .then(|| TrackedRequest {
-                label: "query.policies".to_string(),
-                method: None,
-            }),
+        // Background policy polling is available in IPC diagnostics, not duplicated
+        // into the normal running log on every refresh.
+        "query" => None,
         _ => None,
     }
 }
@@ -158,16 +150,17 @@ fn frame_request_id(payload: &Value) -> Option<String> {
 }
 
 fn is_relevant_event(payload: &Value) -> bool {
-    serde_json::to_string(payload)
-        .map(|value| {
-            let value = value.to_ascii_lowercase();
-            value.contains("probe") || value.contains("url_test") || value.contains("urltest")
+    ["event_type", "eventType", "event", "type", "name", "method"]
+        .iter()
+        .filter_map(|key| payload.get(key).and_then(Value::as_str))
+        .any(|name| {
+            let name = name.to_ascii_lowercase();
+            name.contains("probe") || name.contains("url_test") || name.contains("urltest")
         })
-        .unwrap_or(false)
 }
 
 fn event_label(payload: &Value) -> String {
-    for key in ["event", "type", "name", "method"] {
+    for key in ["event_type", "eventType", "event", "type", "name", "method"] {
         if let Some(value) = payload.get(key).and_then(Value::as_str) {
             if !value.trim().is_empty() {
                 return value.to_string();
@@ -204,7 +197,7 @@ fn append_frame_log(
             "method": request.method,
             "elapsedMs": frame.elapsed_ms,
             "error": frame.error,
-            "rawFrame": frame.payload,
+            "summary": { "ok": frame.payload.get("ok"), "event": event_label(&frame.payload) },
         })),
     );
 }
@@ -239,7 +232,7 @@ mod tests {
             "type": "query",
             "request": { "policies": {} }
         }))
-        .is_some());
+        .is_none());
     }
 
     #[test]

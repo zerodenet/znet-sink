@@ -7,8 +7,8 @@ use crate::services::proxy_mode;
 use crate::state::app_state::AppState;
 
 #[tauri::command]
-pub fn gui_proxy_mode_status(state: State<'_, AppState>) -> AppResult<GuiProxyModeStatus> {
-    proxy_mode::status(state.inner())
+pub async fn gui_proxy_mode_status(state: State<'_, AppState>) -> AppResult<GuiProxyModeStatus> {
+    proxy_mode::status(state.inner()).await
 }
 
 #[tauri::command]

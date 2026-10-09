@@ -78,3 +78,12 @@ pub async fn gui_connection_history_export(
     )
     .await
 }
+
+/// Detail capture is a temporary diagnostic session, never enabled at startup.
+#[tauri::command]
+pub fn gui_debug_capture(enabled: Option<bool>) -> crate::models::debug::CaptureStatus {
+    match enabled {
+        Some(enabled) => crate::models::debug::set_capture(enabled),
+        None => crate::models::debug::capture_status(),
+    }
+}

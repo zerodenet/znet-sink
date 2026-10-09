@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+mod capture;
+pub use capture::CaptureStatus;
+pub(crate) use capture::{capture_payload, capture_status, set_capture};
 
 mod worker;
 
@@ -54,13 +58,6 @@ pub struct DebugFramePage {
     pub history: Option<crate::services::connection_history_store::HistorySummary>,
 }
 
-/// Maximum number of recent frames retained in memory for live inspection.
-pub(crate) const DEBUG_RING_SIZE: usize = 1_000;
-
-/// Global ring buffer for diagnostic IPC frame capture.
-static DEBUG_FRAMES: std::sync::LazyLock<Mutex<Vec<DebugFrame>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::with_capacity(DEBUG_RING_SIZE)));
-
 static DEBUG_FRAME_ID: AtomicU64 = AtomicU64::new(0);
 
 type DebugFrameObserver = Arc<dyn Fn(&DebugFrame) + Send + Sync + 'static>;
@@ -74,32 +71,36 @@ pub(crate) fn install_debug_frame_observer(observer: DebugFrameObserver) -> bool
     DEBUG_FRAME_OBSERVER.set(observer).is_ok()
 }
 
-/// Push a frame into the ring buffer from anywhere in the crate.
-pub(crate) fn push_debug_frame(frame: DebugFrame) {
-    let mut frame = frame;
-    frame.payload = crate::kernel::redaction::frame(&frame.payload);
-    frame.id = DEBUG_FRAME_ID.fetch_add(1, Ordering::Relaxed);
-    let persisted = frame.clone();
-    if let Ok(mut frames) = DEBUG_FRAMES.lock() {
-        if frames.len() >= DEBUG_RING_SIZE {
-            frames.remove(0);
-        }
-        frames.push(frame);
+/// Transport producers project borrowed JSON before cloning any diagnostic data.
+pub(crate) fn push_debug_frame(mut frame: DebugFrame) {
+    // Small transport-generated records use the same bounds/redaction. Large
+    // producer payloads were already projected from a borrow before this call.
+    if frame.payload.get("_diagnosticCapture").is_none() {
+        frame.payload = capture_payload(&frame.payload);
     }
-    // Disk rotation and log projection must never stall the IPC reader or a
-    // request writer. Keep live inspection synchronous; persist on one bounded
-    // worker so slow storage cannot create an unbounded memory backlog either.
+    if let Some(error) = &mut frame.error {
+        let mut end = error.len().min(1024);
+        while !error.is_char_boundary(end) {
+            end -= 1;
+        }
+        error.truncate(end);
+    }
+    frame.id = DEBUG_FRAME_ID.fetch_add(1, Ordering::Relaxed);
+    // No second in-memory copy: all readers use the bounded on-disk store.
     let worker = DEBUG_WORKER.get_or_init(|| {
         worker::Worker::new(128, persist_debug_frame)
             .map_err(|error| eprintln!("debug capture worker unavailable: {error}"))
             .ok()
     });
-    if let Some(worker) = worker {
-        if let Err(frame) = worker.submit(persisted) {
-            if crate::services::connection_history_store::is_completed_connection_frame(&frame) {
-                crate::services::connection_history_store::record_write_failure();
-            }
-        }
+    let rejected = match worker {
+        Some(worker) => worker.submit(frame).err(),
+        None => Some(frame),
+    };
+    if rejected
+        .as_ref()
+        .is_some_and(crate::services::connection_history_store::is_completed_connection_frame)
+    {
+        crate::services::connection_history_store::record_write_failure();
     }
 }
 
@@ -119,12 +120,8 @@ fn persist_debug_frame(persisted: DebugFrame, dropped: u64) {
     }
 }
 
-/// Clear all captured debug frames.
-pub(crate) fn clear_debug_frames() {
-    if let Ok(mut frames) = DEBUG_FRAMES.lock() {
-        frames.clear();
-    }
-}
+// Retained for callers that clear diagnostics; there is no duplicated memory ring.
+pub(crate) fn clear_debug_frames() {}
 
 pub(crate) fn seed_next_debug_frame_id(next_id: u64) {
     let mut current = DEBUG_FRAME_ID.load(Ordering::SeqCst);

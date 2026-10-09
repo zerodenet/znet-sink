@@ -62,9 +62,9 @@ pub(crate) fn clear(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
     with_storage_lock(|| clear_locked(state))
 }
 
-pub(crate) fn diagnostic_log_paths() -> AppResult<[PathBuf; 4]> {
+pub(crate) fn diagnostic_log_paths() -> AppResult<Vec<PathBuf>> {
     let data_dir = data_dir()?;
-    Ok(diagnostic_log_paths_at(
+    Ok(all_log_paths_at(
         &data_dir,
         core_config::managed_core_log_path()?,
     ))
@@ -77,6 +77,13 @@ pub(crate) fn diagnostic_log_paths_at(data_dir: &Path, core_log_path: PathBuf) -
         data_dir.join("logs").join("debug.log.jsonl"),
         core_log_path,
     ]
+}
+
+fn all_log_paths_at(data_dir: &Path, core_log_path: PathBuf) -> Vec<PathBuf> {
+    let [gui, application, debug, core] = diagnostic_log_paths_at(data_dir, core_log_path);
+    let mut paths = vec![gui, application, core];
+    paths.extend(debug_store::segment_paths(&debug));
+    paths
 }
 
 fn clear_locked(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
@@ -102,7 +109,14 @@ fn clear_locked(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
     }
 
     clear_debug_frames();
-    match managed_file_size(&data_dir, &debug_log_path) {
+    match debug_store::segment_paths(&debug_log_path)
+        .iter()
+        .try_fold(None, |total, path| {
+            managed_file_size(&data_dir, path).map(|size| match (total, size) {
+                (None, None) => None,
+                (total, size) => Some(total.unwrap_or(0_u64).saturating_add(size.unwrap_or(0))),
+            })
+        }) {
         Ok(debug_log_size) => record_file_cleanup(
             &mut result,
             "ipc-debug-log",
@@ -203,7 +217,7 @@ fn record_cleanup_error(result: &mut DebugStorageCleanupResult, target: &str, er
 
 fn summary_at(data_dir: &Path, core_log_path: &Path) -> AppResult<DebugStorageSummary> {
     let mut summary = DebugStorageSummary::default();
-    for path in diagnostic_log_paths_at(data_dir, core_log_path.to_path_buf()) {
+    for path in all_log_paths_at(data_dir, core_log_path.to_path_buf()) {
         if let Some(size) = managed_file_size(data_dir, &path)? {
             summary.live_log_bytes = summary.live_log_bytes.saturating_add(size);
             summary.live_log_file_count += 1;
@@ -404,6 +418,19 @@ mod tests {
             std::process::id(),
             crate::services::common::now_unix_ms()
         ))
+    }
+
+    #[test]
+    fn storage_summary_counts_ipc_archives_and_ignores_unrelated_files() {
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("debug.log.jsonl.1"), b"abc").unwrap();
+        fs::write(logs.join("debug.log.jsonl.4"), b"defg").unwrap();
+        fs::write(logs.join("debug.log.jsonl.unrelated"), b"ignore").unwrap();
+        let summary = summary_at(root.path(), &logs.join("core.log.jsonl")).unwrap();
+        assert_eq!(summary.live_log_bytes, 7);
+        assert_eq!(summary.live_log_file_count, 2);
     }
 
     #[test]
