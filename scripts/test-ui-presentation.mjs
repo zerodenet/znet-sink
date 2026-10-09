@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {logContext, logHeadline, rawLogMessage} from '../src/lib/services/log-presentation.ts';
 import {logWindow} from '../src/lib/services/log-window.ts';
 import {networkLocation} from '../src/lib/services/network-location.ts';
 import {describeUiError} from '../src/lib/services/ui-error.ts';
@@ -32,4 +33,19 @@ test('UI diagnostics preserve cross-realm exceptions and opaque failures without
   assert.deepEqual(describeUiError({message:'duplicate key',name:'Error',stack:'render at NodesTab:12'}),{message:'duplicate key',name:'Error',stack:'render at NodesTab:12'});
   assert.equal(describeUiError(null,'Script error.').message,'Script error.');
   assert.equal(describeUiError('request failed').message,'request failed');
+});
+
+
+test('log summaries show actual context without replacing original diagnostics', () => {
+  const log = {source:'core',message:'raw line',fields:{message:'session finished',target:'Domain("example.test")',port:443,outbound_tag:'direct',duration_ms:0}};
+  assert.equal(logHeadline(log),'连接结束');
+  assert.equal(logHeadline({source:'core',message:'session accepted'}),'接收连接');
+  assert.equal(rawLogMessage(log),'session finished');
+  assert.equal(log.message,'raw line');
+  assert.deepEqual(logContext(log),['目标 example.test:443','出口 direct','耗时 0 ms']);
+  assert.deepEqual(logContext({source:'core',message:'session finished',fields:{duration_ms:null}}),[]);
+  assert.equal(logHeadline({source:'plugin',message:'session finished'}),'session finished');
+  assert.equal(logHeadline({source:'core',message:'unknown protocol error'}),'unknown protocol error');
+  assert.deepEqual(logContext({...log,fields:{target:'[::1]',port:70000,duration_ms:-1,error:'reset'}}),['目标 [::1]','reset']);
+  assert.deepEqual(logContext({source:'plugin',fields:{pluginId:'org.example',componentId:'sync',action:'update'}}),['org.example','sync','update']);
 });

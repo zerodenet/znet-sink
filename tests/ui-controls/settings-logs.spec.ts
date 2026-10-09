@@ -126,23 +126,40 @@ test('logs remain interactive with large structured records and repeated refresh
   expect(errors).toEqual([]);
 });
 
-test('log rows give metadata and message separate readable lines', async ({ page }) => {
-  await page.goto('/?panel=logs');
+test('log messages lead aligned rows and retain raw diagnostics at narrow widths', async ({ page }) => {
+  await page.goto('/?panel=logs&log-design=1');
   await expect(page.locator('.log-row').first()).toBeVisible();
-  for (const width of [900, 620]) {
-    await page.setViewportSize({ width, height: 700 });
-    const layout = await page.locator('.log-row').first().evaluate(row => {
+  const finished = page.locator('[data-log-id="9"]');
+  await expect(finished.locator('.log-message')).toHaveText('连接结束');
+  await expect(finished.locator('.log-context')).toContainText('目标 vending.test.starmerx.com:443');
+  await expect(finished.locator('.log-context')).toContainText('出口 company');
+  await expect(page.locator('[data-log-id="11"] .log-context')).toContainText('org.zerodenet.connect.znet-sink');
+  for (const width of [1100, 900, 620, 420]) {
+    await page.setViewportSize({ width, height: 800 });
+    const layout = await finished.evaluate(row => {
       const meta = row.querySelector('.log-meta')!.getBoundingClientRect();
       const message = row.querySelector('.log-message')!.getBoundingClientRect();
       const summary = row.querySelector('.log-summary')!.getBoundingClientRect();
-      return { separateLines: message.top >= meta.bottom, messageFits: message.right <= summary.right + 1, rowHeight: row.getBoundingClientRect().height };
+      return { separateLines: message.top >= meta.bottom, messageFits: message.right <= summary.right + 1,
+        aligned: Math.abs(message.top - meta.top) < 1, overflow: row.scrollWidth > row.clientWidth, rowHeight: row.getBoundingClientRect().height };
     });
-    expect(layout.separateLines).toBe(true);
+    expect(width <= 680 ? layout.separateLines : layout.aligned).toBe(true);
     expect(layout.messageFits).toBe(true);
-    expect(layout.rowHeight).toBeLessThan(100);
-    await expect(page.locator('.log-fields')).toHaveCount(0);
+    expect(layout.overflow).toBe(false);
+    expect(layout.rowHeight).toBeLessThan(95);
+    await page.locator(".log-panel").screenshot({ path: test.info().outputPath(`logs-${width}.png`) });
   }
-  await page.screenshot({ path: test.info().outputPath('logs-readable.png') });
+  await finished.locator('.log-summary').click();
+  await expect(finished.locator('.detail-message')).toHaveText('session finished');
+  await expect(finished.locator('pre')).toContainText('duration_ms');
+  await page.getByRole('textbox', { name: '搜索已加载日志' }).fill('连接结束');
+  await expect(page.locator('.log-row')).toHaveCount(2);
+  await page.getByRole('textbox', { name: '搜索已加载日志' }).fill('session finished');
+  await expect(page.locator('.log-row')).toHaveCount(2);
+  await page.getByRole('textbox', { name: '搜索已加载日志' }).fill('');
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.locator('html').evaluate(el => el.classList.add('dark'));
+  await page.locator('.log-panel').screenshot({ path: test.info().outputPath('logs-dark.png') });
 });
 
 test('overview displays the bundled flag and readable network region',async ({page})=>{
