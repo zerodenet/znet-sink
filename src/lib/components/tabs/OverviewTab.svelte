@@ -69,6 +69,7 @@
     if (!format || format === 'auto') return '自动检测';
     if (format === 'zero') return 'Zero';
     if (format === 'clash') return 'Clash';
+    if (format === 'json') return 'JSON';
     return format;
   }
 
@@ -150,42 +151,43 @@
     if (!activeId) return null;
     return subscriptions.find((subscription) => subscription.targetProxyConfigId === activeId) ?? null;
   });
-  const sourceOptions = $derived(
-    subscriptions.map((subscription) => ({ value: subscription.id, label: subscription.name })),
-  );
+  type SourceOption = { value: string; label: string; profileId?: string; subscriptionId?: string; disabled: boolean };
+  const sourceOptions = $derived<SourceOption[]>([
+    ...proxyConfigs.map((profile) => ({ value: `profile:${profile.id}`, label: profile.name,
+      profileId: profile.id, disabled: profile.content == null })),
+    ...subscriptions.filter((subscription) => !proxyConfigs.some((profile) =>
+      profile.id === subscription.targetProxyConfigId && profile.content != null)).map((subscription) => ({
+      value: `subscription:${subscription.id}`, label: `${subscription.name} · 未同步`,
+      subscriptionId: subscription.id, disabled: !subscription.enabled,
+    })),
+  ]);
+  const activeSourceValue = $derived(activeProxyConfig ? `profile:${activeProxyConfig.id}` : '');
 
   async function activateSource(id: string) {
-    if (!id || activatingSourceId !== null || activeSubscription?.id === id) return;
-    const subscription = subscriptions.find((item) => item.id === id);
-    if (!subscription || !subscription.enabled) return;
+    if (!id || activatingSourceId !== null || activeSourceValue === id) return;
+    const option = sourceOptions.find((item) => item.value === id);
+    if (!option || option.disabled) return;
 
     activatingSourceId = id;
     try {
-      let current = subscription;
-      let targetId = current.targetProxyConfigId;
-      const hasUsableTarget = targetId
-        ? proxyConfigs.some((profile) => profile.id === targetId && profile.content != null)
-        : false;
-
-      // A never-synced source is still a one-action choice: sync it first,
-      // then activate the generated config. Existing cached configs do not
-      // require network access merely to become active again.
-      if (!hasUsableTarget) {
-        current = await syncSubscription(id);
-        targetId = current.targetProxyConfigId;
+      let targetId = option.profileId;
+      // Cached and local configurations activate without a subscription fetch.
+      if (!targetId && option.subscriptionId) {
+        const synced = await syncSubscription(option.subscriptionId);
+        targetId = synced.targetProxyConfigId;
       }
       if (!targetId) {
         throw new Error('订阅尚未生成可用配置');
       }
 
-      await setActiveProxyConfig(targetId);
+      const activated = await setActiveProxyConfig(targetId);
       await Promise.allSettled([
         refreshLiteSource(),
         guiState.refreshAll(),
       ]);
-      toast.success(`已切换到 ${current.name}`);
+      toast.success(`已切换到 ${activated.name}`);
     } catch (error) {
-      toast.error(getAppErrorMessage(error, '切换订阅失败'));
+      toast.error(getAppErrorMessage(error, '切换配置失败'));
     } finally {
       activatingSourceId = null;
     }
@@ -247,8 +249,8 @@
   const sourceName = $derived.by(() => {
     if (sourceLoading) return '正在加载…';
     if (sourceError) return '配置来源待确认';
-    if (activeSubscription) return activeSubscription.name;
     if (activeProxyConfig) return activeProxyConfig.name;
+    if (activeSubscription) return activeSubscription.name;
     return subscriptions.length > 0 ? '选择订阅' : '添加订阅';
   });
   const sourceMeta = $derived.by(() => {
@@ -259,7 +261,9 @@
       return `${formatSubscriptionFormat(activeSubscription.format)} · ${nodeCount} · ${formatRelativeTime(activeSubscription.lastSyncAtUnixMs)}`;
     }
     if (activeProxyConfig) {
-      return `${activeProxyConfig.format || 'Zero'} · 本地/专业配置`;
+      const origin = activeProxyConfig.managedSource?.sourceName
+        ?? (activeProxyConfig.managedSource ? '插件订阅' : activeProxyConfig.path ? '配置文件' : '本地配置');
+      return `${formatSubscriptionFormat(activeProxyConfig.format)} · ${origin}`;
     }
     if (subscriptions.length > 0) return `${subscriptions.length} 个订阅 · 请选择当前使用来源`;
     return '暂无订阅来源';
@@ -401,26 +405,26 @@
           <span class="lite-entry-meta">{sourceMeta}</span>
         </span>
         <span class="lite-source-controls">
-          {#if subscriptions.length > 0}
+          {#if sourceOptions.length > 0}
             <Select.Root
               type="single"
               items={sourceOptions}
               disabled={sourceLoading || !!sourceError || activatingSourceId !== null}
-              bind:value={() => activeSubscription?.id ?? '', (value) => {
+              bind:value={() => activeSourceValue, (value) => {
                 if (typeof value === 'string' && value) void activateSource(value);
               }}
             >
               <Select.Trigger class="lite-source-select" aria-label="切换配置来源">
-                <Select.Value />
+                <Select.Value placeholder="选择配置" />
               </Select.Trigger>
               <Select.Content>
-                {#each subscriptions as subscription}
+                {#each sourceOptions as option (option.value)}
                   <Select.Item
-                    value={subscription.id}
-                    label={subscription.name}
-                    disabled={!subscription.enabled}
+                    value={option.value}
+                    label={option.label}
+                    disabled={option.disabled}
                   >
-                    {subscription.name}{subscription.id === activeSubscription?.id ? ' · 当前' : ''}
+                    {option.label}{option.value === activeSourceValue ? ' · 当前' : ''}
                   </Select.Item>
                 {/each}
               </Select.Content>
@@ -429,9 +433,14 @@
           <button data-slot="surface-button"
             type="button"
             class="lite-manage-source"
-            onclick={() => (store.activeTab = 'subscriptions')}
+            onclick={() => {
+              if (activeProxyConfig && !activeSubscription) {
+                store.uiMode = 'pro';
+                store.activeTab = 'profiles';
+              } else store.activeTab = 'subscriptions';
+            }}
           >
-            {subscriptions.length > 0 ? '管理' : '添加'}
+            {sourceOptions.length > 0 ? '管理' : '添加'}
           </button>
         </span>
       </div>

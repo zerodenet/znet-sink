@@ -109,8 +109,14 @@ const profiles: ProxyConfigProfile[] = ['main', 'work'].map((id, i) => ({
   content: { route: { final: { type: 'outbound', outbound: 'proxy' } } },
   capabilities: {} as ProxyConfigProfile['capabilities'],
 }));
+if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
+  profiles[0].name = '狗梯 - company';
+  profiles[0].format = 'json';
+  profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
+}
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
 let managedLastSync = 1;
+let syncedSourceTarget: string | undefined;
 window.addEventListener('fixture-subscription-synced', (event) => {
   managedLastSync = (event as CustomEvent<number>).detail;
 });
@@ -118,6 +124,13 @@ export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
   const mode = new URLSearchParams(location.search).get('mode');
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
+  }
+  if (mode === 'local-with-subscriptions' || mode === 'managed-config') {
+    return [{id:'sub-work',name:'工作订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1}];
+  }
+  if (mode === 'unsynced-source') {
+    return [{id:'new-sub',name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:syncedSourceTarget,policySelections:{},updatedAtUnixMs:1},
+      {id:'disabled-sub',name:'停用订阅',url:'https://example.test/disabled',enabled:false,kernel:'zero',format:'zero',policySelections:{},updatedAtUnixMs:1}];
   }
   if (mode === 'managed-usage') {
     return [{
@@ -139,7 +152,12 @@ export const setActiveProxyConfig = async (id: string) => {
 export const importProxyConfig = async () => structuredClone(profiles[0]);
 export const upsertProxyConfig = async () => structuredClone(profiles[0]);
 export const removeProxyConfig = async () => {};
-export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
+export const syncSubscription = async (id: string): Promise<SubscriptionProfile> => {
+  if (new URLSearchParams(location.search).get('mode') !== 'unsynced-source' || id !== 'new-sub') throw new Error('No subscription network calls in this fixture');
+  profiles.push({...structuredClone(profiles[0]),id:'synced',name:'新订阅配置',active:false});
+  syncedSourceTarget = 'synced';
+  return {id,name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'synced',policySelections:{},updatedAtUnixMs:1};
+};
 export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
 export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
 export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
