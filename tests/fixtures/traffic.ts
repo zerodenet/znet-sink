@@ -46,8 +46,8 @@ export class FixtureGateway implements TrafficGateway {
     return {operation_id:input.operation_id,core_instance_id:input.expected_core_instance_id,snapshots:structuredClone(affected)};
   }
   async subscribe(event:(event:TrafficEvent)=>void,status:(state:StreamStatus)=>void){this.event=event;this.status=status;status(this.caps.capabilities.trafficStatistics?.automatic_sampling?'subscribed':'offline');return()=>{this.stops++;this.event=undefined;this.status=undefined;};}
-  advance(indices=this.rows.map((_,i)=>i),delta=1000){
-    for(const index of indices){const row=this.rows[index];row.sampled_at_monotonic_ns=String(BigInt(row.sampled_at_monotonic_ns)+BigInt(delta)*1_000_000n);row.sampled_at_unix_ms=String(BigInt(row.sampled_at_unix_ms)+BigInt(delta));for(const p of row.planes)for(const k of p.available_metrics)if(p.counters[k]!=null)p.counters[k]=String(BigInt(p.counters[k]!)+1000n);}
+  advance(indices=this.rows.map((_,i)=>i),delta=1000,bytes=1000){
+    for(const index of indices){const row=this.rows[index];row.sampled_at_monotonic_ns=String(BigInt(row.sampled_at_monotonic_ns)+BigInt(delta)*1_000_000n);row.sampled_at_unix_ms=String(BigInt(row.sampled_at_unix_ms)+BigInt(delta));for(const p of row.planes)for(const k of p.available_metrics)if(p.counters[k]!=null)p.counters[k]=String(BigInt(p.counters[k]!)+BigInt(bytes));}
   }
   push(indices=this.rows.map((_,i)=>i)){
     this.event?.({type:'sample',instance:this.rows[0].core_instance_id,payload:{core_instance_id:this.rows[0].core_instance_id,config_revision:this.rows[0].config_revision,registry_revision:this.registry,sampled_at_unix_ms:this.rows[0].sampled_at_unix_ms,scopes:structuredClone(indices.map(i=>this.rows[i])),total:this.rows.length,next_offset:null}});

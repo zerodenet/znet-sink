@@ -39,11 +39,13 @@ export const trafficGateway:TrafficGateway={
     const stop=await fixture.subscribe(event,status);
     report();
     const sample=()=>{fixture.advance();fixture.push();};
+    const step=(event:Event)=>{const {ms,bytes}=(event as CustomEvent<{ms:number;bytes:number}>).detail;fixture.advance(undefined,ms,bytes);fixture.push();};
     const gap=()=>fixture.status?.('gap');
     const remove=()=>{fixture.rows=fixture.rows.filter(row=>row.scope.kind!=='peer');fixture.registry=String(BigInt(fixture.registry)+1n);fixture.status?.('gap');};
     window.addEventListener('fixture-traffic-sample',sample);
+    window.addEventListener('fixture-traffic-step',step);
     window.addEventListener('fixture-traffic-gap',gap);
     window.addEventListener('fixture-traffic-remove-peer',remove);
-    return()=>{window.removeEventListener('fixture-traffic-sample',sample);window.removeEventListener('fixture-traffic-gap',gap);window.removeEventListener('fixture-traffic-remove-peer',remove);stop();report();};
+    return()=>{window.removeEventListener('fixture-traffic-sample',sample);window.removeEventListener('fixture-traffic-step',step);window.removeEventListener('fixture-traffic-gap',gap);window.removeEventListener('fixture-traffic-remove-peer',remove);stop();report();};
   },
 };
