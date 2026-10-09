@@ -10,6 +10,7 @@ fn unrelated_files_in_backup_root_do_not_block_launch() {
 
     fs::write(dir.path().join("zero"), b"old").unwrap();
     let transaction = BundleTransaction::prepare(dir.path(), &backups, &["zero".into()]).unwrap();
+    ensure_no_interrupted_upgrade(&backups).unwrap();
     drop(transaction);
     assert_eq!(
         ensure_no_interrupted_upgrade(&backups).unwrap_err().code,
@@ -22,8 +23,15 @@ fn malformed_upgrade_entry_still_blocks_launch() {
     let dir = tempfile::tempdir().unwrap();
     let backups = dir.path().join("backups");
     fs::create_dir(&backups).unwrap();
-    fs::write(backups.join("upgrade-broken"), b"not a backup directory").unwrap();
-    assert!(ensure_no_interrupted_upgrade(&backups).is_err());
+    let malformed_backup = backups.join("upgrade-broken");
+    fs::write(&malformed_backup, b"not a backup directory").unwrap();
+    let error = ensure_no_interrupted_upgrade(&backups).unwrap_err();
+    assert_eq!(error.code, "kernel_upgrade_recovery_required");
+    assert_eq!(
+        error.details.unwrap()["backupPath"],
+        serde_json::json!(malformed_backup)
+    );
+    assert!(BundleTransaction::prepare(dir.path(), &backups, &["zero".into()]).is_err());
 }
 
 #[cfg(unix)]
