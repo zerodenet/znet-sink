@@ -25,6 +25,7 @@
   } from '$lib/services/diagnostic-copy';
   import { logWindow } from '$lib/services/log-window';
   import { mergeLogPage } from '$lib/services/log-page';
+  import { logHeadline, logContext, rawLogMessage as displayMessage } from '$lib/services/log-presentation';
   import type { LogEntry, LogLevel, LogPage, LogQuery, LogSource } from '$lib/types/logs';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
 
@@ -271,27 +272,6 @@
     return `${new Date(ms).toLocaleString('zh-CN', { hour12: false })}.${pad(new Date(ms).getMilliseconds(), 3)}`;
   }
 
-  function fieldObject(log: LogEntry): Record<string, unknown> | null {
-    return log.fields && typeof log.fields === 'object' && !Array.isArray(log.fields)
-      ? log.fields as Record<string, unknown>
-      : null;
-  }
-
-  function pluginOwner(log: LogEntry): string | null {
-    if (log.source !== 'plugin') return null;
-    const fields = fieldObject(log);
-    const pluginId = fields?.['pluginId'];
-    const componentId = fields?.['componentId'];
-    return typeof pluginId === 'string'
-      ? typeof componentId === 'string' ? `${pluginId} / ${componentId}` : pluginId
-      : null;
-  }
-
-  function displayMessage(log: LogEntry): string {
-    const message = fieldObject(log)?.['message'];
-    return typeof message === 'string' && message.length > 0 ? message : log.message;
-  }
-
   function formattedFields(log: LogEntry): string {
     if (log.fields == null) return '无结构化字段';
     try {
@@ -308,7 +288,10 @@
       String(log.id),
       log.source,
       log.level,
+      log.message,
       displayMessage(log),
+      logHeadline(log),
+      logContext(log).join(' '),
       formattedFields(log),
     ].join('\n').toLocaleLowerCase();
     searchTexts.set(log, text);
@@ -316,7 +299,7 @@
   }
 
   function levelLabel(level: LogLevel): string {
-    return ({ trace: 'TRC', debug: 'DBG', info: 'INF', warn: 'WRN', error: 'ERR' })[level];
+    return ({ trace: '跟踪', debug: '调试', info: '信息', warn: '警告', error: '错误' })[level];
   }
 
   function showFeedback(tone: FeedbackTone, message: string) {
@@ -739,21 +722,26 @@
             class="log-summary"
             onclick={() => toggleExpanded(log.id)}
             aria-expanded={expandedLogId === log.id}
-            title={`${formatTime(log.occurredAtUnixMs)} [${log.source.toUpperCase()}] ${displayMessage(log)}`}
           >
             <ChevronDown class={`row-chevron h-3 w-3 ${expandedLogId === log.id ? 'open' : ''}`} />
             <span class="log-meta">
-              <span class="log-time">{formatTime(log.occurredAtUnixMs)}</span>
-              <span class="log-source {log.source}">{log.source === 'app' ? 'APP' : log.source === 'core' ? 'CORE' : 'PLUGIN'}</span>
+              <time class="log-time" datetime={new Date(log.occurredAtUnixMs).toISOString()} title={formatFullTime(log.occurredAtUnixMs)}>{formatTime(log.occurredAtUnixMs)}</time>
+              <span class="log-source {log.source}">{log.source === 'app' ? '应用' : log.source === 'core' ? '内核' : '插件'}</span>
               <span class="log-level {log.level}">{levelLabel(log.level)}</span>
-              {#if pluginOwner(log)}<span class="log-owner" title={pluginOwner(log) ?? ''}>{pluginOwner(log)}</span>{/if}
             </span>
-            <span class="log-message">{displayMessage(log)}</span>
+            <span class="log-content">
+              <span class="log-message">{logHeadline(log)}</span>
+              {#if logContext(log).length}
+                <span class="log-context">
+                  {#each logContext(log) as context}<span title={context}>{context}</span>{/each}
+                </span>
+              {/if}
+            </span>
           </button>
 
           <Button variant="ghost" size="icon-xs"
             type="button"
-            class="mt-0.5 shrink-0 self-start"
+            class="log-copy shrink-0"
             onclick={() => void copyLog(log)}
             title={`复制日志 #${log.id}`}
             aria-label={`复制日志 #${log.id}`}
@@ -970,7 +958,7 @@
     overflow-y: auto;
     padding: 7px;
     background: color-mix(in srgb, var(--card) 97%, var(--muted));
-    font-family: var(--font-mono, "JetBrains Mono", monospace);
+    font-family: var(--font-sans, sans-serif);
     scrollbar-gutter: stable;
     overflow-anchor: none;
   }
@@ -1022,12 +1010,10 @@
   .log-summary {
     min-width: 0;
     display: grid;
-    grid-template-columns: 14px minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    align-content: center;
-    column-gap: 8px;
-    row-gap: 3px;
-    padding: 7px 4px 7px 6px;
+    grid-template-columns: 12px 202px minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 10px 6px 10px 8px;
     border: 0;
     background: transparent;
     color: inherit;
@@ -1037,30 +1023,26 @@
   }
 
   :global(.row-chevron) {
-    grid-row: 1 / 3;
-    align-self: start;
     margin-top: 3px;
     color: var(--muted-foreground);
-    opacity: 0.35;
+    opacity: 0.4;
     transform: rotate(-90deg);
     transition: transform 0.12s ease, opacity 0.12s ease;
-    flex-shrink: 0;
   }
-
   :global(.row-chevron.open) { transform: rotate(0); opacity: 0.8; }
   .log-row:hover :global(.row-chevron) { opacity: 0.8; }
+  :global(.log-copy) { margin-top: 6px; opacity: 0.45; }
+  .log-row:hover :global(.log-copy), .log-row:focus-within :global(.log-copy) { opacity: 1; }
 
+  .log-meta { display: flex; align-items: center; gap: 8px; min-width: 0; height: 18px; }
   .log-time {
-    width: auto;
     color: var(--muted-foreground);
-    font-size: 10.5px;
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-    opacity: 0.78;
-    flex-shrink: 0;
   }
-
-  .log-source,
+  .log-source { color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
   .log-level {
     display: inline-flex;
     align-items: center;
@@ -1068,43 +1050,36 @@
     height: 18px;
     padding: 0 4px;
     border-radius: 4px;
-    font-size: 9.5px;
-    font-weight: 750;
-    letter-spacing: 0.025em;
-    flex-shrink: 0;
+    font-size: 9px;
+    white-space: nowrap;
+    color: var(--muted-foreground);
+    background: color-mix(in srgb, var(--muted) 65%, transparent);
   }
-
-  .log-source.app { background: color-mix(in srgb, #8b5cf6 12%, transparent); color: #7c3aed; }
-  .log-source.core { background: color-mix(in srgb, #3b82f6 12%, transparent); color: #2563eb; }
-  .log-source.plugin { background: color-mix(in srgb, #16a34a 12%, transparent); color: #15803d; }
-  .log-meta { grid-column: 2; display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; }
-  .log-owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted-foreground); }
-  .log-level { color: var(--muted-foreground); background: var(--card); }
-  .log-level.error { color: #dc2626; background: color-mix(in srgb, #ef4444 11%, transparent); }
-  .log-level.warn { color: #d97706; background: color-mix(in srgb, #f59e0b 11%, transparent); }
-  .log-level.info { color: #16a34a; background: color-mix(in srgb, #22c55e 9%, transparent); }
-  .log-level.debug { color: #0891b2; background: color-mix(in srgb, #06b6d4 9%, transparent); }
-
+  .log-level.error { color: light-dark(#b91c1c, #fca5a5); background: color-mix(in srgb, #ef4444 11%, transparent); }
+  .log-level.warn { color: light-dark(#b45309, #fcd34d); background: color-mix(in srgb, #f59e0b 11%, transparent); }
+  .log-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .log-message {
-    grid-column: 2;
     min-width: 0;
     color: var(--foreground);
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: 12px;
+    line-height: 18px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
   .wrap .log-message {
     white-space: normal;
-    overflow-wrap: break-word;
-    word-break: normal;
+    overflow-wrap: anywhere;
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
   }
+  .log-context { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted-foreground); font-size: 10.5px; line-height: 16px; }
+  .log-context span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .log-context span + span { border-left: 1px solid var(--border); padding-left: 10px; }
+  .log-context span:first-child { flex: 0 1 auto; }
+  .log-context span:last-child { flex: 0 1 auto; }
 
   .log-details {
     grid-column: 1 / -1;
@@ -1149,7 +1124,7 @@
     border-radius: 5px;
     background: color-mix(in srgb, var(--muted) 72%, var(--card));
     color: var(--foreground);
-    font: inherit;
+    font-family: var(--font-mono, monospace);
     font-size: 10px;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -1169,7 +1144,6 @@
     .log-heading { align-items: flex-start; }
     .heading-actions { flex: 1; }
     .copy-feedback { flex: 1 1 100%; max-width: none; min-height: 0; }
-    .log-fields { display: none; }
     .action-label { display: none; }
 
   }
@@ -1180,6 +1154,10 @@
     .heading-actions { width: 100%; justify-content: flex-start; }
     .log-filters { flex-wrap: wrap; }
     .search-wrap { order: 3; flex-basis: calc(100% - 48px); max-width: none; }
-    .log-time { width: 104px; font-size: 9.5px; }
+    .log-summary { grid-template-columns: 12px minmax(0, 1fr); gap: 4px 8px; }
+    :global(.row-chevron) { grid-row: 1 / 3; }
+    .log-content { grid-column: 2; }
+    .log-meta { height: 16px; }
+    .log-time { font-size: 9.5px; }
   }
 </style>

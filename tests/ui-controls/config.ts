@@ -168,9 +168,23 @@ export const appendLog = async (_input: unknown) => {};
 import type { LogEntry, LogQuery } from '../../src/lib/types/logs';
 let logFixture: LogEntry[] | undefined;
 const makeLogs = (): LogEntry[] => Array.from({length:5000},(_,i)=>({id:i+1,occurredAtUnixMs:1788697000000+i*10,source:i%3?'core':'app',level:i%10?'info':'error',message:`日志 ${i+1} session finished`,fields:{session_id:i+1,stage:'relay',context:{detail:'示例日志字段'.repeat(80)},bytes_up:500,bytes_down:12000}}));
+const designLogs = (): LogEntry[] => [
+  { id: 1, source: 'app', level: 'info', message: '系统代理已开启', fields: { host: '127.0.0.1', port: 7890 } },
+  { id: 2, source: 'core', level: 'info', message: 'session accepted', fields: { target: 'Domain("chatgpt.com")', port: 443, outbound_tag: '日本 IX [0x01] [Lite]', session_id: 92 } },
+  { id: 3, source: 'core', level: 'info', message: 'session finished', fields: { target: 'Domain("api.github.com")', port: 443, outbound_tag: 'direct', duration_ms: 2339, bytes_up: 966, bytes_down: 987386 } },
+  { id: 4, source: 'plugin', level: 'info', message: 'Connect 手动同步完成', fields: { pluginId: 'org.zerodenet.connect.znet-sink', componentId: 'subscription', action: 'syncNow' } },
+  { id: 5, source: 'core', level: 'warn', message: 'session failed', fields: { target: 'Domain("rank.similarweb.com")', port: 443, outbound_tag: '日本 SS [01] [Lite]', error: '远程主机关闭了连接', session_id: 93 } },
+  { id: 6, source: 'app', level: 'error', message: '订阅更新失败：请求超时，请检查网络后重试', fields: { operation: 'subscription.sync', code: 'transport' } },
+  { id: 7, source: 'app', level: 'debug', message: '内核 IPC 原始请求（query.policies）', fields: { request_id: 123 } },
+  { id: 8, source: 'core', level: 'debug', message: '内核 IPC 原始响应（query.policies）', fields: { request_id: 123 } },
+  { id: 9, source: 'core', level: 'info', message: 'session finished', fields: { target: 'Domain("vending.test.starmerx.com")', port: 443, outbound_tag: 'company', duration_ms: 120 } },
+  { id: 10, source: 'core', level: 'warn', message: 'tcp receive buffer full, rejecting segment', fields: { network: 'tcp' } },
+  { id: 11, source: 'plugin', level: 'warn', message: '同步暂未完成，稍后重试', fields: { pluginId: 'org.zerodenet.connect.znet-sink', componentId: 'very-long-component-name-for-layout-verification', action: 'Subscription.MetadataUpdate' } },
+  { id: 12, source: 'app', level: 'info', message: '配置已应用' },
+].map((entry) => ({...entry, occurredAtUnixMs: 1791509837208 + entry.id * 1000})) as LogEntry[];
 export const getLogs = async (query: LogQuery = {}) => {
   window.dispatchEvent(new CustomEvent('fixture-log-query', {detail:query}));
-  logFixture ??= makeLogs();
+  logFixture ??= new URLSearchParams(location.search).has("log-design") ? designLogs() : makeLogs();
   const matching=logFixture.filter(e=>(!query.source||e.source===query.source)&&(!query.level||e.level===query.level));
   const items=matching.filter(e=>e.id<(query.beforeId??Infinity)).slice(-(query.limit??400));
   return structuredClone({items,hasMore:!!items.length&&items[0].id>matching[0].id,oldestAvailableId:matching[0]?.id});
