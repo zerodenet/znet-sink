@@ -65,3 +65,42 @@ fn endpoint_managed_publishes_only_after_confirmation_and_reports_storage_failur
     assert_eq!(error.code, "endpoint_preferences_unsaved");
     assert!(error.message.contains("内核已生效"));
 }
+
+#[test]
+fn endpoint_card_addresses_match_declared_resource_without_peer_addresses_or_keys() {
+    let endpoint = json!({"endpoint_id":"opaque:a","tag":"a","protocol":"wireguard","configuration":{"origin":"explicit"}});
+    let source = json!({"endpoints":[{"tag":"a","protocol":{"type":"wireguard",
+        "addresses":["10.66.0.2/32"," fd66::2/128 ","10.66.0.2/32",""],
+        "private_key":"not-public","peers":[{"endpoint":"remote.test:51820","allowed_ips":["0.0.0.0/0"]}]}}]});
+    let result = addresses::configured(&source, std::slice::from_ref(&endpoint));
+    assert_eq!(result["opaque:a"], ["10.66.0.2/32", "fd66::2/128"]);
+    let mut duplicate = source.clone();
+    duplicate["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .push(source["endpoints"][0].clone());
+    assert!(addresses::configured(&duplicate, std::slice::from_ref(&endpoint)).is_empty());
+    let mut other = endpoint.clone();
+    other["protocol"] = json!("future_mesh");
+    assert!(addresses::configured(&source, &[other]).is_empty());
+    assert!(addresses::configured(&json!({}), &[endpoint]).is_empty());
+}
+
+#[test]
+fn endpoint_card_addresses_support_inbound_only_and_legacy_roles_by_exact_binding() {
+    let inbound = json!({"endpoint_id":"opaque:in","tag":"a","protocol":"wireguard","configuration":{"origin":"explicit"},"outbound_tags":[]});
+    let source = json!({"endpoints":[{"tag":"a","directions":{"inbound":true,"outbound":false},"protocol":{"type":"wireguard","addresses":["10.66.0.1/32"]}}]});
+    assert_eq!(
+        addresses::configured(&source, &[inbound])["opaque:in"],
+        ["10.66.0.1/32"]
+    );
+    let legacy = json!({"endpoint_id":"opaque:legacy","tag":"display-name","protocol":"wireguard","configuration":{"origin":"legacy"},"inbound_tags":[],"outbound_tags":["a"]});
+    let source = json!({"outbounds":[{"tag":"a","protocol":{"type":"wireguard","addresses":["10.77.0.2/32"]}}]});
+    assert_eq!(
+        addresses::configured(&source, std::slice::from_ref(&legacy))["opaque:legacy"],
+        ["10.77.0.2/32"]
+    );
+    let mut unrelated = legacy;
+    unrelated["outbound_tags"] = json!(["b"]);
+    assert!(addresses::configured(&source, &[unrelated]).is_empty());
+}

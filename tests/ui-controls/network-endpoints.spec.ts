@@ -15,6 +15,10 @@ test('generic endpoint management renders actual facts and only confirmed change
   const wg=page.getByRole('article',{name:'端点 wg-a',exact:true});
   const mesh=page.getByRole('article',{name:'端点 mesh-b',exact:true});
   await expect(mesh).toContainText('future_mesh');
+  await expect(wg.getByLabel('本机隧道 IP')).toContainText('10.66.0.2/32');
+  await expect(wg.getByLabel('本机隧道 IP')).toContainText('fd66:1234:5678:90ab::2/128');
+  await expect(wg.getByLabel('本机隧道 IP')).not.toContainText('example.test:51820');
+  await expect(mesh.getByLabel('本机隧道 IP')).toHaveCount(0);
   await expect(wg.getByLabel('活动连接')).toContainText(/数据报\s*2/);
   await wg.getByRole('switch',{name:'停用端点',exact:true}).click();
   await expect(wg.getByRole('switch',{name:'停用端点',exact:true})).toBeDisabled();
@@ -219,14 +223,18 @@ test('stale counter observations hide the live rate and restart its baseline on 
   await page.clock.install();
   await open(page, '&frozen-samples=1');
   const row = page.getByRole('article', {name:'端点 wg-a',exact:true});
+  await expect(row.getByText('运行中', {exact:true})).toBeVisible();
   await page.clock.runFor(6000);
   await expect(row.locator('.rates')).not.toContainText('—');
+  // Stop the source after a real interval; startup/focus reads may share a timestamp.
+  await page.evaluate(() => window.dispatchEvent(new Event('fixture-freeze-traffic')));
   await page.clock.runFor(20000);
   await expect(row.getByLabel('端点实时流量')).toContainText('采样中断');
   await expect(row.locator('.rates')).toContainText('—');
   await page.evaluate(() => window.dispatchEvent(new Event('fixture-resume-traffic')));
   await page.getByRole('button', {name:'刷新端点',exact:true}).click();
   await expect(row.locator('.rates')).toContainText('—');
+  await expect(row.getByLabel('端点实时流量')).not.toContainText('采样中断');
   await page.clock.runFor(6000);
   await expect(row.locator('.rates')).not.toContainText('—');
   await expect(row.getByLabel('端点实时流量')).not.toContainText('采样中断');
@@ -267,6 +275,8 @@ test('endpoint details retain long public facts at narrow widths and distinguish
   await expect(dialog).toContainText('fd00:1234:5678:9abc::/64');
   for (const width of [752, 360]) {
     await page.setViewportSize({width, height:800});
+    await expect(row.getByLabel('本机隧道 IP')).toContainText('fd66:1234:5678:90ab::2/128');
+    expect(await row.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     await expect(page.getByRole('region', {name:'Peer 1', exact:true})).toBeVisible();
     expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await page.getByRole('region', {name:'Peer 1', exact:true}).evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);

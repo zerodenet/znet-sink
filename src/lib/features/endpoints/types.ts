@@ -37,6 +37,7 @@ export interface NetworkEndpoint {
 export interface EndpointCatalog {
   capabilities: GuiZeroCapabilities; endpoints: NetworkEndpoint[];
   profileId: string | null; editableEndpointIds: string[]; localOverrideIds: string[];
+  configuredAddresses?: Record<string, string[]>;
 }
 export interface EndpointDetails {
   endpoint_id: string; generation: number | null;
