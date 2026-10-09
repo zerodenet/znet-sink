@@ -201,16 +201,33 @@ assert.ok(
   overviewTab.includes("store.activeTab = 'subscriptions'") &&
     overviewTab.includes('配置来源') &&
     overviewTab.includes('listSubscriptions()') &&
+    overviewTab.includes('listProxyConfigs()') &&
     overviewTab.includes('activateSource') &&
-    overviewTab.includes('syncSubscription(id)') &&
+    overviewTab.includes('syncSubscription(option.subscriptionId)') &&
     overviewTab.includes('setActiveProxyConfig(targetId)') &&
     overviewTab.includes('<Select.Root') &&
+    overviewTab.includes('items={sourceOptions}') &&
+    overviewTab.includes('bind:value={() => activeSourceValue,') &&
+    overviewTab.includes('disabled={isPowerBusy || sourceLoading || !!sourceError || activatingSourceId !== null}') &&
     overviewTab.includes('class="lite-proxy-segment"') &&
     overviewTab.includes('class="lite-power-orbit"') &&
     overviewTab.includes('class="lite-traffic-ring"') &&
     overviewTab.includes('onclick={() => powerOn ? guiState.disconnect() : guiState.connect()}') &&
     !overviewTab.includes('class="lite-chart"'),
-  'Lite Overview should keep the graphical power surface, mode selector, and narrow subscription source chooser',
+  'Lite Overview should keep the graphical power surface, mode selector, and guarded actual-configuration source chooser',
+);
+assert.ok(
+  overviewTab.includes("const activeSourceValue = $derived(activeProxyConfig ? `profile:${activeProxyConfig.id}` : '')") &&
+    overviewTab.includes('if (activeProxyConfig) return activeProxyConfig.name') &&
+    overviewTab.includes('profileId: profile.id, disabled: profile.content == null') &&
+    overviewTab.includes('subscriptionId: subscription.id, disabled: !subscription.enabled') &&
+    overviewTab.includes('if (!id || activatingSourceId !== null || activeSourceValue === id) return') &&
+    overviewTab.includes('if (!option || option.disabled) return') &&
+    overviewTab.includes('let targetId = option.profileId') &&
+    /if \(!targetId && option\.subscriptionId\) \{\s*const synced = await syncSubscription\(option\.subscriptionId\);\s*targetId = synced\.targetProxyConfigId;/.test(overviewTab) &&
+    overviewTab.includes("if (!targetId) {\n        throw new Error('订阅尚未生成可用配置')") &&
+    overviewTab.includes('const activated = await setActiveProxyConfig(targetId)'),
+  'Lite source selection must retain the confirmed configuration, reject unavailable or duplicate choices, and sync only uncached subscription targets before activation',
 );
 assert.ok(
   proxyConfigCommands.includes('pub async fn proxy_config_set_active') &&

@@ -20,8 +20,8 @@ function loadService(file, dependencies) {
   return exports;
 }
 
-function tunService({ status, stop, start = () => {}, recover = () => {}, profile = {} }) {
-  const config = { tun: { enabled: true } };
+function tunService({ status, stop, start = () => {}, recover = () => {}, profile = {}, settings = { tun: { enabled: true } } }) {
+  const config = settings;
   const calls = [];
   const service = loadService('tun.ts', {
     '@tauri-apps/api/core': {
@@ -35,17 +35,32 @@ function tunService({ status, stop, start = () => {}, recover = () => {}, profil
       },
     },
     './core': {
-      async getAppConfig() { return config; },
+      async getClientSettings() { return config; },
+      async getGuiZeroCapabilities() { return null; },
       async getGuiConnectionStatus() { return { coreAvailable: true }; },
       async getGuiCoreHealth() { return { healthy: true }; },
       async updateAppConfig(patch) { calls.push(`save:${patch.tun.enabled}`); Object.assign(config.tun, patch.tun); },
     },
-    '$lib/services/kernel-capabilities': {},
+    '$lib/services/kernel-capabilities': { projectClientKernelFeatures: () => ({
+      tunDnsHijack: { state: 'supported' }, tunDnsSystemAuto: { state: 'supported' },
+    }) },
   });
   return { service, config, calls };
 }
 
 const snapshot = (enabled, desiredEnabled = enabled) => ({ enabled, desiredEnabled, supported: true });
+
+test('TUN readiness and enable use effective DNS settings instead of raw fallback defaults', async () => {
+  const { service, calls } = tunService({
+    status: () => ({ ...snapshot(true), healthy: true }),
+    settings: { tun: { enabled: true, dnsHijack: true }, dns: {
+      enabled: true, config: { servers: { upstream: { type: 'udp', host: '1.1.1.1' } } },
+    } },
+  });
+  assert.equal((await service.inspectTunDnsHijackReadiness()).state, 'ready');
+  assert.equal((await service.enableGuiTun()).healthy, true);
+  assert.deepEqual(calls, ['save:true']);
+});
 
 test('unreachable runtime: explicit OFF persists before stop and survives failure', async () => {
   const failure = { code: 'refused', message: 'unreachable' };

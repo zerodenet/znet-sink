@@ -4,3 +4,4 @@
 
 # Plugin manifests hash source bytes; checkout must preserve their LF form.
 examples/plugins/**/*.js text eol=lf
+examples/plugin-package-v1/**/*.js text eol=lf

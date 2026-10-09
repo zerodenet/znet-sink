@@ -100,6 +100,9 @@ jobs:
       - name: Run application lifecycle contract
         run: pnpm test:runtime-lifecycle
 
+      - name: Run desktop shell contract
+        run: pnpm test:desktop-shell
+
       - name: Validate release policy and stable evidence gate
         run: pnpm test:release-version
 
@@ -127,7 +130,8 @@ jobs:
   ui-controls:
     name: UI controls (Chromium and WebKit)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Cold browser dependencies can take 20 minutes before the full suite starts.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -193,7 +197,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $log = Join-Path $env:RUNNER_TEMP 'client-core-tests.log'
-          cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1 2>&1 | Tee-Object -FilePath $log
+          cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked --no-fail-fast -j 1 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
           if ($status -ne 0) {
             $diagnostic = ((Get-Content -LiteralPath $log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

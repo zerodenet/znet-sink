@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('WireGuard DNS detour is editable and persists as a profile-owned DNS edit', async ({ page }) => {
+test('WireGuard DNS detour is editable and persists as a global client DNS edit', async ({ page }) => {
   await page.goto('/?panel=dns', { waitUntil: 'domcontentloaded' });
   const save = page.getByRole('button', { name: '保存并应用', exact: true });
   await expect(save).toBeEnabled();

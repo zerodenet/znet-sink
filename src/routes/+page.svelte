@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { store, type SettingsSection } from '$lib/services/store.svelte';
+  import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
@@ -125,6 +126,9 @@
     const uninstallDesktopWebviewGuards = installDesktopWebviewGuards();
     initTheme();
     void store.loadFromBackend();
+    const unsubscribeConfigNavigation = proxyConfigSignal.onActiveChanged(() => {
+      void store.refreshInteractionSurface();
+    });
     void listen<{ tab?: string; section?: string }>('app:navigate', (event) => {
       const { tab, section } = event.payload;
       if (tab === 'settings') {
@@ -151,6 +155,7 @@
     mediaQuery.addEventListener('change', onSystemThemeChange);
     return () => {
       mediaQuery.removeEventListener('change', onSystemThemeChange);
+      unsubscribeConfigNavigation();
       unlistenNavigate?.();
       unlistenTrayAction?.();
       uninstallGlobalErrorTelemetry();

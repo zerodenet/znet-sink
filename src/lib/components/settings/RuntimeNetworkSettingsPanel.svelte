@@ -69,7 +69,7 @@
 
 <div class="config-section">
   <div class="config-section-title">连接生命周期</div>
-  <p class="source-note">{isLocallyEdited(snapshot, 'runtime.udpUpstreamIdleTimeoutSeconds') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失时使用 Zero 默认值 30 秒'}</p>
+  <p class="source-note">{isLocallyEdited(snapshot, 'runtime.udpUpstreamIdleTimeoutSeconds') ? '客户端设置 · 全局生效' : '来自配置 · 缺失时使用 Zero 默认值 30 秒'}</p>
   {#if loading}
     <div class="config-loading">加载配置中...</div>
   {:else}

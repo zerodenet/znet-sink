@@ -30,12 +30,14 @@ fn connection_failure_has_safe_category_without_url_or_secret() {
             Budget {
                 calls: 1,
                 resource_bytes: 4096,
-                timeout: Duration::from_secs(5),
+                timeout: Duration::from_secs(10),
             },
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-    let error = get_with_diagnostics(&lease, &url, "test", 1024, &[], Duration::from_secs(1))
+    // Allow Windows to report connection refusal before the request deadline,
+    // which also includes client construction. This tests Connect, not Timeout.
+    let error = get_with_diagnostics(&lease, &url, "test", 1024, &[], Duration::from_secs(5))
         .err()
         .unwrap();
     assert_eq!(error.transport, Some(TransportFailure::Connect));

@@ -84,7 +84,7 @@
 <div class="config-section">
   <div class="config-section-title">代理端口</div>
 
-  <p class="text-xs text-muted-foreground">{isLocallyEdited(snapshot, 'localProxy') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</p>
+  <p class="text-xs text-muted-foreground">{isLocallyEdited(snapshot, 'localProxy') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</p>
 
   {#if loading}
     <div class="config-loading">加载配置中...</div>
@@ -93,7 +93,7 @@
       <div class="config-row-label">
         <span class="label-text">代理监听</span>
         <span class="label-desc">
-          修改后只对当前配置生效，系统代理跟随实际端口。订阅更新保留本地修改，恢复后采用配置最新值。
+          切换配置后仍使用此设置，系统代理跟随实际端口。恢复后采用当前配置值。
         </span>
       </div>
 

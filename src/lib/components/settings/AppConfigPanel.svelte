@@ -133,21 +133,22 @@
   }
 
   async function toggleMenuVisibility(key: string) {
-    if (!config || key === 'settings' || store.uiMode !== 'pro') return;
+    if (!config || key === 'settings' || store.uiMode !== 'pro' || updatingMenuKey !== null) return;
 
     updatingMenuKey = key;
     updateError = null;
     try {
       const hidden = new Set((config.ui.hiddenMenuKeys ?? []).map((item) => item.toLowerCase()));
-      if (hidden.has(key)) {
-        hidden.delete(key);
-      } else {
-        hidden.add(key);
-      }
+      const visible = !isMenuVisible(key);
+      if (visible) hidden.delete(key);
+      else hidden.add(key);
 
       const nextHiddenKeys = Array.from(hidden);
       const updated = await updateAppConfig({
-        ui: { hiddenMenuKeys: nextHiddenKeys },
+        ui: {
+          hiddenMenuKeys: nextHiddenKeys,
+          ...(key === 'endpoints' ? { endpointsMenuVisible: visible } : {}),
+        },
       });
 
       config = {
@@ -171,8 +172,10 @@
   }
 
   function isMenuVisible(key: string): boolean {
-    if (!config) return true;
-    return !(config.ui.hiddenMenuKeys ?? []).some((item) => item.toLowerCase() === key);
+    if (!config) return false;
+    if ((config.ui.hiddenMenuKeys ?? []).some((item) => item.toLowerCase() === key)) return false;
+    if (key === 'endpoints') return config.ui.endpointsMenuVisible ?? store.isNavVisible(key);
+    return true;
   }
 
   async function loadLogPaths() {
@@ -452,13 +455,13 @@
       </div>
 
       <div class="proxy-bypass-editor">
-        <p class="text-xs text-muted-foreground">{isLocallyEdited(networkSnapshot, 'bypass') ? '本地修改 · 仅当前配置' : '来自配置 · 下方表单用于设置本地替换规则'}</p>
+        <p class="text-xs text-muted-foreground">{isLocallyEdited(networkSnapshot, 'bypass') ? '客户端设置 · 全局生效' : '来自配置 · 下方表单用于设置本地替换规则'}</p>
         {#if networkSnapshot?.sourceBypass && !isLocallyEdited(networkSnapshot, 'bypass')}
           <details><summary>当前配置中的绕过规则</summary><pre class="text-xs whitespace-pre-wrap break-all">{JSON.stringify(networkSnapshot.sourceBypass, null, 2)}</pre></details>
         {/if}
         <div class="config-row-label">
           <span class="label-text">绕过规则</span>
-          <span class="label-desc">保存后替换当前配置的绕过规则，其他配置不受影响；恢复配置值会移除这项本地修改。</span>
+          <span class="label-desc">保存后覆盖所有配置的绕过规则；恢复配置值会移除全局覆盖。</span>
         </div>
         <div class="config-row-label">
           <label class="label-text" for="custom-bypass-rules">绕过地址与域名</label>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { overviewData } from '$lib/services/overview-data.svelte';
+  import { overviewTrafficTotals, formatOverviewBytes, formatOverviewSpeed as formatSpeed } from '$lib/services/overview-traffic';
 
   type TrafficPoint = { up: number; down: number };
   type ChartScale = {
@@ -21,13 +22,6 @@
   const TICK_COUNT = 4;
   const MIN_VISIBLE_SCALE_MBPS = 0.016; // 16 KB/s
 
-  function formatSpeed(speed: number): string {
-    if (speed >= 1) return `${speed.toFixed(2)} MB/s`;
-    if (speed * 1000 >= 1) return `${(speed * 1000).toFixed(speed * 1000 >= 100 ? 0 : 1)} KB/s`;
-    if (speed > 0) return '<1 KB/s';
-    return '0 KB/s';
-  }
-
   function formatScaleSpeed(speed: number): string {
     if (speed >= 10) return `${speed.toFixed(0)} MB/s`;
     if (speed >= 1) return `${speed.toFixed(speed >= 5 ? 1 : 2)} MB/s`;
@@ -41,12 +35,6 @@
   function formatScaleLabel(scale: ChartScale): string {
     if (scale.min <= 0) return `上限 ${formatScaleSpeed(scale.max)}`;
     return `${formatScaleSpeed(scale.min)} – ${formatScaleSpeed(scale.max)}`;
-  }
-
-  function formatTraffic(mb: number): string {
-    if (mb >= 1000) return `${(mb / 1000).toFixed(2)} GB`;
-    if (mb >= 1) return `${mb.toFixed(1)} MB`;
-    return `${(mb * 1000).toFixed(0)} KB`;
   }
 
   function niceStep(value: number): number {
@@ -147,6 +135,7 @@
   } = $props();
 
   const unavailable = $derived(unsupported || !!unavailableReason);
+  const trafficTotals = $derived(overviewTrafficTotals(overviewData.totalUpBytes, overviewData.totalDownBytes, unavailable));
   const displayHistory = $derived(unavailable ? [] : history.slice(-DISPLAY_HISTORY));
   const scale = $derived(buildScale(displayHistory));
   const scaleLabel = $derived(formatScaleLabel(scale));
@@ -187,12 +176,12 @@
   <div class="chart-stats">
     <div class="stat-item">
       <span class="stat-label">内核累计下行</span>
-      <span class="stat-val down">{unavailable ? '—' : formatTraffic(overviewData.totalDownMB)}</span>
+      <span class="stat-val down">{formatOverviewBytes(trafficTotals.down)}</span>
     </div>
     <div class="stat-divider"></div>
     <div class="stat-item">
       <span class="stat-label">内核累计上行</span>
-      <span class="stat-val up">{unavailable ? '—' : formatTraffic(overviewData.totalUpMB)}</span>
+      <span class="stat-val up">{formatOverviewBytes(trafficTotals.up)}</span>
     </div>
     <div class="stat-divider"></div>
     <div class="stat-item">

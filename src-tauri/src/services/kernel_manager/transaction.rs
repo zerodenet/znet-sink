@@ -56,9 +56,8 @@ pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
         // Finder and other tools may leave unrelated ordinary files here.
         // Keep examining upgrade-* entries and symlinks as before, so an
         // interrupted transaction cannot be hidden by changing its type.
-        if entry.file_type().map_err(storage_error)?.is_file()
-            && !entry.file_name().to_string_lossy().starts_with("upgrade-")
-        {
+        let file_type = entry.file_type().map_err(storage_error)?;
+        if file_type.is_file() && !entry.file_name().to_string_lossy().starts_with("upgrade-") {
             continue;
         }
         let backup = entry.path();
@@ -68,6 +67,16 @@ pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
             .contains(&backup)
         {
             continue;
+        }
+        // Windows reports file/receipt.json as NotFound, whereas Unix reports
+        // NotADirectory. Reject malformed upgrade files before that distinction
+        // can make a damaged backup look like a directory without a receipt.
+        if file_type.is_file() {
+            return Err(AppError {
+                code: "kernel_upgrade_recovery_required",
+                message: format!("内核升级备份不是目录，请先检查备份：{}", backup.display()),
+                details: Some(serde_json::json!({"backupPath": backup})),
+            });
         }
         let receipt_path = backup.join("receipt.json");
         let bytes = match fs::read(&receipt_path) {

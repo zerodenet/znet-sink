@@ -18,10 +18,11 @@ if (params().has('long-details')) {
 }
 let lastSample = Date.now();
 let sample = 0;
-let resumed = false;
-window.addEventListener('fixture-resume-traffic', () => { resumed = true; });
+let frozen = false;
+window.addEventListener('fixture-freeze-traffic', () => { frozen = true; });
+window.addEventListener('fixture-resume-traffic', () => { frozen = false; });
 function observeTraffic() {
-  if (params().has('frozen-samples') && sample >= 2 && !resumed) return;
+  if (params().has('frozen-samples') && frozen) return;
   const now = Date.now();
   const elapsed = Math.max(0, now - lastSample) / 1000;
   sample++;
@@ -59,7 +60,7 @@ export const endpointGateway: EndpointGateway = {
     capabilities.features=['network_endpoint_catalog_v1','network_endpoint_control_v1',...(params().has('old-preconditions')?[]:['network_endpoint_control_preconditions_v1'])];
     capabilities.globalLimitations=[params().has('old-control') ? 'endpoint_live_direction_contraction_requires_stop' : 'endpoint_live_outbound_direction_contraction_requires_stop'];
     if (params().has('observe-only')) endpoints.forEach(row => { row.supported.operations=['list','get','details']; });
-    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides)};
+    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{[endpoints[0].endpoint_id]:['10.66.0.2/32','fd66:1234:5678:90ab::2/128']}};
   },
   async control(input) {
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));

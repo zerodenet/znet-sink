@@ -40,6 +40,8 @@ test('legacy single-role endpoints show actual Inner rates and activity without 
   await expect(wg.getByLabel('活动连接')).toContainText(/流\s*0/);
   await expect(wg.getByLabel('活动连接')).toContainText(/数据报\s*0/);
   await expect(wg.getByLabel('活动连接')).toContainText(/Packet\s*—/);
+  await expect(wg.getByLabel('活动连接').locator('[title^="当前活动 TCP 流"]')).toContainText('0');
+  await expect(wg.getByLabel('活动连接').locator('[title^="当前活动 UDP 流"]')).toContainText('0');
   await page.evaluate(()=>window.dispatchEvent(new Event('fixture-traffic-sample')));
   await expect(wg.locator('.rates')).toContainText('RX 1000 B/s');
   await expect(other.locator('.rates')).toContainText('RX —');
@@ -76,6 +78,29 @@ test('five scopes keep Flow Inner Outer separate and plot real fixture deltas',a
   await page.getByRole('radio',{name:/^端点\s*1$/}).click();await expect(scope(page,'resource:wg-a')).toBeVisible();
   await page.getByRole('radio',{name:/^Peer\s*1$/}).click();await expect(scope(page,'peer-1')).toContainText('resource:wg-a');
   await page.screenshot({path:test.info().outputPath('traffic-peer.png')});
+});
+
+test('bursts keep rate positions and scale stable, small positive rates stay distinct from idle',async({page})=>{
+  await open(page);await page.getByRole('radio',{name:/^Peer\s*1$/}).click();await page.getByRole('radio',{name:'Outer',exact:true}).click();
+  const row=scope(page,'peer-1'),rate=row.locator('.rates .send .rate-value'),chart=row.locator('.mini-chart svg');
+  const step=async(ms:number,bytes:number)=>page.evaluate(detail=>window.dispatchEvent(new CustomEvent('fixture-traffic-step',{detail})),{ms,bytes});
+  await step(1000,2000);await expect(rate).toHaveText('2.0 KB/s');
+  const box=await rate.boundingBox(),scale=await chart.getAttribute('data-ceiling');
+  await step(100,0);await expect(rate).toHaveText('1.8 KB/s');await expect(chart).toHaveAttribute('data-ceiling',scale!);
+  const next=await rate.boundingBox();expect(next!.x).toBeCloseTo(box!.x,1);expect(next!.width).toBeCloseTo(box!.width,1);
+  for(let i=0;i<3;i++)await step(1000,0);await expect(rate).toHaveText('0 B/s');
+  await step(3000,1);await expect(rate).toHaveText('<1 B/s');
+  await page.setViewportSize({width:360,height:800});expect(await row.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await page.screenshot({path:test.info().outputPath('traffic-rate-stable.png')});
+});
+
+test('recovery retains a dimmed curve while reporting rate as unavailable',async({page})=>{
+  await open(page);const row=scope(page,'全局');
+  for(let i=0;i<3;i++)await page.evaluate(()=>window.dispatchEvent(new Event('fixture-traffic-sample')));
+  await expect(row.locator('path.receive')).toHaveAttribute('d',/L/);
+  await page.evaluate(()=>window.dispatchEvent(new Event('fixture-traffic-gap')));
+  await expect(row.locator('.rates .receive .rate-value')).toHaveText('—');
+  await expect(row.locator('path.receive')).toHaveAttribute('d',/L/);
 });
 
 test('explicit Admin clear is confirmed once, preserves activity and uses returned nonzero counters',async({page})=>{

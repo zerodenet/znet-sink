@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
-  getAppConfig,
+  getClientSettings,
   getGuiConnectionStatus,
   getGuiCoreHealth,
   getGuiZeroCapabilities,
@@ -37,7 +37,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 async function resolveTunPolicy(): Promise<TunPolicy> {
-  return {appConfig: await getAppConfig()};
+  return {appConfig: await getClientSettings()};
 }
 
 function enrichTunStatus(status: GuiTunStatus, policy: TunPolicy): GuiManagedTunStatus {
@@ -176,7 +176,7 @@ export async function inspectTunDnsHijackReadiness(
   dns?: AppConfig['dns'],
 ): Promise<TunDnsHijackReadiness> {
   const [appConfig, capabilities] = await Promise.all([
-    dns ? Promise.resolve(null) : getAppConfig(),
+    dns ? Promise.resolve(null) : getClientSettings(),
     getGuiZeroCapabilities().catch(() => null),
   ]);
   return evaluateTunDnsHijackReadiness(

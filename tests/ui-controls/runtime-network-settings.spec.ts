@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('UDP upstream idle timeout validates and saves a profile-owned runtime edit', async ({ page }) => {
+test('UDP upstream idle timeout validates and saves a global client setting', async ({ page }) => {
   await page.goto('/?panel=runtime-network', { waitUntil: 'domcontentloaded' });
   const input = page.getByRole('spinbutton', { name: 'UDP 上游空闲时间' });
   await expect(input).toHaveValue('30');

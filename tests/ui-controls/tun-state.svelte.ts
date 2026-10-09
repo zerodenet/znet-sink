@@ -24,7 +24,26 @@ export const guiState = $state({
 window.addEventListener('fixture-mode-changed', event => {
   guiState.proxyMode = {...guiState.proxyMode,currentMode:(event as CustomEvent<string>).detail};
 });
-export const store = $state({ interactionSurface: { actions: new Map(), navigation: new Map() }, isActionOperable: (_action: string) => true, selectedTheme: 'light', isSwitchingUiMode: false, switchUIMode: async (_mode: string) => {}, refreshInteractionSurface: async () => {}, isNavOperable: (_key: string) => true, isNavVisible: (key: string) => store.uiMode === 'pro' || ['overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings'].includes(key), uiMode: 'pro' as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
+const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings']);
+export const store = $state({
+  interactionSurface: { actions: new Map(), navigation: new Map() },
+  isActionOperable: (_action: string) => true,
+  selectedTheme: 'light',
+  isSwitchingUiMode: false,
+  switchUIMode: async (_mode: string) => {},
+  refreshInteractionSurface: async () => {},
+  isNavOperable: (_key: string) => true,
+  isNavVisible: (key: string) => {
+    // Match the production mode boundary even when cached metadata is visible.
+    if (store.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;
+    return store.interactionSurface.navigation.get(key)?.visible ?? LITE_MODE_NAV.has(key);
+  },
+  uiMode: 'pro' as 'lite' | 'pro',
+  activeTab: 'settings',
+  settingsSection: 'tun',
+  isInitialized: true,
+  openSettings: (_section: string) => {},
+});
 export type TunDnsHijackReadiness = {
   state: string; code?: string; message: string;
   features: { tunDualStack: { state: string }; tunDnsHijack: { state: string } };

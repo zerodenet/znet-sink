@@ -452,12 +452,13 @@ fn validate_dns_settings(input: &GuiDnsSettingsInput) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn gui_apply_dns_config(
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     input: GuiDnsSettingsInput,
 ) -> AppResult<serde_json::Value> {
     validate_dns_settings(&input)?;
     let _operation = state.proxy_config_operation().lock().await;
-    dns_apply::apply(state.clone(), input).await
+    dns_apply::apply(app_handle, state.clone(), input).await
 }
 
 /// Validate a config without applying it.
@@ -903,7 +904,7 @@ fn export_diagnostics_locked() -> AppResult<GuiDiagnosticExport> {
 
 fn copy_diagnostic_file(source: &Path, destination: &Path) -> AppResult<()> {
     match source.file_name().and_then(|name| name.to_str()) {
-        Some("debug.log.jsonl") => {
+        Some(name) if name == "debug.log.jsonl" || name.starts_with("debug.log.jsonl.") => {
             write_sanitized_jsonl(source, destination, sanitize_debug_record)
         }
         Some(name) if name.ends_with(".jsonl") => {
@@ -1089,6 +1090,26 @@ fn write_pretty_json(path: &Path, value: &serde_json::Value) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{redact_urls, sanitize_debug_record, sanitize_structured_record};
+
+    #[test]
+    fn ipc_archive_exports_apply_the_same_sanitization_as_the_active_segment() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("debug.log.jsonl.1");
+        let destination = root.path().join("export.jsonl");
+        std::fs::write(
+            &source,
+            serde_json::json!({"payload": {
+                "params": {"config": {"private_key": "canary-secret"}},
+                "url": "https://private.example/token"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        super::copy_diagnostic_file(&source, &destination).unwrap();
+        let output = std::fs::read_to_string(destination).unwrap();
+        assert!(!output.contains("canary-secret"));
+        assert!(!output.contains("private.example"));
+    }
 
     #[test]
     fn diagnostic_log_sanitizer_removes_urls_and_credentials() {

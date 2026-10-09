@@ -848,7 +848,7 @@
   });
 </script>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
-  <span>{isLocallyEdited(profileSnapshot, 'dns') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</span>
+  <span>{isLocallyEdited(profileSnapshot, 'dns') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
 </div>
 
@@ -1195,7 +1195,7 @@
       <ErrorRecoveryActions code={errorCode} context="dns" onretry={save} />
     </div>
   {/if}
-  <p class="state compact">此处编辑当前配置的 DNS；保存后保留为本地修改，订阅原文不变。恢复配置值后重新采用来源 DNS。</p>
+  <p class="state compact">DNS 设置对所有配置生效，订阅原文不变。恢复配置值后采用当前配置的 DNS。</p>
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 

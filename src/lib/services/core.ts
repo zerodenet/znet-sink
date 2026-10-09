@@ -258,6 +258,11 @@ export async function getAppConfig(): Promise<AppConfig> {
   return invoke('app_config_get');
 }
 
+/** Current source resolved with explicit global settings and fallback defaults. */
+export async function getClientSettings(): Promise<AppConfig> {
+  return invoke('client_settings_get');
+}
+
 export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig> {
   return invoke('app_config_update', { patch });
 }
@@ -825,4 +830,9 @@ export async function getProfileSettings(): Promise<ProfileSettings> {
 }
 export async function applyProfileSettings(profileId: string, changes: Record<string, unknown>, reset: string[] = []): Promise<ProfileSettings> {
   return invoke('profile_settings_apply', {profileId, changes, reset});
+}
+
+export type DebugCaptureStatus = { detailed: boolean; expiresAtMs: number };
+export async function setDebugCapture(enabled?: boolean): Promise<DebugCaptureStatus> {
+  return invoke('gui_debug_capture', { enabled });
 }

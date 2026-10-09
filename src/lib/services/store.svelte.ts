@@ -37,6 +37,7 @@ class AppStateStore {
   });
   private onboardingRequired = true;
   private uiModeGeneration = 0;
+  private interactionSurfaceGeneration = 0;
   private uiModePersistence: Promise<unknown> = Promise.resolve();
 
   constructor() {
@@ -55,6 +56,7 @@ class AppStateStore {
   }
 
   async loadFromBackend() {
+    const surfaceGeneration = ++this.interactionSurfaceGeneration;
     try {
       const [config, surface] = await Promise.all([
         getAppConfig(),
@@ -68,11 +70,13 @@ class AppStateStore {
         this.uiMode = config.ui.uiMode as UIMode;
       }
 
-      this.interactionSurface = {
-        navigation: new Map(surface.navigation.map((item) => [item.key, item])),
-        actions: new Map(surface.actions.map((item) => [item.key, item])),
-        features: new Map(surface.features.map((item) => [item.key, item])),
-      };
+      if (surfaceGeneration === this.interactionSurfaceGeneration) {
+        this.interactionSurface = {
+          navigation: new Map(surface.navigation.map((item) => [item.key, item])),
+          actions: new Map(surface.actions.map((item) => [item.key, item])),
+          features: new Map(surface.features.map((item) => [item.key, item])),
+        };
+      }
 
       if (config.ui.defaultRoute && this.isNavVisible(config.ui.defaultRoute)) {
         this.activeTab = config.ui.defaultRoute;
@@ -170,10 +174,11 @@ class AppStateStore {
   }
 
   async refreshInteractionSurface(expectedMode?: UIMode) {
+    const generation = ++this.interactionSurfaceGeneration;
     try {
       console.time('[ZNet] refreshInteractionSurface');
       const surface = await getGuiInteractionSurfaceSnapshot();
-      if (expectedMode && this.uiMode !== expectedMode) {
+      if (generation !== this.interactionSurfaceGeneration || (expectedMode && this.uiMode !== expectedMode)) {
         console.timeEnd('[ZNet] refreshInteractionSurface');
         return;
       }

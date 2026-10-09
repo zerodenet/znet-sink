@@ -7,6 +7,9 @@ use crate::services::common::lock;
 use crate::state::app_state::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+
+mod addresses;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -33,6 +36,7 @@ pub struct ManagedCatalog {
     pub profile_id: Option<String>,
     pub editable_endpoint_ids: Vec<String>,
     pub local_override_ids: Vec<String>,
+    pub configured_addresses: BTreeMap<String, Vec<String>>,
 }
 fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
     Ok(lock(state.proxy_configs(), "proxy_config")?
@@ -51,6 +55,10 @@ pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<Man
     let app = lock(state.app_config(), "app_config")?;
     let mut editable_endpoint_ids = Vec::new();
     let mut local_override_ids = Vec::new();
+    let configured_addresses = source
+        .as_ref()
+        .map(|(_, source)| addresses::configured(source, &catalog.endpoints))
+        .unwrap_or_default();
     if let Some((id, source)) = &source {
         for row in &catalog.endpoints {
             if endpoints::owns(source, row) {
@@ -67,6 +75,7 @@ pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<Man
         profile_id: source.map(|(id, _)| id),
         editable_endpoint_ids,
         local_override_ids,
+        configured_addresses,
     })
 }
 fn prepare(

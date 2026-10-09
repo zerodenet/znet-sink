@@ -1,26 +1,41 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Observation } from '$lib/features/traffic/history';
   import { byteKeys, chartPath, formatRate, metric } from '$lib/features/traffic/history';
+  import { chartCeiling, displayRate, displaySeries } from '$lib/features/traffic/presentation';
   let { observation, plane = 'flow', stale = false }: { observation?: Observation; plane?: string; stale?: boolean } = $props();
   const keys = $derived(observation ? byteKeys(observation.snapshot, plane) : ['rx_bytes', 'tx_bytes']);
   const paths = $derived(keys.map(key => `${plane}.${key}`));
-  const points = $derived(observation?.points ?? []);
-  const ceiling = $derived(Math.max(1024, ...points.flatMap(p => paths.map(key => p.values[key] ?? 0))));
+  const points = $derived(displaySeries(observation?.points ?? [], paths));
+  const peak = $derived(Math.max(0, ...points.flatMap(p => paths.map(key => p.values[key] ?? 0))));
+  let ceiling = $state(1024);
+  let scaleScope = '';
+  $effect(() => {
+    const snapshot = observation?.snapshot;
+    const scope = JSON.stringify([snapshot?.core_instance_id, snapshot?.scope, snapshot?.stats_epoch, snapshot?.generation, plane]);
+    ceiling = chartCeiling(scope === scaleScope ? untrack(() => ceiling) : 0, peak);
+    scaleScope = scope;
+  });
   const physical = $derived(keys[0] === 'rx_bytes');
   function hint(key: string) {
     if (!observation) return '暂无统计快照';
     if (metric(observation.snapshot.planes.find(p => p.plane === plane), key) === null) return '内核未提供此指标';
     if (stale) return '采样中断，累计值保留';
-    return observation.rates[`${plane}.${key}`] == null ? '等待下一次有效采样' : '同一统计周期的差分速率';
+    return observation.rates[`${plane}.${key}`] == null ? '等待下一次有效采样' : '最近 3 秒平均速率 · 按实际采样间隔计算';
   }
 </script>
-<div class="mini-chart" aria-label={`${plane} 流量曲线`}>
-  <svg viewBox="0 0 300 64" preserveAspectRatio="none" role="img" aria-label="最近两分钟的同周期差分速率">
+<div class="mini-chart" class:stale aria-label={`${plane} 流量曲线`}>
+  <svg viewBox="0 0 300 64" preserveAspectRatio="none" role="img" aria-label="最近两分钟的同周期平均速率" data-ceiling={ceiling}>
+    <title>曲线空缺表示速率样本不可用或重新建立采样基线，不代表网络连接断开；累计值来自内核统计。</title>
     <path d="M0,9H300 M0,33H300 M0,57H300" class="grid" />
-    {#if !stale}{#each paths as key, index}<path d={chartPath(points, key, ceiling)} class:receive={index === 0} class:send={index === 1} />{/each}{/if}
+    {#each paths as key, index}<path d={chartPath(points, key, ceiling)} class:receive={index === 0} class:send={index === 1} />{/each}
   </svg>
-  <div class="rates"><span class="receive" title={hint(keys[0])}>{physical ? 'RX' : '↓'} {formatRate(stale ? null : observation?.rates[paths[0]])}</span><span class="send" title={hint(keys[1])}>{physical ? 'TX' : '↑'} {formatRate(stale ? null : observation?.rates[paths[1]])}</span></div>
+  <div class="rates">{#each paths as key, index}<span class:receive={index === 0} class:send={index === 1} title={hint(keys[index])}><span class="direction">{physical ? (index === 0 ? 'RX' : 'TX') : (index === 0 ? '↓' : '↑')}</span> <span class="rate-value">{formatRate(stale ? null : displayRate(observation, key))}</span></span>{/each}</div>
 </div>
 <style>
   .mini-chart { min-width:0; } svg { width:100%; height:64px; display:block; } path { fill:none; stroke-width:1.7; vector-effect:non-scaling-stroke; stroke-linecap:round; } .grid { stroke:var(--border); stroke-width:.6; opacity:.5; } .receive { color:var(--chart-download,#3b82f6); stroke:var(--chart-download,#3b82f6); } .send { color:var(--chart-upload,#16a34a); stroke:var(--chart-upload,#16a34a); } .rates { display:flex; justify-content:space-between; gap:8px; font-size:11px; font-variant-numeric:tabular-nums; }
+  .rates>span { display:inline-flex; align-items:baseline; gap:4px; white-space:nowrap; }
+  .direction { min-width:2ch; }
+  .rate-value { display:inline-block; min-width:9ch; text-align:right; }
+  .stale path:not(.grid) { opacity:.35; }
 </style>

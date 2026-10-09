@@ -28,13 +28,16 @@ export const updateRuleSet = async () => items[0];
 export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
 export const handleAppError = (_error: unknown, _fallback: string) => {};
-import { getTunConfig } from './tun-state.svelte';
+import { getTunConfig, store } from './tun-state.svelte';
 export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
 const endpointConfig = () => ({ localProxy: {
   host: '127.0.0.2', port: 8899,
   sourceProxyConfigId: new URLSearchParams(location.search).has('custom') ? 'custom-profile' : null,
 } });
 let precedenceOverrides = {listener:false,dns:false,tun:false,urlTest:false,bypass:false,rules:false};
+let menuUi: { uiMode: string; hiddenMenuKeys: string[]; endpointsMenuVisible?: boolean } = {
+  uiMode: 'pro', hiddenMenuKeys: new URLSearchParams(location.search).has('menu-hidden') ? ['endpoints'] : [],
+};
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
   if (panel === 'dns') return { dns: { enabled: true, dnsHijack: false, config: {
@@ -56,7 +59,7 @@ export const getAppConfig = async () => {
         {key:'rules',label:'通用规则追加',source:'当前配置',value:'保留配置规则，不追加客户端通用规则'}
       ] };
   }
-  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
+  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: new URLSearchParams(location.search).get('mode') === 'endpoint-menu' ? structuredClone(menuUi) : { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
   if (panel === 'url-test') return {urlTest: {url: 'http://www.gstatic.com/generate_204', toleranceMs: 50}};
   if (panel === 'runtime-network') return {runtime: {udpUpstreamIdleTimeoutSeconds: 30}};
   if (panel === 'endpoint') return endpointConfig();
@@ -69,6 +72,15 @@ import { capabilityFixture, healthFixture } from './kernel-capabilities';
 const isCapabilitiesPanel = () => new URLSearchParams(location.search).get('panel') === 'capabilities';
 export const getGuiCoreHealth = async () => isCapabilitiesPanel() ? healthFixture() : ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
+  if (new URLSearchParams(location.search).get('mode') === 'endpoint-menu') {
+    window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
+    await new Promise<void>(resolve => window.addEventListener('fixture-finish-menu-write', () => resolve(), { once: true }));
+    menuUi = { ...menuUi, ...(input as { ui: typeof menuUi }).ui };
+    const declared = new URLSearchParams(location.search).has('menu-declared');
+    const visible = !menuUi.hiddenMenuKeys.includes('endpoints') && (menuUi.endpointsMenuVisible ?? declared);
+    store.interactionSurface.navigation.set('endpoints', { key: 'endpoints', category: 'navigation', visible, operable: visible, readonly: !visible });
+    return getAppConfig();
+  }
   if (new URLSearchParams(location.search).get('mode') === 'precedence') {
     precedenceOverrides = {...precedenceOverrides,...(input as {overrides:typeof precedenceOverrides}).overrides};
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));
@@ -97,8 +109,14 @@ const profiles: ProxyConfigProfile[] = ['main', 'work'].map((id, i) => ({
   content: { route: { final: { type: 'outbound', outbound: 'proxy' } } },
   capabilities: {} as ProxyConfigProfile['capabilities'],
 }));
+if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
+  profiles[0].name = '狗梯 - company';
+  profiles[0].format = 'json';
+  profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
+}
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
 let managedLastSync = 1;
+let syncedSourceTarget: string | undefined;
 window.addEventListener('fixture-subscription-synced', (event) => {
   managedLastSync = (event as CustomEvent<number>).detail;
 });
@@ -106,6 +124,13 @@ export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
   const mode = new URLSearchParams(location.search).get('mode');
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
+  }
+  if (mode === 'local-with-subscriptions' || mode === 'managed-config') {
+    return [{id:'sub-work',name:'工作订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1}];
+  }
+  if (mode === 'unsynced-source') {
+    return [{id:'new-sub',name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:syncedSourceTarget,policySelections:{},updatedAtUnixMs:1},
+      {id:'disabled-sub',name:'停用订阅',url:'https://example.test/disabled',enabled:false,kernel:'zero',format:'zero',policySelections:{},updatedAtUnixMs:1}];
   }
   if (mode === 'managed-usage') {
     return [{
@@ -127,7 +152,12 @@ export const setActiveProxyConfig = async (id: string) => {
 export const importProxyConfig = async () => structuredClone(profiles[0]);
 export const upsertProxyConfig = async () => structuredClone(profiles[0]);
 export const removeProxyConfig = async () => {};
-export const syncSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription network calls in this fixture'); };
+export const syncSubscription = async (id: string): Promise<SubscriptionProfile> => {
+  if (new URLSearchParams(location.search).get('mode') !== 'unsynced-source' || id !== 'new-sub') throw new Error('No subscription network calls in this fixture');
+  profiles.push({...structuredClone(profiles[0]),id:'synced',name:'新订阅配置',active:false});
+  syncedSourceTarget = 'synced';
+  return {id,name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'synced',policySelections:{},updatedAtUnixMs:1};
+};
 export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
 export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
 export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
@@ -138,9 +168,23 @@ export const appendLog = async (_input: unknown) => {};
 import type { LogEntry, LogQuery } from '../../src/lib/types/logs';
 let logFixture: LogEntry[] | undefined;
 const makeLogs = (): LogEntry[] => Array.from({length:5000},(_,i)=>({id:i+1,occurredAtUnixMs:1788697000000+i*10,source:i%3?'core':'app',level:i%10?'info':'error',message:`日志 ${i+1} session finished`,fields:{session_id:i+1,stage:'relay',context:{detail:'示例日志字段'.repeat(80)},bytes_up:500,bytes_down:12000}}));
+const designLogs = (): LogEntry[] => [
+  { id: 1, source: 'app', level: 'info', message: '系统代理已开启', fields: { host: '127.0.0.1', port: 7890 } },
+  { id: 2, source: 'core', level: 'info', message: 'session accepted', fields: { target: 'Domain("chatgpt.com")', port: 443, outbound_tag: '日本 IX [0x01] [Lite]', session_id: 92 } },
+  { id: 3, source: 'core', level: 'info', message: 'session finished', fields: { target: 'Domain("api.github.com")', port: 443, outbound_tag: 'direct', duration_ms: 2339, bytes_up: 966, bytes_down: 987386 } },
+  { id: 4, source: 'plugin', level: 'info', message: 'Connect 手动同步完成', fields: { pluginId: 'org.zerodenet.connect.znet-sink', componentId: 'subscription', action: 'syncNow' } },
+  { id: 5, source: 'core', level: 'warn', message: 'session failed', fields: { target: 'Domain("rank.similarweb.com")', port: 443, outbound_tag: '日本 SS [01] [Lite]', error: '远程主机关闭了连接', session_id: 93 } },
+  { id: 6, source: 'app', level: 'error', message: '订阅更新失败：请求超时，请检查网络后重试', fields: { operation: 'subscription.sync', code: 'transport' } },
+  { id: 7, source: 'app', level: 'debug', message: '内核 IPC 原始请求（query.policies）', fields: { request_id: 123 } },
+  { id: 8, source: 'core', level: 'debug', message: '内核 IPC 原始响应（query.policies）', fields: { request_id: 123 } },
+  { id: 9, source: 'core', level: 'info', message: 'session finished', fields: { target: 'Domain("vending.test.starmerx.com")', port: 443, outbound_tag: 'company', duration_ms: 120 } },
+  { id: 10, source: 'core', level: 'warn', message: 'tcp receive buffer full, rejecting segment', fields: { network: 'tcp' } },
+  { id: 11, source: 'plugin', level: 'warn', message: '同步暂未完成，稍后重试', fields: { pluginId: 'org.zerodenet.connect.znet-sink', componentId: 'very-long-component-name-for-layout-verification', action: 'Subscription.MetadataUpdate' } },
+  { id: 12, source: 'app', level: 'info', message: '配置已应用' },
+].map((entry) => ({...entry, occurredAtUnixMs: 1791509837208 + entry.id * 1000})) as LogEntry[];
 export const getLogs = async (query: LogQuery = {}) => {
   window.dispatchEvent(new CustomEvent('fixture-log-query', {detail:query}));
-  logFixture ??= makeLogs();
+  logFixture ??= new URLSearchParams(location.search).has("log-design") ? designLogs() : makeLogs();
   const matching=logFixture.filter(e=>(!query.source||e.source===query.source)&&(!query.level||e.level===query.level));
   const items=matching.filter(e=>e.id<(query.beforeId??Infinity)).slice(-(query.limit??400));
   return structuredClone({items,hasMore:!!items.length&&items[0].id>matching[0].id,oldestAvailableId:matching[0]?.id});
@@ -251,6 +295,8 @@ export const getProfileSettings = async () => {
   }
   return {profileId:'fixture-profile',settings,editedFields:Object.keys(localFieldEdits)};
 };
+
+export const getClientSettings = async () => (await getProfileSettings()).settings;
 export const applyProfileSettings = async (profileId: string, changes: Record<string,unknown>, reset: string[] = []) => {
   if (new URLSearchParams(location.search).get('panel') === 'tun') {
     await new Promise(resolve=>setTimeout(resolve,300));

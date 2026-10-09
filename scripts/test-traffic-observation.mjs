@@ -5,7 +5,8 @@ import { TrafficSession, MAX_HISTORY_SCOPES } from '../src/lib/features/traffic/
 import { TrafficWorkspace } from '../src/lib/features/traffic/workspace.ts';
 import { scopeKey } from '../src/lib/features/traffic/types.ts';
 import { inventory } from '../src/lib/features/traffic/inventory.ts';
-import { observe, metric, rebaseline, formatBytes, MAX_POINTS } from '../src/lib/features/traffic/history.ts';
+import { observe, metric, rebaseline, formatBytes, formatRate, MAX_POINTS } from '../src/lib/features/traffic/history.ts';
+import { displayRate, displaySeries, chartCeiling } from '../src/lib/features/traffic/presentation.ts';
 import { page, snapshot, u64 } from '../src/lib/features/traffic/wire.ts';
 import { supported, samplingSupported, resetReason } from '../src/lib/features/traffic/policy.ts';
 const flush=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));};
@@ -28,6 +29,35 @@ test('rates use scope monotonic time and epoch, never wall time or other planes'
 test('histories are bounded by time and point count',()=>{
  let row;let s=sample();for(let i=0;i<300;i++){s=structuredClone(s);s.sampled_at_monotonic_ns=String(BigInt(s.sampled_at_monotonic_ns)+100_000_000n);s.sampled_at_unix_ms=String(BigInt(s.sampled_at_unix_ms)+100n);row=observe(row,s,true);}
  assert.equal(row.points.length,MAX_POINTS);s.sampled_at_unix_ms=String(BigInt(s.sampled_at_unix_ms)+121_000n);assert.equal(observe(row,s,true).points.length,1);
+});
+test('presentation weights short query samples and reaches true idle without changing raw counters',()=>{
+ const g=new FixtureGateway();const key='inner.rx_bytes';
+ let row=observe(undefined,structuredClone(g.rows[0]),true);
+ const next=(ms,bytes)=>{g.advance([0],ms,bytes);row=observe(row,structuredClone(g.rows[0]),true);};
+ next(1000,2000);assert.equal(displayRate(row,key),2000);
+ next(100,0);assert.equal(row.rates[key],0);assert(Math.abs(displayRate(row,key)-2000/1.1)<0.01);
+ assert.equal(row.snapshot.planes[1].counters.rx_bytes,'12000');
+ next(900,1800);assert.equal(displayRate(row,key),1900);
+ for(let i=0;i<3;i++)next(1000,0);
+ assert.equal(displayRate(row,key),0);assert.equal(formatRate(displayRate(row,key)),'0 B/s');
+ next(3000,1);assert.equal(formatRate(displayRate(row,key)),'<1 B/s');
+ assert.equal(displaySeries(row.points,[key]).at(-1).values[key],displayRate(row,key));
+});
+test('presentation does not smooth across unavailable metrics or a re-established baseline',()=>{
+ const g=new FixtureGateway(),key='inner.rx_bytes';let row=observe(undefined,structuredClone(g.rows[0]),true);
+ g.advance([0]);row=observe(row,structuredClone(g.rows[0]),true);assert.equal(displayRate(row,key),1000);
+ assert.equal(displayRate(rebaseline(row),key),null);
+ g.rows[0].planes[1].counters.rx_bytes=null;g.advance([0]);row=observe(row,structuredClone(g.rows[0]),true);assert.equal(displayRate(row,key),null);
+ g.rows[0].planes[1].counters.rx_bytes='1';g.advance([0]);row=observe(row,structuredClone(g.rows[0]),true);assert.equal(displayRate(row,key),null);
+ g.advance([0],1000,100);row=observe(row,structuredClone(g.rows[0]),true);assert.equal(displayRate(row,key),100);
+ for(const field of ['stats_epoch','core_instance_id','generation']){const changed=structuredClone(g.rows[0]);changed[field]='changed';assert.equal(displayRate(observe(row,changed,true),key),null);}
+ assert.equal(formatRate(null),'—');assert.equal(formatRate(0.1),'<1 B/s');assert.equal(formatRate(0),'0 B/s');
+});
+test('chart scale bands absorb small changes and do not collapse with each sample',()=>{
+ const scale=chartCeiling(0,2000);assert.equal(scale,4096);
+ for(const peak of [2100,1900,2200,2000])assert.equal(chartCeiling(scale,peak),scale);
+ const expanded=chartCeiling(scale,20000);assert.equal(expanded,32768);
+ assert.equal(chartCeiling(expanded,100),16384);
 });
 test('capabilities gate old kernels, query-only transport and Admin/reset metrics',()=>{
  const d=discovery();assert(supported(d));assert(samplingSupported(d));assert.equal(resetReason(d,sample()),null);
@@ -67,6 +97,36 @@ test('period, generation and instance changes query authority; old events and no
   g.event({type:'reset',instance:'core-a',payload:{core_instance_id:'core-a',operation_id:'old',snapshots:[old]}});await flush();assert.equal(s.view.rows[key].snapshot.stats_epoch,'z-new');
   for(const row of g.rows){row.core_instance_id='core-b';row.stats_epoch='new-instance';}g.push();await flush();assert.equal(s.view.rows[key].snapshot.core_instance_id,'core-b');
   g.event({type:'reset',instance:'core-a',payload:{core_instance_id:'core-a',operation_id:'old',snapshots:[old]}});assert.equal(s.view.rows[key].snapshot.core_instance_id,'core-b');
+ }finally{s.dispose();}
+});
+test('inventory membership changes preserve unchanged periods and ignore queued old registry pages',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]);s.watch([key]);g.advance();g.push();
+  const oldPage={core_instance_id:'core-a',config_revision:g.rows[0].config_revision,registry_revision:g.registry,sampled_at_unix_ms:g.rows[0].sampled_at_unix_ms,scopes:structuredClone(g.rows),total:g.rows.length,next_offset:null};
+  g.rows.push(sample({kind:'outbound',tag:'added'},5));g.registry='2';g.advance();g.push();await flush();
+  assert.equal(s.view.order.length,6);assert.equal(s.view.rows[key].rates['flow.bytes_down'],1000);
+  assert(s.view.rows[key].points.slice(1).every(p=>p.values['flow.bytes_down']!==null));
+  const count=g.queries.length,row=s.view.rows[key];g.event({type:'sample',instance:'core-a',payload:oldPage});await flush();
+  assert.equal(g.queries.length,count);assert.equal(s.view.rows[key],row);
+  g.rows.pop();g.registry='3';g.push();await flush();
+  assert.equal(s.view.order.length,5);assert.equal(s.view.rows[key],row);
+ }finally{s.dispose();}
+});
+test('inventory refresh still establishes new periods and genuine delivery gaps discard baselines',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]),changed=scopeKey(scopes[3]);s.watch([key,changed]);g.advance();g.push();
+  g.registry='2';g.rows[3].generation='9007199254740995';g.rows[3].stats_epoch='new-period';g.advance();g.push();await flush();
+  assert.equal(s.view.rows[key].rates['flow.bytes_down'],1000);
+  assert.equal(s.view.rows[changed].rates['inner.rx_bytes'],null);
+  assert.equal(s.view.rows[changed].points.length,1);
+  g.status('gap');g.advance();await flush();assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
+ }finally{s.dispose();}
+});
+test('failed inventory-only recovery invalidates rates until a successful query',async()=>{
+ const g=new FixtureGateway(),s=await started(g);try{
+  const key=scopeKey(scopes[0]);g.advance();g.push();const page=g.page.bind(g);g.page=async()=>{throw{code:'offline'};};
+  g.registry='2';g.advance();g.push();await flush();assert(s.view.stale);assert.equal(s.view.rows[key].baselineValid,false);
+  g.page=page;await s.refresh();assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
  }finally{s.dispose();}
 });
 test('event gaps and reconnect establish fresh baselines; query-only operation polls bounded pages',async()=>{
