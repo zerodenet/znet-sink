@@ -39,20 +39,40 @@ export function policyProbeLabel(outbound: PolicyOutbound, now: number, ready: b
   return outbound.alive === true && outbound.delayMs != null ? `${outbound.delayMs} ms` : '结果未知';
 }
 
+
+/** Reuse observations of the same leaf, never a policy's aggregate latency. */
+function latestLeafProbes(groups: PolicyGroup[]): Map<string, PolicyOutbound> {
+  const policyTags = new Set(groups.map((group) => group.name));
+  const probes = new Map<string, PolicyOutbound>();
+  for (const group of groups) for (const member of group.outbounds) {
+    const checked = member.lastCheckedUnixMs;
+    if (policyTags.has(member.tag) || checked == null || !Number.isFinite(checked) || checked <= 0) continue;
+    const previous = probes.get(member.tag);
+    if (!previous || checked > previous.lastCheckedUnixMs!
+      || checked === previous.lastCheckedUnixMs && member.alive === false && previous.alive !== false) {
+      // Keep the entire newest observation together: an old successful latency
+      // must not survive a later failure or an unknown result.
+      probes.set(member.tag, member);
+    }
+  }
+  return probes;
+}
+
 // Follow only confirmed single selections. A relay/load-balancer cannot be
 // represented by one member's latency, and a cycle must not invent an exit.
-export function selectedPolicyPath(group: PolicyGroup, groups: PolicyGroup[]): { path: string[]; probe?: PolicyOutbound } {
+export function selectedPolicyPath(group: PolicyGroup, groups: PolicyGroup[], probes = latestLeafProbes(groups)): { path: string[]; probe?: PolicyOutbound } {
   const path: string[] = [];
   const seen = new Set<string>();
   let current = group;
   while (!seen.has(current.name)) {
     seen.add(current.name);
+    if (current.kind && !['selector', 'urltest', 'url_test'].includes(current.kind.toLowerCase())) return { path };
     if (!current.selected) return { path };
     path.push(current.selected);
     const member = current.outbounds.find((outbound) => outbound.tag === current.selected);
     if (!member) return { path };
     const child = groups.find((candidate) => candidate.name === member.tag);
-    if (!child) return { path, probe: member };
+    if (!child) return { path, probe: probes.get(member.tag) ?? member };
     if (!['selector', 'urltest', 'url_test'].includes(child.kind?.toLowerCase() ?? '')) return { path };
     current = child;
   }
@@ -98,8 +118,9 @@ export function buildOverview(input: OverviewInput) {
   // proving a fault. Keep old selections unconfirmed, but only surface an
   // actionable warning when the policy read itself failed.
   if (ready && input.groupsError) add('策略状态更新失败', input.groupsError, 'nodes');
+  const probes = latestLeafProbes(input.groups);
   const groups = input.groups.map((g) => {
-    const resolved = selectedPolicyPath(g, input.groups);
+    const resolved = selectedPolicyPath(g, input.groups, probes);
     const selected = resolved.probe;
     const fresh = groupsReady && selected?.lastCheckedUnixMs != null && now - selected.lastCheckedUnixMs <= 5 * 60_000;
     return {
@@ -111,7 +132,7 @@ export function buildOverview(input: OverviewInput) {
       selectedTag: groupsReady ? g.selected ?? '' : '',
       switchable: g.kind?.toLowerCase() === 'selector',
       options: g.outbounds.map((outbound) => {
-        const resolved = selectedPolicyPath({ ...g, selected: outbound.tag }, input.groups);
+        const resolved = selectedPolicyPath({ ...g, selected: outbound.tag }, input.groups, probes);
         return { value: outbound.tag, label: `${resolved.path.join(' → ') || outbound.tag} · ${resolved.probe ? policyProbeLabel(resolved.probe, now, groupsReady) : '待探测'}` };
       }),
     };
