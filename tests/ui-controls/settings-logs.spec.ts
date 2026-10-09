@@ -152,3 +152,37 @@ test('overview displays the bundled flag and readable network region',async ({pa
   await expect(flag).toBeVisible();
   expect(await flag.evaluate(el=>getComputedStyle(el).backgroundImage)).toMatch(/us\.svg|flag-icons-us/);
 });
+
+for (const { query, initiallyVisible } of [
+  { query: '', initiallyVisible: false },
+  { query: '&menu-declared=1', initiallyVisible: true },
+  { query: '&menu-declared=1&menu-hidden=1', initiallyVisible: false },
+]) {
+  test(`endpoint menu preference uses effective visibility and persists the user's choice ${query || 'default'}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).menuWrites = [];
+      window.addEventListener('fixture-save', event => (window as any).menuWrites.push((event as CustomEvent).detail));
+    });
+    await page.goto(`/?panel=settings&mode=endpoint-menu${query}`);
+    await page.getByRole('navigation', { name: '设置' }).getByRole('button', { name: '应用', exact: true }).click();
+    const endpoint = page.locator('.menu-button-row').getByRole('button', { name: '端点', exact: true });
+    await expect(endpoint).toHaveAttribute('aria-pressed', String(initiallyVisible));
+    await endpoint.click();
+    await expect(endpoint).toBeDisabled();
+    await page.evaluate(() => window.dispatchEvent(new Event('fixture-finish-menu-write')));
+    await expect(endpoint).toBeEnabled();
+    await expect(endpoint).toHaveAttribute('aria-pressed', String(!initiallyVisible));
+    expect(await page.evaluate(() => (window as any).menuWrites)).toEqual([{
+      ui: { hiddenMenuKeys: initiallyVisible ? ['endpoints'] : [], endpointsMenuVisible: !initiallyVisible },
+    }]);
+    // Remounting settings reads the saved explicit preference.
+    await page.getByRole('navigation', { name: '设置' }).getByRole('button', { name: '网络', exact: true }).click();
+    await page.getByRole('navigation', { name: '设置' }).getByRole('button', { name: '应用', exact: true }).click();
+    await expect(endpoint).toHaveAttribute('aria-pressed', String(!initiallyVisible));
+    await endpoint.click();
+    await expect(endpoint).toBeDisabled();
+    await page.evaluate(() => window.dispatchEvent(new Event('fixture-finish-menu-write')));
+    await expect(endpoint).toHaveAttribute('aria-pressed', String(initiallyVisible));
+    expect((await page.evaluate(() => (window as any).menuWrites))[1].ui.endpointsMenuVisible).toBe(initiallyVisible);
+  });
+}

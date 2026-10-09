@@ -47,13 +47,17 @@ pub async fn interaction_surface(
     let ui_mode = interaction_mode::current_ui_mode(state.inner())?;
     let is_pro = interaction_mode::is_pro_mode(&ui_mode);
     let zero_features = cached_or_query_zero_features(state.inner()).await;
-    let hidden_menu_keys = lock(state.app_config(), "app_config")?
-        .ui
-        .hidden_menu_keys
-        .clone();
-    let has_active_config = lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .any(|p| p.active);
+    let ui = lock(state.app_config(), "app_config")?.ui.clone();
+    let (has_active_config, has_endpoints) = {
+        let profiles = lock(state.proxy_configs(), "proxy_config")?;
+        let active = profiles.iter().find(|profile| profile.active);
+        (
+            active.is_some(),
+            active
+                .and_then(|profile| profile.content.as_ref())
+                .is_some_and(has_declared_endpoints),
+        )
+    };
 
     crate::services::logs::znet_log(
         Some(state.inner()),
@@ -67,7 +71,12 @@ pub async fn interaction_surface(
 
     Ok(InteractionSurfaceSnapshot {
         ui_mode,
-        navigation: navigation_items(is_pro, &hidden_menu_keys, has_active_config),
+        navigation: navigation_items(
+            is_pro,
+            &ui.hidden_menu_keys,
+            has_active_config,
+            endpoints_menu_visible(&ui, has_endpoints),
+        ),
         actions: action_items(is_pro, &zero_features),
         features: feature_surface_items(is_pro, &zero_features),
     })
@@ -193,10 +202,40 @@ fn feature(key: &str, enabled: bool, missing_active_reason: &Option<String>) -> 
     }
 }
 
+fn endpoints_menu_visible(
+    ui: &crate::models::app_config::AppUiConfig,
+    has_endpoints: bool,
+) -> bool {
+    ui.endpoints_menu_visible.unwrap_or(has_endpoints)
+}
+
+// Detect declarations without relying on a running or reachable kernel.
+fn has_declared_endpoints(source: &serde_json::Value) -> bool {
+    source["endpoints"].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row["tag"]
+                .as_str()
+                .is_some_and(|tag| !tag.trim().is_empty())
+                && row
+                    .pointer("/protocol/type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+        })
+    }) || ["inbounds", "outbounds"].iter().any(|key| {
+        source[*key].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.pointer("/protocol/type")
+                    .is_some_and(|protocol| protocol == "wireguard")
+            })
+        })
+    })
+}
+
 fn navigation_items(
     is_pro: bool,
     hidden_menu_keys: &[String],
     has_active_config: bool,
+    endpoints_visible: bool,
 ) -> Vec<InteractionSurfaceItem> {
     let mut items = vec![
         shared("overview", "navigation"),
@@ -218,6 +257,13 @@ fn navigation_items(
     ];
 
     for item in &mut items {
+        if item.key == "endpoints" && is_pro && !endpoints_visible {
+            item.visible = false;
+            item.operable = false;
+            item.readonly = true;
+            item.reason =
+                Some("hidden by endpoint menu preference or active configuration".to_string());
+        }
         if item.key != "settings"
             && hidden_menu_keys
                 .iter()
@@ -460,7 +506,10 @@ fn feature_required(
 
 #[cfg(test)]
 mod tests {
-    use super::{action_items, feature_surface_items, navigation_items};
+    use super::{
+        action_items, endpoints_menu_visible, feature_surface_items, has_declared_endpoints,
+        navigation_items,
+    };
 
     #[test]
     fn canonical_zero_snapshot_features_enable_gui_surfaces() {
@@ -496,24 +545,83 @@ mod tests {
     fn endpoints_navigation_is_independent_pro_only_and_respects_visibility() {
         for has_config in [false, true] {
             for pro in [false, true] {
-                let items = navigation_items(pro, &[], has_config);
+                let items = navigation_items(pro, &[], has_config, true);
                 let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
                 assert_eq!(endpoint.visible, pro);
                 assert_eq!(endpoint.operable, pro);
             }
         }
-        let hidden = navigation_items(true, &["ENDPOINTS".into()], true);
+        let hidden = navigation_items(true, &["ENDPOINTS".into()], true, true);
         let endpoint = hidden.iter().find(|item| item.key == "endpoints").unwrap();
         assert!(!endpoint.visible && !endpoint.operable && endpoint.readonly);
     }
 
     #[test]
+    fn endpoints_navigation_defaults_to_declarations_and_preserves_explicit_choices() {
+        let mut ui = crate::models::app_config::AppUiConfig::default();
+        for preference in [None, Some(false), Some(true)] {
+            ui.endpoints_menu_visible = preference;
+            for declared in [false, true] {
+                for pro in [false, true] {
+                    let items = navigation_items(
+                        pro,
+                        &ui.hidden_menu_keys,
+                        true,
+                        endpoints_menu_visible(&ui, declared),
+                    );
+                    let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
+                    assert_eq!(endpoint.visible, pro && preference.unwrap_or(declared));
+                    assert_eq!(endpoint.operable, endpoint.visible);
+                }
+            }
+        }
+        // Legacy explicit hides remain authoritative even with declarations.
+        ui.hidden_menu_keys.push("ENDPOINTS".into());
+        for preference in [None, Some(false), Some(true)] {
+            ui.endpoints_menu_visible = preference;
+            let items = navigation_items(
+                true,
+                &ui.hidden_menu_keys,
+                true,
+                endpoints_menu_visible(&ui, true),
+            );
+            assert!(
+                !items
+                    .iter()
+                    .find(|item| item.key == "endpoints")
+                    .unwrap()
+                    .visible
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_menu_detection_includes_generic_and_disabled_declarations() {
+        use serde_json::json;
+        for source in [
+            json!({"endpoints":[{"tag":"mesh", "enabled":false, "protocol":{"type":"future_mesh"}}]}),
+            json!({"inbounds":[{"tag":"wg", "protocol":{"type":"wireguard"}}]}),
+            json!({"outbounds":[{"tag":"wg", "protocol":{"type":"wireguard"}}]}),
+        ] {
+            assert!(has_declared_endpoints(&source));
+        }
+        for source in [
+            json!({}),
+            json!({"endpoints":[]}),
+            json!({"endpoints":[null]}),
+            json!({"outbounds":[{"protocol":{"type":"shadowsocks"}}]}),
+        ] {
+            assert!(!has_declared_endpoints(&source));
+        }
+    }
+
+    #[test]
     fn plugins_navigation_is_shared_and_respects_menu_visibility() {
         for pro in [false, true] {
-            let items = navigation_items(pro, &[], false);
+            let items = navigation_items(pro, &[], false, false);
             let plugin = items.iter().find(|item| item.key == "plugins").unwrap();
             assert!(plugin.visible && plugin.operable);
-            let hidden = navigation_items(pro, &["plugins".into()], false);
+            let hidden = navigation_items(pro, &["plugins".into()], false, false);
             let plugin = hidden.iter().find(|item| item.key == "plugins").unwrap();
             assert!(!plugin.visible && !plugin.operable);
         }

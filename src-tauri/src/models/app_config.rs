@@ -125,6 +125,9 @@ pub struct AppUiConfig {
     pub sidebar_collapsed: bool,
     #[serde(default)]
     pub hidden_menu_keys: Vec<String>,
+    /// None follows the active configuration; Some preserves the user choice.
+    #[serde(default)]
+    pub endpoints_menu_visible: Option<bool>,
     #[serde(default = "default_true")]
     pub traffic_ball_enabled: bool,
     #[serde(default)]
@@ -138,6 +141,7 @@ impl Default for AppUiConfig {
             ui_mode: default_ui_mode(),
             sidebar_collapsed: false,
             hidden_menu_keys: vec!["debug".to_string()],
+            endpoints_menu_visible: None,
             traffic_ball_enabled: true,
             default_route: None,
         }
@@ -426,6 +430,7 @@ pub struct AppUiConfigPatch {
     pub ui_mode: Option<String>,
     pub sidebar_collapsed: Option<bool>,
     pub hidden_menu_keys: Option<Vec<String>>,
+    pub endpoints_menu_visible: Option<bool>,
     pub traffic_ball_enabled: Option<bool>,
     pub default_route: Option<Option<String>>,
 }

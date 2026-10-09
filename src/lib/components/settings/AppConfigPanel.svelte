@@ -133,21 +133,22 @@
   }
 
   async function toggleMenuVisibility(key: string) {
-    if (!config || key === 'settings' || store.uiMode !== 'pro') return;
+    if (!config || key === 'settings' || store.uiMode !== 'pro' || updatingMenuKey !== null) return;
 
     updatingMenuKey = key;
     updateError = null;
     try {
       const hidden = new Set((config.ui.hiddenMenuKeys ?? []).map((item) => item.toLowerCase()));
-      if (hidden.has(key)) {
-        hidden.delete(key);
-      } else {
-        hidden.add(key);
-      }
+      const visible = !isMenuVisible(key);
+      if (visible) hidden.delete(key);
+      else hidden.add(key);
 
       const nextHiddenKeys = Array.from(hidden);
       const updated = await updateAppConfig({
-        ui: { hiddenMenuKeys: nextHiddenKeys },
+        ui: {
+          hiddenMenuKeys: nextHiddenKeys,
+          ...(key === 'endpoints' ? { endpointsMenuVisible: visible } : {}),
+        },
       });
 
       config = {
@@ -171,8 +172,10 @@
   }
 
   function isMenuVisible(key: string): boolean {
-    if (!config) return true;
-    return !(config.ui.hiddenMenuKeys ?? []).some((item) => item.toLowerCase() === key);
+    if (!config) return false;
+    if ((config.ui.hiddenMenuKeys ?? []).some((item) => item.toLowerCase() === key)) return false;
+    if (key === 'endpoints') return config.ui.endpointsMenuVisible ?? store.isNavVisible(key);
+    return true;
   }
 
   async function loadLogPaths() {

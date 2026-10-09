@@ -28,13 +28,16 @@ export const updateRuleSet = async () => items[0];
 export const getAppErrorMessage = (error: unknown, fallback: string) => (error as { message?: string })?.message ?? fallback;
 export const getAppErrorInfo = (error: unknown, fallback: string) => ({ code: (error as { code?: string })?.code, message: getAppErrorMessage(error, fallback) });
 export const handleAppError = (_error: unknown, _fallback: string) => {};
-import { getTunConfig } from './tun-state.svelte';
+import { getTunConfig, store } from './tun-state.svelte';
 export { applyFixtureTun as applyTunSettings } from './tun-state.svelte';
 const endpointConfig = () => ({ localProxy: {
   host: '127.0.0.2', port: 8899,
   sourceProxyConfigId: new URLSearchParams(location.search).has('custom') ? 'custom-profile' : null,
 } });
 let precedenceOverrides = {listener:false,dns:false,tun:false,urlTest:false,bypass:false,rules:false};
+let menuUi: { uiMode: string; hiddenMenuKeys: string[]; endpointsMenuVisible?: boolean } = {
+  uiMode: 'pro', hiddenMenuKeys: new URLSearchParams(location.search).has('menu-hidden') ? ['endpoints'] : [],
+};
 export const getAppConfig = async () => {
   const panel = new URLSearchParams(location.search).get('panel');
   if (panel === 'dns') return { dns: { enabled: true, dnsHijack: false, config: {
@@ -56,7 +59,7 @@ export const getAppConfig = async () => {
         {key:'rules',label:'通用规则追加',source:'当前配置',value:'保留配置规则，不追加客户端通用规则'}
       ] };
   }
-  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
+  if (panel === 'settings' || panel === 'logs') return { ...(await getTunConfig()), core: { autoStart: true, autoConnect: true, cleanupProxyOnExit: true }, ui: new URLSearchParams(location.search).get('mode') === 'endpoint-menu' ? structuredClone(menuUi) : { uiMode: 'pro', hiddenMenuKeys: [] }, localProxy: { host: '127.0.0.1', port: 7890, bypass: ['localhost', '127.*'] }, urlTest: { url: 'http://www.gstatic.com/generate_204', toleranceMs: 50 } };
   if (panel === 'url-test') return {urlTest: {url: 'http://www.gstatic.com/generate_204', toleranceMs: 50}};
   if (panel === 'runtime-network') return {runtime: {udpUpstreamIdleTimeoutSeconds: 30}};
   if (panel === 'endpoint') return endpointConfig();
@@ -69,6 +72,15 @@ import { capabilityFixture, healthFixture } from './kernel-capabilities';
 const isCapabilitiesPanel = () => new URLSearchParams(location.search).get('panel') === 'capabilities';
 export const getGuiCoreHealth = async () => isCapabilitiesPanel() ? healthFixture() : ({ engineVersion:'0.0.17-rc.1' });
 export const updateAppConfig = async (input?: unknown) => {
+  if (new URLSearchParams(location.search).get('mode') === 'endpoint-menu') {
+    window.dispatchEvent(new CustomEvent('fixture-save', { detail: input }));
+    await new Promise<void>(resolve => window.addEventListener('fixture-finish-menu-write', () => resolve(), { once: true }));
+    menuUi = { ...menuUi, ...(input as { ui: typeof menuUi }).ui };
+    const declared = new URLSearchParams(location.search).has('menu-declared');
+    const visible = !menuUi.hiddenMenuKeys.includes('endpoints') && (menuUi.endpointsMenuVisible ?? declared);
+    store.interactionSurface.navigation.set('endpoints', { key: 'endpoints', category: 'navigation', visible, operable: visible, readonly: !visible });
+    return getAppConfig();
+  }
   if (new URLSearchParams(location.search).get('mode') === 'precedence') {
     precedenceOverrides = {...precedenceOverrides,...(input as {overrides:typeof precedenceOverrides}).overrides};
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));

@@ -170,6 +170,9 @@ pub(crate) fn prepare_update(current: &AppConfig, patch: AppConfigPatch) -> AppR
         if let Some(hidden_menu_keys) = ui.hidden_menu_keys {
             config.ui.hidden_menu_keys = normalize_menu_keys(hidden_menu_keys);
         }
+        if let Some(visible) = ui.endpoints_menu_visible {
+            config.ui.endpoints_menu_visible = Some(visible);
+        }
         if let Some(traffic_ball_enabled) = ui.traffic_ball_enabled {
             config.ui.traffic_ball_enabled = traffic_ball_enabled;
         }
@@ -496,6 +499,22 @@ pub fn normalize_network_probe_urls(urls: Vec<String>) -> AppResult<Vec<String>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn endpoint_menu_updates_preserve_explicit_false_across_unrelated_settings() {
+        use crate::models::app_config::{AppConfig, AppConfigPatch};
+        use serde_json::json;
+        let current = AppConfig::default();
+        for visible in [false, true] {
+            let patch: AppConfigPatch =
+                serde_json::from_value(json!({"ui":{"endpointsMenuVisible":visible}})).unwrap();
+            let updated = super::prepare_update(&current, patch).unwrap();
+            assert_eq!(updated.ui.endpoints_menu_visible, Some(visible));
+            let unrelated: AppConfigPatch =
+                serde_json::from_value(json!({"ui":{"theme":"dark"}})).unwrap();
+            let updated = super::prepare_update(&updated, unrelated).unwrap();
+            assert_eq!(updated.ui.endpoints_menu_visible, Some(visible));
+        }
+    }
     use super::{
         migrate_builtin_domestic_resolvers, migrate_legacy_recommended_node_dns,
         normalize_network_probe_urls, normalize_proxy_bypass, normalize_tun_cidrs,
