@@ -235,3 +235,61 @@ test('global overview follows its explicit target and ignores unrelated split po
   assert.equal(automatic.globalDelay,'31 ms');
   assert.equal(buildOverview({...base,mode:{...base.mode,globalOutbound:undefined}}).globalSelection,'全局出口未确认');
 });
+
+test('selectors and nested references reuse the newest observation of their actual leaf', () => {
+  const groups = [
+    {name:'YouTube',kind:'selector',selected:'Proxy',outbounds:[{tag:'Proxy'}]},
+    {name:'Proxy',kind:'selector',selected:'Auto',outbounds:[{tag:'Auto'}]},
+    {name:'Manual',kind:'selector',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:999,lastCheckedUnixMs:now-1000}]},
+    {name:'Auto',kind:'urltest',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:356,lastCheckedUnixMs:now},{tag:'JP',alive:true,delayMs:20,lastCheckedUnixMs:now}]},
+  ];
+  let model = buildOverview({...baseline(),groups});
+  for (const name of ['YouTube','Proxy','Manual','Auto']) {
+    const group = model.groups.find(g => g.name === name);
+    assert.equal(group.delay,'356 ms');
+    assert.equal(group.health,'最近探测成功');
+    assert.match(group.options.find(option=>option.value===groups.find(g=>g.name===name).selected).label,/356 ms$/);
+  }
+  assert.equal(model.groups[0].selectionLabel,'Proxy → Auto → US');
+  assert.equal(model.groups.find(g=>g.name==='Manual').selectedTag,'US');
+  groups[3].selected='JP';
+  model=buildOverview({...baseline(),groups});
+  assert.equal(model.groups.find(g=>g.name==='YouTube').delay,'20 ms');
+  assert.equal(model.groups.find(g=>g.name==='YouTube').selectionLabel,'Proxy → Auto → JP');
+  assert.equal(model.groups.find(g=>g.name==='Manual').delay,'356 ms');
+});
+
+test('shared probe data never resurrects stale successes or crosses leaf identities', () => {
+  for (const observation of [
+    {tag:'US',alive:false,lastCheckedUnixMs:now-10},
+    {tag:'US',alive:undefined,lastCheckedUnixMs:now-10},
+    {tag:'US',alive:true,delayMs:356,lastCheckedUnixMs:now-400000},
+  ]) {
+    const groups=[
+      {name:'Manual',kind:'selector',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:999,lastCheckedUnixMs:now-500000}]},
+      {name:'Auto',kind:'urltest',selected:'JP',outbounds:[observation,{tag:'JP',alive:true,delayMs:20,lastCheckedUnixMs:now}]},
+    ];
+    const model=buildOverview({...baseline(),groups});
+    const manual=model.groups.find(g=>g.name==='Manual');
+    assert.equal(manual.delay,'—');
+    assert.equal(manual.failed,observation.alive===false);
+    assert.equal(manual.selectedTag,'US');
+    assert.doesNotMatch(manual.options[0].label,/999 ms|20 ms/);
+    assert.equal(buildOverview({...baseline(),groups,groupsAt:now,groupsError:'disconnected'}).groups[0].delay,'—');
+  }
+});
+
+test('policy aggregate probes and ambiguous routes cannot become a leaf measurement', () => {
+  const groups=[
+    {name:'Root',kind:'selector',selected:'Relay',outbounds:[{tag:'Relay',alive:true,delayMs:1,lastCheckedUnixMs:now}]},
+    {name:'Relay',kind:'relay',selected:'US',outbounds:[{tag:'US'}]},
+    {name:'Auto',kind:'urltest',selected:'US',outbounds:[{tag:'US',alive:true,delayMs:356,lastCheckedUnixMs:now}]},
+  ];
+  let model=buildOverview({...baseline(),groups});
+  assert.equal(model.groups.find(g=>g.name==='Root').delay,'—');
+  assert.equal(model.groups.find(g=>g.name==='Relay').delay,'—');
+  groups[1].kind='selector';groups[1].selected='missing';
+  assert.equal(buildOverview({...baseline(),groups}).groups.find(g=>g.name==='Root').delay,'—');
+  groups[1].selected='Root';groups[1].outbounds=[{tag:'Root'}];
+  assert.equal(buildOverview({...baseline(),groups}).groups.find(g=>g.name==='Root').delay,'—');
+});

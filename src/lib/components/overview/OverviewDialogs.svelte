@@ -24,7 +24,7 @@
     <Dialog.Body>
       {#each model.groups as group (group.name)}
         <div class="policy-edit">
-          <div class="policy-name"><strong><FlaggedText text={group.name} /></strong><span>{group.switchable ? '手动选择' : ['urltest', 'url_test'].includes(group.kind.toLowerCase()) ? '自动测速' : '策略管理'}</span></div>
+          <div class="policy-name"><strong><FlaggedText text={group.name} /></strong><span>{group.switchable ? '可切换' : ['urltest', 'url_test'].includes(group.kind.toLowerCase()) ? '自动测速' : '策略管理'}</span></div>
           {#if group.switchable}<FieldSelect aria-label={`${group.name} 当前出口`} bind:value={() => group.selectedTag, (value) => actions.choosePolicy(group.name, value)} disabled={busy || !model.groupsReady} options={group.options} placeholder="等待选择" />{:else}<p class="automatic-choice"><FlaggedText text={group.selectionLabel} /> · {group.delay}</p>{/if}
           <p>已确认：<FlaggedText text={group.selectionLabel} /> · {group.health}</p><OperationFeedback {feedback} target={`policy:${group.name}`} />
         </div>
