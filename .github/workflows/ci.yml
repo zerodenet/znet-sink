@@ -100,6 +100,9 @@ jobs:
       - name: Run application lifecycle contract
         run: pnpm test:runtime-lifecycle
 
+      - name: Run desktop shell contract
+        run: pnpm test:desktop-shell
+
       - name: Validate release policy and stable evidence gate
         run: pnpm test:release-version
 
@@ -127,7 +130,8 @@ jobs:
   ui-controls:
     name: UI controls (Chromium and WebKit)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Cold browser dependencies can take 20 minutes before the full suite starts.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
