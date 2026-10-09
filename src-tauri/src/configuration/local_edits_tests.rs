@@ -3,7 +3,7 @@ fn source(port: u16) -> Value {
     json!({"inbounds":[{"tag":"main","protocol":{"type":"mixed"},"listen":{"address":"127.0.0.2","port":port}}],"runtime":{"dns":{},"latency_test_url":"https://source.test/204"},"route":{"bypass":[]}})
 }
 #[test]
-fn editing_port_only_preserves_source_address_dns_and_other_profiles() {
+fn editing_port_is_global_and_preserves_unmodified_source_fields() {
     let app = AppConfig::default();
     let base = source(7891);
     let next = candidate(
@@ -19,7 +19,10 @@ fn editing_port_only_preserves_source_address_dns_and_other_profiles() {
         json!({"address":"127.0.0.2","port":7877})
     );
     assert_eq!(edited["runtime"], base["runtime"]);
-    assert_eq!(resolve(&next, Some("b"), &base).unwrap().1, base);
+    assert_eq!(
+        resolve(&next, Some("b"), &source(7899)).unwrap().1["inbounds"][0]["listen"]["port"],
+        7877
+    );
     assert_eq!(base, source(7891));
     assert_eq!(next.local_proxy.port, app.local_proxy.port);
 }
@@ -42,7 +45,7 @@ fn subscription_refresh_keeps_edit_and_reset_reads_latest_source() {
         resolve(&restored, Some("a"), &source(7892)).unwrap().1,
         source(7892)
     );
-    assert!(restored.profile_edits.is_empty());
+    assert!(restored.client_edits.as_ref().unwrap().is_empty());
 }
 #[test]
 fn edits_reject_host_process_fields_and_invalid_ports() {
@@ -83,7 +86,7 @@ fn editing_public_url_keeps_policy_specific_url_and_tolerance() {
 }
 
 #[test]
-fn udp_idle_timeout_is_profile_owned_and_restores_the_latest_source_value() {
+fn udp_idle_timeout_is_global_and_restores_the_latest_source_value() {
     let base = json!({
         "runtime": {"udp_upstream_idle_timeout_seconds": 45},
         "route": {"bypass": []}
@@ -101,7 +104,7 @@ fn udp_idle_timeout_is_profile_owned_and_restores_the_latest_source_value() {
     );
     assert_eq!(
         resolve(&app, Some("b"), &base).unwrap().1["runtime"]["udp_upstream_idle_timeout_seconds"],
-        45
+        90
     );
     assert!(candidate(
         &AppConfig::default(),
@@ -121,7 +124,7 @@ fn udp_idle_timeout_is_profile_owned_and_restores_the_latest_source_value() {
 }
 
 #[test]
-fn legacy_switches_migrate_to_current_profile_without_affecting_other_profiles() {
+fn legacy_explicit_switches_migrate_globally_without_inferring_defaults() {
     let mut app = AppConfig::default();
     app.overrides.listener = true;
     app.local_proxy.port = 7877;
@@ -133,9 +136,80 @@ fn legacy_switches_migrate_to_current_profile_without_affecting_other_profiles()
         7877
     );
     assert_eq!(
-        resolve(&app, Some("b"), &source(7891)).unwrap().1,
-        source(7891)
+        resolve(&app, Some("b"), &source(7891)).unwrap().1["inbounds"][0]["listen"]["port"],
+        7877
     );
+}
+
+#[test]
+fn legacy_profile_settings_promote_active_values_once_and_keep_archived_conflicts() {
+    let mut app: AppConfig = serde_json::from_value(json!({"profileEdits": {
+        "a": {"localProxy.port": 7877}, "b": {"localProxy.port": 8888}
+    }}))
+    .unwrap();
+    assert!(migrate_legacy(&mut app, Some("a")));
+    assert!(!migrate_legacy(&mut app, Some("b")));
+    assert_eq!(app.profile_edits["b"]["localProxy.port"], 8888);
+    assert_eq!(
+        resolve(&app, Some("b"), &source(7892)).unwrap().1["inbounds"][0]["listen"]["port"],
+        7877
+    );
+    let restored = candidate(&app, "b", Edits::new(), &["localProxy.port".into()]).unwrap();
+    let mut restored: AppConfig = serde_json::from_value(json!(restored)).unwrap();
+    assert!(!migrate_legacy(&mut restored, Some("b")));
+    assert_eq!(
+        resolve(&restored, Some("b"), &source(7892)).unwrap().1,
+        source(7892)
+    );
+    assert_eq!(
+        resolve(&restored, Some("a"), &source(7893)).unwrap().1,
+        source(7893)
+    );
+}
+
+#[test]
+fn global_settings_apply_without_a_profile_and_survive_profile_preferences_removal() {
+    let mut app = candidate(
+        &AppConfig::default(),
+        "a",
+        BTreeMap::from([
+            ("localProxy.port".into(), json!(7877)),
+            ("tun.mtu".into(), json!(1280)),
+            ("urlTest.toleranceMs".into(), json!(0)),
+            ("bypass".into(), json!({"localNetworks":false,"rules":[]})),
+            ("routing.injectCommonRules".into(), json!(false)),
+            (
+                "dns".into(),
+                json!({"enabled":false,"config":null,"dnsHijack":false}),
+            ),
+        ]),
+        &[],
+    )
+    .unwrap();
+    app.profile_edits.clear();
+    let base = json!({"inbounds": source(7892)["inbounds"], "runtime":{"tun":{"mtu":1500}},
+        "outbound_groups":[{"tag":"auto","type":"url_test","tolerance_ms":50}]});
+    for id in [None, Some("a"), Some("b")] {
+        let (settings, resolved) = resolve(&app, id, &base).unwrap();
+        assert_eq!(resolved["inbounds"][0]["listen"]["port"], 7877);
+        assert_eq!(resolved["runtime"]["tun"]["mtu"], 1280);
+        assert_eq!(resolved["outbound_groups"][0]["tolerance_ms"], 0);
+        assert!(!settings.dns.enabled);
+        assert!(settings.overrides.dns && settings.overrides.bypass && settings.overrides.rules);
+        assert!(!settings.routing.inject_common_rules);
+    }
+}
+
+#[test]
+fn explicit_empty_inbounds_do_not_gain_a_listener_from_global_port_settings() {
+    let app = candidate(
+        &AppConfig::default(),
+        "a",
+        BTreeMap::from([("localProxy.port".into(), json!(7877))]),
+        &[],
+    )
+    .unwrap();
+    assert!(resolve(&app, Some("b"), &json!({"inbounds":[]})).is_err());
 }
 
 #[test]

@@ -9,20 +9,35 @@ pub(super) struct Effects {
 pub(super) fn between(old: &AppConfig, next: &AppConfig) -> Effects {
     let endpoint = old.local_proxy.host != next.local_proxy.host
         || old.local_proxy.port != next.local_proxy.port;
-    let local = old.profile_edits != next.profile_edits;
+    let local = old.profile_edits != next.profile_edits || old.client_edits != next.client_edits;
     let changed = |prefix: &str| {
-        old.profile_edits
+        let global = old
+            .client_edits
             .iter()
-            .chain(next.profile_edits.iter())
-            .any(|(id, edits)| {
+            .chain(next.client_edits.iter())
+            .any(|edits| {
                 edits
                     .keys()
                     .filter(|key| key.starts_with(prefix))
                     .any(|key| {
-                        old.profile_edits.get(id).and_then(|v| v.get(key))
-                            != next.profile_edits.get(id).and_then(|v| v.get(key))
+                        old.client_edits.as_ref().and_then(|v| v.get(key))
+                            != next.client_edits.as_ref().and_then(|v| v.get(key))
                     })
-            })
+            });
+        global
+            || old
+                .profile_edits
+                .iter()
+                .chain(next.profile_edits.iter())
+                .any(|(id, edits)| {
+                    edits
+                        .keys()
+                        .filter(|key| key.starts_with(prefix))
+                        .any(|key| {
+                            old.profile_edits.get(id).and_then(|v| v.get(key))
+                                != next.profile_edits.get(id).and_then(|v| v.get(key))
+                        })
+                })
     };
     let capture_changed = changed("tun.") || changed("dns") || changed("bypass");
     let proxy_changed = changed("localProxy.") || changed("bypass");

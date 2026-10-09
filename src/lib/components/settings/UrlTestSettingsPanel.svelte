@@ -84,7 +84,7 @@
 <div class="config-section">
   <div class="config-section-title">公共测速与自动选择</div>
 
-  <p class="text-xs text-muted-foreground">{isLocallyEdited(snapshot, 'urlTest') ? '本地修改 · 仅当前配置' : '来自配置 · 缺失项使用默认值'}</p>
+  <p class="text-xs text-muted-foreground">{isLocallyEdited(snapshot, 'urlTest') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</p>
 
   {#if loading}
     <div class="config-loading">加载配置中...</div>
@@ -92,7 +92,7 @@
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">公共测速地址</span>
-        <span class="label-desc">修改后用于当前配置的公共测速；策略组已有的专用地址继续保留。</span>
+        <span class="label-desc">修改后用于所有配置的公共测速；策略组已有的专用地址继续保留。</span>
       </div>
       <Input class="w-full max-w-sm font-mono" bind:value={url} oninput={() => (saved = false)} disabled={saving} aria-label="公共测速地址" placeholder="http://www.gstatic.com/generate_204" />
     </div>
@@ -103,7 +103,7 @@
           <span class="label-desc">策略组当前分别使用 {Array.from(new Set(snapshot.groupTolerances)).join(' / ')} ms。输入框显示缺省补充值；修改此项后才统一设置。</span>
         {/if}
         <span class="label-desc">
-          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；修改此项后统一当前配置的策略组容差，恢复后各组采用配置值。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
+          当前节点仍健康时，只有候选节点快超过该值才自动切换。0 ms 表示始终追求最低延迟；修改此项后统一所有配置的策略组容差，恢复后各组采用配置值。支持统一正式版 Zero v0.0.1；旧编号内核需要 v0.0.16-dev.3 或更高版本，不支持的内核不会注入该字段。
         </span>
       </div>
 

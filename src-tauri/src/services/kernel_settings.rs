@@ -96,6 +96,7 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
         })?;
     let mut settings = match schema {
         CLIENT_KERNEL_SETTINGS_SCHEMA
+        | "znet.client-kernel-settings.v3"
         | "znet.client-kernel-settings.v2"
         | "znet.client-kernel-settings.v1" => {
             serde_json::from_value::<ClientKernelSettingsBundle>(value)
@@ -122,6 +123,10 @@ pub(crate) fn import_from_str(current: &AppConfig, content: &str) -> AppResult<A
     normalize_and_validate(&mut settings)?;
     let mut next = current.clone();
     settings.apply_to(&mut next);
+    crate::configuration::local_edits::validate_client_edits(
+        &next,
+        next.client_edits.as_ref().unwrap(),
+    )?;
     super::bypass::normalize(&mut next)?;
     Ok(next)
 }
@@ -320,6 +325,39 @@ mod tests {
             Some("C:/machine-b/zero.exe")
         );
         assert_eq!(imported.ui.theme, "light");
+    }
+
+    #[test]
+    fn global_edits_round_trip_and_refuse_profile_or_process_fields() {
+        let source = crate::configuration::local_edits::candidate(
+            &AppConfig::default(),
+            "a",
+            std::collections::BTreeMap::from([("localProxy.port".into(), serde_json::json!(7877))]),
+            &[],
+        )
+        .unwrap();
+        let mut bundle = ClientKernelSettingsBundle {
+            schema_version: CLIENT_KERNEL_SETTINGS_SCHEMA.into(),
+            exported_at_unix_ms: 1,
+            settings: ClientKernelSettings::from_app_config(&source),
+        };
+        let imported = import_from_str(
+            &AppConfig::default(),
+            &serde_json::to_string(&bundle).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(imported.client_edits, source.client_edits);
+        for key in ["endpoints", "core.socket"] {
+            bundle.settings.client_edits = Some(std::collections::BTreeMap::from([(
+                key.into(),
+                serde_json::json!({}),
+            )]));
+            assert!(import_from_str(
+                &AppConfig::default(),
+                &serde_json::to_string(&bundle).unwrap()
+            )
+            .is_err());
+        }
     }
 
     #[test]

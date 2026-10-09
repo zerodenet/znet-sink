@@ -22,14 +22,6 @@ pub(crate) fn current(state: &AppState) -> AppResult<(AppConfig, Value)> {
     super::local_edits::resolve(&app, profile.as_ref().map(|p| p.id.as_str()), &base)
 }
 
-pub(crate) fn owns_tun(state: &AppState) -> AppResult<bool> {
-    let (app, _) = current(state)?;
-    Ok(!app.overrides.tun
-        && source(state)?
-            .pointer("/runtime/tun")
-            .is_some_and(Value::is_object))
-}
-
 /// A hot config apply cannot silently retain an old command-owned TUN plan.
 /// Check before publishing either the new runtime config or source profile.
 pub(crate) async fn require_capture_compatible(

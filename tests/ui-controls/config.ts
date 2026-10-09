@@ -263,6 +263,8 @@ export const getProfileSettings = async () => {
   }
   return {profileId:'fixture-profile',settings,editedFields:Object.keys(localFieldEdits)};
 };
+
+export const getClientSettings = async () => (await getProfileSettings()).settings;
 export const applyProfileSettings = async (profileId: string, changes: Record<string,unknown>, reset: string[] = []) => {
   if (new URLSearchParams(location.search).get('panel') === 'tun') {
     await new Promise(resolve=>setTimeout(resolve,300));

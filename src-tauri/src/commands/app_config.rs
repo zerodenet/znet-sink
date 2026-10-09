@@ -12,11 +12,12 @@ pub(crate) mod tun_settings;
 
 #[tauri::command]
 pub async fn app_config_apply_tun(
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     tun: crate::models::app_config::AppTunConfigPatch,
 ) -> AppResult<AppConfig> {
     let _operation = state.proxy_config_operation().lock().await;
-    tun_settings::apply(state.inner(), tun).await
+    tun_settings::apply(app_handle, state.clone(), tun).await
 }
 
 #[tauri::command]
@@ -152,7 +153,13 @@ pub async fn app_config_update(
     // Snapshot the old config before applying changes.
     let old_config = app_config::get(state.clone())?;
 
-    let new_config = app_config::prepare_update(&old_config, patch)?;
+    let (id, source) = crate::configuration::local_edits::context(state.inner())?;
+    let new_config = crate::configuration::local_edits::prepare_patch(
+        &old_config,
+        id.as_deref(),
+        &source,
+        patch,
+    )?;
     apply_candidate(app_handle, state.clone(), old_config, new_config).await
 }
 

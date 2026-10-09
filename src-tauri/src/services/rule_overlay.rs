@@ -60,22 +60,26 @@ pub(crate) fn compose_effective_candidate_for(
         selections,
     };
     let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
-    if id
-        .and_then(|id| inputs.app.profile_edits.get(id))
-        .is_some_and(|edits| !edits.is_empty())
+    if !inputs
+        .app
+        .client_edits
+        .as_ref()
+        .is_none_or(|edits| edits.is_empty())
     {
         candidate.report.compare(
-            "profile_local_edits",
-            &[
-                "/endpoints",
-                "/inbounds",
-                "/runtime/latency_test_url",
-                "/runtime/tun",
-                "/outbound_groups",
-            ],
+            "client_settings",
+            &["/inbounds", "/runtime", "/outbound_groups"],
             base,
             &edited,
         );
+    }
+    if id
+        .and_then(|id| inputs.app.profile_edits.get(id))
+        .is_some_and(|edits| edits.contains_key("endpoints"))
+    {
+        candidate
+            .report
+            .compare("profile_local_edits", &["/endpoints"], base, &edited);
     }
     Ok(candidate)
 }
@@ -148,7 +152,14 @@ fn finalize_effective_config(
         None => common::lock(state.app_config(), "app_config")?.clone(),
     };
     if let Some(dns) = dns_override {
-        app.dns = dns.clone();
+        // Preview/validation must use the requested DNS, even when a saved global
+        // DNS override already exists or the current source declares its own DNS.
+        let mut edits = app.client_edits.take().unwrap_or_default();
+        edits.insert(
+            "dns".into(),
+            serde_json::to_value(dns).map_err(|e| AppError::internal(e.to_string()))?,
+        );
+        app.client_edits = Some(edits);
     }
     if let Some(tolerance) = tolerance_override {
         app.url_test.tolerance_ms = tolerance;
@@ -522,10 +533,10 @@ mod tests {
             }))
             .unwrap(),
         );
-        app_config.profile_edits.insert(
-            "dns-test".into(),
-            std::collections::BTreeMap::from([("dns".into(), json!(app_config.dns))]),
-        );
+        app_config.client_edits = Some(std::collections::BTreeMap::from([(
+            "dns".into(),
+            json!(app_config.dns),
+        )]));
         let state =
             AppState::with_domain_data(app_config, Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let base = json!({
@@ -543,6 +554,29 @@ mod tests {
         assert!(effective["runtime"]["dns"]["servers"]
             .get("stale")
             .is_none());
+    }
+
+    #[test]
+    fn dns_preview_uses_the_draft_instead_of_saved_global_or_source_dns() {
+        let mut app = AppConfig::default();
+        app.client_edits = Some(std::collections::BTreeMap::from([(
+            "dns".into(),
+            json!({"enabled": true, "config": {
+                "servers":{"saved":{"type":"system"}},"default_server":"saved"
+            }, "dnsHijack":false}),
+        )]));
+        let state = AppState::with_domain_data(app, vec![], vec![], vec![], vec![]);
+        let base = json!({"runtime":{"dns":{
+            "servers":{"source":{"type":"system"}},"default_server":"source"
+        }}});
+        let draft = serde_json::from_value(json!({"enabled":true, "config":{
+            "servers":{"draft":{"type":"system"}},"default_server":"draft"
+        },"dnsHijack":false}))
+        .unwrap();
+        let preview = compose_effective_config_with_dns(&state, &base, &draft).unwrap();
+        assert_eq!(preview["runtime"]["dns"]["default_server"], "draft");
+        let saved = compose_effective_config_for(&state, &base, Some("other")).unwrap();
+        assert_eq!(saved["runtime"]["dns"]["default_server"], "saved");
     }
 
     fn dns_with_detour(detour: &str) -> Value {

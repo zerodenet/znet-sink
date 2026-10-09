@@ -1,5 +1,5 @@
 import {
-  getAppConfig,
+  getClientSettings,
   guiApplyDnsConfig,
   guiValidateDnsConfig,
   getGuiCoreHealth,
@@ -579,7 +579,7 @@ export async function loadGlobalDnsSettings(): Promise<{
   source: DnsSettingsInput;
   draft: DnsSettingsDraft;
 }> {
-  const appConfig = await getAppConfig();
+  const appConfig = await getClientSettings();
   const source = {
     enabled: appConfig.dns.enabled,
     config: appConfig.dns.config,

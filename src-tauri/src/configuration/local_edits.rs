@@ -1,4 +1,4 @@
-//! Sparse, profile-owned edits. Original subscription documents stay untouched.
+//! Sparse global client settings and profile-owned endpoint preferences.
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::services::{app_config, common::lock, proxy_config};
@@ -7,6 +7,10 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub(crate) type Edits = BTreeMap<String, Value>;
+mod migration;
+mod patch;
+pub(crate) use migration::migrate_legacy;
+pub(crate) use patch::prepare_patch;
 
 pub(crate) fn active(state: &AppState) -> AppResult<(String, Value)> {
     lock(state.proxy_configs(), "proxy_config")?
@@ -16,19 +20,34 @@ pub(crate) fn active(state: &AppState) -> AppResult<(String, Value)> {
         .ok_or_else(|| AppError::invalid_argument("请先选择一份配置，再修改网络设置"))
 }
 
+pub(crate) fn context(state: &AppState) -> AppResult<(Option<String>, Value)> {
+    let profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| profile.active)
+        .cloned();
+    Ok(profile
+        .filter(|profile| profile.content.is_some())
+        .map(|profile| (Some(profile.id), profile.content.unwrap()))
+        .unwrap_or_else(|| (None, json!({}))))
+}
+
 pub(crate) fn resolve(
     app: &AppConfig,
     id: Option<&str>,
     base: &Value,
 ) -> AppResult<(AppConfig, Value)> {
     let mut app = app.clone();
+    migrate_legacy(&mut app, id);
     // Legacy choices are migrated at load/import; defaults cannot override profiles.
     app.overrides = Default::default();
     let mut source = base.clone();
-    let edits = id
+    let mut edits = app.client_edits.clone().unwrap_or_default();
+    if let Some(endpoints) = id
         .and_then(|id| app.profile_edits.get(id))
-        .cloned()
-        .unwrap_or_default();
+        .and_then(|edits| edits.get("endpoints"))
+    {
+        edits.insert("endpoints".into(), endpoints.clone());
+    }
     for (key, value) in &edits {
         match key.as_str() {
             "endpoints" => super::endpoints::apply(&mut source, value)?,
@@ -161,15 +180,28 @@ pub(crate) fn candidate(
     reset: &[String],
 ) -> AppResult<AppConfig> {
     let mut next = previous.clone();
-    let edits = next.profile_edits.entry(id.to_owned()).or_default();
+    migrate_legacy(&mut next, Some(id));
     for key in reset {
-        edits.remove(key);
+        if key == "endpoints" {
+            if let Some(edits) = next.profile_edits.get_mut(id) {
+                edits.remove(key);
+            }
+        } else {
+            next.client_edits.as_mut().unwrap().remove(key);
+        }
     }
     for (key, value) in changes {
         validate_field(previous, &key, &value)?;
-        edits.insert(key, value);
+        if key == "endpoints" {
+            next.profile_edits
+                .entry(id.to_owned())
+                .or_default()
+                .insert(key, value);
+        } else {
+            next.client_edits.as_mut().unwrap().insert(key, value);
+        }
     }
-    if edits.is_empty() {
+    if next.profile_edits.get(id).is_some_and(BTreeMap::is_empty) {
         next.profile_edits.remove(id);
     }
     Ok(next)
@@ -218,10 +250,20 @@ fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn view(state: &AppState) -> AppResult<Value> {
-    let (id, base) = active(state)?;
-    let saved = lock(state.app_config(), "app_config")?.clone();
-    let (app, source) = resolve(&saved, Some(&id), &base)?;
+pub(crate) fn validate_client_edits(app: &AppConfig, edits: &Edits) -> AppResult<()> {
+    for (key, value) in edits {
+        if key == "endpoints" {
+            return Err(AppError::invalid_argument(
+                "端点偏好不能作为全局客户端设置导入",
+            ));
+        }
+        validate_field(app, key, value)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn settings(saved: &AppConfig, id: Option<&str>, base: &Value) -> AppResult<Value> {
+    let (app, source) = resolve(saved, id, base)?;
     let mut settings = serde_json::to_value(&app).map_err(invalid)?;
     let mut listener_view = source.clone();
     proxy_config::project_endpoint(&mut listener_view, &app.local_proxy, false)?;
@@ -285,7 +327,28 @@ pub(crate) fn view(state: &AppState) -> AppResult<Value> {
             settings["dns"] = json!({"enabled":true,"config":dns,"dnsHijack":params["dns_hijack"]});
         }
     }
-    let edited = saved.profile_edits.get(&id).cloned().unwrap_or_default();
+    Ok(settings)
+}
+
+pub(crate) fn view(state: &AppState) -> AppResult<Value> {
+    let (id, base) = active(state)?;
+    let saved = lock(state.app_config(), "app_config")?.clone();
+    let settings = settings(&saved, Some(&id), &base)?;
+    let (app, source) = resolve(&saved, Some(&id), &base)?;
+    let tolerances: Vec<Value> = source
+        .get("outbound_groups")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|group| matches!(group["type"].as_str(), Some("url_test" | "urltest")))
+        .map(|group| {
+            group
+                .get("tolerance_ms")
+                .cloned()
+                .unwrap_or_else(|| json!(app.url_test.tolerance_ms))
+        })
+        .collect();
+    let edited = app.client_edits.clone().unwrap_or_default();
     Ok(
         json!({"profileId":id,"settings":settings,"editedFields":edited.keys().collect::<Vec<_>>(),
         "sourceEndpoint":super::preferences::endpoint_for(&saved,&base).ok(),"sourceBypass":base.pointer("/route/bypass"),"groupTolerances":tolerances}),
@@ -295,69 +358,3 @@ pub(crate) fn view(state: &AppState) -> AppResult<Value> {
 #[cfg(test)]
 #[path = "local_edits_tests.rs"]
 mod tests;
-
-/// Preserve the previous UI's explicit choices on the active profile only.
-/// Portable defaults themselves are never inferred to be edits.
-pub(crate) fn migrate_legacy(app: &mut AppConfig, id: Option<&str>) -> bool {
-    if app.overrides == Default::default() {
-        return false;
-    }
-    let Some(id) = id else {
-        return false;
-    };
-    let flags = app.overrides.clone();
-    let mut values = Edits::new();
-    if flags.listener {
-        values.insert("localProxy.host".into(), json!(app.local_proxy.host));
-        values.insert("localProxy.port".into(), json!(app.local_proxy.port));
-    }
-    if flags.url_test {
-        values.insert("urlTest.url".into(), json!(app.url_test.url));
-        values.insert(
-            "urlTest.toleranceMs".into(),
-            json!(app.url_test.tolerance_ms),
-        );
-    }
-    if flags.dns {
-        values.insert("dns".into(), json!(app.dns));
-    }
-    if flags.bypass {
-        if let Some(bypass) = &app.bypass {
-            values.insert("bypass".into(), json!(bypass));
-        }
-    }
-    if flags.rules {
-        values.insert(
-            "routing.injectCommonRules".into(),
-            json!(app.routing.inject_common_rules),
-        );
-    }
-    if flags.tun {
-        if let Value::Object(tun) = json!(app.tun) {
-            for (field, value) in tun {
-                if matches!(
-                    field.as_str(),
-                    "name"
-                        | "tag"
-                        | "addr"
-                        | "secondaryAddr"
-                        | "mtu"
-                        | "includeCidrs"
-                        | "excludeCidrs"
-                        | "dualStack"
-                        | "dnsHijack"
-                        | "autoRoute"
-                        | "strictRoute"
-                ) {
-                    values.insert(format!("tun.{field}"), value);
-                }
-            }
-        }
-    }
-    let edits = app.profile_edits.entry(id.to_owned()).or_default();
-    for (key, value) in values {
-        edits.entry(key).or_insert(value);
-    }
-    app.overrides = Default::default();
-    true
-}

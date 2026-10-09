@@ -5,6 +5,9 @@ use super::dns_config::ClientDnsConfig;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Sparse settings shared by every profile. None marks pre-global storage.
+    #[serde(default)]
+    pub client_edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     #[serde(default)]
     pub profile_edits:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>,
@@ -37,6 +40,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            client_edits: Some(Default::default()),
             profile_edits: Default::default(),
             overrides: ConfigOverrides::default(),
             schema_version: default_schema_version(),
@@ -292,7 +296,7 @@ impl Default for AppTunConfig {
     }
 }
 
-pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v3";
+pub const CLIENT_KERNEL_SETTINGS_SCHEMA: &str = "znet.client-kernel-settings.v4";
 
 /// Portable client-owned settings projected onto every active proxy profile.
 /// Machine-bound executable paths, runtime sockets, UI state, logs, and
@@ -308,6 +312,8 @@ pub struct ClientKernelSettingsBundle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKernelSettings {
+    #[serde(default)]
+    pub client_edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     #[serde(default)]
     pub overrides: ConfigOverrides,
     pub core: PortableCoreConfig,
@@ -331,6 +337,7 @@ pub struct PortableCoreConfig {
 impl ClientKernelSettings {
     pub fn from_app_config(config: &AppConfig) -> Self {
         Self {
+            client_edits: config.client_edits.clone(),
             overrides: config.overrides.clone(),
             core: PortableCoreConfig {
                 auto_connect: config.core.auto_connect,
@@ -347,6 +354,7 @@ impl ClientKernelSettings {
     }
 
     pub fn apply_to(self, config: &mut AppConfig) {
+        config.client_edits = Some(self.client_edits.unwrap_or_default());
         config.overrides = self.overrides;
         config.core.auto_connect = self.core.auto_connect;
         config.core.auto_start = self.core.auto_start;
@@ -475,8 +483,18 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct AppDnsConfigPatch {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_dns_patch")]
     pub config: Option<Option<ClientDnsConfig>>,
     pub dns_hijack: Option<bool>,
+}
+
+fn deserialize_nullable_dns_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<ClientDnsConfig>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<ClientDnsConfig>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize)]

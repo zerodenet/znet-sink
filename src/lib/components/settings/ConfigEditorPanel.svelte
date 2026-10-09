@@ -409,7 +409,7 @@
       </div>
     {:else if workspaceView === 'overrides'}
       <div class="read-view">
-        <div class="view-note">这些字段由客户端设置按当前配置隔离保存，不会写回订阅来源。</div>
+        <div class="view-note">网络设置全局生效，端点偏好属于当前配置；不会写回订阅来源。</div>
         <pre>{configEditor.localEditsJson}</pre>
       </div>
     {:else}

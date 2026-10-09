@@ -90,14 +90,17 @@ async fn snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnapshot> {
     } else {
         "来源、客户端覆盖或内核实例已在最近一次事务后变化"
     };
-    let local_edits = common::lock(state.app_config(), "app_config")?
+    let mut settings = common::lock(state.app_config(), "app_config")?.clone();
+    crate::configuration::local_edits::migrate_legacy(&mut settings, Some(&active.id));
+    let mut edits = settings.client_edits.unwrap_or_default();
+    if let Some(endpoints) = settings
         .profile_edits
         .get(&active.id)
-        .cloned()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .unwrap_or_else(|| json!({}));
+        .and_then(|v| v.get("endpoints"))
+    {
+        edits.insert("endpoints".into(), endpoints.clone());
+    }
+    let local_edits = json!(edits);
 
     state.configuration().record(candidate.report.clone());
     Ok(ConfigWorkspaceSnapshot {

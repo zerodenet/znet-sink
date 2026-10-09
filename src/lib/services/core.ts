@@ -258,6 +258,11 @@ export async function getAppConfig(): Promise<AppConfig> {
   return invoke('app_config_get');
 }
 
+/** Current source resolved with explicit global settings and fallback defaults. */
+export async function getClientSettings(): Promise<AppConfig> {
+  return invoke('client_settings_get');
+}
+
 export async function updateAppConfig(patch: AppConfigPatch): Promise<AppConfig> {
   return invoke('app_config_update', { patch });
 }
