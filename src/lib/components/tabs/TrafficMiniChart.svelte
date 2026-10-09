@@ -26,6 +26,7 @@
 </script>
 <div class="mini-chart" class:stale aria-label={`${plane} 流量曲线`}>
   <svg viewBox="0 0 300 64" preserveAspectRatio="none" role="img" aria-label="最近两分钟的同周期平均速率" data-ceiling={ceiling}>
+    <title>曲线空缺表示速率样本不可用或重新建立采样基线，不代表网络连接断开；累计值来自内核统计。</title>
     <path d="M0,9H300 M0,33H300 M0,57H300" class="grid" />
     {#each paths as key, index}<path d={chartPath(points, key, ceiling)} class:receive={index === 0} class:send={index === 1} />{/each}
   </svg>
