@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { store } from '$lib/services/store.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
+  import { overviewTrafficTotals, formatOverviewBytes as formatBytes, formatOverviewSpeed as formatSpeed } from '$lib/services/overview-traffic';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { getAppErrorMessage } from '$lib/services/core';
   import {
@@ -19,6 +20,8 @@
   import { buildOverview, capturePresentation, trafficUnavailableReason } from '$lib/components/overview/model';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Select from '$lib/components/ui/select';
+  import { Button } from '$lib/components/ui/button';
+  import { Check, CircleAlert, LoaderCircle, Power, RefreshCw } from '@lucide/svelte';
 
   let now = $state(Date.now());
   const model = $derived(buildOverview({ now, connection: guiState.connection, connectionAt: guiState.connectionUpdatedAt,
@@ -28,25 +31,11 @@
   const trafficUnavailable = $derived(trafficUnavailableReason(model, guiState.supportsTrafficStats, overviewData.lastSampleAtUnixMs, overviewData.isLive, now));
   onMount(() => {
     const clock = window.setInterval(() => { now = Date.now(); }, 1000);
-    return () => { sourceRequest++; window.clearInterval(clock); };
+    return () => { disposed = true; sourceRequest++; window.clearInterval(clock); if (recoveryFeedbackTimer) clearTimeout(recoveryFeedbackTimer); };
   });
 
-  function formatSpeed(speed: number): string {
-    if (speed >= 1) return `${speed.toFixed(2)} MB/s`;
-    if (speed * 1000 >= 1) return `${(speed * 1000).toFixed(0)} KB/s`;
-    return '0 KB/s';
-  }
-
-  function formatBytes(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
-    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
-    return `${Math.round(bytes)} B`;
-  }
-
   function trafficShare(part: number, total: number): number {
-    // An empty session still needs a complete, stable ring. Start from an
+    // Empty counters still need a complete, stable ring. Start from an
     // intentional 50/50 composition and let real cumulative bytes move the
     // boundary once traffic exists.
     if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return 50;
@@ -89,7 +78,29 @@
   let sourceError = $state<string | null>(null);
   let modeError = $state<string | null>(null);
   let activatingSourceId = $state<string | null>(null);
+  let recovering = $state(false);
+  let recoveryFeedback = $state<{ ok: boolean; message: string } | null>(null);
+  let recoveryFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sourceRequest = 0;
+  let disposed = false;
+
+  async function recoverNetwork() {
+    if (recovering || isPowerBusy || !guiState.isTunEnabled) return;
+    recovering = true;
+    recoveryFeedback = null;
+    if (recoveryFeedbackTimer) clearTimeout(recoveryFeedbackTimer);
+    try {
+      const result = await guiState.recoverTun({ notify: false });
+      if (disposed) return;
+      recoveryFeedback = { ok: result.ok, message: result.ok ? 'TUN 路由检查通过' : result.message || '网络恢复未完成，请重试' };
+      if (result.ok) recoveryFeedbackTimer = setTimeout(() => recoveryFeedback = null, 4000);
+    } catch (error) {
+      if (disposed) return;
+      recoveryFeedback = { ok: false, message: getAppErrorMessage(error, '网络恢复失败，请重试') };
+    } finally {
+      recovering = false;
+    }
+  }
 
   const PROXY_MODES = [
     { value: 'global', label: '全局' },
@@ -127,19 +138,19 @@
       ? overviewData.speedHistory[overviewData.speedHistory.length - 1].up
       : 0,
   );
-  const sessionTotalBytes = $derived(overviewData.captureSessionTotalBytes);
-  const sessionTotalLabel = $derived(formatBytes(sessionTotalBytes));
-  const sessionDownLabel = $derived(formatBytes(overviewData.captureSessionDownBytes));
-  const sessionUpLabel = $derived(formatBytes(overviewData.captureSessionUpBytes));
-  const sessionUpShare = $derived(trafficShare(overviewData.captureSessionUpBytes, sessionTotalBytes));
-  const sessionDownShare = $derived(100 - sessionUpShare);
-  const sessionRingStyle = $derived(
-    `--traffic-up-share: ${sessionUpShare.toFixed(3)}%; --traffic-down-share: ${sessionDownShare.toFixed(3)}%;`,
+  const trafficTotals = $derived(overviewTrafficTotals(overviewData.totalUpBytes, overviewData.totalDownBytes, !!trafficUnavailable));
+  const trafficTotalLabel = $derived(formatBytes(trafficTotals.total));
+  const trafficDownLabel = $derived(formatBytes(trafficTotals.down));
+  const trafficUpLabel = $derived(formatBytes(trafficTotals.up));
+  const trafficUpShare = $derived(trafficShare(trafficTotals.up ?? 0, trafficTotals.total ?? 0));
+  const trafficDownShare = $derived(100 - trafficUpShare);
+  const trafficRingStyle = $derived(
+    `--traffic-up-share: ${trafficUpShare.toFixed(3)}%; --traffic-down-share: ${trafficDownShare.toFixed(3)}%;`,
   );
 
   const systemProxyEnabled = $derived(guiState.isSystemProxyEnabled);
   const captureEnabled = $derived(guiState.isCaptureEnabled);
-  const isPowerBusy = $derived(guiState.isInitializing || guiState.isCoreBusy || guiState.isConnecting || guiState.isDisconnecting || guiState.isSwitchingTun || guiState.isSwitchingSystemProxy || guiState.isSwitchingMode || guiState.isSelectingPolicy);
+  const isPowerBusy = $derived(recovering || guiState.isInitializing || guiState.isCoreBusy || guiState.isConnecting || guiState.isDisconnecting || guiState.isSwitchingTun || guiState.isSwitchingSystemProxy || guiState.isSwitchingMode || guiState.isSelectingPolicy);
   const capture = $derived(capturePresentation(model, systemProxyEnabled, guiState.isTunEnabled, guiState.isTunDesiredEnabled, isPowerBusy));
   const liteConnected = $derived(capture.healthy);
   const powerOn = $derived(capture.powerOn);
@@ -284,39 +295,39 @@
         class:on={liteConnected}
         class:idle={!liteConnected}
         class:partial={capture.warning && powerOn}
-        class:unsupported={!guiState.supportsTrafficStats}
+        class:unsupported={!!trafficUnavailable}
       >
         <div
-          class="lite-session-traffic lite-metric-help lite-metric-help-below"
-          data-tooltip={guiState.supportsTrafficStats ? `本次总流量 ${sessionTotalLabel}` : '本次总流量不可用'}
+          class="lite-total-traffic lite-metric-help lite-metric-help-below"
+          data-tooltip={trafficUnavailable ?? `内核累计总流量 ${trafficTotalLabel}`}
         >
-          <span class="sr-only">本次总流量：</span>
-          <strong>{guiState.supportsTrafficStats ? sessionTotalLabel : '—'}</strong>
+          <span class="sr-only">内核累计总流量：</span>
+          <strong>{trafficTotalLabel}</strong>
         </div>
 
         <div
           class="lite-traffic-ring"
           class:flowing={currentUp > 0.001 || currentDown > 0.001}
-          style={sessionRingStyle}
+          style={trafficRingStyle}
           aria-hidden="true"
         ></div>
 
         <div class="lite-traffic-totals">
           <span
             class="lite-total-up lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `本次上传 ${sessionUpLabel}` : '本次上传不可用'}
+            data-tooltip={trafficUnavailable ?? `内核累计上行 ${trafficUpLabel}`}
           >
-            <span class="sr-only">本次上传：</span>
+            <span class="sr-only">内核累计上行：</span>
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 7 6 3 10 7"/></svg>
-            <span>{guiState.supportsTrafficStats ? sessionUpLabel : '—'}</span>
+            <span>{trafficUpLabel}</span>
           </span>
           <span
             class="lite-total-down lite-metric-help"
-            data-tooltip={guiState.supportsTrafficStats ? `本次下载 ${sessionDownLabel}` : '本次下载不可用'}
+            data-tooltip={trafficUnavailable ?? `内核累计下行 ${trafficDownLabel}`}
           >
-            <span class="sr-only">本次下载：</span>
+            <span class="sr-only">内核累计下行：</span>
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 5 6 9 10 5"/></svg>
-            <span>{guiState.supportsTrafficStats ? sessionDownLabel : '—'}</span>
+            <span>{trafficDownLabel}</span>
           </span>
         </div>
 
@@ -362,12 +373,31 @@
       </div>
     </div>
 
-    <div class="lite-capture-state" class:warning={capture.warning} class:failed={capture.failed} role="status" aria-label="代理运行状态">
-      <span>{capture.label}</span>
-      {#if guiState.isTunEnabled}
-        <button data-slot="surface-button" onclick={() => guiState.recoverTun()} disabled={isPowerBusy || guiState.isSwitchingTun} aria-label="立即重试 TUN 网络恢复">{guiState.isSwitchingTun ? '处理中…' : '立即重试'}</button>
-      {/if}
-      {#if capture.warning}<small>{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || model.egress.issue?.detail || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
+    <div class="lite-capture-state" role="status" aria-label="代理运行状态">
+      <div class="lite-capture-toolbar">
+        <span class="lite-capture-badge" class:healthy={capture.healthy && !isPowerBusy} class:warning={capture.warning} class:failed={capture.failed && !isPowerBusy}>
+          {#if isPowerBusy}<LoaderCircle class="h-3.5 w-3.5 lite-recovery-spin" />
+          {:else if capture.warning}<CircleAlert class="h-3.5 w-3.5" />
+          {:else if capture.healthy}<Check class="h-3.5 w-3.5" />
+          {:else}<Power class="h-3.5 w-3.5" />{/if}
+          <span>{capture.label}</span>
+        </span>
+        {#if guiState.isTunEnabled}
+          <Button variant="outline" size="sm" class="lite-recovery-button" onclick={recoverNetwork}
+            disabled={isPowerBusy} aria-busy={recovering || guiState.isSwitchingTun}
+            aria-label="立即重试 TUN 网络恢复" title="重新检查并恢复 TUN 路由">
+            {#if recovering || guiState.isSwitchingTun}<LoaderCircle class="h-3.5 w-3.5 lite-recovery-spin" />
+            {:else}<RefreshCw class="h-3.5 w-3.5" />{/if}
+            <span>{recovering || guiState.isSwitchingTun ? '恢复中…' : '重试恢复'}</span>
+          </Button>
+        {/if}
+      </div>
+      {#if recoveryFeedback}
+        <small class="lite-recovery-feedback" class:success={recoveryFeedback.ok} class:error={!recoveryFeedback.ok} role={recoveryFeedback.ok ? 'status' : 'alert'}>
+          {#if recoveryFeedback.ok}<Check class="h-3 w-3" />{:else}<CircleAlert class="h-3 w-3" />{/if}
+          <span>{recoveryFeedback.message}</span>
+        </small>
+      {:else if capture.warning}<small class="lite-capture-detail">{guiState.connectionError || guiState.tunStatusError || guiState.tunStatus?.lastError || model.egress.issue?.detail || `系统代理：${model.proxy} · TUN：${model.tunLabel}`}</small>{/if}
     </div>
 
     <div class="lite-mode-block">
@@ -409,7 +439,7 @@
             <Select.Root
               type="single"
               items={sourceOptions}
-              disabled={sourceLoading || !!sourceError || activatingSourceId !== null}
+              disabled={isPowerBusy || sourceLoading || !!sourceError || activatingSourceId !== null}
               bind:value={() => activeSourceValue, (value) => {
                 if (typeof value === 'string' && value) void activateSource(value);
               }}
@@ -483,10 +513,26 @@
 {/if}
 
 <style>
-  .lite-capture-state { display:flex; flex-direction:column; gap:3px; text-align:center; font-size:11px; color:var(--muted-foreground); }
-  .lite-capture-state.warning { color:var(--warning, #d97706); }
-  .lite-capture-state.failed { color:var(--destructive); }
-  .lite-capture-state small { font-size:10px; overflow-wrap:anywhere; }
+  .lite-capture-state { display:flex; align-items:center; flex-direction:column; gap:7px; padding:2px 8px 4px; text-align:center; font-size:11px; color:var(--muted-foreground); }
+  .lite-capture-toolbar { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; }
+  .lite-capture-badge { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:5px 10px; border:1px solid var(--border); border-radius:8px; background:var(--card); }
+  .lite-capture-badge.healthy { color:#15803d; background:color-mix(in srgb,var(--success) 7%,var(--card)); border-color:color-mix(in srgb,var(--success) 24%,var(--border)); }
+  .lite-capture-badge.warning { color:#b45309; background:color-mix(in srgb,var(--warning) 7%,var(--card)); border-color:color-mix(in srgb,var(--warning) 24%,var(--border)); }
+  .lite-capture-badge.failed { color:#b91c1c; background:color-mix(in srgb,var(--destructive) 6%,var(--card)); border-color:color-mix(in srgb,var(--destructive) 22%,var(--border)); }
+  :global(.lite-recovery-button) { min-width:98px; box-shadow:0 1px 2px rgb(0 0 0 / 5%); transition:transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+  :global(.lite-recovery-button:hover:not(:disabled)) { border-color:color-mix(in srgb,var(--primary) 35%,var(--border)); background:color-mix(in srgb,var(--primary) 6%,var(--card)); transform:translateY(-1px); box-shadow:0 3px 7px rgb(0 0 0 / 7%); }
+  :global(.lite-recovery-button:active:not(:disabled)) { transform:translateY(0) scale(.97); box-shadow:none; }
+  :global(.lite-recovery-button:disabled) { cursor:wait; }
+  :global(.lite-recovery-spin) { animation:spin .8s linear infinite; }
+  .lite-capture-state small { font-size:10px; line-height:1.5; overflow-wrap:anywhere; max-width:min(100%,420px); }
+  .lite-capture-detail { color:#b45309; }
+  .lite-recovery-feedback { display:flex; align-items:flex-start; justify-content:center; gap:5px; }
+  .lite-recovery-feedback :global(svg) { flex-shrink:0; margin-top:1px; }
+  .lite-recovery-feedback.success { color:#15803d; }
+  .lite-recovery-feedback.error { color:#b91c1c; }
+  :global(.dark) .lite-capture-badge.healthy, :global(.dark) .lite-recovery-feedback.success { color:var(--success); }
+  :global(.dark) .lite-capture-badge.warning, :global(.dark) .lite-capture-detail { color:var(--warning); }
+  :global(.dark) .lite-capture-badge.failed, :global(.dark) .lite-recovery-feedback.error { color:#fca5a5; }
   .lite-mode-error { margin:0; font-size:11px; color:var(--destructive); }
   @property --traffic-up-share {
     syntax: '<percentage>';
@@ -528,7 +574,7 @@
     overflow: visible;
   }
 
-  .lite-session-traffic {
+  .lite-total-traffic {
     position: absolute;
     top: 0;
     left: 50%;
@@ -552,16 +598,16 @@
     transition: opacity 0.2s ease, color 0.2s ease;
   }
 
-  .lite-session-traffic strong {
+  .lite-total-traffic strong {
     font-weight: 700;
   }
 
-  .lite-power-orbit.idle .lite-session-traffic {
+  .lite-power-orbit.idle .lite-total-traffic {
     color: var(--muted-foreground);
     opacity: 0.72;
   }
 
-  .lite-power-orbit.unsupported .lite-session-traffic {
+  .lite-power-orbit.unsupported .lite-total-traffic {
     opacity: 0.45;
   }
 
@@ -986,6 +1032,8 @@
     .lite-power-spin {
       animation: none;
     }
+    :global(.lite-recovery-spin) { animation:none; }
+    :global(.lite-recovery-button) { transition:none; }
   }
 
   @keyframes spin {

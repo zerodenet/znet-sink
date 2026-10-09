@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { formatOverviewBytes, formatOverviewSpeed, overviewTrafficTotals } from '../src/lib/services/overview-traffic.ts';
 import { flagTextParts } from '../src/lib/services/flag-text.ts';
 import { buildOverview, capturePresentation, trafficUnavailableReason, formatUptime } from '../src/lib/components/overview/model.ts';
 const now = 1000000;
@@ -234,6 +235,24 @@ test('global overview follows its explicit target and ignores unrelated split po
   assert.equal(automatic.globalSelection,'auto → leaf');
   assert.equal(automatic.globalDelay,'31 ms');
   assert.equal(buildOverview({...base,mode:{...base.mode,globalOutbound:undefined}}).globalSelection,'全局出口未确认');
+});
+
+
+test('overview totals preserve kernel counters, missing values and decimal byte units', () => {
+  assert.deepEqual(overviewTrafficTotals(13_000_000,322_000_000,false),{up:13_000_000,down:322_000_000,total:335_000_000});
+  assert.deepEqual(overviewTrafficTotals(0,128,false),{up:0,down:128,total:128});
+  assert.deepEqual(overviewTrafficTotals(null,128,false),{up:null,down:128,total:null});
+  assert.deepEqual(overviewTrafficTotals(0,0,true),{up:null,down:null,total:null});
+  assert.deepEqual(overviewTrafficTotals(NaN,-1,false),{up:null,down:null,total:null});
+  for (const [bytes, expected] of [[0,'0 B'],[999,'999 B'],[1000,'1 KB'],[1_000_000,'1.0 MB'],[1_180_000_000,'1.18 GB'],[null,'—'],[NaN,'—']]) {
+    assert.equal(formatOverviewBytes(bytes),expected);
+  }
+});
+
+test('overview speed units do not round positive sub-KB traffic down to zero', () => {
+  for (const [rate, expected] of [[0,'0 KB/s'],[0.000064,'<1 KB/s'],[0.08,'80.0 KB/s'],[0.193,'193 KB/s'],[1.234,'1.23 MB/s'],[NaN,'—'],[-1,'—']]) {
+    assert.equal(formatOverviewSpeed(rate),expected);
+  }
 });
 
 test('selectors and nested references reuse the newest observation of their actual leaf', () => {

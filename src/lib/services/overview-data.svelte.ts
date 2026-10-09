@@ -205,7 +205,8 @@ class OverviewDataStore {
   totalUpBytes = $state(0);
   totalDownBytes = $state(0);
 
-  // Capture-session traffic is shared by Lite and Pro. The session starts when
+  // Client capture-session deltas are separate from the kernel cumulative
+  // counters shown by both overview modes. The session starts when
   // either system proxy or TUN becomes active and ends only after both stop.
   // Its values are deltas of the authoritative Zero cumulative counters.
   captureSessionActive = $state(false);

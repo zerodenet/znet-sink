@@ -46,29 +46,29 @@ assert.ok(
 assert.ok(
   overview.includes('class="lite-power-orbit"') &&
     overview.includes('class="lite-traffic-ring"') &&
-    overview.includes('style={sessionRingStyle}') &&
+    overview.includes('style={trafficRingStyle}') &&
     overview.includes('background: conic-gradient(') &&
     overview.includes('from 180deg') &&
     overview.includes('--traffic-up-share') &&
-    overview.includes('sessionTotalLabel'),
-  'Lite Overview should render one closed CSS conic-gradient ring around the power switch with the session total above it',
+    overview.includes('trafficTotalLabel'),
+  'Lite Overview should render one closed CSS conic-gradient ring around the power switch with the kernel cumulative total above it',
 );
 assert.ok(
   overview.includes('total <= 0) return 50') &&
-    overview.includes('trafficShare(overviewData.captureSessionUpBytes, sessionTotalBytes)') &&
-    overview.includes('const sessionDownShare = $derived(100 - sessionUpShare)') &&
+    overview.includes('trafficShare(trafficTotals.up ?? 0, trafficTotals.total ?? 0)') &&
+    overview.includes('const trafficDownShare = $derived(100 - trafficUpShare)') &&
     !overview.includes('<svg class="lite-traffic-ring"') &&
     !overview.includes('stroke-dasharray={sessionUpDash}') &&
     !overview.includes('stroke-dasharray={sessionDownDash}') &&
     !overview.includes('stroke-dashoffset={sessionDownOffset}'),
-  'an empty session should start 50/50 and the traffic ring must not regress to SVG dash segments that can expose visual gaps',
+  'empty counters should start 50/50 and the traffic ring must not regress to SVG dash segments that can expose visual gaps',
 );
 assert.ok(
   overview.includes('class="lite-traffic-totals"') &&
     overview.includes('class="lite-total-up lite-metric-help"') &&
     overview.includes('class="lite-total-down lite-metric-help"') &&
-    overview.includes('sessionUpLabel') &&
-    overview.includes('sessionDownLabel'),
+    overview.includes('trafficUpLabel') &&
+    overview.includes('trafficDownLabel'),
   'the values beside the ring should be cumulative upload/download totals that match the ring composition',
 );
 assert.ok(
@@ -80,17 +80,17 @@ assert.ok(
   'real-time upload/download speed should remain visible in a fixed row below the ring instead of replacing cumulative totals',
 );
 assert.ok(
-  overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次总流量 ${sessionTotalLabel}`') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次上传 ${sessionUpLabel}`') &&
-    overview.includes('data-tooltip={guiState.supportsTrafficStats ? `本次下载 ${sessionDownLabel}`') &&
+  overview.includes('data-tooltip={trafficUnavailable ?? `内核累计总流量 ${trafficTotalLabel}`') &&
+    overview.includes('data-tooltip={trafficUnavailable ?? `内核累计上行 ${trafficUpLabel}`') &&
+    overview.includes('data-tooltip={trafficUnavailable ?? `内核累计下行 ${trafficDownLabel}`') &&
     overview.includes('data-tooltip={trafficUnavailable ?? `实时上传速率 ${formatSpeed(currentUp)}`') &&
     overview.includes('data-tooltip={trafficUnavailable ?? `实时下载速率 ${formatSpeed(currentDown)}`') &&
-    overview.includes('<span class="sr-only">本次总流量：</span>') &&
-    overview.includes('<span class="sr-only">本次上传：</span>') &&
-    overview.includes('<span class="sr-only">本次下载：</span>') &&
+    overview.includes('<span class="sr-only">内核累计总流量：</span>') &&
+    overview.includes('<span class="sr-only">内核累计上行：</span>') &&
+    overview.includes('<span class="sr-only">内核累计下行：</span>') &&
     overview.includes('<span class="sr-only">实时上传速率：</span>') &&
     overview.includes('<span class="sr-only">实时下载速率：</span>') &&
-    !overview.includes('本次代理会话总流量 ${sessionTotalLabel}，上传 ${sessionUpLabel}，下载 ${sessionDownLabel}'),
+    !overview.includes('本次代理会话总流量 ${trafficTotalLabel}，上传 ${trafficUpLabel}，下载 ${trafficDownLabel}'),
   'each Lite traffic metric should expose its own hover hint and screen-reader label instead of one aggregated explanation',
 );
 assert.ok(
