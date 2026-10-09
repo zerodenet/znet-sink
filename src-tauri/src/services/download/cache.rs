@@ -1,7 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -16,7 +16,33 @@ pub(super) struct Cache {
     pub part: PathBuf,
     pub meta: Metadata,
     root: PathBuf,
-    _lock: File,
+    _lock: CacheLock,
+}
+
+struct CacheLock {
+    file: File,
+    owner_pid: u32,
+}
+
+impl CacheLock {
+    fn try_acquire(file: File) -> Result<Self, TryLockError> {
+        file.try_lock()?;
+        Ok(Self {
+            file,
+            owner_pid: std::process::id(),
+        })
+    }
+}
+
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        // Closing alone can leave a Unix lock held by a descriptor inherited
+        // during process creation. Only the owning process may unlock: a forked
+        // child's copy must not release a lock still in use by its parent.
+        if self.owner_pid == std::process::id() {
+            let _ = self.file.unlock();
+        }
+    }
 }
 
 impl Cache {
@@ -38,8 +64,7 @@ impl Cache {
             .write(true)
             .open(root.join("lock"))
             .map_err(io_error)?;
-        lock.try_lock()
-            .map_err(|_| AppError::internal("该文件正在下载或校验，请等待当前操作完成"))?;
+        let lock = CacheLock::try_acquire(lock).map_err(lock_error)?;
         let meta = fs::read(root.join("metadata.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -115,7 +140,7 @@ fn prune(parent: &Path) {
         else {
             continue;
         };
-        if lock.try_lock().is_ok() {
+        if let Ok(_lock) = CacheLock::try_acquire(lock) {
             // Keep the lock inode/directory: deleting it could admit a competing
             // downloader while this lock is still held (especially on Unix).
             let _ = fs::remove_file(root.join("payload.part"));
@@ -124,6 +149,17 @@ fn prune(parent: &Path) {
     }
 }
 
+fn lock_error(error: TryLockError) -> AppError {
+    match error {
+        TryLockError::WouldBlock => AppError::internal("该文件正在下载或校验，请等待当前操作完成"),
+        TryLockError::Error(error) => io_error(error),
+    }
+}
+
 pub(super) fn io_error(error: std::io::Error) -> AppError {
     AppError::internal(format!("下载缓存读写失败（请检查磁盘空间和权限）：{error}"))
 }
+
+#[cfg(test)]
+#[path = "tests/cache_lock.rs"]
+mod tests;
