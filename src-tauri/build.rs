@@ -46,5 +46,32 @@ fn main() {
             "embedded frontend/backend features differ"
         );
     }
-    tauri_build::build()
+    // Use the target, not the build-script host, so cross-compilation works too.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        // Tauri's resource manifest does not reach the library unit-test runner.
+        // Embed it through the linker for every executable, including tests, to
+        // prevent STATUS_ENTRYPOINT_NOT_FOUND when loading Common-Controls APIs.
+        // https://github.com/tauri-apps/tauri/pull/4383#issuecomment-1212221864
+        // Disable only the resource manifest to avoid duplicates; Tauri still
+        // generates the app's icon and version resources.
+        tauri_build::try_build(
+            tauri_build::Attributes::new()
+                .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest()),
+        )
+        .expect("failed to build Tauri resources");
+
+        let manifest = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"),
+        )
+        .join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        // Keep Tauri's default manifest behavior without adding a UAC fragment.
+        println!("cargo:rustc-link-arg=/MANIFESTUAC:NO");
+    } else {
+        tauri_build::build()
+    }
 }
