@@ -42,7 +42,7 @@ pub async fn system_proxy_enable(
             tauri::async_runtime::spawn_blocking(move || {
                 local_proxy::wait_until_listening(&host, port)?;
                 system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)?;
-                system_proxy::status()
+                system_proxy::status_fresh()
             })
             .await
             .map_err(|e| {
@@ -90,7 +90,7 @@ pub async fn system_proxy_disable(
         async {
             tauri::async_runtime::spawn_blocking(|| {
                 system_proxy_guard::disable_with_guard()?;
-                system_proxy::status()
+                system_proxy::status_fresh()
             })
             .await
             .map_err(|e| {

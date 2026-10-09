@@ -1,3 +1,6 @@
+mod cache;
+static STATUS_CACHE: cache::StatusCache<SystemProxyStatus> = cache::StatusCache::new();
+
 #[cfg(any(target_os = "macos", test))]
 #[path = "system_proxy_macos_bypass.rs"]
 mod macos_bypass;
@@ -87,7 +90,7 @@ pub fn enable_with_bypass(
     }
 
     let socks_enabled = supports_socks5(host, port);
-    set_proxy_platform(host, port, true, socks_enabled, bypass)?;
+    mutate_proxy(|| set_proxy_platform(host, port, true, socks_enabled, bypass))?;
 
     Ok(SystemProxyStatus {
         enabled: true,
@@ -111,7 +114,7 @@ pub fn enable_with_bypass(
 /// on enable and [`restore`]s it on disable, so the user's original settings
 /// are recovered instead of being wiped.
 pub fn disable() -> AppResult<SystemProxyStatus> {
-    set_proxy_platform("", 0, false, false, &[])?;
+    mutate_proxy(|| set_proxy_platform("", 0, false, false, &[]))?;
 
     Ok(SystemProxyStatus {
         enabled: false,
@@ -124,7 +127,26 @@ pub fn disable() -> AppResult<SystemProxyStatus> {
 }
 
 pub fn status() -> AppResult<SystemProxyStatus> {
-    status_platform()
+    STATUS_CACHE.get(false, status_platform)
+}
+
+/// Guard/mutation decisions always inspect the OS, including external changes.
+pub fn status_fresh() -> AppResult<SystemProxyStatus> {
+    STATUS_CACHE.get(true, status_platform)
+}
+
+pub async fn status_async() -> AppResult<SystemProxyStatus> {
+    tauri::async_runtime::spawn_blocking(status)
+        .await
+        .map_err(|error| AppError::internal(format!("system proxy query worker: {error}")))?
+}
+
+fn mutate_proxy<T>(operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+    STATUS_CACHE.invalidate();
+    let result = operation();
+    // Even failed OS commands may have partially changed settings.
+    STATUS_CACHE.invalidate();
+    result
 }
 
 /// Whether the current platform exposes and has the managed local-network
@@ -143,7 +165,7 @@ pub fn capture_backup() -> AppResult<ProxyBackup> {
 /// [`capture_backup`]. Used by the proxy guard instead of the destructive
 /// [`disable`] so the user's original configuration is recovered.
 pub fn restore(backup: &ProxyBackup) -> AppResult<()> {
-    restore_platform(backup)
+    mutate_proxy(|| restore_platform(backup))
 }
 
 fn supports_socks5(host: &str, port: u16) -> bool {

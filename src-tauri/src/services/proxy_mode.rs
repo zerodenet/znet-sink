@@ -20,17 +20,10 @@ const GROUP_KEYS: &[&str] = &[
 ];
 const OUTBOUND_KEYS: &[&str] = &["outbounds", "proxies"];
 
-pub fn status(state: &AppState) -> AppResult<GuiProxyModeStatus> {
+pub async fn status(state: &AppState) -> AppResult<GuiProxyModeStatus> {
     let active = active_proxy_config(state)?;
     let core_running = core_process::refresh_status(state)?.state == CoreProcessState::Running;
-    Ok(build_status_from_active(
-        active.as_ref(),
-        false,
-        core_running,
-        false,
-        false,
-        None,
-    ))
+    Ok(build_status_from_active(active.as_ref(), false, core_running, false, false, None).await)
 }
 
 pub async fn set(
@@ -89,7 +82,8 @@ pub async fn set(
         restart,
         core_was_running && !restart,
         None,
-    ))
+    )
+    .await)
 }
 
 fn profile_input(
@@ -115,7 +109,7 @@ fn active_proxy_config(
         .cloned())
 }
 
-fn build_status_from_active(
+async fn build_status_from_active(
     active: Option<&crate::models::proxy_config::ProxyConfigProfile>,
     exported: bool,
     core_running: bool,
@@ -123,7 +117,8 @@ fn build_status_from_active(
     requires_reconnect: bool,
     reason: Option<String>,
 ) -> GuiProxyModeStatus {
-    let system_proxy_enabled = system_proxy::status()
+    let system_proxy_enabled = system_proxy::status_async()
+        .await
         .map(|status| status.enabled)
         .unwrap_or(false);
 

@@ -4,7 +4,7 @@
   import { Button } from '$lib/components/ui/button';
   import * as Select from '$lib/components/ui/select';
   import * as Tabs from '$lib/components/AppTabs';
-  import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames } from '$lib/services/core';
+  import { getAppErrorMessage, getGuiDebugFrames, clearDebugFrames, setDebugCapture } from '$lib/services/core';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import {
@@ -36,6 +36,22 @@
 
   let subTab = $state<SubTab>(diagnosticCatalog.length ? 'diagnostics' : 'modules');
   let frames = $state<DebugFrame[]>([]);
+  let detailedCapture = $state(false);
+  let captureBusy = $state(false);
+  let captureRevision = 0;
+
+  async function toggleCapture() {
+    if (captureBusy) return;
+    captureBusy = true;
+    captureRevision += 1;
+    try {
+      const status = await setDebugCapture(!detailedCapture);
+      detailedCapture = status.detailed;
+    } catch (error) {
+      showFeedback('error', getAppErrorMessage(error, '调整 IPC 采集失败'));
+    } finally { captureBusy = false; }
+  }
+
   let loading = $state(true);
   let refreshing = $state(false);
   let loadingMore = $state(false);
@@ -142,7 +158,9 @@
     if (options.replace && frames.length > 0) refreshing = true;
 
     try {
-      const page = await getGuiDebugFrames(buildQuery());
+      const captureRevisionAtStart = captureRevision;
+      const [page, capture] = await Promise.all([getGuiDebugFrames(buildQuery()), setDebugCapture()]);
+      if (captureRevisionAtStart === captureRevision) detailedCapture = capture.detailed;
       if (!refreshGate.isCurrentGeneration(generation) || subTab !== 'frames' || requestedFilter !== filterType) return;
       if (!refreshGate.canApply(request)) return;
       loadError = null;
@@ -395,6 +413,9 @@
           </span>
         </div>
         <div class="debug-actions">
+        <Button variant={detailedCapture ? 'secondary' : 'outline'} size="sm" disabled={captureBusy} onclick={toggleCapture} aria-pressed={detailedCapture} title="默认记录摘要；详细采集有大小限制，5 分钟后自动停止">
+          <Radio />{detailedCapture ? '停止详细采集' : '详细采集 · 5 分钟'}
+        </Button>
         <Button variant="outline" size="sm" onclick={toggleExpandAll} title="展开或折叠全部 IPC 帧">
           <ChevronsUpDown />
           {expandAll ? '折叠' : '展开'}
@@ -418,7 +439,7 @@
           disabled={visibleFrames.length === 0}
           variant="outline"
           size="sm"
-          title="复制当前筛选下已加载的完整 IPC 帧"
+          title="复制当前筛选下已加载的 IPC 记录"
         ><Clipboard />复制</Button>
         <Button onclick={() => refresh({ replace: true })} size="sm" disabled={refreshing || clearing}>
           <RefreshCcw class={refreshing ? 'animate-spin' : undefined} />

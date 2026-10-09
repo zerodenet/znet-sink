@@ -831,3 +831,8 @@ export async function getProfileSettings(): Promise<ProfileSettings> {
 export async function applyProfileSettings(profileId: string, changes: Record<string, unknown>, reset: string[] = []): Promise<ProfileSettings> {
   return invoke('profile_settings_apply', {profileId, changes, reset});
 }
+
+export type DebugCaptureStatus = { detailed: boolean; expiresAtMs: number };
+export async function setDebugCapture(enabled?: boolean): Promise<DebugCaptureStatus> {
+  return invoke('gui_debug_capture', { enabled });
+}

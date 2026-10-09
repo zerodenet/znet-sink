@@ -22,7 +22,7 @@ pub async fn snapshot(state: State<'_, AppState>) -> AppResult<GuiSelfTestSnapsh
         .find(|profile| profile.active)
         .cloned();
     let core_config = core_config::snapshot(state.clone())?;
-    let proxy_mode = proxy_mode::status(state.inner())?;
+    let proxy_mode = proxy_mode::status(state.inner()).await?;
     let connection = gui_connection::status(state.inner()).await?;
 
     let mut checks = Vec::new();

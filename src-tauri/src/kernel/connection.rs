@@ -52,7 +52,7 @@ use tokio::time::timeout;
 use crate::errors::{AppError, AppResult};
 use crate::kernel::transport::{self, KernelCloser, KernelReader, KernelWriter};
 use crate::models::core::CoreEndpoint;
-use crate::models::debug::{push_debug_frame, DebugFrame};
+use crate::models::debug::{capture_payload, push_debug_frame, DebugFrame};
 
 /// `id` used for the initial `subscribe` frame. Distinct from the
 /// `znet-sink-<n>` request ids so it can never collide with a pending
@@ -202,7 +202,6 @@ impl MultiplexedConnection {
         // and we must not stall the async runtime. The pending slot is
         // already registered so a lightning-fast kernel response can still be
         // paired even while the write is completing.
-        let frame_preview = crate::kernel::redaction::preview(&frame_bytes);
         push_debug_frame(DebugFrame {
             id: 0,
             at_ms: crate::services::common::now_unix_ms(),
@@ -211,7 +210,6 @@ impl MultiplexedConnection {
             payload: serde_json::json!({
                 "requestId": request_id,
                 "bytes": frame_bytes.len(),
-                "preview": frame_preview,
             }),
             elapsed_ms: None,
             error: None,
@@ -395,7 +393,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     at_ms: crate::services::common::now_unix_ms(),
                     direction: "rx".to_string(),
                     frame_type: "subscribe-ack".to_string(),
-                    payload: frame.clone(),
+                    payload: capture_payload(&frame),
                     elapsed_ms: None,
                     error: None,
                 });
@@ -429,9 +427,8 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             } else {
                 // No id on this response — log a snippet so we can identify
                 // what the kernel is sending.
-                let snippet: String =
-                    serde_json::to_string(&crate::kernel::redaction::frame(&frame))
-                        .unwrap_or_else(|_| "<invalid>".to_string());
+                let snippet: String = serde_json::to_string(&capture_payload(&frame))
+                    .unwrap_or_else(|_| "<invalid>".to_string());
                 let preview: String = if snippet.len() > 200 {
                     format!("{}…", snippet.chars().take(200).collect::<String>())
                 } else {
@@ -455,7 +452,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 at_ms: crate::services::common::now_unix_ms(),
                 direction: "rx".to_string(),
                 frame_type: "event".to_string(),
-                payload: frame.clone(),
+                payload: capture_payload(&frame),
                 elapsed_ms: None,
                 error: None,
             });
