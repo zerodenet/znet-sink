@@ -78,7 +78,7 @@ assert.ok(
     && guiState.includes('get isConnected(): boolean')
     && guiState.includes('return this.isTunEnabled && this.connection?.systemProxyEnabled === true;')
     && guiState.includes('get isSystemProxyEnabled(): boolean')
-    && guiState.includes('return this.connection?.systemProxyEnabled === true;'),
+    && guiState.includes('this.connection?.systemProxyActualEnabled ?? this.connection?.systemProxyEnabled'),
   'Lite power must require both the GUI-owned system proxy and the client-managed Zero TUN while the public system-proxy state reflects actual OS proxy ownership',
 );
 

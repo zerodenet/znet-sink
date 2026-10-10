@@ -1,21 +1,7 @@
-//! Crash-safe system proxy lifecycle management.
-//!
-//! Strategy:
-//!   1. **Backup + Marker file** — When the GUI enables the system proxy it
-//!      first snapshots the user's original proxy settings into the marker
-//!      file. The marker survives all crash types (panic, SIGKILL, power
-//!      loss, Task Manager kill).
-//!   2. **Restore-on-disable** — A disable is only ever performed when a
-//!      marker exists (i.e. the GUI itself enabled the proxy). Instead of
-//!      blanking the proxy it *restores* the captured backup, so the user's
-//!      pre-existing proxy (e.g. their own `127.0.0.1:1080`) is recovered.
-//!      If the GUI never enabled the proxy, disable is a no-op — the user's
-//!      settings are left completely untouched.
-//!   3. **Startup cleanup** — On every launch, check for a stale marker. If
-//!      found and the proxy still points at our endpoint, restore the backup.
-//!   4. **Panic hook** — On macOS, preserve the marker for startup cleanup so
-//!      a crashing background thread cannot display an authorization dialog.
-//!      Other platforms retain the best-effort immediate restore.
+//! System proxy ownership and crash recovery.
+//! Markers identify the endpoint set by this client. Disable, quit and stale
+//! startup cleanup clear that endpoint instead of restoring an old proxy.
+//! The backup is only used to roll back a failed enable/retarget transaction.
 
 use std::fs;
 use std::path::PathBuf;
@@ -39,7 +25,7 @@ struct ProxyMarker {
     port: u16,
     enabled_at_unix_ms: u64,
     /// The user's proxy settings as they were immediately before the GUI
-    /// enabled its own proxy. Restored verbatim on disable. Older marker
+    /// enabled its own proxy. Used only for failed-mutation rollback. Older marker
     /// files written before this field existed deserialize to the default
     /// (proxy off), which is a safe fallback.
     #[serde(default)]
@@ -58,86 +44,23 @@ fn marker_path() -> AppResult<PathBuf> {
 
 // ── Public API ──
 
-/// Call on every app startup — detects and cleans up a stale system proxy
-/// left behind after a crash / forced kill.
-///
-/// Only acts when a marker exists *and* the current proxy still points at
-/// the endpoint the GUI set. If the user has since changed the proxy
-/// themselves, their settings are left alone. Restores the captured backup
-/// rather than blanking.
+mod cleanup;
+
+/// Clear a stale client proxy on startup; preserve externally changed settings.
 pub fn cleanup_on_startup() {
+    if let Err(error) = clear_on_exit(None) {
+        eprintln!(
+            "[ZNet] proxy guard: startup cleanup failed: {}; keeping marker",
+            error.message
+        );
+    }
+}
+
+/// Clear the guarded endpoint, or a verified live managed child's local listener.
+/// A matching endpoint is required even on quit. No previous proxy is restored.
+pub fn clear_on_exit(owned_listener: Option<(String, u16)>) -> AppResult<()> {
     let _operation = OPERATION.lock().unwrap_or_else(|error| error.into_inner());
-    let path = match marker_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[ZNet] proxy guard: cannot resolve marker path: {:?}", e);
-            return;
-        }
-    };
-
-    if !path.exists() {
-        return;
-    }
-
-    eprintln!("[ZNet] proxy guard: stale marker detected, attempting cleanup");
-
-    // Read marker to verify ownership
-    let marker: ProxyMarker = match read_marker(&path) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("[ZNet] proxy guard: marker file corrupt ({e}), removing");
-            let _ = fs::remove_file(&path);
-            return;
-        }
-    };
-
-    // Only restore if the current system proxy still matches our endpoint —
-    // otherwise the user changed it after the crash and we must not touch it.
-    match system_proxy::status_fresh() {
-        Ok(status)
-            if status.enabled && status.host == marker.host && status.port == marker.port =>
-        {
-            eprintln!(
-                "[ZNet] proxy guard: restoring user proxy after stale GUI proxy ({}:{})",
-                marker.host, marker.port
-            );
-            if let Err(e) = system_proxy::restore(&marker.previous) {
-                if e.code == "authorization_cancelled" {
-                    eprintln!(
-                        "[ZNet] proxy guard: startup restoration authorization cancelled; keeping marker for a later retry"
-                    );
-                    return;
-                }
-                eprintln!(
-                    "[ZNet] proxy guard: failed to restore previous proxy: {:?}; keeping marker for a later retry",
-                    e
-                );
-                // Do not immediately invoke a second privileged mutation. It
-                // can display another authorization dialog and may destroy a
-                // pre-existing user proxy. The durable marker is the safe
-                // recovery point for an explicit later retry.
-                return;
-            }
-        }
-        Ok(status) => {
-            eprintln!(
-                "[ZNet] proxy guard: system proxy changed since crash (current: {}:{}, ours: {}:{}), not touching it",
-                status.host, status.port, marker.host, marker.port
-            );
-        }
-        Err(e) => {
-            eprintln!("[ZNet] proxy guard: cannot read proxy status: {:?}", e);
-            // Ownership could not be verified, so preserve the only durable
-            // backup and avoid guessing at the user's current proxy state.
-            return;
-        }
-    }
-
-    // The restore succeeded, or the user already changed the proxy and the
-    // marker no longer represents state owned by this application.
-    remove_marker_file(&path);
-
-    eprintln!("[ZNet] proxy guard: startup cleanup complete");
+    cleanup::clear_owned(owned_listener)
 }
 
 /// Enable system proxy and write the crash-protection marker.
@@ -160,8 +83,8 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
 
     // A repeated enable while we still own the current system proxy must be
     // idempotent with respect to the original backup. Re-capturing here would
-    // save our own local proxy as `previous`, so a later disable would restore
-    // 127.0.0.1:<port> instead of the user's real pre-ZNet settings.
+    // save our own local proxy as `previous`, so a failed mutation's rollback
+    // could reinstate the wrong local endpoint.
     if path.exists() {
         match read_marker(&path) {
             Ok(mut marker) => {
@@ -228,7 +151,7 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
 
     let backup = system_proxy::capture_backup()?;
     // Persist the backup BEFORE touching the system. If the app dies right
-    // after this line, cleanup_on_startup still has the backup to restore.
+    // after this line, cleanup_on_startup still knows which endpoint to clear.
     write_marker(host, port, backup.clone(), bypass)?;
     if let Err(error) = system_proxy::enable_with_bypass(host, port, bypass) {
         if error.code == "authorization_cancelled" {
@@ -246,7 +169,7 @@ pub fn enable_with_guard_and_bypass(host: &str, port: u16, bypass: &[String]) ->
             Ok(_) => remove_marker_file(&path),
             Err(restore_error) => {
                 // Keep the marker so a later disable/startup cleanup can retry
-                // the restoration instead of losing the only known-good backup.
+                // cleanup instead of losing ownership evidence.
                 return Err(AppError::internal(format!(
                     "failed to enable system proxy: {}; restoring previous proxy also failed: {}",
                     error.message, restore_error.message
@@ -269,7 +192,13 @@ pub fn is_enabled_by_guard() -> AppResult<bool> {
         crate::errors::AppError::internal(format!("failed to read proxy marker: {error}"))
     })?;
     let status = system_proxy::status()?;
-    Ok(status.enabled && status.host == marker.host && status.port == marker.port)
+    Ok(owns_endpoint(
+        status.enabled,
+        &status.host,
+        status.port,
+        &marker.host,
+        marker.port,
+    ))
 }
 
 /// Move a GUI-owned system proxy to a new local endpoint without replacing
@@ -310,89 +239,19 @@ pub fn retarget_if_enabled(host: &str, port: u16) -> AppResult<()> {
     Ok(())
 }
 
-/// Restore the user's system proxy and remove the crash-protection marker.
-///
-/// This is a **no-op when no marker exists** — i.e. when the GUI never
-/// enabled the proxy. That is what prevents kernel stop / app exit / crash
-/// recovery from destroying a proxy the user configured independently of
-/// the GUI. When a marker exists, the captured backup is restored instead
-/// of the proxy being blanked.
+/// Clear the currently guarded proxy. No marker means no ownership authority.
 pub fn disable_with_guard() -> AppResult<()> {
-    let _operation = OPERATION.lock().unwrap_or_else(|error| error.into_inner());
-    disable_owned()
+    clear_on_exit(None)
 }
 
-fn disable_owned() -> AppResult<()> {
-    let path = marker_path()?;
-    if !path.exists() {
-        // The GUI never enabled the proxy — leave the user's settings alone.
-        return Ok(());
-    }
-
-    let marker = match read_marker(&path) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("[ZNet] proxy guard: marker corrupt ({e}), removing without restoring");
-            remove_marker_file(&path);
-            return Ok(());
-        }
-    };
-
-    // An old marker is not authority over changes made by the user or another app.
-    let current = system_proxy::status_fresh()?;
-    if !owns_endpoint(
-        current.enabled,
-        &current.host,
-        current.port,
-        &marker.host,
-        marker.port,
-    ) {
-        remove_marker_file(&path);
-        return Ok(());
-    }
-
-    eprintln!(
-        "[ZNet] proxy guard: restoring user proxy (was set to {}:{})",
-        marker.host, marker.port
-    );
-    if let Err(restore_error) = system_proxy::restore(&marker.previous) {
-        eprintln!(
-            "[ZNet] proxy guard: failed to restore previous proxy: {:?}; keeping marker for a later retry",
-            restore_error
-        );
-        // One user action gets one restoration attempt. A destructive
-        // fallback would repeat the authorization request and could overwrite
-        // the user's original proxy state. Keep the marker so retry remains
-        // possible without losing the backup.
-        return Err(restore_error);
-    }
-    remove_marker_file(&path);
-    Ok(())
-}
-
-/// Install a panic hook that attempts to restore system proxy on Rust panics.
-/// This is a best-effort measure — the marker file handles the SIGKILL case.
+/// Best-effort cleanup on Rust panics. Forced kills are handled next startup.
 pub fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         #[cfg(target_os = "macos")]
-        eprintln!(
-            "[ZNet] panic guard: preserving proxy marker for startup cleanup; skipping interactive macOS restore"
-        );
-
+        eprintln!("[ZNet] panic guard: preserving proxy marker for startup cleanup; skipping interactive macOS cleanup");
         #[cfg(not(target_os = "macos"))]
-        eprintln!("[ZNet] panic guard: attempting emergency proxy restore");
-
-        // Only restore if we own a marker; never touch a proxy the GUI
-        // didn't set.
-        #[cfg(not(target_os = "macos"))]
-        if let Ok(path) = marker_path() {
-            if let Ok(marker) = read_marker(&path) {
-                if system_proxy::restore(&marker.previous).is_ok() {
-                    let _ = fs::remove_file(&path);
-                }
-            }
-        }
+        let _ = disable_after_panic();
         (original)(info);
     }));
 }
@@ -453,7 +312,7 @@ fn disable_after_panic() -> AppResult<()> {
     let Ok(_operation) = OPERATION.try_lock() else {
         return Ok(());
     };
-    disable_owned()
+    cleanup::clear_owned(None)
 }
 
 fn owns_endpoint(enabled: bool, host: &str, port: u16, owned_host: &str, owned_port: u16) -> bool {

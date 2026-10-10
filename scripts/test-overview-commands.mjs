@@ -92,6 +92,22 @@ test('startup unlocks the shell while runtime observations continue in the backg
   assert.ok(gui.connection);
 });
 
+test('an unguarded OS proxy remains visible and is not silently taken over', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  state.connection.systemProxyEnabled=false;
+  state.connection.systemProxyActualEnabled=true;
+  state.tun.enabled=state.tun.desiredEnabled=false;
+  await gui.refreshAll();
+  assert.equal(gui.isSystemProxyEnabled,true);
+  assert.equal(gui.isCaptureEnabled,true);
+  assert.equal(gui.isConnected,false);
+  assert.equal(gui.canDisableSystemProxy,false);
+  const result=await gui.toggleSystemProxy();
+  assert.equal(result.ok,false);
+  assert.match(result.message,/未由本应用接管/);
+  assert.deepEqual(state.calls,[]);
+});
+
 test('mode request is serialized and failures retain confirmed mode with a returned error',async()=>{
   const {gui,state}=await harness();let finish;state.wait=new Promise(resolve=>{finish=resolve;});
   const first=gui.setProxyMode('global');

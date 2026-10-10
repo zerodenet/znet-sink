@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub fn stop(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
     state.runtime_host().run("stop", false, || {
-        stop_with_proxy_restore(app_handle.clone(), state.clone(), true)
+        stop_with_proxy_cleanup(app_handle.clone(), state.clone(), true)
     })
 }
 
@@ -26,23 +26,55 @@ pub(crate) fn stop_preserving_system_proxy(
     state: State<'_, AppState>,
 ) -> AppResult<CoreProcessStatus> {
     state.runtime_host().run("stop_for_restart", false, || {
-        stop_with_proxy_restore(app_handle.clone(), state.clone(), false)
+        stop_with_proxy_cleanup(app_handle.clone(), state.clone(), false)
     })
 }
 
-pub(super) fn stop_with_proxy_restore(
+pub(super) fn stop_with_proxy_cleanup(
     app_handle: AppHandle,
     state: State<'_, AppState>,
-    restore_system_proxy: bool,
+    cleanup_system_proxy: bool,
+) -> AppResult<CoreProcessStatus> {
+    stop_with_cleanup(app_handle, state, cleanup_system_proxy, None)
+}
+
+pub(super) fn stop_for_exit(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    cleanup_system_proxy: bool,
+) -> AppResult<CoreProcessStatus> {
+    // Fallback authority for an older installation without a proxy marker:
+    // only a live owned child with a recorded private control endpoint qualifies.
+    let has_owned_child = {
+        let mut process = lock(state.runtime_host().process(), "core_process")?;
+        let alive = process
+            .child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|exit| exit.is_none()));
+        alive && process.endpoint.is_some()
+    };
+    let owned_listener = if has_owned_child {
+        crate::configuration::preferences::endpoint(state.inner()).ok()
+    } else {
+        None
+    };
+    stop_with_cleanup(app_handle, state, cleanup_system_proxy, owned_listener)
+}
+
+fn stop_with_cleanup(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    cleanup_system_proxy: bool,
+    owned_listener: Option<(String, u16)>,
 ) -> AppResult<CoreProcessStatus> {
     // Cancel the old watchdog even when the child already exited or is in backoff.
     state.next_core_process_monitor_generation();
-    crate::capture::dns::release()?;
-    let proxy_result = if restore_system_proxy {
-        system_proxy_guard::disable_with_guard()
-    } else {
-        Ok(())
-    };
+    // A failed DNS restore must not prevent proxy cleanup or owned-child
+    // termination. Return the cleanup error only after the child is reaped.
+    let capture_result =
+        super::cleanup::release_capture(cleanup_system_proxy, crate::capture::dns::release, || {
+            system_proxy_guard::clear_on_exit(owned_listener)
+        });
     let (child, mut stderr_handle) = {
         let mut process = lock(state.runtime_host().process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;
@@ -66,7 +98,7 @@ pub(super) fn stop_with_proxy_restore(
     let Some(mut child) = child else {
         // The GUI only controls children it owns. An independently launched
         // Zero process is deliberately outside this lifecycle.
-        proxy_result?;
+        capture_result?;
         let status = refresh_status(state.inner());
         return status;
     };
@@ -106,11 +138,14 @@ pub(super) fn stop_with_proxy_restore(
                 crate::services::probe::CLIENT_CORE_UPDATED_EVENT,
                 state.client_core_snapshot(),
             );
-            proxy_result?;
+            capture_result?;
             Ok(status)
         }
         Err(error) => {
-            let message = format!("failed to stop core process: {error}");
+            let mut message = format!("failed to stop core process: {error}");
+            if let Err(cleanup) = capture_result {
+                message.push_str(&format!("; {}", cleanup.message));
+            }
             process.child = Some(child);
             process.stderr_handle = stderr_handle;
             process.status.state = CoreProcessState::Failed;

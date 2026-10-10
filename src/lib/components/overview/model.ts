@@ -81,6 +81,7 @@ export function selectedPolicyPath(group: PolicyGroup, groups: PolicyGroup[], pr
 
 export function buildOverview(input: OverviewInput) {
   const { connection: c, tun, now } = input;
+  const proxyEnabled = c?.systemProxyActualEnabled ?? c?.systemProxyEnabled;
   const stale = !input.connectionAt || now - input.connectionAt > 15_000 || !!input.connectionError;
   const running = c?.processState === 'running';
   const ready = !stale && c?.coreAvailable === true;
@@ -95,6 +96,7 @@ export function buildOverview(input: OverviewInput) {
   else if (stale) add('运行状态尚未确认', '等待新的状态响应，保留的信息不能证明当前网络可用。', 'core');
   if (c?.processState === 'failed') add('内核进程异常退出', c.processExitReason || c.message || '查看退出原因和内核日志。', 'logs', 'error');
   else if (running && !c?.coreAvailable) add('进程存在，控制接口未就绪', '请检查内核启动和控制接口错误；进程运行不代表代理可用。', 'logs', 'error');
+  if (!stale && proxyEnabled && c?.systemProxyEnabled === false) add('系统代理仍在开启', '此代理未由本应用接管，仍可能改变出口 IP。请在系统网络设置中关闭或检查其他代理应用。', 'network');
   if (!stale && !c?.coreAvailable && c?.systemProxyEnabled) add('系统代理已开启但内核未就绪', '代理请求可能无法转发；请启动内核或在代理设置中关闭系统代理。', 'network', 'error');
   if (input.tunError) add('TUN 状态无法确认', input.tunError, 'tun');
   else if (tun?.enabled && !tun.healthy) add('TUN 已开启但不健康', tun.lastError || '检查路由、权限和实际出口。', 'tun', 'error');
@@ -145,7 +147,7 @@ export function buildOverview(input: OverviewInput) {
   if (failed.length) add('已选出口最近探测失败', failed.map((g) => `${g.name} → ${g.selected}`).join('；'), 'nodes');
   const tone = findings.some((f) => f.severity === 'error') ? 'error' : findings.length ? 'warning' : groupsPending ? 'neutral' : ready ? 'good' : 'neutral';
   const title = tone === 'error' ? '需要处理运行异常' : tone === 'warning' ? '有待确认的运行状态' : groupsPending ? '策略状态正在更新' : ready ? '内核控制面就绪' : c?.processState === 'starting' ? '内核正在启动' : '内核已停止';
-  const proxy = stale ? '状态待确认' : c?.systemProxyEnabled ? '已开启' : '未开启';
+  const proxy = stale ? '状态待确认' : proxyEnabled ? '已开启' : '未开启';
   const tunLabel = input.tunError || stale ? '状态待确认' : !ready ? '内核未就绪' : !tun ? '尚未取得' : !tun.supported ? '不支持' : tun.enabled ? tun.healthy && !egress.issue ? '已开启 · 健康' : '已开启 · 异常' : tun.lastError ? '已停止 · 待处理' : '未开启';
   const endpoint = c?.localProxyHost && c.localProxyPort ? `${c.localProxyHost.includes(':') ? `[${c.localProxyHost}]` : c.localProxyHost}:${c.localProxyPort}` : '尚未取得';
   const family = (key: 'ipv4Egress' | 'ipv6Egress') => {

@@ -97,15 +97,23 @@ pub fn run() {
         lifecycle::Phase::Guard,
         "system_proxy_cleanup",
         Box::new({
+            let stage = shutdown_stage.clone();
             let cleanup = app_state
                 .app_config()
                 .lock()
                 .map(|config| config.core.cleanup_proxy_on_exit)
                 .unwrap_or(true);
             move || {
-                if cleanup {
-                    // Restore the user's proxy only when the preference is enabled.
-                    system_proxy_guard::disable_with_guard().ok();
+                if cleanup && stage.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                    // Normal quit already used the latest preference and made
+                    // one cleanup attempt. Never replay a failed attempt
+                    // (and its authorization prompt) after event-loop teardown.
+                    if let Err(error) = system_proxy_guard::disable_with_guard() {
+                        crate::services::file_logger::line(&format!(
+                            "shutdown: system proxy cleanup failed: {}",
+                            error.message
+                        ));
+                    }
                 }
             }
         }),
@@ -135,6 +143,9 @@ pub fn run() {
     let app = commands::register(builder)
         // ── Phase 5: Runtime — tray, kernel lifecycle, window ──
         .setup(|app| {
+            // Single-instance admission is complete; a concurrent second launch
+            // must never clear the first client's active proxy marker.
+            system_proxy_guard::cleanup_on_startup();
             crate::services::file_logger::line("runtime: setup begin");
             #[cfg(target_os = "macos")]
             crate::services::plugins::notification::install_foreground_delegate();

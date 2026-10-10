@@ -517,6 +517,11 @@ class GuiStateStore {
   }
 
   async toggleSystemProxy({ notify = true }: CommandOptions = {}) {
+    if (this.isSystemProxyEnabled && this.connection?.systemProxyEnabled !== true) {
+      const message = '系统代理已开启，但未由本应用接管。请在系统网络设置中关闭或检查其他代理应用。';
+      if (notify) toastWarning(message);
+      return { ok: false, message };
+    }
     if (this.connection?.systemProxyEnabled === true) {
       return this.disableSystemProxy({ notify });
     } else {
@@ -659,7 +664,7 @@ class GuiStateStore {
   }
 
   get isCaptureEnabled(): boolean {
-    return this.isTunEnabled || this.connection?.systemProxyEnabled === true;
+    return this.isTunEnabled || this.isSystemProxyEnabled;
   }
 
   /** Lite power is fully on only when both client capture layers are active. */
@@ -667,9 +672,9 @@ class GuiStateStore {
     return this.isTunEnabled && this.connection?.systemProxyEnabled === true;
   }
 
-  /** Actual GUI-managed operating-system proxy ownership. */
+  /** Actual OS proxy state; ownership controls mutation, not presentation. */
   get isSystemProxyEnabled(): boolean {
-    return this.connection?.systemProxyEnabled === true;
+    return (this.connection?.systemProxyActualEnabled ?? this.connection?.systemProxyEnabled) === true;
   }
 
   get isTunEnabled(): boolean {

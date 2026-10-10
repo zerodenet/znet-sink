@@ -19,12 +19,15 @@
   const isCrashed = $derived(c?.processExitReason === 'crashed');
   const isStopped = $derived(c?.processExitReason === 'stopped');
   const tunCapturing = $derived(!guiState.connectionError && !guiState.tunStatusError && guiState.connection?.coreAvailable === true && guiState.tunStatus?.enabled === true && guiState.tunStatus.healthy && guiState.tunStatus.autoRoute && guiState.tunStatus.hostDns?.state !== 'error');
-  const isSystemProxyEnabled = $derived(c?.systemProxyEnabled === true);
+  const isSystemProxyEnabled = $derived(guiState.isSystemProxyEnabled);
+  const unmanagedProxy = $derived(isSystemProxyEnabled && c?.systemProxyEnabled === false);
   const missingActiveConfig = $derived(
     guiState.selfTest !== null && !guiState.selfTest.activeProxyConfigId,
   );
   const localProxyEndpoint = $derived(
-    c?.localProxyHost && c?.localProxyPort
+    c?.systemProxyHost && c?.systemProxyPort && isSystemProxyEnabled
+      ? `${c.systemProxyHost}:${c.systemProxyPort}`
+      : c?.localProxyHost && c?.localProxyPort
       ? `${c.localProxyHost}:${c.localProxyPort}`
       : '已设置'
   );
@@ -153,7 +156,7 @@
     guiState.isSwitchingSystemProxy
       ? '切换中'
       : isSystemProxyEnabled
-        ? '关闭系统代理'
+        ? unmanagedProxy ? '未由本应用接管' : '关闭系统代理'
         : '开启系统代理'
   );
 
@@ -200,7 +203,7 @@
       <div class="core-meta-row">
         <span class="meta-key">系统代理</span>
         <span class="meta-val" class:connected={isSystemProxyEnabled}>
-          {c.systemProxyEnabled ? localProxyEndpoint : '未设置'}
+          {isSystemProxyEnabled ? localProxyEndpoint : '未设置'}
         </span>
       </div>
       {#if store.uiMode === 'pro'}
@@ -265,7 +268,9 @@
         disabled={busy || (isSystemProxyEnabled ? !guiState.canDisableSystemProxy : stateUnknown || !guiState.canEnableSystemProxy)}
 
         aria-pressed={isSystemProxyEnabled}
-        title={isSystemProxyEnabled
+        title={unmanagedProxy
+          ? '系统代理仍在开启。请在系统网络设置中关闭或检查其他代理应用。'
+          : isSystemProxyEnabled
           ? '关闭系统代理只撤销系统流量入口，不会停止内核或终止已有连接'
           : !guiState.canEnableSystemProxy && guiState.blockingIssues.length
             ? guiState.blockingIssues.join('; ')

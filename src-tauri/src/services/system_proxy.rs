@@ -1,4 +1,6 @@
 mod cache;
+mod owned_cleanup;
+pub(crate) use owned_cleanup::clear_matching;
 static STATUS_CACHE: cache::StatusCache<SystemProxyStatus> = cache::StatusCache::new();
 
 #[cfg(any(target_os = "macos", test))]
@@ -27,12 +29,9 @@ pub struct SystemProxyStatus {
     pub socks_port: u16,
 }
 
-/// Snapshot of the user's original system-proxy configuration, captured
-/// immediately before the GUI overrides it. Persisted inside the proxy
-/// marker so a later "disable" can *restore* the user's settings instead of
-/// blanking them — which is what previously destroyed users' pre-existing
-/// proxies (e.g. their own `127.0.0.1:1080`) whenever the kernel stopped or
-/// the app exited.
+/// Snapshot taken before an enable transaction, retained for failure rollback.
+/// Normal disable, quit and crash recovery clear the client's endpoint instead
+/// of reinstating this historical state.
 ///
 /// Windows keeps the original `ProxyServer` string verbatim because it may
 /// contain a protocol map with different endpoints. The other optional
@@ -106,13 +105,8 @@ pub fn enable_with_bypass(
     })
 }
 
-/// Blank the system proxy unconditionally.
-///
-/// This is a **destructive** operation — it discards whatever proxy was
-/// configured. The GUI lifecycle should normally go through
-/// [`crate::services::system_proxy_guard`], which captures a [`ProxyBackup`]
-/// on enable and [`restore`]s it on disable, so the user's original settings
-/// are recovered instead of being wiped.
+/// Clear the system proxy. Call through the ownership guard so another
+/// application's externally changed proxy is not cleared.
 pub fn disable() -> AppResult<SystemProxyStatus> {
     mutate_proxy(|| set_proxy_platform("", 0, false, false, &[]))?;
 
@@ -162,8 +156,7 @@ pub fn capture_backup() -> AppResult<ProxyBackup> {
 }
 
 /// Restore the OS proxy settings from a [`ProxyBackup`] — the inverse of
-/// [`capture_backup`]. Used by the proxy guard instead of the destructive
-/// [`disable`] so the user's original configuration is recovered.
+/// [`capture_backup`]. Used only to roll back a failed proxy mutation.
 pub fn restore(backup: &ProxyBackup) -> AppResult<()> {
     mutate_proxy(|| restore_platform(backup))
 }
@@ -385,36 +378,37 @@ fn set_proxy_platform(
 
 #[cfg(target_os = "macos")]
 fn status_platform() -> AppResult<SystemProxyStatus> {
-    let services = active_network_services()?;
-    for service in &services {
-        if let Ok(output) = run_networksetup_output(&["-getwebproxy", service]) {
-            if output.contains("Enabled: Yes") {
-                // Extract host and port from output
-                let host = extract_prop(&output, "Server:")
-                    .unwrap_or("127.0.0.1")
-                    .to_string();
-                let port: u16 = extract_prop(&output, "Port:")
+    for service in active_network_services()? {
+        let web = run_networksetup_output(&["-getwebproxy", &service])?;
+        let primary = if web.contains("Enabled: Yes") {
+            web
+        } else {
+            run_networksetup_output(&["-getsecurewebproxy", &service])?
+        };
+        let socks = run_networksetup_output(&["-getsocksfirewallproxy", &service])?;
+        let socks_enabled = socks.contains("Enabled: Yes");
+        let output = if primary.contains("Enabled: Yes") {
+            Some(primary.as_str())
+        } else if socks_enabled {
+            Some(socks.as_str())
+        } else {
+            None
+        };
+        if let Some(output) = output {
+            return Ok(SystemProxyStatus {
+                enabled: true,
+                host: extract_prop(output, "Server:").unwrap_or("").to_string(),
+                port: extract_prop(output, "Port:")
                     .and_then(|p| p.parse().ok())
-                    .unwrap_or(0);
-                let socks = run_networksetup_output(&["-getsocksfirewallproxy", service])
-                    .unwrap_or_default();
-                let socks_enabled = socks.contains("Enabled: Yes");
-                let socks_host = extract_prop(&socks, "Server:").unwrap_or("").to_string();
-                let socks_port = extract_prop(&socks, "Port:")
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(0);
-                return Ok(SystemProxyStatus {
-                    enabled: true,
-                    host,
-                    port,
-                    socks_enabled,
-                    socks_host,
-                    socks_port,
-                });
-            }
+                    .unwrap_or(0),
+                socks_enabled,
+                socks_host: extract_prop(&socks, "Server:").unwrap_or("").to_string(),
+                socks_port: extract_prop(&socks, "Port:")
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(0),
+            });
         }
     }
-
     Ok(SystemProxyStatus {
         enabled: false,
         host: String::new(),
@@ -628,7 +622,7 @@ fn run_networksetup_output(args: &[&str]) -> AppResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn extract_prop<'a>(output: &'a str, key: &str) -> Option<&'a str> {
     output
         .lines()
@@ -668,7 +662,7 @@ fn set_proxy_platform(
 
         // A PAC script can take precedence over the manual proxy for some
         // clients. The guard has already backed it up, so remove it while our
-        // proxy is active and restore it on disconnect.
+        // proxy is active. The backup is used only for a failed enable rollback.
         delete_internet_setting("AutoConfigURL");
 
         // Enable last so Windows never observes the old server with the new

@@ -219,6 +219,10 @@ export interface ConnectionStatus {
   activeConnections?: number;
   coreAvailable?: boolean;
   systemProxyEnabled?: boolean;
+  /** OS state is separate from the client's guarded proxy ownership. */
+  systemProxyActualEnabled?: boolean;
+  systemProxyHost?: string;
+  systemProxyPort?: number;
   /** Process details from backend CoreProcessStatus */
   processState?: string;
   processPid?: number | null;

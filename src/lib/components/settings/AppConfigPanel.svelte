@@ -443,14 +443,14 @@
     {:else}
       <div class="config-row">
         <div class="config-row-label">
-          <span class="label-text">退出时恢复系统代理</span>
-          <span class="label-desc">退出 ZNet Sink 时恢复应用接管前的系统代理设置。</span>
+          <span class="label-text">退出时清理系统代理</span>
+          <span class="label-desc">退出时关闭 TUN 和内核，并清理本应用的系统代理。关闭窗口会继续后台运行。</span>
         </div>
         <Switch
           checked={config.core.cleanupProxyOnExit}
           onCheckedChange={() => toggleCoreSetting('cleanupProxyOnExit')}
           disabled={loading}
-          aria-label="退出时恢复系统代理"
+          aria-label="退出时清理系统代理"
         />
       </div>
 

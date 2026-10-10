@@ -51,6 +51,11 @@ test('old or failed snapshots never label retained proxy state as confirmed', ()
     assert.equal(model.ready, false); assert.equal(model.proxy, '状态待确认');
   }
 });
+test('actual OS proxy status is displayed separately from managed ownership', () => {
+  const model=buildOverview({...baseline(),connection:{...baseline().connection,systemProxyEnabled:false,systemProxyActualEnabled:true}});
+  assert.equal(model.proxy,'已开启');
+  assert.ok(model.findings.some(f=>f.title==='系统代理仍在开启' && f.target==='network'));
+});
 test('unhealthy tun and desired versus observed mismatch are actionable', () => {
   for (const tun of [{ enabled: true, healthy: false }, { desiredEnabled: true, enabled: false }]) {
     const model = buildOverview({ ...baseline(), tun });
