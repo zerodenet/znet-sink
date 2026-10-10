@@ -43,6 +43,7 @@
   // Mount the production card. Only its state/command boundary is simulated.
   $effect(() => {
     Object.assign(guiState, { connection:input.connection, selfTest:input.selfTest,
+      isSystemProxyEnabled:(input.connection?.systemProxyActualEnabled ?? input.connection?.systemProxyEnabled) === true,
       isInitializing:false,isStartingCore:false,isStoppingCore:false,isConnecting:false,isDisconnecting:false,isSwitchingSystemProxy:operations.feedback.pending === 'system-proxy',
       canRestartCore:true,canStartCore:true,canDisableSystemProxy:true,canEnableSystemProxy:true,
       restartCore:async()=>{action='restart';},startCore:async()=>{action='start';},
