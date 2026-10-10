@@ -63,7 +63,10 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
                     ));
                 }
             }
-            super::stop::stop_with_proxy_restore(stop_app.clone(), state.clone(), true)
+            let cleanup_proxy = lock(state.app_config(), "app_config")
+                .map(|config| config.core.cleanup_proxy_on_exit)
+                .unwrap_or(true);
+            super::stop::stop_for_exit(stop_app.clone(), state.clone(), cleanup_proxy)
         })
     })
     .await;

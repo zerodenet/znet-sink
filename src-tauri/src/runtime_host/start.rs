@@ -122,7 +122,7 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
 /// unnecessary macOS authorization prompts.
 fn restart_inner(app_handle: AppHandle) -> AppResult<CoreProcessStatus> {
     let state = app_handle.state::<AppState>();
-    super::stop::stop_with_proxy_restore(app_handle.clone(), state.clone(), false)?;
+    super::stop::stop_with_proxy_cleanup(app_handle.clone(), state.clone(), false)?;
     let status = start_inner(app_handle.clone(), state.clone())?;
     crate::services::network_probe::emit_host_network_changed(&app_handle, "core.restarted");
     Ok(status)

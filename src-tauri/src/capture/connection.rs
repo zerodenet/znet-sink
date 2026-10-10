@@ -181,20 +181,13 @@ async fn build_status(
         && health.as_ref().is_some_and(|health| health.healthy)
         && system_proxy_owned;
 
-    // GuiConnectionStatus describes the GUI-managed connection, not the raw
-    // Windows proxy registry. Keep host/port for diagnostics, but expose
-    // `enabled` as ownership by the crash-safe guard. Raw OS status remains
-    // available through the dedicated system_proxy_status command.
-    if let Some(proxy) = system_proxy.as_mut() {
-        proxy.enabled = system_proxy_owned;
-    }
-
     Ok(GuiConnectionStatus {
         connected,
         stage: stage.to_string(),
         core_available,
         process,
         system_proxy,
+        system_proxy_owned,
         health,
         stats,
         active_proxy_config_id,

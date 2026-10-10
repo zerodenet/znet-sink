@@ -27,6 +27,7 @@ pub struct GuiConnectionStatus {
     pub core_available: bool,
     pub process: CoreProcessStatus,
     pub system_proxy: Option<SystemProxyStatus>,
+    pub system_proxy_owned: bool,
     pub health: Option<GuiCoreHealth>,
     pub stats: GuiTrafficStats,
     pub active_proxy_config_id: Option<String>,

@@ -1,4 +1,5 @@
 //! Desktop managed-runtime owner. Platform child execution stays outside shared domains.
+mod cleanup;
 mod logging;
 mod monitor;
 mod owner;

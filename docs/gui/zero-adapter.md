@@ -102,6 +102,7 @@ Zero 使用应用数据目录下的临时控制配置，不监听代理流量；
     "exitReason": null,
     "lastError": null
   },
+  "systemProxyOwned": true,
   "systemProxy": {
     "enabled": true,
     "host": "127.0.0.1",
@@ -129,6 +130,8 @@ Zero 使用应用数据目录下的临时控制配置，不监听代理流量；
   "lastError": null
 }
 ```
+
+`systemProxy` 保留实际 OS 代理状态；`systemProxyOwned` 表示本客户端是否持有当前代理。两者分开，未接管的残留代理仍显示为开启并提示检查，不能显示成关闭。`connected` 仍要求内核就绪且系统代理受客户端管理。
 
 `stage` 常见值：
 

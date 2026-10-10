@@ -36,7 +36,8 @@ impl OnPhase for GuardPhase {
     }
     fn run(&self) -> AppResult<()> {
         system_proxy_guard::install_panic_hook();
-        system_proxy_guard::cleanup_on_startup();
+        // Proxy mutation waits until single-instance admission in Tauri setup.
+        // A second launch must not treat the first instance's marker as stale.
         Ok(())
     }
 }
