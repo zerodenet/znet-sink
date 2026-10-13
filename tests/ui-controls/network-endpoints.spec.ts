@@ -10,10 +10,21 @@ async function menu(row: import('@playwright/test').Locator, action: string) {
   await row.getByRole('button', {name:action,exact:true}).click();
 }
 
+async function finishEntryAnimations(page: import('@playwright/test').Page) {
+  // The mock clock also controls the animation timeline. Finish only finite
+  // entry animations before measuring; background layout assertions stay exact.
+  await page.evaluate(()=>{
+    for(const animation of document.getAnimations()) {
+      if(Number.isFinite(animation.effect?.getTiming().iterations)) animation.finish();
+    }
+  });
+}
+
 test('endpoint refresh failures and card facts keep the entire directory layout stable',async({page})=>{
   await page.clock.install();await open(page);
   const row=page.getByRole('article',{name:'端点 wg-a',exact:true});
   await expect(row).toBeVisible();
+  await finishEntryAnimations(page);
   const card=await row.elementHandle();
   const boxes=()=>page.locator('.endpoints-panel').evaluate(panel=>
     [...panel.querySelectorAll('header,.search,.endpoint-card,.endpoint-card footer')].map(el=>{
@@ -53,6 +64,7 @@ test('opened endpoint details hold their size through background failure and rec
   await menu(row,'协议详情');
   const dialog=page.getByRole('dialog');
   await expect(dialog).toContainText('example.test:51820');
+  await finishEntryAnimations(page);
   const size=()=>dialog.evaluate(el=>{const r=el.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};});
   const before=await size();
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{delay:200,detailsError:true}})));
