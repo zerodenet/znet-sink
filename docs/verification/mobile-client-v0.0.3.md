@@ -59,14 +59,29 @@ core 工作树只读且未推送。默认随包策略尚未落实为移动内核
 | Rust workspace/all-targets/all-features clippy | 通过，保留既有及测试代码警告 | 严格 `-D warnings` 已通过 |
 | 共享 Rust Android/iOS aarch64 target check | 两个共享 crate 均通过 | Tauri/iOS 主宿主或扩展已构建 |
 | Android Rust 主宿主 API24 check | NDK r27d/API24 clang，`--lib --target aarch64-linux-android --locked` 通过；40 项未调用桌面代码等警告 | APK、签名、安装、TUN FD、S8 或 VPN 验收 |
-| Chromium 浏览器 | 320px、多组、搜索/滚动恢复、来源返回、未保存确认、未知速率、统计入口及桌面回归 | Android 原始 WebView、WKWebView 或手机系统返回 |
+| Chromium 浏览器 | 云端本地 171 项通过：320px、多组、搜索/滚动恢复、来源返回、未保存确认、未知速率、统计入口及桌面回归 | Android 原始 WebView、WKWebView 或手机系统返回 |
 | WebKit 本地运行 | 未运行：当前云端浏览器下载被网络网关拒绝（403） | iOS/WebKit 验收通过 |
 
 浏览器测试以真实生产组件和明确的替代 IO 执行；测试 fixture 不进入产品模块。
 实际 Unix IPC 的 Packet 测试证明查询/关闭 DTO 与回执处理，仍不是网络转发真机证据。
 详细云端日志保留于 `/tmp/mobile-frontend-verification.log`、
 `/tmp/mobile-backend-tests.log`、`/tmp/mobile-cargo-check.log`、`/tmp/mobile-clippy.log`、
-`/tmp/mobile-android-host-check.log`、`/tmp/mobile-browser-full.log`。
+`/tmp/mobile-android-host-check.log`、`/tmp/mobile-browser-full-final.log`。
+
+## 草稿 PR 与 CI
+
+[Draft PR #46](https://github.com/zerodenet/znet-sink/pull/46) 合入目标为 develop。
+首个代码提交 `f18f72e7f7ad10d0708dbcef205434a362de87f8` 的
+[移动宿主 CI](https://github.com/zerodenet/znet-sink/actions/runs/38382760624)
+中 Android API24 主宿主及 Android/iOS 共享 Rust 三项均成功。
+[浏览器 CI](https://github.com/zerodenet/znet-sink/actions/runs/38382760521/job/115246989500)
+Chromium/WebKit 共 342 项通过；本地 WebKit 未运行与此 CI 结果分别记录。
+
+同一提交 Windows 客户端测试在启动前返回 `0xc0000139`
+(`STATUS_ENTRYPOINT_NOT_FOUND`)，未执行测试，不能计为通过。
+后续保留 Windows2025 全部检查，增加依赖入口诊断及隔离缓存的 Windows2022
+对照。具体缺失 DLL/符号仍需诊断，不能把切换镜像当作根因结论。
+两个镜像名称来自 [GitHub 官方 runner 列表](https://github.com/actions/runner-images/blob/main/README.md)。
 
 ## PRD 验收状态
 

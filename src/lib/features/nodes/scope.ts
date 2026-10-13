@@ -13,4 +13,3 @@ export function controlScope(scope: ClientScope): ClientScope {
   }
   return {...scope,configRevision:revision};
 }
-
