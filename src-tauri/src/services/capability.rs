@@ -3,7 +3,8 @@ use tauri::State;
 use crate::errors::AppResult;
 use crate::models::{
     capability::{
-        CapabilityItem, GuiCapabilitySnapshot, InteractionSurfaceItem, InteractionSurfaceSnapshot,
+        CapabilityItem, GuiCapabilitySnapshot, InteractionPresentation, InteractionSurfaceItem,
+        InteractionSurfaceSnapshot,
     },
     proxy_config::ProxyConfigCapabilities,
 };
@@ -41,11 +42,14 @@ pub fn snapshot(state: State<'_, AppState>) -> AppResult<GuiCapabilitySnapshot> 
 
 pub async fn interaction_surface(
     state: State<'_, AppState>,
+    presentation: Option<InteractionPresentation>,
 ) -> AppResult<InteractionSurfaceSnapshot> {
     let start = std::time::Instant::now();
 
     let ui_mode = interaction_mode::current_ui_mode(state.inner())?;
-    let is_pro = interaction_mode::is_pro_mode(&ui_mode);
+    let mobile_presentation = cfg!(any(target_os = "android", target_os = "ios"))
+        || matches!(presentation, Some(InteractionPresentation::Mobile));
+    let is_pro = full_management_presentation(&ui_mode, presentation);
     let zero_features = cached_or_query_zero_features(state.inner()).await;
     let ui = lock(state.app_config(), "app_config")?.ui.clone();
     let (has_active_config, has_endpoints) = {
@@ -73,19 +77,39 @@ pub async fn interaction_surface(
         ui_mode,
         navigation: navigation_items(
             is_pro,
-            &ui.hidden_menu_keys,
+            if mobile_presentation {
+                &[]
+            } else {
+                &ui.hidden_menu_keys
+            },
             has_active_config,
-            endpoints_menu_visible(&ui, has_endpoints),
+            mobile_presentation || endpoints_menu_visible(&ui, has_endpoints),
         ),
         actions: action_items(is_pro, &zero_features),
         features: feature_surface_items(is_pro, &zero_features),
     })
 }
 
+/// Mobile changes presentation, not authority. Mutations still check native
+/// platform support, Zero capabilities, resource scope and kernel permissions.
+fn full_management_presentation(
+    ui_mode: &str,
+    presentation: Option<InteractionPresentation>,
+) -> bool {
+    cfg!(any(target_os = "android", target_os = "ios"))
+        || matches!(presentation, Some(InteractionPresentation::Mobile))
+        || interaction_mode::is_pro_mode(ui_mode)
+}
+
 /// Return cached zero_features if fresh enough, otherwise query the core and update the cache.
 ///
 /// Skips the core IPC entirely when the core process is not running.
 async fn cached_or_query_zero_features(state: &AppState) -> Vec<String> {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        // Until the native runtime bridge exists, client navigation remains
+        // available without querying or restoring a desktop core cache.
+        return Vec::new();
+    }
     let now = common::now_unix_ms();
 
     // Check cache
@@ -510,6 +534,28 @@ mod tests {
         action_items, endpoints_menu_visible, feature_surface_items, has_declared_endpoints,
         navigation_items,
     };
+    use crate::models::capability::InteractionPresentation;
+
+    #[test]
+    fn mobile_projection_preserves_management_without_declaring_missing_core_features() {
+        assert!(super::full_management_presentation(
+            "lite",
+            Some(InteractionPresentation::Mobile)
+        ));
+        if !cfg!(any(target_os = "android", target_os = "ios")) {
+            assert!(!super::full_management_presentation(
+                "lite",
+                Some(InteractionPresentation::Desktop)
+            ));
+        }
+        let features = feature_surface_items(true, &[]);
+        assert!(features
+            .iter()
+            .any(|item| item.key == "dns" && item.visible && !item.operable));
+        assert!(features
+            .iter()
+            .any(|item| item.key == "routing" && item.visible));
+    }
 
     #[test]
     fn canonical_zero_snapshot_features_enable_gui_surfaces() {

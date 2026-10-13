@@ -156,6 +156,21 @@ impl AppState {
         snapshot
     }
 
+    pub(crate) fn ensure_client_scope(
+        &self,
+        expected: Option<&ClientScope>,
+    ) -> crate::errors::AppResult<()> {
+        let core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        if expected.is_some_and(|expected| expected != &core.snapshot().scope) {
+            return Err(crate::errors::AppError::conflict(
+                "client_scope",
+                "",
+                "所属配置或内核实例已变化，请刷新后重选",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn client_core_configuration_committed(
         &self,
         active_profile: Option<&ProxyConfigProfile>,
@@ -237,17 +252,31 @@ impl AppState {
             .set_source_status(status);
     }
 
-    #[cfg(feature = "tool-node-probe")]
+    #[cfg(all(feature = "tool-node-probe", test))]
     pub(crate) fn start_client_probe(
         &self,
         request: StartProbeRequest,
     ) -> Result<StartProbeOutcome, ClientCoreError> {
+        self.start_client_probe_scoped(request, None)
+    }
+
+    #[cfg(feature = "tool-node-probe")]
+    pub(crate) fn start_client_probe_scoped(
+        &self,
+        request: StartProbeRequest,
+        expected_scope: Option<&ClientScope>,
+    ) -> Result<StartProbeOutcome, ClientCoreError> {
         let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
-        let outcome = self.probe_runtime.start(
-            &core.snapshot().scope,
-            request,
-            crate::services::common::now_unix_ms(),
-        )?;
+        let scope = core.snapshot().scope;
+        if expected_scope.is_some_and(|expected| expected != &scope) {
+            return Err(ClientCoreError {
+                code: "stale_probe_scope".into(),
+                message: "测速所属配置或内核实例已变化，请在当前配置重新发起".into(),
+            });
+        }
+        let outcome =
+            self.probe_runtime
+                .start(&scope, request, crate::services::common::now_unix_ms())?;
         if outcome.created {
             core.advance_snapshot();
         }
@@ -612,6 +641,49 @@ mod tests {
         assert_eq!(state.core_process_monitor_generation(), 1);
         assert_eq!(state.next_core_process_monitor_generation(), 2);
         assert_eq!(state.core_process_monitor_generation(), 2);
+    }
+
+    #[test]
+    fn old_same_tag_configuration_scope_is_rejected_before_control() {
+        let state = AppState::default();
+        let old = state.client_core_snapshot().scope;
+        assert!(state.ensure_client_scope(Some(&old)).is_ok());
+        {
+            let mut core = state.client_core.lock().unwrap();
+            core.configuration_committed(
+                Some(crate::client_core::ProfileId("new".into())),
+                crate::client_core::ConfigRevision(7),
+                1,
+            );
+        }
+        assert!(state.ensure_client_scope(Some(&old)).is_err());
+        let current = state.client_core_snapshot().scope;
+        assert!(state.ensure_client_scope(Some(&current)).is_ok());
+        state.client_core.lock().unwrap().core_instance_started(2);
+        assert!(state.ensure_client_scope(Some(&current)).is_err());
+        assert!(state.ensure_client_scope(None).is_ok());
+    }
+
+    #[cfg(feature = "tool-node-probe")]
+    #[test]
+    fn delayed_probe_targets_cannot_start_in_replacement_configuration() {
+        let state = AppState::default();
+        let old = state.client_core_snapshot().scope;
+        state.client_core.lock().unwrap().configuration_committed(
+            Some(crate::client_core::ProfileId("new".into())),
+            crate::client_core::ConfigRevision(7),
+            1,
+        );
+        let request = crate::client_core::StartProbeRequest {
+            kind: crate::client_core::ProbeJobKind::Outbound,
+            target_tags: vec!["same-tag".into()],
+            timeout_ms: Some(30_000),
+        };
+        let error = state
+            .start_client_probe_scoped(request, Some(&old))
+            .unwrap_err();
+        assert_eq!(error.code, "stale_probe_scope");
+        assert!(state.list_client_probe_jobs(None).is_empty());
     }
 
     fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {

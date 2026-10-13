@@ -106,3 +106,22 @@ test('probe diagnostics counts retained kernel work even without a frontend proj
  assert.equal(status.state,'busy');assert.equal(status.facts.find(f=>f.label==='停止后仍在等待').value,'2');
  assert.match(status.facts.find(f=>f.label==='停止测速').value,/不支持取消已发送请求/);
 });
+
+test('probe draining comes from backend observation and failures stay unknown rather than zero',async()=>{
+ const {ProbeJobsState}=load('features/node-probes/jobs.svelte.ts');
+ let fail=false;
+ const runtime={queued:0,inFlight:2,draining:2,kernelCancellation:'unsupported'};
+ const state=new ProbeJobsState(async()=>({}),undefined,undefined,async()=>{if(fail)throw new Error('service unavailable');return runtime;});
+ await state.refreshRuntime();assert.equal(state.runtime.draining,2);assert.equal(state.runtimeError,null);
+ fail=true;await state.refreshRuntime();assert.equal(state.runtime,null);assert.equal(state.runtimeError,'service unavailable');
+ state.dispose();
+});
+test('late runtime observation cannot overwrite a later read or disposed probe owner',async()=>{
+ const {ProbeJobsState}=load('features/node-probes/jobs.svelte.ts');
+ const older=deferred();let reads=0;
+ const state=new ProbeJobsState(async()=>({}),undefined,undefined,()=>++reads===1?older.promise:Promise.resolve({draining:0}));
+ const old=state.refreshRuntime();await state.refreshRuntime();older.resolve({draining:4});await old;assert.equal(state.runtime.draining,0);
+ const pending=deferred();const disposed=new ProbeJobsState(async()=>({}),undefined,undefined,()=>pending.promise);
+ const request=disposed.refreshRuntime();disposed.dispose();pending.resolve({draining:7});await request;assert.equal(disposed.runtime,null);
+ state.dispose();
+});

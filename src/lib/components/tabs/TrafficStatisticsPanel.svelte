@@ -11,6 +11,7 @@
   import type { ResetInput, TrafficScope } from '$lib/features/traffic/types';
   import { supported, resetReason } from '$lib/features/traffic/policy';
   import { byteKeys, formatBytes, metric } from '$lib/features/traffic/history';
+  import { availablePlanes } from '$lib/features/traffic/presentation';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
   import { useTrafficWorkspace } from '$lib/features/traffic/context';
@@ -30,7 +31,8 @@
   let localError = $state<unknown>(null);
   const filtered = $derived(view.order.filter(key => view.rows[key].snapshot.scope.kind === kind && JSON.stringify(view.rows[key].snapshot.scope).toLowerCase().includes(query.toLowerCase())));
   const visible = $derived(filtered.slice(offset, offset + 24));
-  const planes = $derived([...new Set(['flow','inner','outer',...view.order.flatMap(key=>view.rows[key].snapshot.planes.map(p=>p.plane))])]);
+  const planes = $derived(availablePlanes(filtered.map(key => view.rows[key].snapshot)));
+  $effect(() => { if (planes.length && !planes.includes(plane)) plane = planes[0]; });
   const maximum = $derived(Math.min(256,view.discovery?.capabilities.trafficStatistics?.maximum_reset_targets ?? 0));
   const samplingError = $derived(view.error ? getAppErrorMessage(view.error,'统计查询失败') : null);
   const samplingLabel = $derived(view.stale && view.loading ? '正在同步' : samplingError ? '同步失败' : view.stale ? '采样中断' : view.streaming ? '实时' : '定时查询');
@@ -71,6 +73,7 @@
       </div>
     </div>
     <div class="plane-controls">
+      {#if planes.length === 0}<p class="notice">当前范围没有声明可用的统计平面</p>{/if}
       <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
       <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
     </div>

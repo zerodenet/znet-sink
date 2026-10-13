@@ -111,7 +111,7 @@ assert.ok(
     && !appStore.includes("from './gui-state.svelte'")
     && !guiState.includes('async prepareLiteCapture()')
     && appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
-    && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
+    && appStore.includes("if (!this.mobilePresentation && this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
   'mode switching must preserve capture state and synchronously apply only the presentation boundary',

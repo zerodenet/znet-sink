@@ -17,6 +17,7 @@ pub enum ManagedAction {
     SetState { enabled: bool },
     SetDirections { directions: Directions },
     Restart {},
+    ClearOverrides {},
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -105,6 +106,14 @@ fn prepare(
             persistence: Persistence::RuntimeOnly,
         },
         ManagedAction::Restart {} => Action::Restart {},
+        ManagedAction::ClearOverrides {} => {
+            if endpoints::has_override(app, profile, current) {
+                return Err(AppError::invalid_argument(
+                    "端点存在客户端配置覆盖，请在配置工作区恢复来源并应用",
+                ));
+            }
+            Action::ClearOverrides {}
+        }
     };
     let next = endpoints::candidate(app, profile, source, current, &action)?;
     Ok((
@@ -145,10 +154,15 @@ pub async fn control(
     if !super::supports(&caps, "network_endpoint_control_v1") {
         return Err(super::unsupported("当前内核未声明端点控制能力"));
     }
+    if matches!(input.action, ManagedAction::ClearOverrides {})
+        && !super::supports(&caps, "network_endpoint_control_preconditions_v1")
+    {
+        return Err(super::unsupported("当前内核缺少安全恢复所需的实例前置条件"));
+    }
     let current = super::get(&input.endpoint_id, options.clone()).await?;
     let previous = lock(state.app_config(), "app_config")?.clone();
     let (input, next, revision) = prepare(input, &profile, &source, &current, &previous)?;
-    let changed = !matches!(input.action, Action::Restart {});
+    let changed = !matches!(input.action, Action::Restart {} | Action::ClearOverrides {});
     super::control_params(&input, &current, &caps)?;
     let result = super::direction_transition::apply(input, current, &caps, options, revision).await;
     publish_confirmed(result, || {

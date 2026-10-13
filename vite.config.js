@@ -13,6 +13,10 @@ export default defineConfig(async () => ({
     sveltekit()
   ],
 
+  // OS support and the system WebView version are separate prerequisites.
+  // Android API 24 uses an updated WebView; avoid a newer build-only JS floor.
+  build: { target: ["chrome111", "safari16.4"] },
+
   // Tabs and settings panels are lazy-loaded. Pre-bundle their shared
   // dependencies before Tauri opens the WebView so Vite does not discover a
   // new dependency mid-import, invalidate OverviewTab, and force a reload

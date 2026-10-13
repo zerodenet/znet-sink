@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Choice } from '$lib/components/ui/choice';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { useMobileNavigation } from '$lib/features/mobile/context';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { LayoutGrid, List } from '@lucide/svelte';
@@ -14,6 +15,7 @@
     listProxyConfigs,
     syncAllSubscriptions,
   } from '$lib/services/config';
+  import { guiState } from '$lib/services/gui-state.svelte';
   import * as toast from '$lib/services/toast.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -27,6 +29,12 @@
     ProxyConfigProfile,
     SubscriptionRemovalPreview,
   } from '$lib/types/domain';
+
+  let { mobile = false }: { mobile?: boolean } = $props();
+  const mobileNavigation=untrack(()=>mobile ? useMobileNavigation() : null);
+  let pendingNavigation: (() => void) | null = $state(null);
+  let formOriginal = $state('');
+  let discardForm = $state(false);
 
   const FORMAT_OPTIONS = [
     { value: 'auto', label: '自动检测' },
@@ -173,7 +181,7 @@
     try {
       await syncSubscription(id);
       await refresh(false);
-      toast.success('订阅同步完成');
+      toast.success(mobile && !guiState.connection?.coreAvailable ? '订阅材料已同步，运行态待应用' : '订阅同步完成');
     } catch (e) {
       handleAppError(e, '同步订阅失败');
     } finally {
@@ -273,11 +281,13 @@
     editingId = null;
     form = emptyForm();
     formError = null;
+    formOriginal = JSON.stringify(form);
+    discardForm=false;
     showForm = true;
   }
 
   function openEdit(sub: SubscriptionProfile) {
-    if (busy) return;
+    if (busy || sub.managedSource) return;
     editingId = sub.id;
     form = {
       name: sub.name,
@@ -290,11 +300,27 @@
       enabled: sub.enabled,
     };
     formError = null;
+    formOriginal = JSON.stringify(form);
+    discardForm=false;
     showForm = true;
   }
 
+  $effect(() => {
+    if (!mobileNavigation || !showForm) return;
+    return mobileNavigation.guardBeforeLeave(continueNavigation => {
+      if (!showForm) return true;
+      if (saving) return false;
+      if (JSON.stringify(form)!==formOriginal) { pendingNavigation=continueNavigation; discardForm=true; return false; }
+      showForm=false; return true;
+    });
+  });
+  function discardFormDraft() {
+    discardForm=false; showForm=false; formError=null;
+    const resume=pendingNavigation; pendingNavigation=null; resume?.();
+  }
   function closeForm() {
     if (saving) return;
+    if (mobile && JSON.stringify(form) !== formOriginal) { discardForm=true; return; }
     showForm = false;
     formError = null;
   }
@@ -627,7 +653,8 @@
 </div>
 
 <Dialog.Root bind:open={showForm}>
-  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!saving}>
+  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={false} onEscapeKeydown={event => { event.preventDefault(); closeForm(); }} onInteractOutside={event => { event.preventDefault(); closeForm(); }}>
+    <Button variant="ghost" size="sm" class="absolute top-3 right-3 z-10" disabled={saving} aria-label="关闭订阅编辑器" onclick={closeForm}>关闭</Button>
     <form
       class="subscription-form"
       onsubmit={(event) => {
@@ -817,6 +844,8 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<Dialog.Root bind:open={discardForm}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>订阅来源与同步设置尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardForm=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardFormDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 
 <style>
   .panel-header {

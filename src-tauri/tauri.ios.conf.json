@@ -1,0 +1,14 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ZNet Sink",
+        "decorations": true
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}

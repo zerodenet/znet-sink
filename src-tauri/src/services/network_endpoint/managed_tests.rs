@@ -104,3 +104,36 @@ fn endpoint_card_addresses_support_inbound_only_and_legacy_roles_by_exact_bindin
     unrelated["outbound_tags"] = json!(["b"]);
     assert!(addresses::configured(&source, &[unrelated]).is_empty());
 }
+
+#[test]
+fn endpoint_managed_clear_only_removes_runtime_override_without_claiming_client_source_restore() {
+    let mut request = input();
+    request.action = ManagedAction::ClearOverrides {};
+    let row = super::super::tests::current();
+    let source = source();
+    let app = AppConfig::default();
+    let (control, next, revision) = prepare(request, "p", &source, &row, &app).unwrap();
+    assert!(matches!(control.action, Action::ClearOverrides {}));
+    assert_eq!(revision, 1);
+    assert_eq!(
+        serde_json::to_value(next).unwrap(),
+        serde_json::to_value(&app).unwrap()
+    );
+    let (_, overridden, _) = prepare(input(), "p", &source, &row, &app).unwrap();
+    let mut request = input();
+    request.action = ManagedAction::ClearOverrides {};
+    assert!(prepare(request, "p", &source, &row, &overridden).is_err());
+    let mut request = input();
+    request.action = ManagedAction::ClearOverrides {};
+    assert!(prepare(request, "other", &source, &row, &app).is_err());
+    let mut request = input();
+    request.action = ManagedAction::ClearOverrides {};
+    assert!(prepare(
+        request,
+        "p",
+        &json!({"outbounds":[{"tag":"a"}]}),
+        &row,
+        &app
+    )
+    .is_err());
+}

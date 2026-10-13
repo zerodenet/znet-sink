@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+  import { useMobileNavigation } from '$lib/features/mobile/context';
   import { Textarea } from '$lib/components/ui/textarea';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { store } from '$lib/services/store.svelte';
@@ -19,6 +21,13 @@
   import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+
+  import * as Dialog from '$lib/components/ui/dialog';
+  let { mobile = false }: { mobile?: boolean } = $props();
+  const mobileNavigation=untrack(()=>mobile ? useMobileNavigation() : null);
+  let pendingNavigation: (() => void) | null = $state(null);
+  let editorOriginal = $state('');
+  let discardEditor = $state(false);
 
   type SourceMode = 'file' | 'inline';
 
@@ -126,6 +135,8 @@
     selectedProfile = null;
     validationMessage = null;
     editorTitle = '新建代理配置';
+    editorOriginal = JSON.stringify(draft);
+    discardEditor = false;
     showEditor = true;
   }
 
@@ -142,11 +153,27 @@
     selectedProfile = profile;
     validationMessage = null;
     editorTitle = '编辑代理配置';
+    editorOriginal = JSON.stringify(draft);
+    discardEditor = false;
     showEditor = true;
   }
 
+  $effect(() => {
+    if (!mobileNavigation || !showEditor) return;
+    return mobileNavigation.guardBeforeLeave(continueNavigation => {
+      if (!showEditor) return true;
+      if (saving) return false;
+      if (JSON.stringify(draft)!==editorOriginal) { pendingNavigation=continueNavigation; discardEditor=true; return false; }
+      showEditor=false; return true;
+    });
+  });
+  function discardEditorDraft() {
+    discardEditor=false; showEditor=false; validationMessage=null;
+    const resume=pendingNavigation; pendingNavigation=null; resume?.();
+  }
   function closeEditor() {
     if (saving) return;
+    if (mobile && JSON.stringify(draft) !== editorOriginal) { discardEditor=true; return; }
     showEditor = false;
     validationMessage = null;
   }
@@ -355,6 +382,7 @@
         {/if}
       </div>
     {:else}
+      {#if mobile && !guiState.connection?.coreAvailable}<p class="local-material-note" role="status">当前显示本地配置。内核运行态未确认；已保存的材料待应用，不代表 VPN 已接管。</p>{/if}
       <div class="config-list">
         {#each filteredConfigs as config (config.id)}
           <div class="config-row">
@@ -369,7 +397,7 @@
               <div class="row-top">
                 <div class="row-title">{config.name}</div>
                 {#if config.active}
-                  <Badge variant="secondary">当前生效</Badge>
+                  <Badge variant="secondary">{mobile && !guiState.connection?.coreAvailable ? '本地选中' : '当前生效'}</Badge>
                 {:else}
                   <Badge variant="outline">未启用</Badge>
                 {/if}
@@ -393,7 +421,7 @@
             <div class="row-actions">
               {#if canEdit}
                 {#if config.active}
-                  <Badge variant="secondary">已启用</Badge>
+                  <Badge variant="secondary">{mobile && !guiState.connection?.coreAvailable ? '待应用' : '已启用'}</Badge>
                 {:else}
                   <Button
                     variant="outline"
@@ -533,7 +561,7 @@
   {#if deleteTarget}
     <div class="validation-row" role="alert">
       <AlertTriangle class="h-4 w-4" />
-      <span>确认删除“{deleteTarget.name}”吗？{deleteTarget.active ? '这是当前生效配置。' : ''}</span>
+      <span>确认删除“{deleteTarget.name}”吗？{deleteTarget.active ? mobile && !guiState.connection?.coreAvailable ? '这是当前本地选中的配置，运行状态未确认。' : '这是当前生效配置。' : ''}</span>
     </div>
   {/if}
 
@@ -545,7 +573,10 @@
   {/snippet}
 </DraggableModal>
 
+<Dialog.Root bind:open={discardEditor}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>配置正文与名称尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardEditor=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardEditorDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+
 <style>
+  .local-material-note { margin:8px 0; color:var(--muted-foreground); font-size:.85rem; line-height:1.5; }
   .profiles-root {
     height: 100%;
     min-height: 0;

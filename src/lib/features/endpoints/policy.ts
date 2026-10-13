@@ -15,6 +15,11 @@ export function operationReason(catalog: EndpointCatalog | null, endpoint: Netwo
   if (!endpoint.supported.operations.includes(action.operation)) return '此端点未注册该操作';
   if (!Number.isSafeInteger(endpoint.intent_revision)) return '端点版本超过客户端可安全处理的范围';
   if (endpoint.state === 'starting' || endpoint.state === 'stopping') return '端点正在协调，请等待完成';
+  if (action.operation === 'clear_overrides') {
+    if (kernelFeatureSupport(catalog?.capabilities, 'network_endpoint_control_preconditions_v1').state !== 'supported') return '当前内核缺少安全恢复所需的实例前置条件';
+    if (catalog.localOverrideIds.includes(endpoint.endpoint_id)) return '此端点有客户端配置覆盖，请在配置工作区恢复来源并应用；清除运行覆盖不会移除客户端配置覆盖';
+    if (endpoint.state_source !== 'runtime_override') return '当前没有运行覆盖';
+  }
   if (action.operation === 'restart' && !endpoint.enabled) return '请先启用端点';
   if (action.operation === 'set_directions') {
     const requested = action.directions;

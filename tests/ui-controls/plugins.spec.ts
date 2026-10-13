@@ -81,7 +81,7 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
           return state();
         }
         if (command === 'platform_open_url') { (window as any).__openedPluginUrl = args.url; return; }
-        if (command === 'app_config_get') return { tun: { enabled: false } };
+        if (command === 'app_config_get' || command === 'client_settings_get') return { tun: { enabled: false } };
         if (command === 'gui_tun_status') {
           calls.push({ command, args });
           return { enabled: false, healthy: false };

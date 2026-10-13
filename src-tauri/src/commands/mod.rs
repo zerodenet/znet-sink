@@ -1,4 +1,5 @@
 pub mod app_config;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod app_update;
 pub mod capability;
 pub mod config_workspace;
@@ -29,3 +30,5 @@ pub mod plugins;
 pub mod network_endpoint;
 
 pub mod traffic_observation;
+
+pub mod packet_routes;

@@ -46,7 +46,8 @@ export interface EndpointDetails {
 export type EndpointAction =
   | { operation: 'set_state'; enabled: boolean }
   | { operation: 'set_directions'; directions: EndpointDirections }
-  | { operation: 'restart' };
+  | { operation: 'restart' }
+  | { operation: 'clear_overrides' };
 export interface EndpointControl {
   profileId: string; configRevision: number; endpointId: string; coreInstanceId: string;
   expectedIntentRevision: number; action: EndpointAction;

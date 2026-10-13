@@ -15,7 +15,7 @@ use std::{
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, State};
 
-use crate::client_core::{ClientCoreSnapshot, NodeScreenSnapshot};
+use crate::client_core::{ClientCoreSnapshot, ClientScope, NodeScreenSnapshot};
 #[cfg(feature = "tool-node-probe")]
 use crate::client_core::{ProbeJobId, ProbeJobKind, ProbeJobSnapshot, StartProbeRequest};
 use crate::errors::{AppError, AppResult};
@@ -100,11 +100,14 @@ pub fn gui_probe_job_cancel(
 
 #[cfg(feature = "tool-node-probe")]
 #[tauri::command]
-pub fn gui_probe_job_start(
+pub async fn gui_probe_job_start(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     request: StartProbeRequest,
+    expected_scope: Option<ClientScope>,
 ) -> AppResult<ProbeJobSnapshot> {
+    let _operation = state.proxy_config_operation().lock().await;
+    state.ensure_client_scope(expected_scope.as_ref())?;
     if request.kind == ProbeJobKind::ScheduledPolicyObservation {
         return Err(AppError::invalid_argument(
             "scheduled policy observations are recorded from kernel events and cannot be started manually",
@@ -112,7 +115,7 @@ pub fn gui_probe_job_start(
     }
     let request = probe::normalize_start_request(state.inner(), request)?;
     let outcome = state
-        .start_client_probe(request)
+        .start_client_probe_scoped(request, expected_scope.as_ref())
         .map_err(AppError::client_core)?;
     if outcome.created {
         if let Err(error) = state.probe_runtime().checkpoint(state.capabilities()) {
@@ -244,8 +247,10 @@ pub async fn gui_select_policy(
     state: State<'_, AppState>,
     policy_tag: String,
     target_tag: String,
+    expected_scope: Option<ClientScope>,
 ) -> AppResult<GuiPolicySelectionResult> {
     let _operation = state.proxy_config_operation().lock().await;
+    state.ensure_client_scope(expected_scope.as_ref())?;
     let opts = default_opts(state.inner());
     let result = ZeroAdapter::new()
         .select_policy(policy_tag.clone(), target_tag.clone(), opts)

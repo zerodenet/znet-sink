@@ -80,7 +80,11 @@ pub async fn app_config_import_kernel_settings(
     } else {
         None
     };
-    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let managed_proxy_enabled = if cfg!(any(target_os = "android", target_os = "ios")) {
+        false // The native mobile host owns no desktop capture effects.
+    } else {
+        system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+    };
     app_config::replace(state.inner(), new_config.clone())?;
 
     if kernel_running {
@@ -194,7 +198,11 @@ pub(crate) async fn apply_candidate(
     // Process transitions run without holding the settings mutex.
     let kernel_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let managed_proxy_enabled = if cfg!(any(target_os = "android", target_os = "ios")) {
+        false // The native mobile host owns no desktop capture effects.
+    } else {
+        system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+    };
     let runtime_config_changed = effects.recompose;
 
     if kernel_running {

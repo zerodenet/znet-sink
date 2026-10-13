@@ -6,6 +6,7 @@
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
   import type { Observation } from '$lib/features/traffic/history';
   import EndpointTrafficChart from './EndpointTrafficChart.svelte';
+  import { store } from '$lib/services/store.svelte';
   import { Button } from '$lib/components/ui/button';
   import { getAppErrorMessage } from '$lib/services/core';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -46,6 +47,9 @@
   const inboundReason = $derived(operationReason(catalog, endpoint, directionAction('inbound')));
   const outboundReason = $derived(operationReason(catalog, endpoint, directionAction('outbound')));
   const stateReason = $derived(operationReason(catalog, endpoint, stateAction));
+  const restoreReason = $derived(operationReason(catalog, endpoint, { operation: 'clear_overrides' }));
+  let restoreOpen = $state(false);
+  let restoreTarget = $state.raw<NetworkEndpoint | null>(null);
   const restartReason = $derived(operationReason(catalog, endpoint, { operation: 'restart' }));
   const addresses = $derived(catalog.configuredAddresses?.[endpoint.endpoint_id] ?? []);
   function count(key: string) { return observationAvailable && observation ? observation.snapshot.activity[key] ?? '—' : endpoint.counters[key] == null ? '—' : String(endpoint.counters[key]); }
@@ -67,6 +71,8 @@
         <summary aria-label={`${endpoint.tag} 更多操作`} title="更多操作"><MoreHorizontal size={18} /></summary>
         <div class="option-menu">
           <Button variant="ghost" size="sm" disabled={disabled || !!restartReason} aria-label="重启端点" title={restartReason ?? '重启会结束现有连接'} onclick={() => act({ operation: 'restart' })}><RotateCw size={14} />重启端点</Button>
+          <Button variant="ghost" size="sm" disabled={disabled || !!restoreReason} aria-label="清除端点运行覆盖" title={restoreReason ?? '移除运行覆盖，恢复内核当前配置；可能中断连接'} onclick={() => { menuOpen=false; restoreTarget=endpoint; restoreOpen=true; }}><RotateCw size={14} />清除运行覆盖</Button>
+          {#if catalog.localOverrideIds.includes(endpoint.endpoint_id)}<Button variant="ghost" size="sm" aria-label="管理端点客户端配置覆盖" title="工作区中的客户端覆盖需重新预检并应用；清除运行覆盖不会恢复来源" onclick={() => { menuOpen=false; store.openSettings('config'); }}>管理客户端覆盖</Button>{/if}
           <div class="menu-divider"></div>
           <Button variant="ghost" size="sm" disabled={disabled || inspecting || !endpoint.supported.operations.includes('details')} aria-label="协议详情" onclick={() => showDetail('protocol')}><Network size={14} />协议详情</Button>
           <Button variant="ghost" size="sm" aria-label="观测详情" onclick={() => showDetail('observation')}><Info size={14} />观测详情</Button>
@@ -107,6 +113,8 @@
     </Dialog.Body>
   </Dialog.Content>
 </Dialog.Root>
+
+<Dialog.Root bind:open={restoreOpen}><Dialog.Content><Dialog.Header><Dialog.Title>清除端点运行覆盖？</Dialog.Title><Dialog.Description>移除 {restoreTarget?.tag} 的运行覆盖并核对内核结果。可能中断连接；来源配置保持。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => restoreOpen=false}>取消</Button><Button onclick={() => { restoreOpen=false; if (restoreTarget) onAction(restoreTarget, { operation: 'clear_overrides' }); }}>确认恢复</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 
 <style>
   .endpoint-card { border:1px solid var(--border); border-radius:12px; padding:18px; background:var(--card); min-width:0; }

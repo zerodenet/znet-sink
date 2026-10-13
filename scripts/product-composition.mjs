@@ -25,7 +25,7 @@ export function productComposition() {
     resolveId(id) { if ([metadata, panels, probes, diagnostics].includes(id)) return '\0' + id; },
     load(id) {
       if (id === '\0' + metadata) return `export const productName = ${JSON.stringify(product.name)}; export const diagnosticCatalog = ${JSON.stringify(panelTools.map(({id, title}) => ({id, title})))}; export const moduleCatalog = ${JSON.stringify(product.tools.map(({id, title}) => ({id, title})))};`;
-      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob, cancelProbeJob } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob, cancelProbeJob);` : 'export const createProbeJobs = null;';
+      if (id === '\0' + probes) return product.features.includes('tool-node-probe') ? `import { ProbeJobsState } from '$lib/features/node-probes/jobs.svelte'; import { startProbeJob, cancelProbeJob, getProbeRuntimeSnapshot } from '$lib/features/node-probes/client'; export const createProbeJobs = (query) => new ProbeJobsState(query, startProbeJob, cancelProbeJob, getProbeRuntimeSnapshot);` : 'export const createProbeJobs = null;';
       if (id === '\0' + diagnostics) {
         const sources = product.tools.filter(tool => tool.diagnostics);
         if (!sources.length) return 'export const toolDiagnostics = [];';

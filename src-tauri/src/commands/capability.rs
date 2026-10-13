@@ -1,7 +1,9 @@
 use tauri::State;
 
 use crate::errors::AppResult;
-use crate::models::capability::{GuiCapabilitySnapshot, InteractionSurfaceSnapshot};
+use crate::models::capability::{
+    GuiCapabilitySnapshot, InteractionPresentation, InteractionSurfaceSnapshot,
+};
 use crate::services::capability;
 use crate::state::app_state::AppState;
 
@@ -13,6 +15,7 @@ pub fn gui_capabilities_snapshot(state: State<'_, AppState>) -> AppResult<GuiCap
 #[tauri::command]
 pub async fn gui_interaction_surface_snapshot(
     state: State<'_, AppState>,
+    presentation: Option<InteractionPresentation>,
 ) -> AppResult<InteractionSurfaceSnapshot> {
-    capability::interaction_surface(state).await
+    capability::interaction_surface(state, presentation).await
 }

@@ -1,6 +1,7 @@
 //! One registration point for the existing desktop command surface.
 
 use crate::commands::app_config as app_config_commands;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::commands::app_update as app_update_commands;
 use crate::commands::capability as capability_commands;
 use crate::commands::config_workspace as config_workspace_commands;
@@ -26,8 +27,12 @@ use crate::commands::system_proxy as system_proxy_commands;
 use crate::commands::tool_jobs as tool_job_commands;
 use crate::commands::traffic_observation as traffic_commands;
 
-pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    builder.invoke_handler(tauri::generate_handler![
+pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        crate::mobile_host::gui_mobile_platform_snapshot,
+        crate::commands::packet_routes::gui_packet_routes_snapshot,
+        crate::commands::packet_routes::gui_packet_route_detail,
+        crate::commands::packet_routes::gui_close_packet_route,
         plugin_commands::plugins_supported,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_snapshot,
@@ -53,7 +58,9 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         plugin_commands::plugins_run,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_invoke,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_sdk_call,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_protected_load,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_preview_install,
@@ -185,8 +192,11 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         app_config_commands::app_config_apply_tun,
         app_config_commands::app_config_export_kernel_settings,
         app_config_commands::app_config_import_kernel_settings,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::app_check_release,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::download::app_download_update,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::download::app_install_update,
         proxy_config_commands::proxy_config_list,
         proxy_config_commands::proxy_config_composition_report,
@@ -235,6 +245,17 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_debug_storage_summary,
         gui_core_commands::gui_clear_debug_storage,
         gui_core_commands::gui_export_diagnostics,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::desktop::tray::tray_update_status,
-    ])
+    ];
+    builder.invoke_handler(move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+        if cfg!(any(target_os = "android", target_os = "ios"))
+            && znet_client_core::mobile::requires_desktop_host(invoke.message.command())
+        {
+            let error = crate::mobile_host::unavailable(invoke.message.command());
+            invoke.resolver.reject(error);
+            return true;
+        }
+        handler(invoke)
+    })
 }

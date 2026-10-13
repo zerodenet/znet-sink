@@ -258,3 +258,17 @@ test('traffic resets, counter gaps and long pauses never fabricate a continuous 
   assert.equal(session.view.catalog.endpoints[0].allowed.inbound,true);
   assert.equal(session.view.error.message,'reconcile failed');
 });
+
+test('runtime override clearing preserves declared ownership preconditions and refuses client configuration overlays', async()=>{
+ const action={operation:'clear_overrides'};
+ const c=catalog(),e=endpoint();e.state_source='runtime_override';
+ assert.equal(operationReason(c,e,action),null);
+ c.localOverrideIds=[e.endpoint_id];assert.match(operationReason(c,e,action),/客户端配置覆盖/);
+ c.localOverrideIds=[];c.editableEndpointIds=[];assert.match(operationReason(c,e,action),/仅可观测/);
+ c.editableEndpointIds=[e.endpoint_id];c.capabilities.features=c.capabilities.features.filter(feature=>feature!=='network_endpoint_control_preconditions_v1');
+ assert.match(operationReason(c,e,action),/前置条件/);
+ const g=gateway();const current=catalog();current.endpoints=[e];g.catalog=async()=>current;
+ let sent;g.control=async input=>{sent=input;return {...e,state_source:'config'};};
+ const session=new EndpointSession(g,()=>{});await session.refresh();await session.act(e,action);
+ assert.equal(sent.action.operation,'clear_overrides');assert.equal(sent.expectedIntentRevision,7);assert.equal(sent.coreInstanceId,'core-1');session.dispose();
+});

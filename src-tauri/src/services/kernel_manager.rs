@@ -123,6 +123,7 @@ pub fn prepare_version(
     install_dir: Option<String>,
     app: AppHandle,
 ) -> AppResult<PreparedKernelInstall> {
+    crate::mobile_host::require_desktop_runtime("kernel_install_version")?;
     let dir = resolve_install_dir(install_dir)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
@@ -298,6 +299,7 @@ pub fn prepare_version(
 }
 
 pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersionDetect> {
+    crate::mobile_host::require_desktop_runtime("kernel_detect_version")?;
     let _files = install::lock_installed_files()?;
     let executable_path = core_config::resolve_executable_path(config);
 

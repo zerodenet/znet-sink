@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::models::proxy_config::ProxyConfigCapabilities;
 
@@ -37,4 +37,12 @@ pub struct InteractionSurfaceItem {
     pub operable: bool,
     pub readonly: bool,
     pub reason: Option<String>,
+}
+
+/// UI projection only; never a grant of platform or kernel permission.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InteractionPresentation {
+    Desktop,
+    Mobile,
 }

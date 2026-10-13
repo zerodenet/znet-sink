@@ -8,6 +8,7 @@ export default defineConfig({
   root: absolute('./'),
   plugins: [productComposition(), tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '$lib/features/mobile/runtime', replacement: absolute('./mobile-runtime.ts') },
     { find: '$lib/features/traffic/client', replacement: absolute('./traffic-observation.ts') },
     { find: '$lib/features/endpoints/client', replacement: absolute('./network-endpoints.ts') },
     { find: '@tauri-apps/api/event', replacement: absolute('./tauri-events.ts') },

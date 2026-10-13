@@ -585,7 +585,11 @@ async fn remove_runtime_owned(
     }
 
     let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
-    let managed_proxy_enabled = system_proxy_guard::is_enabled_by_guard().unwrap_or(false);
+    let managed_proxy_enabled = if cfg!(any(target_os = "android", target_os = "ios")) {
+        false // This host owns no desktop proxy; this is not VPN state.
+    } else {
+        system_proxy_guard::is_enabled_by_guard().unwrap_or(false)
+    };
     let Some(replacement) = replacement else {
         if running {
             stop_core(app_handle.clone()).await?;
@@ -764,11 +768,17 @@ fn local_proxy_endpoint(state: &AppState) -> AppResult<(String, u16, Vec<String>
 }
 
 pub(crate) fn retarget_managed_system_proxy(state: &AppState) -> AppResult<()> {
-    if !system_proxy_guard::is_enabled_by_guard()? {
-        return Ok(());
-    }
-    let (host, port, bypass) = local_proxy_endpoint(state)?;
-    system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
+    znet_client_core::mobile::desktop_profile_effect(
+        cfg!(any(target_os = "android", target_os = "ios")),
+        || {
+            if !system_proxy_guard::is_enabled_by_guard()? {
+                return Ok(());
+            }
+            let (host, port, bypass) = local_proxy_endpoint(state)?;
+            system_proxy_guard::enable_with_guard_and_bypass(&host, port, &bypass)
+        },
+    )
+    .map(|_| ())
 }
 
 fn enable_managed_system_proxy(state: &AppState) -> AppResult<()> {
@@ -888,14 +898,20 @@ fn extract_inbound_endpoint(inbound: &Value) -> Option<LocalProxyEndpoint> {
 }
 
 pub(crate) fn ensure_managed_system_proxy_compatible(content: Option<&Value>) -> AppResult<()> {
-    if system_proxy_guard::is_enabled_by_guard()?
-        && content.is_none_or(|v| v.get("inbounds").is_some() && extract_local_proxy(v).is_none())
-    {
-        return Err(AppError::invalid_argument(
-            "disable the GUI-managed system proxy before activating a config without a local proxy inbound",
-        ));
-    }
-    Ok(())
+    znet_client_core::mobile::desktop_profile_effect(
+        cfg!(any(target_os = "android", target_os = "ios")),
+        || {
+            if system_proxy_guard::is_enabled_by_guard()?
+                && content.is_none_or(|v| v.get("inbounds").is_some() && extract_local_proxy(v).is_none())
+            {
+                return Err(AppError::invalid_argument(
+                    "disable the GUI-managed system proxy before activating a config without a local proxy inbound",
+                ));
+            }
+            Ok(())
+        },
+    )
+    .map(|_| ())
 }
 
 fn has_non_empty_nested_array(config: &Value, paths: &[&[&str]]) -> bool {

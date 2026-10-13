@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager, State};
 use super::{monitor::spawn_monitor, spawn::spawn_core_child, status::refresh_locked_status};
 
 fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<CoreProcessStatus> {
+    crate::mobile_host::require_desktop_runtime("core_process_start")?;
     let monitor_generation = {
         let mut process = lock(state.runtime_host().process(), "core_process")?;
         refresh_locked_status(&mut process, state.inner())?;

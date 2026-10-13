@@ -245,3 +245,24 @@ test('upgrade from old capability and downgrade on unsupported query are redisco
 test('misadvertised unsupported query cannot create an immediate rediscovery loop',async()=>{
  const g=new FixtureGateway();let queries=0;g.page=async()=>{queries++;throw{code:'unsupported'};};const s=await started(g);try{assert(queries<=2);assert.equal(s.view.discovery,null);assert(s.view.stale);}finally{s.dispose();}
 });
+
+test('plane controls derive from actual metrics without inventing Flow Inner Outer or Host',async()=>{
+ const {availablePlanes}=await import('../src/lib/features/traffic/presentation.ts');
+ assert.deepEqual(availablePlanes([]),[]);
+ const snapshot=sample();snapshot.planes=snapshot.planes.filter(plane=>plane.plane==='inner');
+ assert.deepEqual(availablePlanes([snapshot]),['inner']);
+ snapshot.planes[0].available_metrics=[];assert.deepEqual(availablePlanes([snapshot]),[]);
+ snapshot.planes[0].available_metrics=['rx_bytes'];snapshot.planes[0].plane='custom';assert.deepEqual(availablePlanes([snapshot,snapshot]),['custom']);
+});
+
+test('background suspends UI polling while shared events remain owned; foreground rechecks and rebaselines',async()=>{
+ let now=10000;const g=new FixtureGateway();const s=await started(g,()=>now);try{
+  const key=scopeKey(scopes[0]);g.advance([0]);g.push([0]);assert(s.view.rows[key].rates['flow.bytes_down']!==null);
+  s.setVisible(false);const queries=g.queries.length;const stops=g.stops;
+  now+=60000;s.tick();g.status('gap');g.advance([0]);g.push([0]);await flush();
+  assert.equal(g.queries.length,queries);assert.equal(g.stops,stops);assert(s.view.stale);
+  assert.equal(s.view.rows[key].rates['flow.bytes_down'],undefined);
+  s.setVisible(true);await flush();assert(g.queries.length>queries);assert.equal(g.stops,stops);
+  assert(!s.view.stale);assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
+ }finally{s.dispose();}
+});

@@ -24,7 +24,7 @@ fn snapshot_contract_serializes_for_the_tauri_bridge() {
             "revision": 7,
             "scope": {
                 "profileId": "profile-a",
-                "configRevision": 3,
+                "configRevision": "3",
                 "coreInstanceId": 2
             },
             "sourceStatus": "ready",

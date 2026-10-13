@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, ClientScope, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -299,8 +299,8 @@ export async function getGuiCapabilitiesSnapshot(): Promise<GuiCapabilitySnapsho
   return invoke('gui_capabilities_snapshot');
 }
 
-export async function getGuiInteractionSurfaceSnapshot(): Promise<InteractionSurfaceSnapshot> {
-  return invoke('gui_interaction_surface_snapshot');
+export async function getGuiInteractionSurfaceSnapshot(presentation?: 'desktop' | 'mobile'): Promise<InteractionSurfaceSnapshot> {
+  return invoke('gui_interaction_surface_snapshot', { presentation });
 }
 
 // System proxy
@@ -356,8 +356,8 @@ export async function getGuiProxyModeStatus(): Promise<ProxyModeStatus> {
   return mapProxyModeStatus(raw);
 }
 
-export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false, globalOutbound?: string): Promise<ProxyModeStatus> {
-  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore, globalOutbound } });
+export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false, globalOutbound?: string, expectedScope?: ClientScope): Promise<ProxyModeStatus> {
+  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore, globalOutbound, expectedScope } });
   return mapProxyModeStatus(raw);
 }
 
@@ -399,8 +399,8 @@ export async function getGuiZeroCapabilities(): Promise<GuiZeroCapabilities> {
 
 // Policy selection
 
-export async function guiSelectPolicy(policyTag: string, targetTag: string): Promise<GuiPolicySelectionResult> {
-  return invoke('gui_select_policy', { policyTag, targetTag });
+export async function guiSelectPolicy(policyTag: string, targetTag: string, expectedScope?: ClientScope): Promise<GuiPolicySelectionResult> {
+  return invoke('gui_select_policy', { policyTag, targetTag, expectedScope });
 }
 
 

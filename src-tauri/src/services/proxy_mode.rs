@@ -32,6 +32,7 @@ pub async fn set(
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
     let _operation = state.proxy_config_operation().lock().await;
+    state.ensure_client_scope(input.expected_scope.as_ref())?;
     let core_was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
     let previous = active_proxy_config(state.inner())?

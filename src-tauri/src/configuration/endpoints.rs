@@ -60,7 +60,7 @@ pub(crate) fn candidate(
         ));
     }
     let mut next = app.clone();
-    if matches!(action, Action::Restart {}) {
+    if matches!(action, Action::Restart {} | Action::ClearOverrides {}) {
         return Ok(next);
     }
     let edits = next.profile_edits.entry(profile.into()).or_default();

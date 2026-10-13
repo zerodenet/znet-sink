@@ -1,12 +1,17 @@
 //! Application composition and service lifecycle, separate from platform UI.
 
-mod commands;
+pub(crate) mod commands;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::lifecycle::{self, phases};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::services::{core_process, network_probe, system_proxy_guard};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::state::app_state::AppState;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::Manager;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
     // File logger + panic hook — first thing, so every later phase (and any
     // crash) lands in <data_dir>/logs/gui.log.jsonl.
@@ -295,4 +300,9 @@ pub fn run() {
 
     // ── Shutdown: runs after Tauri event loop exits ──
     lifecycle.shutdown();
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn run() {
+    crate::mobile_host::application::run();
 }

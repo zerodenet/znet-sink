@@ -27,7 +27,8 @@ export type ClientSourceStatus = 'initializing' | 'ready' | 'degraded' | 'offlin
 
 export interface ClientScope {
   profileId?: string;
-  configRevision: number;
+  /** Native content digest is a lossless decimal string; numeric fixtures remain compatible. */
+  configRevision: string | number;
   coreInstanceId: number;
 }
 
@@ -83,6 +84,7 @@ export interface ProbeJobSnapshot {
 }
 
 export interface StartProbeRequest {
+  expectedScope?: ClientScope;
   kind: ProbeJobKind;
   targetTags: string[];
   timeoutMs?: number;
@@ -151,13 +153,13 @@ export interface ToolRuntimeSnapshot {
 
 export interface StableNodeId {
   profileId: string;
-  configRevision: number;
+  configRevision: string | number;
   tag: string;
 }
 
 export interface StablePolicyId {
   profileId: string;
-  configRevision: number;
+  configRevision: string | number;
   tag: string;
 }
 
@@ -312,6 +314,8 @@ export interface PolicyProbeAccepted {
 }
 
 export interface PolicyGroup {
+  available?: boolean;
+  reason?: string;
   name: string;
   kind?: string;
   selected?: string;

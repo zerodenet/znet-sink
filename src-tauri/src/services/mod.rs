@@ -66,6 +66,8 @@ use std::path::PathBuf;
 /// Single source of truth for the application data directory.
 ///
 /// Resolution order:
+/// Mobile: initialized native private app container only.
+/// Desktop:
 /// 1. `ZNET_SINK_DATA_DIR` env var — development override
 /// 2. Platform-specific standard path:
 ///    - Windows: `%APPDATA%/ZNet Sink`
@@ -76,30 +78,41 @@ use std::path::PathBuf;
 /// production installs. If none of the above paths resolve, this returns
 /// an error so callers can decide how to handle the missing directory.
 pub(crate) fn data_dir() -> AppResult<PathBuf> {
-    if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        if let Some(app_data) = std::env::var_os("APPDATA") {
-            return Ok(PathBuf::from(app_data).join("ZNet Sink"));
-        }
+        return MOBILE_DATA_DIR
+            .get()
+            .cloned()
+            .ok_or_else(|| AppError::internal("mobile private app container is not initialized"));
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-            return Ok(PathBuf::from(config_home).join("znet-sink"));
+        if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
+            return Ok(PathBuf::from(path));
         }
-        if let Some(home) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
-        }
-    }
 
-    Err(AppError::internal(
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(app_data) = std::env::var_os("APPDATA") {
+                return Ok(PathBuf::from(app_data).join("ZNet Sink"));
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+                return Ok(PathBuf::from(config_home).join("znet-sink"));
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
+            }
+        }
+
+        Err(AppError::internal(
         "cannot determine data directory: set ZNET_SINK_DATA_DIR or ensure APPDATA/HOME is available",
     ))
+    }
 }
 
 pub mod bypass;
@@ -112,3 +125,24 @@ pub(crate) mod schedule_store;
 pub mod network_endpoint;
 
 pub mod traffic_observation;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+static MOBILE_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
+    if !path.is_absolute() {
+        return Err(AppError::internal(
+            "native app container must be an absolute path",
+        ));
+    }
+    match MOBILE_DATA_DIR.get() {
+        Some(existing) if existing == &path => Ok(()),
+        Some(_) => Err(AppError::internal("native app container identity changed")),
+        None => MOBILE_DATA_DIR
+            .set(path)
+            .map_err(|_| AppError::internal("native app container was already initialized")),
+    }
+}
+
+pub mod packet_routes;

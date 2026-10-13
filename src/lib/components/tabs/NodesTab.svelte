@@ -1,4 +1,8 @@
 <script lang="ts">
+  import MobileNodesList from '$lib/components/mobile/MobileNodesList.svelte';
+  import { failedProbeTargets, sameProbeScope, controlScope, latestProbeJob } from '$lib/features/nodes/mobile-view';
+  let { mobile = false }: { mobile?: boolean } = $props();
+  let lastProbeJob = $state<ProbeJobSnapshot | null>(null);
   import { createProbeJobs } from 'virtual:znet-node-probes';
   import { NodeScreenState } from '$lib/features/nodes/screen.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -105,7 +109,7 @@
 
   // Kernel connection state
   const isCoreAvailable = $derived(
-    screen.nodeScreen?.sourceStatus === 'ready' || screen.nodeScreen?.sourceStatus === 'degraded',
+    !screen.error && (screen.nodeScreen?.sourceStatus === 'ready' || screen.nodeScreen?.sourceStatus === 'degraded'),
   );
   const probeDisabledReason = $derived(
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
@@ -121,6 +125,7 @@
   function handleProbeJobUpdate(job: ProbeJobSnapshot) {
     if (!probeJobs || probeJobs.disposed) return;
     applyProbeJob(job);
+    lastProbeJob = latestProbeJob(lastProbeJob,job);
     if (job.state === 'running') return;
 
     // Node observations/history are refreshed only after the authoritative job
@@ -151,6 +156,15 @@
     void screen.attach(listen('client-core:updated', () => {
       void refreshNodeScreen('client_core_updated');
     }));
+  });
+
+  onMount(() => {
+    if (!mobile || !probeJobs) return;
+    void refreshMobileProbeRuntime();
+    const timer=setInterval(() => {
+      if (!document.hidden && (drainRecheck || (probeJobs.runtime?.draining ?? 0)>0)) void refreshMobileProbeRuntime();
+    },5000);
+    return () => clearInterval(timer);
   });
 
   onDestroy(() => {
@@ -351,6 +365,7 @@
       const job = await probeJobs.start({
         kind: policyProbe ? 'manual_policy' : 'outbound',
         targetTags: [node.tag],
+        expectedScope: mobile ? screen.nodeScreen?.scope : undefined,
         timeoutMs: 30_000,
       });
       applyProbeJob(job);
@@ -367,16 +382,23 @@
   }
 
   let stoppingProbes = $state(false);
+  let probeStopPending = $state(false);
+  let drainRecheck = $state(false);
+  async function refreshMobileProbeRuntime() {
+    await probeJobs?.refreshRuntime();
+    if (probeJobs?.runtime?.draining===0) drainRecheck=false;
+  }
   async function handleStopProbes() {
     if (!probeJobs || stoppingProbes) return;
     stoppingProbes = true;
+    if (mobile) { probeStopPending=true; drainRecheck=true; }
     try {
       const results = await Promise.allSettled(activeProbeJobs.map(async job => {
         handleProbeJobUpdate(await probeJobs.cancel(job.id));
       }));
       const failed = results.find(result => result.status === 'rejected');
       if (failed?.status === 'rejected') reportActionError(failed.reason);
-    } finally { stoppingProbes = false; }
+    } finally { stoppingProbes = false; if (mobile) await refreshMobileProbeRuntime(); }
   }
 
   async function handleProbeAll() {
@@ -409,6 +431,45 @@
       });
       reportActionError(message);
     }
+  }
+
+  const mobileScopeKey = $derived(JSON.stringify(screen.nodeScreen?.scope ?? null));
+  const retryTargets = $derived(lastProbeJob && screen.nodeScreen ? failedProbeTargets(lastProbeJob, screen.nodeScreen.scope) : []);
+  async function handleMobileSelect(node: ProxyNode, policyTag: string) {
+    const group = groups.find(candidate => candidate.name === policyTag);
+    if (switching || !isCoreAvailable || !store.isActionOperable('policies.select')) return;
+    if (group?.available===false || group?.kind?.toLowerCase() !== 'selector' || !group.outbounds.some(member => member.tag === node.tag)) {
+      reportActionError('当前组或直接成员已变化，请刷新后重选'); return;
+    }
+    switching=node.id; lastError=null;
+    try {
+      const result=await guiSelectPolicy(policyTag,node.tag,screen.nodeScreen ? controlScope(screen.nodeScreen.scope) : undefined);
+      if (!result.accepted) reportActionError(result.message ?? '此组选择尚未确认');
+      await refreshNodeScreen('mobile_policy_select');
+    } catch (error) { reportActionError(error instanceof Error ? error.message : String(error)); }
+    finally { switching=null; }
+  }
+  async function handleMobileGroupProbe(group: PolicyGroup) {
+    if (!probeJobs || !isCoreAvailable) return;
+    // Snapshot every direct effective outbound, independent of search/filter.
+    const tags=[...new Set(group.outbounds.map(member => member.tag))];
+    if (!tags.length || !groups.some(candidate => candidate.name === group.name)) return;
+    await startMobileProbe('outbound', tags);
+  }
+  async function startMobileProbe(kind: ProbeJobSnapshot['kind'], targetTags: string[]) {
+    if (!probeJobs || !isCoreAvailable || !targetTags.length) return;
+    lastError=null;
+    try {
+      const job=await probeJobs.start({kind,targetTags,expectedScope:screen.nodeScreen ? controlScope(screen.nodeScreen.scope) : undefined,timeoutMs:Math.min(300_000,Math.max(30_000,15_000+Math.ceil(targetTags.length/8)*15_000))});
+      handleProbeJobUpdate(job);
+    } catch (error) { reportActionError(error instanceof Error ? error.message : String(error)); }
+  }
+  async function handleRetryFailed() {
+    if (!lastProbeJob || !screen.nodeScreen || !sameProbeScope(lastProbeJob.scope, screen.nodeScreen.scope)) {
+      reportActionError('测速所属配置或内核已变化，请在当前配置重新发起'); return;
+    }
+    const targets=failedProbeTargets(lastProbeJob,screen.nodeScreen.scope);
+    await startMobileProbe(lastProbeJob.kind, targets);
   }
 
   let previousMode: string | undefined;
@@ -564,6 +625,9 @@
   }
 </script>
 
+{#if mobile}
+  <MobileNodesList {groups} nodes={inventory} bind:query={searchQuery} scopeKey={mobileScopeKey} ready={isCoreAvailable} busy={switching!==null} probingTags={new Set([...probingNodeTags,...probingPolicyTags])} jobs={activeProbeJobs} error={lastError ?? screen.error} loading={!screen.nodeScreen} onSelect={handleMobileSelect} onProbe={probeJobs ? handleProbe : undefined} onProbeGroup={probeJobs ? handleMobileGroupProbe : undefined} onStop={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined} onRetry={probeJobs && retryTargets.length ? handleRetryFailed : undefined} stopping={stoppingProbes} stopRequested={probeStopPending} draining={probeJobs?.runtime?.draining ?? null} drainingError={probeJobs?.runtimeError ?? null} lastJob={lastProbeJob && screen.nodeScreen && sameProbeScope(lastProbeJob.scope,screen.nodeScreen.scope) ? lastProbeJob : null} historyForTag={tag=>screen.nodeScreen?.nodes.find(node=>node.tag===tag)?.history ?? []}/>
+{:else}
 <div class="nodes-root animate-fade-in">
   <NodesGroupSidebar
     {groups}
@@ -679,6 +743,8 @@
 
   </div>
 </div>
+
+{/if}
 
 {#if popover.visible && popover.node}
   <div

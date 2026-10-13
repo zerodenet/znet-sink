@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MobileConfigurationFixture from "./MobileConfigurationFixture.svelte";
+  import MobileNodesFixture from "./MobileNodesFixture.svelte";
   import EndpointsWorkspaceFixture from "./EndpointsWorkspaceFixture.svelte";
   import PluginsWorkspaceFixture from "./PluginsWorkspaceFixture.svelte";
   import CapabilitiesTab from '$lib/components/tabs/CapabilitiesTab.svelte';
@@ -47,7 +49,11 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'plugins-shell'}
+{#if selectedPanel === 'mobile-configuration'}
+  <MobileConfigurationFixture />
+{:else if selectedPanel === 'mobile-nodes'}
+  <MobileNodesFixture />
+{:else if selectedPanel === 'plugins-shell'}
   <div class="h-dvh overflow-hidden"><PluginsWorkspaceFixture /></div>
 {:else if selectedPanel === 'endpoints-shell'}
   <div class="h-dvh overflow-hidden"><EndpointsWorkspaceFixture /></div>

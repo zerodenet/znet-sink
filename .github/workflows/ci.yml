@@ -97,6 +97,9 @@ jobs:
       - name: Run professional overview state regression
         run: pnpm test:overview
 
+      - name: Check mobile client scope, traffic and Packet contracts
+        run: pnpm test:mobile
+
       - name: Run application lifecycle contract
         run: pnpm test:runtime-lifecycle
 

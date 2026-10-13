@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "gui"
-version = "0.0.2-rc.202610130535"
+version = "0.0.3-dev.202610131010"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -1798,6 +1798,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",
+ "zero-api",
  "zero-rule",
  "zeroize",
  "znet-client-capabilities",
@@ -6661,6 +6662,16 @@ dependencies = [
  "serde",
  "winnow 1.0.3",
  "zvariant",
+]
+
+[[package]]
+name = "zero-api"
+version = "0.0.3-dev.202610130614"
+source = "git+https://github.com/zerodenet/core.git?rev=e74561f99acca941bfadf0d33e35a5ef08f34086#e74561f99acca941bfadf0d33e35a5ef08f34086"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

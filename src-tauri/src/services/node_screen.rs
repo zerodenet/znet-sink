@@ -62,7 +62,11 @@ pub async fn snapshot(state: &AppState, reason: Option<&str>) -> AppResult<NodeS
         core_config::ipc_options_from_app_config(&config.core)
     };
     let (runtime_groups, runtime_available, runtime_error_code, runtime_error_message) =
-        match adapter.policy_groups(options).await {
+        match if cfg!(any(target_os = "android", target_os = "ios")) {
+            Err(crate::mobile_host::unavailable("gui_policy_groups"))
+        } else {
+            adapter.policy_groups(options).await
+        } {
             Ok(groups) => (groups, true, None, None),
             Err(error) => (
                 Vec::new(),
@@ -223,7 +227,7 @@ fn log_snapshot_refresh(
             "durationMs": duration_ms,
             "revision": snapshot.revision.0,
             "profileId": snapshot.scope.profile_id.as_ref().map(|profile| profile.0.as_str()),
-            "configRevision": snapshot.scope.config_revision.0,
+            "configRevision": snapshot.scope.config_revision.0.to_string(),
             "coreInstanceId": snapshot.scope.core_instance_id.0,
             "sourceStatus": snapshot.source_status,
             "runtimeGroupsAvailable": runtime_groups_available,

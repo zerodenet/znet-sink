@@ -1,12 +1,20 @@
 mod cache;
 mod owned_cleanup;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+mod unsupported;
 pub(crate) use owned_cleanup::clear_matching;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+use unsupported::{
+    capture_backup_platform, local_bypass_configured_platform, restore_platform,
+    set_proxy_platform, status_platform,
+};
 static STATUS_CACHE: cache::StatusCache<SystemProxyStatus> = cache::StatusCache::new();
 
 #[cfg(any(target_os = "macos", test))]
 #[path = "system_proxy_macos_bypass.rs"]
 mod macos_bypass;
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::services::common;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1338,6 +1346,11 @@ pub fn complete_bypass_backup(backup: &mut ProxyBackup) -> AppResult<bool> {
 
 /// Read native exceptions before taking the idempotent-enable fast path.
 pub fn bypass_matches(bypass: &[String]) -> AppResult<bool> {
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = bypass;
+        Err(unsupported::unavailable())
+    }
     #[cfg(target_os = "macos")]
     {
         let expected: std::collections::BTreeSet<_> = bypass

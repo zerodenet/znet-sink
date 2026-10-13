@@ -11,7 +11,9 @@ pub mod services;
 pub mod state;
 
 mod application;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod desktop;
+pub mod mobile_host;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
