@@ -70,7 +70,8 @@ core 工作树只读且未推送。默认随包策略尚未落实为移动内核
 后续 Rust 修复全套证据为 `/tmp/mobile-final-rust-{fmt,check,tests,clippy}.log`，
 升级事务回归为 `/tmp/mobile-upgrade-transaction-regression.log`；
 测试 runner 的 Linux PowerShell 语法/C# 编译/参数转发证据为
-`/tmp/znet-windows-runner-pwsh-validation.log`。
+`/tmp/znet-windows-runner-pwsh-validation.log`；插件示例回归为
+`/tmp/mobile-plugin-example-checkout-regression.log`。
 
 ## 草稿 PR 与 CI
 
@@ -96,7 +97,11 @@ Cargo 哈希测试 EXE 用 Windows SDK `mt.exe` 嵌入最小 Common Controls v6 
 Windows 将“普通文件/receipt.json”的读取错误归类为 NotFound，旧逻辑会忽略
 损坏的 `upgrade-*` 条目。后续修复先检查保留前缀的备份类型，并要求持久回执；
 缺失或损坏时明确要求恢复，无关普通文件和目录继续兼容。新增两项回归，
-事务 13 项及本地 workspace/all-features 899 项通过；最终 Windows CI 仍需核对。
+事务 13 项及本地 workspace/all-features 899 项通过；`d391bfd2` 的两套 Windows GUI 主测试均通过，后续 workspace 在插件示例
+入口摘要校验失败。隔离的 `core.autocrlf=true checkout-index` 重现：示例 JS
+变成 CRLF，与 manifest 的 source_sha256 不符。补齐示例目录的 LF 属性后同样
+checkout 保留声明摘要，原离线打包/安装/执行测试通过。没有更改摘要或校验逻辑；
+最终 head 的 Windows 完整 workspace/readiness 和其他 CI 仍需核对。
 两个镜像名称来自 [GitHub 官方 runner 列表](https://github.com/actions/runner-images/blob/main/README.md)。
 
 ## PRD 验收状态
