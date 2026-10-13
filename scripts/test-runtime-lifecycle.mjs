@@ -53,6 +53,7 @@ assert.ok(
 const appRuntime = read('src-tauri/src/application/mod.rs');
 const tauriManifest = read('src-tauri/Cargo.toml');
 const coreProcessService = read('src-tauri/src/runtime_host/shutdown.rs');
+const tunShutdown = read('src-tauri/src/capture/shutdown.rs');
 const lifecyclePhases = read('src-tauri/src/lifecycle/phases.rs');
 assert.ok(
   tauriManifest.includes('tauri-plugin-single-instance = "2"')
@@ -72,6 +73,13 @@ assert.ok(
     && coreProcessService.indexOf('crate::capture::shutdown::stop_owned_tun(pid, endpoint)')
       < coreProcessService.indexOf('super::stop::stop_for_exit('),
   'application exit should stop TUN before clearing the proxy and stopping the managed core process',
+);
+assert.ok(
+  tunShutdown.includes('next.tun.enabled = Some(false);')
+    && coreProcessService.indexOf('clear_saved_tun_intent(')
+      < coreProcessService.indexOf('state.runtime_host().run("shutdown"')
+    && coreProcessService.includes('if let Err(error) = saved_intent'),
+  'exit must persist TUN OFF even without an owned child, while storage failure must not abort runtime cleanup',
 );
 
 const connectionWorkspace = read('src/lib/components/tabs/ConnectionInspectorWorkspace.svelte');

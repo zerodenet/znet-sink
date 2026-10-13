@@ -113,6 +113,28 @@ pub async fn system_proxy_status() -> AppResult<SystemProxyStatus> {
         })?
 }
 
+#[tauri::command]
+pub async fn system_proxy_reset(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<SystemProxyStatus> {
+    let _operation = state.proxy_config_operation().lock().await;
+    let status = crate::services::native_operation::execute_async(
+        state.inner(),
+        "system.proxy",
+        "reset",
+        Duration::from_secs(30),
+        async {
+            tauri::async_runtime::spawn_blocking(system_proxy_guard::reset_explicitly)
+                .await
+                .map_err(|e| AppError::internal(format!("system proxy reset worker: {e}")))?
+        },
+    )
+    .await?;
+    network_probe::emit_host_network_changed(&app_handle, "system_proxy.reset");
+    Ok(status)
+}
+
 async fn ensure_core_ready(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let adapter = ZeroAdapter::new();
     let opts = default_ipc_opts(state.inner());

@@ -248,3 +248,42 @@ test('overview and policy choices share automatic probes without changing manual
   await expect(shortcut).toContainText('US');
   await expect(shortcut).toContainText('探测失败');
 });
+
+
+test('Lite keeps proxy reset available even during normal capture', async ({page}) => {
+  await page.goto('/?panel=mode-overview');
+  await page.getByRole('button',{name:'重置代理',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toHaveCount(1);
+  await dialog.getByRole('button',{name:/清除系统代理/}).click();
+  await expect(page.getByLabel('模式操作')).toHaveText('proxy-reset');
+  await expect(dialog.getByRole('button',{name:/清除系统代理/})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'重置代理',exact:true})).toBeDisabled();
+  await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
+  await page.evaluate(()=>window.dispatchEvent(new Event('fixture-finish-reset')));
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status',{name:'代理运行状态'})).toContainText('仅 TUN 已开启');
+  await expect(page.getByRole('button',{name:'重置代理',exact:true})).toBeEnabled();
+});
+
+for (const scenario of ['proxy-stopped','proxy-unknown','proxy-reset-failure']) {
+  test(`Lite reset remains actionable for ${scenario}`,async ({page}) => {
+    await page.goto(`/?panel=mode-overview&mode=${scenario}`);
+    const reset=page.getByRole('button',{name:'重置代理',exact:true});
+    await expect(reset).toBeEnabled();await reset.click();
+    const dialog=page.getByRole('dialog');
+    if (scenario === 'proxy-stopped') await expect(dialog.getByRole('button',{name:/强制接管/})).toBeDisabled();
+    if (scenario === 'proxy-unknown') await expect(dialog).toContainText('系统代理状态待确认');
+    await dialog.getByRole('button',{name:/清除系统代理/}).click();
+    await expect(page.getByLabel('模式操作')).toHaveText('proxy-reset');
+    await page.evaluate(()=>window.dispatchEvent(new Event('fixture-finish-reset')));
+    if (scenario === 'proxy-reset-failure') {
+      await expect(dialog.getByRole('alert')).toHaveText('系统拒绝修改代理设置');
+      await expect(dialog.getByRole('button',{name:/清除系统代理/})).toBeEnabled();
+      await expect(dialog).toContainText('127.0.0.1:7891');
+    } else {
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole('button',{name:'开启代理',exact:true})).toBeEnabled();
+    }
+  });
+}

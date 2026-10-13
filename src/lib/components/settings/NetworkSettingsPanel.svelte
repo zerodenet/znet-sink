@@ -1,10 +1,12 @@
 <script lang="ts">
+  import NetworkRescuePanel from '$lib/components/settings/NetworkRescuePanel.svelte';
   import LocalProxyEndpointPanel from '$lib/components/settings/LocalProxyEndpointPanel.svelte';
   import AppConfigPanel from '$lib/components/settings/AppConfigPanel.svelte';
   import UrlTestSettingsPanel from '$lib/components/settings/UrlTestSettingsPanel.svelte';
   import RuntimeNetworkSettingsPanel from '$lib/components/settings/RuntimeNetworkSettingsPanel.svelte';
 </script>
 
+<NetworkRescuePanel />
 <LocalProxyEndpointPanel />
 <AppConfigPanel scope="network" />
 <div class="section-gap"></div>

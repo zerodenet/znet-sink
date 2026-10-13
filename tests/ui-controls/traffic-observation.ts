@@ -24,6 +24,17 @@ if (!enabled) { fixture.caps.supported=false; fixture.caps.capabilities.features
 if (params.has('traffic-poll')) fixture.caps.capabilities.trafficStatistics!.automatic_sampling=false;
 fixture.mode=params.get('traffic-reset') ?? 'success';
 let subscriptions=0;
+let recoveryDelay=0;
+let recoveryError=false;
+window.addEventListener('fixture-traffic-recovery',event=>{
+  const detail=(event as CustomEvent<{delay:number;error?:boolean}>).detail;
+  recoveryDelay=detail.delay;recoveryError=detail.error??false;
+  fixture.status?.('gap');
+});
+window.addEventListener('fixture-traffic-capability',event=>{
+  fixture.caps.supported=(event as CustomEvent<boolean>).detail;
+  fixture.status?.('subscribed');
+});
 function report() {
   let output=document.querySelector('output#traffic-fixture');
   if(!output){output=document.createElement('output');output.id='traffic-fixture';output.className='sr-only';document.body.append(output);}
@@ -31,7 +42,11 @@ function report() {
 }
 export const trafficGateway:TrafficGateway={
   discover:()=>fixture.discover(),
-  page:async input=>{const value=await fixture.page(input);report();return value;},
+  page:async input=>{
+    if(recoveryDelay) await new Promise(resolve=>setTimeout(resolve,recoveryDelay));
+    if(recoveryError) throw {code:'connection_closed',message:'后台统计查询中断，请等待连接恢复。'.repeat(12)};
+    const value=await fixture.page(input);report();return value;
+  },
   get:scope=>fixture.get(scope),
   reset:async input=>{await new Promise(resolve=>setTimeout(resolve,200));try{return await fixture.reset(input);}finally{report();}},
   subscribe:async (event,status)=>{

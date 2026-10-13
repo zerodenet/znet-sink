@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { store, type SettingsSection } from '$lib/services/store.svelte';
   import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
@@ -15,6 +16,8 @@
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { Spinner } from '$lib/components/ui/Spinner';
   import { Button } from '$lib/components/ui/button';
+  import SystemProxyRecoveryDialog from '$lib/components/core/SystemProxyRecoveryDialog.svelte';
+  import { handleTrayAction } from '$lib/services/tray-actions';
   import TabContent from '$lib/components/TabContent.svelte';
   import { WelcomeGuide } from '$lib/components/WelcomeGuide';
   import { installGlobalErrorTelemetry, recordTelemetry } from '$lib/services/telemetry';
@@ -76,43 +79,6 @@
     }
   }
 
-  async function handleTrayAction(action?: string) {
-    switch (action) {
-      case 'toggle_proxy':
-        if (store.uiMode === 'lite') {
-          if (guiState.isCaptureEnabled || guiState.isTunDesiredEnabled) {
-            await guiState.disconnect();
-            break;
-          }
-        } else {
-          if (guiState.isSystemProxyEnabled) {
-            await guiState.disableSystemProxy();
-            break;
-          }
-        }
-
-        // Starting the managed kernel is part of enabling capture, not of
-        // disabling it. This avoids reviving a stopped process just to clean
-        // up an independently lingering system/TUN state.
-        if (!guiState.isProcessRunning) {
-          await guiState.startCore();
-          if (!guiState.isProcessRunning) return;
-        }
-        if (store.uiMode === 'lite') await guiState.connect();
-        else await guiState.enableSystemProxy();
-        break;
-      case 'toggle_system_proxy':
-        await guiState.toggleSystemProxy();
-        break;
-      case 'toggle_tun':
-        await guiState.toggleTun();
-        break;
-      case 'restart_core':
-        await guiState.restartCore();
-        break;
-    }
-  }
-
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
     let unlistenTrayAction: UnlistenFn | null = null;
@@ -144,7 +110,13 @@
       unlistenNavigate = unlisten;
     });
     void listen<{ action?: string }>('app:tray-action', (event) => {
-      void handleTrayAction(event.payload.action);
+      void handleTrayAction(guiState, store.uiMode, event.payload.action).then(async () => {
+        if (!guiState.systemProxyRecoveryOpen) return;
+        // Recovery can be discovered by a fresher query than the native menu.
+        const window = getCurrentWindow();
+        await window.show();
+        await window.setFocus();
+      }).catch(console.warn);
     }).then((unlisten) => {
       unlistenTrayAction = unlisten;
     });
@@ -306,6 +278,7 @@
   {/if}
 
 </main>
+<SystemProxyRecoveryDialog />
 
 <style>
   /* Loading screen */

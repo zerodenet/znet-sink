@@ -162,6 +162,9 @@ fn accept(listener: TcpListener, sessions: Arc<Mutex<BTreeMap<String, Session>>>
 }
 
 fn read_callback(stream: &mut TcpStream, id: &str) -> Result<BTreeMap<String, String>, ()> {
+    // macOS may inherit the listener's nonblocking flag on accepted sockets.
+    // Read the complete header with the timeout below, including TCP fragments.
+    stream.set_nonblocking(false).map_err(|_| ())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|_| ())?;
@@ -220,6 +223,9 @@ mod tests {
             .is_err());
         let url = reqwest::Url::parse(&created.callback_url).unwrap();
         let mut stream = TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
         write!(
             stream,
             "GET {}?code=opaque HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
@@ -228,10 +234,8 @@ mod tests {
         .unwrap();
         stream.shutdown(std::net::Shutdown::Write).unwrap();
         let mut response = String::new();
-        let _ = stream.read_to_string(&mut response);
-        if !response.is_empty() {
-            assert!(response.starts_with("HTTP/1.1 200 OK"));
-        }
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             let status = store
@@ -244,5 +248,37 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn fragmented_callback_waits_for_complete_headers_on_an_inherited_nonblocking_socket() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .write_all(b"GET /callback/test?code=opaque HTTP/1.1\r\nHost:")
+            .unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+        accepted.set_nonblocking(true).unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            result_tx
+                .send(read_callback(&mut accepted, "test"))
+                .unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+            "an incomplete header must wait for its remaining bytes"
+        );
+        client.write_all(b" 127.0.0.1\r\n\r\n").unwrap();
+        let query = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(query["code"], "opaque");
+        worker.join().unwrap();
     }
 }

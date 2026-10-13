@@ -6,6 +6,16 @@ use std::{
 };
 use znet_client_core::capability::Manager;
 
+#[path = "../../../tests/support/loopback.rs"]
+mod loopback;
+
+fn isolated_loopback_probe(test: &str) -> bool {
+    // The test harness omits the crate name from module paths.
+    let module = module_path!().split_once("::").unwrap().1;
+    let name = format!("{module}::{test}");
+    loopback::isolated_loopback_probe(&name)
+}
+
 fn unavailable_url() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     format!(
@@ -16,17 +26,31 @@ fn unavailable_url() -> String {
 
 #[test]
 fn all_failed_probes_identify_the_check_without_disclosing_configured_urls() {
+    if !isolated_loopback_probe(
+        "all_failed_probes_identify_the_check_without_disclosing_configured_urls",
+    ) {
+        return;
+    }
     let error = probe_local_network(&Manager::default(), &[unavailable_url(), unavailable_url()])
         .unwrap_err();
     assert!(error.message.contains("公网 IP 与位置检查失败"));
     assert!(error.message.contains("不代表网络完全不可用"));
     assert!(error.message.contains("探测 1") && error.message.contains("探测 2"));
-    assert!(error.message.contains("建立连接失败"));
-    assert!(!error.message.contains("token") && !error.message.contains("private"));
+    assert!(
+        error.message.contains("建立连接失败"),
+        "unexpected probe diagnostics: {}",
+        error.message
+    );
+    for secret in ["token", "private", "127.0.0.1"] {
+        assert!(!error.message.contains(secret));
+    }
 }
 
 #[test]
 fn failed_first_probe_falls_back_to_a_valid_public_ip_response() {
+    if !isolated_loopback_probe("failed_first_probe_falls_back_to_a_valid_public_ip_response") {
+        return;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let worker = std::thread::spawn(move || {

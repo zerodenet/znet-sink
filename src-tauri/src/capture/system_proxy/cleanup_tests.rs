@@ -1,4 +1,4 @@
-use super::clear_at;
+use super::{clear_at, reset_at};
 use crate::errors::AppError;
 use std::cell::Cell;
 
@@ -57,4 +57,55 @@ fn markerless_cleanup_requires_a_matching_owned_listener() {
     })
     .unwrap();
     assert!(cleared.get());
+}
+
+fn status(enabled: bool) -> crate::services::system_proxy::SystemProxyStatus {
+    crate::services::system_proxy::SystemProxyStatus {
+        enabled,
+        host: String::new(),
+        port: 0,
+        socks_enabled: false,
+        socks_host: String::new(),
+        socks_port: 0,
+    }
+}
+
+#[test]
+fn explicit_reset_works_without_or_with_corrupt_ownership_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("proxy.json");
+    for corrupt in [false, true] {
+        if corrupt {
+            std::fs::write(&path, "corrupt").unwrap();
+        }
+        let called = Cell::new(false);
+        let actual = reset_at(path.clone(), || {
+            called.set(true);
+            Ok(status(false))
+        })
+        .unwrap();
+        assert!(called.get());
+        assert!(!actual.enabled);
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn explicit_reset_retains_record_on_failure_or_unconfirmed_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("proxy.json");
+    std::fs::write(&path, "ownership evidence").unwrap();
+    reset_at(path.clone(), || {
+        Err(AppError::internal("authorization cancelled"))
+    })
+    .unwrap_err();
+    assert!(path.exists());
+    reset_at(path.clone(), || Ok(status(true))).unwrap_err();
+    assert!(path.exists());
+    let mut socks = status(false);
+    socks.socks_enabled = true;
+    reset_at(path.clone(), || Ok(socks)).unwrap_err();
+    assert!(path.exists());
+    reset_at(path.clone(), || Ok(status(false))).unwrap();
+    assert!(!path.exists());
 }

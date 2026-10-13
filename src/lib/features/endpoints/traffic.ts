@@ -1,4 +1,5 @@
 import type { NetworkEndpoint } from './types';
+import { formatRate } from '$lib/features/traffic/history';
 
 export interface TrafficPoint { at: number; rx: number | null; tx: number | null }
 export interface EndpointTraffic {
@@ -47,8 +48,5 @@ export function trafficPaths(points: TrafficPoint[], key: 'rx' | 'tx', ceiling: 
   }).join(' ');
 }
 export function formatEndpointRate(value: number | null | undefined): string {
-  if (value == null) return '—';
-  if (value < 1024) return `${Math.round(value)} B/s`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB/s`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
+  return formatRate(value);
 }

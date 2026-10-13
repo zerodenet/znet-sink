@@ -10,6 +10,62 @@ async function menu(row: import('@playwright/test').Locator, action: string) {
   await row.getByRole('button', {name:action,exact:true}).click();
 }
 
+test('endpoint refresh failures and card facts keep the entire directory layout stable',async({page})=>{
+  await page.clock.install();await open(page);
+  const row=page.getByRole('article',{name:'端点 wg-a',exact:true});
+  await expect(row).toBeVisible();
+  const card=await row.elementHandle();
+  const boxes=()=>page.locator('.endpoints-panel').evaluate(panel=>
+    [...panel.querySelectorAll('header,.search,.endpoint-card,.endpoint-card footer')].map(el=>{
+      const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};
+    }));
+  const before=await boxes();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{delay:200,catalogError:true}})));
+  await page.clock.runFor(6000);
+  await expect(page.getByLabel('端点目录状态')).toContainText('同步失败');
+  expect(await boxes()).toEqual(before);
+  await expect(row.getByRole('switch')).toBeDisabled();
+  expect(await card!.evaluate(el=>el.isConnected)).toBe(true);
+  await page.evaluate(()=>{
+    window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{catalogError:false}}));
+    window.dispatchEvent(new CustomEvent('fixture-endpoint-facts',{detail:{error:true,addresses:false}}));
+  });
+  await page.clock.runFor(6000);
+  await expect(row.getByRole('alert')).toContainText('端点握手暂时失败');
+  await expect(page.getByLabel('端点目录状态')).toContainText('已同步');
+  expect(await boxes()).toEqual(before);
+  await expect(row.getByRole('switch')).toBeEnabled();
+  await page.evaluate(()=>{
+    window.dispatchEvent(new Event('fixture-reload-config'));
+    window.dispatchEvent(new CustomEvent('client-core:updated',{detail:{revision:3,scope:{profileId:'fixture',configRevision:2,coreInstanceId:1}}}));
+  });
+  await expect(row.getByRole('switch')).toBeDisabled();
+  expect(await card!.evaluate(el=>el.isConnected)).toBe(true);
+  expect(await boxes()).toEqual(before);
+  await page.clock.runFor(1000);
+  await expect(row.getByRole('switch')).toBeEnabled();
+  expect(await boxes()).toEqual(before);
+});
+
+test('opened endpoint details hold their size through background failure and recovery',async({page})=>{
+  await page.clock.install();await open(page);
+  const row=page.getByRole('article',{name:'端点 wg-a',exact:true});
+  await menu(row,'协议详情');
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toContainText('example.test:51820');
+  const size=()=>dialog.evaluate(el=>{const r=el.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};});
+  const before=await size();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{delay:200,detailsError:true}})));
+  await page.clock.runFor(6000);
+  await expect(dialog.getByRole('alert')).toContainText('协议详情读取中断');
+  await expect(dialog).not.toContainText('example.test:51820');
+  expect(await size()).toEqual(before);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{detailsError:false}})));
+  await page.clock.runFor(6000);
+  await expect(dialog).toContainText('example.test:51820');
+  expect(await size()).toEqual(before);
+});
+
 test('generic endpoint management renders actual facts and only confirmed changes', async ({page})=>{
   await open(page,'&delayed=1');
   const wg=page.getByRole('article',{name:'端点 wg-a',exact:true});
