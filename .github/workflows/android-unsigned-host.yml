@@ -72,11 +72,17 @@ jobs:
       - name: Inspect package and assert it is unsigned
         run: |
           set -euo pipefail
-          apk=$(rg --files src-tauri/gen/android/app/build/outputs/apk | rg '\.apk$' | head -1)
-          test -n "$apk"
+          apk=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          test -f "$apk"
           python3 scripts/verify-unsigned-android-apk.py "$apk" | tee android-host-evidence/unsigned-verification.json
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > android-host-evidence/package-badging.txt
-          rg -Fx "sdkVersion:'24'" android-host-evidence/package-badging.txt
+          python3 - android-host-evidence/package-badging.txt <<'PY'
+          import pathlib, re, sys
+          badging = pathlib.Path(sys.argv[1]).read_text()
+          assert "sdkVersion:'24'" in badging.splitlines(), "Unexpected minimum API"
+          assert "targetSdkVersion:'36'" in badging.splitlines(), "Unexpected target API"
+          assert re.search(r"^package: name='org\.zerodenet\.znetsink' ", badging, re.M), "Unexpected application ID"
+          PY
           cp "$apk" android-host-evidence/
       - uses: actions/upload-artifact@v4
         if: always()
