@@ -15,6 +15,36 @@ use tauri::{
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_znet_native_io);
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeLicenseResponse {
+    pub status: String,
+    pub content: Option<String>,
+    pub reason: Option<String>,
+}
+
+impl NativeLicenseResponse {
+    pub fn validated(self) -> Result<Self> {
+        if !matches!(self.status.as_str(), "available" | "missing" | "invalid")
+            || self
+                .content
+                .as_ref()
+                .is_some_and(|value| value.len() > 16 * 1024 * 1024)
+            || (self.status != "available" && self.content.is_some())
+            || (self.status == "available" && self.content.is_none())
+            || self.reason.as_ref().is_some_and(|reason| {
+                reason.len() > 96
+                    || !reason
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            })
+        {
+            return Err(Error::InvalidReceipt("invalid_license_asset_response"));
+        }
+        Ok(self)
+    }
+}
+
 pub struct NativeIo<R: Runtime> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     handle: tauri::plugin::PluginHandle<R>,
@@ -31,6 +61,31 @@ impl<R: Runtime, T: Manager<R>> NativeIoExt<R> for T {
     }
 }
 impl<R: Runtime> NativeIo<R> {
+    /// Read the fixed packaged license asset. No document picker, path or grant is accepted.
+    pub fn license_inventory(&self) -> Result<NativeLicenseResponse> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            #[cfg(target_os = "ios")]
+            {
+                return Err(Error::Unavailable);
+            }
+            #[cfg(target_os = "android")]
+            {
+                let response: NativeLicenseResponse = self
+                    .handle
+                    .run_mobile_plugin(
+                        "readLicenseInventory",
+                        std::collections::BTreeMap::<String, String>::new(),
+                    )
+                    .map_err(|_| Error::BridgeResultUnknown)?;
+                response.validated()
+            }
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            Err(Error::Unavailable)
+        }
+    }
     /// This reflects a compiled adapter, not device/platform acceptance.
     pub fn source_available(&self) -> bool {
         cfg!(any(target_os = "android", target_os = "ios"))
@@ -96,4 +151,47 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             Ok(())
         })
         .build()
+}
+
+#[cfg(test)]
+mod license_response_tests {
+    use super::*;
+    fn response(
+        status: &str,
+        content: Option<&str>,
+        reason: Option<&str>,
+    ) -> NativeLicenseResponse {
+        NativeLicenseResponse {
+            status: status.into(),
+            content: content.map(str::to_owned),
+            reason: reason.map(str::to_owned),
+        }
+    }
+    #[test]
+    fn fixed_asset_receipt_distinguishes_missing_from_available() {
+        assert!(response("available", Some("{}"), None).validated().is_ok());
+        assert!(
+            response("missing", None, Some("license_asset_not_packaged"))
+                .validated()
+                .is_ok()
+        );
+        assert!(response("available", None, None).validated().is_err());
+        assert!(response("missing", Some("{}"), None).validated().is_err());
+    }
+    #[test]
+    fn fixed_asset_receipt_rejects_raw_path_errors_and_oversized_bodies() {
+        assert!(response("unknown", None, None).validated().is_err());
+        assert!(response("invalid", None, Some("/private/provider/token"))
+            .validated()
+            .is_err());
+        assert!(
+            response("invalid", None, Some("https://provider/?token=secret"))
+                .validated()
+                .is_err()
+        );
+        let oversized = "x".repeat(16 * 1024 * 1024 + 1);
+        assert!(response("available", Some(&oversized), None)
+            .validated()
+            .is_err());
+    }
 }

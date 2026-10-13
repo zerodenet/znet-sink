@@ -31,7 +31,11 @@ pub mod network_endpoint;
 
 pub mod traffic_observation;
 
+pub mod connection_export;
 pub mod endpoint_restoration;
+pub mod license_inventory;
+pub mod mobile_notifications;
+pub mod mobile_release;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;

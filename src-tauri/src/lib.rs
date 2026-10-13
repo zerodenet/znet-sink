@@ -5,6 +5,7 @@ pub mod configuration;
 pub mod errors;
 pub mod events;
 pub mod kernel;
+pub(crate) mod license_inventory;
 pub mod lifecycle;
 pub mod models;
 pub mod services;

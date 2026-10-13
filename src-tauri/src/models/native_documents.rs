@@ -36,3 +36,31 @@ pub struct DocumentReceipt {
     pub bytes_read: Option<u32>,
     pub reason: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticScope {
+    pub profile_id: Option<String>,
+    pub config_revision: String,
+    pub client_instance_id: String,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticOmission {
+    pub category: String,
+    pub count: Option<u64>,
+    pub reason: String,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticPreview {
+    pub plan_id: String,
+    pub created_at_unix_ms: String,
+    pub expires_at_unix_ms: String,
+    pub scope: DiagnosticScope,
+    pub bytes: u32,
+    pub log_count: usize,
+    pub frame_count: Option<usize>,
+    pub task_count: usize,
+    pub omissions: Vec<DiagnosticOmission>,
+}

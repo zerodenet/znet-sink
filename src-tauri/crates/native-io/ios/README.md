@@ -53,3 +53,43 @@ check and does not typecheck UIKit, CryptoKit, or the Tauri SDK against an iOS S
 
 API references: [Apple export picker](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller/init(forexporting:ascopy:)),
 [Apple opening picker](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller/init(foropeningcontenttypes:ascopy:)).
+
+## License provenance inventory
+
+`scripts/license-swift.mjs` inventories this unsigned Swift library independently
+from a generated iOS application. Supply locked Cargo metadata, the actual Apple
+build scratch directory, and its generated `Package.resolved` if it is outside that
+directory:
+
+```sh
+node scripts/license-swift.mjs \
+  --cargo-metadata /tmp/cargo-metadata.json \
+  --swift-build-path /tmp/native-io-ios-build \
+  --target aarch64-apple-ios-sim \
+  --build-log /tmp/native-io-xcodebuild.log \
+  --output /tmp/native-io-swift-licenses.json
+```
+
+Optional `--resolved-file`, `--sdk-path`, `--sdk-data`, and `--artifact` arguments
+provide the actual build lock, SDK framework metadata, SDKSettings JSON, and static
+archive. Tauri's original Swift sources and license texts are found through its
+exact Cargo metadata dependency, without reading generated `.tauri` source copies.
+Remote Swift package texts require the actual Swift pin and a SwiftPM checkout
+whose Git HEAD matches that revision. SwiftRs's Cargo version or another plugin's
+lockfile cannot substitute for the actual Swift resolution.
+
+The inventory contains exact observed license/notice texts and their hashes. It
+marks source declarations, resolved packages, and successful target compilation
+separately. Apple framework imports are platform-provided dependencies, with no
+invented SPDX license or redistribution notice. A supplied archive must have an
+observed Mach-O object of the requested CPU and iOS device/simulator platform.
+Foundation tests on Linux remain separate from UIKit library compilation. Missing
+Swift locks, source texts, SDK information, compilation evidence, or artifacts
+remain explicit gaps. This library inventory does not prove what a future iOS
+application bundles, signs, or runs on a device.
+
+`node scripts/test-license-swift.mjs` runs independent temporary fixtures for pin
+identity, exact text evidence, stale checkouts, archive rejection, deterministic
+output, and actual build-log architecture selection. `license-swift-targets.mjs`
+reads successful Simulator compiler logs; multiple observed architectures produce
+separate target inventories in CI, without assuming the runner's architecture.

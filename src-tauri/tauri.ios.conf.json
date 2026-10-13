@@ -9,6 +9,9 @@
     ]
   },
   "bundle": {
+    "iOS": {
+      "minimumSystemVersion": "16.4"
+    },
     "createUpdaterArtifacts": false
   }
 }

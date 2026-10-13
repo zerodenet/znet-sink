@@ -421,7 +421,7 @@ fn parse_release(
 ///
 /// We also respect GitHub's `prerelease` flag and explicit nightly/dev/canary
 /// keywords so that mislabeled releases are still routed correctly.
-fn classify_channel(tag: &str, prerelease: bool) -> ReleaseChannel {
+pub(crate) fn classify_channel(tag: &str, prerelease: bool) -> ReleaseChannel {
     let tag_lower = tag.to_ascii_lowercase();
     if tag_lower.contains("nightly") || tag_lower.contains("dev") || tag_lower.contains("canary") {
         ReleaseChannel::Nightly

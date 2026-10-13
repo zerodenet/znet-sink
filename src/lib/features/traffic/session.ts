@@ -1,6 +1,6 @@
 import type { TrafficDiscovery, TrafficGateway, TrafficSnapshot, TrafficPage, TrafficEvent, StreamStatus, ResetInput, ResetSnapshot } from '$lib/features/traffic/types';
 import { scopeKey } from '$lib/features/traffic/types';
-import { supported, samplingSupported, resetReason, errorCode } from '$lib/features/traffic/policy';
+import { supported, samplingSupported, hostSupported, resetReason, errorCode } from '$lib/features/traffic/policy';
 import { inventory } from '$lib/features/traffic/inventory';
 import { observe, rebaseline, type Observation } from '$lib/features/traffic/history';
 
@@ -129,7 +129,7 @@ export class TrafficSession {
         }
         const maximum = this.view.discovery!.capabilities.trafficStatistics!.maximum_page_size;
         if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error('内核分页能力无效');
-        const page = await inventory(this.gateway, Math.min(64, maximum), () => this.alive && revision === this.revision);
+        const page = await inventory(this.gateway, Math.min(64, maximum), () => this.alive && revision === this.revision, hostSupported(this.view.discovery));
         if (!this.alive || revision !== this.revision) return;
         this.acceptInventory(page);
         this.lastQuery = this.now();
@@ -205,6 +205,7 @@ export class TrafficSession {
     }
   }
   private sample(snapshot: TrafficSnapshot) {
+    if(snapshot.scope.kind==='host_interface'&&!hostSupported(this.view.discovery))return;
     const key = scopeKey(snapshot.scope), previous = this.view.rows[key];
     if (this.retiredEpochs.get(key)?.includes(snapshot.stats_epoch)) return;
     if (!previous || snapshot.stats_epoch !== previous.snapshot.stats_epoch || snapshot.generation !== previous.snapshot.generation || snapshot.config_revision !== this.config) {

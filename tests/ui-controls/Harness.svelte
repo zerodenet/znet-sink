@@ -1,6 +1,7 @@
 <script lang="ts">
   import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
   import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
+  import ConnectionExportFixture from './ConnectionExportFixture.svelte';
   import MobileConfigurationFixture from "./MobileConfigurationFixture.svelte";
   import MobileNodesFixture from "./MobileNodesFixture.svelte";
   import EndpointsWorkspaceFixture from "./EndpointsWorkspaceFixture.svelte";
@@ -55,6 +56,8 @@
   <NativeDocumentsFixture />
 {:else if selectedPanel === 'profile-removal'}
   <ProfileRemovalFixture />
+{:else if selectedPanel === 'connection-export'}
+  <ConnectionExportFixture />
 {:else if selectedPanel === 'mobile-configuration'}
   <MobileConfigurationFixture />
 {:else if selectedPanel === 'mobile-nodes'}

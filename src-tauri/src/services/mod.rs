@@ -12,6 +12,7 @@ pub mod core_events;
 pub mod core_process;
 pub mod debug_store;
 pub mod diagnostic_storage;
+pub(crate) mod diagnostics;
 pub mod domain_store;
 pub(crate) mod download;
 pub mod file_logger;
@@ -145,7 +146,10 @@ pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
     }
 }
 
+pub(crate) mod connection_export;
 pub mod endpoint_restoration;
+pub(crate) mod mobile_notifications;
+pub mod mobile_release;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;

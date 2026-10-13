@@ -52,7 +52,7 @@ use tokio::time::timeout;
 use crate::errors::{AppError, AppResult};
 use crate::kernel::transport::{self, KernelCloser, KernelReader, KernelWriter};
 use crate::models::core::CoreEndpoint;
-use crate::models::debug::{capture_payload, push_debug_frame, DebugFrame};
+use crate::models::debug::{capture_payload, push_debug_frame, DebugFrame, DebugTelemetry};
 
 /// `id` used for the initial `subscribe` frame. Distinct from the
 /// `znet-sink-<n>` request ids so it can never collide with a pending
@@ -126,6 +126,7 @@ impl MultiplexedConnection {
             direction: "tx".to_string(),
             frame_type: "subscribe".to_string(),
             payload: subscribe_frame,
+            telemetry: None,
             elapsed_ms: None,
             error: None,
         });
@@ -211,6 +212,7 @@ impl MultiplexedConnection {
                 "requestId": request_id,
                 "bytes": frame_bytes.len(),
             }),
+            telemetry: None,
             elapsed_ms: None,
             error: None,
         });
@@ -254,6 +256,7 @@ impl MultiplexedConnection {
                         "requestId": request_id,
                         "status": "ok",
                     }),
+                    telemetry: None,
                     elapsed_ms: None,
                     error: None,
                 });
@@ -271,6 +274,7 @@ impl MultiplexedConnection {
                         "requestId": request_id,
                         "reason": "connection_closed",
                     }),
+                    telemetry: None,
                     elapsed_ms: None,
                     error: Some("connection closed (reader drained)".to_string()),
                 });
@@ -286,6 +290,7 @@ impl MultiplexedConnection {
                         "requestId": request_id,
                         "timeoutMs": response_timeout.as_millis(),
                     }),
+                    telemetry: None,
                     elapsed_ms: Some(response_timeout.as_millis() as u64),
                     error: Some(format!("timeout after {}ms", response_timeout.as_millis())),
                 });
@@ -394,6 +399,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     direction: "rx".to_string(),
                     frame_type: "subscribe-ack".to_string(),
                     payload: capture_payload(&frame),
+                    telemetry: None,
                     elapsed_ms: None,
                     error: None,
                 });
@@ -421,6 +427,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                         "matched": matched,
                         "ok": ok,
                     }),
+                    telemetry: None,
                     elapsed_ms: None,
                     error: None,
                 });
@@ -440,6 +447,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     direction: "rx".to_string(),
                     frame_type: "orphan-response".to_string(),
                     payload: serde_json::json!({ "preview": preview }),
+                    telemetry: None,
                     elapsed_ms: None,
                     error: Some("no matching request id".to_string()),
                 });
@@ -453,6 +461,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 direction: "rx".to_string(),
                 frame_type: "event".to_string(),
                 payload: capture_payload(&frame),
+                telemetry: DebugTelemetry::from_event(&frame),
                 elapsed_ms: None,
                 error: None,
             });

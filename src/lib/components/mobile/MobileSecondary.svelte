@@ -16,7 +16,7 @@
     packet: () => import('$lib/components/tabs/PacketRoutesPanel.svelte'),
     plugins: () => import('$lib/components/tabs/PluginsTab.svelte'),
     logs: () => import('$lib/components/tabs/LogsTab.svelte'),
-    diagnostics: () => import('$lib/components/tabs/DiagnosticsPanel.svelte'),
+    diagnostics: () => import('./MobileDiagnostics.svelte'),
     about: () => mobilePlatform.runtimePlatform !== 'desktop'
       ? import('./MobileAbout.svelte') : import('$lib/components/settings/AboutPanel.svelte'),
     tun: () => import('$lib/components/settings/TunSettingsPanel.svelte'),

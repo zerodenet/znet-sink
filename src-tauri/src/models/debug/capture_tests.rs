@@ -51,11 +51,14 @@ fn pathological_keys_unicode_and_depth_stay_bounded() {
 
 #[test]
 fn capture_is_off_by_default_and_expires_without_a_timer() {
-    assert!(!status_at(u64::MAX).detailed);
+    let mut session = Session::default();
+    assert!(!session.view(0).detailed);
     assert_eq!(CAPTURE_DURATION_MS, 300_000);
-    // Exercise a separate atomic-free lease boundary; no process-global test mutation.
-    let until = CAPTURE_UNTIL.load(Ordering::Relaxed);
-    assert!(!status_at(until).detailed);
+    session.start(1, 1, None, 10).unwrap();
+    let expired = session.view(1010);
+    assert!(!expired.detailed);
+    assert_eq!(expired.end_reason, Some("duration"));
+    assert_eq!(expired.ended_at_ms, Some(1010));
 }
 
 #[test]
@@ -64,4 +67,68 @@ fn event_identity_survives_a_payload_first_in_wire_order() {
     let output = project(&input, false, true);
     assert_eq!(output["event_type"], "flow.completed");
     assert_eq!(output["id"], "event-1");
+}
+
+#[test]
+fn session_capacity_counts_written_records_and_never_exceeds_total_budget() {
+    let mut session = Session::default();
+    let status = session.start(300, 1, None, 0).unwrap();
+    let id = status.session_id.unwrap();
+    assert!(session.admit(&id, MIB - 100, 1));
+    session.written(&id, MIB - 100, true, 2);
+    assert!(!session.admit(&id, 101, 3));
+    let stopped = session.view(3);
+    assert_eq!(stopped.end_reason, Some("capacity"));
+    assert_eq!(stopped.stored_bytes, MIB - 100);
+    let next = session.start(1, 1, None, 4).unwrap();
+    assert!(!session.admit(&id, 1, 5));
+    assert_eq!(session.view(5).session_id, next.session_id);
+}
+#[test]
+fn invalid_budgets_and_storage_errors_never_claim_success() {
+    let mut session = Session::default();
+    for (duration, capacity) in [(0, 1), (301, 1), (1, 0), (1, 11)] {
+        assert!(session.start(duration, capacity, None, 0).is_err());
+    }
+    let status = session.start(1, 1, None, 0).unwrap();
+    let id = status.session_id.unwrap();
+    session.written(&id, 100, false, 1);
+    let stopped = session.view(1);
+    assert_eq!(stopped.stored_bytes, 0);
+    assert_eq!(stopped.end_reason, Some("storage_failure"));
+}
+
+#[test]
+fn old_session_stop_and_changed_source_scope_cannot_control_replacement_capture() {
+    use crate::client_core::{ClientScope, ConfigRevision, CoreInstanceId, ProfileId};
+    let scope = ClientScope {
+        profile_id: Some(ProfileId("p".into())),
+        config_revision: ConfigRevision(1),
+        core_instance_id: CoreInstanceId(1),
+    };
+    let mut session = Session::default();
+    let original = session.start(300, 1, Some(scope.clone()), 0).unwrap();
+    assert!(session.start(300, 1, Some(scope.clone()), 1).is_err());
+    let mut changed = scope.clone();
+    changed.core_instance_id = CoreInstanceId(2);
+    session.invalidate(&changed, 2);
+    assert_eq!(session.view(2).end_reason, Some("scope_changed"));
+    let next = session.start(300, 1, Some(changed), 3).unwrap();
+    assert_ne!(original.session_id, next.session_id);
+    assert!(session
+        .stop_expected(original.session_id.as_deref(), 4)
+        .is_err());
+    assert!(session.view(4).detailed);
+    session
+        .stop_expected(next.session_id.as_deref(), 5)
+        .unwrap();
+    assert_eq!(session.view(5).end_reason, Some("user"));
+}
+#[test]
+fn monotonic_expiry_survives_a_wall_clock_move_backwards() {
+    let mut session = Session::default();
+    session.start(1, 1, None, 10_000).unwrap();
+    session.deadline = Some(std::time::Instant::now());
+    assert!(!session.view(1).detailed);
+    assert_eq!(session.view(1).end_reason, Some("duration"));
 }

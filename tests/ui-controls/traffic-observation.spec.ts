@@ -5,6 +5,31 @@ async function open(page:Page,params='&traffic-v1=1') {
 }
 const scope=(page:Page,name:string)=>page.getByRole('article',{name:`统计 ${name}`,exact:true});
 
+test('discovered Host scope remains separate and read-only even when kernel advertises reset',async({page})=>{
+  await open(page,'&traffic-v1=1&traffic-host=1');
+  await page.getByRole('radio',{name:/^宿主网卡\s*1$/}).click();
+  const host=scope(page,'test-only-interface');
+  await expect(host).toBeVisible();
+  await expect(host.getByRole('checkbox')).toBeDisabled();
+  await expect(page.getByRole('button',{name:'清空选中统计',exact:true})).toBeDisabled();
+  const planes=page.getByRole('group',{name:'统计平面'});
+  await expect(planes.getByRole('radio',{name:'Host',exact:true})).toBeVisible();
+  await expect(planes.getByRole('radio',{name:'Flow',exact:true})).toHaveCount(0);
+  await expect(page.locator('.statistics')).toContainText('流量不等于本应用代理流量');
+  await host.getByRole('button',{name:'查看 test-only-interface 统计详情'}).click();
+  await expect(page.getByRole('dialog')).toContainText('宿主实际采样');
+  await expect(page.getByRole('dialog')).toContainText('系统接口 · 只读');
+});
+
+test('unsupported Host category explains absence without creating a device or plane',async({page})=>{
+  await open(page);
+  await page.getByRole('radio',{name:/^宿主网卡\s*0$/}).click();
+  await expect(page.locator('.statistics')).toContainText('当前内核或平台未声明可读的宿主网卡统计');
+  await expect(page.locator('.statistics .scope')).toHaveCount(0);
+  await expect(page.getByRole('group',{name:'统计平面'}).getByRole('radio')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'刷新统计',exact:true})).toBeEnabled();
+});
+
 test('endpoint cards retain their size when statistics capability is rediscovered',async({page})=>{
   await page.goto('/?panel=endpoints-shell&tab=endpoints&traffic-v1=1');
   const row=page.getByRole('article',{name:'端点 wg-a',exact:true});

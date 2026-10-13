@@ -1,14 +1,22 @@
 <script lang="ts">
   import {onMount} from 'svelte';
   import {Button} from '$lib/components/ui/button';
+  import {Input} from '$lib/components/ui/input';
+  import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import {ABOUT_IDENTITY,ABOUT_LINKS,MobileAboutController,unavailableKernelVersions,type AboutView,type AboutLink} from '$lib/features/mobile/about';
   import {mobileAboutGateway} from '$lib/services/mobile-about';
-  import {projectLicense,mobileLicenseNotices,licenseInventoryGap} from '$lib/services/mobile-license-notices';
+  import {projectLicense,loadLicenseInventories,licenseEvidenceLabels,type LicenseInventoryView,type LicenseEntry,type LicenseInventory} from '$lib/services/mobile-license-notices';
   import {useMobileNavigation} from '$lib/features/mobile/context';
   const navigation=useMobileNavigation();
   const controller=new MobileAboutController(mobileAboutGateway,next=>view=next);
   let view=$state<AboutView>(controller.view);
-  onMount(()=>{void controller.load();return()=>controller.dispose();});
+  let licenses=$state<LicenseInventoryView>({inventories:[],errors:[]});
+  let licensesLoading=$state(true);
+  let licenseSearch=$state('');
+  let licenseFilter=$state('all');
+  async function loadLicenses(){licensesLoading=true;licenses=await loadLicenseInventories();licensesLoading=false;}
+  const rows=$derived.by(()=>{const records=new Map<string,{entry:LicenseEntry;inventory:LicenseInventory}>();for(const inventory of licenses.inventories)for(const entry of inventory.entries){const old=records.get(entry.id);if(!old||entry.evidence.length>old.entry.evidence.length)records.set(entry.id,{entry,inventory});}return [...records.values()].filter(({entry})=>(licenseFilter==='all'||entry.ecosystem===licenseFilter)&&`${entry.name} ${entry.declaredLicense??''} ${entry.source}`.toLowerCase().includes(licenseSearch.toLowerCase()));});
+  onMount(()=>{void controller.load();void loadLicenses();return()=>controller.dispose();});
 </script>
 <section class="mobile-about" aria-label="关于 ZNet Sink">
   <div class="about-card">
@@ -43,9 +51,23 @@
   <div class="about-card">
     <h2>许可与依赖资料</h2>
     <details><summary>Mozilla Public License 2.0 全文</summary><p>{projectLicense.source}</p><pre>{projectLicense.text}</pre></details>
-    <p>{licenseInventoryGap}</p>
-    {#each mobileLicenseNotices as notice}
-      <details><summary>{notice.name} · {notice.license}</summary><p class="address">版本 / 来源修订：{notice.version}</p><pre class="notice">{notice.notice}</pre><pre>{notice.text}</pre></details>
+    <p>此目录来自本次构建的模块、目标解析与原生依赖记录。解析依赖不代表最终链接保留；构建工具和系统框架单独标明。缺失声明或正文会显示原因。</p>
+    <label>搜索依赖<Input class="min-h-11 text-base" aria-label="搜索依赖许可" type="search" bind:value={licenseSearch} placeholder="名称、许可或来源" /></label>
+    <label>依赖范围<FieldSelect class="min-h-11 text-base" aria-label="依赖范围" bind:value={licenseFilter} options={[{value:'all',label:'全部'},{value:'npm',label:'前端'},{value:'cargo',label:'Rust'},{value:'maven',label:'Android'},{value:'swift',label:'Swift'},{value:'platform',label:'系统框架'},{value:'resource',label:'资源'}]} /></label>
+    <Button variant="outline" disabled={licensesLoading} onclick={loadLicenses}>{licensesLoading?'读取许可目录…':'重新读取许可目录'}</Button>
+    {#each licenses.errors as error}<p role="status">{error}</p>{/each}
+    {#each licenses.inventories as inventory}<p>目标：{inventory.target.triple} · {inventory.target.profile} · {inventory.provenance.kind}；{inventory.entries.length} 条，{inventory.gaps.length} 项资料缺口。</p>{/each}
+    <p aria-live="polite">显示 {rows.length} 个依赖</p>
+    {#each rows as {entry,inventory} (entry.id)}
+      <details><summary>{entry.name} · {entry.declaredLicense??'许可声明未提供'}</summary>
+        <p class="address">{entry.ecosystem} · 版本 / 修订：{entry.version??'未提供'}<br />来源：{entry.source}</p>
+        {#each entry.evidence as evidence}<p>{licenseEvidenceLabels[evidence.kind]??evidence.kind}：{evidence.detail}</p>{/each}
+        {#if entry.missing.length}<p role="status">资料缺口：{entry.missing.join('；')}</p>{/if}
+        {#each [...entry.licenseTextIds,...entry.noticeTextIds] as id}
+          {@const material=inventory.texts.find(text=>text.id===id)}
+          {#if material}<details><summary>{entry.licenseTextIds.includes(id)?'许可全文':'归属与附带通知'} · {material.name}</summary><p class="address">{material.source}<br />SHA-256：{material.sha256}</p>{#each entry.materialReferences?.filter(reference=>reference.id===id)??[] as reference}<p class="address">该组件材料来源：{reference.source} · {reference.name}</p>{/each}<pre>{material.text}</pre></details>{/if}
+        {/each}
+      </details>
     {/each}
   </div>
 </section>
@@ -63,5 +85,5 @@
   details { min-width:0; border-top:1px solid var(--border); }
   summary { min-height:44px; padding:12px 0; cursor:pointer; font-size:.88rem; overflow-wrap:anywhere; }
   pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; line-height:1.6; color:var(--foreground); max-width:100%; }
-  .notice { color:var(--muted-foreground); }
+  label { display:block; font-size:.85rem; }
 </style>

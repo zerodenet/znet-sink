@@ -35,13 +35,14 @@ test('late metadata publication after disposal cannot modify page state',async()
  let resolve;const g=base();g.version=()=>new Promise(r=>resolve=r);let publications=0;
  const c=new MobileAboutController(g,()=>publications++);const request=c.load();c.dispose();resolve('late');await request;assert.equal(publications,1);assert.equal(c.view.version,null);
 });
-test('license imports bind to actual repo and installed-package full texts with explicit incomplete inventory',async()=>{
- const service=await readFile(new URL('../src/lib/services/mobile-license-notices.ts',import.meta.url),'utf8');
- for(const path of ['LICENSE','node_modules/@lucide/svelte/LICENSE','node_modules/@fontsource-variable/inter/LICENSE','node_modules/flag-icons/LICENSE','src-tauri/resources/builtin-rules/LICENSE.meta-rules-dat']){
-  assert.ok(service.includes(`../../../${path}?raw`));assert.ok((await readFile(new URL(`../${path}`,import.meta.url),'utf8')).length>300);
- }
- assert.match(service,/尚未完整提供/);assert.match(service,/license:lucide\.license/);assert.match(service,/license:inter\.license/);assert.match(service,/license:rules\.sourceLicense/);
- const component=await readFile(new URL('../src/lib/components/mobile/MobileAbout.svelte',import.meta.url),'utf8');assert.ok(component.includes('{projectLicense.text}'));assert.ok(component.includes('{notice.text}'));assert.ok(!component.includes('updater'));
+test('dependency inventory rejects broken material references and preserves unresolved dependencies',async()=>{
+ const {parseLicenseInventory}=await import('../src/lib/features/mobile/license-inventory.ts');
+ const fixture={schemaVersion:1,target:{platform:'frontend',triple:'browser',profile:'production',features:[]},provenance:{kind:'synthetic-test-fixture'},entries:[{id:'fixture',name:'fixture',source:'fixture',evidence:[],licenseTextIds:[],noticeTextIds:[],missing:['body unavailable'],textStatus:'missing'}],texts:[],gaps:[{reason:'body unavailable'}]};
+ assert.equal(parseLicenseInventory(fixture).entries[0].missing[0],'body unavailable');
+ assert.throws(()=>parseLicenseInventory({...fixture,schemaVersion:2}));
+ assert.throws(()=>parseLicenseInventory({...fixture,entries:[{...fixture.entries[0],licenseTextIds:['absent']}]}));
+ const body='Text shown as plain text',hash='a'.repeat(64);
+ assert.throws(()=>parseLicenseInventory({...fixture,texts:[{id:'invalid',sha256:hash,text:body,name:'LICENSE',kind:'license',source:'fixture'}]}));
 });
 
 test('malformed host app metadata is unavailable rather than crashing or inventing a value',async()=>{

@@ -5,6 +5,11 @@ use super::dns_config::ClientDnsConfig;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Optional mobile system notifications. This is intent, never system permission.
+    #[serde(default)]
+    pub mobile_notifications_enabled: bool,
+    #[serde(default)]
+    pub release_preferences: super::mobile_release::ReleasePreferences,
     /// Sparse settings shared by every profile. None marks pre-global storage.
     #[serde(default)]
     pub client_edits: Option<std::collections::BTreeMap<String, serde_json::Value>>,
@@ -40,6 +45,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            mobile_notifications_enabled: false,
+            release_preferences: Default::default(),
             client_edits: Some(Default::default()),
             profile_edits: Default::default(),
             overrides: ConfigOverrides::default(),

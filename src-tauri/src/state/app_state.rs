@@ -37,6 +37,7 @@ pub struct AppState {
     rule_sets: Mutex<Vec<RuleSetProfile>>,
     configuration: crate::configuration::Workspace,
     endpoint_restoration: crate::services::endpoint_restoration::EndpointRestoration,
+    diagnostic_exports: crate::services::diagnostics::DiagnosticExports,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -107,6 +108,7 @@ impl AppState {
             configuration: crate::configuration::Workspace::default(),
             endpoint_restoration:
                 crate::services::endpoint_restoration::EndpointRestoration::default(),
+            diagnostic_exports: crate::services::diagnostics::DiagnosticExports::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -165,6 +167,31 @@ impl AppState {
         snapshot
     }
 
+    pub(crate) fn diagnostic_exports(&self) -> &crate::services::diagnostics::DiagnosticExports {
+        &self.diagnostic_exports
+    }
+
+    pub(crate) fn commit_diagnostic_capture(
+        &self,
+        expected: &ClientScope,
+        request: crate::models::debug::CaptureRequest,
+    ) -> crate::errors::AppResult<crate::models::debug::CaptureStatus> {
+        let core = self
+            .client_core
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if &core.snapshot().scope != expected {
+            return Err(crate::errors::AppError::conflict(
+                "diagnostic_capture",
+                "",
+                "所属配置或内核实例已变化，请重新核对捕获范围",
+            ));
+        }
+        // Same core -> capture lock order as scope invalidation, so a start
+        // cannot escape a concurrent profile/instance transition.
+        crate::models::debug::capture_request(request, expected.clone())
+    }
+
     pub(crate) fn ensure_client_scope(
         &self,
         expected: Option<&ClientScope>,
@@ -190,6 +217,7 @@ impl AppState {
             config_revision(active_profile),
             crate::services::common::now_unix_ms(),
         );
+        crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByConfigChange,
@@ -209,6 +237,7 @@ impl AppState {
     pub(crate) fn client_core_instance_started(&self) {
         let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
         core.core_instance_started(crate::services::common::now_unix_ms());
+        crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
@@ -228,6 +257,7 @@ impl AppState {
     pub(crate) fn client_core_instance_lost(&self) {
         let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
         core.core_instance_lost(crate::services::common::now_unix_ms());
+        crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
@@ -690,6 +720,19 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "stale_probe_scope");
         assert!(state.list_client_probe_jobs(None).is_empty());
+    }
+
+    #[test]
+    fn diagnostic_start_after_scope_change_is_rejected_before_global_capture() {
+        let state = AppState::default();
+        let old = state.client_core_snapshot().scope;
+        state.client_core.lock().unwrap().core_instance_started(1);
+        let request = serde_json::from_value(serde_json::json!({
+            "action": "start", "durationSeconds": 1, "capacityMiB": 1
+        }))
+        .unwrap();
+        let error = state.commit_diagnostic_capture(&old, request).unwrap_err();
+        assert_eq!(error.code, "conflict");
     }
 
     fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {

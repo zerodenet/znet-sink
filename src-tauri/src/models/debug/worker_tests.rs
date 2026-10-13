@@ -51,3 +51,14 @@ fn diagnostic_failure_does_not_kill_following_delivery() {
         (2, 1)
     );
 }
+
+#[test]
+fn capture_cleanup_barrier_waits_for_previously_queued_writes() {
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let output = Arc::clone(&recorded);
+    let worker = Worker::new(4, move |item, _| output.lock().unwrap().push(item)).unwrap();
+    worker.submit(1).unwrap();
+    worker.submit(2).unwrap();
+    worker.flush().unwrap();
+    assert_eq!(*recorded.lock().unwrap(), vec![1, 2]);
+}

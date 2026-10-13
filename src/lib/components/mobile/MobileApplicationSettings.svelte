@@ -2,6 +2,7 @@
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { store } from '$lib/services/store.svelte';
   import { applyTheme, type ThemeMode } from '$lib/services/theme.svelte';
+  import MobileNotificationSettings from './MobileNotificationSettings.svelte';
   const themes: { value: ThemeMode; label: string }[] = [{ value: 'system', label: '跟随系统' }, { value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }];
   async function chooseTheme(theme: ThemeMode) { applyTheme(theme); await store.persistTheme(theme); }
 </script>
@@ -11,7 +12,7 @@
     {#each themes as theme}<SegmentedControl.Item value={theme.value}>{theme.label}</SegmentedControl.Item>{/each}
   </SegmentedControl.Root>
   <h2>自动恢复</h2><p>平台运行服务及恢复意图尚未适配。系统撤权或主动断开后不会由页面发起自动恢复。</p>
-  <h2>通知</h2><p>移动系统通知授权尚未适配。应用偏好不能代替系统授权，VPN 服务必需提示由平台宿主持有。</p>
+  <h2>通知</h2><MobileNotificationSettings />
 </section>
 <style>
   .preferences { padding:0 14px 24px; }

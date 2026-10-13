@@ -108,7 +108,9 @@ fn clear_locked(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
         }
     }
 
-    clear_debug_frames();
+    if let Err(error) = clear_debug_frames() {
+        record_cleanup_error(&mut result, "ipc-debug-coordination", error);
+    }
     match debug_store::segment_paths(&debug_log_path)
         .iter()
         .try_fold(None, |total, path| {

@@ -34,16 +34,20 @@ pub(crate) fn append(frame: &DebugFrame) -> AppResult<()> {
 }
 
 pub(crate) fn clear() -> AppResult<()> {
-    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
-    clear_path(&debug_path()?)
+    crate::models::debug::with_debug_cleanup(|| {
+        let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+        clear_path(&debug_path()?)
+    })
 }
 
 fn clear_path(path: &Path) -> AppResult<()> {
-    for path in segment_paths(path) {
+    let segments = segment_paths(path);
+    let mut removed = 0;
+    for (index, path) in segments.iter().enumerate() {
         match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error(error)),
+            Ok(()) => removed+=1,
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(_) => return Err(AppError{code:"diagnostic_cleanup_partial",message:format!("捕获清理未完成：已删除{removed}个日志段，剩余范围尚未核对；连接历史和应用日志不受影响"),details:Some(serde_json::json!({"removedSegments":removed,"failedSegmentIndex":index,"unprocessedSegments":segments.len()-index}))}),
         }
     }
     Ok(())

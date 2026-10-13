@@ -1,3 +1,4 @@
+import { licenseInventory } from './scripts/license-vite.mjs';
 import { productComposition } from './scripts/product-composition.mjs';
 import { defineConfig } from "vite";
 import tailwindcss from '@tailwindcss/vite';
@@ -9,6 +10,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [
     productComposition(),
+    licenseInventory(),
     tailwindcss(),
     sveltekit()
   ],

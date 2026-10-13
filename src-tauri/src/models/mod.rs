@@ -17,6 +17,7 @@ pub mod debug;
 pub mod kernel_version;
 
 pub mod endpoint_restoration;
+pub mod mobile_release;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;

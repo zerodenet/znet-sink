@@ -23,6 +23,8 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/android-unsigned-host
+      GRADLE_USER_HOME: ${{ runner.temp }}/znet-host-gradle
+      ZNET_PRODUCT_FEATURES: tool-dns,tool-route,tool-node-probe
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -55,6 +57,21 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Fetch locked Rust dependencies
         run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked
+      - name: Prepare target-specific dependency notices
+        run: |
+          set -euo pipefail
+          pnpm test:licenses
+          pnpm build
+          mkdir -p "$GRADLE_USER_HOME/init.d"
+          cp scripts/license-gradle.init.gradle "$GRADLE_USER_HOME/init.d/license-gradle.init.gradle"
+          node scripts/license-rust.mjs --target aarch64-linux-android --profile release --features "$ZNET_PRODUCT_FEATURES" --output "$RUNNER_TEMP/rust-license.json"
+          echo "ZNET_LICENSE_INVENTORY=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "ZNET_REQUIRE_LICENSE_INVENTORY=1" >> "$GITHUB_ENV"
+          echo "ZNET_LICENSE_FRONTEND=$GITHUB_WORKSPACE/build/license-inventory.frontend.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseMergeScript=$GITHUB_WORKSPACE/scripts/license-native-merge.mjs" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseCargoInventory=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseFrontendInventory=$GITHUB_WORKSPACE/build/license-inventory.frontend.json" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_znetLicenseMaterialsCache=$GITHUB_WORKSPACE/resources/licenses/authoritative-materials.json" >> "$GITHUB_ENV"
       - name: Build the actual unsigned Release application host
         run: |
           set -o pipefail
@@ -75,6 +92,7 @@ jobs:
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
           test -f "$apk"
           python3 scripts/verify-unsigned-android-apk.py "$apk" | tee android-host-evidence/unsigned-verification.json
+          node scripts/license-artifact.mjs --apk "$apk" --frontend build/license-inventory.frontend.json --output android-host-evidence/license-inventory.actual.json --receipt android-host-evidence/license-artifact-receipt.json
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > android-host-evidence/package-badging.txt
           python3 - android-host-evidence/package-badging.txt <<'PY'
           import pathlib, re, sys

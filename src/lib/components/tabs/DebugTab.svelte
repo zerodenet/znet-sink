@@ -413,8 +413,8 @@
           </span>
         </div>
         <div class="debug-actions">
-        <Button variant={detailedCapture ? 'secondary' : 'outline'} size="sm" disabled={captureBusy} onclick={toggleCapture} aria-pressed={detailedCapture} title="默认记录摘要；详细采集有大小限制，5 分钟后自动停止">
-          <Radio />{detailedCapture ? '停止详细采集' : '详细采集 · 5 分钟'}
+        <Button variant={detailedCapture ? 'secondary' : 'outline'} size="sm" disabled={captureBusy} onclick={toggleCapture} aria-pressed={detailedCapture} title="默认记录摘要；详细采集最多5分钟或10MiB，任一预算达到后自动停止">
+          <Radio />{detailedCapture ? '停止详细采集' : '详细采集 · 5 分钟 / 10MiB'}
         </Button>
         <Button variant="outline" size="sm" onclick={toggleExpandAll} title="展开或折叠全部 IPC 帧">
           <ChevronsUpDown />

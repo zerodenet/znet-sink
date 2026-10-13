@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { revealItemInDir } from '$lib/services/platform';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import ConnectionExportDialog from '$lib/components/mobile/ConnectionExportDialog.svelte';
   import type { ConnectionHistorySummary, DebugFrameQuery } from '$lib/types/debug';
   import { historyHeadReplacesWindow } from '$lib/services/connection-history-window';
   import ConnectionHistoryCoverage from '$lib/components/ConnectionHistoryCoverage.svelte';
@@ -56,6 +58,9 @@
   let historySummary = $state<ConnectionHistorySummary | undefined>();
   let exporting = $state(false);
   let exportPath = $state('');
+  let nativeExportOpen = $state(false);
+  let nativeExportQuery = $state.raw<DebugFrameQuery | null>(null);
+  const nativeExport = $derived(mobilePlatform.runtimePlatform !== 'desktop');
   let filtersOpen = $state(false);
   let actionsOpen = $state(false);
 
@@ -271,6 +276,11 @@
 
   async function exportHistory() {
     if (exporting) return;
+    if (nativeExport) {
+      try { nativeExportQuery = historyQuery(); nativeExportOpen = true; }
+      catch(error) { handleAppError(error,'连接筛选无效'); }
+      return;
+    }
     exporting = true;
     try {
       const result = await invoke<{path: string; records: number}>('gui_connection_history_export', { query: historyQuery() });
@@ -841,10 +851,10 @@
       <Button variant="outline" size="sm" disabled={exporting || historyLoading || Boolean(historyError)} onclick={exportHistory}>
         {exporting ? '导出中…' : '导出筛选记录'}
       </Button>
-      {#if exportPath}
+      {#if exportPath && !nativeExport}
         <Button variant="ghost" size="sm" onclick={revealExport}>打开导出位置</Button>
       {/if}
-      <span class="basis-full break-all text-[10px] text-muted-foreground">{exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
+      <span class="basis-full break-all text-[10px] text-muted-foreground">{nativeExport ? '预览固定筛选的本地完成连接；最多2000条、2MiB。地址及域名会明确提醒，自由文本与凭据排除。' : exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
     </div>
   {/if}
 
@@ -1081,6 +1091,8 @@
   onClose={() => clearHistoryConfirm = false}
   onConfirm={clearHistory}
 />
+
+<ConnectionExportDialog bind:open={nativeExportOpen} query={nativeExportQuery}/>
 
 <style>
   :global(.connections-shell) {

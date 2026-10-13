@@ -47,6 +47,13 @@ fn fingerprint(config: &AppConfig) -> AppResult<String> {
 
 pub(crate) fn export(current: &AppConfig) -> AppResult<TransferExport> {
     let mut omitted = Vec::new();
+    // The v1 migration whitelist does not transfer release channels/scheduler intent.
+    if current.release_preferences != Default::default() {
+        omitted.push("releasePreferences".into());
+    }
+    if current.mobile_notifications_enabled {
+        omitted.push("mobileNotificationsEnabled".into());
+    }
     let mut edits = BTreeMap::new();
     // Export only explicitly owned global choices. Never project a subscription body.
     for (field, value) in current.client_edits.iter().flat_map(|v| v.iter()) {

@@ -24,6 +24,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 
 @InvokeArg
 class NativeIoArgs {
@@ -50,6 +52,7 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
     private val active = AtomicReference<Operation?>(null)
     private val worker = Executors.newSingleThreadExecutor()
     private val destroyed = AtomicBoolean(false)
+    private val readingLicenses = AtomicBoolean(false)
 
     override fun load(webView: WebView) {
         cleanStaging()
@@ -88,6 +91,59 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun share(invoke: Invoke) = begin(invoke, "share")
+
+    /** Fixed packaged asset, reachable only through the Rust plugin handle. No path argument. */
+    @Command
+    fun readLicenseInventory(invoke: Invoke) {
+        try {
+            if (invoke.getArgs().length() != 0) {
+                licenseResult(invoke, "invalid", "unexpected-license-arguments")
+                return
+            }
+        } catch (_: Exception) {
+            licenseResult(invoke, "invalid", "invalid-license-arguments")
+            return
+        }
+        if (destroyed.get() || !readingLicenses.compareAndSet(false, true)) {
+            licenseResult(invoke, "invalid", "native-license-reader-unavailable")
+            return
+        }
+        try {
+            worker.execute {
+                try {
+                    if (activity.assets.list("")?.contains("license-inventory.native.json") == false) {
+                        licenseResult(invoke, "missing", "native-license-inventory-not-packaged")
+                        return@execute
+                    }
+                    val bytes = activity.assets.open("license-inventory.native.json").use {
+                        NativeIoPolicy.readBounded(it, 16 * 1024 * 1024L)
+                    }
+                    val content = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+                    val document = JSObject(content)
+                    if (document.opt("schemaVersion") != 1 || document.optJSONObject("target")?.optString("platform") != "android" ||
+                        document.optJSONObject("provenance") == null || document.optJSONArray("entries") == null ||
+                        document.optJSONArray("texts") == null || document.optJSONArray("gaps") == null) {
+                        licenseResult(invoke, "invalid", "invalid-native-license-inventory")
+                    } else licenseResult(invoke, "available", content = content)
+                } catch (_: java.io.FileNotFoundException) {
+                    licenseResult(invoke, "missing", "native-license-inventory-not-packaged")
+                } catch (_: Exception) {
+                    licenseResult(invoke, "invalid", "invalid-native-license-inventory")
+                } finally { readingLicenses.set(false) }
+            }
+        } catch (_: RejectedExecutionException) {
+            readingLicenses.set(false)
+            licenseResult(invoke, "invalid", "native-license-reader-unavailable")
+        }
+    }
+
+    private fun licenseResult(invoke: Invoke, status: String, reason: String? = null, content: String? = null) {
+        invoke.resolve(JSObject().apply {
+            put("status", status)
+            if (reason != null) put("reason", reason)
+            if (content != null) put("content", content)
+        })
+    }
 
     private fun begin(invoke: Invoke, action: String) {
         var operationId = ""

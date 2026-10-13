@@ -101,6 +101,17 @@ pub(crate) fn append_entry(
     source: LogSource,
     level: LogLevel,
     message: String,
+    mut fields: Option<serde_json::Value>,
+) -> AppResult<LogEntry> {
+    crate::services::diagnostics::strip_untrusted_marker(&mut fields);
+    append_trusted_entry(state, source, level, message, fields)
+}
+
+fn append_trusted_entry(
+    state: &AppState,
+    source: LogSource,
+    level: LogLevel,
+    message: String,
     fields: Option<serde_json::Value>,
 ) -> AppResult<LogEntry> {
     let message = crate::kernel::redaction::text(&message);
@@ -169,7 +180,7 @@ pub(crate) fn plugin_host_event(
         Ok(()) => (LogLevel::Info, "ok", None),
         Err(error) => (LogLevel::Error, "failed", Some(error.code)),
     };
-    let _ = append_entry(
+    let _ = append_trusted_entry(
         state,
         LogSource::Plugin,
         level,
@@ -181,6 +192,7 @@ pub(crate) fn plugin_host_event(
             "outcome": outcome,
             "errorCode": code,
             "origin": "host",
+            "__znetHostDiagnosticV1": crate::services::diagnostics::host_telemetry(action, outcome),
         })),
     );
 }

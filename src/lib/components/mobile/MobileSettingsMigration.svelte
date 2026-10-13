@@ -92,7 +92,7 @@
   }
 </script>
 <section class="migration" aria-label="设置迁移">
-  <p>迁移客户端显式设置及外观、日志偏好。订阅正文、代理凭据、插件秘密和授权、系统 VPN 授权、桌面路径及接管开关均不导入或导出。</p>
+  <p>迁移客户端显式设置及外观、日志偏好。订阅正文、代理凭据、插件秘密和授权、系统 VPN 授权、桌面路径、接管开关及发行渠道/自动检查意图均不导入或导出。</p>
   <p class="hint">迁移采用保守范围：DNS 仅接受系统、IP 或内置公开解析器的精确主机名，TLS 名称也受约束；自定义私有上游与非标准路径整体排除。测速 URL 仅接受根路径及内置公共测试路径。原设置和高级 DNS 编辑能力保留。</p>
   <h2>导入</h2>
   <Button variant="outline" disabled={importBusy || !nativeAvailable} onclick={pick}>从系统文件读取</Button>

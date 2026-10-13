@@ -8,6 +8,7 @@ fn frame(id: u64, frame_type: &str, bytes: usize) -> DebugFrame {
         direction: "rx".into(),
         frame_type: frame_type.into(),
         payload: json!({"data": "x".repeat(bytes)}),
+        telemetry: None,
         elapsed_ms: None,
         error: None,
     }
@@ -113,4 +114,21 @@ fn rejects_an_oversized_record_and_seeds_from_highest_id() {
     let size = fs::metadata(&path).unwrap().len();
     assert!(append_to_path(&path, &frame(41, "event", RECORD_BYTES)).is_err());
     assert_eq!(fs::metadata(&path).unwrap().len(), size);
+}
+
+#[test]
+fn capture_cleanup_reports_partial_segments_and_keeps_other_local_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("debug.log.jsonl");
+    let history = dir.path().join("connections.jsonl");
+    let logs = dir.path().join("logs.jsonl");
+    std::fs::write(&history, b"actual-completed-record").unwrap();
+    std::fs::write(&logs, b"app-log").unwrap();
+    std::fs::write(archive_path(&path, 4), b"older-capture").unwrap();
+    std::fs::create_dir(archive_path(&path, 3)).unwrap();
+    let error = clear_path(&path).unwrap_err();
+    assert_eq!(error.code, "diagnostic_cleanup_partial");
+    assert_eq!(error.details.unwrap()["removedSegments"], 1);
+    assert_eq!(std::fs::read(history).unwrap(), b"actual-completed-record");
+    assert_eq!(std::fs::read(logs).unwrap(), b"app-log");
 }

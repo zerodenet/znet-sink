@@ -26,10 +26,10 @@
   限定到桌面目标；移动权限文件不授予桌面进程、托盘、更新器或桌面目录能力。
 - `macos-private-api` 保持原有 Cargo feature 和配置，因为 Tauri 2.6.2 的
   manifest 检查忽略 root dependency 的 target additive feature。这一 feature
-  只在 macOS 兑现，Android/iOS 不因此获得 macOS 系统 API；移动原生适配仍不可用。
+  只在 macOS 兑现，Android/iOS 不因此获得 macOS 系统 API，也不会因此获得移动运行服务。
 - Android 配置显式冻结 `minSdkVersion=24`（Android 7.0）。Galaxy S8 是必须
   验证的设备；API 下限和响应式页面不证明该设备 WebView、包构建或 VPN 已兼容。
-  iOS 保留 Tauri 自身系统版本基线；本批没有另行冻结产品最低 iOS 版本。
+  iOS 应用声明最低 16.4，与前端 Safari 16.4 构建/CSS 基线一致；Swift 文档库本身最低 15.0。主宿主、扩展及设备兼容仍未验收。
 - 平台配置禁用桌面 updater artifacts。移动内核策略为随应用发布；此次未包含
   已链接的移动内核，也没有开启独立原生代码下载、任意本地执行或模拟安装。
 
@@ -65,30 +65,32 @@ UTF-8 内容；路径、URI 和授权留在原生层。任何没有 content 的�
 [文档 IO 证据](native-documents-v0.0.3.md) 和实际 Android 主宿主工程已接入，
 系统提供者、后台重建、API24/S8 及 iOS Files 的真实设备验收仍未完成。
 
-## 阻塞真实转发的上游通用接口 M01–M04
+## 移动运行 M01–M04：可复用接口与上游缺口
 
 审计源码与需要协调的最小通用范围如下。没有修改或推送 core。
-这些工作属于内核的已有职责抽象，不应包含客户端订阅、插件、商店或安装业务。
+M02/M03 的通用设备与出口接口属于内核职责；M01/M04 已有公开 Rust 接口可复用，客户端还需实现服务所有权、打包及安全桥。不能将全部宿主工作归为 core 阻塞，也不向 core 加入订阅、插件、商店或安装业务。
 
-| 依赖 | 当前真实源码 | 需要 core 协调的范围 | 客户端后续接入 |
+| 依赖 | 当前真实源码 | 可复用接口或需协调范围 | 客户端后续接入 |
 | --- | --- | --- | --- |
-| M01 完整运行生命周期 | `crates/ffi/src/lib.rs` 的 `zero_start` 仅 `EngineHandle::from_path`；`crates/proxy/src/runtime.rs` 已有 `Proxy::new/from_path/spawn`，`runtime/running.rs` 已有 `RunningProxy::shutdown` | 提供可嵌入的完整 Proxy handle / 受支持移动 FFI：创建、启动、启动结果、ProxyHandle 控制、停止并等待所有任务释放、失效句柄拒绝。`EngineHandle` 保持控制职责；不能重命名其状态为网络正在运行 | 原生服务/扩展持有 runtime，UI 只使用控制代理；核心随包链接，显式停止由宿主协调 |
+| M01 完整运行生命周期 | `crates/ffi/src/lib.rs` 的 `zero_start` 仅 `EngineHandle::from_path`；`crates/proxy/src/runtime.rs` 已有 `Proxy::new/from_path/spawn`，`runtime/running.rs` 已有 `RunningProxy::shutdown` | 现有公开 `Proxy`/`RunningProxy` 可用于客户端 Rust 内嵌。若选择统一 C FFI，才需扩展当前 control-only FFI；新的 EmbeddedProxy 包装不是使用公开 Rust 生命周期的必要前置条件。`EngineHandle` 保持控制职责；不能重命名其状态为网络正在运行 | 原生服务/扩展持有 runtime，UI 只使用控制代理；核心随包链接，显式停止由宿主协调 |
 | M02 外部 TUN | `crates/tun/src/lib.rs` 已有 `TunDevice::into_channels[_observed]`；`crates/proxy/src/inbound/tun.rs::start_tun_internal` 仍调用 `zero_tun::create` 和桌面网络配置 | 在 `tun`、`proxy/inbound/tun` 与已有 `stack` 接入正式外部设备/packet channels。复用现有 stack/proxy 路径、方向、IP family、MTU、背压、关闭、真实设备边界统计；OS 已配置接口不能再次走桌面 route/DNS 创建 | Android service 建立并持有 FD；iOS provider 持有 packetFlow。主 UI 不创建 FD，不解析 IP 包或另写转发器 |
 | M03 外层出口与网络变化 | `crates/platform/tokio/src/egress.rs` 有桌面接口绑定；`crates/platform/tokio/src/lib.rs` 有 TCP/UDP 构造；现有 `DialPolicy` 位于 traits | 在 traits/platform 现有 socket 构造边界注入宿主保护/绑定，必须覆盖 TCP、UDP、DNS、QUIC及协议外层 socket，发生在连接/发送前，拒绝保护失败。引入真实物理网络身份/代次、IPv4/IPv6 出口变更和失效池/拨号的协调；不把 Linux 接口绑定当作 Android protect | Android `VpnService.protect` 与 `Network.bindSocket`/底层等价 API 及物理网络回调；iOS 使用 provider 允许的外部连接和路径变化，不臆造跨平台 FD API |
-| M04 控制和事件桥 | `crates/proxy/src/runtime/handle/{model,query,command,event}.rs`、`zero-api` 请求/回执/事件已存在；桌面 GUI 使用私有 IPC | 完整 runtime handle 上提供类型化异步查询/命令及有界事件订阅、取消与间隙信号；保留真实 core_instance_id/config revision/权限，不依赖桌面 endpoint 文件或把秘密放入普通事件 | 客户端宿主负责进程/扩展边界鉴权、用户权限投影、服务状态通道和持久恢复记录；前台重新发现实例及 cursor，不接受旧结果控制新实例 |
+| M04 控制和事件桥 | `crates/proxy/src/runtime/handle/{model,query,command,event}.rs`、`zero-api` 请求/回执/事件已存在；桌面 GUI 使用私有 IPC | 现有 `ProxyHandle` 实现 `QueryService`、`CommandService`、`EventSource` 可复用；客户端实现鉴权、取消订阅、有界缓冲及事件缺口协调，保留真实实例、revision 与权限。统一外语 FFI 若需新增，范围仅为既有接口包装 | 客户端宿主负责进程/扩展边界鉴权、用户权限投影、服务状态通道和持久恢复记录；前台重新发现实例及 cursor，不接受旧结果控制新实例 |
 
 接口名称与具体 JNI/C/Swift 表面应在上游评审冻结；表内是所需语义，
 不是客户端已实现了这些 core API。公共 API 继续使用 `zero-api` 的 schema、
 capabilities、permissions、资源身份和回执。配置、协议私有解析、Packet 路由、
 WireGuard 认证及 Peer 语义保持原有 core 分层。
 
-客户端可独立完成布局、现有业务页面投影、本地配置管理、只读资料与不可用原因；
-缺口影响移动 runtime 和真实系统 IO 接入，不能用桌面成功代替。
+客户端可独立完成布局、业务投影、本地配置、诊断导出、许可目录、公开版本检查、
+Host DTO、普通偏好，以及复用公开 Rust 接口的 runtime owner/服务鉴权桥。真实 VPN
+组合与验收仍依赖 M02/M03 和平台宿主；不能用桌面成功代替。
 没有添加未接入的 Kotlin/Swift 服务骨架或另一个 EngineHandle 数据面。
 
 ## 给独立 core 云端任务的 API 建议与退出清单
 
-以下是评审建议，不是新增或已经可调用的 API。建议以 Rust 内嵌接口为主，
+以下新增包装名称是可选评审建议；现有 Proxy 生命周期和控制 traits 已公开。
+M01/M04 的客户端实现可基于这些接口推进，不必等待新增包装。建议以 Rust 内嵌接口为主，
 C/JNI/Swift 只包装同一 owner；不要重建第二个 mobile engine 或路由器。
 
 ### M01：单一完整 runtime owner
@@ -220,7 +222,8 @@ TCP/UDP/DNS/Fake-IP、后台/锁屏、低内存与服务重建。当前未执行
 
 iOS 后续需要：Packet Tunnel extension、有效 Network Extension entitlement、
 provider 网络设置/packetFlow、允许的 App Group/容器及主应用控制通道。
-本批没有付费开发者账号、签名凭据、Xcode/macOS 构建或真 iPhone VPN 验收。
+本批没有付费开发者账号、签名凭据或真 iPhone VPN 验收。CI 已有文档适配器的
+macOS/Xcode 无签名 Simulator SDK 构建；它不包含主应用或 Packet Tunnel extension。
 不会购买或创建签名；只有依用户后续授权及可用环境才能进行对应验证。
 商店更新和绑定内核与 desktop updater 分开，插件容器/分发及保护材料仍需
 按真实平台限制验证；插件固定入口不得被删掉或显示伪造运行结果。
@@ -250,9 +253,10 @@ Host interface 统计、系统文件保存/分享、通知结果和插件 SDK �
   crate 目标检查，上传 Android 检查日志。CI 真实结果以本 PR 的 commit 检查为准；
   源码中的 workflow 本身不代表该 commit 已在 CI 通过。
 - 后续 Android native build 需 Android SDK/NDK 和生成/维护的原生工程；iOS需
-  macOS/Xcode。当前仓库没有生成的 `gen/android`/`gen/apple` 项目；尽管上述 Android Rust host
-  target check 已通过，本批没有
-  声称完成移动包构建、签名、安装、真实设备协议转发或 Galaxy S8 验收。
+  macOS/Xcode。后续已有 `gen/android` 实际宿主和无签名 arm64 Release APK，
+  以及 iOS 文档适配器的无签名 Simulator SDK 构建；`gen/apple` 主宿主/扩展仍未接入。
+  iOS 应用声明最低 16.4，满足前端 Safari 16.4 基线和 Swift 库的 15.0 下限；这不是设备兼容验收。
+  APK、签名安装、真实设备协议转发及 Galaxy S8 验收仍分别记录，不相互替代。
 
 依据：[Android VPN 官方说明](https://developer.android.com/develop/connectivity/vpn)、
 [NEPacketTunnelProvider](https://developer.apple.com/documentation/networkextension/nepackettunnelprovider)、

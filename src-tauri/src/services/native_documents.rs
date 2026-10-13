@@ -98,7 +98,7 @@ pub(crate) fn pick(app: &AppHandle, purpose: DocumentPurpose) -> AppResult<Docum
     };
     convert(id.clone(), app.native_io().pick_read(&id, purpose, maximum))
 }
-fn deliver(
+pub(crate) fn deliver_prepared(
     app: &AppHandle,
     export: PreparedExport,
     delivery: DocumentDelivery,
@@ -158,7 +158,7 @@ pub(crate) fn export_profile(
             .ok_or_else(|| AppError::not_found("proxy_config", id))?;
         profile_export(profile, expected, acknowledged)?
     };
-    deliver(app, prepared, delivery)
+    deliver_prepared(app, prepared, delivery)
 }
 pub(crate) fn export_settings(
     app: &AppHandle,
@@ -183,36 +183,21 @@ pub(crate) fn export_settings(
         false,
     )
     .map_err(policy_error)?;
-    deliver(app, prepared, delivery)
+    deliver_prepared(app, prepared, delivery)
 }
 pub(crate) fn export_diagnostics(
     app: &AppHandle,
     delivery: DocumentDelivery,
+    plan_id: Option<String>,
 ) -> AppResult<DocumentReceipt> {
     let state = app.state::<AppState>();
-    // This intentionally exports public facts and log metadata only. Arbitrary
-    // log messages/fields can contain secrets even if their key names look benign.
-    let logs = lock(state.logs(), "logs")?;
-    let entries: Vec<_> = logs
-        .iter()
-        .rev()
-        .take(200)
-        .map(|entry| {
-            serde_json::json!({
-                "id": entry.id.to_string(), "source": entry.source, "level": entry.level,
-                "occurredAtUnixMs": entry.occurred_at_unix_ms.to_string()
-            })
-        })
-        .collect();
-    let document = serde_json::json!({ "schemaVersion": "znet.mobile-diagnostics.v1",
-        "createdAtUnixMs": super::common::now_unix_ms().to_string(),
-        "appVersion": env!("CARGO_PKG_VERSION"), "platform": std::env::consts::OS,
-        "architecture": std::env::consts::ARCH, "platformContract": crate::mobile_host::snapshot(),
-        "logMetadata": entries, "logMetadataTruncated": logs.len() > entries.len(),
-        "excluded": ["configuration", "subscription", "credentials", "pluginSecrets", "logMessages", "logFields", "debugPayloads"] });
-    drop(logs);
-    let bytes = serde_json::to_vec_pretty(&document)
-        .map_err(|_| AppError::internal("诊断导出序列化失败"))?;
+    // Legacy explicit export calls retain compatibility. The new mobile flow
+    // always supplies a host-prepared preview ID and never resnapshots here.
+    let id = match plan_id {
+        Some(id) => id,
+        None => super::diagnostics::preview(state.inner())?.plan_id,
+    };
+    let bytes = super::diagnostics::take(state.inner(), &id)?;
     let prepared = PreparedExport::new(
         ExportPurpose::RedactedDiagnostic,
         ExportOwnership::HostGenerated,
@@ -222,7 +207,7 @@ pub(crate) fn export_diagnostics(
         false,
     )
     .map_err(policy_error)?;
-    deliver(app, prepared, delivery)
+    deliver_prepared(app, prepared, delivery)
 }
 
 #[cfg(test)]

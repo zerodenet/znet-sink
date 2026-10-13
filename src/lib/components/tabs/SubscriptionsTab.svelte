@@ -2,6 +2,8 @@
   import { Choice } from '$lib/components/ui/choice';
   import { onMount, untrack } from 'svelte';
   import { useMobileNavigation } from '$lib/features/mobile/context';
+  import { getMobilePlatformSnapshot } from '$lib/features/mobile/runtime';
+  import { subscriptionScheduling, type SchedulePlatform } from '$lib/features/mobile/subscription-scheduling';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { LayoutGrid, List } from '@lucide/svelte';
@@ -31,6 +33,7 @@
   } from '$lib/types/domain';
 
   let { mobile = false }: { mobile?: boolean } = $props();
+  let schedulePlatform = $state<SchedulePlatform>(untrack(() => mobile ? 'unknown' : 'desktop'));
   const mobileNavigation=untrack(()=>mobile ? useMobileNavigation() : null);
   let pendingNavigation: (() => void) | null = $state(null);
   let formOriginal = $state('');
@@ -427,6 +430,9 @@
   onMount(() => {
     viewMode = loadViewMode();
     let disposed = false;
+    if (mobile) void getMobilePlatformSnapshot().then(snapshot => {
+      if (!disposed) schedulePlatform = snapshot.mobile ? 'mobile-unadapted' : 'desktop';
+    }).catch(() => { if (!disposed) schedulePlatform = 'unknown'; });
     let unlisten: UnlistenFn | undefined;
     // Attach before loading so a background completion cannot be missed.
     void listen('subscriptions:updated', () => { void refresh(false); })
@@ -548,7 +554,7 @@
               {/if}
               <span class="row-tag outline-tag">{formatLabel(sub.format)}</span>
               {#if sub.updateIntervalSecs}
-                <span class="row-tag outline-tag" title="自动同步间隔">⏱ 自动</span>
+                <span class="row-tag outline-tag" title="已保存的自动同步周期意图">⏱ {schedulePlatform === 'desktop' ? '自动' : '周期意图'}</span>
               {/if}
             </div>
 
@@ -565,7 +571,7 @@
             {/if}
 
             <div class="row-meta-line">
-              <span>同步: {formatTime(sub.lastSyncAtUnixMs)}</span>
+              <span>{mobile ? '最近成功同步' : '同步'}: {formatTime(sub.lastSyncAtUnixMs)}</span>
               <span class="row-sep">·</span>
               <span>配置: {proxyConfigName(sub.targetProxyConfigId)}</span>
               {#if sub.expireAtUnixMs}
@@ -578,6 +584,10 @@
                 </span>
               {/if}
             </div>
+
+            {#if mobile && subscriptionScheduling(sub, schedulePlatform)}
+              <p class="row-meta-line" aria-label="订阅调度状态">{subscriptionScheduling(sub, schedulePlatform)}</p>
+            {/if}
 
             {#if sub.totalBytes}
               <div class="traffic-bar-wrap">

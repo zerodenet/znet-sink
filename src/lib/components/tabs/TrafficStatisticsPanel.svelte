@@ -9,7 +9,7 @@
   import type { TrafficView, TrafficSession } from '$lib/features/traffic/session';
   import { scopeLabel } from '$lib/features/traffic/types';
   import type { ResetInput, TrafficScope } from '$lib/features/traffic/types';
-  import { supported, resetReason } from '$lib/features/traffic/policy';
+  import { supported, hostSupported, resetReason } from '$lib/features/traffic/policy';
   import { byteKeys, formatBytes, metric } from '$lib/features/traffic/history';
   import { availablePlanes } from '$lib/features/traffic/presentation';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
@@ -18,7 +18,7 @@
   let { session, view }: { session: TrafficSession; view: TrafficView } = $props();
   const samplingHintId = $props.id();
   const workspace = useTrafficWorkspace();
-  const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'}];
+  const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'},{kind:'host_interface',label:'宿主网卡'}];
   let kind = $state(workspace.statistics.kind);
   let plane = $state(workspace.statistics.plane);
   let query = $state(workspace.statistics.query);
@@ -74,9 +74,10 @@
     </div>
     <div class="plane-controls">
       {#if planes.length === 0}<p class="notice">当前范围没有声明可用的统计平面</p>{/if}
-      <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
-      <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
+      <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item==='host'?'Host':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
+      <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层，Host 为宿主网卡；各平面独立计量，不相加，Host 不代表代理流量。"><Info size={14} aria-label="各平面独立统计"/></span></div>
     </div>
+    {#if kind==='host_interface'}<p class="notice">{hostSupported(view.discovery) ? '宿主网卡为系统接口观测，只读且不能清空；流量不等于本应用代理流量。' : '当前内核或平台未声明可读的宿主网卡统计；没有生成网卡或替代统计。'}</p>{/if}
     <div class="scope-grid">
       {#each visible as key (key)}
         {@const row=view.rows[key]}
@@ -86,7 +87,7 @@
         {@const reason=resetReason(view.discovery,snapshot)}
         <article class="scope" aria-label={`统计 ${scopeLabel(snapshot.scope)}`}>
           <div class="identity"><label title={reason ?? '选择此统计范围'}><Choice aria-label={`选择 ${scopeLabel(snapshot.scope)}`} checked={selected.includes(key)} disabled={!!reason || view.stale || view.resetting || (!selected.includes(key)&&selected.length>=maximum)} onchange={event=>toggle(key,event.currentTarget.checked)}/><strong>{scopeLabel(snapshot.scope)}</strong></label><Button variant="ghost" size="icon-sm" aria-label={`查看 ${scopeLabel(snapshot.scope)} 统计详情`} onclick={()=>{inspected=key;detailOpen=true;}}><Info size={14}/></Button></div>
-          <div class="role">{snapshot.scope.kind==='peer' ? snapshot.scope.endpoint_id : layer?.source_roles.join(' · ') || '—'}</div>
+          <div class="role">{snapshot.scope.kind==='host_interface' ? 'Host · 系统接口 · 只读' : snapshot.scope.kind==='peer' ? snapshot.scope.endpoint_id : layer?.source_roles.join(' · ') || '—'}</div>
           <dl class="totals">{#each keys as field}<div><dt>{field==='bytes_down'?'下载':field==='bytes_up'?'上传':field==='rx_bytes'?'RX':'TX'}</dt><dd title={metric(layer,field)?.toString() ?? '内核未提供此指标'}>{formatBytes(metric(layer,field))}</dd></div>{/each}</dl>
           <TrafficMiniChart observation={row} {plane} stale={view.stale}/>
           <div class="activity" title="活动流 / 数据报 / Packet 路由，清空累计统计不会修改这些值"><Activity size={12}/><span>{snapshot.activity.active_stream_flows ?? '—'}</span> / <span>{snapshot.activity.active_datagram_flows ?? '—'}</span> / <span>{snapshot.activity.active_packet_routes ?? '—'}</span></div>

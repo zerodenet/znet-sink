@@ -27,6 +27,19 @@ pub(crate) fn exact(mut value: Value) -> Value {
     value
 }
 pub(crate) fn snapshot(value: &Value) -> AppResult<()> {
+    let scope: zero_api::TrafficScope = serde_json::from_value(value["scope"].clone())
+        .map_err(|_| AppError::internal("invalid public traffic scope"))?;
+    let host = matches!(scope, zero_api::TrafficScope::HostInterface { .. });
+    let planes = value["planes"]
+        .as_array()
+        .ok_or_else(|| AppError::internal("invalid traffic planes"))?;
+    if (host && (planes.len() != 1 || planes[0]["plane"] != "host"))
+        || (!host && planes.iter().any(|plane| plane["plane"] == "host"))
+    {
+        return Err(AppError::internal(
+            "Host statistics must remain separate from proxy planes",
+        ));
+    }
     for key in ["scope", "planes", "activity"] {
         if value.get(key).is_none() {
             return Err(AppError::internal(format!("missing traffic {key}")));
