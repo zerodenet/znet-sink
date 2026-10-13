@@ -38,6 +38,16 @@ function observeTraffic() {
 }
 // This fixture models the client overlay, never a kernel source-file save.
 const localOverrides: Record<string, {enabled?:boolean;directions?:NetworkEndpoint['allowed']}> = {};
+let readState={delay:0,catalogError:false,detailsError:false};
+let showAddresses=true;
+window.addEventListener('fixture-endpoint-read-state',event=>{
+  readState={...readState,...(event as CustomEvent<typeof readState>).detail};
+});
+window.addEventListener('fixture-endpoint-facts',event=>{
+  const facts=(event as CustomEvent<{error?:boolean;addresses?:boolean}>).detail;
+  if(facts.addresses!==undefined)showAddresses=facts.addresses;
+  if(facts.error!==undefined)endpoints[0].last_error=facts.error?{code:'transport',message:'端点握手暂时失败。'.repeat(20)}:null;
+});
 
 window.addEventListener('fixture-reload-config', () => {
   endpoints.forEach(row => {
@@ -53,6 +63,8 @@ window.addEventListener('fixture-reload-config', () => {
 export const endpointGateway: EndpointGateway = {
   async catalog(): Promise<EndpointCatalog> {
     window.dispatchEvent(new Event('fixture-endpoint-catalog-read'));
+    if(readState.delay)await new Promise(resolve=>setTimeout(resolve,readState.delay));
+    if(readState.catalogError)throw {code:'connection_closed',message:'端点目录连接中断。'.repeat(20)};
     if (params().has('slow-observation')) await new Promise(resolve => setTimeout(resolve, 250));
     observeTraffic();
     const capabilities=capabilityFixture();
@@ -60,7 +72,7 @@ export const endpointGateway: EndpointGateway = {
     capabilities.features=['network_endpoint_catalog_v1','network_endpoint_control_v1',...(params().has('old-preconditions')?[]:['network_endpoint_control_preconditions_v1'])];
     capabilities.globalLimitations=[params().has('old-control') ? 'endpoint_live_direction_contraction_requires_stop' : 'endpoint_live_outbound_direction_contraction_requires_stop'];
     if (params().has('observe-only')) endpoints.forEach(row => { row.supported.operations=['list','get','details']; });
-    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{[endpoints[0].endpoint_id]:['10.66.0.2/32','fd66:1234:5678:90ab::2/128']}};
+    return {capabilities,endpoints:structuredClone(endpoints),profileId:'profile-a',editableEndpointIds:params().has('unowned')?[]:endpoints.map(row=>row.endpoint_id),localOverrideIds:Object.keys(localOverrides),configuredAddresses:{[endpoints[0].endpoint_id]:showAddresses?['10.66.0.2/32','fd66:1234:5678:90ab::2/128']:[]}};
   },
   async control(input) {
     window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));
@@ -94,6 +106,8 @@ export const endpointGateway: EndpointGateway = {
     return structuredClone(row);
   },
   async details(endpointId) {
+    if(readState.delay)await new Promise(resolve=>setTimeout(resolve,readState.delay));
+    if(readState.detailsError)throw {code:'connection_closed',message:'协议详情读取中断'};
     if (params().has('slow-observation')) await new Promise(resolve => setTimeout(resolve, 250));
     const row=endpoints.find(row=>row.endpoint_id===endpointId)!;
     return {endpoint_id:endpointId,generation:row.generation,schema_id:row.protocol==='wireguard'?'zero.endpoint.wireguard.v1':'zero.endpoint.future.v1',schema_version:1,

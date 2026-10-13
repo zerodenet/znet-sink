@@ -6,12 +6,36 @@ import { endpointObservation } from '../src/lib/features/endpoints/observation.t
 import { scopeKey } from '../src/lib/features/traffic/types.ts';
 import { observe } from '../src/lib/features/traffic/history.ts';
 import { sample } from '../tests/fixtures/traffic.ts';
+import { formatEndpointRate } from '../src/lib/features/endpoints/traffic.ts';
 const caps = { available:true, features:['network_endpoint_catalog_v1','network_endpoint_control_v1','network_endpoint_control_preconditions_v1'], buildFeatures:[],globalLimitations:[],contracts:{capabilities:{current:1,minimumSupported:1},controlApi:{current:1,minimumSupported:1}} };
 const endpoint = () => ({ endpoint_id:'opaque:/a',tag:'a',protocol:'future',core_instance_id:'core-1',intent_revision:7,config_revision:1,generation:1,enabled:true,allowed:{inbound:true,outbound:true},effective:{inbound:true,outbound:true},state:'running',state_source:'config',supported:{operations:['set_state','set_directions','restart','details','clear_overrides'],directions:{inbound:true,outbound:true}},counters:{inner_rx_bytes:null,active_stream_flows:0} });
 const catalog = () => ({profileId:'profile-a',editableEndpointIds:['opaque:/a'],localOverrideIds:[],capabilities:structuredClone(caps),endpoints:[endpoint()]});
 const deferred = () => { let resolve; let reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 const gateway = () => ({ catalog:async () => catalog(), control:async () => endpoint(), details:async () => ({endpoint_id:'opaque:/a',generation:1,schema_id:'future',schema_version:1,details:{}}) });
 const stop = {operation:'set_state',enabled:false};
+
+test('scope invalidation retains last-known cards but blocks stale controls until authoritative recovery',async()=>{
+  const g=gateway();let controls=0;g.control=async()=>{controls++;return endpoint();};
+  const session=new EndpointSession(g,()=>{});await session.refresh();
+  const previous=session.view.catalog;
+  session.invalidate();
+  assert.equal(session.view.catalog,previous);assert.equal(session.view.stale,true);
+  await session.act(endpoint(),stop);assert.equal(controls,0);
+  const next=deferred();g.catalog=()=>next.promise;
+  const refresh=session.refresh();
+  assert.equal(session.view.catalog,previous);
+  const updated=catalog();updated.endpoints[0].core_instance_id='core-2';
+  next.resolve(updated);await refresh;
+  assert.equal(session.view.catalog.endpoints[0].core_instance_id,'core-2');
+  assert.equal(session.view.stale,false);
+  await session.act(endpoint(),stop);assert.equal(controls,0);
+  session.dispose();
+});
+
+test('legacy endpoint rates distinguish unavailable, idle and positive sub-byte measurements',()=>{
+  assert.equal(formatEndpointRate(null),'—');assert.equal(formatEndpointRate(NaN),'—');
+  assert.equal(formatEndpointRate(0),'0 B/s');assert.equal(formatEndpointRate(.3),'<1 B/s');
+});
 
 test('legacy endpoint roles use declared single role tags without decoding opaque IDs or changing planes',()=>{
  const e={...endpoint(),configuration:{origin:'legacy'},inbound_tags:[],outbound_tags:['declared-role']};

@@ -5,6 +5,57 @@ async function open(page:Page,params='&traffic-v1=1') {
 }
 const scope=(page:Page,name:string)=>page.getByRole('article',{name:`统计 ${name}`,exact:true});
 
+test('endpoint cards retain their size when statistics capability is rediscovered',async({page})=>{
+  await page.goto('/?panel=endpoints-shell&tab=endpoints&traffic-v1=1');
+  const row=page.getByRole('article',{name:'端点 wg-a',exact:true});
+  await expect(row.locator('.mini-chart')).toBeVisible();
+  // Measure after the workspace's intentional mount animation finishes.
+  await page.evaluate(async()=>{await Promise.all(document.getAnimations()
+    .filter(animation=>Number.isFinite(animation.effect?.getTiming().iterations))
+    .map(animation=>animation.finished.catch(()=>{})));});
+  const boxes=()=>row.evaluate(el=>[el,el.querySelector('.connections')!,el.querySelector('footer')!].map(item=>{
+    const r=item.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};
+  }));
+  const before=await boxes();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-traffic-capability',{detail:false})));
+  await expect(row.getByLabel('端点实时流量')).toBeVisible();
+  expect(await boxes()).toEqual(before);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-traffic-capability',{detail:true})));
+  await expect(row.locator('.mini-chart')).toBeVisible();
+  expect(await boxes()).toEqual(before);
+});
+
+test('background statistics recovery keeps toolbar cards and footer in place',async({page})=>{
+  await open(page);
+  const row=scope(page,'全局');
+  await page.evaluate(()=>window.dispatchEvent(new Event('fixture-traffic-sample')));
+  await expect(row.locator('.rates')).toContainText('1000 B/s');
+  const boxes=()=>page.locator('.statistics').evaluate(el=>{
+    const selectors=['.toolbar','.plane-controls','.scope','.statistics footer'];
+    return selectors.map(selector=>{
+      const box=el.querySelector(selector)!.getBoundingClientRect();
+      return {x:box.x,y:box.y,width:box.width,height:box.height};
+    });
+  });
+  const initial=await boxes();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-traffic-recovery',{detail:{delay:200,error:true}})));
+  await expect(page.locator('.statistics')).toContainText('正在同步');
+  const pending=await boxes();
+  expect(pending).toEqual(initial);
+  await expect(page.locator('.statistics').getByRole('alert')).toBeVisible();
+  await expect(page.getByLabel('采样状态',{exact:true})).toHaveAttribute('title',/后台统计查询中断/);
+  expect(await boxes()).toEqual(initial);
+  await expect(row.locator('.totals')).toContainText('11.7 KB');
+  await expect(row.locator('.rates .receive .rate-value')).toHaveText('—');
+  await page.screenshot({path:test.info().outputPath('traffic-recovery-stable.png')});
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-traffic-recovery',{detail:{delay:40}})));
+  await expect(page.locator('.statistics .mode')).toHaveText('实时');
+  expect(await boxes()).toEqual(initial);
+  await page.evaluate(()=>window.dispatchEvent(new Event('fixture-traffic-sample')));
+  await expect(row.locator('.rates .receive .rate-value')).toHaveText('1000 B/s');
+  expect(await boxes()).toEqual(initial);
+});
+
 test('statistics footer hides one-page navigation and groups count with working multi-page controls',async({page})=>{
   await open(page);
   const footer=page.locator('.statistics footer');

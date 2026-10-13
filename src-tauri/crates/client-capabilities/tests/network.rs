@@ -8,6 +8,9 @@ use std::{
 use znet_client_capabilities::network;
 use znet_client_core::capability::*;
 
+#[path = "../../../tests/support/loopback.rs"]
+mod loopback;
+
 fn lease(url: &str, bytes: usize) -> Lease {
     let manager = Manager::default();
     let grants = BTreeSet::from([Permission::new("network.download", "*")]);
@@ -34,6 +37,11 @@ fn lease(url: &str, bytes: usize) -> Lease {
 }
 #[test]
 fn revocation_while_http_is_in_flight_discards_late_response() {
+    if !loopback::isolated_loopback_probe(
+        "revocation_while_http_is_in_flight_discards_late_response",
+    ) {
+        return;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();

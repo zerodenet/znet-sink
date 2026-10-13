@@ -7,6 +7,7 @@ mod presentation;
 use crate::state::app_state::AppState;
 pub(crate) use menu::install;
 use presentation::tray_presentation;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 
 fn toggle_main_window(app: &tauri::AppHandle) {
@@ -39,9 +40,23 @@ fn emit_tray_action(app: &tauri::AppHandle, action: &str) {
     }
 }
 
+fn dispatch_proxy_action(app: &tauri::AppHandle, action: &str) {
+    if app
+        .state::<TrayMenuItems>()
+        .proxy_recovery_required
+        .load(Ordering::Relaxed)
+    {
+        open_main_window_route(app, "overview", None);
+        emit_tray_action(app, "recover_system_proxy");
+    } else {
+        emit_tray_action(app, action);
+    }
+}
+
 /// Holds references to the status-dependent tray menu items so their labels,
 /// checked state, and availability can track the live runtime state.
 pub(crate) struct TrayMenuItems {
+    proxy_recovery_required: AtomicBool,
     status: tauri::menu::MenuItem<tauri::Wry>,
     profile: tauri::menu::MenuItem<tauri::Wry>,
     toggle_proxy: tauri::menu::MenuItem<tauri::Wry>,
@@ -64,6 +79,8 @@ pub(crate) fn tray_update_status(
     running: bool,
     system_proxy_enabled: bool,
     tun_enabled: bool,
+    system_proxy_owned: bool,
+    proxy_status_known: bool,
 ) {
     let ui_mode = domain
         .app_config()
@@ -76,7 +93,16 @@ pub(crate) fn tray_update_status(
             .find(|profile| profile.active)
             .map(|profile| profile.name.clone())
     });
-    let presentation = tray_presentation(&ui_mode, running, system_proxy_enabled, tun_enabled);
+    let presentation = tray_presentation(
+        &ui_mode,
+        running,
+        system_proxy_enabled,
+        tun_enabled,
+        system_proxy_owned,
+        proxy_status_known,
+    );
+    menu.proxy_recovery_required
+        .store(presentation.proxy_recovery_required, Ordering::Relaxed);
 
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_tooltip(Some(format!("ZNet Sink · {}", presentation.status_label)));
@@ -92,16 +118,19 @@ pub(crate) fn tray_update_status(
     let _ = menu.toggle_proxy.set_text(presentation.action_label);
     // A profile is required to start capture, but never prevent users from
     // turning off a capture session that is already active.
-    let _ = menu
-        .toggle_proxy
-        .set_enabled(profile_name.is_some() || presentation.capture_enabled);
+    let _ = menu.toggle_proxy.set_enabled(
+        profile_name.is_some()
+            || presentation.capture_enabled
+            || presentation.proxy_recovery_required,
+    );
+    let _ = menu.system_proxy.set_text(presentation.system_proxy_label);
     let _ = menu.system_proxy.set_checked(system_proxy_enabled);
     let _ = menu.tun.set_checked(tun_enabled);
     // Lite mode treats system proxy + TUN as one transaction. Individual
     // switches are advanced controls and stay available only in Pro mode.
-    let _ = menu
-        .system_proxy
-        .set_enabled(presentation.individual_controls_enabled);
+    let _ = menu.system_proxy.set_enabled(
+        presentation.individual_controls_enabled || presentation.proxy_recovery_required,
+    );
     let _ = menu
         .tun
         .set_enabled(presentation.individual_controls_enabled);

@@ -244,6 +244,15 @@ pub fn disable_with_guard() -> AppResult<()> {
     clear_on_exit(None)
 }
 
+/// Explicit user recovery only. Automatic cleanup must remain ownership scoped.
+pub fn reset_explicitly() -> AppResult<system_proxy::SystemProxyStatus> {
+    let _operation = OPERATION.lock().unwrap_or_else(|error| error.into_inner());
+    cleanup::reset_at(marker_path()?, || {
+        system_proxy::disable()?;
+        system_proxy::status_fresh()
+    })
+}
+
 /// Best-effort cleanup on Rust panics. Forced kills are handled next startup.
 pub fn install_panic_hook() {
     let original = std::panic::take_hook();

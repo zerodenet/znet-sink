@@ -13,7 +13,7 @@
   store.uiMode = params.get('mode') === 'lite' ? 'lite' : 'pro';
   store.activeTab = store.uiMode === 'pro' && params.get('tab') === 'endpoints' ? 'endpoints' : 'nodes';
   store.interactionSurface.navigation = new Map(NAV_TABS.map(tab => [tab.id, {
-    key: tab.id, visible: true, operable: true, readonly: false, category: 'navigation',
+    key: tab.id, visible: store.uiMode === 'pro' || ['overview','nodes','subscriptions','logs','plugins','settings'].includes(tab.id), operable: true, readonly: false, category: 'navigation',
   }]));
   let catalogReads = $state(0);
   onMount(() => {

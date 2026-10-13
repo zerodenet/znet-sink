@@ -1,5 +1,37 @@
 import { test, expect } from '@playwright/test';
 
+test('unmanaged proxy exposes explicit takeover and reset with duplicate protection', async ({page}) => {
+  await page.goto('/?panel=overview&mode=unmanaged');
+  await page.getByRole('button',{name:'处理系统代理',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toContainText('127.0.0.1:7891');
+  await dialog.getByRole('button',{name:/强制接管/}).click();
+  await expect(dialog.getByRole('button',{name:/清除系统代理/})).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel('概览操作')).toHaveText('proxy-takeover');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'关闭系统代理',exact:true})).toBeVisible();
+
+  await page.goto('/?panel=overview&mode=unmanaged-stopped');
+  await page.getByRole('button',{name:'处理系统代理',exact:true}).click();
+  await expect(dialog.getByRole('button',{name:/强制接管/})).toBeDisabled();
+  await dialog.getByRole('button',{name:/清除系统代理/}).click();
+  await expect(page.getByLabel('概览操作')).toHaveText('proxy-reset');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'开启系统代理',exact:true})).toBeVisible();
+});
+
+test('proxy recovery keeps a failed operation visible for retry', async ({page}) => {
+  await page.goto('/?panel=overview&mode=unmanaged-failure');
+  await page.getByRole('button',{name:'处理系统代理',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await dialog.getByRole('button',{name:/清除系统代理/}).click();
+  await expect(dialog.getByRole('alert')).toHaveText('系统拒绝修改代理设置');
+  await expect(dialog.getByRole('button',{name:/清除系统代理/})).toBeEnabled();
+  await expect(dialog).toContainText('127.0.0.1:7891');
+});
+
 test('nested policy selection agrees between overview, selector and confirmed details', async ({ page }) => {
   await page.goto('/?panel=overview&mode=nested-policy');
   const shortcut = page.getByRole('button', { name: '查看与切换策略组' });

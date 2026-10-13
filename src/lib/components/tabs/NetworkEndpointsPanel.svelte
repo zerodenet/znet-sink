@@ -26,6 +26,12 @@
   let hostListening = false;
   let scopeSequence = 0;
   let mounted = false;
+  const panelError = $derived(hostError ? `${getAppErrorMessage(hostError,'客户端状态读取失败')} 客户端状态未确认，端点控制暂不可用。`
+    : view.error ? getAppErrorMessage(view.error,'端点操作失败')
+    : view.refreshError ? `${getAppErrorMessage(view.refreshError,'端点目录刷新失败')} 数据已过期，控制暂不可用。`
+    : view.detailsError ? `${getAppErrorMessage(view.detailsError,'协议详情刷新失败')} 旧详情已隐藏。` : null);
+  const panelStatus = $derived(hostError ? '状态未确认' : view.error ? '操作失败' : view.refreshError ? '同步失败'
+    : view.detailsError ? '详情过期' : view.detailsLoading ? '读取详情' : view.loading ? '正在同步' : view.stale ? '待同步' : view.result ? '已生效' : '已同步');
   function scopeKeyOf(snapshot: ClientCoreSnapshot) {
     const { profileId, configRevision, coreInstanceId } = snapshot.scope;
     return JSON.stringify([profileId ?? null, configRevision, coreInstanceId]);
@@ -80,12 +86,7 @@
   });
 </script>
 <section class="endpoints-panel" aria-label="端点管理">
-  <header><div class="heading"><h2>端点</h2><span class="count">{view.catalog?.endpoints.length ?? '—'}</span></div><div class="toolbar">{#if view.result}<span class="result" role="status" title={view.result}><Check size={13} />已生效</span>{/if}<Button variant="ghost" size="icon-sm" aria-label="刷新端点" title="刷新端点" disabled={view.loading || !!view.busy} onclick={() => refreshHostAndDirectory()}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''} /></Button></div></header>
-  {#if hostError}<p role="alert" class="error">{getAppErrorMessage(hostError, '客户端状态读取失败')} 客户端状态未确认，端点控制暂不可用。</p>{/if}
-  {#if view.error}<p role="alert" class="error">{getAppErrorMessage(view.error, '端点操作失败')} {view.stale ? '数据已过期，控制暂不可用。' : ''}</p>{/if}
-  {#if view.refreshError}<p role="alert" class="error">{getAppErrorMessage(view.refreshError, '端点目录刷新失败')} 数据已过期，控制暂不可用。</p>{/if}
-  {#if view.detailsError}<p role="alert" class="error">{getAppErrorMessage(view.detailsError, '协议详情刷新失败')} 旧详情已隐藏。</p>{/if}
-  {#if view.detailsLoading}<p role="status">正在刷新协议详情…</p>{/if}
+  <header><div class="heading"><h2>端点</h2><span class="count">{view.catalog?.endpoints.length ?? '—'}</span></div><div class="toolbar"><span class="panel-status" class:failed={!!panelError} class:confirmed={!!view.result && !panelError} role={panelError ? 'alert' : 'status'} title={panelError ?? view.result ?? (view.stale ? '保留上次观测，等待目录确认；控制暂不可用。' : '端点目录已同步')} aria-label="端点目录状态">{#if view.result && !panelError}<Check size={13}/>{:else}<i></i>{/if}<span>{panelStatus}</span>{#if panelError}<span class="sr-only">{panelError}</span>{/if}</span><Button variant="ghost" size="icon-sm" aria-label="刷新端点" title="刷新端点" disabled={view.loading || !!view.busy} onclick={() => refreshHostAndDirectory()}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''} /></Button></div></header>
   {#if view.busy}<p role="status" class="sr-only">正在等待内核确认</p>{/if}
   {#if view.catalog && !catalogSupported(view.catalog)}
     <p class="empty">当前内核未声明兼容的端点目录能力。普通节点仍可在策略组和全部节点中使用；升级至支持端点目录的内核后可管理端点。</p>
@@ -93,15 +94,15 @@
     <label class="search"><Search size={15} /><Input aria-label="搜索端点" placeholder="搜索端点" bind:value={query} /></label>
     <div class="endpoint-grid">
       {#each endpoints as endpoint (endpoint.core_instance_id + ':' + endpoint.endpoint_id)}
-        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
+        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} detailsError={view.detailsError ?? view.refreshError} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
       {:else}<p class="empty">{query ? '无匹配端点' : '当前内核配置没有声明端点'}</p>{/each}
     </div>
   {:else if view.loading}<p class="empty">正在读取内核端点目录…</p>{/if}
 
 </section>
 <style>
-  .endpoints-panel { flex:1; min-width:0; overflow:auto; padding:20px; } header { display:flex; justify-content:space-between; align-items:center; gap:12px; } h2 { font-size:16px; font-weight:600; } p { margin:8px 0; font-size:12px; color:var(--muted-foreground); } .error { color:var(--destructive); overflow-wrap:anywhere; }
+  .endpoints-panel { flex:1; min-width:0; overflow:auto; overflow-y:scroll; scrollbar-gutter:stable; padding:20px; } header { display:flex; justify-content:space-between; align-items:center; gap:12px; } h2 { font-size:16px; font-weight:600; } p { margin:8px 0; font-size:12px; color:var(--muted-foreground); }
   .search { display:flex; align-items:center; gap:12px; font-size:12px; margin:16px 0; } .search :global(input) { flex:1; min-width:0; padding:9px; border:1px solid var(--border); border-radius:8px; background:var(--background); }
-  .heading,.toolbar,.result { display:flex; align-items:center; gap:8px; } .count { font-size:11px; color:var(--muted-foreground); background:var(--muted); border-radius:5px; padding:2px 6px; } .result { font-size:11px; color:var(--success,#16a34a); } .search { position:relative; color:var(--muted-foreground); } .search> :global(svg) { position:absolute; left:10px; } .search :global(input) { padding-left:33px; }
+  .heading,.toolbar,.panel-status { display:flex; align-items:center; gap:8px; } .count { font-size:11px; color:var(--muted-foreground); background:var(--muted); border-radius:5px; padding:2px 6px; } .panel-status { width:8em; font-size:11px; white-space:nowrap; color:var(--muted-foreground); } .panel-status i { width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0; } .panel-status.failed { color:var(--destructive); } .panel-status.confirmed { color:var(--success,#16a34a); } .search { position:relative; color:var(--muted-foreground); } .search> :global(svg) { position:absolute; left:10px; } .search :global(input) { padding-left:33px; }
   .endpoint-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:16px; } .empty { padding:24px 0; }
 </style>

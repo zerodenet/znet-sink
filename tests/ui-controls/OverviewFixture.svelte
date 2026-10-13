@@ -5,6 +5,7 @@
   import TunControl from '$lib/components/overview/TunControl.svelte';
   import { OverviewOperations } from '$lib/components/overview/operations.svelte';
   import type { OverviewActions } from '$lib/components/overview/types';
+  import SystemProxyRecoveryDialog from '$lib/components/core/SystemProxyRecoveryDialog.svelte';
   import CoreStatusCard from '$lib/components/core/CoreStatusCard.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
@@ -23,6 +24,10 @@
     groupsAt: scenario === 'policy-stale' ? now - 20000 : now,
   });
   if (scenario === 'global-target') input.mode = {currentMode:'global',globalOutbound:'独立 WireGuard',availableModes:['rule','global','direct']};
+  if (scenario?.startsWith('unmanaged')) {
+    Object.assign(input.connection!, {systemProxyEnabled:false,systemProxyActualEnabled:true,systemProxyHost:'127.0.0.1',systemProxyPort:7891});
+    if (scenario === 'unmanaged-stopped') { input.connection!.coreAvailable=false; input.connection!.processState='stopped'; input.selfTest=null; }
+  }
   if (scenario === 'tun-only-flags') {
     input.connection!.systemProxyEnabled = false;
     input.groups[0].selected = input.groups[0].outbounds[0].tag = '🇯🇵 日本 01';
@@ -45,7 +50,14 @@
     Object.assign(guiState, { connection:input.connection, selfTest:input.selfTest,
       isSystemProxyEnabled:(input.connection?.systemProxyActualEnabled ?? input.connection?.systemProxyEnabled) === true,
       isInitializing:false,isStartingCore:false,isStoppingCore:false,isConnecting:false,isDisconnecting:false,isSwitchingSystemProxy:operations.feedback.pending === 'system-proxy',
-      canRestartCore:true,canStartCore:true,canDisableSystemProxy:true,canEnableSystemProxy:true,
+      canRestartCore:true,canStartCore:true,canDisableSystemProxy:true,canEnableSystemProxy:scenario !== 'unmanaged-stopped',canResetSystemProxy:true,
+      enableSystemProxy:async()=>{
+        await change(()=>{input.connection!.systemProxyEnabled=true;action='proxy-takeover';});return {ok:true};
+      },
+      resetSystemProxy:async()=>{
+        if(scenario === 'unmanaged-failure') { await change(()=>{});return {ok:false,message:'系统拒绝修改代理设置'}; }
+        await change(()=>{input.connection!.systemProxyEnabled=false;input.connection!.systemProxyActualEnabled=false;action='proxy-reset';});return {ok:true};
+      },
       restartCore:async()=>{action='restart';},startCore:async()=>{action='start';},
     });
     store.uiMode='pro';
@@ -74,3 +86,5 @@
   {#snippet traffic()}<TrafficChart {history} unavailableReason={scenario === 'stale' ? '流量采样已过期，等待恢复' : scenario === 'stopped' ? '内核未就绪，暂停展示实时速率' : null} />{/snippet}
 </ProfessionalOverview>
 <output aria-label="概览操作" style="height:24px;flex-shrink:0">{action}</output>
+
+<SystemProxyRecoveryDialog />

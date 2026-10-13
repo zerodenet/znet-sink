@@ -1,5 +1,6 @@
 <script lang="ts">
   import { guiState } from '$lib/services/gui-state.svelte';
+  import SystemProxyRecovery from '$lib/components/core/SystemProxyRecovery.svelte';
 
   // Initial TUN status fetch when initialized
   $effect(() => {
@@ -57,6 +58,9 @@
     >
       {guiState.isSwitchingTun ? '…' : 'TUN'}
     </button>
+    {#if guiState.hasUnmanagedSystemProxy}
+      <SystemProxyRecovery compact />
+    {:else}
     <button data-slot="surface-button"
       onclick={toggleSystemProxy}
       disabled={proxyEnabled ? !guiState.canDisableSystemProxy : !guiState.canEnableSystemProxy}
@@ -68,5 +72,6 @@
     >
       {guiState.isSwitchingSystemProxy ? '…' : 'SYS'}
     </button>
+    {/if}
   </div>
 </aside>

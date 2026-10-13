@@ -284,6 +284,7 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
 
 let localFieldEdits: Record<string, unknown> = {};
 export const getProfileSettings = async () => {
+  if (new URLSearchParams(location.search).has('config-unavailable')) throw new Error('当前配置不可用');
   const defaults = await getAppConfig();
   const settings = JSON.parse(JSON.stringify(defaults));
   const mode = new URLSearchParams(location.search).get('mode');

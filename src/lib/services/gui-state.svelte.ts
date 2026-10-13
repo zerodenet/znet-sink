@@ -10,6 +10,7 @@ import {
   restartCoreProcess,
   enableSystemProxy as enableSystemProxyCommand,
   disableSystemProxy as disableSystemProxyCommand,
+  resetSystemProxy as resetSystemProxyCommand,
   getGuiProxyModeStatus,
   guiSetProxyMode,
   guiSelectPolicy,
@@ -85,6 +86,7 @@ class GuiStateStore {
   get supportsTrafficStats() { return this.runtimeObservation.supportsTrafficStats; }
   set supportsTrafficStats(value: boolean) { this.runtimeObservation.supportsTrafficStats = value; }
 
+  systemProxyRecoveryOpen = $state(false);
   isInitializing = $state(true);
   isLoading = $state(false);
   isConnecting = $state(false);
@@ -230,6 +232,7 @@ class GuiStateStore {
     } catch (error) {
       if (!this.connectionRefreshGate.canApply(request)) return;
       this.connectionError = this.errorMessage(error);
+      this.syncTrayStatus();
       // Preserve the last trusted ownership snapshot through a transient IPC
       // failure instead of making PID/proxy state flicker.
     }
@@ -341,12 +344,20 @@ class GuiStateStore {
     return typeof e?.message === 'string' ? e.message : typeof e === 'string' ? e : '未知错误';
   }
 
-  private syncTrayStatus() {
+  syncTrayStatus() {
     void trayUpdateStatus(
       this.isProcessRunning,
       this.isSystemProxyEnabled,
       this.isTunEnabled,
+      this.connection?.systemProxyEnabled === true,
+      this.connection !== null && !this.connectionError,
     ).catch(() => {});
+  }
+
+  openSystemProxyRecovery() {
+    this.systemProxyRecoveryOpen = true;
+    // macOS toggles a check menu item before dispatch. Reapply observed state.
+    this.syncTrayStatus();
   }
 
   probeNetwork() { return this.networkState.run(); }
@@ -490,7 +501,7 @@ class GuiStateStore {
       await tracedOperation('proxy', 'system_proxy.enable', () => enableSystemProxyCommand());
       await this.refreshRuntimeState();
       await this.refreshSelfTest();
-      return this.reportCommandConfirmation(!this.connectionError && this.isSystemProxyEnabled, '系统代理已开启', '开启请求已完成，但尚未确认系统代理状态，请重新检查', notify);
+      return this.reportCommandConfirmation(!this.connectionError && this.isSystemProxyEnabled && this.connection?.systemProxyEnabled === true, '系统代理已接管', '开启请求已完成，但尚未确认系统代理接管状态，请重新检查', notify);
     } catch (e: any) {
       if (notify) toastError(`开启系统代理失败: ${this.errorMessage(e)}`);
       await this.refreshRuntimeState();
@@ -518,7 +529,7 @@ class GuiStateStore {
 
   async toggleSystemProxy({ notify = true }: CommandOptions = {}) {
     if (this.isSystemProxyEnabled && this.connection?.systemProxyEnabled !== true) {
-      const message = '系统代理已开启，但未由本应用接管。请在系统网络设置中关闭或检查其他代理应用。';
+      const message = '系统代理已开启，但未由本应用接管。请点击“处理系统代理”选择接管或清除。';
       if (notify) toastWarning(message);
       return { ok: false, message };
     }
@@ -526,6 +537,24 @@ class GuiStateStore {
       return this.disableSystemProxy({ notify });
     } else {
       return this.enableSystemProxy({ notify });
+    }
+  }
+
+  async resetSystemProxy({ notify = true }: CommandOptions = {}): Promise<CommandResult> {
+    if (!this.canResetSystemProxy) return { ok: false, message: '请等待正在进行的网络操作完成' };
+    this.isSwitchingSystemProxy = true;
+    try {
+      await tracedOperation('proxy', 'system_proxy.reset', () => resetSystemProxyCommand());
+      await this.refreshConnectionStatus();
+      await this.refreshSelfTest();
+      return this.reportCommandConfirmation(!this.connectionError && !this.isSystemProxyEnabled,
+        '系统代理已清除', '清除请求已完成，但尚未确认系统代理关闭，请重新检查', notify);
+    } catch (e: any) {
+      if (notify) toastError(`清除系统代理失败: ${this.errorMessage(e)}`);
+      await this.refreshConnectionStatus();
+      return { ok: false, message: this.errorMessage(e) };
+    } finally {
+      this.isSwitchingSystemProxy = false;
     }
   }
 
@@ -750,6 +779,8 @@ class GuiStateStore {
     const selfTestBlocking = this.selfTest !== null && !this.selfTest.ready;
     return (!selfTestBlocking || this.isProcessRunning)
       && !this.isSwitchingSystemProxy
+      && !this.isCoreBusy
+      && !this.isSwitchingTun
       && !this.isConnecting
       && !this.isDisconnecting
       && this.connection?.systemProxyEnabled !== true;
@@ -760,6 +791,16 @@ class GuiStateStore {
       && !this.isConnecting
       && !this.isDisconnecting
       && this.connection?.systemProxyEnabled === true;
+  }
+
+  get hasUnmanagedSystemProxy(): boolean {
+    return this.isSystemProxyEnabled && this.connection?.systemProxyEnabled !== true;
+  }
+
+  get canResetSystemProxy(): boolean {
+    // Rescue depends on in-flight client operations, not a stale process phase.
+    return !this.isSwitchingSystemProxy && !this.isStartingCore && !this.isStoppingCore && !this.isSwitchingTun
+      && !this.isConnecting && !this.isDisconnecting && !this.isInitializing;
   }
 
   get canEnableTun(): boolean {

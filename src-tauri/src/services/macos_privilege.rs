@@ -5,7 +5,10 @@
 //! dialog, then reuses that helper until the GUI exits. The helper accepts
 //! fixed `networksetup` proxy mutations and validated, temporary TUN DNS sessions.
 
+mod launch;
 mod tun_dns;
+
+use launch::launch_authorized_helper;
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -13,8 +16,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -23,19 +26,25 @@ use serde::{Deserialize, Serialize};
 use crate::errors::{AppError, AppResult};
 
 const HELPER_COMMAND: &str = "__macos-networksetup-helper";
-const PRIVILEGED_COMMAND_SCRIPT: &str = r#"
-on run argv
-    if (count of argv) is 0 then error "missing privileged command"
-    set commandText to quoted form of (item 1 of argv)
-    repeat with argumentIndex from 2 to (count of argv)
-        set commandText to commandText & " " & quoted form of (item argumentIndex of argv)
-    end repeat
-    do shell script commandText with administrator privileges
-end run
-"#;
 
 static HELPER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PRIVILEGED_HELPER: OnceLock<Mutex<Option<UnixStream>>> = OnceLock::new();
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Quit may reuse existing authorization, but must never ask for new authority.
+pub(crate) fn begin_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
+}
+
+fn require_interactive_authorization(allowed: bool) -> AppResult<()> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::internal(
+            "network cleanup requires administrator authorization; no prompt is allowed during shutdown; retained proxy ownership for recovery",
+        ))
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -110,6 +119,20 @@ pub(crate) fn run_networksetup_commands(commands: &[Vec<String>]) -> AppResult<(
     let mut slot = helper_slot()
         .lock()
         .map_err(|_| AppError::internal("macOS networksetup helper lock is poisoned"))?;
+    execute_with_helper(
+        &mut slot,
+        || !SHUTTING_DOWN.load(Ordering::SeqCst),
+        launch_authorized_helper,
+        commands,
+    )
+}
+
+fn execute_with_helper(
+    slot: &mut Option<UnixStream>,
+    may_authorize: impl Fn() -> bool,
+    launch: impl FnOnce() -> AppResult<UnixStream>,
+    commands: &[Vec<String>],
+) -> AppResult<()> {
     if let Some(stream) = slot.as_mut() {
         match request(stream, commands) {
             Ok(response) => return response_result(response),
@@ -124,7 +147,8 @@ pub(crate) fn run_networksetup_commands(commands: &[Vec<String>]) -> AppResult<(
         }
     }
 
-    let mut stream = launch_authorized_helper()?;
+    require_interactive_authorization(may_authorize())?;
+    let mut stream = launch()?;
     let response = request(&mut stream, commands).map_err(|error| {
         AppError::internal(format!(
             "communicate with authorized networksetup helper: {error}"
@@ -139,16 +163,42 @@ pub(crate) fn set_tun_dns(
     server: Option<&str>,
     pid: u32,
 ) -> AppResult<()> {
+    update_tun_dns(interface, server, pid, true)
+}
+
+pub(crate) fn refresh_tun_dns(interface: &str, server: &str, pid: u32) -> AppResult<()> {
+    update_tun_dns(Some(interface), Some(server), pid, false)
+}
+
+fn dns_helper(
+    slot: &mut Option<UnixStream>,
+    may_authorize: bool,
+    launch: impl FnOnce() -> AppResult<UnixStream>,
+) -> AppResult<&mut UnixStream> {
+    if slot.is_none() {
+        if !may_authorize {
+            return Err(AppError::internal(
+                "已授权的网络 helper 不可用，请手动重试；后台刷新不会请求新授权",
+            ));
+        }
+        *slot = Some(launch()?);
+    }
+    Ok(slot.as_mut().unwrap())
+}
+
+fn update_tun_dns(
+    interface: Option<&str>,
+    server: Option<&str>,
+    pid: u32,
+    may_authorize: bool,
+) -> AppResult<()> {
     let mut slot = helper_slot()
         .lock()
         .map_err(|_| AppError::internal("DNS helper lock poisoned"))?;
     if interface.is_none() && slot.is_none() {
         return Ok(());
     }
-    if slot.is_none() {
-        *slot = Some(launch_authorized_helper()?);
-    }
-    let stream = slot.as_mut().unwrap();
+    let stream = dns_helper(&mut slot, may_authorize, launch_authorized_helper)?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -164,7 +214,7 @@ pub(crate) fn set_tun_dns(
                 pid,
             },
         )
-        .map_err(io::Error::other)?;
+        .map_err(io::Error::from)?;
         stream.write_all(b"\n")?;
         stream.flush()?;
         let mut line = String::new();
@@ -189,78 +239,6 @@ pub(crate) fn has_authorized_helper() -> bool {
         .unwrap_or(false)
 }
 
-fn launch_authorized_helper() -> AppResult<UnixStream> {
-    let (listener, guard) = bind_helper_socket().map_err(|error| {
-        AppError::internal(format!("prepare macOS networksetup helper: {error}"))
-    })?;
-    let executable = std::env::current_exe().map_err(|error| {
-        AppError::internal(format!(
-            "resolve ZNet Sink executable for authorization: {error}"
-        ))
-    })?;
-    let executable = executable.to_string_lossy().into_owned();
-    let socket = guard.socket.to_string_lossy().into_owned();
-    let mut child = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            PRIVILEGED_COMMAND_SCRIPT,
-            "--",
-            executable.as_str(),
-            HELPER_COMMAND,
-            "--socket",
-            socket.as_str(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            AppError::internal(format!(
-                "request administrator authorization for networksetup: {error}"
-            ))
-        })?;
-
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| AppError::internal(format!("configure helper listener: {error}")))?;
-    let stream = loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let uid = peer_effective_uid(&stream).map_err(|error| {
-                    AppError::internal(format!("authenticate networksetup helper: {error}"))
-                })?;
-                if uid == 0 {
-                    stream.set_nonblocking(false).map_err(|error| {
-                        AppError::internal(format!("configure helper connection: {error}"))
-                    })?;
-                    break stream;
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) => {
-                return Err(AppError::internal(format!(
-                    "accept authorized networksetup helper: {error}"
-                )))
-            }
-        }
-        if child
-            .try_wait()
-            .map_err(|error| AppError::internal(format!("wait for authorization: {error}")))?
-            .is_some()
-        {
-            let output = child.wait_with_output().map_err(|error| {
-                AppError::internal(format!("collect authorization result: {error}"))
-            })?;
-            return Err(authorization_failure(&output));
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    };
-
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(stream)
-}
-
 fn request(stream: &mut UnixStream, commands: &[Vec<String>]) -> io::Result<HelperResponse> {
     serde_json::to_writer(
         &mut *stream,
@@ -268,7 +246,7 @@ fn request(stream: &mut UnixStream, commands: &[Vec<String>]) -> io::Result<Help
             commands: commands.to_vec(),
         },
     )
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::from)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
 
@@ -530,107 +508,5 @@ fn authorization_failure(output: &Output) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
-    use std::thread;
-
-    use super::{
-        request, validate_networksetup_command, HelperRequest, HelperResponse,
-        PRIVILEGED_COMMAND_SCRIPT,
-    };
-
-    #[test]
-    fn privileged_helper_accepts_only_fixed_proxy_mutations() {
-        assert!(validate_networksetup_command(&[
-            "-setwebproxy".into(),
-            "Wi-Fi".into(),
-            "127.0.0.1".into(),
-            "7890".into(),
-        ])
-        .is_ok());
-        assert!(validate_networksetup_command(&[
-            "-setwebproxystate".into(),
-            "Wi-Fi".into(),
-            "off".into(),
-        ])
-        .is_ok());
-        assert!(validate_networksetup_command(&[
-            "-setproxybypassdomains".into(),
-            "USB LAN".into(),
-            "192.168.*".into(),
-            "*.example.org".into(),
-        ])
-        .is_ok());
-        assert!(validate_networksetup_command(&[
-            "-setproxybypassdomains".into(),
-            "Wi-Fi".into(),
-            "Empty".into(),
-        ])
-        .is_ok());
-        assert!(
-            validate_networksetup_command(&["-setproxybypassdomains".into(), "Wi-Fi".into(),])
-                .is_err()
-        );
-        assert!(validate_networksetup_command(&[
-            "-setproxybypassdomains".into(),
-            "Wi-Fi".into(),
-            "localhost\ninvalid".into(),
-        ])
-        .is_err());
-        assert!(validate_networksetup_command(&["-listallnetworkservices".into()]).is_err());
-        assert!(validate_networksetup_command(&["-setwebproxy".into(), "Wi-Fi".into(),]).is_err());
-    }
-
-    #[test]
-    fn authorization_script_quotes_every_helper_argument() {
-        assert!(PRIVILEGED_COMMAND_SCRIPT.contains("quoted form of"));
-        assert!(PRIVILEGED_COMMAND_SCRIPT.contains("with administrator privileges"));
-    }
-
-    #[test]
-    fn one_authorized_channel_serves_repeated_proxy_transactions() {
-        let (mut parent, helper) = UnixStream::pair().expect("create helper channel");
-        let server = thread::spawn(move || {
-            let mut helper = helper;
-            for expected_state in ["on", "off"] {
-                let mut line = String::new();
-                BufReader::new(&mut helper)
-                    .read_line(&mut line)
-                    .expect("read helper request");
-                let request: HelperRequest = serde_json::from_str(&line).expect("parse request");
-                let HelperRequest::NetworkSetup { commands } = request else {
-                    panic!("expected proxy request")
-                };
-                assert_eq!(commands[0][2], expected_state);
-
-                serde_json::to_writer(
-                    &mut helper,
-                    &HelperResponse {
-                        success: true,
-                        code: 0,
-                        stdout: Vec::new(),
-                        stderr: Vec::new(),
-                    },
-                )
-                .expect("write helper response");
-                helper.write_all(b"\n").expect("terminate response");
-                helper.flush().expect("flush response");
-            }
-        });
-
-        for state in ["on", "off"] {
-            let commands = vec![vec![
-                "-setwebproxystate".into(),
-                "Wi-Fi".into(),
-                state.into(),
-            ]];
-            assert!(
-                request(&mut parent, &commands)
-                    .expect("request proxy transaction")
-                    .success
-            );
-        }
-        server.join().expect("helper server");
-    }
-}
+#[path = "macos_privilege/tests.rs"]
+mod tests;
