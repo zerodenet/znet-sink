@@ -23,7 +23,6 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/android-unsigned-host
-      GRADLE_USER_HOME: ${{ runner.temp }}/znet-host-gradle
       ZNET_PRODUCT_FEATURES: tool-dns,tool-route,tool-node-probe
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +50,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
           echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/znet-host-gradle" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/android-user"
       - uses: gradle/actions/setup-gradle@v4
       - name: Install frontend dependencies
