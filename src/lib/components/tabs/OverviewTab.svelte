@@ -17,6 +17,7 @@
   import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import * as toast from '$lib/services/toast.svelte';
   import OverviewController from '$lib/components/overview/OverviewController.svelte';
+  import SystemProxyRecovery from '$lib/components/core/SystemProxyRecovery.svelte';
   import { buildOverview, capturePresentation, trafficUnavailableReason } from '$lib/components/overview/model';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Select from '$lib/components/ui/select';
@@ -391,6 +392,7 @@
             <span>{recovering || guiState.isSwitchingTun ? '恢复中…' : '重试恢复'}</span>
           </Button>
         {/if}
+        <SystemProxyRecovery label="重置代理" class="lite-recovery-button" busy={isPowerBusy} />
       </div>
       {#if recoveryFeedback}
         <small class="lite-recovery-feedback" class:success={recoveryFeedback.ok} class:error={!recoveryFeedback.ok} role={recoveryFeedback.ok ? 'status' : 'alert'}>

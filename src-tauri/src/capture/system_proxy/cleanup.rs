@@ -35,3 +35,19 @@ fn clear_at(
 #[cfg(test)]
 #[path = "cleanup_tests.rs"]
 mod tests;
+
+pub(super) fn reset_at(
+    path: std::path::PathBuf,
+    clear_and_read: impl FnOnce() -> AppResult<system_proxy::SystemProxyStatus>,
+) -> AppResult<system_proxy::SystemProxyStatus> {
+    // Ignore missing/corrupt ownership records for this explicit recovery path.
+    // Keep the record if mutation or readback fails, so normal cleanup can retry.
+    let status = clear_and_read()?;
+    if status.enabled || status.socks_enabled {
+        return Err(crate::errors::AppError::internal(
+            "system proxy is still enabled after reset; another application may be changing it",
+        ));
+    }
+    remove_marker_file(&path);
+    Ok(status)
+}

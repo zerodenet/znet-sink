@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
+  import SystemProxyRecovery from './SystemProxyRecovery.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import { getRuntimePerformanceSnapshot } from '$lib/services/runtime-performance';
@@ -156,7 +157,7 @@
     guiState.isSwitchingSystemProxy
       ? '切换中'
       : isSystemProxyEnabled
-        ? unmanagedProxy ? '未由本应用接管' : '关闭系统代理'
+        ? '关闭系统代理'
         : '开启系统代理'
   );
 
@@ -263,14 +264,15 @@
       >
         {coreActionLabel}
       </Button>
+      {#if unmanagedProxy}
+        <SystemProxyRecovery {busy} />
+      {:else}
       <Button variant="outline" size="sm"
         onclick={onToggleSystemProxy}
         disabled={busy || (isSystemProxyEnabled ? !guiState.canDisableSystemProxy : stateUnknown || !guiState.canEnableSystemProxy)}
 
         aria-pressed={isSystemProxyEnabled}
-        title={unmanagedProxy
-          ? '系统代理仍在开启。请在系统网络设置中关闭或检查其他代理应用。'
-          : isSystemProxyEnabled
+        title={isSystemProxyEnabled
           ? '关闭系统代理只撤销系统流量入口，不会停止内核或终止已有连接'
           : !guiState.canEnableSystemProxy && guiState.blockingIssues.length
             ? guiState.blockingIssues.join('; ')
@@ -278,6 +280,7 @@
       >
         {proxyActionLabel}
       </Button>
+      {/if}
     </div>
   {:else}
     <Button variant={guiState.isConnected ? 'destructive' : 'default'} size="sm"

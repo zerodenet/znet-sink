@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SystemProxyRecoveryDialog from '$lib/components/core/SystemProxyRecoveryDialog.svelte';
   import OverviewTab from '$lib/components/tabs/OverviewTab.svelte';
   import { guiState, store } from './tun-state.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
@@ -12,6 +13,7 @@
   let action = $state('');
   let mode = $state<ProxyMode>('rule');
   let updatedAt = $state(Date.now());
+  let connectionError = $state<string | null>(scenario === 'proxy-unknown' ? '状态查询失败' : null);
   let connection = $state<ConnectionStatus>({ state:'connected', processState:'running', coreAvailable:true, systemProxyEnabled:scenario !== 'partial', processPid:321, localProxyHost:'127.0.0.1', localProxyPort:7890 });
   let tun = $state<GuiManagedTunStatus>({ key:'tun', supported:true, enabled:scenario !== 'desired', desiredEnabled:true, healthy:!['failure','recovery-rejected','recovery-error'].includes(scenario), state:'running', addresses:[], lastError:['failure','recovery-rejected','recovery-error'].includes(scenario) ? '出口恢复失败' : undefined,
     autoRoute:true,dualStack:true,strictRoute:true,dnsHijack:false,fakeIpEnabled:false,dnsHijackedQueries:0,networkGeneration:1,ipv6ToIpv4Fallbacks:0,managedByConfig:false,ipv4Egress:{availability:'available'},addressFamilyPolicy:scenario === 'ipv6-required' ? 'ipv6_only' : 'prefer_ipv4',ipv6Egress:{availability:scenario === 'ipv4-only-network' || scenario === 'ipv6-required' ? 'unavailable' : 'available'},
@@ -28,6 +30,23 @@
   async function setProxyMode(next: ProxyMode) {
     if (scenario === 'mode-failure') return {ok:false as const,message:'模式请求已提交，但尚未确认生效，请重新检查'};
     mode=next; action=`mode:${next}`; return { ok:true as const };
+  }
+  let resetting = $state(false);
+  if (scenario.startsWith('proxy-')) {
+    connection.systemProxyEnabled=false;
+    connection.systemProxyActualEnabled=true;
+    connection.systemProxyHost='127.0.0.1';connection.systemProxyPort=7891;
+    tun.enabled=tun.desiredEnabled=false;
+    if (scenario === 'proxy-stopped') { connection.processState='stopped';connection.coreAvailable=false; }
+  }
+  async function resetSystemProxy() {
+    resetting=true;action='proxy-reset';
+    try {
+      await new Promise<void>(resolve => window.addEventListener('fixture-finish-reset', () => resolve(), {once:true}));
+      if (scenario === 'proxy-reset-failure') return {ok:false,message:'系统拒绝修改代理设置'};
+      connection.systemProxyEnabled=false;connection.systemProxyActualEnabled=false;connectionError=null;updatedAt=Date.now();
+      return {ok:true};
+    } finally { resetting=false; }
   }
   let recoveryRequests = 0;
   async function recoverTun(options?: { notify?: boolean }) {
@@ -48,15 +67,16 @@
     overviewData.applyTrafficRateSample({ sampledAtUnixMs:at, stable:true, uploadBytesPerSec:80000, downloadBytesPerSec:500000, totalUploadBytes:12000000, totalDownloadBytes:320000000, connectionCount:4 });
   }
   $effect(() => {
-    Object.assign(guiState, { connection, connectionUpdatedAt:updatedAt, connectionError:null, coreOverview:{coreState:'running'},
+    Object.assign(guiState, { connection, connectionUpdatedAt:updatedAt, connectionError, coreOverview:{coreState:'running'},
       selfTest, selfTestUpdatedAt:updatedAt, tunStatus:tun, tunStatusError:null,
       proxyMode:{currentMode:mode,availableModes:scenario === 'limited' ? ['rule','direct'] : ['rule','global','direct']},
       policyGroups:groups, policyGroupsUpdatedAt:updatedAt, policyGroupsError:null, configNodes:[],
       isTunEnabled:tun.enabled,isTunDesiredEnabled:tun.desiredEnabled,isTunSwitchOn:tun.enabled || tun.desiredEnabled,
-      isSystemProxyEnabled:connection.systemProxyEnabled,isCaptureEnabled:connection.systemProxyEnabled || tun.enabled,isConnected:connection.systemProxyEnabled && tun.enabled,
-      isInitializing:false,isCoreBusy:false,isStartingCore:false,isStoppingCore:false,isConnecting:false,isDisconnecting:false,isSwitchingTun:false,isSwitchingSystemProxy:false,isSwitchingMode:scenario === 'busy',isSelectingPolicy:false,
-      supportsTrafficStats:true,canConnect:true,canDisconnect:true,canRestartCore:true,canStartCore:true,canDisableSystemProxy:true,canEnableSystemProxy:true,canDisableTun:true,canEnableTun:true,
-      connect,disconnect,setProxyMode,
+      isSystemProxyEnabled:connection.systemProxyActualEnabled ?? connection.systemProxyEnabled,isCaptureEnabled:(connection.systemProxyActualEnabled ?? connection.systemProxyEnabled) || tun.enabled,isConnected:connection.systemProxyEnabled && tun.enabled,
+      isInitializing:false,isCoreBusy:false,isStartingCore:false,isStoppingCore:false,isConnecting:false,isDisconnecting:false,isSwitchingTun:false,isSwitchingSystemProxy:resetting,isSwitchingMode:scenario === 'busy',isSelectingPolicy:false,
+      supportsTrafficStats:true,canConnect:true,canDisconnect:true,canRestartCore:true,canStartCore:true,canDisableSystemProxy:connection.systemProxyEnabled,canEnableSystemProxy:connection.systemProxyEnabled !== true && connection.coreAvailable && !resetting,canResetSystemProxy:!resetting,hasUnmanagedSystemProxy:connection.systemProxyActualEnabled === true && !connection.systemProxyEnabled,canDisableTun:true,canEnableTun:true,
+      connect,disconnect,setProxyMode,resetSystemProxy,
+      enableSystemProxy:async()=>{connection.systemProxyEnabled=true;connection.systemProxyActualEnabled=true;updatedAt=Date.now();return {ok:true};},
       refreshSelfTest:async()=>{},refreshNodeStateAfterConfigChange:async()=>{},refreshAll:async()=>{},
       restartCore:async()=>{action='restart';},startCore:async()=>{action='start';},
       toggleSystemProxy:async()=>{connection.systemProxyEnabled=!connection.systemProxyEnabled;return {ok:true};},
@@ -95,3 +115,5 @@
 {#if ready}<OverviewTab />{/if}
 <output aria-label="模式操作">{action}</output>
 <output aria-label="会话累计">{overviewData.captureSessionTotalBytes}</output>
+
+<SystemProxyRecoveryDialog />

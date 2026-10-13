@@ -7,14 +7,16 @@
   import type { Observation } from '$lib/features/traffic/history';
   import EndpointTrafficChart from './EndpointTrafficChart.svelte';
   import { Button } from '$lib/components/ui/button';
+  import { getAppErrorMessage } from '$lib/services/core';
   import * as Dialog from '$lib/components/ui/dialog';
   import { directionLabel, endpointStateLabel, operationReason, directionRequiresRestart } from '$lib/features/endpoints/policy';
   import type { EndpointTraffic } from '$lib/features/endpoints/traffic';
   import type { EndpointAction, EndpointCatalog, EndpointDetails, NetworkEndpoint } from '$lib/features/endpoints/types';
-  let { endpoint, catalog, disabled, onAction, onInspect, details = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false }: {
+  let { endpoint, catalog, disabled, onAction, onInspect, details = null, detailsError = null, inspecting = false, traffic, observation, observationAvailable = false, observationStale = false, pending = false, stale = false }: {
     endpoint: NetworkEndpoint; catalog: EndpointCatalog; disabled: boolean; details?: EndpointDetails | null; inspecting?: boolean;
     observation?: Observation; observationAvailable?: boolean; observationStale?: boolean;
     traffic?: EndpointTraffic; pending?: boolean; stale?: boolean;
+    detailsError?: unknown;
     onAction: (endpoint: NetworkEndpoint, action: EndpointAction) => void;
     onInspect: (endpoint: NetworkEndpoint) => void;
   } = $props();
@@ -72,18 +74,19 @@
       </details>
     </div>
   </header>
-  {#if addresses.length}<div class="local-addresses" aria-label="本机隧道 IP" title={`本机隧道 IP（当前配置值）：${addresses.join(' · ')}`}><MapPin size={12}/><span>{addresses.join(' · ')}</span></div>{/if}
-  <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span>{#if endpoint.health === 'degraded'}<AlertTriangle size={13} aria-label="健康降级" />{/if}<span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
+  <div class="local-addresses">{#if addresses.length}<MapPin size={12}/><span aria-label="本机隧道 IP" title={`本机隧道 IP（${stale ? '上次观测' : '当前配置值'}）：${addresses.join(' · ')}`}>{addresses.join(' · ')}</span>{/if}</div>
+  <div class="status-row"><span class="status" class:running={endpoint.state === 'running'} class:failed={endpoint.state === 'failed'}><i></i>{endpointStateLabel(endpoint)}</span><span class="health-indicator">{#if endpoint.last_error}<span role="alert" title={endpoint.last_error.message}><AlertTriangle size={13}/><span class="sr-only">{endpoint.last_error.message}</span></span>{:else if endpoint.health === 'degraded'}<AlertTriangle size={13} aria-label="健康降级" />{/if}</span><span class="effective" title="内核实际生效方向">{directionLabel(endpoint.effective)}</span></div>
+  <div class="traffic-slot">
   {#if observationAvailable}
-    {#if observation?.snapshot.scope.kind === 'outbound' || observation?.snapshot.scope.kind === 'inbound'}<p class="observation-source" title={`内核声明的${observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} ${observation.snapshot.scope.tag} 统计；Inner 为内层流量，与 Flow、Outer 分开计量`}>{observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} · Inner</p>{:else if !observation}<p class="observation-source">暂无端点统计快照</p>{/if}
+    <p class="observation-source">{#if observation?.snapshot.scope.kind === 'outbound' || observation?.snapshot.scope.kind === 'inbound'}<span title={`内核声明的${observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} ${observation.snapshot.scope.tag} 统计；Inner 为内层流量，与 Flow、Outer 分开计量`}>{observation.snapshot.scope.kind === 'outbound' ? '出站' : '入站'} · Inner</span>{:else if !observation}暂无端点统计快照{/if}</p>
     <TrafficMiniChart {observation} plane="inner" stale={stale || observationStale}/>
   {:else}<EndpointTrafficChart {traffic} {stale} />{/if}
+  </div>
   <div class="connections" aria-label="活动连接">
     <span title="当前活动 TCP 流；不统计 Peer、握手或保活包"><Cable size={13} /><span class="sr-only">流 </span><span class="activity-count">{count('active_stream_flows')}</span></span>
     <span title="当前活动 UDP 流；不统计 WireGuard 外层 UDP 套接字"><Boxes size={13} /><span class="sr-only">数据报 </span><span class="activity-count">{count('active_datagram_flows')}</span></span>
     <span title="当前活动 Packet 路由；— 表示未提供计数，各类计数不合并"><Route size={13} /><span class="sr-only">Packet </span><span class="activity-count">{count('active_packet_routes')}</span></span>
   </div>
-  {#if endpoint.last_error}<p role="alert" class="error">{endpoint.last_error.message}</p>{/if}
   <footer>
     <div class="directions" aria-label="端点方向">
       <button data-slot="surface-button" role="checkbox" aria-checked={endpoint.allowed.inbound} class:active={endpoint.allowed.inbound} aria-label={`${endpoint.tag} 允许入站`} title={inboundReason ?? directionHint('inbound')} disabled={!endpoint.supported.directions.inbound || disabled || !!inboundReason} onclick={() => act(directionAction('inbound'))}><ArrowDownToLine size={14} />入站</button>
@@ -95,9 +98,9 @@
 <Dialog.Root bind:open={detailOpen}>
   <Dialog.Content class="sm:max-w-[640px]">
     <Dialog.Header><Dialog.Title>{endpoint.tag} · {detailMode === 'protocol' ? '协议详情' : '观测详情'}</Dialog.Title><Dialog.Description>{endpoint.protocol}</Dialog.Description></Dialog.Header>
-    <Dialog.Body>
+    <Dialog.Body class="endpoint-details-body">
       {#if detailMode === 'protocol'}
-        <section aria-label="端点协议详情">{#if details}<EndpointDetailsView snapshot={details} />{:else}<p class="save-note">{inspecting ? '正在读取…' : '暂无详情'}</p>{/if}</section>
+        <section aria-label="端点协议详情">{#if details}<EndpointDetailsView snapshot={details} />{:else if detailsError}<p class="save-note failed" role="alert">{getAppErrorMessage(detailsError,'协议详情刷新失败')} 旧详情已隐藏，请重试。</p>{:else}<p class="save-note">{inspecting ? '正在读取…' : '暂无详情'}</p>{/if}</section>
       {:else}
         {#if observationAvailable}{#if observation}<TrafficScopeDetails {observation} stale={stale || observationStale}/>{:else}<p class="save-note">此端点暂无统计快照</p>{/if}{:else}<EndpointObservationView {endpoint} />{/if}
       {/if}
@@ -117,14 +120,18 @@
   .status-row { gap:8px; margin-top:14px; font-size:11px; color:var(--muted-foreground); } .status { gap:5px; } .status i { width:6px; height:6px; border-radius:50%; background:var(--muted-foreground); } .running i { background:var(--success,#16a34a); } .failed i { background:var(--destructive); } .effective { margin-left:auto; }
   .connections { gap:16px; font-size:11px; color:var(--muted-foreground); margin:1px 0 14px; } .connections>span { gap:5px; font-variant-numeric:tabular-nums; }
   .activity-count { display:inline-block; min-width:3ch; text-align:right; }
-  .local-addresses { display:flex; align-items:center; gap:5px; margin-top:10px; color:var(--muted-foreground); font-size:11px; }
+  .local-addresses { display:flex; align-items:center; gap:5px; margin-top:10px; height:17px; color:var(--muted-foreground); font-size:11px; }
   .local-addresses :global(svg) { flex-shrink:0; }
-  .local-addresses>span { min-width:0; overflow-wrap:anywhere; font-family:var(--font-mono); }
-  .observation-source { font-size:10px; color:var(--muted-foreground); margin-top:8px; }
+  .local-addresses>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); }
+  .observation-source { height:16px; font-size:10px; color:var(--muted-foreground); margin-top:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .traffic-slot { height:140px; display:flex; flex-direction:column; justify-content:center; }
+  .health-indicator { width:13px; flex-shrink:0; color:var(--destructive); }
+  :global(.endpoint-details-body) { height:min(440px,60vh); flex-shrink:0; scrollbar-gutter:stable; }
   footer { border-top:1px solid var(--border); padding-top:12px; justify-content:space-between; gap:10px; } .directions { gap:6px; } .directions>button { position:relative; gap:5px; padding:5px 8px; border-radius:6px; font-size:11px; color:var(--muted-foreground); cursor:pointer; background:var(--muted); }
   .directions>button.active { color:var(--primary); background:color-mix(in srgb,var(--primary) 9%,transparent); } .directions>button:focus-visible { outline:2px solid var(--ring); } .directions>button:disabled { opacity:.45; cursor:default; }
   .options { position:relative; } summary { display:flex; padding:4px; list-style:none; cursor:pointer; color:var(--muted-foreground); border-radius:6px; } summary::-webkit-details-marker { display:none; } summary:hover { background:var(--muted); }
   .option-menu { position:absolute; right:0; top:30px; z-index:20; min-width:165px; display:flex; flex-direction:column; padding:5px; gap:2px; background:var(--popover); border:1px solid var(--border); border-radius:9px; box-shadow:0 6px 20px #0002; }
   .option-menu :global(button) { justify-content:flex-start; gap:8px; } .menu-divider { border-top:1px solid var(--border); margin:3px; }
-  .save-note { font-size:12px; line-height:1.6; color:var(--muted-foreground); margin-top:12px; } .error { font-size:11px; color:var(--destructive); overflow-wrap:anywhere; margin-top:8px; }
+  .save-note { font-size:12px; line-height:1.6; color:var(--muted-foreground); margin-top:12px; }
+  .save-note.failed { color:var(--destructive); }
 </style>

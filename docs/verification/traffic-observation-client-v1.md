@@ -61,6 +61,20 @@ IPC 现有订阅正常时复用全局 `gui:event` / `gui:event-status`，页面�
 - 默认环境 Rust workspace 全量：587 passed / 1 failed / 5 ignored；失败为已有 `services::network_probe::probe_tests::all_failed_probes_identify_the_check_without_disclosing_configured_urls`，其断言要求“建立连接失败”，实际受继承代理环境影响。仅在测试进程为 localhost/127.0.0.1 配置 NO_PROXY 后该单测通过，未修改产品网络探测实现。
 - `NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1`：全量通过，41 个 harness，812 passed / 0 failed / 7 ignored。忽略项不算实机验收；保留已有编译警告。
 
+### 后续维护（2026-10-11）：本地探测测试隔离
+
+上述既有断言失败已定位：关闭的本地端口经继承代理请求后返回 HTTP 502，而测试要求连接失败分类。客户端探测与底层网络能力的本地 HTTP 夹具现在复用隔离子进程，仅对该子进程的 loopback 地址设置 `NO_PROXY`，不修改并行测试进程、系统代理或产品探测路径。严格保留 Connect、Timeout、响应读取失败、权限撤销和地址脱敏检查；Windows 的拒绝连接用例留出五秒等待，避免把连接拒绝误测成超时。显式配置不可用代理的针对性回归通过。
+
+完整回归还发现插件授权回调的独立故障：macOS 接收的 socket 继承非阻塞标记时，分段 HTTP 头部会提前读取失败并返回 400。回调读取现在显式恢复阻塞模式并沿用读取超时；补充强制非阻塞 socket 的分段请求测试，原有 owner 隔离测试同时严格校验完整 HTTP 200 响应。本机独立 socket 复现确认，恢复阻塞前约 20 微秒就返回 `WouldBlock`，恢复后才等待设置的 200 毫秒超时。
+
+最终在原有代理环境直接执行 `pnpm verify:backend` 通过：格式检查、workspace locked all-targets check，以及 41 个 Rust harness（860 passed / 0 failed / 7 ignored）。未给整个验证进程额外设置 `NO_PROXY`；已有编译警告和忽略项仍保留，未进行 Windows/Linux 实机验收或安装包发布。
+
+### 后续维护（2026-10-13）：端点工作区刷新布局
+
+端点目录、卡片和协议/观测详情与统计子页面统一处理后台更新：错误及同步提示使用固定状态区，不临时插入整行；作用域失效保留上次目录和曲线供查看，控制继续禁用，权威查询返回后替换身份。协议详情失败时隐藏旧详情，弹窗正文高度保持稳定。卡片为本机地址、统计来源和图表保留稳定空间，旧/新统计接口切换不移动连接计数或控制按钮；旧接口图表复用分档稳定刻度和公共速率格式，小于 1 B/s 的真实流量不再显示为零。
+
+新增浏览器用例实际比较目录、搜索框、卡片、按钮、详情弹窗的坐标及尺寸，覆盖后台失败/恢复、配置失效、本机地址与错误变化以及统计能力重新发现。完整端点/统计 Chromium 回归初跑 32/33 通过，唯一失败来自旧测试夹具把简约模式全部导航设为可见；按现有模式规则修正夹具后，该用例及受影响布局回归通过。新增能力切换用例等待工作区入场动画结束后测量，最终通过。端点逻辑 18/18、统计逻辑 29/29、统一 UI 控件契约、`pnpm check`（0 errors / 0 warnings）和最终 `pnpm build` 通过。本次仍为客户端源码/浏览器夹具验证，不代表安装包或系统 WebView 实机验收。
+
 ## 尚未覆盖
 
 - 本机安装内核未发布 Traffic Observation V1，未进行真实 TCP/UDP/原生 Packet/WireGuard 计数、长期大库存掉样及真实并发收发中清空验收。相关客户端状态转换和边界使用隔离 IPC、逻辑及浏览器夹具验证。

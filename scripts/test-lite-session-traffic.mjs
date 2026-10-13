@@ -37,7 +37,7 @@ assert.ok(
 assert.ok(
   page.includes('const captureEnabled = guiState.isCaptureEnabled') &&
     guiState.includes('get isCaptureEnabled(): boolean') &&
-    guiState.includes('return this.isTunEnabled || this.connection?.systemProxyEnabled === true;') &&
+    guiState.includes('return this.isTunEnabled || this.isSystemProxyEnabled;') &&
     page.includes('overviewData.beginCaptureSession()') &&
     page.includes('overviewData.endCaptureSession()') &&
     !page.includes('const proxyEnabled = guiState.isSystemProxyEnabled'),

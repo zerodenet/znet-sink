@@ -202,7 +202,7 @@ assert.ok(
     overviewTab.includes('配置来源') &&
     overviewTab.includes('listSubscriptions()') &&
     overviewTab.includes('activateSource') &&
-    overviewTab.includes('syncSubscription(id)') &&
+    overviewTab.includes('syncSubscription(option.subscriptionId)') &&
     overviewTab.includes('setActiveProxyConfig(targetId)') &&
     overviewTab.includes('<Select.Root') &&
     overviewTab.includes('class="lite-proxy-segment"') &&

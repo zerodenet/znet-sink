@@ -225,6 +225,7 @@ pub(super) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         platform_commands::platform_clipboard_write,
         system_proxy_commands::system_proxy_enable,
         system_proxy_commands::system_proxy_disable,
+        system_proxy_commands::system_proxy_reset,
         system_proxy_commands::system_proxy_status,
         kernel_version_commands::kernel_list_versions,
         kernel_version_commands::kernel_install_version,

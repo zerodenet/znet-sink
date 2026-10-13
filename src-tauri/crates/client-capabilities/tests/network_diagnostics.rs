@@ -8,6 +8,9 @@ use std::{
 use znet_client_capabilities::network::{get_with_diagnostics, TransportFailure};
 use znet_client_core::capability::{Budget, Error, Manager, Permission, Policy};
 
+#[path = "../../../tests/support/loopback.rs"]
+mod loopback;
+
 fn policy() -> Policy {
     let grants = BTreeSet::from([Permission::new("network.get", "*")]);
     let policy = Manager::default()
@@ -19,6 +22,11 @@ fn policy() -> Policy {
 
 #[test]
 fn connection_failure_has_safe_category_without_url_or_secret() {
+    if !loopback::isolated_loopback_probe(
+        "connection_failure_has_safe_category_without_url_or_secret",
+    ) {
+        return;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(
         "http://{}/private?token=secret",
@@ -30,12 +38,13 @@ fn connection_failure_has_safe_category_without_url_or_secret() {
             Budget {
                 calls: 1,
                 resource_bytes: 4096,
-                timeout: Duration::from_secs(5),
+                timeout: Duration::from_secs(10),
             },
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-    let error = get_with_diagnostics(&lease, &url, "test", 1024, &[], Duration::from_secs(1))
+    // Windows needs time to report refusal; keep Connect distinct from Timeout.
+    let error = get_with_diagnostics(&lease, &url, "test", 1024, &[], Duration::from_secs(5))
         .err()
         .unwrap();
     assert_eq!(error.transport, Some(TransportFailure::Connect));
@@ -49,6 +58,11 @@ fn connection_failure_has_safe_category_without_url_or_secret() {
 
 #[test]
 fn timed_out_first_probe_leaves_budget_for_successful_fallback() {
+    if !loopback::isolated_loopback_probe(
+        "timed_out_first_probe_leaves_budget_for_successful_fallback",
+    ) {
+        return;
+    }
     let slow = TcpListener::bind("127.0.0.1:0").unwrap();
     let fast = TcpListener::bind("127.0.0.1:0").unwrap();
     let slow_url = format!("http://{}", slow.local_addr().unwrap());
@@ -118,6 +132,9 @@ fn timed_out_first_probe_leaves_budget_for_successful_fallback() {
 
 #[test]
 fn truncated_response_is_classified_as_body_failure() {
+    if !loopback::isolated_loopback_probe("truncated_response_is_classified_as_body_failure") {
+        return;
+    }
     let server = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let worker = std::thread::spawn(move || {
@@ -177,6 +194,11 @@ fn diagnosed_requests_still_enforce_revoked_permissions() {
 
 #[test]
 fn revocation_takes_priority_over_an_in_flight_transport_failure() {
+    if !loopback::isolated_loopback_probe(
+        "revocation_takes_priority_over_an_in_flight_transport_failure",
+    ) {
+        return;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();

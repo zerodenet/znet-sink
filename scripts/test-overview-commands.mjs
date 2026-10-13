@@ -27,10 +27,11 @@ async function harness(environment = {}, { ready = true } = {}) {
     getGuiPolicyGroups: async()=>{if(state.readFailure)throw new Error('query failed');const snapshot=copy(state.groups);if(state.groupsWait)await state.groupsWait;return snapshot;},
     getConfigProxyNodes: async()=>[], getConfigPolicyGroups:async()=>copy(state.groups),
     getGuiZeroCapabilities:async()=>({available:true,features:['query']}),
-    guiNetworkProbe:async()=>({ip:'192.0.2.1'}),trayUpdateStatus:async()=>{},
+    guiNetworkProbe:async()=>({ip:'192.0.2.1'}),trayUpdateStatus:async(...args)=>{state.tray=args;},
     getAppConfig:async()=>({core:{autoConnect:false},tun:{enabled:state.tun.desiredEnabled}}),
-    enableSystemProxy:async()=>command('proxy-on',()=>{state.connection.systemProxyEnabled=true;}),
+    enableSystemProxy:async()=>command('proxy-on',()=>{if(!state.ignoreOwnership)state.connection.systemProxyEnabled=true;state.connection.systemProxyActualEnabled=true;}),
     disableSystemProxy:async()=>command('proxy-off',()=>{state.connection.systemProxyEnabled=false;}),
+    resetSystemProxy:async()=>command('proxy-reset',()=>{state.connection.systemProxyEnabled=false;state.connection.systemProxyActualEnabled=false;}),
     guiConnect:async()=>{await command('connect',()=>{state.connection.systemProxyEnabled=true;});return copy(state.connection);},
     guiDisconnect:async()=>{await command('disconnect',()=>{state.connection.systemProxyEnabled=false;});return copy(state.connection);},
     startCoreProcess:async()=>{},restartCoreProcess:async()=>{},
@@ -69,7 +70,9 @@ async function harness(environment = {}, { ready = true } = {}) {
     gui.isInitializing=false;
     await gui.refreshAll();
   }
-  return {state,gui};
+  const tray=await load(new URL('../src/lib/services/tray-actions.ts',import.meta.url).href);
+  await tray.evaluate();
+  return {state,gui,handleTrayAction:tray.namespace.handleTrayAction};
 }
 
 test('startup unlocks the shell while runtime observations continue in the background', async t => {
@@ -106,6 +109,59 @@ test('an unguarded OS proxy remains visible and is not silently taken over', asy
   assert.equal(result.ok,false);
   assert.match(result.message,/未由本应用接管/);
   assert.deepEqual(state.calls,[]);
+});
+
+test('capture session uses actual proxy state independently of ownership and spans TUN', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  for(const [owned,actual,tun,expected] of [
+    [false,true,false,true],[true,true,false,true],[true,false,false,false],
+    [false,false,true,true],[false,false,false,false],
+  ]) {
+    Object.assign(state.connection,{systemProxyEnabled:owned,systemProxyActualEnabled:actual});
+    state.tun.enabled=state.tun.desiredEnabled=tun;
+    await gui.refreshAll();
+    assert.equal(gui.isCaptureEnabled,expected,JSON.stringify({owned,actual,tun}));
+  }
+});
+
+test('explicit takeover establishes ownership and reset clears an unmanaged proxy without touching TUN', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  state.connection.systemProxyEnabled=false;state.connection.systemProxyActualEnabled=true;
+  await gui.refreshAll();
+  assert.equal(gui.hasUnmanagedSystemProxy,true);
+  assert.equal((await gui.enableSystemProxy()).ok,true);
+  assert.equal(gui.hasUnmanagedSystemProxy,false);
+  state.connection.systemProxyEnabled=false;await gui.refreshConnectionStatus();
+  assert.equal((await gui.resetSystemProxy()).ok,true);
+  assert.equal(gui.isSystemProxyEnabled,false);assert.equal(gui.isTunEnabled,true);
+  assert.deepEqual(state.calls,['proxy-on','proxy-reset']);
+});
+
+test('reset does not require a ready kernel or active configuration and blocks duplicate commands', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  gui.selfTest=null;state.connection.coreAvailable=false;state.connection.processState='stopped';
+  state.connection.systemProxyEnabled=false;state.connection.systemProxyActualEnabled=true;
+  await gui.refreshConnectionStatus();
+  assert.equal(gui.canEnableSystemProxy,false);assert.equal(gui.canResetSystemProxy,true);
+  let finish;state.wait=new Promise(resolve=>finish=resolve);
+  const first=gui.resetSystemProxy();
+  assert.equal(gui.isSwitchingSystemProxy,true);
+  assert.equal((await gui.resetSystemProxy()).ok,false);
+  assert.equal((await gui.enableSystemProxy()).ok,false);
+  finish();assert.equal((await first).ok,true);
+  assert.deepEqual(state.calls,['proxy-reset']);
+});
+
+test('takeover requires ownership readback and reset reports failures without hiding the proxy', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  state.connection.systemProxyEnabled=false;state.connection.systemProxyActualEnabled=true;
+  await gui.refreshConnectionStatus();state.ignoreOwnership=true;
+  assert.equal((await gui.enableSystemProxy()).ok,false);
+  state.reject=true;assert.equal((await gui.resetSystemProxy()).ok,false);
+  assert.equal(gui.hasUnmanagedSystemProxy,true);assert.equal(gui.isSwitchingSystemProxy,false);
+  state.reject=false;state.connectionReadFailure=true;
+  assert.equal((await gui.resetSystemProxy()).ok,false);
+  assert.equal(state.notifications.some(([kind])=>kind==='success'),false);
 });
 
 test('mode request is serialized and failures retain confirmed mode with a returned error',async()=>{
@@ -309,4 +365,70 @@ test('global target selection confirms the exact outbound without changing polic
   state.ignoreTarget=true;
   assert.equal((await gui.setProxyMode('global',{globalOutbound:'b',notify:false})).ok,false);
   assert.equal(gui.proxyMode.globalOutbound,'a');
+});
+
+test('tray carries actual proxy state, ownership and observation validity separately', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  state.connection.systemProxyEnabled=false;
+  state.connection.systemProxyActualEnabled=true;
+  await gui.refreshConnectionStatus();
+  assert.deepEqual(Array.from(state.tray), [true,true,true,false,true]);
+  state.connectionReadFailure=true;
+  await gui.refreshConnectionStatus();
+  assert.deepEqual(Array.from(state.tray), [true,true,true,false,false]);
+});
+
+test('unmanaged proxy tray intents open recovery without disabling TUN or starting a kernel', async t => {
+  for (const uiMode of ['lite','pro']) {
+    for (const action of ['toggle_proxy','toggle_system_proxy','recover_system_proxy']) {
+      const {gui,state,handleTrayAction}=await harness();t.after(()=>gui.destroy());
+      state.connection.systemProxyEnabled=false;
+      state.connection.systemProxyActualEnabled=true;
+      state.connection.processState='stopped';state.connection.coreAvailable=false;gui.selfTest=null;
+      // Intentionally do not refresh beforehand: the open menu has an older snapshot.
+      await handleTrayAction(gui,uiMode,action);
+      assert.equal(gui.systemProxyRecoveryOpen,true);
+      assert.deepEqual(state.calls,[]);
+      assert.equal(state.tun.enabled,true);
+      assert.equal(gui.canEnableSystemProxy,false);
+      assert.equal(gui.canResetSystemProxy,true);
+    }
+  }
+});
+
+test('tray does not mutate capture after failed observation and respects ongoing operations', async t => {
+  const {gui,state,handleTrayAction}=await harness();t.after(()=>gui.destroy());
+  state.connectionReadFailure=true;
+  await handleTrayAction(gui,'lite','toggle_proxy');
+  assert.equal(gui.systemProxyRecoveryOpen,true);
+  assert.deepEqual(state.calls,[]);
+  gui.systemProxyRecoveryOpen=false;gui.isSwitchingTun=true;
+  const reads=state.connectionReads;state.tray=null;
+  await handleTrayAction(gui,'pro','toggle_system_proxy');
+  assert.equal(state.connectionReads,reads);
+  assert.deepEqual(Array.from(state.tray),[true,true,true,true,false]);
+  assert.equal(gui.systemProxyRecoveryOpen,false);
+});
+
+test('owned tray capture retains independent pro and combined lite controls', async t => {
+  for (const uiMode of ['lite','pro']) {
+    const {gui,state,handleTrayAction}=await harness();t.after(()=>gui.destroy());
+    await handleTrayAction(gui,uiMode,'toggle_proxy');
+    assert.equal(gui.systemProxyRecoveryOpen,false);
+    assert.ok(state.calls.includes(uiMode === 'pro' ? 'proxy-off' : 'disconnect'));
+    assert.equal(state.tun.enabled,uiMode === 'pro');
+  }
+});
+
+
+test('global proxy rescue remains usable with an unavailable config and a stale starting kernel', async t => {
+  const {gui,state}=await harness();t.after(()=>gui.destroy());
+  gui.selfTest=null;
+  Object.assign(state.connection,{processState:'starting',coreAvailable:false,systemProxyEnabled:false,systemProxyActualEnabled:true});
+  await gui.refreshConnectionStatus();
+  assert.equal(gui.isCoreBusy,true);
+  assert.equal(gui.canResetSystemProxy,true);
+  assert.equal((await gui.resetSystemProxy()).ok,true);
+  assert.deepEqual(state.calls,['proxy-reset']);
+  assert.equal(state.tun.enabled,true);
 });

@@ -7,6 +7,73 @@ use std::{
     thread,
 };
 
+#[test]
+fn exit_persists_tun_off_for_next_launch_without_losing_network_settings() {
+    use crate::models::app_config::AppConfig;
+    use crate::services::app_config_store;
+
+    for intent in [Some(true), None, Some(false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-config.json");
+        let mut config = AppConfig::default();
+        config.tun.enabled = intent;
+        config.tun.addr = "10.77.0.1/24".into();
+        config.tun.mask = "255.255.255.0".into();
+        config.tun.mtu = 1280;
+        config.core.auto_connect = false;
+        config.core.cleanup_proxy_on_exit = false;
+        config.dns.enabled = false;
+        config
+            .client_edits
+            .as_mut()
+            .unwrap()
+            .insert("tun.mtu".into(), json!(1400));
+        // Live AppState has already passed the store's load normalization.
+        crate::services::bypass::normalize(&mut config).unwrap();
+        app_config_store::save(&path, &config).unwrap();
+        let mut expected = config.clone();
+        expected.tun.enabled = Some(false);
+
+        super::clear_saved_tun_intent(&mut config, &path).unwrap();
+        assert_eq!(config, expected);
+        let loaded = app_config_store::load_or_default(&path).unwrap();
+        assert_eq!(loaded, expected);
+        // Even an imported TUN block cannot activate capture on startup;
+        // composition strips it and restoration sees the saved OFF intent.
+        let source = json!({"runtime":{"tun":{"enabled":true,"addr":"10.99.0.1/24"}}});
+        let original = source.clone();
+        let (app, resolved) =
+            crate::configuration::local_edits::resolve(&loaded, Some("imported"), &source).unwrap();
+        let candidate = crate::configuration::composition::finalize(
+            &source,
+            resolved,
+            &crate::configuration::composition::Inputs {
+                source_profile_id: Some("imported".into()),
+                app,
+                supports_tolerance: false,
+                selections: Default::default(),
+            },
+        )
+        .unwrap();
+        assert!(candidate.config.pointer("/runtime/tun").is_none());
+        assert_eq!(source, original);
+        let bytes = std::fs::read(&path).unwrap();
+        super::clear_saved_tun_intent(&mut config, &path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn exit_does_not_claim_saved_tun_off_when_storage_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = crate::models::app_config::AppConfig::default();
+    config.tun.enabled = Some(true);
+    let previous = config.clone();
+    // A directory cannot be used as the configuration file.
+    assert!(super::clear_saved_tun_intent(&mut config, dir.path()).is_err());
+    assert_eq!(config, previous);
+}
+
 #[tokio::test]
 async fn shutdown_checks_owned_peer_does_not_replay_and_confirms_stopped_state() {
     // Wrong peer, lost reply, unconfirmed stop, successful cleanup.

@@ -88,6 +88,8 @@ pub fn run() {
         lifecycle::Phase::Runtime,
         "mark_shutting_down",
         Box::new(move || {
+            #[cfg(target_os = "macos")]
+            crate::services::macos_privilege::begin_shutdown();
             shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
             capabilities.shutdown();
             eprintln!("[ZNet] shutdown: marking shutdown (watchdog will stop restarting)");
@@ -268,6 +270,8 @@ pub fn run() {
 
             match exit_shutdown_stage.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
                 Ok(_) => {
+                    #[cfg(target_os = "macos")]
+                    crate::services::macos_privilege::begin_shutdown();
                     api.prevent_exit();
                     let cleanup_app = app_handle.clone();
                     let cleanup_stage = exit_shutdown_stage.clone();

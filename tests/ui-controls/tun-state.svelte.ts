@@ -2,6 +2,8 @@ import type { AppConfig, AppTunConfigPatch } from '../../src/lib/types/app-confi
 
 const mode = new URLSearchParams(window.location.search).get('mode');
 export const guiState = $state({
+  systemProxyRecoveryOpen: false,
+  openSystemProxyRecovery() { guiState.systemProxyRecoveryOpen = true; },
   proxyMode: {currentMode: new URLSearchParams(location.search).get('route') === 'global' ? 'global' : 'rule', globalOutbound: 'node-a'},
   isSwitchingMode: false,
   isSelectingPolicy: false,

@@ -320,6 +320,11 @@ export async function disableSystemProxy(): Promise<SystemProxyStatus> {
   return invoke('system_proxy_disable');
 }
 
+/** Explicit recovery: clear manual OS proxies even without an ownership marker. */
+export async function resetSystemProxy(): Promise<SystemProxyStatus> {
+  return invoke('system_proxy_reset');
+}
+
 export async function getSystemProxyStatus(): Promise<SystemProxyStatus> {
   return invoke('system_proxy_status');
 }
@@ -521,8 +526,10 @@ export async function trayUpdateStatus(
   running: boolean,
   systemProxyEnabled: boolean,
   tunEnabled: boolean,
+  systemProxyOwned: boolean,
+  proxyStatusKnown: boolean,
 ): Promise<void> {
-  return invoke('tray_update_status', { running, systemProxyEnabled, tunEnabled });
+  return invoke('tray_update_status', { running, systemProxyEnabled, tunEnabled, systemProxyOwned, proxyStatusKnown });
 }
 
 // Network probe

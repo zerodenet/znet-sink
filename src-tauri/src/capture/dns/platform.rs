@@ -64,9 +64,9 @@ impl Guard {
     pub fn refresh(&mut self, target: &Target) -> AppResult<()> {
         #[cfg(target_os = "macos")]
         {
-            crate::services::macos_privilege::set_tun_dns(
-                Some(&target.interface),
-                Some(&target.server),
+            crate::services::macos_privilege::refresh_tun_dns(
+                &target.interface,
+                &target.server,
                 target.pid,
             )
         }

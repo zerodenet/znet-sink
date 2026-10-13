@@ -5,6 +5,22 @@ use crate::{
 };
 use serde_json::json;
 
+/// Exit ends the capture session. Keep its network parameters, but do not
+/// restore the previous ON switch when the client starts again.
+pub(crate) fn clear_saved_tun_intent(
+    config: &mut crate::models::app_config::AppConfig,
+    path: &std::path::Path,
+) -> AppResult<()> {
+    if config.tun.enabled == Some(false) {
+        return Ok(());
+    }
+    let mut next = config.clone();
+    next.tun.enabled = Some(false);
+    crate::services::app_config_store::save(path, &next)?;
+    *config = next;
+    Ok(())
+}
+
 /// Called only with a child PID and endpoint captured from the runtime owner.
 /// Queries and the single stop command cannot reconnect to a replacement peer.
 pub(crate) async fn stop_owned_tun(pid: u32, endpoint: String) -> AppResult<()> {

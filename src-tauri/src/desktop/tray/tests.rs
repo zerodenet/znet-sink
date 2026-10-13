@@ -34,7 +34,7 @@ fn terminal_no_proxy_converts_windows_lan_wildcards_to_cidr() {
 
 #[test]
 fn lite_tray_treats_partial_capture_as_an_active_session() {
-    let presentation = tray_presentation("lite", true, false, true);
+    let presentation = tray_presentation("lite", true, false, true, false, true);
 
     assert_eq!(presentation.status_label, "TUN 运行中");
     assert_eq!(presentation.action_label, "关闭代理");
@@ -43,7 +43,7 @@ fn lite_tray_treats_partial_capture_as_an_active_session() {
 
 #[test]
 fn pro_tray_keeps_tun_and_system_proxy_independent() {
-    let presentation = tray_presentation("pro", true, false, true);
+    let presentation = tray_presentation("pro", true, false, true, false, true);
 
     assert_eq!(presentation.status_label, "TUN 运行中");
     assert_eq!(presentation.action_label, "开启代理");
@@ -52,11 +52,43 @@ fn pro_tray_keeps_tun_and_system_proxy_independent() {
 
 #[test]
 fn tray_reports_combined_capture_and_stopped_states() {
-    let combined = tray_presentation("pro", true, true, true);
-    let stopped = tray_presentation("lite", false, false, false);
+    let combined = tray_presentation("pro", true, true, true, true, true);
+    let stopped = tray_presentation("lite", false, false, false, false, true);
 
     assert_eq!(combined.status_label, "系统代理 + TUN");
     assert_eq!(combined.action_label, "关闭代理");
     assert_eq!(stopped.status_label, "已停止");
     assert_eq!(stopped.action_label, "开启代理");
+}
+
+#[test]
+fn unmanaged_proxy_is_visible_but_requires_explicit_recovery_in_both_modes() {
+    for mode in ["lite", "pro"] {
+        for running in [false, true] {
+            let view = tray_presentation(mode, running, true, false, false, true);
+            assert_eq!(view.status_label, "系统代理未接管");
+            assert_eq!(view.system_proxy_label, "系统代理（未接管）");
+            assert_eq!(view.action_label, "处理系统代理…");
+            assert!(view.proxy_recovery_required);
+        }
+    }
+}
+
+#[test]
+fn unmanaged_proxy_does_not_hide_a_running_tun() {
+    let view = tray_presentation("pro", true, true, true, false, true);
+    assert_eq!(view.status_label, "TUN · 系统代理未接管");
+    assert!(view.proxy_recovery_required);
+    assert!(view.individual_controls_enabled);
+}
+
+#[test]
+fn unavailable_proxy_observation_is_not_reported_as_managed_or_off() {
+    for enabled in [false, true] {
+        let view = tray_presentation("pro", true, enabled, false, true, false);
+        assert_eq!(view.status_label, "系统代理待确认");
+        assert_eq!(view.system_proxy_label, "系统代理（待确认）");
+        assert!(view.proxy_recovery_required);
+        assert!(!view.individual_controls_enabled);
+    }
 }

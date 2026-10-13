@@ -15,6 +15,7 @@
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
   import { useTrafficWorkspace } from '$lib/features/traffic/context';
   let { session, view }: { session: TrafficSession; view: TrafficView } = $props();
+  const samplingHintId = $props.id();
   const workspace = useTrafficWorkspace();
   const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'}];
   let kind = $state(workspace.statistics.kind);
@@ -31,6 +32,9 @@
   const visible = $derived(filtered.slice(offset, offset + 24));
   const planes = $derived([...new Set(['flow','inner','outer',...view.order.flatMap(key=>view.rows[key].snapshot.planes.map(p=>p.plane))])]);
   const maximum = $derived(Math.min(256,view.discovery?.capabilities.trafficStatistics?.maximum_reset_targets ?? 0));
+  const samplingError = $derived(view.error ? getAppErrorMessage(view.error,'统计查询失败') : null);
+  const samplingLabel = $derived(view.stale && view.loading ? '正在同步' : samplingError ? '同步失败' : view.stale ? '采样中断' : view.streaming ? '实时' : '定时查询');
+  const samplingHint = $derived(samplingError ?? (view.stale ? '采样中断，保留上次累计值和历史曲线；速率暂不可用。' : view.loading ? '正在后台更新统计，当前数据显示保持。' : view.streaming ? '正在接收内核采样' : '内核未提供采样订阅，使用定时查询'));
   const selectionReason = $derived(selected.length ? selected.map(key => view.rows[key] ? resetReason(view.discovery,view.rows[key].snapshot) : '统计范围已不存在').find(Boolean) : '先选择统计范围');
   $effect(() => { session.watch(visible); });
   $effect(() => { workspace.statistics = { kind, plane, query, offset }; });
@@ -49,13 +53,12 @@
 </script>
 <section class="statistics" aria-label="流量统计">
 
-  {#if localError || view.error}<p class="error" role="alert">{getAppErrorMessage(localError ?? view.error,'统计操作失败')}</p>{/if}
+  {#if localError || (view.error && !supported(view.discovery))}<p class="error" role="alert">{getAppErrorMessage(localError ?? view.error,'统计操作失败')}</p>{/if}
   {#if view.result}<p class="notice" role="status">{view.result}</p>{/if}
   {#if !supported(view.discovery)}<div class="unsupported-actions"><div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div></div>{/if}
   {#if view.loading && !view.discovery}<p class="empty">正在读取内核统计能力…</p>
   {:else if view.discovery && !supported(view.discovery)}<p class="empty">当前内核未提供 Traffic Observation V1。升级内核后可查看分范围统计。</p>
   {:else if supported(view.discovery)}
-    {#if view.stale}<p class="notice" role="status">{view.loading ? '正在同步统计…' : '采样中断，等待恢复'} · 上次累计值保留，速率暂不可用</p>{/if}
     <div class="toolbar">
       <div class="kinds">
         <SegmentedControl.Root value={kind} onValueChange={value=>{kind=value as TrafficScope['kind'];offset=0;}} aria-label="统计范围" class="flex-wrap max-w-full">
@@ -69,7 +72,7 @@
     </div>
     <div class="plane-controls">
       <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
-      <div class="sampling"><span class:live={view.streaming} class="mode"><span class="status-dot"></span>{view.streaming ? '实时' : '定时查询'}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
+      <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
     </div>
     <div class="scope-grid">
       {#each visible as key (key)}
@@ -96,9 +99,10 @@
   {/if}
 </section>
 <Dialog.Root bind:open={confirming}><Dialog.Content><Dialog.Header><Dialog.Title>清空所选统计？</Dialog.Title><Dialog.Description>开始新的统计周期。设备与连接继续运行；其他范围保持原值。</Dialog.Description></Dialog.Header><Dialog.Body><ul class="reset-targets">{#each plan?.targets ?? [] as target}<li><strong>{scopeLabel(target.scope)}</strong><span>{kinds.find(k=>k.kind===target.scope.kind)?.label}</span></li>{/each}</ul><p class="notice">清空这些范围全部可清空的累计指标。</p></Dialog.Body><Dialog.Footer><Button variant="outline" onclick={()=>confirming=false}>取消</Button><Button onclick={confirm}>确认清空</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
-<Dialog.Root bind:open={detailOpen}><Dialog.Content class="sm:max-w-[720px]"><Dialog.Header><Dialog.Title>{inspected&&view.rows[inspected] ? scopeLabel(view.rows[inspected].snapshot.scope) : '统计详情'}</Dialog.Title><Dialog.Description>独立统计平面 · 当前统计周期</Dialog.Description></Dialog.Header><Dialog.Body>{#if inspected&&view.rows[inspected]}<TrafficScopeDetails observation={view.rows[inspected]} stale={view.stale}/>{:else}<p>此统计范围已不存在</p>{/if}</Dialog.Body></Dialog.Content></Dialog.Root>
+<Dialog.Root bind:open={detailOpen}><Dialog.Content class="sm:max-w-[720px]"><Dialog.Header><Dialog.Title>{inspected&&view.rows[inspected] ? scopeLabel(view.rows[inspected].snapshot.scope) : '统计详情'}</Dialog.Title><Dialog.Description>独立统计平面 · 当前统计周期</Dialog.Description></Dialog.Header><Dialog.Body class="statistics-details-body">{#if inspected&&view.rows[inspected]}<TrafficScopeDetails observation={view.rows[inspected]} stale={view.stale}/>{:else}<p>此统计范围已不存在</p>{/if}</Dialog.Body></Dialog.Content></Dialog.Root>
 <style>
-  .statistics { flex:1; overflow:auto; min-width:0; padding:20px; }
+  .statistics { flex:1; overflow:auto; overflow-y:scroll; scrollbar-gutter:stable; min-width:0; padding:20px; }
+  :global(.statistics-details-body) { height:min(440px,60vh); flex-shrink:0; scrollbar-gutter:stable; }
   .toolbar,.tools,.actions,.kinds,.plane-controls,.sampling,.mode,.identity,.identity label,.activity,footer,footer>div { display:flex; align-items:center; gap:8px; }
   .toolbar { justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
   .kinds { min-width:0; }
@@ -110,9 +114,11 @@
   .search :global(svg) { position:absolute; top:50%; left:10px; transform:translateY(-50%); color:var(--muted-foreground); pointer-events:none; }
   .search :global(input) { min-width:0; width:100%; padding-left:32px; }
   .plane-controls { justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-  .sampling { color:var(--muted-foreground); gap:10px; margin-left:auto; }
-  .mode { font-size:11px; color:var(--muted-foreground); gap:5px; white-space:nowrap; }
+  .sampling { color:var(--muted-foreground); gap:10px; margin-left:auto; flex-shrink:0; }
+  .mode { width:6.5em; font-size:11px; color:var(--muted-foreground); gap:5px; white-space:nowrap; }
   .mode.live { color:var(--success,#16a34a); }
+  .mode.interrupted { color:var(--warning,#d97706); }
+  .mode.failed { color:var(--destructive); }
   .status-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
   .error { color:var(--destructive); font-size:12px; margin:10px 0; overflow-wrap:anywhere; }
   .notice { font-size:12px; color:var(--muted-foreground); margin:10px 0; }

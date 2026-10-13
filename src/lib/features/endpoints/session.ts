@@ -42,8 +42,10 @@ export class EndpointSession {
     this.epoch++;
     this.refreshRequest = null;
     this.selectedDetailId = null;
-    this.publish({ catalog: null, details: null, detailsLoading: false, detailsError: null,
-      stale: true, loading: false, error: null, refreshError: null, result: null, traffic: {} });
+    // Last-known observations remain visible, but stale blocks all mutations.
+    // The next authoritative catalog replaces identities and traffic scope.
+    this.publish({ details: null, detailsLoading: false, detailsError: null,
+      stale: true, loading: false, error: null, refreshError: null, result: null });
   }
   dispose() { this.disposed = true; this.epoch++; }
   async refresh(clearError = true, background = false) {

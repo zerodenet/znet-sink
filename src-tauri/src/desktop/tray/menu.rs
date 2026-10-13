@@ -1,7 +1,10 @@
 use super::environment::tray_copy_proxy_environment;
 #[cfg(target_os = "windows")]
 use super::environment::tray_open_proxy_terminal;
-use super::{emit_tray_action, open_main_window_route, toggle_main_window, TrayMenuItems};
+use super::{
+    dispatch_proxy_action, emit_tray_action, open_main_window_route, toggle_main_window,
+    TrayMenuItems,
+};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
@@ -105,6 +108,7 @@ pub(crate) fn install(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Er
     // Hold references to the status-dependent items so
     // `tray_update_status` can toggle their enabled state.
     app.manage(TrayMenuItems {
+        proxy_recovery_required: std::sync::atomic::AtomicBool::new(false),
         status: status_item,
         profile: profile_item,
         toggle_proxy: toggle_proxy_item,
@@ -120,8 +124,8 @@ pub(crate) fn install(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Er
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" | "overview" => open_main_window_route(app, "overview", None),
-            "toggle_proxy" => emit_tray_action(app, "toggle_proxy"),
-            "toggle_system_proxy" => emit_tray_action(app, "toggle_system_proxy"),
+            "toggle_proxy" => dispatch_proxy_action(app, "toggle_proxy"),
+            "toggle_system_proxy" => dispatch_proxy_action(app, "toggle_system_proxy"),
             "toggle_tun" => emit_tray_action(app, "toggle_tun"),
             "restart_core" => emit_tray_action(app, "restart_core"),
             "nodes" => open_main_window_route(app, "nodes", None),
