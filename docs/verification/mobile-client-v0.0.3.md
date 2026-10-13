@@ -55,7 +55,7 @@ core 工作树只读且未推送。默认随包策略尚未落实为移动内核
 | `pnpm verify:frontend` | 全部现有回归、新移动/Packet 回归、类型检查及生产构建通过 | 手机服务与真实内核转发 |
 | `pnpm check` | 0 错误、0 警告 | 系统 API/键盘已在手机验收 |
 | Rust fmt、workspace check/all-targets/all-features | 通过 | iOS 宿主/扩展链接与签名 |
-| Rust workspace/all-features 测试 | 897 passed、0 failed、7 ignored | ignored 的真实二进制/平台测试已运行 |
+| Rust workspace/all-features 测试 | 899 passed、0 failed、7 ignored | ignored 的真实二进制/平台测试已运行 |
 | Rust workspace/all-targets/all-features clippy | 通过，保留既有及测试代码警告 | 严格 `-D warnings` 已通过 |
 | 共享 Rust Android/iOS aarch64 target check | 两个共享 crate 均通过 | Tauri/iOS 主宿主或扩展已构建 |
 | Android Rust 主宿主 API24 check | NDK r27d/API24 clang，`--lib --target aarch64-linux-android --locked` 通过；40 项未调用桌面代码等警告 | APK、签名、安装、TUN FD、S8 或 VPN 验收 |
@@ -67,6 +67,10 @@ core 工作树只读且未推送。默认随包策略尚未落实为移动内核
 详细云端日志保留于 `/tmp/mobile-frontend-verification.log`、
 `/tmp/mobile-backend-tests.log`、`/tmp/mobile-cargo-check.log`、`/tmp/mobile-clippy.log`、
 `/tmp/mobile-android-host-check.log`、`/tmp/mobile-browser-full-final.log`。
+后续 Rust 修复全套证据为 `/tmp/mobile-final-rust-{fmt,check,tests,clippy}.log`，
+升级事务回归为 `/tmp/mobile-upgrade-transaction-regression.log`；
+测试 runner 的 Linux PowerShell 语法/C# 编译/参数转发证据为
+`/tmp/znet-windows-runner-pwsh-validation.log`。
 
 ## 草稿 PR 与 CI
 
@@ -87,7 +91,12 @@ Chromium/WebKit 共 342 项通过；本地 WebKit 未运行与此 CI 结果分�
 吻合。后续测试 runner 在执行前读取 `RT_MANIFEST #1`，只为缺失 manifest 的
 Cargo 哈希测试 EXE 用 Windows SDK `mt.exe` 嵌入最小 Common Controls v6 依赖。
 现有 manifest 保留，全部测试参数及真实退出码继续传递；发行构建不使用该 runner。
-这项修复仍需新 head 的 Windows CI 验证，不能用已知问题替代实际通过结果。
+`5187eb2` 的两套 Windows CI 已证实 manifest 原本缺失且完成嵌入，各实际
+执行 623 项成功测试；随后暴露同一个升级备份断言失败，不能计为整项通过。
+Windows 将“普通文件/receipt.json”的读取错误归类为 NotFound，旧逻辑会忽略
+损坏的 `upgrade-*` 条目。后续修复先检查保留前缀的备份类型，并要求持久回执；
+缺失或损坏时明确要求恢复，无关普通文件和目录继续兼容。新增两项回归，
+事务 13 项及本地 workspace/all-features 899 项通过；最终 Windows CI 仍需核对。
 两个镜像名称来自 [GitHub 官方 runner 列表](https://github.com/actions/runner-images/blob/main/README.md)。
 
 ## PRD 验收状态
