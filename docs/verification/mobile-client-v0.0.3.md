@@ -80,7 +80,14 @@ Chromium/WebKit 共 342 项通过；本地 WebKit 未运行与此 CI 结果分�
 同一提交 Windows 客户端测试在启动前返回 `0xc0000139`
 (`STATUS_ENTRYPOINT_NOT_FOUND`)，未执行测试，不能计为通过。
 后续保留 Windows2025 全部检查，增加依赖入口诊断及隔离缓存的 Windows2022
-对照。具体缺失 DLL/符号仍需诊断，不能把切换镜像当作根因结论。
+对照。两套环境均复现相同加载失败；Python 探测已有 v6 Common Controls 激活上下文，
+因此没有直接缺失入口，不足以证明 Cargo 测试 EXE 可加载。依赖中的 rfd 启用
+`common-controls-v6` 并静态导入 `TaskDialogIndirect`，与
+[Tauri 上游的库测试 manifest 缺失问题](https://github.com/tauri-apps/tauri/issues/13419)
+吻合。后续测试 runner 在执行前读取 `RT_MANIFEST #1`，只为缺失 manifest 的
+Cargo 哈希测试 EXE 用 Windows SDK `mt.exe` 嵌入最小 Common Controls v6 依赖。
+现有 manifest 保留，全部测试参数及真实退出码继续传递；发行构建不使用该 runner。
+这项修复仍需新 head 的 Windows CI 验证，不能用已知问题替代实际通过结果。
 两个镜像名称来自 [GitHub 官方 runner 列表](https://github.com/actions/runner-images/blob/main/README.md)。
 
 ## PRD 验收状态

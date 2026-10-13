@@ -213,6 +213,7 @@ def diagnose(executable, max_modules):
          limitation="Probe DLL paths may differ from the failed Cargo child; no test EXE is executed. API-set names may map to another DLL.")
     probe = NativeProbe(directories)
     queue, visited, libraries = deque([executable]), set(), {}
+    module_budget_reported = False
     try:
         while queue and len(visited) < max_modules:
             importer = queue.popleft()
@@ -232,7 +233,9 @@ def diagnose(executable, max_modules):
                     continue
                 if dll.lower() not in libraries:
                     if len(libraries) >= max_modules:
-                        emit("module_budget", limit=max_modules)
+                        if not module_budget_reported:
+                            emit("module_budget", limit=max_modules)
+                            module_budget_reported = True
                         continue
                     candidates = [path / dll for path in directories if (path / dll).is_file()]
                     system_file = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / dll
@@ -252,6 +255,7 @@ def diagnose(executable, max_modules):
                         queue.append(candidates[0] if candidates else system_candidate)
                 handle, actual, error = libraries[dll.lower()]
                 emit("imports", importer=str(importer), dll=dll, delayed=entry["delayed"], count=len(entry["symbols"]),
+                     symbols=entry["symbols"] if importer == executable else None,
                      missing_symbols=probe.missing(handle, entry["symbols"]) if handle else None,
                      win32_load_error=error)
         if queue:

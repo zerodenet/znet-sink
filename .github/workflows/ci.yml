@@ -153,7 +153,7 @@ jobs:
           retention-days: 7
 
   windows-client-core:
-    name: Windows DNS and client core (${{ matrix.runner }})
+    name: ${{ matrix.runner == 'windows-2025' && 'Windows DNS and client core' || 'Windows DNS and client core (windows-2022)' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -206,6 +206,13 @@ jobs:
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
+          # Tauri's application manifest is linked to bin targets, but its
+          # library test EXE needs Common Controls v6 before the loader runs.
+          # Use an absolute runner path because Cargo changes the test cwd.
+          $testRunner = Join-Path $PWD 'scripts/run-windows-test.ps1'
+          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER = "pwsh -NoProfile -File $testRunner"
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $log = Join-Path $env:RUNNER_TEMP 'client-core-tests.log'
           cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked -j 1 2>&1 | Tee-Object -FilePath $log
           $status = $LASTEXITCODE
