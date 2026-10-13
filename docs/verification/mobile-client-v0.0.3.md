@@ -102,6 +102,13 @@ Windows 将“普通文件/receipt.json”的读取错误归类为 NotFound，�
 变成 CRLF，与 manifest 的 source_sha256 不符。补齐示例目录的 LF 属性后同样
 checkout 保留声明摘要，原离线打包/安装/执行测试通过。没有更改摘要或校验逻辑；
 最终 head 的 Windows 完整 workspace/readiness 和其他 CI 仍需核对。
+历史 PR #44 的合并提交 `7bf9337aa6a71f93acce4d9761a523946bf4e2ab`
+不是本次 develop 基线的祖先。逐处比对确认相关 LF、备份文件守卫及库测试 manifest
+修复未带入，而网络诊断 fixture 已有等价内容。本次按独立补丁修复，不合入 main
+发布变化。Windows workspace 保留全部测试并使用 `--no-fail-fast` 收集其余套件
+失败；失败仍是非零回执，构建依赖按 runner 隔离缓存。前端 CI 补充已验证的
+桌面 shell 回归。
+
 两个镜像名称来自 [GitHub 官方 runner 列表](https://github.com/actions/runner-images/blob/main/README.md)。
 
 ## PRD 验收状态
