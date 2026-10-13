@@ -17,14 +17,15 @@
     navigation.selectTab(tab);
     if (navigation.activeTab === tab) store.activeTab = tab === 'configuration' ? 'profiles' : tab;
   }
-  function back() {
+  function back(): boolean {
     // Dialogs own their Escape and return handling; never navigate underneath one.
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+    const dialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'))
+      .filter(element => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true').at(-1);
     if (dialog) {
       dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-      return;
+      return true;
     }
-    navigation.back();
+    return navigation.back();
   }
   $effect(() => {
     const tab = store.activeTab;
@@ -54,7 +55,7 @@
       const viewport = window.visualViewport;
       if (viewport && shell) shell.style.height = `${viewport.height}px`;
     };
-    const onBack = (event: Event) => { event.preventDefault(); back(); };
+    const onBack = (event: Event) => { if (back()) event.preventDefault(); };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || !navigation.current) return;
       if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;

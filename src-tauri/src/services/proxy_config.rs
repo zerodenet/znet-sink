@@ -41,9 +41,7 @@ fn normalize_active_flag(items: &mut [ProxyConfigProfile]) {
         }
     }
 
-    if !items.is_empty() && active_index.is_none() {
-        items[0].active = true;
-    }
+    // No active profile is a durable user choice after confirmed stop/removal.
 }
 
 pub fn list(state: State<'_, AppState>) -> AppResult<Vec<ProxyConfigProfile>> {
@@ -425,6 +423,9 @@ pub fn update_active_content(state: &AppState, content: Value) -> AppResult<()> 
 pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let id = normalize_required(id, "id")?;
     let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    if let Some(removed) = previous.iter().find(|profile| profile.id == id) {
+        legacy_removal_admission(removed, None)?;
+    }
     let mut next = previous.clone();
     next.retain(|profile| profile.id != id);
     if next.len() == previous.len() {
@@ -580,6 +581,7 @@ async fn remove_runtime_owned(
         }
         (None, None) => {}
     }
+    legacy_removal_admission(&removed, managed_owner.as_ref())?;
     if !removed.active {
         return remove(state.clone(), id);
     }
@@ -596,7 +598,7 @@ async fn remove_runtime_owned(
         } else if managed_proxy_enabled {
             system_proxy_guard::disable_with_guard()?;
         }
-        if let Err(error) = remove(state.clone(), id) {
+        if let Err(error) = remove_with_replacement(state.clone(), id, None) {
             if running {
                 let _ = restart_core(app_handle.clone()).await;
             }
@@ -607,7 +609,7 @@ async fn remove_runtime_owned(
     };
 
     if !running {
-        remove(state.clone(), id)?;
+        remove_with_replacement(state.clone(), id, Some(&replacement.id))?;
         retarget_managed_system_proxy(state.inner())?;
         return Ok(());
     }
@@ -636,7 +638,9 @@ async fn remove_runtime_owned(
     .await
     {
         Ok(receipt) => {
-            if let Err(mut error) = remove(state.clone(), id) {
+            if let Err(mut error) =
+                remove_with_replacement(state.clone(), id, Some(&replacement.id))
+            {
                 append_recovery(&mut error, "runtime", receipt.restore(state.inner()).await);
                 return Err(error);
             }
@@ -673,6 +677,60 @@ async fn remove_runtime_owned(
         }
         Err(error) => Err(error),
     }
+}
+
+fn legacy_removal_admission(
+    removed: &ProxyConfigProfile,
+    owner: Option<&ManagedSubscriptionSource>,
+) -> AppResult<()> {
+    if removed.active && owner.is_none() {
+        let mut error = AppError::invalid_argument(
+            "删除使用中的普通配置需要明确选择替代或停止；请从配置列表重新打开删除预检",
+        );
+        error.details = Some(
+            serde_json::json!({"requiredPreviewCommand":"profile_removal_preview","requiredCommitCommand":"profile_removal_commit"}),
+        );
+        return Err(error);
+    }
+    if removed.active && cfg!(any(target_os = "android", target_os = "ios")) {
+        return Err(AppError::invalid_argument(
+            "平台 VPN/服务状态未确认，不能删除使用中的托管配置；请通过来源管理重新核对",
+        ));
+    }
+    Ok(())
+}
+fn planned_removal(
+    previous: &[ProxyConfigProfile],
+    id: &str,
+    replacement: Option<&str>,
+) -> AppResult<Vec<ProxyConfigProfile>> {
+    let removed = previous
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| AppError::not_found("proxy_config", id))?;
+    if replacement.is_some_and(|r| r == id || !previous.iter().any(|p| p.id == r)) {
+        return Err(AppError::invalid_argument("删除计划中的替代配置无效"));
+    }
+    Ok(previous
+        .iter()
+        .filter(|p| p.id != id)
+        .cloned()
+        .map(|mut p| {
+            if removed.active {
+                p.active = replacement == Some(p.id.as_str());
+            }
+            p
+        })
+        .collect())
+}
+fn remove_with_replacement(
+    state: State<'_, AppState>,
+    id: String,
+    replacement: Option<&str>,
+) -> AppResult<()> {
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let next = planned_removal(&previous, &id, replacement)?;
+    persist_profile_transition(state.inner(), &previous, next)
 }
 
 fn append_recovery(error: &mut AppError, component: &str, recovery: AppResult<()>) {
@@ -981,6 +1039,26 @@ mod tests {
             content: Some(json!({ "updated": true })),
             active,
         }
+    }
+
+    #[test]
+    fn ordinary_active_legacy_remove_requires_fixed_preview() {
+        assert!(super::legacy_removal_admission(&profile("current", true), None).is_err());
+        assert!(super::legacy_removal_admission(&profile("inactive", false), None).is_ok());
+    }
+    #[test]
+    fn managed_deletion_publishes_exact_chosen_marker_and_stop_preserves_no_active() {
+        let previous = vec![
+            profile("current", true),
+            profile("first", false),
+            profile("chosen", false),
+        ];
+        let next = super::planned_removal(&previous, "current", Some("chosen")).unwrap();
+        assert_eq!(next.iter().find(|p| p.active).unwrap().id, "chosen");
+        let stopped = super::planned_removal(&previous, "current", None).unwrap();
+        assert!(stopped.iter().all(|p| !p.active));
+        let (edited, _) = build_upsert_profiles(&stopped, upsert("first", None)).unwrap();
+        assert!(edited.iter().all(|p| !p.active));
     }
 
     #[test]

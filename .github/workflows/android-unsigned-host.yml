@@ -1,0 +1,83 @@
+name: Android unsigned application host
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-android-unsigned-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-arm64-host:
+    name: Android arm64 unsigned host (minimum API 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/android-unsigned-host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned Android tools
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/android-user"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked
+      - name: Build the actual unsigned Release application host
+        run: |
+          set -o pipefail
+          mkdir -p android-host-evidence
+          test ! -e "$ANDROID_USER_HOME/debug.keystore"
+          pnpm tauri android build --apk --target aarch64 --ci 2>&1 | tee android-host-evidence/unsigned-build.log
+          test ! -e "$ANDROID_USER_HOME/debug.keystore"
+          git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Test host WebView compatibility policy
+        working-directory: src-tauri/gen/android
+        run: |
+          set -o pipefail
+          ./gradlew :app:testUniversalReleaseUnitTest --no-daemon 2>&1 | tee "$GITHUB_WORKSPACE/android-host-evidence/webview-policy-tests.log"
+          cp -R app/build/test-results "$GITHUB_WORKSPACE/android-host-evidence/host-test-results"
+      - name: Inspect package and assert it is unsigned
+        run: |
+          set -euo pipefail
+          apk=$(rg --files src-tauri/gen/android/app/build/outputs/apk | rg '\.apk$' | head -1)
+          test -n "$apk"
+          python3 scripts/verify-unsigned-android-apk.py "$apk" | tee android-host-evidence/unsigned-verification.json
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > android-host-evidence/package-badging.txt
+          rg -Fx "sdkVersion:'24'" android-host-evidence/package-badging.txt
+          cp "$apk" android-host-evidence/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-unsigned-host-evidence
+          path: android-host-evidence/
+          if-no-files-found: warn

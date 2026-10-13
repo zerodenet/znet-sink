@@ -160,7 +160,7 @@ pub async fn details(id: String, instance: String, options: CoreIpcOptions) -> A
     Ok(result)
 }
 
-async fn get(id: &str, options: CoreIpcOptions) -> AppResult<Value> {
+pub(crate) async fn get(id: &str, options: CoreIpcOptions) -> AppResult<Value> {
     queries::query_value(
         json!({"endpoint":{"endpoint_id":id}}),
         "endpoint",
@@ -249,7 +249,7 @@ pub async fn control(input: ControlInput, options: CoreIpcOptions) -> AppResult<
     control_at_revision(input, options, None).await
 }
 
-async fn control_at_revision(
+pub(crate) async fn control_at_revision(
     input: ControlInput,
     options: CoreIpcOptions,
     revision: Option<u64>,

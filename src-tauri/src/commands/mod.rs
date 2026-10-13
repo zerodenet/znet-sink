@@ -31,4 +31,8 @@ pub mod network_endpoint;
 
 pub mod traffic_observation;
 
+pub mod endpoint_restoration;
+pub mod native_documents;
 pub mod packet_routes;
+pub mod profile_removal;
+pub mod settings_transfer;

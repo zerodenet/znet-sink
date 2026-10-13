@@ -1,4 +1,6 @@
 <script lang="ts">
+  import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
+  import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
   import MobileConfigurationFixture from "./MobileConfigurationFixture.svelte";
   import MobileNodesFixture from "./MobileNodesFixture.svelte";
   import EndpointsWorkspaceFixture from "./EndpointsWorkspaceFixture.svelte";
@@ -49,7 +51,11 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'mobile-configuration'}
+{#if selectedPanel === 'native-documents'}
+  <NativeDocumentsFixture />
+{:else if selectedPanel === 'profile-removal'}
+  <ProfileRemovalFixture />
+{:else if selectedPanel === 'mobile-configuration'}
   <MobileConfigurationFixture />
 {:else if selectedPanel === 'mobile-nodes'}
   <MobileNodesFixture />

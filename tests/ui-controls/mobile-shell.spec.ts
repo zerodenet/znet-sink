@@ -76,3 +76,14 @@ test('kernel page separates bundled policy from missing installed mobile artifac
   await expect(page.locator('.version-page')).toContainText('适配待完成');
   await expect(page.getByRole('button', { name: '通过客户端升级更新内核' })).toBeVisible();
 });
+
+test('native back consumes a secondary route and lets an unguarded root finish', async ({page}) => {
+  await page.goto('/mobile.html');
+  const dispatch = () => page.evaluate(() => window.dispatchEvent(new CustomEvent('mobile:back',{cancelable:true})));
+  expect(await dispatch()).toBe(true);
+  await page.getByRole('button',{name:'打开设置'}).click();
+  await expect(page.locator('.secondary-header h1')).toHaveText('设置');
+  expect(await dispatch()).toBe(false);
+  await expect(page.getByRole('textbox',{name:'搜索概览'})).toBeVisible();
+  expect(await dispatch()).toBe(true);
+});

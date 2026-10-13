@@ -36,6 +36,7 @@ pub struct AppState {
     subscriptions: Mutex<Vec<SubscriptionProfile>>,
     rule_sets: Mutex<Vec<RuleSetProfile>>,
     configuration: crate::configuration::Workspace,
+    endpoint_restoration: crate::services::endpoint_restoration::EndpointRestoration,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -104,6 +105,8 @@ impl AppState {
             subscriptions: Mutex::new(subscriptions),
             rule_sets: Mutex::new(rule_sets),
             configuration: crate::configuration::Workspace::default(),
+            endpoint_restoration:
+                crate::services::endpoint_restoration::EndpointRestoration::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -135,6 +138,12 @@ impl AppState {
 
     pub(crate) fn observations(&self) -> &znet_engine_client::SubscriptionOwner {
         &self.observations
+    }
+
+    pub(crate) fn endpoint_restoration(
+        &self,
+    ) -> &crate::services::endpoint_restoration::EndpointRestoration {
+        &self.endpoint_restoration
     }
 
     pub(crate) fn client_core_snapshot(&self) -> ClientCoreSnapshot {
@@ -533,10 +542,6 @@ fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyCo
         }
     }
 
-    if !profiles.is_empty() && active_index.is_none() {
-        profiles[0].active = true;
-    }
-
     profiles
 }
 
@@ -618,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_proxy_configs_promote_first_when_none_active() {
+    fn loaded_proxy_configs_preserve_explicitly_stopped_selection() {
         let state = AppState::with_domain_data(
             AppConfig::default(),
             vec![proxy_profile("a", false), proxy_profile("b", false)],
@@ -628,8 +633,9 @@ mod tests {
         );
 
         let profiles = state.proxy_configs().lock().unwrap();
-        assert!(profiles[0].active);
+        assert!(!profiles[0].active);
         assert!(!profiles[1].active);
+        assert!(state.client_core_snapshot().scope.profile_id.is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { kernelFeatureSupport } from '$lib/services/kernel-capabilities';
-import type { EndpointAction, EndpointCatalog, NetworkEndpoint } from './types';
+import type { EndpointAction, EndpointCatalog, NetworkEndpoint, RestorationReceipt } from './types';
 
 function compatibleControl(catalog: EndpointCatalog | null): boolean {
   const contract = catalog?.capabilities.contracts?.controlApi;
@@ -46,3 +46,19 @@ export function endpointStateLabel(endpoint: NetworkEndpoint): string {
 export function directionLabel(directions: NetworkEndpoint['allowed']): string {
   return directions.inbound && directions.outbound ? '入站 + 出站' : directions.inbound ? '仅入站' : directions.outbound ? '仅出站' : '均不允许';
 }
+
+export function sourceRestoreReason(catalog:EndpointCatalog|null,endpoint:NetworkEndpoint):string|null {
+  if (!catalog?.profileId || !catalog.editableEndpointIds.includes(endpoint.endpoint_id)) return '此端点没有当前配置来源声明，仅可观测';
+  const binding=catalog.restorationTargets?.find(target=>target.endpointId===endpoint.endpoint_id && target.profileId===catalog.profileId && target.tag===endpoint.tag && target.protocol===endpoint.protocol);
+  if (!binding) return catalog.restorationUnavailableReason ?? '缺少可信来源回执或端点绑定，请先核对工作区并刷新端点';
+  return null;
+}
+export function restorationMessage(receipt:RestorationReceipt):string {
+  if (receipt.phase==='confirmed' && receipt.localSaved && receipt.runtimeConfirmed && receipt.applyIdentity && receipt.endpoint) return `${receipt.target.tag}：来源恢复已由配置、端点和本地保存共同确认`;
+  if (receipt.phase==='confirmed') return `${receipt.target.tag}：确认回执不完整，结果未确认；请核对原操作`;
+  if (receipt.phase==='result_unknown') return `${receipt.target.tag}：结果未确认。${receipt.message}`;
+  if (receipt.localSaved && !receipt.runtimeConfirmed) return `${receipt.target.tag}：已保存，运行态待应用；没有宣称端点已恢复`;
+  if (receipt.runtimeConfirmed && !receipt.localSaved) return `${receipt.target.tag}：运行恢复已确认，本地保存仍需核对`;
+  return `${receipt.target.tag}：${receipt.message}`;
+}
+export function restorationUnresolved(receipt:RestorationReceipt|null):boolean { return !!receipt && (receipt.phase==='confirmed' ? !(receipt.localSaved && receipt.runtimeConfirmed && receipt.applyIdentity && receipt.endpoint) : !['prepared','saved_pending','rejected'].includes(receipt.phase)); }

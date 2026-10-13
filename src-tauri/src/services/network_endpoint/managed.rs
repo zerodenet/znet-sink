@@ -38,6 +38,8 @@ pub struct ManagedCatalog {
     pub editable_endpoint_ids: Vec<String>,
     pub local_override_ids: Vec<String>,
     pub configured_addresses: BTreeMap<String, Vec<String>>,
+    pub restoration_targets: Vec<crate::models::endpoint_restoration::RestorationTarget>,
+    pub restoration_unavailable_reason: Option<String>,
 }
 fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
     Ok(lock(state.proxy_configs(), "proxy_config")?
@@ -51,8 +53,23 @@ fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
         }))
 }
 pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<ManagedCatalog> {
-    let catalog = super::catalog(options).await?;
+    let catalog = super::catalog(options.clone()).await?;
     let source = active(state)?;
+    let (restoration_targets, restoration_unavailable_reason) =
+        match crate::services::endpoint_restoration::remember_catalog(
+            state,
+            source.as_ref().map(|(id, _)| id.as_str()),
+            &catalog.endpoints,
+            options,
+        )
+        .await
+        {
+            Ok(targets) => (targets, None),
+            Err(_) => (
+                Vec::new(),
+                Some("来源恢复的配置回执或绑定尚未确认，请先核对工作区并刷新端点".into()),
+            ),
+        };
     let app = lock(state.app_config(), "app_config")?;
     let mut editable_endpoint_ids = Vec::new();
     let mut local_override_ids = Vec::new();
@@ -77,6 +94,8 @@ pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<Man
         editable_endpoint_ids,
         local_override_ids,
         configured_addresses,
+        restoration_targets,
+        restoration_unavailable_reason,
     })
 }
 fn prepare(

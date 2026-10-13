@@ -4,6 +4,8 @@
   import AppLogo from '$lib/components/AppLogo.svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import { Button } from '$lib/components/ui/button';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import NativeDiagnosticExport from '$lib/components/mobile/NativeDiagnosticExport.svelte';
   import {
     appendLog,
     guiClearDebugStorage,
@@ -315,9 +317,13 @@
     <div class="config-row">
       <span class="config-label"></span>
       <div class="diagnostic-actions">
+        {#if mobilePlatform.runtimePlatform !== 'desktop'}
+          <NativeDiagnosticExport disabled={exportingDiagnostics || cleaningDebugStorage} />
+        {:else}
         <Button variant="outline" size="sm"  onclick={handleExportDiagnostics} disabled={exportingDiagnostics || cleaningDebugStorage}>
           <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
         </Button>
+        {/if}
         <Button variant="destructive" size="sm"  onclick={openCleanupConfirm} disabled={exportingDiagnostics || cleaningDebugStorage}>
           <span>清理本地调试数据</span>
         </Button>

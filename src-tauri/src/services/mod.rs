@@ -145,4 +145,8 @@ pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
     }
 }
 
+pub mod endpoint_restoration;
+pub mod native_documents;
 pub mod packet_routes;
+pub mod profile_removal;
+pub mod settings_transfer;

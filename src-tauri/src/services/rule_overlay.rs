@@ -44,8 +44,17 @@ pub(crate) fn compose_effective_candidate_for(
     id: Option<&str>,
 ) -> AppResult<crate::configuration::composition::Candidate> {
     let app = common::lock(state.app_config(), "app_config")?.clone();
+    compose_effective_candidate_with_app(state, base, id, &app)
+}
+
+pub(crate) fn compose_effective_candidate_with_app(
+    state: &AppState,
+    base: &Value,
+    id: Option<&str>,
+    app: &AppConfig,
+) -> AppResult<crate::configuration::composition::Candidate> {
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
-    let (app, edited) = crate::configuration::local_edits::resolve(&app, id, base)?;
+    let (app, edited) = crate::configuration::local_edits::resolve(app, id, base)?;
     let config = compose_rules_for(
         &edited,
         app.routing.inject_common_rules,

@@ -5,6 +5,8 @@
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import NativeDiagnosticExport from '$lib/components/mobile/NativeDiagnosticExport.svelte';
 
   let {
     code,
@@ -72,7 +74,11 @@
     <Button variant="outline" size="sm" onclick={restartCore} disabled={busy || guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isConnecting || guiState.isDisconnecting}><RotateCw />重启内核</Button>
   {/if}
   <Button variant="ghost" size="sm" onclick={() => (store.activeTab = 'logs')} disabled={busy}><ScrollText />查看日志</Button>
-  <Button variant="ghost" size="sm" onclick={exportDiagnostics} disabled={busy}><Download />导出诊断</Button>
+  {#if mobilePlatform.runtimePlatform !== 'desktop'}
+    <NativeDiagnosticExport disabled={busy} />
+  {:else}
+    <Button variant="ghost" size="sm" onclick={exportDiagnostics} disabled={busy}><Download />导出诊断</Button>
+  {/if}
 </div>
 
 <style>

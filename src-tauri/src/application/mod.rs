@@ -140,6 +140,7 @@ pub fn run() {
             }
         }))
         .manage(app_state)
+        .plugin(tauri_plugin_znet_native_io::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())

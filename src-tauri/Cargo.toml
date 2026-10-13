@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 znet-client-core = { path = "crates/client-core" }
 znet-client-capabilities = { path = "crates/client-capabilities" }
 znet-engine-client = { path = "crates/engine-client" }
+tauri-plugin-znet-native-io = { path = "crates/native-io" }
 tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -59,6 +60,7 @@ tauri-plugin-notification = "2"
 dirs = "6.0.0"
 zero-rule = { git = "https://github.com/zerodenet/core.git", rev = "c69f417c5a835ab8193924279c5b562e6d244ab8" }
 zero-api = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+zero-config = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
 tauri-plugin-clipboard-manager = { version = "2", default-features = false }
 libc = "0.2"
 
@@ -66,7 +68,7 @@ libc = "0.2"
 tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 
 [workspace]
-members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox"]
+members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox", "crates/native-io"]
 default-members = [".", "crates/client-core", "crates/engine-client"]
 resolver = "2"
 

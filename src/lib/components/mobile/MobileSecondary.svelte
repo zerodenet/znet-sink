@@ -17,12 +17,14 @@
     plugins: () => import('$lib/components/tabs/PluginsTab.svelte'),
     logs: () => import('$lib/components/tabs/LogsTab.svelte'),
     diagnostics: () => import('$lib/components/tabs/DiagnosticsPanel.svelte'),
-    about: () => import('$lib/components/settings/AboutPanel.svelte'),
+    about: () => mobilePlatform.runtimePlatform !== 'desktop'
+      ? import('./MobileAbout.svelte') : import('$lib/components/settings/AboutPanel.svelte'),
     tun: () => import('$lib/components/settings/TunSettingsPanel.svelte'),
     dns: () => import('$lib/components/settings/DnsSettingsPanel.svelte'),
     network: () => import('$lib/components/settings/RuntimeNetworkSettingsPanel.svelte'),
     probes: () => import('$lib/components/settings/UrlTestSettingsPanel.svelte'),
     workspace: () => import('./MobileWorkspace.svelte'),
+    migration: () => import('./MobileSettingsMigration.svelte'),
     data: () => import('./MobileLocalData.svelte'),
     rules: () => import('$lib/components/tabs/RulesTab.svelte'),
     profiles: () => import('$lib/components/tabs/ProfilesTab.svelte'),
@@ -48,8 +50,6 @@
   <div class="settings-scroll"><MobileMenu settings /><MobileApplicationSettings /></div>
 {:else if page === 'kernel' || page === 'updates'}
   <MobileVersions kernel={page === 'kernel'} />
-{:else if page === 'migration'}
-  <div class="unavailable"><h2>设置迁移待适配</h2><p>手机系统文件选择、覆盖范围预览及确认应用尚未接入。当前不调用桌面路径导入，不迁移凭据或系统授权。DNS、VPN 与运行网络仍可分别查看和编辑。</p></div>
 {:else if page === 'plugins' && mobilePlatform.runtimePlatform !== 'desktop'}
   <div class="unavailable"><h2>移动插件执行待适配</h2><p>安装审阅、逐组件授权、管理页面和托管资源契约保留。移动执行容器、系统 IO、敏感材料加载与分发尚未验收，当前不能安装或运行组件。宿主导航与手动断开独立于插件。</p></div>
 {:else if error}

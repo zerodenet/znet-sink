@@ -16,4 +16,8 @@ pub mod zero_runtime;
 pub mod debug;
 pub mod kernel_version;
 
+pub mod endpoint_restoration;
+pub mod native_documents;
 pub mod packet_routes;
+pub mod profile_removal;
+pub mod settings_transfer;

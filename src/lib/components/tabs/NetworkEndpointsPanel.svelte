@@ -94,7 +94,11 @@
     <label class="search"><Search size={15} /><Input aria-label="搜索端点" placeholder="搜索端点" bind:value={query} /></label>
     <div class="endpoint-grid">
       {#each endpoints as endpoint (endpoint.core_instance_id + ':' + endpoint.endpoint_id)}
-        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} detailsError={view.detailsError ?? view.refreshError} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
+        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} detailsError={view.detailsError ?? view.refreshError} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }}
+          onPreviewRestoration={row => session.previewRestoration(row)}
+          onApplyRestoration={(plan, mode) => session.applyRestoration(plan, mode)}
+          onReconcileRestoration={() => session.reconcileRestoration()}
+          restoration={view.restoration?.target.endpointId === endpoint.endpoint_id && view.restoration.target.profileId === view.catalog?.profileId ? view.restoration : null} />
       {:else}<p class="empty">{query ? '无匹配端点' : '当前内核配置没有声明端点'}</p>{/each}
     </div>
   {:else if view.loading}<p class="empty">正在读取内核端点目录…</p>{/if}

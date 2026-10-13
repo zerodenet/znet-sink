@@ -21,9 +21,11 @@ export class MobileNavigation {
     this.stacks[this.activeTab] = [...this.stacks[this.activeTab], { key: ++this.sequence, page }];
     this.onOpen?.();
   }
-  back() {
-    if (!this.canLeave(() => this.back())) return;
+  back(): boolean {
+    if (!this.canLeave(() => this.back())) return true;
+    if (!this.current) return false;
     this.stacks[this.activeTab] = this.stacks[this.activeTab].slice(0, -1);
+    return true;
   }
   get current() { return this.stacks[this.activeTab].at(-1); }
   /** Editors can retain their draft and require an explicit discard decision. */

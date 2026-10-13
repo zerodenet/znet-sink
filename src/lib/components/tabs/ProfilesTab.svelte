@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { untrack, onMount } from 'svelte';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import { getNativeDocumentCapabilities, pickNativeDocument, documentReceiptMessage } from '$lib/services/native-documents';
+  import NativeProfileExport from '$lib/components/mobile/NativeProfileExport.svelte';
+  import ProfileRemovalDialog from '$lib/components/mobile/ProfileRemovalDialog.svelte';
   import { useMobileNavigation } from '$lib/features/mobile/context';
   import { Textarea } from '$lib/components/ui/textarea';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
@@ -9,7 +13,6 @@
   import {
     importProxyConfig,
     listProxyConfigs,
-    removeProxyConfig,
     setActiveProxyConfig,
     upsertProxyConfig,
   } from '$lib/services/config';
@@ -44,8 +47,8 @@
   let loadError = $state<string | null>(null);
   let saving = $state(false);
   let activatingId = $state<string | null>(null);
-  let removingId = $state<string | null>(null);
   let deleteTarget = $state<ProxyConfigProfile | null>(null);
+  let deleteOpen = $state(false);
   let query = $state('');
   let showEditor = $state(false);
   let editingId = $state<string | null>(null);
@@ -53,12 +56,28 @@
   let draft = $state<EditorDraft>(emptyDraft());
   let validationMessage = $state<string | null>(null);
   let selectedProfile = $state<ProxyConfigProfile | null>(null);
+  let choosingFile = $state(false);
+  let nativeFilesAvailable = $state(false);
+  let nativeFilesReason = $state('正在读取系统文件能力…');
+  let editorGeneration = 0;
+  const nativeHost = $derived(mobilePlatform.runtimePlatform !== 'desktop');
+  onMount(() => {
+    let alive = true;
+    if (mobilePlatform.runtimePlatform !== 'desktop') {
+      void getNativeDocumentCapabilities().then(capabilities => {
+        if (!alive) return;
+        nativeFilesAvailable = capabilities.available;
+        nativeFilesReason = capabilities.reason ?? '系统文件读取按设备权限执行，取消会保留原草稿。';
+      }).catch(() => { if (alive) nativeFilesReason = '系统文件适配不可用，仍可粘贴 JSON。'; });
+    }
+    return () => { alive = false; editorGeneration++; };
+  });
 
   const canEdit = $derived(store.isActionOperable('proxyConfig.upsert'));
   const canRemove = $derived(store.isActionOperable('proxyConfig.remove'));
   const filteredConfigs = $derived(filterConfigs(configs, query));
   const activeProfile = $derived(configs.find((item) => item.active) ?? null);
-  const busy = $derived(saving || activatingId !== null || removingId !== null);
+  const busy = $derived(saving || activatingId !== null || deleteOpen);
   const canSave = $derived(canEdit && !saving && draft.name.trim().length > 0 && isDraftReady(draft));
 
   function emptyDraft(mode: SourceMode = 'file'): EditorDraft {
@@ -130,6 +149,7 @@
 
   function openCreate() {
     if (busy) return;
+    editorGeneration++;
     draft = emptyDraft('file');
     editingId = null;
     selectedProfile = null;
@@ -142,6 +162,7 @@
 
   function openEdit(profile: ProxyConfigProfile) {
     if (busy || profile.managedSource) return;
+    editorGeneration++;
     draft = {
       name: profile.name,
       sourceMode: profile.path ? 'file' : 'inline',
@@ -168,12 +189,14 @@
     });
   });
   function discardEditorDraft() {
+    editorGeneration++;
     discardEditor=false; showEditor=false; validationMessage=null;
     const resume=pendingNavigation; pendingNavigation=null; resume?.();
   }
   function closeEditor() {
     if (saving) return;
     if (mobile && JSON.stringify(draft) !== editorOriginal) { discardEditor=true; return; }
+    editorGeneration++;
     showEditor = false;
     validationMessage = null;
   }
@@ -191,6 +214,27 @@
   }
 
   async function chooseSourceFile() {
+    if (choosingFile || saving) return;
+    const generation = editorGeneration;
+    const originalDraft = JSON.stringify(draft);
+    choosingFile = true;
+    try {
+    if (nativeHost) {
+      const receipt = await pickNativeDocument('configuration');
+      if (generation !== editorGeneration || !showEditor) return;
+      if (JSON.stringify(draft) !== originalDraft) {
+        validationMessage = '草稿已变化，文件结果未写入；请保留修改后重新选择文件。';
+        return;
+      }
+      if (receipt.status === 'read' && receipt.content !== null) {
+        // Keep system URI grants native; persist ordinary imported content.
+        draft.content = receipt.content;
+        draft.sourcePath = '';
+        draft.sourceMode = 'inline';
+      }
+      validationMessage = documentReceiptMessage(receipt);
+      return;
+    }
     const selected = await openFile({
       title: '选择代理配置文件',
       multiple: false,
@@ -198,10 +242,13 @@
       defaultPath: draft.sourcePath || selectedProfile?.path || undefined,
     });
 
-    if (typeof selected === 'string' && selected.trim()) {
+    if (generation === editorGeneration && showEditor && typeof selected === 'string' && selected.trim()) {
       draft.sourcePath = selected.trim();
       validationMessage = null;
     }
+    } catch (error) {
+      if (generation === editorGeneration && showEditor) validationMessage = getAppErrorMessage(error, '系统文件读取失败，原草稿保留');
+    } finally { choosingFile = false; }
   }
 
   async function handleSave() {
@@ -248,6 +295,7 @@
       }
 
       saving = false;
+      editorOriginal = JSON.stringify(draft);
       closeEditor();
     } catch (error) {
       saving = false;
@@ -258,33 +306,18 @@
   function requestRemove(profile: ProxyConfigProfile) {
     if (!canRemove || busy) return;
     deleteTarget = profile;
+    deleteOpen = true;
   }
 
-  function closeDelete() {
-    if (removingId !== null) return;
-    deleteTarget = null;
-  }
-
-  async function handleRemove() {
-    if (!canRemove || !deleteTarget || busy) return;
-    const target = deleteTarget;
-    removingId = target.id;
-
-    try {
-      await removeProxyConfig(target.id);
-      if (editingId === target.id) {
-        closeEditor();
-      }
-      deleteTarget = null;
-      await refresh();
-      // Removing the active profile makes the backend promote another
-      // profile (or none), so re-sync GUI state to the new active config.
-      await guiState.refreshNodeStateAfterConfigChange();
-    } catch (error) {
-      handleAppError(error, '删除代理配置失败');
-    } finally {
-      removingId = null;
+  async function profileRemoved() {
+    if (deleteTarget && editingId === deleteTarget.id) {
+      editorOriginal = JSON.stringify(draft);
+      closeEditor();
     }
+    deleteTarget = null;
+    deleteOpen = false;
+    await refresh();
+    await guiState.refreshNodeStateAfterConfigChange();
   }
 
   async function handleSetActive(id: string) {
@@ -419,6 +452,9 @@
             </button>
 
             <div class="row-actions">
+              {#if nativeFilesAvailable && !config.managedSource}
+                <NativeProfileExport profile={config} disabled={busy} />
+              {/if}
               {#if canEdit}
                 {#if config.active}
                   <Badge variant="secondary">{mobile && !guiState.connection?.coreAvailable ? '待应用' : '已启用'}</Badge>
@@ -503,12 +539,12 @@
         <div class="form-input-wrap">
         <div class="file-picker-row">
           <Input value={draft.sourcePath} readonly placeholder="请选择本地配置文件" class="mono" />
-          <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving}>
+          <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving || choosingFile || (nativeHost && !nativeFilesAvailable)}>
             <FolderOpen class="h-3.5 w-3.5" />
             <span>选择</span>
           </Button>
         </div>
-        <div class="form-hint">保存时会直接读取这个文件并解析为 JSON。</div>
+        <div class="form-hint">{nativeHost ? nativeFilesReason : '保存时会直接读取这个文件并解析为 JSON。'}</div>
         </div>
       </div>
     {:else}
@@ -550,28 +586,7 @@
   {/snippet}
 </DraggableModal>
 
-<DraggableModal
-  title="删除代理配置"
-  description="删除后无法从应用内恢复。若删除的是当前配置，后端会切换到下一份可用配置；没有其他配置时会停止内核。"
-  open={deleteTarget !== null}
-  onClose={closeDelete}
-  closeDisabled={removingId !== null}
-  width="min(460px, 90vw)"
->
-  {#if deleteTarget}
-    <div class="validation-row" role="alert">
-      <AlertTriangle class="h-4 w-4" />
-      <span>确认删除“{deleteTarget.name}”吗？{deleteTarget.active ? mobile && !guiState.connection?.coreAvailable ? '这是当前本地选中的配置，运行状态未确认。' : '这是当前生效配置。' : ''}</span>
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
-    <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
-      {removingId !== null ? '删除中...' : '确认删除'}
-    </Button>
-  {/snippet}
-</DraggableModal>
+<ProfileRemovalDialog targetId={deleteTarget?.id ?? null} bind:open={deleteOpen} onremoved={profileRemoved} />
 
 <Dialog.Root bind:open={discardEditor}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>配置正文与名称尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardEditor=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardEditorDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 
