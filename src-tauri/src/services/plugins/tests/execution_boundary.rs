@@ -8,9 +8,9 @@ fn host_run_and_invoke_share_owner_close_without_closing_other_hosts() {
     let review = approve(&host, &manager);
     let shutdown = host.executor_shutdown_handle();
     assert!(shutdown.close(Duration::ZERO).drained);
-    assert!(host.run(&manager, review).is_err());
-    assert!(host
-        .invoke(
+    assert_eq!(host.run(&manager, review).unwrap_err().code, "cancelled");
+    assert_eq!(
+        host.invoke(
             &manager,
             None,
             "org.example.plugin",
@@ -18,7 +18,10 @@ fn host_run_and_invoke_share_owner_close_without_closing_other_hosts() {
             "read".into(),
             serde_json::Value::Null
         )
-        .is_err());
+        .unwrap_err()
+        .code,
+        "cancelled"
+    );
     let (_root, other, manager) = setup(false);
     let review = approve(&other, &manager);
     assert!(other.run(&manager, review).is_ok());
@@ -32,8 +35,8 @@ fn reviewed_page_invocation_cannot_reacquire_grants_after_stop_restart() {
     let original = approve(&host, &manager);
     host.stop(&manager, &original.key).unwrap();
     approve(&host, &manager);
-    assert!(host
-        .invoke_reviewed(
+    assert_eq!(
+        host.invoke_reviewed(
             &manager,
             None,
             original,
@@ -41,7 +44,10 @@ fn reviewed_page_invocation_cannot_reacquire_grants_after_stop_restart() {
             serde_json::Value::Null,
             Arc::new(AtomicBool::new(false))
         )
-        .is_err());
+        .unwrap_err()
+        .code,
+        "revoked"
+    );
     assert_eq!(
         host.storage_get("org.example.plugin", namespace::Area::State, "late/value")
             .unwrap(),
@@ -107,8 +113,9 @@ fn cancelled_inflight_page_cannot_commit_guest_state_or_deliver_markerless_resul
         flag.store(true, Ordering::Release);
         release_tx.send(()).unwrap();
         let result = task.join().unwrap();
-        assert!(result.is_err());
-        assert!(!serde_json::to_string(&result.err().unwrap())
+        let failure = result.unwrap_err();
+        assert_eq!(failure.code, "cancelled");
+        assert!(!serde_json::to_string(&failure)
             .unwrap()
             .contains("markerless-secret-canary"));
         assert_eq!(
@@ -178,4 +185,28 @@ fn vm_file_gate_preserves_other_sdk_methods_and_their_existing_authority_checks(
         // Passing this narrow gate does not create a grant or execute IO; the
         // existing typed SDK dispatcher still validates request scope/budget.
     }
+}
+
+#[test]
+fn host_disabled_and_pre_cancelled_invocations_keep_canonical_error_reasons() {
+    let (_root, host, manager) = setup(false);
+    let review = host.snapshot(&manager).components[0]
+        .review
+        .clone()
+        .unwrap();
+    assert_eq!(host.run(&manager, review).unwrap_err().code, "disabled");
+    let review = approve(&host, &manager);
+    assert_eq!(
+        host.invoke_reviewed(
+            &manager,
+            None,
+            review,
+            "read".into(),
+            serde_json::Value::Null,
+            Arc::new(AtomicBool::new(true))
+        )
+        .unwrap_err()
+        .code,
+        "cancelled"
+    );
 }

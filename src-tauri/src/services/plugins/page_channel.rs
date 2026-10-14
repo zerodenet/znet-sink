@@ -1,11 +1,12 @@
 //! Host-owned signed document bindings. Guests never create or refresh reviews.
+use super::sdk::invocation_failure;
 use super::*;
 use serde::Serialize;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-use znet_plugin_sandbox::{policy::Lease, sdk::Call};
+use znet_plugin_sandbox::{contract::Error as InvocationError, policy::Lease, sdk::Call};
 const LIMIT: usize = 16;
 const TTL: Duration = Duration::from_secs(15 * 60);
 #[derive(Serialize)]
@@ -30,15 +31,16 @@ impl PageBinding {
     pub(crate) fn check(&self) -> AppResult<()> {
         if Instant::now() >= self.deadline {
             self.cancelled.store(true, Ordering::Release);
+            return Err(invocation_failure(InvocationError::Expired));
         }
         if self.cancelled.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(invocation_failure(InvocationError::Cancelled));
         }
         Ok(())
     }
     pub(crate) fn check_lease(&self, lease: &Lease, request: Option<&Request>) -> AppResult<()> {
         self.check()?;
-        lease.check(request).map_err(io::failure)
+        lease.check(request).map_err(invocation_failure)
     }
 }
 #[derive(Default)]
@@ -59,13 +61,11 @@ impl Store {
     fn insert(&self, binding: PageBinding) -> AppResult<String> {
         let mut documents = self.documents.lock().unwrap();
         if self.closed.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(invocation_failure(InvocationError::Cancelled));
         }
         documents.retain(|_, doc| doc.check().is_ok());
         if documents.len() >= LIMIT {
-            return Err(AppError::invalid_argument(
-                "插件页面数量已达上限，请先关闭旧页面",
-            ));
+            return Err(invocation_failure(InvocationError::Busy));
         }
         let mut bytes = [0; 16];
         getrandom::fill(&mut bytes).map_err(|_| AppError::internal("无法创建插件页面凭据"))?;
@@ -78,7 +78,7 @@ impl Store {
     }
     fn get(&self, token: &str) -> AppResult<PageBinding> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(invocation_failure(InvocationError::Cancelled));
         }
         let doc = self
             .documents
@@ -86,7 +86,7 @@ impl Store {
             .unwrap()
             .get(token)
             .cloned()
-            .ok_or_else(stale)?;
+            .ok_or_else(|| invocation_failure(InvocationError::Cancelled))?;
         doc.check()?;
         Ok(doc)
     }
@@ -125,7 +125,7 @@ impl Host {
             .filter_map(|component| component.review.clone())
             .collect::<Vec<_>>();
         if components.is_empty() {
-            return Err(stale());
+            return Err(invocation_failure(InvocationError::Revoked));
         }
         let materials = self
             .state
@@ -168,7 +168,7 @@ impl Host {
         let doc = self.page_documents.get(token)?;
         let validation = (|| {
             if digest(&self.page(&doc.plugin_id, &doc.page_id)?) != doc.digest {
-                return Err(stale());
+                return Err(invocation_failure(InvocationError::Revoked));
             }
             let materials = self
                 .state
@@ -180,7 +180,7 @@ impl Host {
                 .map(|(key, loaded)| (key.clone(), loaded.component.digest().to_owned()))
                 .collect::<Vec<_>>();
             if materials != doc.materials {
-                return Err(stale());
+                return Err(invocation_failure(InvocationError::Revoked));
             }
             let current = manager
                 .component_snapshots()
@@ -190,17 +190,18 @@ impl Host {
                 })
                 .collect::<Vec<_>>();
             if current.len() != doc.reviews.len() {
-                return Err(stale());
+                return Err(invocation_failure(InvocationError::Revoked));
             }
             for original in &doc.reviews {
-                self.current_review(manager, original)?;
+                self.current_review(manager, original)
+                    .map_err(|_| invocation_failure(InvocationError::Revoked))?;
             }
             if review.is_some_and(|review| {
                 !doc.reviews
                     .iter()
                     .any(|original| same_review(original, review))
             }) {
-                return Err(stale());
+                return Err(invocation_failure(InvocationError::Revoked));
             }
             doc.check()?;
             Ok(())
@@ -249,7 +250,7 @@ impl Host {
         let component_id = review
             .key
             .strip_prefix(&format!("{}/", doc.plugin_id))
-            .ok_or_else(stale)?;
+            .ok_or_else(|| invocation_failure(InvocationError::Cancelled))?;
         let (component, authority) =
             self.sdk_context(manager, &doc.plugin_id, component_id, &call.request)?;
         let timeout = Duration::from_millis(call.budget.timeout_ms)
@@ -263,7 +264,7 @@ impl Host {
                 call.budget.max_result_bytes,
                 doc.cancelled.clone(),
             )
-            .map_err(io::failure)?;
+            .map_err(invocation_failure)?;
         doc.check_lease(&lease, Some(&call.request))?;
         Ok((doc, lease))
     }

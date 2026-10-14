@@ -253,3 +253,7 @@ Windows 两环境及最终提交的所有工作流结果继续在 PR 描述核�
 详见[执行边界](../gui/mobile-plugin-execution-boundary-v0.0.3.md)、[页面通道](../gui/plugin-page-channel-v0.0.3.md)、[只读核对](../gui/ordinary-subscription-reconciliation-v0.0.3.md)及根[todo.md](../../todo.md)。
 
 上述最终源码完整 Chromium 回归 **228 passed**，日志 `/tmp/mobile-phase5-final-full-browser.log`；没有跳过或重试通过项。
+
+类型化错误收尾补丁随后补齐：原租约的预算、deadline、撤权、过期、关闭及繁忙不再经过通用包/网络错误转换器；直接保留现有SDK canonical code，并用固定文案排除任意原消息/details。实际资源预算、租约超时和撤权/关闭分类使真实Host页面聚焦回归增至11项，Host执行/文件准入为6项。
+补丁源码 Rust 全集 **1093 passed / 0 failed / 7 ignored**，fmt/check/clippy通过；最终前端完整验证/build通过，移动语义 **108项**，许可 **17项**，类型检查 **0/0**。
+日志 `/tmp/mobile-phase5-typed-final-{fmt,check,tests,clippy,frontend}.log`。同一补丁的完整Chromium运行记录在 `/tmp/mobile-phase5-typed-final-browser.log`；最终终态、双引擎CI和unsigned APK收据以最新head的PR记录为准，634dd29的工作流/产物只算历史证据。

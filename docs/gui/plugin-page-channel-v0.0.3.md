@@ -29,11 +29,13 @@ VM-originated FileRead/FileWrite cannot treat a guest `selected_path` as a trust
 
 `pageClose` and normal Host exit deny new calls and invalidate delivery from the original in-flight leases. They do not withdraw a network request already sent, undo a file already published, revoke an OS browser request already accepted, or roll back a confirmed local write. Closure/expiry/revocation after an effect produces a delivery-denied/unknown result, never unconditional rollback. System effects cannot be atomically cancelled with a policy update; the owning lease admission, immediate checks and final extraction make that limitation visible.
 
+Known original lease/admission errors are mapped directly from Rust enums to the existing SDK wire codes (`budget_exceeded`, `deadline`, `revoked`, `expired`, `disabled`, `cancelled`, `busy`, `permission_denied`). A document lease expiring is distinct from an explicit page close, and both are distinct from a component revision change. These typed failures use fixed host messages and exclude arbitrary original error text, paths and detail fields; ordinary IO/package errors retain their existing sanitizer. No error category is inferred from strings.
+
 ## Verification
 
 Focused Rust tests use a real signed package, installed Store, real Host rescan and actual Manager policies. They cover document/lease closure; revoke/re-authorize ABA; document count/expiry/Host exit; foreign review/method-capability rejection; in-flight delivery denial and prevention of later effects; a real selected-file read under a fresh native IO policy whose result remains denied by the revoked original component; protected material remaining intact when original permission is absent; and corruption of the real installation store cancelling both the document and its original in-flight binding.
 
-Run `cargo test --manifest-path src-tauri/Cargo.toml --lib services::plugins::page_channel`. Frontend channel tests and browser tests are owned by the frame implementation and recorded separately. No live external browser, third-party HTTP request, system picker or mobile plugin execution is claimed by these Rust tests.
+The 11 focused cases also exercise an actual one-byte original resource budget, an actual elapsed lease deadline, real revoke/close/document expiry, and canaries proving typed failures cannot copy arbitrary messages/details. Run `cargo test --manifest-path src-tauri/Cargo.toml --lib services::plugins::page_channel`. Frontend channel tests and browser tests are owned by the frame implementation and recorded separately. No live external browser, third-party HTTP request, system picker or mobile plugin execution is claimed by these Rust tests.
 
 ## Browser transport boundary
 

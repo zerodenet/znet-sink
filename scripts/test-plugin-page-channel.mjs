@@ -219,3 +219,13 @@ test('malformed recognized frames consume admission budget before validation and
   );
   assert(guard.current.resultBytes <= PAGE_LIMITS.totalResultBytes);
 });
+
+test('typed invocation failures preserve lifecycle, budget and uncertainty codes without copying untrusted error text', () => {
+  for (const code of ['disabled', 'revoked', 'expired', 'busy', 'not_found', 'transport', 'uncertain', 'deadline', 'budget_exceeded', 'cancelled', 'permission_denied']) {
+    const failure = publicFailure({code, message:'https://private.invalid/?token=SECRET', diagnostics:['SECRET'],field_path:'SECRET'});
+    assert.equal(failure.code, code);
+    assert(!JSON.stringify(failure).includes('SECRET'));
+    assert(!failure.message.includes('网络请求失败或元数据格式无效'));
+    assert.equal(failure.field_path, undefined);
+  }
+});

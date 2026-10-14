@@ -319,3 +319,155 @@ fn corrupt_installation_store_cancels_document_and_inflight_binding() {
     assert!(lease.check(Some(&call().request)).is_err());
     assert!(host.page_documents.get(&doc.document_review).is_err());
 }
+
+#[test]
+fn real_original_resource_budget_and_deadline_have_exact_public_failures() {
+    use znet_plugin_sandbox::sdk::ErrorCode;
+    let (_root, host, manager) = setup();
+    let doc = host
+        .page_document(&manager, "org.example.page", "manage")
+        .unwrap();
+    let review = doc.components[0].review.as_ref().unwrap();
+    let mut bounded = call();
+    bounded.budget.max_result_bytes = 1;
+    let (_, lease) = host
+        .page_lease(&manager, &doc.document_review, review, &bounded)
+        .unwrap();
+    let error = super::super::sdk::execute_original(&lease, &bounded.request, || {
+        Ok(serde_json::json!("oversize-private-canary"))
+    })
+    .unwrap_err();
+    let failure = super::super::sdk::public_failure(error);
+    assert_eq!(failure.code, ErrorCode::BudgetExceeded);
+    assert!(failure.message.contains("资源预算"));
+    assert!(!failure.message.contains("private-canary"));
+    assert!(failure.diagnostics.is_empty());
+    drop(lease); // release the real component's single-invocation permit
+
+    let mut timed = call();
+    timed.budget.timeout_ms = 5;
+    let (binding, lease) = host
+        .page_lease(&manager, &doc.document_review, review, &timed)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(15));
+    let failure = super::super::sdk::public_failure(
+        binding
+            .check_lease(&lease, Some(&timed.request))
+            .unwrap_err(),
+    );
+    assert_eq!(failure.code, ErrorCode::Deadline);
+    assert!(failure.message.contains("时间预算"));
+    let mut issued = false;
+    let failure = super::super::sdk::public_failure(
+        super::super::sdk::execute_original(&lease, &timed.request, || {
+            issued = true;
+            Ok(Value::Null)
+        })
+        .unwrap_err(),
+    );
+    assert_eq!(failure.code, ErrorCode::Deadline);
+    assert!(!issued);
+}
+
+#[test]
+fn actual_revocation_closure_and_expiry_remain_distinct_on_public_wire() {
+    use znet_plugin_sandbox::sdk::ErrorCode;
+    let (_root, host, manager) = setup();
+    let doc = host
+        .page_document(&manager, "org.example.page", "manage")
+        .unwrap();
+    let review = doc.components[0].review.as_ref().unwrap();
+    let (binding, lease) = host
+        .page_lease(&manager, &doc.document_review, review, &call())
+        .unwrap();
+    host.revoke_permissions(&manager, &review.key).unwrap();
+    let error = binding
+        .check_lease(&lease, Some(&call().request))
+        .unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Revoked
+    );
+    let error = super::super::sdk::execute_original(&lease, &call().request, || Ok(Value::Null))
+        .unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Revoked
+    );
+    let error = host.page_check(&manager, &doc.document_review).unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Revoked
+    );
+
+    let (_root, host, manager) = setup();
+    let doc = host
+        .page_document(&manager, "org.example.page", "manage")
+        .unwrap();
+    let (binding, lease) = host
+        .page_lease(
+            &manager,
+            &doc.document_review,
+            doc.components[0].review.as_ref().unwrap(),
+            &call(),
+        )
+        .unwrap();
+    host.page_close(&doc.document_review);
+    let error = binding
+        .check_lease(&lease, Some(&call().request))
+        .unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Cancelled
+    );
+    let error = super::super::sdk::execute_original(&lease, &call().request, || Ok(Value::Null))
+        .unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Cancelled
+    );
+
+    let doc = host
+        .page_document(&manager, "org.example.page", "manage")
+        .unwrap();
+    host.page_documents
+        .documents
+        .lock()
+        .unwrap()
+        .get_mut(&doc.document_review)
+        .unwrap()
+        .deadline = Instant::now();
+    let error = host.page_check(&manager, &doc.document_review).unwrap_err();
+    assert_eq!(
+        super::super::sdk::public_failure(error).code,
+        ErrorCode::Expired
+    );
+}
+
+#[test]
+fn typed_host_codes_never_copy_arbitrary_messages_or_details() {
+    use znet_plugin_sandbox::sdk::ErrorCode;
+    for (code, expected) in [
+        ("budget_exceeded", ErrorCode::BudgetExceeded),
+        ("deadline", ErrorCode::Deadline),
+        ("revoked", ErrorCode::Revoked),
+        ("cancelled", ErrorCode::Cancelled),
+        ("busy", ErrorCode::Busy),
+        ("permission_denied", ErrorCode::PermissionDenied),
+        ("expired", ErrorCode::Expired),
+        ("disabled", ErrorCode::Disabled),
+    ] {
+        let failure = super::super::sdk::public_failure(AppError {
+            code,
+            message: "/private/message-canary".into(),
+            details: Some(
+                serde_json::json!({"fieldPath":"path-canary", "diagnostics":["token-canary"],"retryAfterMs":123}),
+            ),
+        });
+        assert_eq!(failure.code, expected);
+        assert!(!serde_json::to_string(&failure).unwrap().contains("canary"));
+        assert!(failure.diagnostics.is_empty());
+        assert!(failure.field_path.is_none());
+        assert!(failure.retry_after_ms.is_none());
+    }
+}

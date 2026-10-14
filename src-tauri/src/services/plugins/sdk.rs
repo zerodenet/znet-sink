@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use znet_plugin_sandbox::{
-    contract::{Capability, Request},
+    contract::{Capability, Error, Request},
     sdk::{Call, ErrorCode, Failure, Method},
 };
 
@@ -38,6 +38,15 @@ fn public_detail_string(details: Option<&Value>, keys: &[&str]) -> Option<String
 /// plugin failure envelope. Arbitrary details, paths, database messages and
 /// causes are never copied into the guest boundary.
 pub(crate) fn public_failure(error: AppError) -> Failure {
+    if let Some((code, message)) = invocation_public_fields(error.code) {
+        return Failure {
+            code,
+            message: message.into(),
+            field_path: None,
+            diagnostics: Vec::new(),
+            retry_after_ms: None,
+        };
+    }
     let code = match error.code {
         "invalid_argument" => ErrorCode::InvalidRequest,
         "not_found" => ErrorCode::NotFound,
@@ -420,7 +429,9 @@ pub(crate) struct PreparedManagedSubscriptionRemoval {
 
 impl ManagedSubscriptionAuthorization {
     pub(crate) fn check(&self) -> AppResult<()> {
-        self.lease.check(Some(&self.request)).map_err(io::failure)
+        self.lease
+            .check(Some(&self.request))
+            .map_err(invocation_failure)
     }
 }
 
@@ -487,7 +498,9 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件托管订阅请求无效"));
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let request = call.request;
         let args: SubscriptionApplyArgs = decode(call.arguments)?;
         Ok((
@@ -516,7 +529,9 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件托管订阅移除请求无效"));
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let request = call.request;
         let args: SubscriptionRemoveArgs = decode(call.arguments)?;
         Ok((args.subscription_id, args.remove_associated_config, request))
@@ -537,7 +552,9 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件托管订阅用量请求无效"));
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let request = call.request;
         let args: SubscriptionMetadataUpdateArgs = decode(call.arguments)?;
         Ok((
@@ -566,7 +583,9 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件托管订阅同步完成请求无效"));
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let request = call.request;
         let args: SubscriptionSyncCompleteArgs = decode(call.arguments)?;
         Ok((
@@ -602,7 +621,9 @@ impl Host {
                 call.budget.max_result_bytes,
             )
             .map_err(io::failure)?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let args: SubscriptionApplyArgs = decode(call.arguments)?;
         Ok(PreparedManagedSubscription {
             input: crate::models::subscription::ManagedSubscriptionApply {
@@ -644,7 +665,9 @@ impl Host {
                 call.budget.max_result_bytes,
             )
             .map_err(io::failure)?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let args: SubscriptionRemoveArgs = decode(call.arguments)?;
         Ok(PreparedManagedSubscriptionRemoval {
             subscription_id: args.subscription_id,
@@ -678,7 +701,9 @@ impl Host {
                 call.budget.max_result_bytes,
             )
             .map_err(io::failure)?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let args: SubscriptionMetadataUpdateArgs = decode(call.arguments)?;
         Ok(PreparedManagedSubscriptionMetadataUpdate {
             input: crate::models::subscription::ManagedSubscriptionMetadataUpdate {
@@ -716,7 +741,9 @@ impl Host {
                 call.budget.max_result_bytes,
             )
             .map_err(io::failure)?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let args: SubscriptionSyncCompleteArgs = decode(call.arguments)?;
         Ok(PreparedManagedSubscriptionSyncComplete {
             input: crate::models::subscription::ManagedSubscriptionSyncComplete {
@@ -785,12 +812,18 @@ impl Host {
         self.checked_rescan(manager)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
-        let loaded = state.loaded.get(&key).ok_or_else(stale)?;
+        let loaded = state
+            .loaded
+            .get(&key)
+            .ok_or_else(|| invocation_failure(Error::Revoked))?;
         let manifest = loaded.component.manifest();
-        if manifest.plugin_id != plugin_id
-            || manifest.component_id != component_id
-            || loaded.blocked.is_some()
-            || !loaded.consent.enabled
+        if manifest.plugin_id != plugin_id || manifest.component_id != component_id {
+            return Err(invocation_failure(Error::Revoked));
+        }
+        if !loaded.consent.enabled {
+            return Err(invocation_failure(Error::Disabled));
+        }
+        if loaded.blocked.is_some()
             || !loaded.consent.grants.contains(request)
             || !manifest
                 .required
@@ -798,13 +831,14 @@ impl Host {
                 .chain(&manifest.optional)
                 .any(|declared| declared == request)
         {
-            return Err(AppError::invalid_argument(
-                "插件未启用，或此 SDK 操作没有获得对应权限",
-            ));
+            return Err(invocation_failure(Error::PermissionDenied));
         }
         Ok((
             Arc::clone(&loaded.component),
-            loaded.authority.clone().ok_or_else(stale)?,
+            loaded
+                .authority
+                .clone()
+                .ok_or_else(|| invocation_failure(Error::Revoked))?,
         ))
     }
 
@@ -904,7 +938,9 @@ impl Host {
         }
         let budget = call.budget;
         let started = Instant::now();
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let value = match call.method {
             Method::LogWrite => {
                 let state =
@@ -1012,7 +1048,9 @@ impl Host {
                     Duration::from_millis(budget.timeout_ms),
                 )
                 .map_err(io::failure)?;
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let bytes = znet_client_capabilities::files::read(&host_lease, &selected, maximum)
                     .and_then(|resource| resource.take(&host_lease))
                     .map_err(io::failure)?;
@@ -1041,7 +1079,9 @@ impl Host {
                     Duration::from_millis(budget.timeout_ms),
                 )
                 .map_err(io::failure)?;
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 znet_client_capabilities::files::publish(
                     &host_lease,
                     &publication,
@@ -1096,7 +1136,9 @@ impl Host {
                     Duration::from_millis(budget.timeout_ms),
                 )
                 .map_err(io::failure)?;
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let response = znet_client_capabilities::network::request(
                     &host_lease,
                     &znet_client_capabilities::network::Request {
@@ -1162,7 +1204,9 @@ impl Host {
                     Duration::from_millis(budget.timeout_ms),
                 )
                 .map_err(io::failure)?;
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let response = znet_client_capabilities::network::configured_request(
                     &host_lease,
                     &znet_client_capabilities::network::Request {
@@ -1188,7 +1232,9 @@ impl Host {
             }
             Method::PersistentSecretGet => {
                 let _operation = self.operation.lock().unwrap();
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
                 match self.vault_get(plugin_id, &args.key)? {
                     Some(value) => json!({"valueBase64":STANDARD.encode(value.as_slice())}),
@@ -1197,7 +1243,9 @@ impl Host {
             }
             Method::PersistentSecretPut => {
                 let _operation = self.operation.lock().unwrap();
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
                 let value = args
                     .value_base64
@@ -1210,13 +1258,17 @@ impl Host {
             }
             Method::PersistentSecretDelete => {
                 let _operation = self.operation.lock().unwrap();
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
                 Value::Bool(self.vault_delete(plugin_id, &args.key)?)
             }
             Method::CryptoKeyGenerate => {
                 let _operation = self.operation.lock().unwrap();
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let args: CryptoKeyArgs = decode(call.arguments)?;
                 let vault_key = format!("keys/{}", args.key_name);
                 let seed = match self.vault_get(plugin_id, &vault_key)? {
@@ -1237,7 +1289,9 @@ impl Host {
             }
             Method::CryptoSign => {
                 let _operation = self.operation.lock().unwrap();
-                lease.check(Some(&call.request)).map_err(io::failure)?;
+                lease
+                    .check(Some(&call.request))
+                    .map_err(invocation_failure)?;
                 let args: CryptoKeyArgs = decode(call.arguments)?;
                 let data = STANDARD
                     .decode(
@@ -1466,7 +1520,9 @@ impl Host {
                 details: None,
             });
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         Ok(value)
     }
 
@@ -1496,7 +1552,9 @@ impl Host {
                 call.budget.max_result_bytes,
             )
             .map_err(io::failure)?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let bytes = self.sensitive.take(
             &format!("{plugin_id}/{component_id}"),
             &args.handle,
@@ -1788,14 +1846,18 @@ impl Host {
         {
             return Err(AppError::invalid_argument("受保护加载 SDK 请求无效"));
         }
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         let args: HandleArgs = decode(call.arguments)?;
         let bytes = self.sensitive.take(
             &format!("{plugin_id}/{component_id}"),
             &args.handle,
             Some("material"),
         )?;
-        lease.check(Some(&call.request)).map_err(io::failure)?;
+        lease
+            .check(Some(&call.request))
+            .map_err(invocation_failure)?;
         Ok(bytes)
     }
 }
@@ -1861,20 +1923,83 @@ pub(super) fn execute_original(
     })
 }
 
-fn original_execution_failure(reason: znet_client_core::capability::Error) -> AppError {
-    use znet_client_core::capability::Error;
-    let message = match reason {
-        Error::Revoked | Error::Disabled => "原组件授权或安装材料已变化，请重新审阅页面",
-        Error::Cancelled => "页面或宿主已关闭，此调用的结果不可交付",
-        Error::Expired | Error::Deadline => "原调用已过期，已发出的操作不自动重放",
-        Error::BudgetExceeded => "超过原调用的资源预算，请减小单次结果或核对已审阅的组件预算",
-        Error::Busy => "宿主操作数量已达上限",
-        Error::PermissionDenied | Error::AdmissionDenied => "原调用不具备此操作权限",
-        Error::InvalidRequest | Error::Transport => "宿主未确认此操作结果",
-    };
+fn invocation_public_fields(code: &str) -> Option<(ErrorCode, &'static str)> {
+    Some(match code {
+        "revoked" => (
+            ErrorCode::Revoked,
+            "原组件授权或安装材料已变化，请重新审阅页面",
+        ),
+        "disabled" => (ErrorCode::Disabled, "原组件已停用，此调用不可执行"),
+        "cancelled" => (
+            ErrorCode::Cancelled,
+            "页面或宿主已关闭，此调用的结果不可交付",
+        ),
+        "expired" => (
+            ErrorCode::Expired,
+            "原页面或授权已过期，请重新审阅；已发出的操作不自动重放",
+        ),
+        "deadline" => (
+            ErrorCode::Deadline,
+            "原调用超过时间预算，已发出的操作不自动重放",
+        ),
+        "budget_exceeded" => (
+            ErrorCode::BudgetExceeded,
+            "超过原调用的资源预算，请减小单次结果或核对已审阅的组件预算",
+        ),
+        "busy" => (
+            ErrorCode::Busy,
+            "宿主操作或页面数量已达上限，请先结束已有操作",
+        ),
+        "permission_denied" => (ErrorCode::PermissionDenied, "原调用不具备此操作权限"),
+        "invalid_request" => (ErrorCode::InvalidRequest, "原调用请求或结果格式无效"),
+        "unsupported" => (
+            ErrorCode::Unsupported,
+            "当前宿主不支持此调用的契约或执行环境",
+        ),
+        "transport" => (ErrorCode::Transport, "宿主未确认此操作结果"),
+        _ => return None,
+    })
+}
+fn typed_invocation_failure(code: &'static str) -> AppError {
+    let (_, message) = invocation_public_fields(code).expect("host-owned invocation error code");
     AppError {
-        code: "plugin_sdk_invocation",
+        code,
         message: message.into(),
         details: None,
     }
+}
+
+pub(crate) fn invocation_failure(reason: znet_plugin_sandbox::contract::Error) -> AppError {
+    use znet_plugin_sandbox::contract::Error;
+    typed_invocation_failure(match reason {
+        Error::Revoked | Error::DigestMismatch => "revoked",
+        Error::Disabled => "disabled",
+        Error::Cancelled => "cancelled",
+        Error::Expired => "expired",
+        Error::Deadline => "deadline",
+        Error::BudgetExceeded => "budget_exceeded",
+        Error::Busy => "busy",
+        Error::PermissionDenied | Error::AdmissionDenied => "permission_denied",
+        Error::InvalidManifest | Error::InvalidOutput => "invalid_request",
+        Error::WrongHost
+        | Error::IncompatibleDevice
+        | Error::IncompatibleVersion
+        | Error::UnsupportedIsolation => "unsupported",
+        Error::GuestException | Error::HostFailure => "transport",
+    })
+}
+fn original_execution_failure(reason: znet_client_core::capability::Error) -> AppError {
+    use znet_client_core::capability::Error;
+    typed_invocation_failure(match reason {
+        Error::Revoked => "revoked",
+        Error::Disabled => "disabled",
+        Error::Cancelled => "cancelled",
+        Error::Expired => "expired",
+        Error::Deadline => "deadline",
+        Error::BudgetExceeded => "budget_exceeded",
+        Error::Busy => "busy",
+        Error::PermissionDenied | Error::AdmissionDenied => "permission_denied",
+        Error::InvalidRequest => "invalid_request",
+        Error::Transport => "transport",
+    })
 }

@@ -61,7 +61,11 @@ fn sdk_dispatcher(
                     crate::services::subscription::apply_managed_authorized(
                         app.clone(),
                         managed,
-                        || lease.check(Some(&request)).map_err(io::failure),
+                        || {
+                            lease
+                                .check(Some(&request))
+                                .map_err(super::sdk::invocation_failure)
+                        },
                     ),
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
@@ -73,7 +77,11 @@ fn sdk_dispatcher(
                 return crate::services::subscription::update_managed_metadata_authorized(
                     app.clone(),
                     input,
-                    || lease.check(Some(&request)).map_err(io::failure),
+                    || {
+                        lease
+                            .check(Some(&request))
+                            .map_err(super::sdk::invocation_failure)
+                    },
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
@@ -84,7 +92,11 @@ fn sdk_dispatcher(
                 return crate::services::subscription::complete_managed_sync_authorized(
                     app.clone(),
                     input,
-                    || lease.check(Some(&request)).map_err(io::failure),
+                    || {
+                        lease
+                            .check(Some(&request))
+                            .map_err(super::sdk::invocation_failure)
+                    },
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
@@ -98,7 +110,11 @@ fn sdk_dispatcher(
                         subscription_id,
                         remove_associated_config,
                         plugin_id.clone(),
-                        || lease.check(Some(&request)).map_err(io::failure),
+                        || {
+                            lease
+                                .check(Some(&request))
+                                .map_err(super::sdk::invocation_failure)
+                        },
                     ),
                 )
                 .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
@@ -339,7 +355,9 @@ impl Host {
         let (component, authority, configuration) = {
             let _operation = self.operation.lock().unwrap();
             self.checked_rescan(manager)?;
-            self.current_review(manager, &review)?;
+            self.current_review(manager, &review).map_err(|_| {
+                super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+            })?;
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&review.key).ok_or_else(stale)?;
             let mut configuration = loaded
@@ -378,18 +396,7 @@ impl Host {
                 },
             )
             .and_then(|receipt| receipt.into_value());
-        result.map_err(|error| {
-            use znet_plugin_sandbox::contract::Error;
-            AppError::invalid_argument(match error {
-                Error::Revoked | Error::Expired | Error::Disabled | Error::PermissionDenied => {
-                    "插件权限已失效，请重新查看权限并确认"
-                }
-                Error::Busy => "此组件正在运行，请稍后重试",
-                Error::Deadline | Error::BudgetExceeded => "插件运行超过资源限制，已停止",
-                Error::Cancelled => "插件运行已停止",
-                _ => "插件运行失败，请检查兼容性或联系发布者",
-            })
-        })
+        result.map_err(super::sdk::invocation_failure)
     }
     pub fn invoke(
         &self,
@@ -483,11 +490,15 @@ impl Host {
             let _operation = self.operation.lock().unwrap();
             self.checked_rescan(manager)?;
             if cancelled.load(Ordering::Acquire) {
-                return Err(stale());
+                return Err(super::sdk::invocation_failure(
+                    znet_plugin_sandbox::contract::Error::Cancelled,
+                ));
             }
             let key = format!("{plugin_id}/{component_id}");
             let binding = if let Some(review) = original_review {
-                self.current_review(manager, review)?
+                self.current_review(manager, review).map_err(|_| {
+                    super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+                })?
             } else {
                 manager
                     .component_snapshots()
@@ -543,24 +554,16 @@ impl Host {
                     scheduled: false,
                 },
             )
-            .map_err(|error| {
-                use znet_plugin_sandbox::contract::Error;
-                AppError::invalid_argument(match error {
-                    Error::Revoked | Error::Expired | Error::Disabled | Error::PermissionDenied => {
-                        "插件尚未启用，或当前操作没有所需权限"
-                    }
-                    Error::Busy => "插件正在处理另一个操作，请稍后重试",
-                    Error::Deadline | Error::BudgetExceeded => "插件操作超过资源限制，已停止",
-                    Error::Cancelled => "插件操作已停止",
-                    _ => "插件操作失败，请在插件页面查看说明",
-                })
-            })?;
-        let output = receipt.value().map_err(|_| stale())?.clone();
+            .map_err(super::sdk::invocation_failure)?;
+        let output = receipt
+            .value()
+            .map_err(super::sdk::invocation_failure)?
+            .clone();
         let Some(marker) = output
             .as_object()
             .and_then(|object| object.get("znet_plugin_result"))
         else {
-            receipt.check().map_err(|_| stale())?;
+            receipt.check().map_err(super::sdk::invocation_failure)?;
             return Ok(output);
         };
         if marker != 1 {
@@ -572,7 +575,7 @@ impl Host {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
         let _operation = self.operation.lock().unwrap();
-        receipt.check().map_err(|_| stale())?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
         let loaded = state.loaded.get(&key).ok_or_else(stale)?;
@@ -586,7 +589,7 @@ impl Host {
             plugin_id,
             envelope.state_updates,
         )?;
-        receipt.check().map_err(|_| stale())?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)
     }
 
@@ -658,15 +661,18 @@ impl Host {
                     scheduled: true,
                 },
             )
-            .map_err(|_| AppError::invalid_argument("插件后台操作失败或授权已失效"))?;
-        let output = receipt.value().map_err(|_| stale())?.clone();
+            .map_err(super::sdk::invocation_failure)?;
+        let output = receipt
+            .value()
+            .map_err(super::sdk::invocation_failure)?
+            .clone();
         let envelope: InvocationEnvelope = serde_json::from_value(output)
             .map_err(|_| AppError::invalid_argument("插件返回的状态更新格式无效"))?;
         if envelope.znet_plugin_result != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
         let _operation = self.operation.lock().unwrap();
-        receipt.check().map_err(|_| stale())?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
         let loaded = state.loaded.get(&key).ok_or_else(stale)?;
@@ -680,7 +686,7 @@ impl Host {
             plugin_id,
             envelope.state_updates,
         )?;
-        receipt.check().map_err(|_| stale())?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)
     }
     /// Run declared bounded startup hooks after the app state is available.
@@ -761,10 +767,14 @@ impl Host {
         let _operation = self.operation.lock().unwrap();
         self.checked_rescan(manager)?;
         if cancelled.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
         }
         if let Some(review) = original_review {
-            self.current_review(manager, review)?;
+            self.current_review(manager, review).map_err(|_| {
+                super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+            })?;
         }
         let schema = {
             let state = self.state.lock().unwrap();
@@ -780,13 +790,17 @@ impl Host {
             .validate_values(&values)
             .map_err(|_| AppError::invalid_argument("插件配置缺少必填项或字段格式无效"))?;
         if cancelled.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
         }
         manager.revoke_component(key);
         configuration::save(&self.root()?, key, values)?;
         self.rescan(manager, &self.store()?)?;
         if cancelled.load(Ordering::Acquire) {
-            return Err(stale());
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
         }
         Ok(self.snapshot(manager))
     }
