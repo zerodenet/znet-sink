@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, Window};
 
 use crate::errors::AppResult;
 use crate::models::subscription::{
@@ -36,6 +36,33 @@ pub async fn subscription_sync(
 #[tauri::command]
 pub async fn subscription_sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     subscription::sync_all(app_handle).await
+}
+
+/// Explicit main-host action. Only validator metadata is removed; an unknown
+/// configuration application is never resolved by deleting this row.
+#[tauri::command]
+pub async fn subscription_reset_conditional_cache(
+    app_handle: AppHandle,
+    window: Window,
+    id: String,
+    expected_updated_at_unix_ms: String,
+) -> AppResult<subscription::ConditionalCacheReset> {
+    crate::services::native_documents::require_host(window.label())?;
+    let version = expected_updated_at_unix_ms
+        .parse::<u64>()
+        .map_err(|_| crate::errors::AppError::invalid_argument("来源版本无法确认，请刷新后重试"))?;
+    if version.to_string() != expected_updated_at_unix_ms {
+        return Err(crate::errors::AppError::invalid_argument(
+            "来源版本无法确认，请刷新后重试",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        subscription::reset_conditional_cache(app_handle.state::<AppState>(), id, version)
+    })
+    .await
+    .map_err(|_| {
+        crate::errors::AppError::internal("条件记录清理结果未确认，请先核对；不会自动重试")
+    })?
 }
 
 #[tauri::command]

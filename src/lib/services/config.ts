@@ -125,6 +125,13 @@ export async function syncSubscription(id: string): Promise<SubscriptionProfile>
   return subscription;
 }
 
+export async function resetSubscriptionConditionalCache(id:string,expectedUpdatedAtUnixMs:number):Promise<{cleared:boolean}>{
+  if(!id || !Number.isSafeInteger(expectedUpdatedAtUnixMs) || expectedUpdatedAtUnixMs<0)throw new Error('来源版本无法确认，请刷新后重新预览。');
+  const result=await invoke<{cleared:boolean}>('subscription_reset_conditional_cache',{id,expectedUpdatedAtUnixMs:String(expectedUpdatedAtUnixMs)});
+  if(typeof result?.cleared!=='boolean')throw new Error('条件记录清理回执未确认，请先核对。');
+  return result;
+}
+
 export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome> {
   const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
   proxyConfigSignal.markChanged(true);

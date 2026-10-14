@@ -1,0 +1,46 @@
+[package]
+name = "znet-mobile-runtime"
+version = "0.0.3"
+edition = "2021"
+license = "MPL-2.0"
+description = "Client-owned embedded Zero Proxy executor and lifecycle"
+
+# Kept isolated: core vendor patches must not change desktop TLS inputs.
+# A consuming native host must explicitly adopt these pinned dependencies.
+[workspace]
+
+[features]
+default = []
+socks5 = ["zero-proxy/socks5"]
+http = ["zero-proxy/http"]
+mixed = ["zero-proxy/mixed"]
+vless = ["zero-proxy/vless"]
+hysteria2 = ["zero-proxy/hysteria2"]
+shadowsocks = ["zero-proxy/shadowsocks"]
+trojan = ["zero-proxy/trojan"]
+vmess = ["zero-proxy/vmess"]
+mieru = ["zero-proxy/mieru"]
+dns = ["zero-proxy/dns"]
+wireguard = ["zero-proxy/wireguard"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
+zero-api = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086", default-features = false }
+zero-config = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086", default-features = false }
+zero-engine = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086", default-features = false }
+zero-proxy = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"
+
+# Git dependencies do not inherit the core workspace vendor patches.
+# Select the same immutable fork packages used by that revision.
+[patch.crates-io]
+gotatun = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+h2 = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+hyper = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+rustls = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+openssl-sys = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+blake3 = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+quinn-proto = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+h3-quinn = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }

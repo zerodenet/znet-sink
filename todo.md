@@ -1,8 +1,8 @@
 # 移动适配依赖与暂不支持项
 
-2026-10-14，v0.0.3，Draft PR #46。这里是依赖协调与解除条件的单一入口；完整 PRD 范围和已实现项沿用 [验收账本](docs/gui/mobile-acceptance-ledger-v0.0.3.md)，不另造完成标准。源码检查不是手机验收，unsupported 占位不计为已完成 VPN。
+2026-10-14，v0.0.3，Draft PR #46。这里是依赖协调与解除条件的单一入口；完整 PRD 范围和已实现项沿用 [验收账本](docs/gui/mobile-acceptance-ledger-v0.0.3.md)，不另造完成标准。源码检查不是手机验收，unsupported 占位不计为已完成 VPN。用户已确认内核接入、原生VPN及宿主生命周期装配后置；该优先级不影响其验收条件，当前以独立客户端功能交付。
 
-已核实客户端 develop 为 `fd198ba52711f018334860b8a6704546ccd349fd`；客户端依赖、只读 core 审计及 core 远端 develop 为 `e74561f99acca941bfadf0d33e35a5ef08f34086`。只修改客户端；core 由用户协调其负责人。下列行为要求是建议验收契约，接口名称尚未决定。
+已核实客户端 develop 为 `fd198ba52711f018334860b8a6704546ccd349fd`；客户端依赖和只读 core 工作树固定 `e74561f99acca941bfadf0d33e35a5ef08f34086`。最终复核 core 远端 develop 已到 `c2a72f6404d48f6931c25de6e56293dbff1823ab`；只读查看增量是 connector 恢复、桌面 TUN/Tokio 及测试修正，没有解除下列移动接口或 non-desktop TUN 工厂问题。不自动升级客户端固定依赖。只修改客户端；core 由用户协调其负责人。下列行为要求是建议验收契约，接口名称尚未决定。
 
 ## CORE-01
 
@@ -50,13 +50,23 @@
 
 验收：原生服务/扩展持有实际 Proxy，UI 退出不终止转发；停止完成资源释放；不能用 EngineHandle 的控制状态冒充数据面就绪。
 
+## CORE-05
+
+**实际移动目标编译阻塞：非桌面 TUN 工厂返回类型。依赖方：core 的 tun crate。**
+
+证据：客户端真实 Android API24 NDK `cargo check --target aarch64-linux-android` 在固定 e74561f 的 [`crates/tun/src/lib.rs:165`](https://github.com/zerodenet/core/blob/e74561f99acca941bfadf0d33e35a5ef08f34086/crates/tun/src/lib.rs#L165) 报 E0282。`create() -> io::Result<impl TunDevice>` 在非 Linux/macOS/Windows 只有 `Err`，没有可确定的 concrete TunDevice。没有修改 core 或缓存源码。
+
+影响与解除条件：完整 Proxy 即使不启用 TUN 也依赖 zero-tun，因此移动目标编译被阻塞；需要上游让 unsupported-target 分支具有合法、明确的返回类型并保持 Unsupported，或通过正式外部设备接口/feature 组织补齐。不能用移动平台伪装为 Linux，不能替换成 EngineHandle 控制状态。
+
+验收：固定修复版本的 Android API24 NDK 与实际 iOS SDK 完整 Proxy compile/check 通过，并覆盖明确拒绝未适配设备；这不替代 CORE-01/02 的真实接入及手机网络验收。iOS owner SDK 本轮未运行，因相同非桌面分支问题保留阻塞；仅已有 Swift 文档库及轻量共享 Rust 目标检查可按实际结果报告。
+
 ## CLIENT-01
 
-**原生 runtime owner、默认随包内核与控制桥：客户端继续实施。** 本轮增加共享 Rust 窄控制桥、实际 IPC 只读检查和独立监听取消/缺口处理；native owner 与 EventSource 尚未注册，不计为完整 M04。 已有公开 Rust 生命周期/控制服务可复用。当前没有真实 VpnService/Packet Tunnel runtime 注册或可运行的默认随包内核，移动调用返回 unsupported，平台 VPN 状态保留 unknown。解除条件为实际宿主所有权、随包编译能力、鉴权/有界控制与事件桥及 CORE-01/02 组合验证；验收包括撤权、主动断开、实例换代和不依赖 UI 存活。
+**原生 runtime owner、默认随包内核与控制桥：客户端继续实施。** 本轮增加共享 Rust 窄控制桥、实际 IPC 只读检查和独立监听取消/缺口处理；native owner 与 EventSource 尚未注册，不计为完整 M04。 已有公开 Rust 生命周期/控制服务可复用；本轮新增 [具体 RuntimeOwner](docs/gui/embedded-mobile-runtime-v0.0.3.md)，独立 Tokio executor 实际持有 Proxy/RunningProxy，UI观察句柄销毁不停止转发，停止等待 orchestration 和 executor disposal。Linux真实回环/控制测试不等于 native host 注册。当前没有真实 VpnService/Packet Tunnel runtime 注册或可运行的默认随包内核，移动调用返回 unsupported，平台 VPN 状态保留 unknown。解除条件为实际宿主所有权、随包编译能力、鉴权/有界控制与事件桥及 CORE-01/02/05 组合验证；验收包括撤权、主动断开、实例换代和不依赖 UI 存活。
 
 ## CLIENT-02
 
-**后台订阅和更新检查：客户端及平台调度。** 本轮实施真实前台到期协调，后台 OS 调度仍未适配，不注册空 Worker 或返回假成功。解除条件为系统允许的调度、持久去重和恢复核对；验收区分周期意图、实际执行、推迟、进程中断和结果未确认，不承诺准点。
+**后台订阅和更新检查：客户端及平台调度。** 本轮实施真实前台到期协调，后台 OS 调度仍未适配，不注册空 Worker 或返回假成功。普通订阅条件同步已复用共享HTTP executor，ETag/Last-Modified绑定实际来源和有效材料，304不重复应用；自动暂停仍允许显式手动同步。未知运行提交保留阻断状态，当前尚缺普通订阅的持久权威核对/解除入口，不能通过清缓存或重新下载解除。该入口需读取真实回执、实例及已保存材料，不能直接改为成功。解除条件为系统允许的调度、持久去重和恢复核对；验收区分周期意图、实际执行、推迟、进程中断和结果未确认，不承诺准点。
 
 ## CLIENT-03
 

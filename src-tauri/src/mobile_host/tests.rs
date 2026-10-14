@@ -42,7 +42,7 @@ fn both_mobile_platforms_explain_pending_capabilities_without_creating_runtime_f
         }
         assert_eq!(
             blocked[0]["dependencyIds"],
-            serde_json::json!(["CORE-01", "CORE-02", "CLIENT-01"])
+            serde_json::json!(["CORE-01", "CORE-02", "CORE-05", "CLIENT-01"])
         );
     }
     assert!(snapshot_for("desktop").unsupported_capabilities.is_empty());

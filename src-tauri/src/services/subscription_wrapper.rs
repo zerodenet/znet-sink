@@ -7,7 +7,9 @@ pub(crate) use original::{
     apply_managed_to_acceptance_store, complete_managed_sync_in_acceptance_store,
     remove_managed_from_acceptance_store, update_managed_metadata_in_acceptance_store,
 };
-pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
+pub use original::{
+    reset_conditional_cache, ConditionalCacheReset, ParsedSubscriptionConfig, SyncAllOutcome,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;

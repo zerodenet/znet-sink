@@ -172,4 +172,44 @@ workspace/readiness 及其他 CI 已于 2026-10-13 12:15 UTC 核对全绿：
 
 新增真实 Unix IPC 测试验证查询身份前后变化、关闭单监听不终止 pending control/另一 observer、帧/事件/请求预算与秘密脱敏。独立 HTTP/SQLite 测试验证前台同步、修改/手动同步竞争、恢复未知屏障和304拒绝保留材料。这些夹具不等于生产 Zero/手机内核、原生生命周期或真实分享验收。
 
-当前移动 Proxy/服务注册及随包可运行内核、TUN/保护、后台 OS 调度、304条件缓存语义、iOS主应用/provider与真机转发仍未完成。不创建签名凭据或购买账号。最终 head CI/原生构建收据继续在 PR 描述更新，不借前一提交成功替代。
+该次检查时，移动 Proxy/服务注册及随包可运行内核、TUN/保护、后台 OS 调度、304条件缓存语义、iOS主应用/provider与真机转发仍未完成。不创建签名凭据或购买账号。后续条件同步实现见下节；最终 head CI/原生构建收据继续在 PR 描述更新，不借前一提交成功替代。
+
+## 普通订阅条件同步与独立 Proxy owner
+
+普通订阅现在复用共享 HTTP executor，持久 ETag/Last-Modified 与实际来源和有效材料绑定。
+真实 HTTP200→304 测试确认 304 不替换材料、不提交运行配置、不修改选择或覆盖；暂停自动
+同步仍允许用户手动同步。损坏条件记录有固定来源及版本的显式清理确认，SQLite CAS 仅删除
+该来源的条件元数据，不下载、不应用、不解除运行提交结果未知屏障。额度缺失、旧数字 DTO
+超出安全整数及来源未提供额度采样时间分别说明；没有合成零值或健康状态。
+
+具体 [RuntimeOwner](../../src-tauri/crates/mobile-runtime/src/owner.rs) 使用固定 core e74561f
+的公开 Proxy/RunningProxy，位于独立 workspace，未链接进主应用或 APK。专用 OS 线程及
+Tokio executor 持有完整生命周期；真实 Linux TCP 回环在原 UI executor/观察句柄销毁后
+继续转发，停止等待实际 shutdown 和 executor disposal。默认及 all-features 各 **5 项通过**，
+fmt、check 和严格 clippy `-D warnings` 通过。这不证明 UDP、DNS、所有协议或手机转发。
+core 所需八个 vendor patch 使用同一不可变版本，未替换主桌面 workspace 的 TLS 依赖。
+
+云端实际 Android API24 NDK 完整 owner check 在固定 core 的 zero-tun 工厂报 **E0282**：
+非桌面分支 `io::Result<impl TunDevice>` 只有 Err，无法推断 concrete 返回类型。
+已记录 [CORE-05](../../todo.md)，没有修改 core 或缓存源码，没有用 EngineHandle 或假 Linux
+cfg 绕过。iOS owner SDK 检查未运行。PR 的完整 owner iOS job 及 Android owner step 仅保留
+手动审计入口，正常 PR 中跳过，不计为目标编译成功。已有轻量共享 Rust、原生文档库和普通
+Android 主宿主/APK 检查继续执行；主应用没有实际 owner/TUN 接入。
+
+用户已确认原生 VPN、内核接入及宿主生命周期装配后置；这只改变当前实施顺序。
+后台 OS 调度、普通订阅结果未知的持久权威核对/解除入口、随包可运行内核、原生事件桥、
+iOS 主应用/provider/App Group、插件执行边界及手机验收仍未完成。
+
+本轮最终云端 Rust workspace/all-features **1057 passed / 0 failed / 7 ignored**，fmt、
+all-targets/all-features check 与 clippy 通过，现有编译警告保留。独立 owner 的五项测试与
+主 workspace 分开计数。证据为 `/tmp/mobile-round4-final3-{check,tests,clippy}.log`、
+`/tmp/embedded-mobile-runtime-{tests,allfeatures-tests,clippy,android-check}.log`。
+最终 `pnpm verify:frontend` 与生产 build 通过；移动语义 **84 项**、许可断言 **17 项**，
+svelte-check **0 errors / 0 warnings**。完整 Chromium 回归 **214 passed**，包括实际订阅
+组件的未知额度、暂停后的手动同步及固定来源条件记录清理确认。证据为
+`/tmp/mobile-round4-final3-frontend.log`、`/tmp/mobile-round4-final-browser.log`。
+本地 WebKit 未运行，同一提交 CI 双引擎结果和新原生产物收据在 PR 更新，不借用旧提交。
+
+提交前只读复核客户端 develop 仍为 fd198ba5；core 远端 develop 已更新到 c2a72f6，
+增量未解除移动接口及 CORE-05，客户端与独立 owner 依赖仍固定 e74561f。只 fetch/read
+core 元资料，审计工作树仍干净，无 source/缓存修改。

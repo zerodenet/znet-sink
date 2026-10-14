@@ -90,13 +90,14 @@ fn subscription_unexpected_304_is_rejected_and_existing_material_is_untouched() 
             kernel: "zero".into(),
             format: "zero-json".into(),
             path: None,
-            content: Some(json!({"outbounds":[{"tag":"direct","type":"direct"}]})),
+            content: Some(json!({"inbounds":[],"outbounds":[{"tag":"direct","protocol":{"type":"direct"}}],"route":{"final":{"type":"direct"}}})),
             active: false,
             managed_source: None,
             updated_at_unix_ms: 1,
             capabilities: Default::default(),
         });
     let previous = serde_json::to_value(state.proxy_configs().lock().unwrap().clone()).unwrap();
+    zero_config::RuntimeConfig::parse(&previous[0]["content"].to_string()).unwrap();
     let error =
         fetch_subscription_content_blocking(state.capabilities(), &url, "custom").unwrap_err();
     assert_eq!(error.code, "upstream_error");

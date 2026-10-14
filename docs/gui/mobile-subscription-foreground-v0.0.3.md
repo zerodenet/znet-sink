@@ -26,13 +26,13 @@ AppState 持有共享协调状态。每个前台 epoch 只有一个 pass；重�
 
 已确认网络/源拒绝失败采用最多四次一轮的退避（60/120/240 秒后再由真实前台事件触发，耗尽后至少 15 分钟或配置周期的冷却），不承诺后台重试。没有可执行的新前台事件时不会自行醒来。损坏/未来 checkpoint、存储不可读或写失败暂停该 pass，读取失败保留旧可读记录并注明存储错误。
 
-普通 URL 订阅当前没有经验证的 validator/material cache。因此收到 304 明确作为 HTTP 错误，保留旧有效材料，不把空 body 解析成功或增加 lastSync。规则集已有条件请求，不代表普通订阅 304 已完成；此边界在测试和待办中保留。
+普通 URL 订阅已复用共享条件请求执行器和私有 validator/material 记录：只有来源、成功同步 revision 和仍有效的关联材料完全匹配时，304 才更新检查时间；不应用或覆盖配置。意外 304、记录损坏、源/材料变化及未知提交均保留旧有效材料并明确反馈。详见 [普通订阅条件同步](ordinary-subscription-conditional-sync-v0.0.3.md)。
 
 ## 验证与尚未运行
 
 - 调度 policy tests：真实 epoch 去重、后台停止排队、新 epoch 等待、进程恢复未知屏障、关闭/重开不清屏障、due 过滤、容量、有限退避、无敏感记录。
 - 私有 SQLite storage 实测 reopen：同 native capability namespace 写入/重读在途记录，恢复未知且不发起新 due 目标。
-- 既有 subscription capability workflow 实际 localhost HTTP 测试：200 元数据和统一操作记录；304 拒绝/旧具体配置不变/URL token 不进入错误和操作记录；同毫秒源变更及手动成功使旧预检失效。
+- 既有 subscription capability workflow 实际 localhost HTTP 测试：200 元数据和统一操作记录；有效200→304条件请求/意外304拒绝/旧具体配置不变/URL token 不进入错误和操作记录；同毫秒源变更及手动成功使旧预检失效。
 - TypeScript 文案测试：由权威 `foregroundReconciliation` 区分 native foreground 与未适配平台，始终保留系统后台调度未适配事实；小于 60 秒/不安全周期不执行。
 
 以上单元、服务和编译检查不替代 Android S8/API24 或 iOS 真机冷启动、锁屏、系统暂停、进程杀死、网络切换及存储不足验收。当前完整域同步 API 仍依赖 AppHandle（原生状态与事件/配置编排）；WorkManager/Apple 后台任务不能在无宿主时调用一个空壳或 UI invoke 来声称成功。真实后台方案需要独立可初始化的域执行上下文、平台截止/取消和恢复协调，属于未适配项。

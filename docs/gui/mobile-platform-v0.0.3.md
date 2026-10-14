@@ -267,3 +267,5 @@ Host interface 统计、系统文件保存/分享、通知结果和插件 SDK �
 ## 本轮独立客户端进展
 
 新增实际 IPC 控制通道只读核对及共享桥、活动连接固定筛选导出、捕获元数据恢复账本和原生生命周期前台订阅到期协调。具体边界见 [验收账本](mobile-acceptance-ledger-v0.0.3.md)；这些实现没有注册可转发的移动 Proxy，也没有开放移动 VPN 或 OS 后台定时执行。
+
+新增 [客户端 RuntimeOwner](embedded-mobile-runtime-v0.0.3.md) 已直接复用 Proxy::spawn/RunningProxy::shutdown，独立于 UI executor。它仍未链接进应用/原生服务；Android NDK真实编译失败的 CORE-05 见根 todo.md。C FFI不作为此Rust嵌入的前置依赖。

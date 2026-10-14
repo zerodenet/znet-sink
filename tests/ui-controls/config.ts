@@ -122,6 +122,14 @@ window.addEventListener('fixture-subscription-synced', (event) => {
 });
 export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
   const mode = new URLSearchParams(location.search).get('mode');
+  if(mode==='quota-facts')return [
+    {id:'unknown',name:'额度已提供但用量未知',totalBytes:100},
+    {id:'partial',name:'只有上传已采样',uploadBytes:10,totalBytes:100},
+    {id:'zero',name:'明确的零用量',uploadBytes:0,downloadBytes:0,totalBytes:100},
+    {id:'unsafe',name:'数值无法确认',usedBytes:Number.MAX_SAFE_INTEGER+1,totalBytes:100},
+    {id:'paused',name:'自动暂停仍可手动',enabled:false,totalBytes:100,lastError:'source failed https://example.test?token=private-canary'},
+    {id:'cache',name:'条件记录损坏',lastError:'订阅条件请求记录无法读取、校验或保存；配置材料未因此删除，请检查本地存储后重试'},
+  ].map(item=>({url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1,...item}));
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
   }
@@ -153,12 +161,17 @@ export const importProxyConfig = async () => structuredClone(profiles[0]);
 export const upsertProxyConfig = async () => structuredClone(profiles[0]);
 export const removeProxyConfig = async () => {};
 export const syncSubscription = async (id: string): Promise<SubscriptionProfile> => {
+  if(new URLSearchParams(location.search).get('mode')==='quota-facts'){
+    window.dispatchEvent(new CustomEvent('fixture-subscription-manual-sync',{detail:id}));
+    return {...(await listSubscriptions()).find(sub=>sub.id===id)!,lastSyncAtUnixMs:2};
+  }
   if (new URLSearchParams(location.search).get('mode') !== 'unsynced-source' || id !== 'new-sub') throw new Error('No subscription network calls in this fixture');
   profiles.push({...structuredClone(profiles[0]),id:'synced',name:'新订阅配置',active:false});
   syncedSourceTarget = 'synced';
   return {id,name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'synced',policySelections:{},updatedAtUnixMs:1};
 };
 export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
+export const resetSubscriptionConditionalCache=async(id:string,version:number)=>{window.dispatchEvent(new CustomEvent('fixture-subscription-cache-reset',{detail:{id,version}}));return {cleared:true};};
 export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
 export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
 export const syncAllSubscriptions = async () => ({ total: 0, updated: 0, unchanged: 0, failed: 0 });

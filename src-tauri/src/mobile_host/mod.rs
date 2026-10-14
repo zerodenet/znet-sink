@@ -32,15 +32,16 @@ fn unsupported_capabilities(mobile: bool) -> Vec<UnsupportedCapability> {
             limitation_kind: "not-adapted",
             reason_code: "mobile_tunnel_and_egress_not_adapted",
             reason: "VPN 暂不支持：系统隧道接入及隧道外网络保护尚未适配，不能确认接管。",
-            dependency_ids: &["CORE-01", "CORE-02", "CLIENT-01"],
+            dependency_ids: &["CORE-01", "CORE-02", "CORE-05", "CLIENT-01"],
         },
         UnsupportedCapability {
             capability_id: "kernel.mobile-runtime",
             status: "unsupported",
             limitation_kind: "not-adapted",
             reason_code: "native_runtime_owner_not_registered",
-            reason: "移动内核运行暂不支持：原生运行服务或扩展及安全控制通道尚未接入。",
-            dependency_ids: &["CLIENT-01"],
+            reason:
+                "移动内核运行暂不支持：原生服务及控制通道尚未接入，完整内核的移动目标编译仍受阻。",
+            dependency_ids: &["CLIENT-01", "CORE-05"],
         },
         UnsupportedCapability {
             capability_id: "kernel.bundled-artifact",
@@ -48,7 +49,7 @@ fn unsupported_capabilities(mobile: bool) -> Vec<UnsupportedCapability> {
             limitation_kind: "not-adapted",
             reason_code: "runnable_mobile_kernel_not_bundled",
             reason: "默认内核将随应用分发；当前尚无可运行的移动内核产物。",
-            dependency_ids: &["CLIENT-01"],
+            dependency_ids: &["CLIENT-01", "CORE-05"],
         },
     ]
 }
@@ -129,7 +130,7 @@ pub(crate) fn unavailable(operation: &str) -> AppError {
             "adaptationState": "not-adapted",
             "status": "unsupported",
             "reasonCode": "native_runtime_owner_not_registered",
-            "dependencyIds": ["CLIENT-01", "CORE-01", "CORE-02"],
+            "dependencyIds": ["CLIENT-01", "CORE-01", "CORE-02", "CORE-05"],
             "coreDistribution": "bundled-with-application",
         })),
     }

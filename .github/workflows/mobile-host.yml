@@ -36,6 +36,69 @@ jobs:
         # No native IO, Tauri host, extension, signing or device claim.
         run: cargo check --manifest-path src-tauri/Cargo.toml --locked -p znet-client-core -p znet-engine-client --target "${{ matrix.target }}"
 
+  embedded-runtime:
+    name: Embedded Proxy ownership and real forwarding
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      # Test harness must hold all-feature native config enum values.
+      RUST_MIN_STACK: '16777216'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri/crates/mobile-runtime
+          key: embedded-proxy-owner
+      - name: Check and test the actual Rust Proxy owner
+        shell: bash
+        run: |
+          set -eo pipefail
+          manifest=src-tauri/crates/mobile-runtime/Cargo.toml
+          cargo fmt --manifest-path "$manifest" --all -- --check
+          cargo check --manifest-path "$manifest" --workspace --locked --all-targets --all-features -j 2
+          cargo test --manifest-path "$manifest" --workspace --locked --all-features -j 2
+          cargo clippy --manifest-path "$manifest" --workspace --locked --all-targets --all-features -j 2
+
+  ios-embedded-runtime:
+    name: Embedded Proxy Rust (unsigned iOS SDK check)
+    # CORE-05: pinned zero-tun has no concrete unsupported-target return
+    # type. Keep the actual SDK audit callable; do not report skipped as built.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri/crates/mobile-runtime
+          key: embedded-proxy-ios-sdk
+      - name: Compile owner with actual iPhoneOS SDK without signing
+        shell: bash
+        run: |
+          set -eo pipefail
+          export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export IPHONEOS_DEPLOYMENT_TARGET=16.4
+          export CC_aarch64_apple_ios="$(xcrun --sdk iphoneos --find clang)"
+          export AR_aarch64_apple_ios="$(xcrun --sdk iphoneos --find ar)"
+          mkdir -p embedded-runtime-evidence
+          xcrun --sdk iphoneos --show-sdk-version > embedded-runtime-evidence/ios-sdk-version.txt
+          cargo check --manifest-path src-tauri/crates/mobile-runtime/Cargo.toml --workspace --locked --all-features --target aarch64-apple-ios -j 2 2>&1 | tee embedded-runtime-evidence/ios-owner-check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embedded-runtime-ios-sdk-check
+          path: embedded-runtime-evidence/
+          if-no-files-found: warn
+
   android-rust-host:
     name: Android Rust host (API 24)
     runs-on: ubuntu-latest
@@ -62,6 +125,7 @@ jobs:
           "$native_bin/aarch64-linux-android24-clang" --version
           printf '%s\n' \
             "ANDROID_NDK_HOME=$ndk_root" \
+            "ANDROID_NDK_ROOT=$ndk_root" \
             "CC_aarch64_linux_android=$native_bin/aarch64-linux-android24-clang" \
             "AR_aarch64_linux_android=$native_bin/llvm-ar" \
             "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$native_bin/aarch64-linux-android24-clang" \
@@ -72,10 +136,21 @@ jobs:
         # APK, establish a TUN FD or prove Galaxy S8/VPN forwarding support.
         run: |
           cargo check --manifest-path src-tauri/Cargo.toml --lib --target aarch64-linux-android --locked -j 2 2>&1 | tee android-rust-host-check.log
+      - name: Check actual embedded Proxy owner with Android API 24 NDK
+        # Ordinary host has no linked owner yet. Actual owner cross-check is
+        # blocked at pinned core/zero-tun CORE-05, not a successful APK check.
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          cargo check --manifest-path src-tauri/crates/mobile-runtime/Cargo.toml --workspace --target aarch64-linux-android --all-features --locked -j 2 2>&1 | tee android-embedded-owner-check.log
       - name: Upload Android target check evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-api24-rust-host-check
-          path: android-rust-host-check.log
+          path: |
+            android-rust-host-check.log
+            android-embedded-owner-check.log
           if-no-files-found: warn

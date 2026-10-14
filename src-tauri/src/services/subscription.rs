@@ -20,6 +20,9 @@ use crate::services::{domain_store, logs, proxy_config, rule_set};
 use crate::state::app_state::AppState;
 use sha2::{Digest, Sha256};
 
+#[path = "subscription/conditional_sync.rs"]
+mod conditional_sync;
+pub use conditional_sync::{reset_conditional_cache, ConditionalCacheReset};
 #[path = "subscription/plugin_cleanup.rs"]
 mod plugin_cleanup;
 pub(crate) use plugin_cleanup::remove_plugin_owned;
@@ -175,7 +178,7 @@ pub fn upsert(
 pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionProfile> {
     let id = normalize_required(id, "id")?;
     let state = app_handle.state::<AppState>();
-    sync_by_id(&app_handle, state.inner(), &id).await
+    sync_by_id(&app_handle, state.inner(), &id, false).await
 }
 
 /// Sync every enabled subscription sequentially. Returns the number
@@ -485,6 +488,7 @@ async fn sync_by_id(
     app_handle: &AppHandle,
     state: &AppState,
     id: &str,
+    automatic: bool,
 ) -> AppResult<SubscriptionProfile> {
     let _in_flight = begin_in_flight(state.subscription_syncs(), "subscription", id)?;
     let subscription = {
@@ -496,6 +500,13 @@ async fn sync_by_id(
             .ok_or_else(|| AppError::not_found("subscription", id.to_string()))?
     };
 
+    if automatic && !subscription.enabled {
+        return Err(AppError::conflict(
+            "subscription",
+            id,
+            "automatic synchronization is disabled",
+        ));
+    }
     sync_guarded(app_handle, state, subscription).await
 }
 
@@ -558,11 +569,6 @@ async fn sync_guarded(
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
     let id = subscription.id.clone();
-    if !subscription.enabled {
-        let error = AppError::invalid_argument("subscription is disabled");
-        update_sync_error(state, &id, &error.message)?;
-        return Err(error);
-    }
     if subscription.managed_source.is_some() {
         let error = AppError::invalid_argument(
             "managed subscription refresh is owned by its plugin source",
@@ -591,7 +597,7 @@ async fn sync_all_with_state(
 
     let mut succeeded = 0usize;
     for id in &ids {
-        if sync_by_id(app_handle, state, id).await.is_ok() {
+        if sync_by_id(app_handle, state, id, true).await.is_ok() {
             succeeded += 1;
         }
     }
@@ -603,22 +609,86 @@ async fn sync_all_with_state(
     })
 }
 
+const UNKNOWN_APPLY_MESSAGE: &str =
+    "订阅材料准备或运行提交结果未确认；请先核对已保存材料和运行状态，不要自动重放";
+
+fn require_confirmed_previous_result(subscription: &SubscriptionProfile) -> AppResult<()> {
+    // Exact host-issued phase marker only; arbitrary legacy/provider error text
+    // and ordinary network rejection do not become uncertainty barriers.
+    if subscription.last_error.as_deref() == Some(UNKNOWN_APPLY_MESSAGE) {
+        return Err(AppError {
+            code: "config_apply_uncertain",
+            message: UNKNOWN_APPLY_MESSAGE.into(),
+            details: None,
+        });
+    }
+    Ok(())
+}
+
 async fn sync_subscription(
     app_handle: &AppHandle,
     state: &AppState,
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
+    require_confirmed_previous_result(&subscription)?;
     let user_agent = subscription
         .user_agent
         .clone()
         .unwrap_or_else(|| default_user_agent_for_format(&subscription.format).to_string());
+    let (cache, cache_revision) =
+        conditional_sync::load(state.capabilities().clone(), subscription.id.clone()).await?;
+    let validators = {
+        let profiles = lock(state.proxy_configs(), "proxy_config")?;
+        subscription
+            .target_proxy_config_id
+            .as_ref()
+            .and_then(|id| profiles.iter().find(|profile| &profile.id == id))
+            .and_then(|profile| {
+                cache
+                    .as_ref()
+                    .filter(|cache| cache.matches(&subscription, &user_agent, profile))
+            })
+            .map(conditional_sync::Cache::validators)
+            .unwrap_or_default()
+    };
     let response = fetch_subscription_content(
         state.capabilities().clone(),
         subscription.url.clone(),
         user_agent.clone(),
+        validators,
     )
     .await?;
-    let parsed = parse_subscription_content(&response.content, &subscription.format)?;
+    if response.not_modified {
+        // Serialize against local material edits, then recheck both identities.
+        let _operation = state.proxy_config_operation().lock().await;
+        let (updated, refreshed) = conditional_sync::confirm_not_modified(
+            state,
+            &subscription,
+            &user_agent,
+            cache
+                .as_ref()
+                .ok_or_else(|| AppError::invalid_argument("304 没有已确认材料的条件请求记录"))?,
+            &response.userinfo,
+            now_unix_ms(),
+            domain_store::save_subscriptions,
+        )?;
+        conditional_sync::save(
+            state.capabilities().clone(),
+            updated.id.clone(),
+            refreshed,
+            cache_revision,
+        )
+        .await?;
+        return Ok(updated);
+    }
+    let parsed =
+        parse_subscription_content(&response.content, &subscription.format).map_err(|_| {
+            AppError {
+                code: "subscription_parse_error",
+                message: "订阅正文无法按所选格式解析或验证，已保留旧材料".into(),
+                details: None,
+            }
+        })?;
     let now = now_unix_ms();
     let target_proxy_config_id = subscription
         .target_proxy_config_id
@@ -633,18 +703,63 @@ async fn sync_subscription(
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
 
-    apply_parsed_subscription(
+    let (updated, published) = apply_parsed_subscription(
         app_handle,
         state,
         subscription,
         parsed,
-        user_agent,
+        user_agent.clone(),
         metadata,
         now,
         target_proxy_config_id,
         None,
     )
     .await
+    .map_err(sanitized_apply_error)?;
+    // Publication and authoritative runtime reconciliation have already succeeded.
+    // If the private validator write fails, its error describes this separate phase;
+    // saved material and last successful sync remain intact.
+    let _operation = state.proxy_config_operation().lock().await;
+    let profile = lock(state.proxy_configs(), "proxy_config")?
+        .iter()
+        .find(|profile| Some(&profile.id) == updated.target_proxy_config_id.as_ref())
+        .cloned()
+        .ok_or_else(|| AppError::invalid_argument("已保存订阅的关联配置不存在"))?;
+    let confirmed = conditional_sync::Cache::confirmed(
+        &updated,
+        &user_agent,
+        &published,
+        &response.validators,
+    )?;
+    if !confirmed.matches_material(&profile) {
+        return Err(AppError::conflict(
+            "subscription",
+            updated.id.clone(),
+            "订阅已保存，但材料随后变化；未保存条件请求记录",
+        ));
+    }
+    conditional_sync::save(
+        state.capabilities().clone(),
+        updated.id.clone(),
+        confirmed,
+        cache_revision,
+    )
+    .await?;
+    Ok(updated)
+}
+
+fn sanitized_apply_error(error: AppError) -> AppError {
+    AppError {
+        code: error.code,
+        message: match error.code {
+            "unconfirmed" | "internal" | "config_apply_uncertain" => UNKNOWN_APPLY_MESSAGE,
+            "conflict" => "订阅来源或配置版本已变化，未确认新的运行状态；请刷新后核对",
+            "invalid_argument" => "订阅配置或规则依赖校验失败，旧确认材料已保留",
+            _ => "订阅材料准备或运行提交失败；请核对材料与运行状态",
+        }
+        .into(),
+        details: None,
+    }
 }
 
 async fn apply_parsed_subscription(
@@ -657,7 +772,7 @@ async fn apply_parsed_subscription(
     now: u64,
     target_proxy_config_id: String,
     commit_guard: Option<&(dyn Fn() -> AppResult<()> + Send + Sync)>,
-) -> AppResult<SubscriptionProfile> {
+) -> AppResult<(SubscriptionProfile, ProxyConfigProfile)> {
     let parsed =
         prepare_parsed_subscription(state, &subscription, parsed, user_agent, commit_guard).await?;
     ensure_subscription_unchanged(state, &subscription)?;
@@ -665,7 +780,7 @@ async fn apply_parsed_subscription(
         guard()?;
     }
 
-    upsert_synced_proxy_config(
+    let published = upsert_synced_proxy_config(
         app_handle,
         state,
         &subscription,
@@ -676,13 +791,14 @@ async fn apply_parsed_subscription(
     if let Some(guard) = commit_guard {
         guard()?;
     }
-    update_sync_success(
+    let updated = update_sync_success(
         state,
         &subscription.id,
         target_proxy_config_id,
         metadata,
         now,
-    )
+    )?;
+    Ok((updated, published))
 }
 
 async fn prepare_parsed_subscription(
@@ -729,9 +845,7 @@ async fn prepare_parsed_subscription(
             Some(state),
             LogLevel::Warn,
             format!(
-                "subscription rule provider '{}' failed: {}; {}",
-                failure.tag,
-                failure.message,
+                "subscription rule provider failed; {}",
                 if failure.used_previous_artifact {
                     "continuing with the last verified ZRS"
                 } else {
@@ -743,10 +857,8 @@ async fn prepare_parsed_subscription(
                 "operation": "sync",
                 "subscriptionId": subscription.id,
                 "subscriptionName": subscription.name,
-                "ruleSetTag": failure.tag,
                 "usedPreviousArtifact": failure.used_previous_artifact,
                 "routeReferencesRemoved": false,
-                "errorMessage": failure.message,
             }),
         );
     }
@@ -1478,6 +1590,10 @@ fn ensure_subscription_unchanged(
         .ok_or_else(|| AppError::not_found("subscription", snapshot.id.clone()))?;
     if current.updated_at_unix_ms != snapshot.updated_at_unix_ms
         || current.url != snapshot.url
+        || current.user_agent != snapshot.user_agent
+        || current.kernel != snapshot.kernel
+        || current.last_sync_at_unix_ms != snapshot.last_sync_at_unix_ms
+        || current.last_error != snapshot.last_error
         || current.format != snapshot.format
         || current.target_proxy_config_id != snapshot.target_proxy_config_id
         || current.enabled != snapshot.enabled
@@ -1494,28 +1610,47 @@ fn ensure_subscription_unchanged(
 /// Raw response captured from the subscription endpoint, including
 /// the optional `subscription-userinfo` header used to track traffic
 /// usage and expiry.
-#[derive(Clone, Debug)]
 struct SubscriptionFetch {
     content: String,
     userinfo: SubscriptionUserinfo,
+    not_modified: bool,
+    validators: znet_client_capabilities::network::Validators,
+}
+
+impl std::fmt::Debug for SubscriptionFetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionFetch")
+            .field("not_modified", &self.not_modified)
+            .finish_non_exhaustive()
+    }
 }
 
 async fn fetch_subscription_content(
     manager: znet_client_core::capability::Manager,
     url: String,
     user_agent: String,
+    validators: znet_client_capabilities::network::Validators,
 ) -> AppResult<SubscriptionFetch> {
     tauri::async_runtime::spawn_blocking(move || {
-        fetch_subscription_content_blocking(&manager, &url, &user_agent)
+        fetch_subscription_conditional_blocking(&manager, &url, &user_agent, &validators)
     })
     .await
-    .map_err(|error| AppError::internal(format!("subscription worker failed: {error}")))?
+    .map_err(|_| AppError::internal("订阅读取工作线程中断，结果未确认"))?
 }
 
+#[cfg(test)]
 fn fetch_subscription_content_blocking(
     manager: &znet_client_core::capability::Manager,
     url: &str,
     user_agent: &str,
+) -> AppResult<SubscriptionFetch> {
+    fetch_subscription_conditional_blocking(manager, url, user_agent, &Default::default())
+}
+fn fetch_subscription_conditional_blocking(
+    manager: &znet_client_core::capability::Manager,
+    url: &str,
+    user_agent: &str,
+    validators: &znet_client_capabilities::network::Validators,
 ) -> AppResult<SubscriptionFetch> {
     use znet_client_capabilities::network;
     let error = |error| AppError {
@@ -1541,30 +1676,59 @@ fn fetch_subscription_content_blocking(
         details: None,
     };
     let lease = znet_client_capabilities::subscription::begin(manager).map_err(error)?;
-    let response = network::get(
+    let response = network::get_conditional(
         &lease,
         url,
         user_agent,
         network::MAX_BODY_BYTES,
-        &["subscription-userinfo"],
+        &["subscription-userinfo", "etag", "last-modified"],
+        validators,
     )
     .and_then(|resource| resource.take(&lease))
     .map_err(error)?;
-    if !(200..300).contains(&response.status) {
-        return Err(AppError {
-            code: "upstream_error",
-            message: format!("subscription server returned HTTP {}", response.status),
-            details: None,
-        });
-    }
     let userinfo = response
         .headers
         .get("subscription-userinfo")
         .map(String::as_str)
         .map(parse_subscription_userinfo)
         .unwrap_or_default();
-    let content = String::from_utf8_lossy(&response.body).into_owned();
-    Ok(SubscriptionFetch { content, userinfo })
+    let response_validators = network::Validators {
+        etag: response.headers.get("etag").cloned(),
+        last_modified: response.headers.get("last-modified").cloned(),
+    };
+    if !conditional_sync::valid_validator(&response_validators.etag)
+        || !conditional_sync::valid_validator(&response_validators.last_modified)
+    {
+        return Err(AppError::invalid_argument(
+            "订阅服务器返回了无效条件请求字段，旧材料已保留",
+        ));
+    }
+    if response.status == 304 && (validators.etag.is_some() || validators.last_modified.is_some()) {
+        return Ok(SubscriptionFetch {
+            content: String::new(),
+            userinfo,
+            not_modified: true,
+            validators: network::Validators::default(),
+        });
+    }
+    if response.status != 200 {
+        return Err(AppError {
+            code: "upstream_error",
+            message: format!("subscription server returned HTTP {}", response.status),
+            details: None,
+        });
+    }
+    let content = String::from_utf8(response.body)
+        .map_err(|_| AppError::invalid_argument("订阅正文不是有效 UTF-8，已保留旧材料"))?;
+    Ok(SubscriptionFetch {
+        content,
+        userinfo,
+        not_modified: false,
+        validators: network::Validators {
+            etag: response.headers.get("etag").cloned(),
+            last_modified: response.headers.get("last-modified").cloned(),
+        },
+    })
 }
 
 /// Parsed `subscription-userinfo` header.
@@ -1586,7 +1750,7 @@ impl SubscriptionUserinfo {
     fn expire_ms(&self) -> Option<u64> {
         self.expire_secs
             .filter(|secs| *secs > 0)
-            .map(|secs| secs * 1000)
+            .and_then(|secs| secs.checked_mul(1000))
     }
 }
 
@@ -2799,7 +2963,7 @@ async fn run_auto_sync_pass(
                 format!("retry {number}/{AUTO_SYNC_MAX_RETRIES}")
             }
         };
-        match sync_by_id(app, state.inner(), &attempt.id).await {
+        match sync_by_id(app, state.inner(), &attempt.id, true).await {
             Ok(profile) => {
                 retry_states.remove(&attempt.id);
                 logs::znet_log_fields(

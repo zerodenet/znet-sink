@@ -70,6 +70,9 @@ tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 
 [workspace]
 members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox", "crates/native-io"]
+# The embedded owner must retain core's immutable vendor patches. Its own
+# workspace/checks keep these forks from replacing desktop TLS dependencies.
+exclude = ["crates/mobile-runtime"]
 default-members = [".", "crates/client-core", "crates/engine-client"]
 resolver = "2"
 
