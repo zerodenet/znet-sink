@@ -13,7 +13,14 @@ test.beforeEach(async ({ page }) => {
         value,
       )
     )
-      messages.push(value.replace(/https?:\/\/[^\s]+/g, '[url]').slice(0, 512));
+      messages.push(
+        value
+          .replace(
+            /\b(?:https?|about|data|blob|file|tauri|asset):[^\s]+/g,
+            '[url]',
+          )
+          .slice(0, 512),
+      );
   });
 });
 test.afterEach(async ({ page }, info) => {
@@ -27,16 +34,16 @@ test.afterEach(async ({ page }, info) => {
     }))
     .catch(() => null);
   const frames = await Promise.all(
-    page
-      .frames()
-      .map(async (candidate) => ({
-        url: candidate.url().startsWith('about:')
-          ? candidate.url()
-          : '[non-about]',
-        ready: await candidate
-          .evaluate(() => document.readyState)
-          .catch(() => null),
-      })),
+    page.frames().map(async (candidate) => ({
+      url: ['about:blank', 'about:srcdoc'].includes(
+        candidate.url().split(/[?#]/, 1)[0],
+      )
+        ? candidate.url().split(/[?#]/, 1)[0]
+        : '[non-about]',
+      ready: await candidate
+        .evaluate(() => document.readyState)
+        .catch(() => null),
+    })),
   );
   console.log(
     'PLUGIN_IFRAME_DIAGNOSTIC',
@@ -159,7 +166,10 @@ test('parent CSP blocks external iframe navigation and retires the old channel w
   await frame(page)
     .getByRole('button', { name: 'Navigate', exact: true })
     .click();
-  await expect(page.getByRole('alert')).toContainText(/原通道关闭|发生导航/);
+  await expect(page.getByRole('alert')).toContainText(
+    /原通道关闭|文档无法核对/,
+    { timeout: 7000 },
+  );
   expect(requests).toBe(0);
   expect((await counters(page)).closes).toBe(1);
   await expect(page.locator('iframe')).toHaveCount(0);
@@ -250,7 +260,16 @@ test('early about:blank load callbacks cannot bind or retire the signed srcdoc c
   await page
     .locator('iframe')
     .evaluate((element) => element.dispatchEvent(new Event('load')));
-  await expect(page.getByRole('alert')).toContainText('发生导航');
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  expect((await counters(page)).closes).toBe(0);
+  await frame(page)
+    .locator('body')
+    .evaluate(() => location.replace('about:blank'));
+  await expect(page.getByRole('alert')).toContainText(
+    /原通道关闭|文档无法核对/,
+    { timeout: 7000 },
+  );
   expect((await counters(page)).closes).toBe(1);
 });
 
@@ -317,6 +336,210 @@ test('signed bootstrap waits for observed iframe load and tolerates several init
     (window as any).__releaseIframeLoad = true;
     element.dispatchEvent(new Event('load'));
   });
-  await expect(page.getByRole('alert')).toContainText('发生导航');
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  expect((await counters(page)).closes).toBe(0);
+  await frame(page)
+    .locator('body')
+    .evaluate(() => location.replace('about:blank'));
+  await expect(page.getByRole('alert')).toContainText(
+    /原通道关闭|文档无法核对/,
+    { timeout: 7000 },
+  );
+  expect((await counters(page)).closes).toBe(1);
+});
+
+async function holdDocumentProbes(page: Page) {
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    addEventListener(
+      'message',
+      (event) => {
+        const value = event.data;
+        if (value?.source === 'znet-plugin-page-v1' && value.method === 'ready')
+          (window as any).__initialDocumentProof = value.args.documentProof;
+        if (
+          value?.source === 'znet-plugin-page-v1' &&
+          value.method === 'document_checked' &&
+          !value.args?.fixtureManual
+        ) {
+          (window as any).__heldDocumentCheck = value;
+          event.stopImmediatePropagation();
+        }
+      },
+      true,
+    );
+  });
+}
+async function probeResponse(
+  page: Page,
+  wrongNonce = false,
+  wrongProof = false,
+) {
+  const held = await page.evaluate(() => (window as any).__heldDocumentCheck);
+  await frame(page)
+    .locator('body')
+    .evaluate(
+      (_element, { held, wrongNonce, wrongProof }) => {
+        parent.postMessage(
+          {
+            source: 'znet-plugin-page-v1',
+            channel: held.channel,
+            id: 0,
+            method: 'document_checked',
+            args: {
+              nonce: wrongNonce ? 'wrong-nonce' : held.args.nonce,
+              documentProof: wrongProof
+                ? '0'.repeat(32)
+                : held.args.documentProof,
+              fixtureManual: true,
+            },
+          },
+          '*',
+        );
+      },
+      { held, wrongNonce, wrongProof },
+    );
+}
+async function startHeldProbe(page: Page) {
+  await page
+    .locator('iframe')
+    .evaluate((element) => element.dispatchEvent(new Event('load')));
+  await expect
+    .poll(() => page.evaluate(() => !!(window as any).__heldDocumentCheck))
+    .toBe(true);
+}
+test('document probe holds receipts and new calls, ignores wrong nonce/proof and resumes only the original document', async ({
+  page,
+}) => {
+  await holdDocumentProbes(page);
+  await open(page);
+  await frame(page).getByRole('button', { name: 'Delayed operation' }).click();
+  await expect.poll(async () => (await counters(page)).invokes).toBe(1);
+  await startHeldProbe(page);
+  await page.getByRole('button', { name: 'Resolve old operation' }).click();
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await probeResponse(page, true, false);
+  await probeResponse(page, false, true);
+  await expect(frame(page).locator('#result')).toHaveText('ready');
+  expect((await counters(page)).invokes).toBe(1);
+  expect((await counters(page)).closes).toBe(0);
+  await probeResponse(page);
+  await expect.poll(async () => (await counters(page)).invokes).toBe(2);
+  await expect(frame(page).locator('#result')).toContainText(
+    /document-1|late-canary/,
+  );
+  expect((await counters(page)).documents).toBe(1);
+  expect((await counters(page)).closes).toBe(0);
+});
+test('resuming a document probe rechecks the original review before a retained receipt or queued call can cross revocation', async ({
+  page,
+}) => {
+  await holdDocumentProbes(page);
+  await open(page);
+  await frame(page).getByRole('button', { name: 'Delayed operation' }).click();
+  await expect.poll(async () => (await counters(page)).invokes).toBe(1);
+  await startHeldProbe(page);
+  await page.getByRole('button', { name: 'Resolve old operation' }).click();
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await page.getByRole('button', { name: 'Revoke silently' }).click();
+  await probeResponse(page);
+  await expect(page.getByRole('alert')).toContainText('身份或授权无法确认');
+  expect((await counters(page)).invokes).toBe(1);
+  expect((await counters(page)).documents).toBe(1);
+  expect((await counters(page)).closes).toBe(1);
+  await expect(page.locator('iframe')).toHaveCount(0);
+});
+test('unanswered document probe closes within its UI handshake budget without replaying a retained native operation', async ({
+  page,
+}) => {
+  await holdDocumentProbes(page);
+  await open(page);
+  await frame(page).getByRole('button', { name: 'Delayed operation' }).click();
+  await expect.poll(async () => (await counters(page)).invokes).toBe(1);
+  await startHeldProbe(page);
+  await page.getByRole('button', { name: 'Resolve old operation' }).click();
+  await probeResponse(page, true, true);
+  await expect(page.getByRole('alert')).toContainText('文档无法核对', {
+    timeout: 7000,
+  });
+  expect((await counters(page)).invokes).toBe(1);
+  expect((await counters(page)).documents).toBe(1);
+  expect((await counters(page)).closes).toBe(1);
+});
+
+test('trusted pagehide capture runs before a later guest capture handler can suppress it', async ({
+  page,
+}) => {
+  await page.goto('/?panel=plugin-page&document-mode=suppress-pagehide');
+  await expect(
+    frame(page).getByRole('heading', { name: 'Signed fixture page' }),
+  ).toBeVisible();
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  await frame(page)
+    .locator('body')
+    .evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+  await expect(page.getByRole('alert')).toContainText('原通道关闭');
+  expect((await counters(page)).closes).toBe(1);
+});
+
+test('a confirmed configuration receipt invalidating its own review survives same-document proof without a new grant', async ({
+  page,
+}) => {
+  await holdDocumentProbes(page);
+  await page.goto('/?panel=plugin-page&document-mode=configure-probe');
+  await expect(
+    frame(page).getByRole('heading', { name: 'Signed fixture page' }),
+  ).toBeVisible();
+  await frame(page).getByRole('button', { name: 'Save configuration' }).click();
+  await expect.poll(async () => (await counters(page)).configures).toBe(1);
+  await startHeldProbe(page);
+  await page
+    .getByRole('button', { name: 'Finish confirmed configure' })
+    .click();
+  expect((await counters(page)).documents).toBe(1);
+  await probeResponse(page);
+  await expect.poll(async () => (await counters(page)).documents).toBe(2);
+  await expect(
+    frame(page).getByRole('heading', { name: 'Signed fixture page' }),
+  ).toBeVisible();
+  expect((await counters(page)).configures).toBe(1);
+  expect((await counters(page)).closes).toBe(1);
+});
+
+test('all recognized control frames share the bounded request budget and cannot flood document checks without IO', async ({
+  page,
+}) => {
+  await holdDocumentProbes(page);
+  await open(page);
+  await frame(page)
+    .locator('body')
+    .evaluate(() => (window as any).znetPlugin.context());
+  await startHeldProbe(page);
+  const held = await page.evaluate(() => (window as any).__heldDocumentCheck);
+  await frame(page)
+    .locator('body')
+    .evaluate((_element, held) => {
+      for (let attempt = 0; attempt < 512; attempt++)
+        parent.postMessage(
+          {
+            source: 'znet-plugin-page-v1',
+            channel: held.channel,
+            id: 0,
+            method: 'document_checked',
+            args: {
+              nonce: 'wrong',
+              documentProof: '0'.repeat(32),
+              fixtureManual: true,
+            },
+          },
+          '*',
+        );
+    }, held);
+  await expect(page.getByRole('alert')).toContainText('超过请求预算');
+  expect((await counters(page)).invokes).toBe(0);
+  expect((await counters(page)).sdkCalls).toBe(0);
+  expect((await counters(page)).documents).toBe(1);
   expect((await counters(page)).closes).toBe(1);
 });

@@ -78,6 +78,137 @@
   let acknowledgementKey = -1;
   let initializedKey = -1;
   const bridge = new PageChannel();
+  const DOCUMENT_CHECK_MS = 5000;
+  let documentProof = '';
+  let recognizedAttempts = 0;
+  let documentProbe: {
+    epoch: NonNullable<PageChannel['current']>;
+    nonce: string;
+    timer: ReturnType<typeof setTimeout>;
+    promise: Promise<boolean>;
+    resolve: (verified: boolean) => void;
+  } | null = null;
+  function completeDocumentProbe(verified: boolean) {
+    const pending = documentProbe;
+    if (!pending) return;
+    documentProbe = null;
+    clearTimeout(pending.timer);
+    pending.resolve(verified);
+  }
+  async function waitForDocument(ticket: PageTicket, recheck = true) {
+    assertCurrent(ticket);
+    let waited = false;
+    while (documentProbe) {
+      waited = true;
+      const pending = documentProbe;
+      if (pending.epoch !== ticket.epoch || !(await pending.promise))
+        throw new PageChannelError('stale');
+      assertCurrent(ticket);
+    }
+    if (waited && recheck) {
+      try {
+        await host.pageCheck(ticket.epoch.document.document_review);
+      } catch {
+        if (bridge.currentTicket(ticket))
+          retire('插件页面身份或授权无法确认，原通道已关闭，请重新检查');
+        throw new PageChannelError('stale');
+      }
+      assertCurrent(ticket);
+      if (documentProbe) await waitForDocument(ticket, recheck);
+    }
+  }
+  function safeSdkReply<T extends { version: 1; ok: boolean; error?: unknown }>(
+    reply: T,
+  ): T {
+    return (
+      reply?.ok === false
+        ? {
+            version: reply.version,
+            ok: false,
+            error: publicFailure(reply.error),
+          }
+        : reply
+    ) as T;
+  }
+  const resultBudgets = new WeakMap<PageTicket['epoch'], { bytes: number }>();
+  async function verifiedResult<T>(
+    ticket: PageTicket,
+    value: T,
+    recheck = true,
+  ): Promise<T> {
+    // Bound encoded bytes before retaining a native receipt through a probe.
+    const content = boundedJson(value, PAGE_LIMITS.resultBytes) as T;
+    const bytes = new TextEncoder().encode(JSON.stringify(content)).length;
+    let budget = resultBudgets.get(ticket.epoch);
+    if (!budget) {
+      budget = { bytes: 0 };
+      resultBudgets.set(ticket.epoch, budget);
+    }
+    if (budget.bytes + bytes > PAGE_LIMITS.totalResultBytes)
+      throw new PageChannelError('budget_exceeded');
+    budget.bytes += bytes;
+    try {
+      await waitForDocument(ticket, recheck);
+      return content;
+    } finally {
+      budget.bytes -= bytes;
+    }
+  }
+  function probeDocument() {
+    if (documentProbe) return;
+    const epoch = bridge.current;
+    if (!epoch || epoch.target !== frame?.contentWindow) return;
+    let resolve!: (verified: boolean) => void;
+    const promise = new Promise<boolean>((value) => (resolve = value));
+    const nonce = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      if (documentProbe?.epoch === epoch && documentProbe.nonce === nonce)
+        retire('插件页面文档无法核对，原通道已关闭，请重新打开');
+    }, DOCUMENT_CHECK_MS);
+    documentProbe = { epoch, nonce, timer, promise, resolve };
+    epoch.target.postMessage(
+      {
+        source: 'znet-plugin-host-v1',
+        channel: epoch.channel,
+        id: 0,
+        ok: true,
+        value: { phase: 'document-check', nonce },
+      },
+      '*',
+    );
+  }
+  async function deliver(ticket: PageTicket, value: unknown, error?: unknown) {
+    let content: unknown = null,
+      failure = error ? publicFailure(error) : undefined;
+    try {
+      if (!failure)
+        content = boundedJson(
+          value === undefined ? null : value,
+          PAGE_LIMITS.resultBytes,
+        );
+    } catch (reason) {
+      failure = publicFailure(reason);
+    }
+    try {
+      const prepared = await verifiedResult(ticket, failure ?? content);
+      const delivered = bridge.result(
+        ticket,
+        failure ? null : prepared,
+        failure ? prepared : undefined,
+      );
+      if (!delivered && bridge.currentTicket(ticket))
+        retire('插件页面交付预算已用尽，请重新打开');
+      bridge.finish(ticket, delivered);
+    } catch (reason) {
+      if (
+        reason instanceof PageChannelError &&
+        reason.code === 'budget_exceeded' &&
+        bridge.currentTicket(ticket)
+      )
+        retire('插件页面交付预算已用尽，请重新打开');
+      bridge.finish(ticket, false);
+    }
+  }
   const host = untrack(() => api);
   const readPicker = untrack(() => chooseRead),
     writePicker = untrack(() => chooseWrite);
@@ -87,6 +218,8 @@
   function retire(reason = '') {
     generation++;
     bridge.close();
+    completeDocumentProbe(false);
+    documentProof = '';
     if (documentBinding) closeDocument(documentBinding.document_review);
     documentBinding = null;
     pageDocument = '';
@@ -145,6 +278,10 @@
     return `<script>
 (() => {
   const channel = ${channelValue};
+  const hostWindow = parent;
+  const send = hostWindow.postMessage.bind(hostWindow);
+  const originalDocument = document;
+  const documentProof = Array.from(crypto.getRandomValues(new Uint32Array(4)),value=>value.toString(16).padStart(8,'0')).join('');
   const pluginId = ${plugin};
   const initialNavigation = ${navigationValue};
   let nextId = 1;
@@ -155,16 +292,19 @@
       if(pending.size>=8||nextId>512){const error=new Error('插件页面请求超过客户端预算');error.code='budget_exceeded';reject(error);return;}
       const id = nextId++;
       pending.set(id, { resolve, reject });
-      parent.postMessage({ source: 'znet-plugin-page-v1', channel, id, method, args }, '*');
+      send({ source: 'znet-plugin-page-v1', channel, id, method, args }, '*');
     }));
   }
   addEventListener('message', event => {
     const value = event.data;
-    if(event.source!==parent||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel)return;
+    if(event.source!==hostWindow||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel)return;
     if(value.id===0&&value.ok){
+      if(value.value&&value.value.phase==='document-check'&&typeof value.value.nonce==='string'&&value.value.nonce.length<=64&&originalDocument===document){
+        send({source:'znet-plugin-page-v1',channel,id:0,method:'document_checked',args:{nonce:value.value.nonce,documentProof}},'*');return;
+      }
       if(value.value&&value.value.phase==='loaded'&&!initialized){
         initialized=true;
-        parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'loaded_ack',args:{}},'*');
+        send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded_ack',args:{}},'*');
         readyResolve();
       }
       return;
@@ -272,9 +412,9 @@
     capabilities: Object.freeze({ call: sdkCall }),
     invoke: (componentId, action, payload = null) => request('component.invoke', { componentId, action, payload })
   }), writable: false, configurable: false });
-  addEventListener('load',()=>parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'loaded',args:{}},'*'),{once:true});
-  addEventListener('pagehide',()=>parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'closing',args:{}},'*'));
-  parent.postMessage({ source: 'znet-plugin-page-v1', channel, id: 0, method: 'ready', args: {} }, '*');
+  addEventListener('load',()=>send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded',args:{}},'*'),{once:true,capture:true});
+  addEventListener('pagehide',()=>send({source:'znet-plugin-page-v1',channel,id:0,method:'closing',args:{}},'*'),{capture:true});
+  send({ source: 'znet-plugin-page-v1', channel, id: 0, method: 'ready', args: {documentProof} }, '*');
 })();
 <\/script>`;
   }
@@ -363,6 +503,7 @@
       }
       documentBinding = doc;
       channel = crypto.randomUUID();
+      recognizedAttempts = 0;
       frameKey++;
       readyKey =
         bootstrapLoadedKey =
@@ -416,14 +557,14 @@
     )
       return;
     if (initializedKey === frameKey) {
-      retire('插件页面发生导航，原消息通道已关闭，请重新打开');
+      probeDocument();
       return;
     }
     loadObservedKey = frameKey;
     acknowledgeLoaded();
   }
   async function check(ticket: PageTicket) {
-    assertCurrent(ticket);
+    await waitForDocument(ticket);
     try {
       await host.pageCheck(ticket.epoch.document.document_review);
     } catch {
@@ -431,7 +572,7 @@
         retire('插件页面身份或授权无法确认，原通道已关闭，请重新检查');
       throw new PageChannelError('stale');
     }
-    assertCurrent(ticket);
+    await waitForDocument(ticket);
   }
   async function dispatch(ticket: PageTicket) {
     await check(ticket);
@@ -460,12 +601,15 @@
         Object.values(args.values).some((v) => typeof v !== 'string')
       )
         throw new PageChannelError('invalid_request');
-      const snapshot = await host.pageConfigure(
-        doc.document_review,
-        review,
-        args.values as Record<string, string>,
+      const snapshot = await verifiedResult(
+        ticket,
+        await host.pageConfigure(
+          doc.document_review,
+          review,
+          args.values as Record<string, string>,
+        ),
+        false,
       );
-      assertCurrent(ticket);
       onSnapshot(snapshot);
       if (
         componentFingerprint(
@@ -490,13 +634,15 @@
         args.action.length > 128
       )
         throw new PageChannelError('invalid_request');
-      const result = await host.pageInvoke(
-        doc.document_review,
-        review,
-        args.action,
-        args.payload ?? null,
+      const result = await verifiedResult(
+        ticket,
+        await host.pageInvoke(
+          doc.document_review,
+          review,
+          args.action,
+          args.payload ?? null,
+        ),
       );
-      assertCurrent(ticket);
       return result;
     }
     if (!args.call || typeof args.call !== 'object' || Array.isArray(args.call))
@@ -521,12 +667,12 @@
           : {};
       delete values.selectedPath;
       call.arguments = values;
-      const preflight = await host.pagePreflight(
-        doc.document_review,
-        review,
-        call,
+      const preflight = await verifiedResult(
+        ticket,
+        safeSdkReply(
+          await host.pagePreflight(doc.document_review, review, call),
+        ),
       );
-      assertCurrent(ticket);
       if (!preflight.ok)
         return { version: 1, ok: false, error: publicFailure(preflight.error) };
       if (
@@ -536,7 +682,7 @@
         throw new PageChannelError('stale');
       const path =
         call.method === 'file_read' ? await readPicker() : await writePicker();
-      assertCurrent(ticket);
+      await waitForDocument(ticket);
       if (typeof path !== 'string')
         return {
           version: 1,
@@ -546,11 +692,14 @@
       await check(ticket);
       call.arguments = { ...values, selectedPath: path };
     }
-    const reply =
-      call.method === 'protected_load'
-        ? await host.pageProtectedLoad(doc.document_review, review, call)
-        : await host.pageSdk(doc.document_review, review, call);
-    assertCurrent(ticket);
+    const reply = await verifiedResult(
+      ticket,
+      safeSdkReply(
+        call.method === 'protected_load'
+          ? await host.pageProtectedLoad(doc.document_review, review, call)
+          : await host.pageSdk(doc.document_review, review, call),
+      ),
+    );
     if (reply.version !== 1 || typeof reply.ok !== 'boolean')
       throw new PageChannelError('invalid_request');
     return reply.ok
@@ -563,6 +712,23 @@
     const receive = (event: MessageEvent) => {
       if (event.origin !== 'null') return;
       const data = event.data;
+      if (
+        documentBinding &&
+        event.source === frame?.contentWindow &&
+        data?.source === 'znet-plugin-page-v1' &&
+        data.channel === channel
+      ) {
+        if (++recognizedAttempts > PAGE_LIMITS.requests) {
+          retire('插件页面超过请求预算，原通道已关闭');
+          return;
+        }
+        try {
+          boundedJson(data, PAGE_LIMITS.requestBytes);
+        } catch (reason) {
+          retire(publicFailure(reason).message);
+          return;
+        }
+      }
       const ownedBootstrap =
         !!documentBinding &&
         event.source === frame?.contentWindow &&
@@ -570,6 +736,14 @@
         data.channel === channel &&
         data.id === 0;
       if (ownedBootstrap && data.method === 'ready' && readyKey !== frameKey) {
+        if (
+          typeof data.args?.documentProof !== 'string' ||
+          !/^[0-9a-f]{32}$/.test(data.args.documentProof)
+        ) {
+          retire('插件页面握手无效，原通道已关闭');
+          return;
+        }
+        documentProof = data.args.documentProof;
         bridge.open(documentBinding!, channel, frame!.contentWindow!);
         readyKey = frameKey;
         try {
@@ -579,6 +753,21 @@
           retire('插件页面握手无效，原通道已关闭');
         }
         return;
+      }
+      if (ownedBootstrap && data.method === 'document_checked') {
+        if (
+          documentProbe?.epoch === bridge.current &&
+          data.args?.nonce === documentProbe.nonce &&
+          data.args?.documentProof === documentProof
+        ) {
+          try {
+            boundedJson(data, PAGE_LIMITS.requestBytes);
+            completeDocumentProbe(true);
+          } catch {
+            retire('插件页面握手无效，原通道已关闭');
+          }
+        }
+        return; // A late/wrong probe response never resumes or closes a new probe.
       }
       if (
         ownedBootstrap &&
@@ -614,35 +803,19 @@
         if (bridge.ready(event.source, data)) return;
         ticket = bridge.begin(event.source, data);
       } catch (reason) {
-        if (!bridge.reject(event.source, data, reason))
+        if (documentProbe || !bridge.reject(event.source, data, reason))
           retire(publicFailure(reason).message);
         return;
       }
       if (!ticket) return;
       if (initializedKey !== frameKey) {
-        const delivered = bridge.result(
-          ticket,
-          null,
-          new PageChannelError('invalid_request'),
-        );
-        bridge.finish(ticket, delivered);
-        if (!delivered) retire('插件页面握手尚未完成，原通道已关闭');
+        void deliver(ticket, null, new PageChannelError('invalid_request'));
         return;
       }
       const request = ticket;
       void dispatch(request)
-        .then((result) => {
-          const delivered = bridge.result(request, result);
-          if (!delivered && bridge.currentTicket(request))
-            retire('插件页面交付预算已用尽，请重新打开');
-          bridge.finish(request, delivered);
-        })
-        .catch((reason) => {
-          const delivered = bridge.result(request, null, reason);
-          if (!delivered && bridge.currentTicket(request))
-            retire('插件页面交付预算已用尽，请重新打开');
-          bridge.finish(request, delivered);
-        });
+        .then((result) => deliver(request, result))
+        .catch((reason) => deliver(request, null, reason));
     };
     const recover = async () => {
       retire();

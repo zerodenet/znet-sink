@@ -50,11 +50,13 @@
     sdkCalls = $state(0),
     preflights = $state(0),
     pickers = $state(0),
-    snapshots = $state(0);
+    snapshots = $state(0),
+    configures = $state(0);
   const docs = new Map<string, { fingerprint: string; closed: boolean }>();
   let pendingInvoke: ((result: unknown) => void) | null = null;
+  let pendingConfigure: (() => void) | null = null;
   let pendingPicker: ((path: string | null) => void) | null = null;
-  const html = `<!doctype html><html><body><h1>Signed fixture page</h1><output id="result">ready</output><button id="unknown">Unknown component</button><button id="normal">Current operation</button><button id="late">Delayed operation</button><button id="file">Choose file</button><button id="browser">Open browser</button><button id="nav">Navigate</button><button id="huge">Oversized result</button><script>
+  const html = `<!doctype html><html><body><h1>Signed fixture page</h1><output id="result">ready</output><button id="unknown">Unknown component</button><button id="normal">Current operation</button><button id="late">Delayed operation</button><button id="file">Choose file</button><button id="browser">Open browser</button><button id="nav">Navigate</button><button id="huge">Oversized result</button><button id="save">Save configuration</button><script>
   const out=document.getElementById('result');const run=task=>task().then(value=>out.textContent=JSON.stringify(value)).catch(error=>out.textContent=error.code+':'+error.message);
   document.getElementById('unknown').onclick=()=>run(()=>znetPlugin.invoke('unknown','normal'));
   document.getElementById('normal').onclick=()=>run(()=>znetPlugin.invoke('worker','normal'));
@@ -63,6 +65,7 @@
   document.getElementById('browser').onclick=()=>run(()=>znetPlugin.browser.open('worker','https://fixture.invalid','https://fixture.invalid/?token=SECRET'));
   document.getElementById('nav').onclick=()=>location.href='https://navigation.invalid/should-not-load?token=SECRET';
   document.getElementById('huge').onclick=()=>run(()=>znetPlugin.invoke('worker','huge'));
+  document.getElementById('save').onclick=()=>run(()=>znetPlugin.configuration.save('worker',{name:'after-save'}));
   <\/script></body></html>`;
   const documentMode = new URLSearchParams(location.search).get(
     'document-mode',
@@ -73,25 +76,28 @@
   const attempts = `<script>window.__networkAttempted=true;window.__cspViolations=[];addEventListener('securitypolicyviolation',event=>window.__cspViolations.push(event.violatedDirective));fetch(${JSON.stringify(probeOrigin + '/fetch')}).catch(()=>{});const image=new Image();image.src=${JSON.stringify(probeOrigin + '/script-image')};<\/script>`;
   const image = `<img src="${probeOrigin}/raw-image" alt="blocked remote image">`;
   const earlyRequest = `<script>addEventListener('message',event=>{const value=event.data;if(event.source===parent&&value?.source==='znet-plugin-host-v1'&&value.id===0&&value.value===true){window.__earlyAttempt=true;parent.postMessage({source:'znet-plugin-page-v1',channel:value.channel,id:999,method:'component.invoke',args:{componentId:'worker',action:'early'}},'*');}});<\/script>`;
+  const suppressPagehide = `<script>addEventListener('pagehide',event=>event.stopImmediatePropagation(),true);<\/script>`;
   const guestHtml =
-    documentMode === 'early-request'
-      ? html.replace('<html><body>', `<html><body>${earlyRequest}`)
-      : documentMode === 'pre-head-script'
-        ? html.replace(
-            '<html><body>',
-            `<html>${attempts}<head><title>Guest full document</title></head><body>`,
-          )
-        : documentMode === 'pre-head-image'
+    documentMode === 'suppress-pagehide'
+      ? html.replace('<html><body>', `<html><body>${suppressPagehide}`)
+      : documentMode === 'early-request'
+        ? html.replace('<html><body>', `<html><body>${earlyRequest}`)
+        : documentMode === 'pre-head-script'
           ? html.replace(
               '<html><body>',
-              `<html>${image}<head><title>Guest full document</title></head><body>${attempts}`,
+              `<html>${attempts}<head><title>Guest full document</title></head><body>`,
             )
-          : documentMode === 'comment-fake-head'
+          : documentMode === 'pre-head-image'
             ? html.replace(
                 '<html><body>',
-                `<!-- <head> is not a real head --> <html>${attempts}${image}<head><title>Guest full document</title></head><body>`,
+                `<html>${image}<head><title>Guest full document</title></head><body>${attempts}`,
               )
-            : html;
+            : documentMode === 'comment-fake-head'
+              ? html.replace(
+                  '<html><body>',
+                  `<!-- <head> is not a real head --> <html>${attempts}${image}<head><title>Guest full document</title></head><body>`,
+                )
+              : html;
   const snapshot = () => ({
     checked: true,
     components: [structuredClone(authoritative)],
@@ -137,9 +143,23 @@
     async pageCheck(token: string) {
       check(token);
     },
-    async pageConfigure(token: string, review: PluginReview) {
+    async pageConfigure(
+      token: string,
+      review: PluginReview,
+      values: Record<string, string>,
+    ) {
       check(token, review);
-      return snapshot();
+      configures++;
+      const commit = () => {
+        authoritative.configuration!.values = structuredClone(values);
+        authoritative.review!.revision++;
+        return snapshot();
+      };
+      if (documentMode === 'configure-probe')
+        return new Promise(
+          (resolve) => (pendingConfigure = () => resolve(commit())),
+        );
+      return commit();
     },
     async pageInvoke(token: string, review: PluginReview, action: string) {
       check(token, review);
@@ -246,6 +266,9 @@
     ><Button onclick={() => pendingPicker?.(null)}>Cancel picker</Button><Button
       onclick={() => hidden(true)}>Background</Button
     ><Button onclick={() => hidden(false)}>Foreground</Button>
+    <Button onclick={() => pendingConfigure?.()}
+      >Finish confirmed configure</Button
+    >
   </div>
   <output aria-label="Host counters"
     >{JSON.stringify({
@@ -256,6 +279,7 @@
       preflights,
       pickers,
       snapshots,
+      configures,
     })}</output
   >
   <PluginPageFrame

@@ -281,3 +281,31 @@ Windows 两环境及最终提交的所有工作流结果继续在 PR 描述核�
 `/tmp/plugin-page-handshake-final-node.log`、`/tmp/mobile-phase5-handshake-final-frontend.log`。
 这是系统Chromium154的实际结果；尚不能证明CI Chromium151/WebKit2336首次加载已修复。
 Rust及原生配置没有变化，前述1093项验证覆盖同一Rust源码。新head完整CI需要重新核对。
+
+
+5b95adf 将真实握手与三个顺序回归推到原draft PR 后，标准核对确认初始parent load和
+postMessage处于独立任务源，不能用ack往返证明所有load已到达。其CI仍需观察，但不论
+终态都继续消除这个歧义：后续load需要原文档对新的host challenge做核对；核对中暂停
+调用/交付，pagehide或无法核对关闭原通道。标准依据与最终行为见页面通道文档。
+
+
+中间提交 **5b95adf** 的实际 CI 双引擎 UI 为 **462 passed / 0 failed**，运行
+38518311905 / job115702025361，证明保留的parent/child CSP在CI Chromium/WebKit可执行，
+无需放宽URL来源。该通过仍不替代随后消除任务源排序假设的最终源码验证。
+
+最终同文档核对使用每文档bootstrap私有随机proof和每次新host nonce；原window/channel/
+epoch同时核对，核对中原请求保留在已有八个在途名额内，不新建业务队列/ID或重放。
+返回内容等待前单项1MiB与并发持有4MiB限制；恢复后核对原文档授权。已确认的configure
+收据沿其已有owning路径消费同一host快照后关闭旧页，不用变化后的review再授权。
+所有匹配原窗口/channel的业务与控制消息共同计入512次/256KiB输入预算。
+
+冻结源码的实际Frame聚焦回归 **22/22 Chromium**、通道Node **8/8**、类型检查0/0，
+日志 `/tmp/plugin-page-document-proof-frozen{,-types,-node}.log`。覆盖晚到初load、错误/无回应、
+原授权撤销、固定请求等待和旧结果拒绝、自身失效配置收据、捕获监听顺序与控制消息预算。
+真实销毁可令pagehide消息source为null；不放宽原窗口校验，实际替换走五秒有界核对关闭，
+明确报告文档未确认。当前有效来源的pagehide则立即关闭；不宣称所有浏览器销毁都立即可验。
+第一轮夹具的evaluate传参/消息阻断错误和五秒断言竞争已修正，失败不计为通过。
+原backend/Rust/原生配置没有改变，1093项Rust证据仍针对同一源码；最新完整前端验证、
+最终head的全量双引擎CI及unsigned APK收据在原draft PR继续核对。
+
+最终同文档核对源码 `pnpm verify:frontend` 全集及生产build已通过：移动语义108项、许可17项、类型检查0/0；日志 `/tmp/mobile-phase5-document-proof-final-frontend.log`。本轮未再次运行未改变的Rust全集，前述1093项源码证据与最终head CI各自说明。
