@@ -5,6 +5,7 @@
   import { getMobilePlatformSnapshot, getMobileSubscriptionScheduleSnapshot } from '$lib/features/mobile/runtime';
   import { subscriptionScheduling, type SchedulePlatform } from '$lib/features/mobile/subscription-scheduling';
   import { subscriptionUsage, subscriptionFailureSummary } from '$lib/features/mobile/subscription-usage';
+  import SubscriptionReconciliationDialog from '$lib/components/mobile/SubscriptionReconciliationDialog.svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { LayoutGrid, List } from '@lucide/svelte';
@@ -43,6 +44,7 @@
   let cacheResetTarget=$state.raw<SubscriptionProfile|null>(null),cacheResetBusy=$state(false),cacheResetSubmitted=$state(false),cacheResetMessage=$state<string|null>(null);
   const cacheResetAvailable=(sub:SubscriptionProfile)=>!sub.managedSource&&/条件请求记录|本地存储/.test(sub.lastError??'');
   function previewCacheReset(sub:SubscriptionProfile){cacheResetTarget=structuredClone($state.snapshot(sub));cacheResetSubmitted=false;cacheResetMessage=null;}
+  let reconciliationTarget=$state.raw<SubscriptionProfile|null>(null);
   async function resetConditionalCache(){
     const target=cacheResetTarget;if(!target||cacheResetBusy||cacheResetSubmitted)return;cacheResetBusy=true;cacheResetSubmitted=true;
     try{const result=await resetSubscriptionConditionalCache(target.id,target.updatedAtUnixMs);cacheResetMessage=result.cleared?'该订阅条件记录已清理，配置材料保留。':'该订阅没有条件记录，配置材料保留。';}
@@ -643,6 +645,7 @@
             {#if failure}
               <span class="row-error" role="status">{failure.message}</span>
             {/if}
+            {#if !sub.managedSource && subscriptionFailureSummary(sub.lastError)?.unknown}<Button variant="outline" onclick={()=>reconciliationTarget=structuredClone($state.snapshot(sub))}>核对未知结果</Button>{/if}
             {#if cacheResetAvailable(sub)}<Button variant="outline" disabled={busy||cacheResetBusy} onclick={()=>previewCacheReset(sub)}>重置条件请求记录</Button>{/if}
           </div>
 
@@ -888,6 +891,8 @@
 
 <Dialog.Root bind:open={discardForm}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>订阅来源与同步设置尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardForm=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardFormDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 <Dialog.Root open={cacheResetTarget!==null} onOpenChange={open=>{if(!open&&!cacheResetBusy)cacheResetTarget=null;}}><Dialog.Content><Dialog.Header><Dialog.Title>重置原订阅的条件请求记录？</Dialog.Title><Dialog.Description>仅清理 {cacheResetTarget?.name} 的 HTTP 条件记录，保留配置、覆盖、同步错误和未知结果。此操作不下载、不提交运行配置；手动同步是独立动作。</Dialog.Description></Dialog.Header>{#if cacheResetMessage}<p role="status">{cacheResetMessage}</p>{/if}<Dialog.Footer><Button variant="outline" disabled={cacheResetBusy} onclick={()=>cacheResetTarget=null}>返回</Button><Button disabled={cacheResetBusy||cacheResetSubmitted} onclick={resetConditionalCache}>清理原订阅条件记录</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+
+{#if reconciliationTarget}<SubscriptionReconciliationDialog target={reconciliationTarget} onClose={()=>reconciliationTarget=null} />{/if}
 
 <style>
   .panel-header {

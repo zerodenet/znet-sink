@@ -402,6 +402,7 @@ pub struct Manifest {
 }
 
 /// Local source identity only. A digest is NOT publisher authentication.
+#[derive(Clone)]
 pub struct Component {
     pub(crate) manifest: Manifest,
     pub(crate) source: String,

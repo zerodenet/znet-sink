@@ -609,8 +609,7 @@ async fn sync_all_with_state(
     })
 }
 
-const UNKNOWN_APPLY_MESSAGE: &str =
-    "订阅材料准备或运行提交结果未确认；请先核对已保存材料和运行状态，不要自动重放";
+use crate::services::subscription_reconciliation::UNKNOWN_APPLY_MESSAGE;
 
 fn require_confirmed_previous_result(subscription: &SubscriptionProfile) -> AppResult<()> {
     // Exact host-issued phase marker only; arbitrary legacy/provider error text

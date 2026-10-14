@@ -58,6 +58,7 @@ export interface PluginInstallReview {
 }
 export const onPluginDownloadProgress = (callback: (progress: PluginDownloadProgress) => void): Promise<UnlistenFn> =>
   listen<PluginDownloadProgress>('plugin:download-progress', event => callback(event.payload));
+export type PluginPageDocument = import('$lib/features/plugin-pages/channel').PageDocument;
 export const pluginApi = {
   catalog: () => invoke<PluginListing[]>('plugins_catalog'),
   releases: (id: string) => invoke<PluginRelease[]>('plugins_releases', { id }),
@@ -66,6 +67,14 @@ export const pluginApi = {
   supported: () => invoke<boolean>('plugins_supported'),
   snapshot: () => invoke<PluginSnapshot>('plugins_snapshot'),
   page: (pluginId: string, pageId: string) => invoke<string>('plugins_page', { pluginId, pageId }),
+  pageDocument: (pluginId:string,pageId:string)=>invoke<PluginPageDocument>('plugins_page_document',{pluginId,pageId}),
+  pageClose: (documentReview:string)=>invoke<void>('plugins_page_close',{documentReview}),
+  pageCheck: (documentReview:string)=>invoke<void>('plugins_page_check',{documentReview}),
+  pageConfigure: (documentReview:string,review:PluginReview,values:Record<string,string>)=>invoke<PluginSnapshot>('plugins_page_configure',{documentReview,review,values}),
+  pageInvoke: (documentReview:string,review:PluginReview,action:string,payload:unknown)=>invoke<unknown>('plugins_page_invoke',{documentReview,review,action,payload}),
+  pageSdk: <T>(documentReview:string,review:PluginReview,call:PluginSdkCall)=>invoke<PluginSdkReply<T>>('plugins_page_sdk_call',{documentReview,review,call}),
+  pageProtectedLoad: <T>(documentReview:string,review:PluginReview,call:PluginSdkCall)=>invoke<PluginSdkReply<T>>('plugins_page_protected_load',{documentReview,review,call}),
+  pagePreflight: (documentReview:string,review:PluginReview,call:PluginSdkCall)=>invoke<PluginSdkReply<{state:string}>>('plugins_page_file_preflight',{documentReview,review,call}),
   refresh: () => invoke<PluginSnapshot>('plugins_refresh'),
   previewInstall: (path: string) => invoke<PluginInstallReview>('plugins_preview_install', { path }),
   install: (path: string, approvalDigest?: string) => invoke<PluginSnapshot>('plugins_install', { path, approvalDigest }),

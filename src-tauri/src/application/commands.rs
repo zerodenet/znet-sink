@@ -69,6 +69,22 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_document,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_close,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_check,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_configure,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_invoke,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_sdk_call,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_protected_load,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_page_file_preflight,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_refresh,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_authorize,
@@ -241,6 +257,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         subscription_commands::subscription_sync,
         subscription_commands::subscription_sync_all,
         subscription_commands::subscription_reset_conditional_cache,
+        subscription_commands::subscription_reconcile_unknown,
         subscription_commands::subscription_remove_preview,
         subscription_commands::subscription_remove,
         rule_set_commands::rule_set_list,

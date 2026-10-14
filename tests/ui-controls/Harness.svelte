@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PluginPageFixture from './PluginPageFixture.svelte';
   import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
   import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
   import ConnectionExportFixture from './ConnectionExportFixture.svelte';
@@ -52,7 +53,9 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'native-documents'}
+{#if selectedPanel === 'plugin-page'}
+  <PluginPageFixture />
+{:else if selectedPanel === 'native-documents'}
   <NativeDocumentsFixture />
 {:else if selectedPanel === 'profile-removal'}
   <ProfileRemovalFixture />

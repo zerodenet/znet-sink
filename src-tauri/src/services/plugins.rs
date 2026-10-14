@@ -8,6 +8,7 @@ mod model;
 pub(crate) mod namespace;
 pub(crate) mod notification;
 mod operations;
+pub(crate) mod page_channel;
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
@@ -42,12 +43,14 @@ pub struct Host {
     root: Option<std::path::PathBuf>,
     // Serialize installation/catalog changes, never held during VM execution.
     operation: Mutex<()>,
+    executor: znet_plugin_sandbox::runtime::Executor,
     restore: Mutex<()>,
     state: Mutex<State>,
     notification_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
     log_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
     callbacks: callback::Store,
     sensitive: sensitive::Store,
+    page_documents: page_channel::Store,
 }
 #[derive(Default)]
 struct State {

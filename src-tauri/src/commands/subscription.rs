@@ -81,3 +81,48 @@ pub async fn subscription_remove(
 ) -> AppResult<SubscriptionRemovalOutcome> {
     subscription::remove(app_handle, id, remove_associated_config.unwrap_or(false)).await
 }
+
+/// Pure inspection: readable current identity never clears an uncertain operation.
+#[tauri::command]
+pub async fn subscription_reconcile_unknown(
+    app_handle: AppHandle,
+    window: Window,
+    id: String,
+    expected_updated_at_unix_ms: String,
+) -> AppResult<crate::services::subscription_reconciliation::SubscriptionReconciliation> {
+    crate::services::native_documents::require_host(window.label())?;
+    let version = parse_reconciliation_version(&expected_updated_at_unix_ms)?;
+    crate::services::subscription_reconciliation::inspect(
+        app_handle.state::<AppState>().inner(),
+        id,
+        version,
+    )
+    .await
+}
+fn parse_reconciliation_version(value: &str) -> AppResult<u64> {
+    let version = value
+        .parse::<u64>()
+        .map_err(|_| crate::errors::AppError::invalid_argument("来源版本无法确认，请刷新后重试"))?;
+    if version.to_string() != value {
+        return Err(crate::errors::AppError::invalid_argument(
+            "来源版本无法确认，请刷新后重试",
+        ));
+    }
+    Ok(version)
+}
+#[cfg(test)]
+mod reconciliation_tests {
+    use super::*;
+    #[test]
+    fn reconciliation_is_host_only_and_versions_are_lossless_canonical_decimal() {
+        assert!(crate::services::native_documents::require_host("main").is_ok());
+        assert!(crate::services::native_documents::require_host("plugin-canary").is_err());
+        for value in ["", " 1", "01", "+1", "-1", "1.0", "18446744073709551616"] {
+            assert!(parse_reconciliation_version(value).is_err());
+        }
+        assert_eq!(
+            parse_reconciliation_version("18446744073709551615").unwrap(),
+            u64::MAX
+        );
+    }
+}

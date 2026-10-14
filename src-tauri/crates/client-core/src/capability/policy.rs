@@ -96,6 +96,39 @@ impl Policy {
         s.grants.clear();
     }
     pub fn begin(&self, budget: Budget, cancelled: Arc<AtomicBool>) -> Result<Lease, Error> {
+        self.begin_reviewed(budget, cancelled, None, None)
+    }
+    /// Atomically bind admission to the reviewed consent epoch. Stop/re-enable
+    /// cannot turn an old page or queued invocation into a fresh authorization.
+    pub fn begin_at_revision(
+        &self,
+        budget: Budget,
+        cancelled: Arc<AtomicBool>,
+        expected_revision: u64,
+    ) -> Result<Lease, Error> {
+        self.begin_reviewed(budget, cancelled, Some(expected_revision), None)
+    }
+    /// Trusted host execution admission: queue expiry and execution expiry
+    /// remain distinct on one immutable consent epoch and one busy lease.
+    pub fn begin_queued(
+        &self,
+        budget: Budget,
+        cancelled: Arc<AtomicBool>,
+        expected_revision: Option<u64>,
+        queue_timeout: Duration,
+    ) -> Result<Lease, Error> {
+        if queue_timeout.is_zero() || queue_timeout > Duration::from_secs(30) {
+            return Err(Error::BudgetExceeded);
+        }
+        self.begin_reviewed(budget, cancelled, expected_revision, Some(queue_timeout))
+    }
+    fn begin_reviewed(
+        &self,
+        budget: Budget,
+        cancelled: Arc<AtomicBool>,
+        expected_revision: Option<u64>,
+        queue_timeout: Option<Duration>,
+    ) -> Result<Lease, Error> {
         self.manager.ensure_open()?;
         if budget.calls == 0
             || budget.calls > 256
@@ -107,6 +140,9 @@ impl Policy {
             return Err(Error::BudgetExceeded);
         }
         let mut s = self.state.lock().unwrap();
+        if s.retired || expected_revision.is_some_and(|revision| revision != s.epoch) {
+            return Err(Error::Revoked);
+        }
         if !s.enabled {
             return Err(Error::Disabled);
         }
@@ -124,18 +160,25 @@ impl Policy {
             policy: self.clone(),
             epoch: s.epoch,
             id: self.manager.next_id(),
-            deadline: Instant::now() + budget.timeout,
+            deadline: Mutex::new(Deadline {
+                expires: Instant::now() + queue_timeout.unwrap_or(budget.timeout),
+                activation_timeout: queue_timeout.map(|_| budget.timeout),
+            }),
             budget,
             cancelled,
             usage: Arc::new(Mutex::new((0, 0))),
         })
     }
 }
+struct Deadline {
+    expires: Instant,
+    activation_timeout: Option<Duration>,
+}
 pub struct Lease {
     policy: Policy,
     epoch: u64,
     id: u64,
-    deadline: Instant,
+    deadline: Mutex<Deadline>,
     budget: Budget,
     cancelled: Arc<AtomicBool>,
     pub(super) usage: Arc<Mutex<(u32, usize)>>,
@@ -153,7 +196,7 @@ impl Lease {
         if self.cancelled.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
         }
-        if Instant::now() >= self.deadline {
+        if Instant::now() >= self.deadline.lock().unwrap().expires {
             return Err(Error::Deadline);
         }
         if permission.is_some_and(|p| !allows(&s.grants, p)) {
@@ -163,7 +206,40 @@ impl Lease {
     }
     pub fn remaining(&self) -> Result<Duration, Error> {
         self.check(None)?;
-        Ok(self.deadline.saturating_duration_since(Instant::now()))
+        Ok(self
+            .deadline
+            .lock()
+            .unwrap()
+            .expires
+            .saturating_duration_since(Instant::now()))
+    }
+    /// Trusted host only, exactly once at actual VM dispatch. This changes only
+    /// the deadline, never authorization, grant expiry, operation ID or epoch.
+    pub fn activate_queued_execution(&self) -> Result<(), Error> {
+        self.policy.manager.ensure_open()?;
+        let state = self.policy.state.lock().unwrap();
+        if !state.enabled || state.retired || state.epoch != self.epoch {
+            return Err(Error::Revoked);
+        }
+        if state
+            .expires
+            .is_some_and(|expires| expires <= Instant::now())
+        {
+            return Err(Error::Expired);
+        }
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        let mut deadline = self.deadline.lock().unwrap();
+        if Instant::now() >= deadline.expires {
+            return Err(Error::Deadline);
+        }
+        let timeout = deadline
+            .activation_timeout
+            .take()
+            .ok_or(Error::InvalidRequest)?;
+        deadline.expires = Instant::now() + timeout;
+        Ok(())
     }
     pub fn identity(&self) -> &str {
         self.policy.identity()

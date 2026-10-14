@@ -296,9 +296,7 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
                             )
                         })
                         .await
-                        .unwrap_or_else(|error| {
-                            Err(AppError::internal(format!("插件后台执行线程失败：{error}")))
-                        });
+                        .unwrap_or_else(|_| Err(AppError::internal("插件后台执行线程失败")));
                         let state = app.state::<crate::state::app_state::AppState>();
                         let declared_failure = result.as_ref().ok().is_some_and(|value| {
                             value.get("ok").and_then(serde_json::Value::as_bool) == Some(false)

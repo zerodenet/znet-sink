@@ -48,6 +48,7 @@ pub mod rule_overlay;
 pub mod rule_set;
 #[path = "subscription_wrapper.rs"]
 pub mod subscription;
+pub(crate) mod subscription_reconciliation;
 pub mod system_proxy;
 pub mod system_proxy_guard;
 pub(crate) mod text_encoding;

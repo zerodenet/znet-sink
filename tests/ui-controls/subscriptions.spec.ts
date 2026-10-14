@@ -1,5 +1,19 @@
 import { expect, test } from '@playwright/test';
 
+test('unknown inspection fixes source and preserves uncertainty without synchronize, cache reset or unsafe revision rounding',async({page})=>{
+ await page.addInitScript(()=>{const win=window as unknown as {inspections:unknown[];mutations:unknown[]};win.inspections=[];win.mutations=[];window.addEventListener('fixture-subscription-inspection',e=>win.inspections.push((e as CustomEvent).detail));for(const event of ['fixture-subscription-manual-sync','fixture-subscription-cache-reset'])window.addEventListener(event,e=>win.mutations.push((e as CustomEvent).detail));});
+ await page.setViewportSize({width:320,height:480});await page.goto('/?panel=subscriptions&mode=quota-facts');await page.getByRole('button',{name:'核对未知结果',exact:true}).click();
+ const dialog=page.getByRole('dialog');await expect(dialog).toContainText('原运行提交待核对');await expect.poll(()=>page.evaluate(()=>(window as unknown as {inspections:unknown[]}).inspections)).toEqual([]);
+ await page.getByRole('button',{name:'读取核对状态',exact:true}).click();await expect(dialog).toContainText('当前身份可读；不代表原操作生效');await expect(dialog).toContainText('18446744073709551615');await expect(dialog).toContainText('没有持久记录');await expect(dialog).toContainText('结果仍未确认');
+ await expect.poll(()=>page.evaluate(()=>(window as unknown as {inspections:unknown[]}).inspections)).toEqual([{id:'uncertain',version:1,profileId:'work'}]);expect(await page.evaluate(()=>(window as unknown as {mutations:unknown[]}).mutations)).toEqual([]);
+ const button=await page.getByRole('button',{name:'重新核对',exact:true}).boundingBox();expect(button).not.toBeNull();expect(button!.height).toBeGreaterThanOrEqual(44);expect(button!.y+button!.height).toBeLessThanOrEqual(480);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.getByRole('button',{name:'返回',exact:true}).click();await expect(page.locator('.list-row').filter({has:page.getByText('原运行提交待核对',{exact:true})})).toContainText('结果待核对');
+});
+
+test('closing read-only inspection permits return while late reply cannot recreate the panel or clear source state',async({page})=>{
+ await page.goto('/?panel=subscriptions&mode=quota-facts&inspection=late');await page.getByRole('button',{name:'核对未知结果',exact:true}).click();await page.getByRole('button',{name:'读取核对状态',exact:true}).click();await expect(page.getByRole('dialog')).toContainText('正在读取');await page.getByRole('button',{name:'返回',exact:true}).click();await page.evaluate(()=>window.dispatchEvent(new Event('fixture-release-inspection')));await expect(page.getByRole('dialog')).toHaveCount(0);await expect(page.locator('.list-row').filter({has:page.getByText('原运行提交待核对',{exact:true})})).toContainText('结果待核对');
+});
+
 test('managed subscription card shows aggregate quota, ratio, expiry and ownership', async ({ page }) => {
   await page.goto('/?panel=subscriptions&mode=managed-usage');
 

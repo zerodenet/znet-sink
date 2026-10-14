@@ -91,18 +91,20 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
           if (command === 'plugins_snapshot') snapshotCalls++;
           return state();
         }
-        if (command === 'plugins_page') {
+        if (command === 'plugins_page_check' || command === 'plugins_page_close') return;
+        if (command === 'plugins_page_document') {
           pageLoads++;
-          return `<!doctype html><html><body><main data-znet-layout="settings"><nav data-znet-settings-nav><div data-znet-nav-title>Connect</div><button data-znet-settings-item aria-current="step">来源</button></nav><section data-znet-settings-content><header data-znet-page-header><h1>Connect 管理</h1></header><div data-znet-panel><output id="config">正在读取配置</output><label data-znet-field><span>来源名称</span><input aria-label="来源名称" /></label><button id="login" data-variant="primary">登录并同步</button><button id="usage">更新用量</button><button id="usage-error">验证错误</button><output id="result"></output><output id="host-error"></output></div></section></main><script>(async()=>{const value=await znetPlugin.configuration.get('identity');document.getElementById('config').textContent='配置 '+value.path})().catch(error=>{document.getElementById('config').textContent=error.message});document.getElementById('login').onclick=async()=>{await znetPlugin.storage.putJson('identity','state','device/session',{credential:'remote-issued'});const value=await znetPlugin.invoke('identity','login',{account:'demo'});document.getElementById('result').textContent='订阅 '+value.subscriptions.length};document.getElementById('usage').onclick=async()=>{const value=await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','1',{usedBytes:123,totalBytes:1000,expireAtUnixMs:1800000000000});document.getElementById('result').textContent='用量 '+value.usedBytes};document.getElementById('usage-error').onclick=async()=>{try{await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','bad',{usedBytes:123,totalBytes:0,expireAtUnixMs:1800000000000})}catch(error){document.getElementById('host-error').textContent=JSON.stringify({code:error.code,message:error.message,fieldPath:error.fieldPath,diagnostics:error.diagnostics,retryAfterMs:error.retryAfterMs})}}</script></body></html>`;
+          const html = `<!doctype html><html><body><main data-znet-layout="settings"><nav data-znet-settings-nav><div data-znet-nav-title>Connect</div><button data-znet-settings-item aria-current="step">来源</button></nav><section data-znet-settings-content><header data-znet-page-header><h1>Connect 管理</h1></header><div data-znet-panel><output id="config">正在读取配置</output><label data-znet-field><span>来源名称</span><input aria-label="来源名称" /></label><button id="login" data-variant="primary">登录并同步</button><button id="usage">更新用量</button><button id="usage-error">验证错误</button><output id="result"></output><output id="host-error"></output></div></section></main><script>(async()=>{const value=await znetPlugin.configuration.get('identity');document.getElementById('config').textContent='配置 '+value.path})().catch(error=>{document.getElementById('config').textContent=error.message});document.getElementById('login').onclick=async()=>{await znetPlugin.storage.putJson('identity','state','device/session',{credential:'remote-issued'});const value=await znetPlugin.invoke('identity','login',{account:'demo'});document.getElementById('result').textContent='订阅 '+value.subscriptions.length};document.getElementById('usage').onclick=async()=>{const value=await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','1',{usedBytes:123,totalBytes:1000,expireAtUnixMs:1800000000000});document.getElementById('result').textContent='用量 '+value.usedBytes};document.getElementById('usage-error').onclick=async()=>{try{await znetPlugin.subscriptions.updateMetadata('identity','https://example.com','bad',{usedBytes:123,totalBytes:0,expireAtUnixMs:1800000000000})}catch(error){document.getElementById('host-error').textContent=JSON.stringify({code:error.code,message:error.message,fieldPath:error.fieldPath,diagnostics:error.diagnostics,retryAfterMs:error.retryAfterMs})}}</script></body></html>`;
+          return {plugin_id:component.plugin_id,page_id:'manage',html,document_review:'signed-document',components:structuredClone(components)};
         }
-        if (command === 'plugins_storage_put' || command === 'plugins_invoke') {
-          if (args.pluginId !== component.plugin_id) throw new Error('插件身份越界');
+        if (command === 'plugins_storage_put' || command === 'plugins_invoke' || command === 'plugins_page_invoke') {
+          if ((args.pluginId ?? args.review?.key.split('/')[0]) !== component.plugin_id) throw new Error('插件身份越界');
           calls.push({ command, args: JSON.parse(JSON.stringify(args)) });
-          if (command === 'plugins_invoke') return { subscriptions: ['a', 'b'] };
+          if (command === 'plugins_invoke' || command === 'plugins_page_invoke') return { subscriptions: ['a', 'b'] };
           return;
         }
-        if (command === 'plugins_sdk_call') {
-          if (args.pluginId !== component.plugin_id || args.componentId !== component.component_id) throw new Error('插件身份越界');
+        if (command === 'plugins_sdk_call' || command === 'plugins_page_sdk_call') {
+          if ((args.pluginId ?? args.review?.key.split('/')[0]) !== component.plugin_id || (args.componentId ?? args.review?.key.split('/')[1]) !== component.component_id) throw new Error('插件身份越界');
           calls.push({ command, args: structuredClone(args) });
           if (args.call.method === 'storage_put' && args.call.request.capability === 'plugin.storage.write') {
             return { version: 1, ok: true, value: true };
@@ -289,7 +291,7 @@ test('multiple components stay grouped under one installed plugin card', async (
 });
 
 test('a signed plugin management page owns its workflow through the bound host sdk', async ({ page }) => {
-  await fixture(page, false, 1, true, false, true, '1.0.0', false, 1, false, true);
+  await fixture(page, false, 1, true, false, true, '1.0.0', false, 1, false, true, {enabled:true});
   await openInstalledPlugin(page);
   await expect(page.locator('.plugin-detail-hero')).toHaveCount(0);
   const detailToolbar = page.locator('.plugin-detail-toolbar');
@@ -309,19 +311,19 @@ test('a signed plugin management page owns its workflow through the bound host s
   await frame.getByRole('button', { name: '登录并同步' }).click();
   await expect(frame.getByText('订阅 2', { exact: true })).toBeVisible();
   const calls = await page.evaluate(() => (window as any).__pluginFixture.calls);
-  expect(calls.map((call: any) => call.command)).toEqual(['plugins_sdk_call', 'plugins_invoke']);
-  expect(calls.every((call: any) => call.args.pluginId === 'org.example.plugin')).toBe(true);
+  expect(calls.map((call: any) => call.command)).toEqual(['plugins_page_sdk_call', 'plugins_page_invoke']);
+  expect(calls.every((call: any) => call.args.review.key === 'org.example.plugin/identity' && call.args.documentReview === 'signed-document')).toBe(true);
   await frame.getByRole('button', { name: '更新用量', exact: true }).click();
   await expect(frame.getByText('用量 123', { exact: true })).toBeVisible();
   await frame.getByRole('button', { name: '验证错误', exact: true }).click();
   await expect(frame.locator('#host-error')).toHaveText(JSON.stringify({
     code: 'invalid_request',
-    message: 'totalBytes 必须大于 0',
+    message: '参数无效，请核对输入与当前组件状态',
     fieldPath: 'usage.totalBytes',
-    diagnostics: ['服务端配额无效'],
+    diagnostics: [],
     retryAfterMs: 250,
   }));
-  const sdkCalls = await page.evaluate(() => (window as any).__pluginFixture.calls.filter((call: any) => call.command === 'plugins_sdk_call' && call.args.call.method === 'subscription_metadata_update'));
+  const sdkCalls = await page.evaluate(() => (window as any).__pluginFixture.calls.filter((call: any) => call.command === 'plugins_page_sdk_call' && call.args.call.method === 'subscription_metadata_update'));
   expect(sdkCalls).toHaveLength(2);
   expect(sdkCalls[0].args.call).toMatchObject({
     request: { capability: 'subscriptions.manage', scope: 'self' },

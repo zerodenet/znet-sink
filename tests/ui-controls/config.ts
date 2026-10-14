@@ -129,6 +129,7 @@ export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
     {id:'unsafe',name:'数值无法确认',usedBytes:Number.MAX_SAFE_INTEGER+1,totalBytes:100},
     {id:'paused',name:'自动暂停仍可手动',enabled:false,totalBytes:100,lastError:'source failed https://example.test?token=private-canary'},
     {id:'cache',name:'条件记录损坏',lastError:'订阅条件请求记录无法读取、校验或保存；配置材料未因此删除，请检查本地存储后重试'},
+    {id:'uncertain',name:'原运行提交待核对',lastError:'订阅材料准备或运行提交结果未确认；请先核对已保存材料和运行状态，不要自动重放'},
   ].map(item=>({url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1,...item}));
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
@@ -172,6 +173,11 @@ export const syncSubscription = async (id: string): Promise<SubscriptionProfile>
 };
 export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
 export const resetSubscriptionConditionalCache=async(id:string,version:number)=>{window.dispatchEvent(new CustomEvent('fixture-subscription-cache-reset',{detail:{id,version}}));return {cleared:true};};
+export const reconcileUnknownSubscription=async(id:string,version:number,profileId:string|null):Promise<import('../../src/lib/services/config').SubscriptionReconciliation>=>{
+  window.dispatchEvent(new CustomEvent('fixture-subscription-inspection',{detail:{id,version,profileId}}));
+  if(new URLSearchParams(location.search).get('inspection')==='late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-inspection',()=>resolve(),{once:true}));
+  return {status:'result-unknown',source:{id,updatedAtUnixMs:String(version),lastSyncAtUnixMs:null},material:{status:'saved-valid',profileId,updatedAtUnixMs:'1',active:true,validation:'native-schema-only'},evidence:{candidate:'not-recorded',receipt:'not-recorded'},runtime:{status:'readable',coreInstanceId:'actual-fixture-instance',configRevision:'18446744073709551615',reasonCode:'runtime_identity_readable_only',reason:'当前运行身份可读，不代表原操作生效。'},canResolve:false,reason:'没有持久候选材料及应用回执，当前运行身份可读也不能证明原订阅操作已生效；结果仍未确认。'};
+};
 export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
 export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
 export const syncAllSubscriptions = async () => ({ total: 0, updated: 0, unchanged: 0, failed: 0 });

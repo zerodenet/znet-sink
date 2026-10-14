@@ -228,3 +228,28 @@ listener orchestration 回执，生产 managed host 已使用空 bootstrap，随
 `1ab96e271219b7c5f03310260c6b823c78ee20e776e33af79d5fe0a6253fce82`，两项真实测试通过；
 常规 readiness 五项通过。日志为 `/tmp/mobile-final-readiness-{regression,real-linux}.log`。
 Windows 两环境及最终提交的所有工作流结果继续在 PR 描述核对，不借旧提交的浏览器或 APK。
+
+### 插件宿主边界与订阅只读核对增量（2026-10-14）
+
+同一分支和 draft PR 继续交付客户端功能；没有修改 core 源码/缓存、签名、发布或原生 VPN 装配。
+客户端 develop 只读复核仍为 fd198ba5，core develop 仍为 c2a72f6，固定依赖仍为 e74561f。
+
+- 真实 QuickJS 执行移到共享有界 worker：2 在途、32 排队、5秒排队期限，原执行/SDK预算与授权TTL不延长；同一原租约跨执行、 owning 提交与交付。停止、撤权、stop/start ABA和宿主关闭拒绝旧启动/结果，在途IO真实 draining。
+- 签名页面材料、HTML摘要、组件registration/revision和宿主文档token原子绑定；8个RPC只在桌面注册。固定窗口/channel/代次、前后台关闭/重建、文件选择前后核对和原租约SDK执行已实现。要求Process隔离仍拒绝；VM文件路径不能冒充用户选择，可信票据接入前明确 unsupported。
+- 宿主先写完整受控head/CSP/bootstrap，任何guest字节在其后；URL frame导航由parent CSP拒绝。实际本地HTTP探针覆盖pre-head脚本、pre-head图片和注释fake-head，均收到0请求并确认CSP阻止及正常SDK可用。畸形同来源请求也消耗512次预算。
+- 普通订阅按固定来源版本/材料/当前IPC身份只读核对，保留无损u64；旧记录没有候选/持久回执时始终result-unknown、canResolve=false。不清屏障、重放、下载、配置写入或创造运行确认。
+
+最新源码云端 Rust workspace/all-features **1089 passed / 0 failed / 7 ignored**，fmt、all-targets/all-features check和clippy通过，编译警告保留。
+日志 `/tmp/mobile-phase5-final3-{fmt,check,tests,clippy}.log`。真实已发布Linux v0.0.1内核的两个启动/应用/释放回归通过，
+日志 `/tmp/mobile-phase5-final-real-linux.log`；这是已发布桌面内核，不是当前固定core或手机转发验收。
+
+最终前端完整验证/生产build通过，移动语义 **107项**、许可 **17项**，类型检查 **0 errors / 0 warnings**，
+日志 `/tmp/mobile-phase5-final2-frontend.log`。真实签名包Host页面/租约/材料回归8项通过；Host执行/ABA/取消及VM文件准入5项由workspace全集覆盖。
+实际Frame相关13项Chromium回归通过（12项通道/CSP场景加既有管理流程），日志 `/tmp/plugin-page-csp-fix-final.log`；最终完整Chromium回归另行记录。
+
+本地WebKit缺少执行文件，未运行；最终commit双引擎和原生产物证据以同一PR描述记录，不借旧head。
+真实系统文件提供者、OS浏览器、原生WebView、第三方HTTP、移动SDK/敏感加载、进程/OOM隔离和手机VPN均未验收；
+原生服务/扩展注册及CORE-01/02/05未解除。普通订阅未知结果的持久权威解除和系统后台调度仍待实施。
+详见[执行边界](../gui/mobile-plugin-execution-boundary-v0.0.3.md)、[页面通道](../gui/plugin-page-channel-v0.0.3.md)、[只读核对](../gui/ordinary-subscription-reconciliation-v0.0.3.md)及根[todo.md](../../todo.md)。
+
+上述最终源码完整 Chromium 回归 **228 passed**，日志 `/tmp/mobile-phase5-final-full-browser.log`；没有跳过或重试通过项。

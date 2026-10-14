@@ -1547,3 +1547,6 @@ fn enabled_startup_hook_restores_consent_and_atomically_updates_opaque_state() {
         Some(next_value)
     );
 }
+
+#[path = "tests/execution_boundary.rs"]
+mod execution_boundary;

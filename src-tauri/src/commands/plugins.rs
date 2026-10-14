@@ -63,6 +63,8 @@ mod desktop {
             .await
             .map_err(|_| crate::errors::AppError::internal("插件操作未能完成"))?
     }
+    include!("plugins_page.rs");
+
     #[tauri::command]
     pub fn plugins_snapshot(state: State<'_, AppState>) -> Snapshot {
         state.plugins().snapshot(state.capabilities())
