@@ -12,13 +12,27 @@ impl Drop for OwnedChild {
     }
 }
 
-fn spawn(dir: &std::path::Path, port: u16) -> (OwnedChild, CoreEndpoint) {
-    let binary = std::env::var("ZNET_TEST_ZERO_BINARY").expect("set ZNET_TEST_ZERO_BINARY");
-    let config = dir.join("config.json");
-    std::fs::write(&config, serde_json::to_vec(&json!({
+fn listener_config(port: u16) -> serde_json::Value {
+    json!({
         "inbounds": [{"tag":"test", "listen":{"address":"127.0.0.1", "port":port}, "protocol":{"type":"mixed"}}],
         "outbounds": [], "route": {"rules":[], "final":{"type":"direct"}}
-    })).unwrap()).unwrap();
+    })
+}
+
+fn spawn(dir: &std::path::Path) -> (OwnedChild, CoreEndpoint) {
+    let binary = std::env::var("ZNET_TEST_ZERO_BINARY").expect("set ZNET_TEST_ZERO_BINARY");
+    let config = dir.join("config.json");
+    // Match the managed host: IPC-only bootstrap, then acknowledged runtime
+    // application. Engine health is not a listener-orchestration receipt.
+    std::fs::write(
+        &config,
+        serde_json::to_vec(&json!({
+            "inbounds": [],
+            "outbounds": [], "route": {"rules":[], "final":{"type":"direct"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     #[cfg(unix)]
     let socket = dir.join("ipc.sock");
     #[cfg(windows)]
@@ -47,6 +61,20 @@ fn spawn(dir: &std::path::Path, port: u16) -> (OwnedChild, CoreEndpoint) {
     )
 }
 
+fn apply_listener(endpoint: &CoreEndpoint, port: u16) -> AppResult<()> {
+    tauri::async_runtime::block_on(async {
+        let control = crate::kernel::configuration::BoundControl::connect(
+            crate::models::core::CoreIpcOptions {
+                socket: Some(endpoint.path.clone()),
+                timeout_ms: Some(5000),
+            },
+        )
+        .await?;
+        control.apply(listener_config(port)).await?;
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires ZNET_TEST_ZERO_BINARY pointing to a released kernel"]
 fn real_kernel_ready_and_lifetime_pipe_shutdown_release_listener() {
@@ -54,7 +82,7 @@ fn real_kernel_ready_and_lifetime_pipe_shutdown_release_listener() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
-    let (mut child, endpoint) = spawn(dir.path(), port);
+    let (mut child, endpoint) = spawn(dir.path());
     if let Err(error) = wait_for_ready(&mut child.0, &endpoint) {
         panic!(
             "readiness failed at {} for pid {}: {error:?}\nkernel stderr:\n{}",
@@ -63,6 +91,7 @@ fn real_kernel_ready_and_lifetime_pipe_shutdown_release_listener() {
             std::fs::read_to_string(dir.path().join("kernel-stderr.log")).unwrap_or_default()
         );
     }
+    apply_listener(&endpoint, port).expect("actual runtime-only listener application must confirm");
     crate::services::local_proxy::wait_until_listening("127.0.0.1", port).unwrap();
     drop(child.0.stdin.take());
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -85,6 +114,12 @@ fn real_kernel_ready_and_lifetime_pipe_shutdown_release_listener() {
 fn real_kernel_bind_failure_is_never_reported_ready() {
     let dir = tempfile::tempdir().unwrap();
     let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
-    let (mut child, endpoint) = spawn(dir.path(), occupied.local_addr().unwrap().port());
-    assert!(wait_for_ready(&mut child.0, &endpoint).is_err());
+    let (mut child, endpoint) = spawn(dir.path());
+    wait_for_ready(&mut child.0, &endpoint).expect("IPC-only bootstrap must become controllable");
+    let result = apply_listener(&endpoint, occupied.local_addr().unwrap().port());
+    assert!(
+        result.is_err(),
+        "occupied listener must not pass acknowledged runtime application; kernel stderr:\n{}",
+        std::fs::read_to_string(dir.path().join("kernel-stderr.log")).unwrap_or_default()
+    );
 }

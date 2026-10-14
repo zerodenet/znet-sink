@@ -213,3 +213,18 @@ svelte-check **0 errors / 0 warnings**。完整 Chromium 回归 **214 passed**�
 提交前只读复核客户端 develop 仍为 fd198ba5；core 远端 develop 已更新到 c2a72f6，
 增量未解除移动接口及 CORE-05，客户端与独立 owner 依赖仍固定 e74561f。只 fetch/read
 core 元资料，审计工作树仍干净，无 source/缓存修改。
+
+### Windows 已发布内核回归
+
+`94cfbc7` 的双引擎浏览器 **428 passed**，原生三个工作流均成功；主 CI 的 Windows2025
+已发布内核测试有一次真实失败：占用端口场景在仅等待 IPC health 持续300ms 后提前返回。
+Windows2022 同场景通过，不能拿对照成功掩盖失败。源码核对确认 IPC/Engine health 不是
+listener orchestration 回执，生产 managed host 已使用空 bootstrap，随后等待
+`config.apply_runtime` 确认才标记 Running。
+
+真实回归改为上述完整生产顺序；正常场景要求 runtime-only 确认、实际监听及 parent pipe EOF
+后资源释放，占用端口场景仍要求实际运行应用被拒绝，没有增加睡眠来制造就绪，没有删测试。
+云端从正式 v0.0.1 获取 Linux archive 并验证官方 SHA-256
+`1ab96e271219b7c5f03310260c6b823c78ee20e776e33af79d5fe0a6253fce82`，两项真实测试通过；
+常规 readiness 五项通过。日志为 `/tmp/mobile-final-readiness-{regression,real-linux}.log`。
+Windows 两环境及最终提交的所有工作流结果继续在 PR 描述核对，不借旧提交的浏览器或 APK。
