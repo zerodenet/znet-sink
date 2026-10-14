@@ -221,11 +221,61 @@ test('malformed recognized frames consume admission budget before validation and
 });
 
 test('typed invocation failures preserve lifecycle, budget and uncertainty codes without copying untrusted error text', () => {
-  for (const code of ['disabled', 'revoked', 'expired', 'busy', 'not_found', 'transport', 'uncertain', 'deadline', 'budget_exceeded', 'cancelled', 'permission_denied']) {
-    const failure = publicFailure({code, message:'https://private.invalid/?token=SECRET', diagnostics:['SECRET'],field_path:'SECRET'});
+  for (const code of [
+    'disabled',
+    'revoked',
+    'expired',
+    'busy',
+    'not_found',
+    'transport',
+    'uncertain',
+    'deadline',
+    'budget_exceeded',
+    'cancelled',
+    'permission_denied',
+  ]) {
+    const failure = publicFailure({
+      code,
+      message: 'https://private.invalid/?token=SECRET',
+      diagnostics: ['SECRET'],
+      field_path: 'SECRET',
+    });
     assert.equal(failure.code, code);
     assert(!JSON.stringify(failure).includes('SECRET'));
     assert(!failure.message.includes('网络请求失败或元数据格式无效'));
     assert.equal(failure.field_path, undefined);
   }
+});
+
+test('inbound Window identity stays fixed while replies use the captured document delivery target', () => {
+  const guard = new PageChannel(),
+    window = windowTarget(),
+    port = windowTarget(),
+    nextPort = windowTarget();
+  guard.open(doc(), 'channel', window, port);
+  assert(
+    guard.ready(window, {
+      source: 'znet-plugin-page-v1',
+      channel: 'channel',
+      id: 0,
+      method: 'ready',
+      args: {},
+    }),
+  );
+  assert.equal(guard.begin(port, frame(1)), null);
+  const old = guard.begin(window, frame(1));
+  window.postMessage = () => {
+    throw new Error('WindowProxy delivery would target a different document');
+  };
+  assert(guard.result(old, { receipt: 'original' }));
+  guard.finish(old, true);
+  assert(guard.reject(window, frame(2), { code: 'invalid_request' }));
+  assert.equal(port.messages.length, 3);
+  guard.open(doc(), 'channel', window, nextPort);
+  const current = guard.begin(window, frame(3));
+  assert(!guard.result(old, { secret: 'late' }));
+  assert(guard.result(current, 'new document'));
+  guard.finish(current, true);
+  assert.equal(port.messages.length, 3);
+  assert.equal(nextPort.messages.length, 1);
 });

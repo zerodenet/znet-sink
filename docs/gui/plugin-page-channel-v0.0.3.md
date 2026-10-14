@@ -47,3 +47,12 @@ The locked Tauri 2.11.2 `manager::set_csp` implementation can add `script-src`/`
 
 
 Native receipts are bounded to 1 MiB before waiting for document validation, with a separate per-epoch 4 MiB aggregate reservation for held content. Normal resumed effects and delivery recheck the original host document, so silent revocation/expiry during validation cannot acquire replacement authority. A confirmed configuration save is the specific exception: that owning write intentionally changes the review and closes the original backend document. Its already-confirmed, bounded host snapshot may update the same current host view after same-document proof; then the old page retires. It neither invokes with the changed review nor sends it to the guest. A navigation/closure still denies that old page callback; no write is replayed.
+
+
+## Document-bound reply transport
+
+The fresh bootstrap creates a private MessageChannel before signed guest bytes execute, retains its document-side port in its closure, and transfers only the host-side port with the original ready message. The host captures that port once as an immutable delivery target while retaining the original Window identity for inbound checks. Ready acknowledgements, errors and business receipts use that captured port; safe lifecycle challenges alone use the Window transport. A later document cannot inherit a WindowProxy-targeted plaintext receipt. Retirement closes the original port; old epochs cannot retarget delivery to a replacement.
+
+Business requests additionally carry the bootstrap's private document proof and require the exact original Window/channel/proof before dispatch. The bootstrap captures the frame WindowProxy before guest code and checks its active Document before requesting, responding to lifecycle checks or consuming receipts. The public SDK v1 methods and SDK Call/Reply DTO remain unchanged; document tokens, component reviews and the private port/proof are not exposed through guest context APIs.
+
+A CSP-denied URL navigation can retain the original document in WebKit. The invariant is zero forbidden requests and no authority or receipt crossing a genuine document replacement, not unconditional closure merely because a navigation was attempted. Browser regressions use actual policy violations/HTTP probes, then a real replacement and a request carrying the old known channel before the parent's load callback. The replacement must neither invoke a component nor receive the original held receipt.

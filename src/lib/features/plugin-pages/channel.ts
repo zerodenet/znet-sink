@@ -238,7 +238,8 @@ export function checkedDocument(
 interface Epoch {
   id: number;
   channel: string;
-  target: MessageTarget;
+  readonly target: MessageTarget;
+  readonly deliveryTarget: MessageTarget;
   document: PageDocument;
   active: boolean;
   ready: boolean;
@@ -267,12 +268,18 @@ export class PageChannel {
   get current() {
     return this.epoch;
   }
-  open(document: PageDocument, channel: string, target: MessageTarget) {
+  open(
+    document: PageDocument,
+    channel: string,
+    target: MessageTarget,
+    deliveryTarget: MessageTarget = target,
+  ) {
     this.close();
     this.epoch = {
       id: ++this.next,
       channel,
       target,
+      deliveryTarget,
       document,
       active: true,
       ready: false,
@@ -308,7 +315,7 @@ export class PageChannel {
       return false;
     boundedJson(value, PAGE_LIMITS.requestBytes);
     e.ready = true;
-    e.target.postMessage(
+    e.deliveryTarget.postMessage(
       {
         source: 'znet-plugin-host-v1',
         channel: e.channel,
@@ -382,7 +389,7 @@ export class PageChannel {
     const size = new TextEncoder().encode(JSON.stringify(message)).length;
     if (e.resultBytes + size > PAGE_LIMITS.totalResultBytes) return false;
     e.resultBytes += size;
-    e.target.postMessage(message, '*');
+    e.deliveryTarget.postMessage(message, '*');
     return true;
   }
   component(ticket: PageTicket): PluginComponent {
@@ -441,7 +448,7 @@ export class PageChannel {
       ticket.epoch.resultBytes += size;
     }
     if (!this.currentTicket(ticket)) return false;
-    ticket.epoch.target.postMessage(message, '*');
+    ticket.epoch.deliveryTarget.postMessage(message, '*');
     return true;
   }
   finish(ticket: PageTicket, delivered: boolean) {

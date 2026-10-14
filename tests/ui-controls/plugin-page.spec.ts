@@ -155,24 +155,70 @@ test('background closes the old channel before authoritative foreground snapshot
   await page.getByRole('button', { name: 'Resolve old operation' }).click();
   await expect(frame(page).locator('#result')).toHaveText('ready');
 });
-test('parent CSP blocks external iframe navigation and retires the old channel when the guest leaves', async ({
+test('parent CSP blocks external navigation without requiring original-document destruction, then closes a genuine replacement', async ({
   page,
 }) => {
-  let requests = 0;
-  page.on('request', (request) => {
-    if (request.url().includes('navigation.invalid')) requests++;
+  const received: string[] = [];
+  const probe = createServer((request, response) => {
+    received.push(request.url ?? '');
+    response.end();
   });
-  await open(page);
-  await frame(page)
-    .getByRole('button', { name: 'Navigate', exact: true })
-    .click();
-  await expect(page.getByRole('alert')).toContainText(
-    /原通道关闭|文档无法核对/,
-    { timeout: 7000 },
-  );
-  expect(requests).toBe(0);
-  expect((await counters(page)).closes).toBe(1);
-  await expect(page.locator('iframe')).toHaveCount(0);
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const address = probe.address();
+  if (!address || typeof address === 'string')
+    throw new Error('probe address unavailable');
+  await page.addInitScript(() => {
+    if (window === window.top) {
+      (window as any).__framePolicyViolations = [];
+      document.addEventListener('securitypolicyviolation', (event) =>
+        (window as any).__framePolicyViolations.push(
+          (event as SecurityPolicyViolationEvent).effectiveDirective,
+        ),
+      );
+    }
+  });
+  const sockets = new Set<import('node:net').Socket>();
+  probe.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  try {
+    await page.goto(
+      `/?panel=plugin-page&nav-target=${encodeURIComponent(`http://127.0.0.1:${address.port}/blocked-frame`)}`,
+    );
+    await expect(
+      frame(page).getByRole('heading', { name: 'Signed fixture page' }),
+    ).toBeVisible();
+    await frame(page)
+      .getByRole('button', { name: 'Current operation' })
+      .click();
+    await expect(frame(page).locator('#result')).toContainText('document-1');
+    await frame(page)
+      .getByRole('button', { name: 'Navigate', exact: true })
+      .click();
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__framePolicyViolations))
+      .toContain('frame-src');
+    expect(received).toEqual([]);
+    // CSP may retain srcdoc (WebKit) or load an error document (Chromium).
+    // Neither outcome grants a replacement document the original bridge.
+    await page.locator('iframe').evaluate((element) => {
+      (element as HTMLIFrameElement).srcdoc =
+        '<!doctype html><html><body><h1>Actual unsigned replacement</h1></body></html>';
+    });
+    await expect(page.getByRole('alert')).toContainText(
+      /原通道关闭|文档无法核对/,
+      { timeout: 7000 },
+    );
+    expect((await counters(page)).closes).toBe(1);
+    await expect(page.locator('iframe')).toHaveCount(0);
+    expect(received).toEqual([]);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) =>
+      probe.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 for (const mode of ['pre-head-script', 'pre-head-image', 'comment-fake-head']) {
@@ -542,4 +588,96 @@ test('all recognized control frames share the bounded request budget and cannot 
   expect((await counters(page)).sdkCalls).toBe(0);
   expect((await counters(page)).documents).toBe(1);
   expect((await counters(page)).closes).toBe(1);
+});
+
+test('a genuine replacement cannot invoke with a known channel or receive old native results before parent load callbacks', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    (window as any).__holdReplacement = false;
+    (window as any).__heldReplacementLoads = 0;
+    document.addEventListener(
+      'load',
+      (event) => {
+        if (
+          (window as any).__holdReplacement &&
+          event.target instanceof HTMLIFrameElement
+        ) {
+          event.stopImmediatePropagation();
+          (window as any).__heldReplacementLoads++;
+        }
+      },
+      true,
+    );
+    addEventListener(
+      'message',
+      (event) => {
+        const value = event.data;
+        if (
+          value?.source === 'znet-plugin-page-v1' &&
+          value.method === 'ready'
+        ) {
+          (window as any).__originalFrameWindow = event.source;
+          (window as any).__originalChannel = value.channel;
+        }
+        if (
+          (window as any).__holdReplacement &&
+          value?.source === 'znet-plugin-page-v1' &&
+          value.method === 'closing'
+        )
+          event.stopImmediatePropagation();
+        if (value?.source === 'fixture-replacement-attempt') {
+          (window as any).__replacementAttempt = {
+            sameWindow: event.source === (window as any).__originalFrameWindow,
+          };
+        }
+      },
+      true,
+    );
+  });
+  await open(page);
+  await frame(page).getByRole('button', { name: 'Delayed operation' }).click();
+  await expect.poll(async () => (await counters(page)).invokes).toBe(1);
+  const channel = await page.evaluate(() => (window as any).__originalChannel);
+  await page.evaluate(() => ((window as any).__holdReplacement = true));
+  const replacement = `<!doctype html><html><body><h1>Unsigned replacement</h1><script>window.__receivedOldResults=[];addEventListener('message',event=>{if(event.data?.source==='znet-plugin-host-v1'&&event.data.id>0)window.__receivedOldResults.push(event.data);});parent.postMessage({source:'znet-plugin-page-v1',channel:${JSON.stringify(channel)},documentProof:'0'.repeat(32),id:777,method:'component.invoke',args:{componentId:'worker',action:'replacement'}},'*');parent.postMessage({source:'fixture-replacement-attempt'},'*');</script></body></html>`;
+  await page
+    .locator('iframe')
+    .evaluate(
+      (element, html) => ((element as HTMLIFrameElement).srcdoc = html),
+      replacement,
+    );
+  await expect(
+    frame(page).getByRole('heading', { name: 'Unsigned replacement' }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__replacementAttempt?.sameWindow),
+    )
+    .toBe(true);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__heldReplacementLoads))
+    .toBeGreaterThan(0);
+  expect((await counters(page)).invokes).toBe(1);
+  await page.getByRole('button', { name: 'Resolve old operation' }).click();
+  await expect
+    .poll(async () => (await counters(page)).completedInvokes)
+    .toBe(1);
+  expect(
+    await frame(page)
+      .locator('body')
+      .evaluate(() => (window as any).__receivedOldResults),
+  ).toEqual([]);
+  expect((await counters(page)).invokes).toBe(1);
+  expect((await counters(page)).closes).toBe(0);
+  await page.evaluate(() => {
+    (window as any).__holdReplacement = false;
+    document.querySelector('iframe')!.dispatchEvent(new Event('load'));
+  });
+  await expect(page.getByRole('alert')).toContainText('文档无法核对', {
+    timeout: 7000,
+  });
+  expect((await counters(page)).closes).toBe(1);
+  expect((await counters(page)).invokes).toBe(1);
 });

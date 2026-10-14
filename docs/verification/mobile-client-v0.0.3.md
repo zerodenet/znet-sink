@@ -309,3 +309,25 @@ epoch同时核对，核对中原请求保留在已有八个在途名额内，不
 最终head的全量双引擎CI及unsigned APK收据在原draft PR继续核对。
 
 最终同文档核对源码 `pnpm verify:frontend` 全集及生产build已通过：移动语义108项、许可17项、类型检查0/0；日志 `/tmp/mobile-phase5-document-proof-final-frontend.log`。本轮未再次运行未改变的Rust全集，前述1093项源码证据与最终head CI各自说明。
+
+
+79a754a 实际CI为 **473 passed / 1 failed**：唯一失败是WebKit拒绝外部URL后保留原srcdoc，
+旧测试误要求其必须关闭。13项其他主CI检查与移动Rust/原生文档/APK工作流均成功；
+artifact11874112866为该head的49,551,687-byte unsigned/API24/arm64宿主，不能借作后续head。
+测试需要验证实际CSP拒绝/0请求与真正文档替换的旧权限/结果失效，不能把拒绝尝试误作已导航。
+
+随后补齐入站私有文档证明与出站document-bound MessagePort。仅检查WindowProxy及一次
+proof不能保证异步回执不被后续文档接收；私有port在bootstrap/guest边界前建立并固定捕获，
+源窗口校验仍保持。此增量的完整验证和最终head CI继续在原draft PR核对。
+
+
+冻结后的child-created私有port源码：实际Frame/既有签名流程 **23/23 Chromium**、通道
+Node **9/9**、类型检查0/0、差异检查通过。真正文档替换回归保持相同WindowProxy，
+延迟parent load并暂扣旧closing，确认新doc用旧已知channel/错误proof不能调用，旧native
+收据在parent load之前也不能被新Window接收；之后有界关闭且不重放。
+公共SDK v1调用和Call/Reply DTO未变，port/proof不经公开context提供。
+日志 `/tmp/plugin-page-private-port-{final-browser,final-types,node}.log`。
+最终 `pnpm verify:frontend` 全集和生产build通过：移动语义109项（包括新增分离入站身份/
+出站目标回归）、许可17项、类型0/0；日志 `/tmp/mobile-phase5-private-port-final-frontend.log`。
+23项回归的首轮HTTP server收尾因闲置连接挂起，已显式清理连接；CSP/0HTTP/真实替换
+断言均保留。新的准确head全部CI和APK收据继续在原draft PR记录，不借79a754a成功产物。

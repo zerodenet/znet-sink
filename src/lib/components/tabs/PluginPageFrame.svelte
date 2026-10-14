@@ -81,6 +81,7 @@
   const DOCUMENT_CHECK_MS = 5000;
   let documentProof = '';
   let recognizedAttempts = 0;
+  let replyPort: MessagePort | null = null;
   let documentProbe: {
     epoch: NonNullable<PageChannel['current']>;
     nonce: string;
@@ -218,6 +219,8 @@
   function retire(reason = '') {
     generation++;
     bridge.close();
+    replyPort?.close();
+    replyPort = null;
     completeDocumentProbe(false);
     documentProof = '';
     if (documentBinding) closeDocument(documentBinding.document_review);
@@ -280,7 +283,11 @@
   const channel = ${channelValue};
   const hostWindow = parent;
   const send = hostWindow.postMessage.bind(hostWindow);
-  const originalDocument = document;
+  const frameWindow = window;
+  const originalDocument = frameWindow.document;
+  function sameDocument(){try{return frameWindow.document===originalDocument;}catch{return false;}}
+  const replyChannel=new MessageChannel();
+  const replyPort=replyChannel.port1;
   const documentProof = Array.from(crypto.getRandomValues(new Uint32Array(4)),value=>value.toString(16).padStart(8,'0')).join('');
   const pluginId = ${plugin};
   const initialNavigation = ${navigationValue};
@@ -289,22 +296,22 @@
   const pending = new Map();
   function request(method, args = {}) {
     return ready.then(()=>new Promise((resolve, reject) => {
+      if(!sameDocument()){const error=new Error('插件页面已失效，请重新打开');error.code='stale';reject(error);return;}
       if(pending.size>=8||nextId>512){const error=new Error('插件页面请求超过客户端预算');error.code='budget_exceeded';reject(error);return;}
       const id = nextId++;
       pending.set(id, { resolve, reject });
-      send({ source: 'znet-plugin-page-v1', channel, id, method, args }, '*');
+      send({ source: 'znet-plugin-page-v1', channel, documentProof, id, method, args }, '*');
     }));
   }
-  addEventListener('message', event => {
-    const value = event.data;
-    if(event.source!==hostWindow||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel)return;
+  function receiveReply(value) {
+    if(!sameDocument()||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel)return;
     if(value.id===0&&value.ok){
-      if(value.value&&value.value.phase==='document-check'&&typeof value.value.nonce==='string'&&value.value.nonce.length<=64&&originalDocument===document){
+      if(value.value&&value.value.phase==='document-check'&&typeof value.value.nonce==='string'&&value.value.nonce.length<=64&&sameDocument()){
         send({source:'znet-plugin-page-v1',channel,id:0,method:'document_checked',args:{nonce:value.value.nonce,documentProof}},'*');return;
       }
       if(value.value&&value.value.phase==='loaded'&&!initialized){
         initialized=true;
-        send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded_ack',args:{}},'*');
+        send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded_ack',documentProof,args:{}},'*');
         readyResolve();
       }
       return;
@@ -327,7 +334,13 @@
       retryAfterMs: failure.retry_after_ms
     });
     item.reject(error);
+  }
+  addEventListener('message',event=>{
+    const value=event.data;
+    if(event.source!==hostWindow||!sameDocument()||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel||value.id!==0)return;
+    receiveReply(value); // Window transport carries safe lifecycle controls only.
   });
+  replyPort.addEventListener('message',event=>receiveReply(event.data));replyPort.start();
   const utf8 = {
     encode(value) { const bytes = new TextEncoder().encode(JSON.stringify(value)); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary); },
     decode(value) { const binary = atob(value); const bytes = Uint8Array.from(binary, char => char.charCodeAt(0)); return JSON.parse(new TextDecoder().decode(bytes)); }
@@ -412,9 +425,9 @@
     capabilities: Object.freeze({ call: sdkCall }),
     invoke: (componentId, action, payload = null) => request('component.invoke', { componentId, action, payload })
   }), writable: false, configurable: false });
-  addEventListener('load',()=>send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded',args:{}},'*'),{once:true,capture:true});
+  addEventListener('load',()=>send({source:'znet-plugin-page-v1',channel,id:0,method:'loaded',documentProof,args:{}},'*'),{once:true,capture:true});
   addEventListener('pagehide',()=>send({source:'znet-plugin-page-v1',channel,id:0,method:'closing',args:{}},'*'),{capture:true});
-  send({ source: 'znet-plugin-page-v1', channel, id: 0, method: 'ready', args: {documentProof} }, '*');
+  send({ source: 'znet-plugin-page-v1', channel, id: 0, method: 'ready', args: {documentProof} }, '*', [replyChannel.port2]);
 })();
 <\/script>`;
   }
@@ -738,15 +751,20 @@
       if (ownedBootstrap && data.method === 'ready' && readyKey !== frameKey) {
         if (
           typeof data.args?.documentProof !== 'string' ||
-          !/^[0-9a-f]{32}$/.test(data.args.documentProof)
+          !/^[0-9a-f]{32}$/.test(data.args.documentProof) ||
+          event.ports.length !== 1
         ) {
           retire('插件页面握手无效，原通道已关闭');
           return;
         }
         documentProof = data.args.documentProof;
-        bridge.open(documentBinding!, channel, frame!.contentWindow!);
-        readyKey = frameKey;
         try {
+          const capturedPort = event.ports[0];
+          replyPort = capturedPort;
+          bridge.open(documentBinding!, channel, frame!.contentWindow!, {
+            postMessage: (message) => capturedPort.postMessage(message),
+          });
+          readyKey = frameKey;
           bridge.ready(event.source, data);
           acknowledgeLoaded();
         } catch {
@@ -772,6 +790,7 @@
       if (
         ownedBootstrap &&
         data.method === 'loaded' &&
+        data.documentProof === documentProof &&
         readyKey === frameKey &&
         bootstrapLoadedKey !== frameKey
       ) {
@@ -782,6 +801,7 @@
       if (
         ownedBootstrap &&
         data.method === 'loaded_ack' &&
+        data.documentProof === documentProof &&
         acknowledgementKey === frameKey &&
         initializedKey !== frameKey
       ) {
@@ -798,6 +818,7 @@
         retire('插件页面已离开，原通道关闭');
         return;
       }
+      if (data?.id !== 0 && data?.documentProof !== documentProof) return;
       let ticket: PageTicket | null = null;
       try {
         if (bridge.ready(event.source, data)) return;

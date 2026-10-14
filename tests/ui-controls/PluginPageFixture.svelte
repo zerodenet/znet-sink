@@ -51,11 +51,15 @@
     preflights = $state(0),
     pickers = $state(0),
     snapshots = $state(0),
-    configures = $state(0);
+    configures = $state(0),
+    completedInvokes = $state(0);
   const docs = new Map<string, { fingerprint: string; closed: boolean }>();
   let pendingInvoke: ((result: unknown) => void) | null = null;
   let pendingConfigure: (() => void) | null = null;
   let pendingPicker: ((path: string | null) => void) | null = null;
+  const navigationTarget =
+    new URLSearchParams(location.search).get('nav-target') ??
+    'https://navigation.invalid/should-not-load?token=SECRET';
   const html = `<!doctype html><html><body><h1>Signed fixture page</h1><output id="result">ready</output><button id="unknown">Unknown component</button><button id="normal">Current operation</button><button id="late">Delayed operation</button><button id="file">Choose file</button><button id="browser">Open browser</button><button id="nav">Navigate</button><button id="huge">Oversized result</button><button id="save">Save configuration</button><script>
   const out=document.getElementById('result');const run=task=>task().then(value=>out.textContent=JSON.stringify(value)).catch(error=>out.textContent=error.code+':'+error.message);
   document.getElementById('unknown').onclick=()=>run(()=>znetPlugin.invoke('unknown','normal'));
@@ -63,7 +67,7 @@
   document.getElementById('late').onclick=()=>run(()=>znetPlugin.invoke('worker','late'));
   document.getElementById('file').onclick=()=>run(()=>znetPlugin.files.read('worker',{selectedPath:'/guest/forged'}));
   document.getElementById('browser').onclick=()=>run(()=>znetPlugin.browser.open('worker','https://fixture.invalid','https://fixture.invalid/?token=SECRET'));
-  document.getElementById('nav').onclick=()=>location.href='https://navigation.invalid/should-not-load?token=SECRET';
+  document.getElementById('nav').onclick=()=>location.href=${JSON.stringify(navigationTarget)};
   document.getElementById('huge').onclick=()=>run(()=>znetPlugin.invoke('worker','huge'));
   document.getElementById('save').onclick=()=>run(()=>znetPlugin.configuration.save('worker',{name:'after-save'}));
   <\/script></body></html>`;
@@ -75,7 +79,7 @@
     'https://guest-network.invalid';
   const attempts = `<script>window.__networkAttempted=true;window.__cspViolations=[];addEventListener('securitypolicyviolation',event=>window.__cspViolations.push(event.violatedDirective));fetch(${JSON.stringify(probeOrigin + '/fetch')}).catch(()=>{});const image=new Image();image.src=${JSON.stringify(probeOrigin + '/script-image')};<\/script>`;
   const image = `<img src="${probeOrigin}/raw-image" alt="blocked remote image">`;
-  const earlyRequest = `<script>addEventListener('message',event=>{const value=event.data;if(event.source===parent&&value?.source==='znet-plugin-host-v1'&&value.id===0&&value.value===true){window.__earlyAttempt=true;parent.postMessage({source:'znet-plugin-page-v1',channel:value.channel,id:999,method:'component.invoke',args:{componentId:'worker',action:'early'}},'*');}});<\/script>`;
+  const earlyRequest = `<script>const bootstrap=Array.from(document.scripts).find(script=>script.textContent.includes('const channel ='));const match=bootstrap.textContent.match(/const channel = ("[^";]+");/);window.__earlyAttempt=true;parent.postMessage({source:'znet-plugin-page-v1',channel:JSON.parse(match[1]),id:999,method:'component.invoke',args:{componentId:'worker',action:'early'}},'*');<\/script>`;
   const suppressPagehide = `<script>addEventListener('pagehide',event=>event.stopImmediatePropagation(),true);<\/script>`;
   const guestHtml =
     documentMode === 'suppress-pagehide'
@@ -165,7 +169,12 @@
       check(token, review);
       invokes++;
       if (action === 'late')
-        return new Promise((resolve) => (pendingInvoke = resolve));
+        return new Promise((resolve) => (pendingInvoke = resolve)).then(
+          (value) => {
+            completedInvokes++;
+            return value;
+          },
+        );
       if (action === 'huge') return 'x'.repeat(1024 * 1024);
       return { state: 'current', document: token };
     },
@@ -280,6 +289,7 @@
       pickers,
       snapshots,
       configures,
+      completedInvokes,
     })}</output
   >
   <PluginPageFrame
