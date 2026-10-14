@@ -257,3 +257,27 @@ Windows 两环境及最终提交的所有工作流结果继续在 PR 描述核�
 类型化错误收尾补丁随后补齐：原租约的预算、deadline、撤权、过期、关闭及繁忙不再经过通用包/网络错误转换器；直接保留现有SDK canonical code，并用固定文案排除任意原消息/details。实际资源预算、租约超时和撤权/关闭分类使真实Host页面聚焦回归增至11项，Host执行/文件准入为6项。
 补丁源码 Rust 全集 **1093 passed / 0 failed / 7 ignored**，fmt/check/clippy通过；最终前端完整验证/build通过，移动语义 **108项**，许可 **17项**，类型检查 **0/0**。
 日志 `/tmp/mobile-phase5-typed-final-{fmt,check,tests,clippy,frontend}.log`。同一补丁的完整Chromium运行记录在 `/tmp/mobile-phase5-typed-final-browser.log`；最终终态、双引擎CI和unsigned APK收据以最新head的PR记录为准，634dd29的工作流/产物只算历史证据。
+
+
+### 4293774 双引擎首次加载回归
+
+上述类型化错误补丁的系统 Chromium 全集实际通过 **228项**；同一提交 GitHub Actions
+使用的 Chromium/WebKit 则 **433 passed / 23 failed**，插件 iframe 首次内容没有呈现。
+主 CI 其他13项全部通过，不能把本地不同版本浏览器或其他检查通过称为双引擎验收。
+移动 Rust 与原生文档工作流通过；unsigned APK 49,552,095 bytes / arm64 / API24，
+文档 payload 与许可 asset 检查通过，artifact 11872238395。此提交产物仍没有装配 Proxy/TUN。
+
+精确 Playwright 浏览器下载及失败 trace artifact 本地获取受到环境 CDN/domain 403 拒绝，
+不是自动批准审查拒绝，没有修改依赖或绕过网络限制。首次加载与安全握手修复后的新提交
+必须重新跑实际双引擎 CI；此处保留失败历史，不能借用上一个 head 的通过记录。
+
+
+首次加载修复改由当前WindowProxy与新channel的真实bootstrap建立，ready/load/host ack
+完成后才接受业务请求；早到空白页或旧iframe回调不建立通道。初始化后的load或pagehide
+继续关闭原文档，旧授权、导航和网络CSP断言没有放宽。新增三个实际Frame回归覆盖早到
+空白页、多次/延后的宿主load及握手前rawguest业务调用（拒绝且计入预算）。
+本地聚焦 **16/16 Chromium** 通过，页面通道Node **8/8**，前端全集验证及生产build通过，
+移动语义108项/许可17项，类型检查0/0。日志 `/tmp/plugin-page-handshake-final.log`、
+`/tmp/plugin-page-handshake-final-node.log`、`/tmp/mobile-phase5-handshake-final-frontend.log`。
+这是系统Chromium154的实际结果；尚不能证明CI Chromium151/WebKit2336首次加载已修复。
+Rust及原生配置没有变化，前述1093项验证覆盖同一Rust源码。新head完整CI需要重新核对。

@@ -1,5 +1,48 @@
 import { createServer } from 'node:http';
 import { test, expect, type Page } from '@playwright/test';
+// CI diagnostics distinguish a retired epoch from a CSP-blocked srcdoc without
+// exposing signed HTML, document tickets, component configuration or URLs.
+const policyDiagnostics = new WeakMap<Page, string[]>();
+test.beforeEach(async ({ page }) => {
+  const messages: string[] = [];
+  policyDiagnostics.set(page, messages);
+  page.on('console', (message) => {
+    const value = message.text();
+    if (
+      /Content Security Policy|Refused to frame|frame-src|blocked.*CSP/i.test(
+        value,
+      )
+    )
+      messages.push(value.replace(/https?:\/\/[^\s]+/g, '[url]').slice(0, 512));
+  });
+});
+test.afterEach(async ({ page }, info) => {
+  if (info.status === info.expectedStatus || page.isClosed()) return;
+  const dom = await page
+    .evaluate(() => ({
+      iframes: document.querySelectorAll('iframe').length,
+      alerts: Array.from(document.querySelectorAll('[role="alert"]')).map(
+        (node) => node.textContent,
+      ),
+    }))
+    .catch(() => null);
+  const frames = await Promise.all(
+    page
+      .frames()
+      .map(async (candidate) => ({
+        url: candidate.url().startsWith('about:')
+          ? candidate.url()
+          : '[non-about]',
+        ready: await candidate
+          .evaluate(() => document.readyState)
+          .catch(() => null),
+      })),
+  );
+  console.log(
+    'PLUGIN_IFRAME_DIAGNOSTIC',
+    JSON.stringify({ dom, frames, policy: policyDiagnostics.get(page) }),
+  );
+});
 const frame = (page: Page) =>
   page.frameLocator('iframe[title="Signed fixture"]');
 async function counters(page: Page) {
@@ -185,3 +228,95 @@ for (const mode of ['pre-head-script', 'pre-head-image', 'comment-fake-head']) {
     }
   });
 }
+
+test('early about:blank load callbacks cannot bind or retire the signed srcdoc channel', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLIFrameElement) {
+            node.dispatchEvent(new Event('load'));
+            node.dispatchEvent(new Event('load'));
+          }
+        }
+    }).observe(document, { subtree: true, childList: true });
+  });
+  await open(page);
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  expect((await counters(page)).closes).toBe(0);
+  await page
+    .locator('iframe')
+    .evaluate((element) => element.dispatchEvent(new Event('load')));
+  await expect(page.getByRole('alert')).toContainText('发生导航');
+  expect((await counters(page)).closes).toBe(1);
+});
+
+test('guest methods before loaded acknowledgement cannot invoke a component', async ({
+  page,
+}) => {
+  await page.goto('/?panel=plugin-page&document-mode=early-request');
+  await expect(
+    frame(page).getByRole('heading', { name: 'Signed fixture page' }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      frame(page)
+        .locator('body')
+        .evaluate(() => !!(window as any).__earlyAttempt),
+    )
+    .toBe(true);
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  expect((await counters(page)).invokes).toBe(1);
+});
+test('signed bootstrap waits for observed iframe load and tolerates several initial load callbacks', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    (window as any).__heldIframeLoads = 0;
+    document.addEventListener(
+      'load',
+      (event) => {
+        if (
+          event.target instanceof HTMLIFrameElement &&
+          !(window as any).__releaseIframeLoad
+        ) {
+          event.stopImmediatePropagation();
+          (window as any).__heldIframeLoads++;
+        }
+      },
+      true,
+    );
+  });
+  await open(page);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__heldIframeLoads))
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() =>
+      frame(page)
+        .locator('body')
+        .evaluate(() => document.readyState),
+    )
+    .toBe('complete');
+  await frame(page).getByRole('button', { name: 'Current operation' }).click();
+  expect((await counters(page)).invokes).toBe(0);
+  await page.locator('iframe').evaluate((element) => {
+    (window as any).__releaseIframeLoad = true;
+    element.dispatchEvent(new Event('load'));
+    element.dispatchEvent(new Event('load'));
+    (window as any).__releaseIframeLoad = false;
+  });
+  await expect(frame(page).locator('#result')).toContainText('document-1');
+  expect((await counters(page)).invokes).toBe(1);
+  expect((await counters(page)).closes).toBe(0);
+  await page.locator('iframe').evaluate((element) => {
+    (window as any).__releaseIframeLoad = true;
+    element.dispatchEvent(new Event('load'));
+  });
+  await expect(page.getByRole('alert')).toContainText('发生导航');
+  expect((await counters(page)).closes).toBe(1);
+});

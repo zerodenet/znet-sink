@@ -72,23 +72,26 @@
     'https://guest-network.invalid';
   const attempts = `<script>window.__networkAttempted=true;window.__cspViolations=[];addEventListener('securitypolicyviolation',event=>window.__cspViolations.push(event.violatedDirective));fetch(${JSON.stringify(probeOrigin + '/fetch')}).catch(()=>{});const image=new Image();image.src=${JSON.stringify(probeOrigin + '/script-image')};<\/script>`;
   const image = `<img src="${probeOrigin}/raw-image" alt="blocked remote image">`;
+  const earlyRequest = `<script>addEventListener('message',event=>{const value=event.data;if(event.source===parent&&value?.source==='znet-plugin-host-v1'&&value.id===0&&value.value===true){window.__earlyAttempt=true;parent.postMessage({source:'znet-plugin-page-v1',channel:value.channel,id:999,method:'component.invoke',args:{componentId:'worker',action:'early'}},'*');}});<\/script>`;
   const guestHtml =
-    documentMode === 'pre-head-script'
-      ? html.replace(
-          '<html><body>',
-          `<html>${attempts}<head><title>Guest full document</title></head><body>`,
-        )
-      : documentMode === 'pre-head-image'
+    documentMode === 'early-request'
+      ? html.replace('<html><body>', `<html><body>${earlyRequest}`)
+      : documentMode === 'pre-head-script'
         ? html.replace(
             '<html><body>',
-            `<html>${image}<head><title>Guest full document</title></head><body>${attempts}`,
+            `<html>${attempts}<head><title>Guest full document</title></head><body>`,
           )
-        : documentMode === 'comment-fake-head'
+        : documentMode === 'pre-head-image'
           ? html.replace(
               '<html><body>',
-              `<!-- <head> is not a real head --> <html>${attempts}${image}<head><title>Guest full document</title></head><body>`,
+              `<html>${image}<head><title>Guest full document</title></head><body>${attempts}`,
             )
-          : html;
+          : documentMode === 'comment-fake-head'
+            ? html.replace(
+                '<html><body>',
+                `<!-- <head> is not a real head --> <html>${attempts}${image}<head><title>Guest full document</title></head><body>`,
+              )
+            : html;
   const snapshot = () => ({
     checked: true,
     components: [structuredClone(authoritative)],

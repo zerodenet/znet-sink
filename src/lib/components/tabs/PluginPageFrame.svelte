@@ -72,7 +72,11 @@
   let mounted = $state(false);
   let visible = $state(true);
   let watched = '';
-  let attachedKey = -1;
+  let readyKey = -1;
+  let bootstrapLoadedKey = -1;
+  let loadObservedKey = -1;
+  let acknowledgementKey = -1;
+  let initializedKey = -1;
   const bridge = new PageChannel();
   const host = untrack(() => api);
   const readPicker = untrack(() => chooseRead),
@@ -144,7 +148,7 @@
   const pluginId = ${plugin};
   const initialNavigation = ${navigationValue};
   let nextId = 1;
-  let readyResolve; const ready=new Promise(resolve=>readyResolve=resolve);
+  let readyResolve, initialized=false; const ready=new Promise(resolve=>readyResolve=resolve);
   const pending = new Map();
   function request(method, args = {}) {
     return ready.then(()=>new Promise((resolve, reject) => {
@@ -157,7 +161,14 @@
   addEventListener('message', event => {
     const value = event.data;
     if(event.source!==parent||!value||value.source!=='znet-plugin-host-v1'||value.channel!==channel)return;
-    if(value.id===0&&value.ok){readyResolve();return;}
+    if(value.id===0&&value.ok){
+      if(value.value&&value.value.phase==='loaded'&&!initialized){
+        initialized=true;
+        parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'loaded_ack',args:{}},'*');
+        readyResolve();
+      }
+      return;
+    }
     const item = pending.get(value.id);
     if (!item) return;
     pending.delete(value.id);
@@ -261,6 +272,7 @@
     capabilities: Object.freeze({ call: sdkCall }),
     invoke: (componentId, action, payload = null) => request('component.invoke', { componentId, action, payload })
   }), writable: false, configurable: false });
+  addEventListener('load',()=>parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'loaded',args:{}},'*'),{once:true});
   addEventListener('pagehide',()=>parent.postMessage({source:'znet-plugin-page-v1',channel,id:0,method:'closing',args:{}},'*'));
   parent.postMessage({ source: 'znet-plugin-page-v1', channel, id: 0, method: 'ready', args: {} }, '*');
 })();
@@ -352,7 +364,12 @@
       documentBinding = doc;
       channel = crypto.randomUUID();
       frameKey++;
-      attachedKey = -1;
+      readyKey =
+        bootstrapLoadedKey =
+        loadObservedKey =
+        acknowledgementKey =
+        initializedKey =
+          -1;
       pageDocument = wrap(
         doc.html,
         channel,
@@ -367,21 +384,43 @@
       if (current === generation) loading = false;
     }
   }
-  function attach() {
-    if (!frame?.contentWindow || !documentBinding) return;
-    if (attachedKey === frameKey) {
+  function acknowledgeLoaded() {
+    if (
+      readyKey !== frameKey ||
+      bootstrapLoadedKey !== frameKey ||
+      loadObservedKey !== frameKey ||
+      acknowledgementKey === frameKey
+    )
+      return;
+    const current = bridge.current;
+    if (!current || current.target !== frame?.contentWindow) return;
+    acknowledgementKey = frameKey;
+    current.target.postMessage(
+      {
+        source: 'znet-plugin-host-v1',
+        channel: current.channel,
+        id: 0,
+        ok: true,
+        value: { phase: 'loaded' },
+      },
+      '*',
+    );
+  }
+  function attach(event: Event) {
+    // Ignore callbacks from a detached previous iframe and initial about:blank
+    // loads. Only the signed bootstrap can establish and complete a channel.
+    if (
+      event.currentTarget !== frame ||
+      !frame?.contentWindow ||
+      !documentBinding
+    )
+      return;
+    if (initializedKey === frameKey) {
       retire('插件页面发生导航，原消息通道已关闭，请重新打开');
       return;
     }
-    attachedKey = frameKey;
-    bridge.open(documentBinding, channel, frame.contentWindow);
-    bridge.ready(frame.contentWindow, {
-      source: 'znet-plugin-page-v1',
-      channel,
-      id: 0,
-      method: 'ready',
-      args: {},
-    });
+    loadObservedKey = frameKey;
+    acknowledgeLoaded();
   }
   async function check(ticket: PageTicket) {
     assertCurrent(ticket);
@@ -524,6 +563,42 @@
     const receive = (event: MessageEvent) => {
       if (event.origin !== 'null') return;
       const data = event.data;
+      const ownedBootstrap =
+        !!documentBinding &&
+        event.source === frame?.contentWindow &&
+        data?.source === 'znet-plugin-page-v1' &&
+        data.channel === channel &&
+        data.id === 0;
+      if (ownedBootstrap && data.method === 'ready' && readyKey !== frameKey) {
+        bridge.open(documentBinding!, channel, frame!.contentWindow!);
+        readyKey = frameKey;
+        try {
+          bridge.ready(event.source, data);
+          acknowledgeLoaded();
+        } catch {
+          retire('插件页面握手无效，原通道已关闭');
+        }
+        return;
+      }
+      if (
+        ownedBootstrap &&
+        data.method === 'loaded' &&
+        readyKey === frameKey &&
+        bootstrapLoadedKey !== frameKey
+      ) {
+        bootstrapLoadedKey = frameKey;
+        acknowledgeLoaded();
+        return;
+      }
+      if (
+        ownedBootstrap &&
+        data.method === 'loaded_ack' &&
+        acknowledgementKey === frameKey &&
+        initializedKey !== frameKey
+      ) {
+        initializedKey = frameKey;
+        return;
+      }
       if (
         event.source === bridge.current?.target &&
         data?.source === 'znet-plugin-page-v1' &&
@@ -544,6 +619,16 @@
         return;
       }
       if (!ticket) return;
+      if (initializedKey !== frameKey) {
+        const delivered = bridge.result(
+          ticket,
+          null,
+          new PageChannelError('invalid_request'),
+        );
+        bridge.finish(ticket, delivered);
+        if (!delivered) retire('插件页面握手尚未完成，原通道已关闭');
+        return;
+      }
       const request = ticket;
       void dispatch(request)
         .then((result) => {
