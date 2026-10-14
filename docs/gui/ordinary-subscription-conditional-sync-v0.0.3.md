@@ -26,6 +26,12 @@
 
 这些是共享服务与真实本机 HTTP/SQLite 证据，不等同于手机端真机后台验收或内核转发验收。
 
-未确认操作还存在一个明确限制：既有 `configuration::apply` 通过当次 bound identity/确认回执核对，`capture_apply::Receipt` 仅在当前流程中持有；没有可供普通订阅按操作 ID 恢复的持久权威 journal/解除入口。本轮把新的 `config_apply_uncertain`/未确认应用错误转换为固定宿主 phase 消息；再次同步遇到该准确标记时在任何新 HTTP/apply 前返回待核对，不自动重放。普通网络错误、任意旧错误文本不会误触发此屏障。来源编辑会保留既有同步错误，改名/切换自动参与也不会解除未知结果。真实权威核对及安全解除仍待实现，不能以手动再下载、删除错误或清空本地日志充当核对。
+## 未确认屏障与有限本地恢复
+
+普通运行应用的新持久候选/回执与本地阶段记录位于 schema 3 的独立可信关系账本。prepared/apply-pending 或缺 confirmed 回执仍是未知，不能因当前 runtime 身份可读、改名、关闭自动参与或清 `lastError` 重放。已确认应用但本地发布未完成时，可经 `subscription_reconcile_unknown` 核对原记录，再由用户明确执行 `subscription_recover_confirmed_local`；该动作只完成原本地候选，不发 HTTP、apply 或 TUN 操作。ledger 准入限活动普通 Zero 配置的真实运行变更且不需外部 OS 系统代理调整；需要 retarget 或实际系统代理状态无法确认时，仍走既有真实 retarget/补偿链，此类事务不属于本批 local-only 恢复。`local-committed` 保留来源屏障直到 AppConfig 投影及 SQLite 完成阶段确认，不能让自动或手动同步抢先继续。
+
+条件记录不属于本批本地恢复的成功收据。原响应的 ETag/Last-Modified 若尚未持久保存，恢复不编造或宣称它们已恢复；也不为完成此动作再次下载、删除缓存或清空错误。下一次独立的用户/到期同步照常检查原来源、关联材料、source/material revision、lastSync 与 lastError：已有 validator 全部匹配才可条件 GET；缺失或失配时按普通流程无条件 GET。这个后续检查是新的来源同步，不是原未知操作的重放或恢复阶段。
+
+没有持久 confirmed 回执的历史操作、确认落盘前崩溃、当前实例/版本、AppConfig 或独立 typed 规则集组合改变，仍没有安全解除证据。完整解除需可关联原操作的权威结果或稳定运行摘要；不能通过手动下载、删除错误或清日志冒充。接口与存储限制见[普通订阅核对与有限恢复](./ordinary-subscription-reconciliation-v0.0.3.md)。
 
 损坏条件记录的修正使用显式宿主操作 `reset_conditional_cache(id, expectedUpdatedAtUnixMs)`，返回 `{ cleared }`。它取得同一 per-ID claim，拒绝托管来源，核对当前来源版本，然后读取私有原始记录的 SQLite revision 并执行 CAS Delete；不要求能解码损坏记录，不盲删、不请求网络、不提交运行配置。仅删除当前普通订阅的 validator 行，源、配置材料、客户端覆盖、lastSync、lastError 和固定未知屏障均保持原值。空记录返回 `cleared: false`；来源/行版本变化要求重新确认。清除条件记录可让下一次已获准的普通同步重新获取正文，但不是未知运行结果的解除操作。

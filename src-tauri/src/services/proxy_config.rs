@@ -163,6 +163,135 @@ pub async fn upsert_runtime(
     upsert_runtime_locked(app_handle.clone(), input).await
 }
 
+/// Ordinary active-source replacement with a durable confirmed-apply journal.
+/// Cases requiring an OS system-proxy retarget retain the existing transaction
+/// and compensation chain; they are not claimed as local-only recoverable.
+pub(crate) async fn upsert_ordinary_subscription_runtime(
+    app_handle: AppHandle,
+    input: ProxyConfigUpsert,
+    expected_source: &SubscriptionProfile,
+    next_source: SubscriptionProfile,
+) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    crate::services::ordinary_subscription_recovery::require_sync_allowed(
+        state.inner(),
+        &expected_source.id,
+    )?;
+    let previous = lock(state.proxy_configs(), "proxy_config")?.clone();
+    let (next, profile) = build_upsert_profiles(&previous, input.clone())?;
+    if profile.managed_source.is_some() || expected_source.managed_source.is_some() {
+        return Err(AppError::invalid_argument(
+            "普通订阅不能修改托管或受保护配置",
+        ));
+    }
+    let previous_active = previous.iter().find(|profile| profile.active);
+    let next_active = next.iter().find(|profile| profile.active);
+    let runtime_changed = previous_active.map(|item| (&item.id, &item.content))
+        != next_active.map(|item| (&item.id, &item.content));
+    let running = core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;
+    if !running || !runtime_changed {
+        let profile = upsert_runtime_locked(app_handle.clone(), input).await?;
+        return Ok((profile, None));
+    }
+    let active = next_active
+        .filter(|active| active.id == profile.id)
+        .ok_or_else(|| AppError::invalid_argument("普通订阅应用目标不是当前配置"))?;
+    let source = active
+        .content
+        .clone()
+        .ok_or_else(|| AppError::invalid_argument("普通订阅没有有效配置正文"))?;
+    let app = lock(state.app_config(), "app_config")?.clone();
+    let rules_fingerprint = crate::services::app_database::ordinary_recovery::fingerprint(&*lock(
+        state.rule_sets(),
+        "rule_set",
+    )?)?;
+    let effective = crate::services::rule_overlay::compose_effective_candidate_with_app(
+        state.inner(),
+        &source,
+        Some(&active.id),
+        &app,
+    )?
+    .config;
+    if !ordinary_local_recovery_has_no_proxy_retarget(state.inner(), &app, &source, &active.id)? {
+        let profile = upsert_runtime_locked(app_handle.clone(), input).await?;
+        return Ok((profile, None));
+    }
+    let options = ipc_options(state.inner())?;
+    ZeroAdapter::new()
+        .validate_config(effective.clone(), options.clone())
+        .await?;
+    let capture = crate::configuration::capture_apply::candidate_capture_parameters(
+        state.inner(),
+        &source,
+        Some(&active.id),
+    )?;
+    let record = crate::services::ordinary_subscription_recovery::prepare_locked(
+        state.inner(),
+        expected_source,
+        profile.clone(),
+        next_source,
+        &effective,
+        &capture,
+        &app,
+        &rules_fingerprint,
+    )?;
+    let record = crate::services::ordinary_subscription_recovery::mark_apply_pending_locked(
+        state.inner(),
+        record,
+    )?;
+    // A dispatched request or confirmation persistence failure leaves the
+    // durable barrier. Never compensate/replay this ordinary journal path.
+    let receipt = crate::configuration::capture_apply::apply_profile(
+        state.inner(),
+        &source,
+        Some(&active.id),
+        effective,
+        options,
+    )
+    .await?;
+    let confirmed = crate::services::ordinary_subscription_recovery::confirm_locked(
+        state.inner(),
+        &record,
+        &receipt,
+    )?;
+    let subscription = crate::services::ordinary_subscription_recovery::finish_confirmed_locked(
+        state.inner(),
+        confirmed,
+    )?;
+    Ok((profile, Some(subscription)))
+}
+
+fn ordinary_local_recovery_has_no_proxy_retarget(
+    state: &AppState,
+    app: &crate::models::app_config::AppConfig,
+    source: &Value,
+    profile: &str,
+) -> AppResult<bool> {
+    if !system_proxy_guard::is_enabled_by_guard()? {
+        return Ok(true);
+    }
+    let current = crate::configuration::preferences::proxy_settings(state)?;
+    let (resolved_app, resolved_source) =
+        crate::configuration::local_edits::resolve(app, Some(profile), source)?;
+    let (host, port) =
+        crate::configuration::preferences::endpoint_for(&resolved_app, &resolved_source)?;
+    let bypass =
+        if !resolved_app.overrides.bypass && resolved_source.pointer("/route/bypass").is_some() {
+            Vec::new()
+        } else {
+            resolved_app.local_proxy.bypass.clone()
+        };
+    if current != (host.clone(), port, bypass.clone()) {
+        return Ok(false);
+    }
+    let actual = crate::services::system_proxy::status_fresh()?;
+    Ok(actual.enabled
+        && actual.host == host
+        && actual.port == port
+        && crate::services::system_proxy::bypass_matches(&bypass)?)
+}
+
 pub(crate) async fn upsert_runtime_locked(
     app_handle: AppHandle,
     input: ProxyConfigUpsert,

@@ -117,6 +117,7 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
+let recoveredOrdinarySource = false;
 window.addEventListener('fixture-subscription-synced', (event) => {
   managedLastSync = (event as CustomEvent<number>).detail;
 });
@@ -130,7 +131,8 @@ export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
     {id:'paused',name:'自动暂停仍可手动',enabled:false,totalBytes:100,lastError:'source failed https://example.test?token=private-canary'},
     {id:'cache',name:'条件记录损坏',lastError:'订阅条件请求记录无法读取、校验或保存；配置材料未因此删除，请检查本地存储后重试'},
     {id:'uncertain',name:'原运行提交待核对',lastError:'订阅材料准备或运行提交结果未确认；请先核对已保存材料和运行状态，不要自动重放'},
-  ].map(item=>({url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1,...item}));
+  ].map(item=>({url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{},updatedAtUnixMs:1,...item,
+    ...(item.id==='uncertain' && recoveredOrdinarySource ? {lastError:undefined,lastSyncAtUnixMs:2,updatedAtUnixMs:2}: {})}));
   if (mode === 'source-failure') {
     return profiles.map(profile => ({id:`sub-${profile.id}`,name:`订阅-${profile.name}`,url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:profile.id,policySelections:{},updatedAtUnixMs:1}));
   }
@@ -175,8 +177,19 @@ export const upsertSubscription = async (): Promise<SubscriptionProfile> => { th
 export const resetSubscriptionConditionalCache=async(id:string,version:number)=>{window.dispatchEvent(new CustomEvent('fixture-subscription-cache-reset',{detail:{id,version}}));return {cleared:true};};
 export const reconcileUnknownSubscription=async(id:string,version:number,profileId:string|null):Promise<import('../../src/lib/services/config').SubscriptionReconciliation>=>{
   window.dispatchEvent(new CustomEvent('fixture-subscription-inspection',{detail:{id,version,profileId}}));
-  if(new URLSearchParams(location.search).get('inspection')==='late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-inspection',()=>resolve(),{once:true}));
-  return {status:'result-unknown',source:{id,updatedAtUnixMs:String(version),lastSyncAtUnixMs:null},material:{status:'saved-valid',profileId,updatedAtUnixMs:'1',active:true,validation:'native-schema-only'},evidence:{candidate:'not-recorded',receipt:'not-recorded'},runtime:{status:'readable',coreInstanceId:'actual-fixture-instance',configRevision:'18446744073709551615',reasonCode:'runtime_identity_readable_only',reason:'当前运行身份可读，不代表原操作生效。'},canResolve:false,reason:'没有持久候选材料及应用回执，当前运行身份可读也不能证明原订阅操作已生效；结果仍未确认。'};
+  const mode=new URLSearchParams(location.search).get('inspection');
+  if(mode==='late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-inspection',()=>resolve(),{once:true}));
+  const confirmed=['confirmed','recovery-late','recovery-fail'].includes(mode??'');
+  const recorded=confirmed || mode==='prepared' || mode==='stale';
+  return {status:confirmed?'local-publication-pending':'result-unknown',source:{id,updatedAtUnixMs:String(version),lastSyncAtUnixMs:null},material:{status:'saved-valid',profileId,updatedAtUnixMs:'1',active:true,validation:'native-schema-only'},evidence:{candidate:recorded?'recorded':'not-recorded',receipt:confirmed || mode==='stale'?'confirmed':'not-recorded'},runtime:{status:'readable',coreInstanceId:'actual-fixture-instance',configRevision:'18446744073709551615',reasonCode:confirmed?'confirmed_receipt_matches':'runtime_identity_only',reason:confirmed?'真实应用回执与当前运行身份一致。':'当前运行身份可读，不代表原操作生效。'},canResolve:confirmed,recoveryId:recorded?'fixture-record':null,reason:confirmed?'原应用已确认，仅本地发布尚未完成。':'没有可核对一致的持久候选材料及应用回执；结果仍未确认。'};
+};
+export const recoverConfirmedSubscriptionLocal=async(id:string,expectedUpdatedAtUnixMs:string,recoveryId:string):Promise<SubscriptionProfile>=>{
+  window.dispatchEvent(new CustomEvent('fixture-subscription-local-recovery',{detail:{id,expectedUpdatedAtUnixMs,recoveryId}}));
+  const mode=new URLSearchParams(location.search).get('inspection');
+  if(mode==='recovery-late')await new Promise<void>(resolve=>window.addEventListener('fixture-release-recovery',()=>resolve(),{once:true}));
+  if(mode==='recovery-fail')throw new Error('Local publication conflict');
+  recoveredOrdinarySource=true;
+  return (await listSubscriptions()).find(source=>source.id===id)!;
 };
 export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
 export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });

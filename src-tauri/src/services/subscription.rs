@@ -579,10 +579,27 @@ async fn sync_guarded(
 
     let result = sync_subscription(app_handle, state, subscription).await;
     if let Err(error) = &result {
-        update_sync_error(state, &id, &error.message)?;
+        // A ledger-bound UNKNOWN source is part of the exact prepared graph.
+        // Rewriting its timestamp/error here would invalidate recovery.
+        if should_publish_sync_error(state, &id, error)? {
+            update_sync_error(state, &id, &error.message)?;
+        }
     }
 
     result
+}
+
+pub(crate) fn should_publish_sync_error(
+    state: &AppState,
+    id: &str,
+    error: &AppError,
+) -> AppResult<bool> {
+    // The owning journal may already be Complete even when delivery/reload
+    // failed. Its caller keeps this code so stale memory never rewrites SQL.
+    if error.code == "subscription_local_recovery_pending" {
+        return Ok(false);
+    }
+    Ok(!crate::services::ordinary_subscription_recovery::has_pending(state, id)?)
 }
 
 async fn sync_all_with_state(
@@ -629,6 +646,7 @@ async fn sync_subscription(
     state: &AppState,
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
+    crate::services::ordinary_subscription_recovery::require_sync_allowed(state, &subscription.id)?;
     require_confirmed_previous_result(&subscription)?;
     let user_agent = subscription
         .user_agent
@@ -751,7 +769,10 @@ fn sanitized_apply_error(error: AppError) -> AppError {
     AppError {
         code: error.code,
         message: match error.code {
-            "unconfirmed" | "internal" | "config_apply_uncertain" => UNKNOWN_APPLY_MESSAGE,
+            "unconfirmed"
+            | "internal"
+            | "config_apply_uncertain"
+            | "subscription_local_recovery_pending" => UNKNOWN_APPLY_MESSAGE,
             "conflict" => "订阅来源或配置版本已变化，未确认新的运行状态；请刷新后核对",
             "invalid_argument" => "订阅配置或规则依赖校验失败，旧确认材料已保留",
             _ => "订阅材料准备或运行提交失败；请核对材料与运行状态",
@@ -779,24 +800,29 @@ async fn apply_parsed_subscription(
         guard()?;
     }
 
-    let published = upsert_synced_proxy_config(
+    let (published, confirmed_source) = upsert_synced_proxy_config(
         app_handle,
         state,
         &subscription,
         &target_proxy_config_id,
         parsed,
+        &metadata,
+        now,
     )
     .await?;
     if let Some(guard) = commit_guard {
         guard()?;
     }
-    let updated = update_sync_success(
-        state,
-        &subscription.id,
-        target_proxy_config_id,
-        metadata,
-        now,
-    )?;
+    let updated = match confirmed_source {
+        Some(source) => source,
+        None => update_sync_success(
+            state,
+            &subscription.id,
+            target_proxy_config_id,
+            metadata,
+            now,
+        )?,
+    };
     Ok((updated, published))
 }
 
@@ -2709,11 +2735,26 @@ async fn upsert_synced_proxy_config(
     subscription: &SubscriptionProfile,
     target_proxy_config_id: &str,
     parsed: ParsedSubscriptionConfig,
-) -> AppResult<ProxyConfigProfile> {
+    metadata: &SyncMetadata,
+    synced_at_unix_ms: u64,
+) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
     let input =
         prepare_synced_proxy_config_upsert(state, subscription, target_proxy_config_id, parsed)?;
     ensure_subscription_unchanged(state, subscription)?;
-    proxy_config::upsert_runtime(app_handle.clone(), input).await
+    let next_source = synced_source_candidate(
+        subscription,
+        target_proxy_config_id,
+        input.content.as_ref(),
+        metadata,
+        synced_at_unix_ms,
+    );
+    proxy_config::upsert_ordinary_subscription_runtime(
+        app_handle.clone(),
+        input,
+        subscription,
+        next_source,
+    )
+    .await
 }
 
 fn prepare_synced_proxy_config_upsert(
@@ -2818,6 +2859,32 @@ fn ensure_clash_local_inbound(
     Ok(())
 }
 
+fn synced_source_candidate(
+    previous: &SubscriptionProfile,
+    target_proxy_config_id: &str,
+    content: Option<&Value>,
+    metadata: &SyncMetadata,
+    synced_at_unix_ms: u64,
+) -> SubscriptionProfile {
+    let mut source = previous.clone();
+    source.target_proxy_config_id = Some(target_proxy_config_id.into());
+    if let Some(content) = content {
+        crate::services::policy_selection::retain_valid_selections(
+            &mut source.policy_selections,
+            content,
+        );
+    }
+    source.last_sync_at_unix_ms = Some(synced_at_unix_ms);
+    source.last_error = None;
+    source.updated_at_unix_ms = synced_at_unix_ms;
+    source.node_count = metadata.node_count;
+    source.upload_bytes = metadata.upload_bytes;
+    source.download_bytes = metadata.download_bytes;
+    source.total_bytes = metadata.total_bytes;
+    source.expire_at_unix_ms = metadata.expire_at_unix_ms;
+    source
+}
+
 fn update_sync_success(
     state: &AppState,
     id: &str,
@@ -2836,21 +2903,13 @@ fn update_sync_success(
         .find(|profile| profile.id == id)
         .ok_or_else(|| AppError::not_found("subscription", id.to_string()))?;
 
-    subscription.target_proxy_config_id = Some(target_proxy_config_id);
-    if let Some(content) = synced_content.as_ref() {
-        crate::services::policy_selection::retain_valid_selections(
-            &mut subscription.policy_selections,
-            content,
-        );
-    }
-    subscription.last_sync_at_unix_ms = Some(synced_at_unix_ms);
-    subscription.last_error = None;
-    subscription.updated_at_unix_ms = synced_at_unix_ms;
-    subscription.node_count = metadata.node_count;
-    subscription.upload_bytes = metadata.upload_bytes;
-    subscription.download_bytes = metadata.download_bytes;
-    subscription.total_bytes = metadata.total_bytes;
-    subscription.expire_at_unix_ms = metadata.expire_at_unix_ms;
+    *subscription = synced_source_candidate(
+        subscription,
+        &target_proxy_config_id,
+        synced_content.as_ref(),
+        &metadata,
+        synced_at_unix_ms,
+    );
     let updated = subscription.clone();
     domain_store::save_subscriptions(&next)?;
     *subscriptions = next;

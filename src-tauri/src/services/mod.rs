@@ -34,6 +34,7 @@ pub mod macos_privilege;
 pub(crate) mod native_operation;
 pub mod network_probe;
 pub mod node_screen;
+pub(crate) mod ordinary_subscription_recovery;
 pub mod policy_selection;
 pub mod probe;
 pub mod probe_history;

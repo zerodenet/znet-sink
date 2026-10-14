@@ -36,6 +36,14 @@ pub(crate) struct Receipt {
     options: CoreIpcOptions,
 }
 impl Receipt {
+    /// Host-only confirmation evidence. These values remain in memory; the
+    /// ordinary recovery journal stores only their fingerprints and identity.
+    pub(crate) fn applied_config(&self) -> &Value {
+        &self.applied_config
+    }
+    pub(crate) fn applied_capture_parameters(&self) -> &Value {
+        &self.applied_params
+    }
     // Publication failures compensate the exact confirmed runtime transaction,
     // even when restoring profile storage has already changed local defaults.
     pub(crate) async fn restore(&self, state: &AppState) -> AppResult<()> {
@@ -109,6 +117,18 @@ impl Backend for Live<'_> {
         .map(|_| ())
     }
 }
+/// Freeze the platform capture plan using the same composition as apply_profile.
+/// Callers fingerprint this plan, then compare the actual confirmed Receipt.
+pub(crate) fn candidate_capture_parameters(
+    state: &AppState,
+    source: &Value,
+    profile: Option<&str>,
+) -> AppResult<Value> {
+    let app = crate::services::common::lock(state.app_config(), "app_config")?.clone();
+    let (next_app, next_source) = super::local_edits::resolve(&app, profile, source)?;
+    super::preferences::tun_params_for(&next_app, &next_source, next_app.tun.clone())
+}
+
 pub(crate) async fn apply_profile(
     state: &AppState,
     source: &Value,

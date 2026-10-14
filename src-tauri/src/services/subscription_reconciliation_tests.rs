@@ -231,14 +231,23 @@ async fn actual_pinned_runtime_identity_queries_are_typed_bounded_and_never_appl
             "stable" => {
                 assert_eq!(result.status, "readable");
                 assert_eq!(result.config_revision.as_deref(), Some("9007199254740993"));
+                assert_eq!(
+                    observed_identity(&result),
+                    Some(KernelRuntimeIdentity {
+                        core_instance_id: "one".into(),
+                        config_revision: 9007199254740993,
+                    })
+                );
             }
             "instance-changed" | "revision-changed" => {
                 assert_eq!(result.status, "changed");
                 assert!(result.config_revision.is_none());
+                assert!(observed_identity(&result).is_none());
             }
             _ => {
                 assert_eq!(result.status, "unavailable");
                 assert!(result.core_instance_id.is_none());
+                assert!(observed_identity(&result).is_none());
             }
         }
         let text = serde_json::to_string(&result).unwrap();

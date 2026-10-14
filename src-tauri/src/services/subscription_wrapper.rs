@@ -5,7 +5,8 @@ pub(crate) use original::remove_plugin_owned;
 #[cfg(test)]
 pub(crate) use original::{
     apply_managed_to_acceptance_store, complete_managed_sync_in_acceptance_store,
-    remove_managed_from_acceptance_store, update_managed_metadata_in_acceptance_store,
+    remove_managed_from_acceptance_store, should_publish_sync_error,
+    update_managed_metadata_in_acceptance_store,
 };
 pub use original::{
     reset_conditional_cache, ConditionalCacheReset, ParsedSubscriptionConfig, SyncAllOutcome,

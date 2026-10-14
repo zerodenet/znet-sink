@@ -326,3 +326,37 @@ async fn optional_capture_facts_are_only_required_when_mutating_capture() {
         );
     }
 }
+
+#[test]
+fn ordinary_confirmation_requires_returned_config_and_capture_fingerprints() {
+    let (_dir, _state, record) = crate::services::ordinary_subscription_recovery::tests::fixture();
+    let receipt = |config: Value, capture: Value| Receipt {
+        identity: KernelRuntimeIdentity {
+            core_instance_id: "original-core".into(),
+            config_revision: 9_007_199_254_740_993,
+        },
+        previous_config: json!({"before":"not-persisted"}),
+        applied_config: config,
+        previous_params: json!({"before":"not-persisted"}),
+        applied_params: capture,
+        options: CoreIpcOptions::default(),
+    };
+    let evidence = crate::services::ordinary_subscription_recovery::confirmation_evidence;
+    let valid = evidence(
+        &record,
+        &receipt(json!({"effective":"known"}), json!({"capture":"known"})),
+    )
+    .unwrap();
+    assert_eq!(valid.core_instance_id, "original-core");
+    assert_eq!(valid.config_revision, 9_007_199_254_740_993);
+    assert!(evidence(
+        &record,
+        &receipt(json!({"effective":"different"}), json!({"capture":"known"}))
+    )
+    .is_err());
+    assert!(evidence(
+        &record,
+        &receipt(json!({"effective":"known"}), json!({"capture":"different"}))
+    )
+    .is_err());
+}

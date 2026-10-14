@@ -262,6 +262,29 @@ pub async fn upsert_runtime(
     Ok(profile)
 }
 
+pub(crate) async fn upsert_ordinary_subscription_runtime(
+    app_handle: AppHandle,
+    mut input: ProxyConfigUpsert,
+    expected_source: &SubscriptionProfile,
+    next_source: SubscriptionProfile,
+) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
+    let managed_by_gui = {
+        let state = app_handle.state::<AppState>();
+        prepare_subscription_upsert(state.inner(), &mut input)?
+    };
+    let result = original::upsert_ordinary_subscription_runtime(
+        app_handle.clone(),
+        input,
+        expected_source,
+        next_source,
+    )
+    .await?;
+    if managed_by_gui && result.1.is_none() {
+        clear_managed_source(app_handle.state::<AppState>().inner())?;
+    }
+    Ok(result)
+}
+
 pub(crate) async fn upsert_managed_subscription_runtime(
     app_handle: AppHandle,
     mut input: ProxyConfigUpsert,

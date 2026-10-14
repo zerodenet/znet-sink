@@ -892,7 +892,7 @@
 <Dialog.Root bind:open={discardForm}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>订阅来源与同步设置尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardForm=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardFormDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 <Dialog.Root open={cacheResetTarget!==null} onOpenChange={open=>{if(!open&&!cacheResetBusy)cacheResetTarget=null;}}><Dialog.Content><Dialog.Header><Dialog.Title>重置原订阅的条件请求记录？</Dialog.Title><Dialog.Description>仅清理 {cacheResetTarget?.name} 的 HTTP 条件记录，保留配置、覆盖、同步错误和未知结果。此操作不下载、不提交运行配置；手动同步是独立动作。</Dialog.Description></Dialog.Header>{#if cacheResetMessage}<p role="status">{cacheResetMessage}</p>{/if}<Dialog.Footer><Button variant="outline" disabled={cacheResetBusy} onclick={()=>cacheResetTarget=null}>返回</Button><Button disabled={cacheResetBusy||cacheResetSubmitted} onclick={resetConditionalCache}>清理原订阅条件记录</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 
-{#if reconciliationTarget}<SubscriptionReconciliationDialog target={reconciliationTarget} onClose={()=>reconciliationTarget=null} />{/if}
+{#if reconciliationTarget}<SubscriptionReconciliationDialog target={reconciliationTarget} onClose={()=>reconciliationTarget=null} onRecovered={()=>refresh(false)} />{/if}
 
 <style>
   .panel-header {

@@ -82,7 +82,8 @@ pub async fn subscription_remove(
     subscription::remove(app_handle, id, remove_associated_config.unwrap_or(false)).await
 }
 
-/// Pure inspection: readable current identity never clears an uncertain operation.
+/// Inspection never writes. A recovery offer requires a durable confirmed
+/// receipt; readable current identity alone never clears an uncertain operation.
 #[tauri::command]
 pub async fn subscription_reconcile_unknown(
     app_handle: AppHandle,
@@ -96,6 +97,28 @@ pub async fn subscription_reconcile_unknown(
         app_handle.state::<AppState>().inner(),
         id,
         version,
+    )
+    .await
+}
+
+/// Explicit local publication only, bound to the user's inspected recovery
+/// record. This command cannot download subscription content or apply runtime
+/// configuration again.
+#[tauri::command]
+pub async fn subscription_recover_confirmed_local(
+    app_handle: AppHandle,
+    window: Window,
+    id: String,
+    expected_updated_at_unix_ms: String,
+    recovery_id: String,
+) -> AppResult<SubscriptionProfile> {
+    crate::services::native_documents::require_host(window.label())?;
+    let version = parse_reconciliation_version(&expected_updated_at_unix_ms)?;
+    crate::services::subscription_reconciliation::recover(
+        app_handle.state::<AppState>().inner(),
+        id,
+        version,
+        recovery_id,
     )
     .await
 }

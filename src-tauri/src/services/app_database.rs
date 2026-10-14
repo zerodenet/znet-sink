@@ -15,8 +15,9 @@ use crate::models::subscription::SubscriptionProfile;
 use super::domain_store;
 
 const DATABASE_FILE: &str = "znet-sink.db";
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
+pub(crate) mod ordinary_recovery;
 pub(crate) mod storage;
 const APPLICATION_ID: i32 = 0x5A4E_4554; // "ZNET"
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -196,6 +197,9 @@ fn migrate_schema(connection: &mut Connection, dir: &Path) -> AppResult<()> {
     }
     transaction
         .execute_batch(storage::SCHEMA)
+        .map_err(|error| database_error(dir, error))?;
+    transaction
+        .execute_batch(ordinary_recovery::SCHEMA)
         .map_err(|error| database_error(dir, error))?;
     transaction
         .pragma_update(None, "user_version", SCHEMA_VERSION)

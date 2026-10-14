@@ -66,7 +66,13 @@
 
 ## CLIENT-02
 
-**后台订阅和更新检查：客户端及平台调度。** 本轮实施真实前台到期协调，后台 OS 调度仍未适配，不注册空 Worker 或返回假成功。普通订阅条件同步已复用共享HTTP executor，ETag/Last-Modified绑定实际来源和有效材料，304不重复应用；自动暂停仍允许显式手动同步。未知运行提交保留阻断状态；本轮增加按来源版本固定的只读核对，读取已保存普通材料及真实 pinned IPC 运行身份，并保持无损 revision。旧记录没有持久候选/应用回执，页面明确仍未知，不能清除屏障或重放。持久权威解除路径仍未完成，不能通过清缓存或重新下载解除。详见[核对边界](docs/gui/ordinary-subscription-reconciliation-v0.0.3.md)。 已确认回执后的本地发布失败可继续由客户端持久候选/回执恢复；回执本身丢失时，现有公开配置投影不能证明原提交，需要可关联原操作的权威结果或允许读取的运行摘要，再与 CORE-03 的 owning API 协商。不能仅凭当前 revision 推测，也不把全部订阅功能归为 core 阻塞。解除条件为系统允许的调度、持久去重和恢复核对；验收区分周期意图、实际执行、推迟、进程中断和结果未确认，不承诺准点。
+**后台订阅和更新检查：客户端及平台调度，继续部分实施。** 已有真实前台到期协调；后台 OS 调度仍未适配，不注册空 Worker 或承诺锁屏准时执行。普通条件同步复用共享 HTTP executor，validator 绑定有效来源/材料，304 不重复 apply，暂停自动参与仍允许明确手动同步。
+
+本批增加客户端可独立完成的“已持久 confirmed 应用、仅本地发布中断”恢复，限普通活动 Zero 配置的真实运行变更且不需外部 OS 系统代理 retarget：schema 3 有界候选/回执账本和五阶段屏障；主窗口只读核对原记录、版本及 pinned IPC 身份，再由用户明确完成原候选的 SQLite 关系/AppConfig 投影。不重新下载、提交 apply 或操作 TUN，不把 local-committed 当 complete，不覆盖随后改变的源、关系、设置或独立 typed 规则集（只保存摘要）；重复完成须当前事实与原完成摘要精确匹配。条件 validator 不属于本批恢复收据，未保存时明确未恢复，后续独立同步按正常绑定流程处理。实际测试及平台未运行项由[统一验证记录](docs/verification/mobile-client-v0.0.3.md)列出；详见[核对与恢复边界](docs/gui/ordinary-subscription-reconciliation-v0.0.3.md)及[存储限制](docs/gui/storage.md)。
+
+仍未覆盖本地恢复：托管系统代理的实际 host/port/native bypass 需要 retarget 或新鲜状态无法确认时，继续原真实 retarget/补偿链，不静默跳过高级能力。
+
+仍未完成：没有持久 confirmed 回执的历史/丢失回执操作、确认落盘前中断、实例/revision 或组合漂移不能解除；当前公开配置投影不足以证明原提交，需要可关联原操作的权威结果或允许读取的运行摘要，再与 CORE-03 owning API 协商。移动运行 owner 未注册时只读展示本地事实，恢复准入明确 unsupported；原生 VPN/core 装配、后台调度和真机恢复继续后置。不能清缓存、重复下载或仅看当前 revision 来绕过，也不能把全部订阅工作归为 core 阻塞。
 
 ## CLIENT-03
 

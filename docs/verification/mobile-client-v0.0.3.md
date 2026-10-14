@@ -331,3 +331,54 @@ Node **9/9**、类型检查0/0、差异检查通过。真正文档替换回归�
 出站目标回归）、许可17项、类型0/0；日志 `/tmp/mobile-phase5-private-port-final-frontend.log`。
 23项回归的首轮HTTP server收尾因闲置连接挂起，已显式清理连接；CSP/0HTTP/真实替换
 断言均保留。新的准确head全部CI和APK收据继续在原draft PR记录，不借79a754a成功产物。
+
+## 恢复执行时的已确认基线
+
+`20603815828c3adafb9e2f5ba2a45a82891f062a` 的四组工作流均成功：
+主 CI `38524928261` 的14项检查通过，其中实际 Chromium/WebKit UI job
+`115722938791` 为 **476 passed**。移动 Rust `38524928250` 为4项成功、
+unsigned iOS Proxy owner 检查1项跳过；Android Rust host中完整 Proxy owner 的
+NDK步骤也明确跳过。原生文档 `38524928249` 的3项检查通过。
+
+Android host `38524928259` 成功，匹配同一提交的产物 `11875627777`
+（`android-unsigned-host-evidence`）包含未签名 arm64-v8a APK：
+49,551,399字节，应用标识 `org.zerodenet.znetsink`，minSdk24、targetSdk36，
+原生文档库与payload检查通过。18,641,166字节是artifact ZIP大小，不是APK大小。
+这仍是host证据：没有装配实际移动 Proxy owner/随包可运行内核，不证明Galaxy S8
+或iPhone VPN、TCP/UDP/DNS、撤权、网络切换、锁屏恢复通过。
+
+后续普通订阅持久回执及本地发布恢复属于新的改动，需独立运行验证并核对新的head CI。
+
+## 普通订阅 confirmed receipt 本地恢复：客户端验证
+
+本批增加固定来源版本及恢复记录的明确本地保存操作。首次读取没有写入；只有持久
+权威回执及全部作用域核对通过才提供保存。缺回执、旧未知记录和失效身份保留阻塞。
+
+前端完整 `pnpm verify:frontend` 和生产build通过：移动语义 **115项**，依赖许可
+**17项**，类型检查 **0 errors / 0 warnings**，日志
+`/tmp/mobile-phase6-recovery-frontend.log`。生产订阅服务Node契约 **22/22**；实际
+订阅组件 Chromium154 **11/11**（含旧7项、新恢复4项），日志
+`/tmp/mobile-phase6-recovery-browser.log`。覆盖固定source/recoveryId、pending期间
+重复/退出阻止、失败保留证据且不重放、prepared及stale保持只读。
+
+这些浏览器断言使用明确的服务fixture验证UI，不充当真实内核应用或真机网络验收。
+本地标准Playwright浏览器/WebKit仍未运行；新提交双引擎结果以同一head CI为准。
+
+最终客户端 Rust `cargo test --workspace --all-features --locked --no-fail-fast`
+**1116 passed / 0 failed / 7 ignored**（45个结果组）；fmt、workspace
+all-targets/all-features check 与同范围 clippy 均通过，Rust/Clippy警告保留。
+日志 `/tmp/mobile-phase6-recovery-{fmt,check,tests,clippy}.log`。其中新增SQLite
+账本13项、业务恢复9项、真实Receipt结构指纹校验1项；现有实际Unix socket核对
+继续证明仅发typed runtime查询，无apply、HTTP或TUN操作。
+
+覆盖schema1/2→3迁移保留关系及能力存储、准备屏障/确认落盘/关系发布/完成阶段、
+容量和32项保留预算、SQLite触发器故障整批回滚、损坏候选和摘要、同毫秒编辑、
+规则集组合漂移、不同实例/revision、应用设置投影失败、重开及当前进程已知阶段
+缓存协调、原版本/原ID重复完成，以及Complete已经提交但结果交付失败时禁止旧
+内存回写。首次全集失败源于旧schema1迁移测试仍断言2；已更新为3并检查恢复表为空。
+最终全集以上述1116项结果为准，不用早期22项聚焦结果替代。
+
+本批仅在不需外部桌面系统代理重定位的普通活动配置变更中记录可恢复事务；其他
+同步仍保留原实际重定位/协调链路。未恢复HTTP validator、没有持久确认回执及
+移动owner未注册时的运行核对/恢复均不宣称完成。独立原生Proxy、真机VPN及发行
+验收继续遵循现有todo；本批没有修改core来源或缓存。

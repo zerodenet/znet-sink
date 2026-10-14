@@ -1,6 +1,5 @@
-//! Read-only inspection of an ordinary subscription's uncertain result.
-//! Current storage has no durable candidate/apply receipt: a readable runtime
-//! is evidence of reachability only, never permission to clear this barrier.
+//! Ordinary subscription inspection and explicit confirmed-receipt local
+//! recovery. Readable runtime identity alone never resolves an unknown apply.
 use crate::{
     errors::{AppError, AppResult},
     kernel::{configuration::BoundControl, zero::queries::KernelRuntimeIdentity},
@@ -27,6 +26,7 @@ pub struct SubscriptionReconciliation {
     pub evidence: EvidenceFacts,
     pub runtime: RuntimeFacts,
     pub can_resolve: bool,
+    pub recovery_id: Option<String>,
     pub reason: &'static str,
 }
 #[derive(Debug, Serialize)]
@@ -194,6 +194,7 @@ fn finish(
         },
         runtime,
         can_resolve: false,
+        recovery_id: None,
         reason: UNKNOWN_REASON,
     })
 }
@@ -271,6 +272,10 @@ pub(crate) async fn inspect(
     let id = normalize_required(id, "id")?;
     let _claim = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
     let _profile = state.proxy_config_operation().lock().await;
+    // A committed DB phase can outlive failed in-memory delivery. Reconcile
+    // only this record's proved graph before inspecting the cached marker;
+    // a changed source version still requires a fresh user inspection.
+    super::ordinary_subscription_recovery::inspect_record(state, &id, expected_updated_at_unix_ms)?;
     let before = local_snapshot(state, &id, expected_updated_at_unix_ms)?;
     let core = lock(state.app_config(), "app_config")?.core.clone();
     let core_fingerprint = fingerprint(&core)?;
@@ -291,7 +296,98 @@ pub(crate) async fn inspect(
     if fingerprint(&lock(state.app_config(), "app_config")?.core)? != core_fingerprint {
         return Err(changed(&id));
     }
-    finish(state, &id, expected_updated_at_unix_ms, before, runtime)
+    let offer = super::ordinary_subscription_recovery::inspect_record(
+        state,
+        &id,
+        expected_updated_at_unix_ms,
+    )?;
+    let mut result = finish(state, &id, expected_updated_at_unix_ms, before, runtime)?;
+    if let Some(offer) = offer {
+        result.evidence.candidate = "recorded";
+        result.recovery_id = Some(offer.recovery_id);
+        if let Some(expected) = offer.expected_identity {
+            result.evidence.receipt = "confirmed";
+            if observed_identity(&result.runtime).as_ref() == Some(&expected) {
+                result.status = "local-publication-pending";
+                result.can_resolve = true;
+                result.reason = "原应用的权威回执及候选材料已持久记录，当前身份一致；可明确完成原候选的本地保存，不会重新下载或提交运行配置。";
+                result.runtime.reason_code = "confirmed_receipt_matches";
+                result.runtime.reason = "当前内核实例与配置版本符合原应用的持久权威回执。";
+            } else {
+                result.reason = "原应用回执已记录，但当前运行身份不能与之核对一致；保留记录，不允许发布旧候选。";
+            }
+        } else {
+            result.reason =
+                "候选材料已记录，但没有持久权威应用回执；结果仍未确认，不会重复提交原操作。";
+        }
+    }
+    Ok(result)
+}
+
+fn observed_identity(runtime: &RuntimeFacts) -> Option<KernelRuntimeIdentity> {
+    if runtime.status != "readable" {
+        return None;
+    }
+    Some(KernelRuntimeIdentity {
+        core_instance_id: runtime.core_instance_id.clone()?,
+        config_revision: runtime.config_revision.as_ref()?.parse().ok()?,
+    })
+}
+
+pub(crate) async fn recover(
+    state: &AppState,
+    id: String,
+    expected_updated_at_unix_ms: u64,
+    recovery_id: String,
+) -> AppResult<crate::models::subscription::SubscriptionProfile> {
+    let id = normalize_required(id, "id")?;
+    if recovery_id.is_empty()
+        || recovery_id.len() > 256
+        || !recovery_id.as_bytes()[0].is_ascii_alphanumeric()
+        || !recovery_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(AppError::invalid_argument("恢复记录无法确认，请重新核对"));
+    }
+    let _claim = begin_in_flight(state.subscription_syncs(), "subscription", &id)?;
+    let _profile = state.proxy_config_operation().lock().await;
+    let offer = super::ordinary_subscription_recovery::inspect_record(
+        state,
+        &id,
+        expected_updated_at_unix_ms,
+    )?
+    .filter(|offer| offer.recovery_id == recovery_id)
+    .ok_or_else(|| AppError::invalid_argument("原恢复记录已失效，请重新核对"))?;
+    let expected = offer.expected_identity.ok_or_else(|| AppError {
+        code: "unconfirmed",
+        message: "没有持久权威应用回执，不能完成本地发布；不会重复提交".into(),
+        details: None,
+    })?;
+    let core = lock(state.app_config(), "app_config")?.core.clone();
+    let core_fingerprint = fingerprint(&core)?;
+    let runtime = runtime_identity(
+        state.capabilities(),
+        super::core_config::ipc_options_from_app_config(&core),
+        crate::mobile_host::snapshot().mobile || core.kernel != "zero",
+    )
+    .await;
+    let observed = observed_identity(&runtime).filter(|identity| identity == &expected);
+    if fingerprint(&lock(state.app_config(), "app_config")?.core)? != core_fingerprint {
+        return Err(changed(&id));
+    }
+    let observed = observed.ok_or_else(|| AppError {
+        code: "unconfirmed",
+        message: "当前运行身份与原权威回执不一致或不可读，未发布候选；请重新核对".into(),
+        details: None,
+    })?;
+    super::ordinary_subscription_recovery::recover_locked(
+        state,
+        &id,
+        expected_updated_at_unix_ms,
+        &recovery_id,
+        &observed,
+    )
 }
 
 #[cfg(test)]

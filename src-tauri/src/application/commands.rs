@@ -258,6 +258,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         subscription_commands::subscription_sync_all,
         subscription_commands::subscription_reset_conditional_cache,
         subscription_commands::subscription_reconcile_unknown,
+        subscription_commands::subscription_recover_confirmed_local,
         subscription_commands::subscription_remove_preview,
         subscription_commands::subscription_remove,
         rule_set_commands::rule_set_list,
