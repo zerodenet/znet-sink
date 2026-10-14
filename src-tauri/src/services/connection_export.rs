@@ -1,4 +1,4 @@
-//! Fixed, redacted completed-flow snapshots for native save/share. No UI bytes or paths.
+//! Fixed, redacted completed/active-flow snapshots for native save/share. No UI bytes or paths.
 use crate::{
     client_core::ClientScope,
     errors::{AppError, AppResult},
@@ -12,7 +12,12 @@ use crate::{
     },
     state::app_state::AppState,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+mod active;
+pub(crate) use active::preview as preview_active;
+pub use active::Filter as ActiveConnectionExportFilter;
+#[cfg(all(test, unix))]
+mod ipc_tests;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -31,6 +36,7 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 static PLANS: LazyLock<Mutex<BTreeMap<String, Plan>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 struct Plan {
+    active: Option<active::Lease>,
     scope: ClientScope,
     expires: u64,
     bytes: Option<Vec<u8>>,
@@ -38,6 +44,10 @@ struct Plan {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionExportPreview {
+    pub source: &'static str,
+    pub core_instance_id: Option<String>,
+    pub config_revision: Option<String>,
+    pub observed_at_unix_ms: Option<String>,
     pub plan_id: String,
     pub records: usize,
     pub truncated: bool,
@@ -136,8 +146,15 @@ fn flow_id(value: Option<&str>) -> Value {
 fn project(frame: &DebugFrame) -> Value {
     let payload = frame.payload.get("payload").unwrap_or(&frame.payload);
     let record = payload.get("record").unwrap_or(payload);
+    let mut projected = project_fields(record);
+    projected["receivedRecordId"] = json!(frame.id.to_string());
+    projected["capturedAtUnixMs"] = json!(frame.at_ms.to_string());
+    projected["source"] = json!("locally_received_completed_flow");
+    projected
+}
+fn project_fields(record: &Value) -> Value {
     let result = record.get("result").unwrap_or(record);
-    let mut projected = json!({"receivedRecordId":frame.id.to_string(),"capturedAtUnixMs":frame.at_ms.to_string(),"flowId":flow_id(text(record,&["flowId","flow_id"])),"flowIdentityDigest":text(record,&["flowId","flow_id"]).map(|s|digest(s.as_bytes())),"sourceAddress":socket(text(record,&["source"])),"sourceIp":ip(text(record,&["sourceIp","source_ip"])),"targetIp":ip(text(record,&["targetIp","target_ip"])),"targetHost":domain(text(record,&["targetHost","target_host"])),"destinationAddress":socket(text(record,&["destination"])),"destinationHost":destination_domain(text(record,&["destination"])),"remoteAddress":socket(text(record,&["remoteDestination","remote_destination"])),"protocol":enum_value(text(record,&["network","protocol"]),&["tcp","udp"]),"outcome":enum_value(text(result,&["outcome"]).or_else(||text(record,&["outcome"])),&["success","completed","failed","blocked","cancelled","closed","timeout"]),"bytesUp":number(record,&["bytesUp","bytes_up"]),"bytesDown":number(record,&["bytesDown","bytes_down"]),"startedAtUnixMs":number(record,&["startedAtUnixMs","started_at_unix_ms"]),"endedAtUnixMs":number(record,&["endedAtUnixMs","ended_at_unix_ms"]),"revision":number(record,&["revision"]),"source":"locally_received_completed_flow"});
+    let mut projected = json!({"flowId":flow_id(text(record,&["flowId","flow_id"])),"flowIdentityDigest":text(record,&["flowId","flow_id"]).map(|s|digest(s.as_bytes())),"sourceAddress":socket(text(record,&["source"])),"sourceIp":ip(text(record,&["sourceIp","source_ip"])),"targetIp":ip(text(record,&["targetIp","target_ip"])),"targetHost":domain(text(record,&["targetHost","target_host"])),"destinationAddress":socket(text(record,&["destination"])),"destinationHost":destination_domain(text(record,&["destination"])),"remoteAddress":socket(text(record,&["remoteDestination","remote_destination"])),"protocol":enum_value(text(record,&["network","protocol"]),&["tcp","udp"]),"outcome":enum_value(text(result,&["outcome"]).or_else(||text(record,&["outcome"])),&["success","completed","failed","blocked","cancelled","closed","timeout"]),"bytesUp":number(record,&["bytesUp","bytes_up"]),"bytesDown":number(record,&["bytesDown","bytes_down"]),"startedAtUnixMs":number(record,&["startedAtUnixMs","started_at_unix_ms"]),"endedAtUnixMs":number(record,&["endedAtUnixMs","ended_at_unix_ms"]),"revision":number(record,&["revision"])});
     let fields: [(&[&str], &str); 7] = [
         (&["flowId", "flow_id"], "flowId"),
         (&["source"], "sourceAddress"),
@@ -192,6 +209,10 @@ fn prepare(
     }
     Ok((
         ConnectionExportPreview {
+            source: "completed-history",
+            core_instance_id: None,
+            config_revision: None,
+            observed_at_unix_ms: None,
             plan_id: format!(
                 "connection-export-{now}-{}",
                 NEXT.fetch_add(1, Ordering::Relaxed)
@@ -244,6 +265,7 @@ pub(crate) fn preview(
     plans.insert(
         view.plan_id.clone(),
         Plan {
+            active: None,
             scope,
             expires: now.saturating_add(TTL),
             bytes: Some(bytes),
@@ -267,13 +289,33 @@ fn take_plan(
         .take()
         .ok_or_else(|| conflict("原快照已交给系统，请核对原操作；不会自动重放"))
 }
-pub(crate) fn deliver(
-    app: &AppHandle,
-    id: &str,
-    delivery: DocumentDelivery,
-) -> AppResult<DocumentReceipt> {
-    let state = app.state::<AppState>();
+pub(crate) async fn prepare_delivery(state: &AppState, id: &str) -> AppResult<PreparedExport> {
     let scope = state.client_core_snapshot().scope;
+    state.ensure_client_scope(Some(&scope))?;
+    let active = {
+        let plans = lock(&PLANS, "connection_exports")?;
+        let plan = plans
+            .get(id)
+            .ok_or_else(|| conflict("连接预览不存在，请重新预览"))?;
+        if plan.scope != scope || plan.expires <= now_unix_ms() {
+            return Err(conflict("配置、实例或预览有效期已变化，请重新预览"));
+        }
+        if plan.bytes.is_none() {
+            return Err(conflict("原快照已交给系统，请核对原操作；不会自动重放"));
+        }
+        plan.active.clone()
+    };
+    if let Some(lease) = active {
+        active::runtime_available(cfg!(any(target_os = "android", target_os = "ios")))?;
+        crate::services::interaction_mode::require_pro_mode(state, "active_connection_export")?;
+        if active::options(state)?.1 != lease.binding {
+            return Err(conflict("内核控制绑定已变化，请重新预览"));
+        }
+        active::verify(&lease).await?;
+        if active::options(state)?.1 != lease.binding {
+            return Err(conflict("核对期间控制绑定已变化，请重新预览"));
+        }
+    }
     state.ensure_client_scope(Some(&scope))?;
     let bytes = {
         let mut plans = lock(&PLANS, "connection_exports")?;
@@ -288,7 +330,25 @@ pub(crate) fn deliver(
         false,
     )
     .map_err(|_| AppError::invalid_argument("连接导出不符合系统用途或容量策略"))?;
-    native_documents::deliver_prepared(app, export, delivery)
+    Ok(export)
+}
+pub(crate) async fn deliver(
+    app: &AppHandle,
+    id: &str,
+    delivery: DocumentDelivery,
+) -> AppResult<DocumentReceipt> {
+    let export = {
+        let state = app.state::<AppState>();
+        let _guard = state.proxy_config_operation().lock().await;
+        prepare_delivery(state.inner(), id).await?
+    };
+    // No client graph lock is held while the system picker/share controller awaits a user.
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        native_documents::deliver_prepared(&app, export, delivery)
+    })
+    .await
+    .map_err(|_| AppError::internal("系统导出结果未确认，请检查目标；不会自动重放"))?
 }
 #[cfg(test)]
 mod tests;

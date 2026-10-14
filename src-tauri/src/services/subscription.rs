@@ -496,22 +496,84 @@ async fn sync_by_id(
             .ok_or_else(|| AppError::not_found("subscription", id.to_string()))?
     };
 
+    sync_guarded(app_handle, state, subscription).await
+}
+
+/// A foreground pass cannot replace a newer manual/source result. The same
+/// per-subscription guard used by edits/removal/manual sync protects this check.
+pub(crate) async fn sync_due(
+    app_handle: AppHandle,
+    expected: SubscriptionProfile,
+) -> AppResult<Option<SubscriptionProfile>> {
+    let state = app_handle.state::<AppState>();
+    let _in_flight = match begin_in_flight(state.subscription_syncs(), "subscription", &expected.id)
+    {
+        Ok(guard) => guard,
+        Err(error) if error.code == "conflict" => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let current = lock(state.subscriptions(), "subscription")?
+        .iter()
+        .find(|profile| profile.id == expected.id)
+        .cloned();
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    if !matches_due_snapshot(&current, &expected, now_unix_ms()) {
+        return Ok(None);
+    }
+    sync_guarded(&app_handle, state.inner(), current)
+        .await
+        .map(Some)
+}
+
+fn matches_due_snapshot(
+    current: &SubscriptionProfile,
+    expected: &SubscriptionProfile,
+    now: u64,
+) -> bool {
+    current.enabled
+        && current.managed_source.is_none()
+        && current.update_interval_secs.is_some_and(|interval| {
+            interval >= MIN_AUTO_SYNC_INTERVAL_SECS
+                && now
+                    >= current
+                        .last_sync_at_unix_ms
+                        .unwrap_or(0)
+                        .saturating_add(interval.saturating_mul(1000))
+        })
+        && current.updated_at_unix_ms == expected.updated_at_unix_ms
+        && current.last_sync_at_unix_ms == expected.last_sync_at_unix_ms
+        && current.url == expected.url
+        && current.format == expected.format
+        && current.kernel == expected.kernel
+        && current.user_agent == expected.user_agent
+        && current.target_proxy_config_id == expected.target_proxy_config_id
+        && current.update_interval_secs == expected.update_interval_secs
+}
+
+async fn sync_guarded(
+    app_handle: &AppHandle,
+    state: &AppState,
+    subscription: SubscriptionProfile,
+) -> AppResult<SubscriptionProfile> {
+    let id = subscription.id.clone();
     if !subscription.enabled {
         let error = AppError::invalid_argument("subscription is disabled");
-        update_sync_error(state, id, &error.message)?;
+        update_sync_error(state, &id, &error.message)?;
         return Err(error);
     }
     if subscription.managed_source.is_some() {
         let error = AppError::invalid_argument(
             "managed subscription refresh is owned by its plugin source",
         );
-        update_sync_error(state, id, &error.message)?;
+        update_sync_error(state, &id, &error.message)?;
         return Err(error);
     }
 
     let result = sync_subscription(app_handle, state, subscription).await;
     if let Err(error) = &result {
-        update_sync_error(state, id, &error.message)?;
+        update_sync_error(state, &id, &error.message)?;
     }
 
     result

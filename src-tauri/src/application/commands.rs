@@ -30,6 +30,9 @@ use crate::commands::traffic_observation as traffic_commands;
 pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
         crate::mobile_host::gui_mobile_platform_snapshot,
+        crate::mobile_host::gui_mobile_subscription_schedule_snapshot,
+        crate::commands::connection_export::native_active_connection_export_preview,
+        crate::commands::runtime_bridge::gui_runtime_bridge_inspect,
         crate::commands::profile_removal::profile_removal_preview,
         crate::commands::profile_removal::profile_removal_commit,
         crate::commands::profile_removal::profile_removal_reconcile,

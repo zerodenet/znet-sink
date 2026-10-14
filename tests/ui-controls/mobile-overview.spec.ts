@@ -19,6 +19,19 @@ test('actual mobile overview has one first-screen statistics entry and opens glo
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '概览' })).toHaveAttribute('aria-current', 'page');
 });
 
+test('unsupported mobile tunnel explains its boundary without enabling a VPN action', async ({page}) => {
+  await page.setViewportSize({width:320,height:640});
+  await page.goto('/mobile.html?fixture=overview&traffic-v1');
+  const disclosure = page.locator('details[aria-label="暂不支持的移动能力"]');
+  await expect(disclosure).toBeVisible();
+  const summary = disclosure.locator('summary');
+  expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await summary.click();
+  await expect(disclosure).toContainText('系统隧道接入及隧道外网络保护尚未适配');
+  await expect(page.getByRole('button',{name:'开启 VPN',exact:true})).toBeDisabled();
+  await expect(page.locator('.session-total')).toHaveText('—');
+});
+
 test('rejected actual overview mode submission preserves confirmed selection', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 720 });
   await page.goto('/mobile.html?fixture=overview&traffic-v1&global-failure');

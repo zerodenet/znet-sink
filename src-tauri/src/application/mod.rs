@@ -155,6 +155,13 @@ pub fn run() {
             // must never clear the first client's active proxy marker.
             system_proxy_guard::cleanup_on_startup();
             crate::services::file_logger::line("runtime: setup begin");
+            if let Err(error) = crate::services::data_dir().and_then(|dir| {
+                crate::models::debug::initialize_capture_recovery(
+                    &dir.join("capture-recovery.json"),
+                )
+            }) {
+                crate::services::file_logger::line(&error.message);
+            }
             #[cfg(target_os = "macos")]
             crate::services::plugins::notification::install_foreground_delegate();
             let ipc_observer =

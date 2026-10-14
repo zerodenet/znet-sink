@@ -16,14 +16,11 @@ pub fn start(
     app: AppHandle,
     active_generation: Arc<AtomicU64>,
     generation: u64,
-    // NOTE: per-type event filtering used to be delegated to the kernel's
-    // `subscribe` frame. The multiplexed connection now subscribes to every
-    // event (it is shared across consumers), so this filter is currently
-    // unused — retained for API compatibility with the command layer.
-    _events: Option<Vec<String>>,
+    events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreEventSubscription> {
     let endpoint = protocol::endpoint_from_options(options.as_ref())?;
+    let filter = connection::event_filter::EventFilter::new(events)?;
     let timeout = protocol::timeout_from_options(options.as_ref())?;
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -33,6 +30,7 @@ pub fn start(
             generation,
             endpoint,
             timeout,
+            &filter,
         );
 
         match result {
@@ -72,6 +70,7 @@ fn subscribe_and_forward_events(
     generation: u64,
     endpoint: CoreEndpoint,
     timeout: Duration,
+    filter: &connection::event_filter::EventFilter,
 ) -> AppResult<()> {
     let mut backoff = MIN_RECONNECT_BACKOFF;
 
@@ -114,10 +113,20 @@ fn subscribe_and_forward_events(
             }
 
             match receiver.try_recv() {
-                Ok(event) => emit_core_event(&app, generation, event),
+                Ok(event) => {
+                    if connection::is_gap_event(&event) {
+                        return Err(event_gap());
+                    } else if filter.matches(&event, None) {
+                        emit_core_event(
+                            &app,
+                            generation,
+                            crate::kernel::redaction::sensitive(&event),
+                        );
+                    }
+                }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                    // Slow consumer: some events were dropped. Keep going.
-                    continue;
+                    // Raw consumers cannot safely apply deltas after loss.
+                    return Err(event_gap());
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
                     closed = true;
@@ -139,6 +148,14 @@ fn subscribe_and_forward_events(
             sleep_interruptible(&active_generation, generation, backoff);
             backoff = next_reconnect_backoff(backoff);
         }
+    }
+}
+
+fn event_gap() -> crate::errors::AppError {
+    crate::errors::AppError {
+        code: "event_gap",
+        message: "事件存在缺口，读取权威快照后再继续应用增量".into(),
+        details: None,
     }
 }
 

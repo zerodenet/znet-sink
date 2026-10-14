@@ -23,6 +23,9 @@ use std::time::Duration;
 use crate::errors::{AppError, AppResult};
 use crate::models::core::CoreEndpoint;
 
+/// Includes the newline delimiter. Bound allocation before reading untrusted IPC.
+pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
 #[cfg(windows)]
 use std::ffi::OsStr;
 #[cfg(windows)]
@@ -132,6 +135,11 @@ pub fn serialize_frame(frame: &Value) -> AppResult<Vec<u8>> {
         details: None,
     })?;
     bytes.push(b'\n');
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(AppError::invalid_argument(
+            "IPC frame exceeds the byte budget",
+        ));
+    }
     Ok(bytes)
 }
 
@@ -213,31 +221,48 @@ pub(crate) fn read_json_line<R: Read>(
     reader: &mut BufReader<R>,
     endpoint: &CoreEndpoint,
 ) -> AppResult<Value> {
-    let mut line = String::new();
+    let mut line = Vec::new();
 
     loop {
         line.clear();
         let bytes = reader
-            .read_line(&mut line)
+            .take((MAX_FRAME_BYTES + 1) as u64)
+            .read_until(b'\n', &mut line)
             .map_err(|error| AppError::from_io("failed to read IPC response", endpoint, error))?;
 
         if bytes == 0 {
             return Err(AppError::connection_closed(endpoint));
         }
-
+        if bytes > MAX_FRAME_BYTES {
+            return Err(AppError {
+                code: "invalid_response",
+                message: "core IPC frame exceeds the byte budget".into(),
+                details: None,
+            });
+        }
+        let line = std::str::from_utf8(&line).map_err(|_| AppError {
+            code: "invalid_response",
+            message: "core IPC frame is not UTF-8".into(),
+            details: None,
+        })?;
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() || trimmed.starts_with(':') {
             continue;
         }
 
-        return serde_json::from_str(trimmed).map_err(|error| AppError {
+        let value: Value = serde_json::from_str(trimmed).map_err(|_| AppError {
             code: "invalid_response",
-            message: format!("core IPC returned invalid JSON: {error}"),
-            details: Some(serde_json::json!({
-                "endpoint": endpoint.path,
-                "line": trimmed,
-            })),
-        });
+            message: "core IPC returned invalid JSON".into(),
+            details: None,
+        })?;
+        if !value.is_object() {
+            return Err(AppError {
+                code: "invalid_response",
+                message: "core IPC frame must be an object".into(),
+                details: None,
+            });
+        }
+        return Ok(value);
     }
 }
 

@@ -60,6 +60,7 @@
   let exportPath = $state('');
   let nativeExportOpen = $state(false);
   let nativeExportQuery = $state.raw<DebugFrameQuery | null>(null);
+  let nativeExportSource = $state<'completed-history' | 'active'>('completed-history');
   const nativeExport = $derived(mobilePlatform.runtimePlatform !== 'desktop');
   let filtersOpen = $state(false);
   let actionsOpen = $state(false);
@@ -277,7 +278,7 @@
   async function exportHistory() {
     if (exporting) return;
     if (nativeExport) {
-      try { nativeExportQuery = historyQuery(); nativeExportOpen = true; }
+      try { nativeExportSource='completed-history'; nativeExportQuery = historyQuery(); nativeExportOpen = true; }
       catch(error) { handleAppError(error,'连接筛选无效'); }
       return;
     }
@@ -289,6 +290,12 @@
     } catch (error) {
       handleAppError(error, '导出连接记录失败');
     } finally { exporting = false; }
+  }
+
+  function exportActive() {
+    nativeExportSource='active';
+    nativeExportQuery={search:searchQuery.trim()||undefined,protocol:protocolFilter==='all'?undefined:protocolFilter,outbound:outboundFilter==='all'?undefined:outboundFilter};
+    nativeExportOpen=true;
   }
 
   async function revealExport() {
@@ -860,6 +867,7 @@
 
   {#if activeTab === 'live'}
     <p class="border-b border-border px-3 py-1 text-[10px] text-muted-foreground">实时视图最多保留 500 条、每次展示前 200 条；不是所有连接的完整存档。</p>
+    {#if nativeExport}<div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2"><Button variant="outline" size="sm" onclick={exportActive}>导出筛选活动连接</Button><span class="text-[10px] text-muted-foreground">按当前搜索、协议与出口读取真实内核快照；暂停展示不代替内核查询。固定后最多2000条、2MiB。</span></div>{/if}
   {/if}
 
   {#if activeTab === 'live' && !canCloseConnections}
@@ -1092,7 +1100,7 @@
   onConfirm={clearHistory}
 />
 
-<ConnectionExportDialog bind:open={nativeExportOpen} query={nativeExportQuery}/>
+<ConnectionExportDialog bind:open={nativeExportOpen} query={nativeExportQuery} source={nativeExportSource}/>
 
 <style>
   :global(.connections-shell) {

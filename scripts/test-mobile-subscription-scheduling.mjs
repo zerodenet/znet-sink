@@ -22,7 +22,15 @@ test('managed sources never reuse ordinary URL scheduling claims', () => {
   assert.match(subscriptionScheduling({ enabled: true, managedSource: {} }, 'mobile-unadapted'), /来源插件管理/);
 });
 test('unsafe or malformed interval is not truncated to an executable intent', () => {
-  for (const value of [-1, 0, 0.1, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+  for (const value of [-1, 0, 0.1, 1, 59, Number.MAX_SAFE_INTEGER + 1, NaN]) {
     assert.match(subscriptionScheduling({ enabled: true, updateIntervalSecs: value }, 'mobile-unadapted'), /无法确认/);
   }
+});
+
+test('native foreground reconciliation is separate from OS background delivery and actual completion', () => {
+  const text=subscriptionScheduling({enabled:true,updateIntervalSecs:3600},'mobile-foreground');
+  assert.match(text,/回到前台时核对到期任务/);assert.match(text,/结果以实际记录为准/);
+  assert.match(text,/后台调度尚未适配/);assert.match(text,/不承诺锁屏或睡眠期间定点执行/);
+  assert.match(subscriptionScheduling({enabled:false,updateIntervalSecs:3600},'mobile-foreground'),/已暂停参与同步/);
+  assert.match(subscriptionScheduling({enabled:true,managedSource:{}},'mobile-foreground'),/来源插件管理/);
 });

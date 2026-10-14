@@ -12,6 +12,49 @@ pub const MOBILE_RUNTIME_REASON: &str = "移动 VPN 运行适配尚未完成：�
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UnsupportedCapability {
+    pub capability_id: &'static str,
+    pub status: &'static str,
+    pub limitation_kind: &'static str,
+    pub reason_code: &'static str,
+    pub reason: &'static str,
+    pub dependency_ids: &'static [&'static str],
+}
+
+fn unsupported_capabilities(mobile: bool) -> Vec<UnsupportedCapability> {
+    if !mobile {
+        return Vec::new();
+    }
+    vec![
+        UnsupportedCapability {
+            capability_id: "vpn.forwarding",
+            status: "unsupported",
+            limitation_kind: "not-adapted",
+            reason_code: "mobile_tunnel_and_egress_not_adapted",
+            reason: "VPN 暂不支持：系统隧道接入及隧道外网络保护尚未适配，不能确认接管。",
+            dependency_ids: &["CORE-01", "CORE-02", "CLIENT-01"],
+        },
+        UnsupportedCapability {
+            capability_id: "kernel.mobile-runtime",
+            status: "unsupported",
+            limitation_kind: "not-adapted",
+            reason_code: "native_runtime_owner_not_registered",
+            reason: "移动内核运行暂不支持：原生运行服务或扩展及安全控制通道尚未接入。",
+            dependency_ids: &["CLIENT-01"],
+        },
+        UnsupportedCapability {
+            capability_id: "kernel.bundled-artifact",
+            status: "unsupported",
+            limitation_kind: "not-adapted",
+            reason_code: "runnable_mobile_kernel_not_bundled",
+            reason: "默认内核将随应用分发；当前尚无可运行的移动内核产物。",
+            dependency_ids: &["CLIENT-01"],
+        },
+    ]
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MobilePlatformSnapshot {
     pub platform: &'static str,
     pub mobile: bool,
@@ -28,15 +71,25 @@ pub struct MobilePlatformSnapshot {
     pub core_instance_id: Option<String>,
     pub profile_id: Option<String>,
     pub config_revision: Option<String>,
+    pub unsupported_capabilities: Vec<UnsupportedCapability>,
 }
 
 pub fn snapshot() -> MobilePlatformSnapshot {
-    let (platform, owner) = if cfg!(target_os = "android") {
-        ("android", "android-vpn-service")
+    let platform = if cfg!(target_os = "android") {
+        "android"
     } else if cfg!(target_os = "ios") {
-        ("ios", "ios-packet-tunnel-provider")
+        "ios"
     } else {
-        ("desktop", "desktop-managed-process")
+        "desktop"
+    };
+    snapshot_for(platform)
+}
+
+fn snapshot_for(platform: &'static str) -> MobilePlatformSnapshot {
+    let owner = match platform {
+        "android" => "android-vpn-service",
+        "ios" => "ios-packet-tunnel-provider",
+        _ => "desktop-managed-process",
     };
     let mobile = platform != "desktop";
     // No native observations are available. Do not synthesize an instance or
@@ -62,17 +115,21 @@ pub fn snapshot() -> MobilePlatformSnapshot {
         core_instance_id: None,
         profile_id: None,
         config_revision: None,
+        unsupported_capabilities: unsupported_capabilities(mobile),
     }
 }
 
 pub(crate) fn unavailable(operation: &str) -> AppError {
     AppError {
-        code: "mobile_platform_unavailable",
+        code: "unsupported",
         message: MOBILE_RUNTIME_REASON.into(),
         details: Some(serde_json::json!({
             "operation": operation,
             "platform": snapshot().platform,
             "adaptationState": "not-adapted",
+            "status": "unsupported",
+            "reasonCode": "native_runtime_owner_not_registered",
+            "dependencyIds": ["CLIENT-01", "CORE-01", "CORE-02"],
             "coreDistribution": "bundled-with-application",
         })),
     }
@@ -89,6 +146,24 @@ pub(crate) fn require_desktop_runtime(operation: &str) -> AppResult<()> {
 #[tauri::command]
 pub fn gui_mobile_platform_snapshot() -> MobilePlatformSnapshot {
     snapshot()
+}
+
+#[tauri::command]
+pub fn gui_mobile_subscription_schedule_snapshot(
+    state: tauri::State<'_, crate::state::app_state::AppState>,
+    window: tauri::Window,
+) -> AppResult<crate::services::mobile_subscription_scheduler::MobileScheduleSnapshot> {
+    crate::services::native_documents::require_host(window.label())?;
+    if !snapshot().mobile {
+        return Err(AppError {
+            code: "unsupported",
+            message: "当前宿主没有原生移动生命周期；移动后台执行仍未适配。".into(),
+            details: Some(
+                serde_json::json!({"status":"unsupported","reasonCode":"native_foreground_lifecycle_not_available","dependencyIds":["CLIENT-02"]}),
+            ),
+        });
+    }
+    state.mobile_subscription_scheduler().snapshot()
 }
 
 #[cfg(test)]

@@ -55,7 +55,7 @@
     "test:product-composition": "node --test scripts/test-product-composition.mjs",
     "test:traffic-observation": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-traffic-observation.mjs",
     "test:licenses": "node scripts/test-license-inventory.mjs",
-    "test:mobile": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-mobile-overview.mjs scripts/test-mobile-node-management.mjs scripts/test-packet-routes.mjs scripts/test-settings-migration.mjs scripts/test-profile-removal.mjs scripts/test-native-document-receipts.mjs scripts/test-endpoint-restoration.mjs scripts/test-mobile-about.mjs scripts/test-mobile-subscription-scheduling.mjs scripts/test-mobile-releases.mjs scripts/test-native-diagnostics.mjs scripts/test-connection-export.mjs",
+    "test:mobile": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-mobile-overview.mjs scripts/test-mobile-runtime-inspection.mjs scripts/test-mobile-node-management.mjs scripts/test-packet-routes.mjs scripts/test-settings-migration.mjs scripts/test-profile-removal.mjs scripts/test-native-document-receipts.mjs scripts/test-endpoint-restoration.mjs scripts/test-mobile-about.mjs scripts/test-mobile-subscription-scheduling.mjs scripts/test-mobile-releases.mjs scripts/test-native-diagnostics.mjs scripts/test-connection-export.mjs",
     "test:mobile-browser": "playwright test --config tests/ui-controls/mobile.playwright.config.ts",
     "test:packet-routes": "node --experimental-strip-types --loader ./scripts/lib-alias-loader.mjs --test scripts/test-packet-routes.mjs"
   },

@@ -7060,6 +7060,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "zero-api",
+ "znet-client-core",
 ]
 
 [[package]]

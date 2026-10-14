@@ -25,7 +25,10 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> AppResult<T> {
 
 fn lease(manager: &Manager, scheduler: &str) -> AppResult<Lease> {
     // Native-only allowlist; no caller-provided plugin namespace or SQL.
-    if !matches!(scheduler, "subscriptions" | "rule-sets") {
+    if !matches!(
+        scheduler,
+        "subscriptions" | "rule-sets" | "mobile-subscriptions"
+    ) {
         return Err(failure());
     }
     let grants = BTreeSet::from([

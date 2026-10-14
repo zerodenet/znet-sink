@@ -105,6 +105,39 @@ impl znet_engine_client::flow_cleanup::FlowControl for BoundControl {
         self.close_flow(flow_id).await
     }
 }
+
+impl znet_engine_client::QueryTransport for BoundControl {
+    type Error = AppError;
+    async fn query(&self, request: Value) -> AppResult<Value> {
+        self.call(json!({"type":"query","request":request})).await
+    }
+}
+
+impl znet_engine_client::bridge::BridgeTransport for BoundControl {
+    async fn command(&self, request: zero_api::CommandRequest) -> AppResult<Value> {
+        let mut frame = serde_json::to_value(request)
+            .map_err(|_| AppError::invalid_argument("控制请求编码失败"))?;
+        frame["type"] = json!("command");
+        self.call(frame).await
+    }
+    fn failure_is_rejection(&self, error: &AppError) -> bool {
+        let code = error
+            .details
+            .as_ref()
+            .and_then(|details| details.pointer("/error/code"))
+            .and_then(Value::as_str)
+            .unwrap_or(error.code);
+        matches!(
+            code,
+            "invalid_argument"
+                | "permission_denied"
+                | "feature_disabled"
+                | "unsupported"
+                | "not_found"
+                | "conflict"
+        )
+    }
+}
 #[cfg(all(test, unix))]
 #[path = "configuration_tests.rs"]
 mod tests;

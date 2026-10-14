@@ -36,7 +36,12 @@ pub(crate) fn append(frame: &DebugFrame) -> AppResult<()> {
 pub(crate) fn clear() -> AppResult<()> {
     crate::models::debug::with_debug_cleanup(|| {
         let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
-        clear_path(&debug_path()?)
+        clear_path(&debug_path()?)?;
+        crate::models::debug::clear_capture_recovery().map_err(|_| AppError {
+            code: "diagnostic_cleanup_partial",
+            message: "已清理捕获帧；捕获恢复账本清理未确认。日志、连接历史与配置不受影响，请核对账本原操作".into(),
+            details: None,
+        })
     })
 }
 

@@ -1,7 +1,6 @@
 use tauri::{AppHandle, State};
 
 use crate::errors::AppResult;
-use crate::kernel::connection;
 use crate::models::{core::CoreIpcOptions, gui_core::GuiEventSubscription};
 use crate::services::common::lock;
 use crate::services::{core_config, gui_events};
@@ -14,6 +13,7 @@ pub fn gui_events_start(
     events: Option<Vec<String>>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiEventSubscription> {
+    crate::kernel::connection::event_filter::EventFilter::new(events.clone())?;
     let options = resolve_options(&state, options)?;
     let binding = znet_engine_client::Binding {
         endpoint: crate::kernel::protocol::endpoint_from_options(options.as_ref())?,
@@ -25,13 +25,9 @@ pub fn gui_events_start(
 
 #[tauri::command]
 pub fn gui_events_stop(state: State<'_, AppState>) -> u64 {
-    let (generation, binding) = state.observations().stop();
-    if let Some(binding) = binding {
-        // Retire only the observation endpoint; raw diagnostics may be connected
-        // to another engine. Never reset that unrelated transport.
-        connection::reset_endpoint(&binding.endpoint);
-    }
-    generation
+    // Stop this UI listener only. Runtime ownership and the shared transport
+    // belong to the host, including pending control and other subscriptions.
+    gui_events::stop(state.inner())
 }
 
 fn resolve_options(

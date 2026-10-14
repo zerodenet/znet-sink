@@ -102,7 +102,7 @@ pub async fn gui_debug_capture(
             "diagnostic.capture",
             "ipc-detail",
             Duration::from_secs(15),
-            async { Ok(crate::models::debug::set_capture(enabled)) },
+            async { crate::models::debug::set_capture(enabled) },
         )
         .await
     } else {

@@ -56,9 +56,11 @@ async function testRootPageExclusivelyOwnsTheEventStream() {
 }
 
 async function testProfileSwitchRotatesTheRuntimeEventGeneration() {
-  const [configService, guiEventsCommand] = await Promise.all([
+  const [configService, guiEventsCommand, guiEventsService, connection] = await Promise.all([
     readFile(new URL('../src/lib/services/config.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src-tauri/src/commands/gui_events.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/services/gui_events.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/kernel/connection.rs', import.meta.url), 'utf8'),
   ]);
   const switchStart = configService.indexOf('const profileActivation');
   const switchEnd = configService.indexOf('export async function removeProxyConfig', switchStart);
@@ -78,9 +80,13 @@ async function testProfileSwitchRotatesTheRuntimeEventGeneration() {
   const stopCommandStart = guiEventsCommand.indexOf('pub fn gui_events_stop');
   const stopCommandEnd = guiEventsCommand.indexOf('fn resolve_options', stopCommandStart);
   const stopCommand = guiEventsCommand.slice(stopCommandStart, stopCommandEnd);
-  assert.ok(guiEventsCommand.includes('use crate::kernel::connection;'));
-  assert.ok(stopCommand.includes('state.observations().stop()'));
-  assert.ok(stopCommand.includes('connection::reset_endpoint(&binding.endpoint);'));
+  assert.ok(stopCommand.includes('gui_events::stop(state.inner())'), 'command must delegate cancellation to its listener owner');
+  const serviceStop = guiEventsService.slice(guiEventsService.indexOf('pub(crate) fn stop('), guiEventsService.indexOf('pub fn start('));
+  assert.ok(serviceStop.includes('state.observations().stop()'), 'stop must invalidate the owned subscription generation');
+  for (const forbidden of ['reset_endpoint(', 'connection::reset(', '.retire(', 'stop_kernel', 'runtime_host']) {
+    assert.equal((stopCommand + serviceStop).includes(forbidden), false, 'UI cancellation must preserve shared transport and runtime');
+  }
+  assert.ok(connection.includes('pub fn reset_endpoint('), 'host lifecycle must retain its independent transport retirement path');
 }
 
 async function testCoreWarningsStayOutOfTransientNotifications() {

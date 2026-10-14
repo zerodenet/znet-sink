@@ -130,6 +130,14 @@
   <div class="rates"><div><span>↑ 上传</span><strong>{formatRate(sampled ? displayRate(row, 'flow.bytes_up') : null)}</strong></div><div><span>↓ 下载</span><strong>{formatRate(sampled ? displayRate(row, 'flow.bytes_down') : null)}</strong></div></div>
   <div class="vpn-feedback" role="status"><strong>{vpnLabel}</strong><p id="mobile-vpn-reason">{platform?.reason ?? (mobilePlatform.responsivePreview ? '当前展示移动布局。真实手机接管需原生运行服务与数据面确认。' : '尚未取得原生服务状态，不能确认接管。')}</p><Button variant="ghost" disabled={loading} onclick={() => { void refresh(); void workspace.session.refresh(true); }}><RefreshCw size={16}/>重新检查</Button></div>
   {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
+  {#if platform?.unsupportedCapabilities?.length}
+    <details class="card" aria-label="暂不支持的移动能力">
+      <summary>暂不支持的能力与原因</summary>
+      {#each platform.unsupportedCapabilities as limitation (limitation.capabilityId)}
+        <p class="hint">{limitation.reason}</p>
+      {/each}
+    </details>
+  {/if}
   <section class="card" aria-label="代理模式"><span class="label">代理模式</span><div class="modes">{#each [{value:'rule',label:'规则'},{value:'direct',label:'直连'},{value:'global',label:'全局'}] as mode}<button data-slot="surface-button" class:chosen={ready && guiState.proxyMode?.currentMode === mode.value} aria-pressed={ready && guiState.proxyMode?.currentMode === mode.value} disabled={busy || !modes.includes(mode.value as 'rule'|'direct'|'global')} onclick={() => void setMode(mode.value as 'rule'|'direct'|'global')}>{mode.label}</button>{/each}</div>{#if !modes.length}<p class="hint">内核控制能力待确认；本地配置仍可查看和编辑。</p>{/if}</section>
   {#if ready && guiState.proxyMode?.currentMode === 'global'}<button data-slot="surface-button" class="card entry" onclick={chooseOutlet}><span><span class="label">全局出口</span><strong>{currentTarget ?? '请重新选择出口'}</strong></span><ChevronRight size={18}/></button>{/if}
   {#if feedback}<p role="status" class="hint">{feedback}</p>{/if}
@@ -154,6 +162,7 @@
   .rates > div { display:flex; flex-direction:column; gap:3px; min-width:100px; }.rates span { font-size:0.75rem; color:var(--muted-foreground); }.rates strong { font-size:1rem; font-weight:500; }
   .vpn-feedback { text-align:center; padding:12px 0 0; }.vpn-feedback strong { font-weight:500; }.vpn-feedback p,.hint { font-size:0.8rem; color:var(--muted-foreground); margin:6px 0; }
   .card { margin:10px 0; padding:12px 14px; border-radius:12px; background:var(--card); border:1px solid var(--border); width:100%; }
+  details.card summary { min-height:44px; display:flex; align-items:center; cursor:pointer; }
   .modes { display:flex; margin-top:8px; padding:4px; background:var(--muted); border-radius:9px; gap:4px; }.modes button { flex:1; min-height:44px; border-radius:7px; }.modes .chosen { background:var(--popover); }.modes button:disabled { opacity:0.5; }
   .entry { display:flex; align-items:center; justify-content:space-between; text-align:left; gap:8px; min-height:64px; }.entry > span { display:flex; flex-direction:column; gap:4px; min-width:0; }.entry strong { font-weight:500; }.entry small { color:var(--muted-foreground); }.entry > :global(svg) { flex-shrink:0; }
   .cumulative { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; color:var(--muted-foreground); font-size:0.75rem; margin:14px 0 0; }.error { color:var(--destructive); font-size:0.85rem; }

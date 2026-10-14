@@ -19,7 +19,7 @@
   本地 profile、订阅及规则存储继续复用现有 Rust 领域。
 - 命令注册层在 Android/iOS 拒绝桌面进程控制、原始桌面 IPC、系统代理（其底层 mobile 分支也返回明确不支持，绝不生成关闭快照）、
   桌面 TUN 开关、桌面安装器、任意内核安装和路径打开。拒绝发生在执行前，
-  返回 `mobile_platform_unavailable` 及原因。子进程启动和内核安装服务也有内部
+  返回 `unsupported`、稳定 reasonCode 与依赖编号及原因。子进程启动和内核安装服务也有内部
   门禁，内部调用不会绕过注册层而创建这些资源。已有本地草稿与只读管理能力
   保留；需要运行态的命令仍须通过现有权限及可用性验证。
 - Cargo 把 single-instance、process、updater 与 tray 功能
@@ -61,13 +61,13 @@ A08 仍为部分完成：粘贴和系统选择的内容沿既有材料准备路�
 新的原生文档插件读取 Android `content://` / iOS security-scoped 材料并返回有界
 UTF-8 内容；路径、URI 和授权留在原生层。任何没有 content 的旧 path-only 导入
 仍在创建 file lease 前拒绝，不能用桌面路径扩大授权。普通导出确认凭据风险，
-设置导出只用白名单，诊断导出明确仅含元数据；取消和未知回执不宣称保存。
+设置导出只用白名单；诊断导出仅包含允许的元数据及经字段分类脱敏的实际记录，不包含自由日志原文、配置或秘密；取消和未知回执不宣称保存。
 [文档 IO 证据](native-documents-v0.0.3.md) 和实际 Android 主宿主工程已接入，
 系统提供者、后台重建、API24/S8 及 iOS Files 的真实设备验收仍未完成。
 
 ## 移动运行 M01–M04：可复用接口与上游缺口
 
-审计源码与需要协调的最小通用范围如下。没有修改或推送 core。
+依赖协调的单一入口为仓库根 [todo.md](../../todo.md)，包含必需阻塞与条件增强、现有公开 Rust 能力及源码证据。下列为历史设计细节，接口名称不是已冻结要求。没有修改或推送 core。
 M02/M03 的通用设备与出口接口属于内核职责；M01/M04 已有公开 Rust 接口可复用，客户端还需实现服务所有权、打包及安全桥。不能将全部宿主工作归为 core 阻塞，也不向 core 加入订阅、插件、商店或安装业务。
 
 | 依赖 | 当前真实源码 | 可复用接口或需协调范围 | 客户端后续接入 |
@@ -189,7 +189,7 @@ Wi-Fi↔蜂窝、IPv6-only、断网/恢复、其他 VPN/撤权无外层回送和
   原子阻止另一个控制器在读取与提交之间修改内核。M04 还应评审兼容的可选
   preconditions 扩展，优先为配置、模式、选择及作用域受影响的 probe/write 增加
   expected instance/revision，并由 owning core 命令在同一协调锁内校验。
-  旧协议没有 CAS 时明确受限，不把客户端序列化或 after-read 当作内核原子保证。
+  Rust 内嵌可复用已经公开的 `apply_runtime_config_if_current_with_principal_impact_and_wait`；端点与统计已有自身前置条件，不重复发明。旧通用 wire 命令没有对应 CAS 时明确受限，不把客户端序列化或 after-read 当作内核原子保证。
   本批移动 runtime 未开启，因此不能宣称 E06 的完整远端并发验收已完成。
 - JNI/Swift 请求异步关联 operation ID，timeouts 表示结果未知；取消 UI listener
   仅终止这一 listener，不能重放写操作、取消已发网络请求或停止公共 runtime。
@@ -263,3 +263,7 @@ Host interface 统计、系统文件保存/分享、通知结果和插件 SDK �
 [NEPacketTunnelFlow](https://developer.apple.com/documentation/networkextension/nepackettunnelflow)、
 [Tauri Android 最低版本配置](https://v2.tauri.app/reference/config/#minsdkversion)、
 [Tauri 平台权限文件](https://v2.tauri.app/security/capabilities/#target-platform)。
+
+## 本轮独立客户端进展
+
+新增实际 IPC 控制通道只读核对及共享桥、活动连接固定筛选导出、捕获元数据恢复账本和原生生命周期前台订阅到期协调。具体边界见 [验收账本](mobile-acceptance-ledger-v0.0.3.md)；这些实现没有注册可转发的移动 Proxy，也没有开放移动 VPN 或 OS 后台定时执行。

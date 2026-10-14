@@ -2,7 +2,7 @@
   import { Choice } from '$lib/components/ui/choice';
   import { onMount, untrack } from 'svelte';
   import { useMobileNavigation } from '$lib/features/mobile/context';
-  import { getMobilePlatformSnapshot } from '$lib/features/mobile/runtime';
+  import { getMobilePlatformSnapshot, getMobileSubscriptionScheduleSnapshot } from '$lib/features/mobile/runtime';
   import { subscriptionScheduling, type SchedulePlatform } from '$lib/features/mobile/subscription-scheduling';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
@@ -430,9 +430,30 @@
   onMount(() => {
     viewMode = loadViewMode();
     let disposed = false;
-    if (mobile) void getMobilePlatformSnapshot().then(snapshot => {
-      if (!disposed) schedulePlatform = snapshot.mobile ? 'mobile-unadapted' : 'desktop';
-    }).catch(() => { if (!disposed) schedulePlatform = 'unknown'; });
+    let unlistenSchedule: UnlistenFn | undefined;
+    let scheduleRequest = 0;
+    async function readSchedule() {
+      const request = ++scheduleRequest;
+      try {
+        const platform = await getMobilePlatformSnapshot();
+        if (!platform.mobile) {
+          if (!disposed && request === scheduleRequest) schedulePlatform = 'desktop';
+          return;
+        }
+        const snapshot = await getMobileSubscriptionScheduleSnapshot();
+        if (!disposed && request === scheduleRequest) schedulePlatform = snapshot.storageError ? 'unknown' : 'mobile-foreground';
+      } catch {
+        if (!disposed && request === scheduleRequest) schedulePlatform = 'unknown';
+      }
+    }
+    const resumeSchedule = () => { if (!document.hidden && mobile) void readSchedule(); };
+    if (mobile) {
+      document.addEventListener('visibilitychange', resumeSchedule);
+      void listen('subscriptions:schedule-updated', () => void readSchedule()).then(stop => {
+        if (disposed) stop(); else unlistenSchedule = stop;
+      }).catch(() => {});
+      void readSchedule();
+    }
     let unlisten: UnlistenFn | undefined;
     // Attach before loading so a background completion cannot be missed.
     void listen('subscriptions:updated', () => { void refresh(false); })
@@ -442,7 +463,10 @@
         void refresh();
       })
       .catch(() => { if (!disposed) void refresh(); });
-    return () => { disposed = true; refreshGate.reset(); unlisten?.(); };
+    return () => {
+      disposed = true; scheduleRequest++; refreshGate.reset(); unlisten?.(); unlistenSchedule?.();
+      document.removeEventListener('visibilitychange', resumeSchedule);
+    };
   });
 </script>
 

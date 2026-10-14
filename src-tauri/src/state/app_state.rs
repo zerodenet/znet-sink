@@ -38,6 +38,9 @@ pub struct AppState {
     configuration: crate::configuration::Workspace,
     endpoint_restoration: crate::services::endpoint_restoration::EndpointRestoration,
     diagnostic_exports: crate::services::diagnostics::DiagnosticExports,
+    mobile_subscription_scheduler:
+        crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler,
+    runtime_bridge: znet_engine_client::bridge::RuntimeBridge,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -109,6 +112,10 @@ impl AppState {
             endpoint_restoration:
                 crate::services::endpoint_restoration::EndpointRestoration::default(),
             diagnostic_exports: crate::services::diagnostics::DiagnosticExports::default(),
+            mobile_subscription_scheduler:
+                crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler::default(
+                ),
+            runtime_bridge: znet_engine_client::bridge::RuntimeBridge::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -171,6 +178,16 @@ impl AppState {
         &self.diagnostic_exports
     }
 
+    pub(crate) fn mobile_subscription_scheduler(
+        &self,
+    ) -> &crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler {
+        &self.mobile_subscription_scheduler
+    }
+
+    pub(crate) fn runtime_bridge(&self) -> &znet_engine_client::bridge::RuntimeBridge {
+        &self.runtime_bridge
+    }
+
     pub(crate) fn commit_diagnostic_capture(
         &self,
         expected: &ClientScope,
@@ -207,6 +224,29 @@ impl AppState {
         Ok(())
     }
 
+    pub(crate) fn bind_runtime_bridge(
+        &self,
+        expected: &ClientScope,
+        binding: znet_engine_client::bridge::RuntimeBinding,
+    ) -> crate::errors::AppResult<()> {
+        let core = self
+            .client_core
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if &core.snapshot().scope != expected {
+            return Err(crate::errors::AppError::conflict(
+                "runtime_bridge",
+                "",
+                "所属配置或实例已变化，请重新核对",
+            ));
+        }
+        // Scope transitions acquire the same core -> bridge lock order. A
+        // discovery reply cannot rebind an invalidated old client scope.
+        self.runtime_bridge
+            .bind(binding)
+            .map_err(|_| crate::errors::AppError::internal("控制通道身份不完整"))
+    }
+
     pub(crate) fn client_core_configuration_committed(
         &self,
         active_profile: Option<&ProxyConfigProfile>,
@@ -218,6 +258,7 @@ impl AppState {
             crate::services::common::now_unix_ms(),
         );
         crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
+        self.runtime_bridge.invalidate();
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByConfigChange,
@@ -238,6 +279,7 @@ impl AppState {
         let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
         core.core_instance_started(crate::services::common::now_unix_ms());
         crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
+        self.runtime_bridge.invalidate();
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,
@@ -258,6 +300,7 @@ impl AppState {
         let mut core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
         core.core_instance_lost(crate::services::common::now_unix_ms());
         crate::models::debug::invalidate_capture_scope(&core.snapshot().scope);
+        self.runtime_bridge.invalidate();
         #[cfg(feature = "tool-node-probe")]
         self.probe_runtime.invalidate(
             crate::client_core::ProbeJobState::InvalidatedByCoreRestart,

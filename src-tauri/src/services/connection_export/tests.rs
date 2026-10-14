@@ -11,7 +11,7 @@ fn frame() -> DebugFrame {
         payload: json!({"payload":{"record":{"flowId":"flow-123","network":"tcp","source":"[2001:db8::1]:1234","destination":"192.0.2.5:443","targetHost":"EXAMPLE.COM","bytesUp":u64::MAX,"bytesDown":"9007199254740993","result":{"outcome":"success","message":"https://private/?token=secret"},"password":"secret","processPath":"/private/secret","targetIp":"invalid"}}}),
     }
 }
-fn scope() -> ClientScope {
+pub(super) fn scope() -> ClientScope {
     use crate::client_core::{ConfigRevision, CoreInstanceId};
     ClientScope {
         profile_id: None,
@@ -63,6 +63,7 @@ fn connection_export_preview_fixes_bounded_local_completed_scope_and_never_echoe
     plans.insert(
         preview.plan_id.clone(),
         Plan {
+            active: None,
             scope: scope(),
             expires: 200,
             bytes: Some(bytes.clone()),
@@ -80,6 +81,7 @@ fn connection_export_expired_or_changed_client_scope_cannot_deliver_or_resnapsho
     plans.insert(
         "fixed".into(),
         Plan {
+            active: None,
             scope: scope(),
             expires: 200,
             bytes: Some(b"fixed".to_vec()),
@@ -93,4 +95,26 @@ fn connection_export_expired_or_changed_client_scope_cannot_deliver_or_resnapsho
         take_plan(&mut plans, "fixed", &scope(), 199).unwrap(),
         b"fixed"
     );
+}
+
+#[test]
+fn active_connection_export_rejects_guest_source_and_ids_and_keeps_mobile_bridge_reason() {
+    for value in [
+        json!({"source":"active","ids":["fake"]}),
+        json!({"search":"x","record":{"flow_id":"fake"}}),
+        json!({"beforeId":123}),
+    ] {
+        assert!(serde_json::from_value::<ActiveConnectionExportFilter>(value).is_err());
+    }
+    assert!(ActiveConnectionExportFilter {
+        protocol: Some("icmp".into()),
+        ..Default::default()
+    }
+    .validate()
+    .is_err());
+    assert_eq!(
+        active::runtime_available(true).unwrap_err().code,
+        "unsupported"
+    );
+    active::runtime_available(false).unwrap();
 }

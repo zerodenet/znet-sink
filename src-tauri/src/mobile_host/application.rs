@@ -13,13 +13,20 @@ pub(crate) fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
-    crate::application::commands::register(builder)
+    let app = crate::application::commands::register(builder)
         .setup(|app| {
             // Android/iOS private app container is resolved by the native
             // host. Never inherit HOME, desktop paths or a working directory.
             crate::services::install_mobile_data_dir(app.path().app_data_dir()?)
                 .map_err(|error| std::io::Error::other(error.message))?;
             crate::services::file_logger::init();
+            if let Err(error) = crate::services::data_dir().and_then(|dir| {
+                crate::models::debug::initialize_capture_recovery(
+                    &dir.join("capture-recovery.json"),
+                )
+            }) {
+                crate::services::file_logger::line(&error.message);
+            }
             let data = Arc::new(Mutex::new(None));
             crate::lifecycle::phases::ConfigPhase { data: data.clone() }
                 .run()
@@ -40,6 +47,24 @@ pub(crate) fn run() {
             // desktop subscription/probe timers and call them mobile jobs.
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while building mobile UI application");
+    app.run(|app, event| match event {
+        tauri::RunEvent::Ready
+        | tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::Resumed,
+            ..
+        } => {
+            crate::services::mobile_subscription_scheduler::resume(app);
+        }
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::Suspended,
+            ..
+        }
+        | tauri::RunEvent::Exit
+        | tauri::RunEvent::ExitRequested { .. } => {
+            crate::services::mobile_subscription_scheduler::suspend(app);
+        }
+        _ => {}
+    });
 }

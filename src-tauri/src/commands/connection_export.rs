@@ -38,11 +38,14 @@ pub async fn native_connection_export_deliver(
     delivery: DocumentDelivery,
 ) -> AppResult<DocumentReceipt> {
     admit(&app, window.label())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        connection_export::deliver(&app, &plan_id, delivery)
-    })
-    .await
-    .map_err(|_| {
-        crate::errors::AppError::internal("系统导出结果未确认，请检查目标；不会自动重放")
-    })?
+    connection_export::deliver(&app, &plan_id, delivery).await
+}
+#[tauri::command]
+pub async fn native_active_connection_export_preview(
+    app: AppHandle,
+    window: WebviewWindow,
+    query: connection_export::ActiveConnectionExportFilter,
+) -> AppResult<connection_export::ConnectionExportPreview> {
+    admit(&app, window.label())?;
+    connection_export::preview_active(app.state::<AppState>().inner(), query).await
 }

@@ -193,6 +193,23 @@ pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionPr
     original::sync(app_handle, id).await.map(present_profile)
 }
 
+/// Scheduling consumes the same canonical stored formats as manual sync.
+pub(crate) fn scheduled_profiles(state: &AppState) -> AppResult<Vec<SubscriptionProfile>> {
+    migrate_profiles(state)?;
+    Ok(lock(state.subscriptions(), "subscription")?.clone())
+}
+
+/// Host-only foreground entry; execution and per-ID deduplication stay shared.
+pub(crate) async fn sync_due(
+    app_handle: AppHandle,
+    expected: SubscriptionProfile,
+) -> AppResult<Option<SubscriptionProfile>> {
+    // The selected snapshot comes from the stored domain, not UI presentation.
+    original::sync_due(app_handle, expected)
+        .await
+        .map(|profile| profile.map(present_profile))
+}
+
 pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
     {
         let state = app_handle.state::<AppState>();

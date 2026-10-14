@@ -39,4 +39,5 @@ pub mod mobile_release;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;
+pub mod runtime_bridge;
 pub mod settings_transfer;

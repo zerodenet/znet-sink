@@ -47,7 +47,6 @@ fn recover_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-use tokio::time::timeout;
 
 use crate::errors::{AppError, AppResult};
 use crate::kernel::transport::{self, KernelCloser, KernelReader, KernelWriter};
@@ -61,6 +60,10 @@ const SUBSCRIBE_FRAME_ID: &str = "znet-sink-subscribe";
 
 mod scoped;
 pub(crate) use scoped::ScopedConnection;
+pub(crate) mod event_filter;
+#[cfg(all(test, unix))]
+#[path = "connection/security_tests.rs"]
+mod security_tests;
 
 /// Broadcast channel capacity for kernel events.
 ///
@@ -68,7 +71,34 @@ pub(crate) use scoped::ScopedConnection;
 /// consumer falls behind and [`broadcast::Receiver`] reports
 /// [`Lagged`](broadcast::error::RecvError::Lagged), which the event
 /// forwarders tolerate.
-const EVENT_CHANNEL_CAPACITY: usize = 1024;
+const EVENT_CHANNEL_CAPACITY: usize = 128;
+const MAX_EVENT_BYTES: usize = 256 * 1024;
+const MAX_PENDING_REQUESTS: usize = 64;
+
+pub(crate) fn is_gap_event(frame: &Value) -> bool {
+    frame.get("event_type").and_then(Value::as_str) == Some("znet.transport_gap")
+}
+
+struct PendingRequest {
+    nonce: u64,
+    sender: oneshot::Sender<Result<Value, AppError>>,
+}
+struct PendingSlot {
+    inner: Arc<Inner>,
+    id: String,
+    nonce: u64,
+}
+impl Drop for PendingSlot {
+    fn drop(&mut self) {
+        let mut pending = recover_lock(&self.inner.pending);
+        if pending
+            .get(&self.id)
+            .is_some_and(|request| request.nonce == self.nonce)
+        {
+            pending.remove(&self.id);
+        }
+    }
+}
 
 /// A shared multiplexed connection. Cheap to clone (internally `Arc`).
 #[derive(Clone)]
@@ -80,7 +110,8 @@ struct Inner {
     endpoint: CoreEndpoint,
     writer: Mutex<KernelWriter>,
     closer: KernelCloser,
-    pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>,
+    pending: Mutex<HashMap<String, PendingRequest>>,
+    next_pending_nonce: AtomicU64,
     event_tx: broadcast::Sender<Value>,
     alive: AtomicBool,
     last_received_at_ms: AtomicU64,
@@ -105,6 +136,7 @@ impl MultiplexedConnection {
             writer: Mutex::new(writer),
             closer,
             pending: Mutex::new(HashMap::new()),
+            next_pending_nonce: AtomicU64::new(1),
             event_tx,
             alive: AtomicBool::new(true),
             last_received_at_ms: AtomicU64::new(crate::services::common::now_unix_ms()),
@@ -192,12 +224,45 @@ impl MultiplexedConnection {
         if !self.inner.alive.load(Ordering::Acquire) {
             return Err(AppError::connection_closed(&self.inner.endpoint));
         }
+        if frame_bytes.len() > transport::MAX_FRAME_BYTES
+            || request_id.is_empty()
+            || request_id.len() > 128
+            || request_id == SUBSCRIBE_FRAME_ID
+        {
+            return Err(AppError::invalid_argument(
+                "IPC request exceeds the frame or identity budget",
+            ));
+        }
+        let deadline = tokio::time::Instant::now() + response_timeout;
 
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = recover_lock(&self.inner.pending);
-            pending.insert(request_id.clone(), tx);
+            if pending.len() >= MAX_PENDING_REQUESTS || pending.contains_key(&request_id) {
+                return Err(AppError {
+                    code: "busy",
+                    message: "IPC pending request budget or duplicate identity rejected".into(),
+                    details: None,
+                });
+            }
+            let nonce = self
+                .inner
+                .next_pending_nonce
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    value.checked_add(1)
+                })
+                .map_err(|_| AppError::internal("IPC request identity budget exhausted"))?;
+            pending.insert(request_id.clone(), PendingRequest { nonce, sender: tx });
         }
+        let nonce = recover_lock(&self.inner.pending)
+            .get(&request_id)
+            .map(|request| request.nonce);
+        // The reader may already have delivered and removed this slot.
+        let _pending_slot = nonce.map(|nonce| PendingSlot {
+            inner: self.inner.clone(),
+            id: request_id.clone(),
+            nonce,
+        });
 
         // Write the frame on a blocking thread — overlapped WriteFile blocks,
         // and we must not stall the async runtime. The pending slot is
@@ -217,17 +282,20 @@ impl MultiplexedConnection {
             error: None,
         });
         let writer_inner = Arc::clone(&self.inner);
-        let write_result = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
-            let mut writer = recover_lock(&writer_inner.writer);
-            writer.write_all(&frame_bytes)?;
-            writer.flush()
-        })
+        let write_result = tokio::time::timeout_at(
+            deadline,
+            tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
+                let mut writer = recover_lock(&writer_inner.writer);
+                writer.write_all(&frame_bytes)?;
+                writer.flush()
+            }),
+        )
         .await;
 
         let endpoint = self.inner.endpoint.clone();
         match write_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => {
                 self.inner.remove_pending(&request_id);
                 self.retire();
                 return Err(AppError::from_io(
@@ -236,16 +304,19 @@ impl MultiplexedConnection {
                     error,
                 ));
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 self.inner.remove_pending(&request_id);
                 self.retire();
                 return Err(AppError::internal(format!(
                     "IPC write worker failed: {error}"
                 )));
             }
+            Err(_) => {
+                return Err(AppError {code:"timeout",message:"IPC request write result is unconfirmed; the in-flight write was not cancelled".into(),details:None});
+            }
         }
 
-        match timeout(response_timeout, rx).await {
+        match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(result)) => {
                 push_debug_frame(DebugFrame {
                     id: 0,
@@ -415,7 +486,7 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                 let sender = recover_lock(&inner.pending).remove(id);
                 let matched = sender.is_some();
                 if let Some(sender) = sender {
-                    let _ = sender.send(Ok(frame));
+                    let _ = sender.sender.send(Ok(frame));
                 }
                 push_debug_frame(DebugFrame {
                     id: 0,
@@ -454,6 +525,10 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
             }
             // Response with no matching id → drop.
         } else {
+            if serde_json::to_vec(&frame).map_or(true, |bytes| bytes.len() > MAX_EVENT_BYTES) {
+                let _ = inner.event_tx.send(serde_json::json!({"event_type":"znet.transport_gap","reason":"event_byte_budget"}));
+                continue;
+            }
             // Event frame: fan out to every subscriber. No subscriber → ignore.
             push_debug_frame(DebugFrame {
                 id: 0,
@@ -471,14 +546,16 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
 
     // Connection is gone: mark dead and wake every pending waiter so they
     // don't block until their own timeout.
-    inner.alive.store(false, Ordering::Release);
-    let drained: HashMap<String, oneshot::Sender<Result<Value, AppError>>> = {
+    inner.mark_dead();
+    let drained: HashMap<String, PendingRequest> = {
         let mut guard = recover_lock(&inner.pending);
         std::mem::take(&mut *guard)
     };
     let endpoint = inner.endpoint.clone();
     for (_, sender) in drained {
-        let _ = sender.send(Err(AppError::connection_closed(&endpoint)));
+        let _ = sender
+            .sender
+            .send(Err(AppError::connection_closed(&endpoint)));
     }
 }
 

@@ -7,7 +7,8 @@ pub(crate) use telemetry::DebugTelemetry;
 
 mod capture;
 pub(crate) use capture::{
-    capture_payload, capture_request, capture_status, invalidate_capture_scope, set_capture,
+    capture_payload, capture_request, capture_status, clear_capture_recovery,
+    initialize_capture_recovery, invalidate_capture_scope, set_capture,
 };
 pub use capture::{CaptureRequest, CaptureStatus};
 

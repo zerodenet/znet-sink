@@ -4,7 +4,7 @@
  import {Input} from '$lib/components/ui/input';
  import * as Dialog from '$lib/components/ui/dialog';
  import {getNativeDocumentCapabilities,documentReceiptMessage,type DocumentDelivery} from '$lib/services/native-documents';
- import {previewNativeDiagnostics,deliverNativeDiagnosticSnapshot,readNativeCapture,startNativeCapture,stopNativeCapture,validateCaptureBudget,captureReason,type DiagnosticPreview,type CaptureStatus} from '$lib/services/native-diagnostics';
+ import {previewNativeDiagnostics,deliverNativeDiagnosticSnapshot,readNativeCapture,startNativeCapture,stopNativeCapture,validateCaptureBudget,captureReason,captureHistoryReason,type DiagnosticPreview,type CaptureStatus} from '$lib/services/native-diagnostics';
  import {getAppErrorMessage} from '$lib/services/core';
  let {disabled=false}:{disabled?:boolean}=$props();
  let open=$state(false),available=$state(false),busy=$state(false),preparing=$state(false),captureBusy=$state(false);
@@ -36,12 +36,15 @@
 </script>
 <section class="native-diagnostics" aria-label="有限调试捕获与诊断导出">
  <h3>有限调试捕获</h3>
- <p>捕获由宿主服务维护；达到任一预算会停止。离开页面不会停止或延长捕获。记录来自实际 IPC，不提供 PCAP 全包捕获或移动内核未提供的采样。</p>
+ <p>捕获由宿主服务维护；达到任一预算会停止。离开页面不会停止或延长捕获。进程重建只核对元数据账本，不恢复或重放旧捕获。记录来自实际 IPC，不提供 PCAP 全包捕获或移动内核未提供的采样。</p>
  <div class="capture-budget"><label>时长（秒）<Input type="number" min="1" max="300" step="1" bind:value={duration} disabled={captureBusy||capture?.detailed} aria-label="捕获时长（秒）"/></label><label>容量（MiB）<Input type="number" min="1" max="10" step="1" bind:value={capacity} disabled={captureBusy||capture?.detailed} aria-label="捕获容量（MiB）"/></label></div>
  {#if capture}<p role="status">{capture.state==='idle' ? '尚未捕获' : captureReason(capture)}；已存 {capture.storedBytes} / {capture.maximumBytes} 字节，{capture.storedFrames} 帧。观察到队列丢弃 {capture.queueDropsObserved ?? '—'} 帧。</p>{/if}
+ {#if capture?.recoveryState && capture.recoveryState!=='confirmed'}<p role="alert">{capture.recoveryReason ?? '捕获恢复记录未确认，无法开始新会话'}。清理仅通过「更多 → 设置 → 本地数据 → 调试捕获」明确发起。</p>{/if}
+ {#if capture?.recovered}<p>已读取上一进程账本；计数是最后成功存盘的检查点，不代表完整捕获或正常完成。</p>{/if}
+ {#if capture?.recoveryHistory?.length}<details aria-label="捕获恢复历史"><summary>捕获恢复记录（最近 {capture.recoveryHistory.length} 项）</summary><p>最多32项、64KiB，仅保存元数据。历史检查点不能作为可继续执行的任务。</p>{#each [...capture.recoveryHistory].reverse() as record (record.sessionId)}<article class="recovery-record"><p>{captureHistoryReason(record)}</p><p>会话 {record.sessionId} · {new Date(record.startedAtMs).toLocaleString()}；时限 {record.durationSeconds} 秒，截止 {new Date(record.expiresAtMs).toLocaleString()}。</p><p>持久检查点 {record.storedBytes} / {record.maximumBytes} 字节，{record.storedFrames} 帧；观察到队列丢弃 {record.queueDropsObserved} 帧。{record.endedAtMs!=null ? `确认结束时间 ${new Date(record.endedAtMs).toLocaleString()}`:'结束时间未确认'}</p></article>{/each}</details>{/if}
  {#if lastCaptureRead}<p>状态读取时间：{new Date(lastCaptureRead).toLocaleTimeString()}；显示值为最近一次宿主回执。</p>{/if}
  {#if captureMessage}<p role="alert">{captureMessage}</p>{/if}
- <div class="capture-actions"><Button variant="outline" disabled={disabled||captureBusy||capture?.detailed} onclick={startCapture}>开始有界捕获</Button><Button variant="outline" disabled={captureBusy||!capture?.detailed} onclick={stopCapture}>停止原捕获会话</Button><Button variant="outline" disabled={captureBusy} onclick={readCapture}>核对捕获状态</Button></div>
+ <div class="capture-actions"><Button variant="outline" disabled={disabled||captureBusy||capture?.detailed||(capture?.recoveryState!=null&&capture.recoveryState!=='confirmed')} onclick={startCapture}>开始有界捕获</Button><Button variant="outline" disabled={captureBusy||!capture?.detailed} onclick={stopCapture}>停止原捕获会话</Button><Button variant="outline" disabled={captureBusy} onclick={readCapture}>核对捕获状态</Button></div>
  <Button variant="outline" disabled={disabled||preparing||busy} onclick={prepare}>{preparing?'正在准备快照…':'预览脱敏诊断材料'}</Button>
 </section>
 <Dialog.Root bind:open>
@@ -57,5 +60,5 @@
 <style>
  .native-diagnostics { min-width:0; padding:12px 0; } h3 {font-size:1rem;font-weight:500;} p {font-size:.85rem;line-height:1.6;overflow-wrap:anywhere;color:var(--muted-foreground);} p[role="alert"] {color:var(--destructive);}
  .capture-budget {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.capture-budget label {min-width:0;font-size:.85rem;}.capture-budget :global(input) {min-height:44px;width:100%;font-size:1rem;}
- .capture-actions {display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}.native-diagnostics :global(button){min-height:44px;height:auto;white-space:normal;} summary{min-height:44px;padding:12px 0;cursor:pointer;}
+ .capture-actions {display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}.native-diagnostics :global(button){min-height:44px;height:auto;white-space:normal;} .recovery-record{padding:8px 0;border-top:1px solid var(--border);} summary{min-height:44px;padding:12px 0;cursor:pointer;}
 </style>

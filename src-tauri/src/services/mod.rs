@@ -146,11 +146,14 @@ pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
     }
 }
 
+pub mod capture_recovery;
 pub(crate) mod connection_export;
 pub mod endpoint_restoration;
 pub(crate) mod mobile_notifications;
 pub mod mobile_release;
+pub(crate) mod mobile_subscription_scheduler;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;
+pub(crate) mod runtime_bridge;
 pub mod settings_transfer;

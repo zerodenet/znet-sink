@@ -82,3 +82,7 @@ Clash 路由转换支持三段式 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`�
 - `lastError`
 
 同步生成的代理配置默认不会自动设为 active；如果已有 `targetProxyConfigId` 且该代理配置原本是 active，则同步后会保持 active 并同步 `localProxy`。
+
+## 移动端周期意图
+
+Android/iOS 原生宿主在冷启动/恢复前台时执行有界到期协调，复用同一普通订阅同步链与 per-ID guard；关闭或后台不会增加排队请求，在途请求以真实返回/持久记录核对。系统后台任务尚未适配，不能保证锁屏/睡眠期间定点执行。恢复记录、未知结果屏障与 304 限制见 [移动前台到期协调](mobile-subscription-foreground-v0.0.3.md)。
