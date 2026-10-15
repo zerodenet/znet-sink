@@ -62,8 +62,8 @@ test('actual overview preserves u64 cumulative data and shows unknown rates afte
 test('actual overview shortcuts mount the target bottom tab', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 720 });
   await page.goto('/mobile.html?fixture=overview&traffic-v1');
-  await expect(page.getByRole('button', { name: /当前配置/ })).toContainText('日常网络配置');
-  await page.getByRole('button', { name: /当前配置/ }).click();
+  await expect(page.getByRole('button', { name: /^当前配置/ })).toContainText('日常网络配置');
+  await page.getByRole('button', { name: /^当前配置/ }).click();
   await expect(page.getByRole('textbox', { name: '搜索配置' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '配置' })).toHaveAttribute('aria-current', 'page');
 });

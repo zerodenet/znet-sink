@@ -5,6 +5,7 @@ pub(crate) mod capture_apply;
 pub(crate) mod composition;
 pub(crate) mod dns;
 pub(crate) mod dns_migration;
+pub(crate) mod mobile_location;
 pub(crate) mod native_validation;
 pub(crate) mod persistence;
 pub(crate) mod profile_editor;
@@ -15,6 +16,7 @@ pub(crate) mod route_rules;
 pub(crate) mod rule_migration;
 pub(crate) mod rule_references;
 pub(crate) mod rules;
+pub(crate) mod runtime_network;
 
 pub use report::{CompositionReport, LayerReport};
 use std::sync::atomic::{AtomicU64, Ordering};

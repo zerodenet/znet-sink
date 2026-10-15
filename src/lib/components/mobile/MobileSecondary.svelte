@@ -7,9 +7,9 @@
   import MobileApplicationSettings from './MobileApplicationSettings.svelte';
   import { Button } from '$lib/components/ui/button';
   import UiErrorBoundary from '$lib/components/UiErrorBoundary.svelte';
-  let { page, routeKey, tab, trafficVisit }: { page: MobilePage; routeKey: number; tab: MobileTab; trafficVisit?: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit } = $props();
+  let { page, routeKey, tab, trafficVisit, locationTarget, origin }: { page: MobilePage; routeKey: number; tab: MobileTab; trafficVisit?: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit; locationTarget?: import('$lib/features/mobile/location').MobileLocationTarget; origin?: import('$lib/features/mobile/navigation.svelte').MobileRouteOrigin } = $props();
   // The keyed host route owns this scope even if its async panel loads while hidden.
-  untrack(() => provideMobileRoute({ key: routeKey, page, tab, trafficVisit }));
+  untrack(() => provideMobileRoute({ key: routeKey, page, tab, trafficVisit, locationTarget, origin }));
   type Loader = () => Promise<{ default: Component }>;
   const loaders: Partial<Record<MobilePage, Loader>> = {
     traffic: () => import('./MobileTraffic.svelte'),
@@ -30,6 +30,7 @@
     data: () => import('./MobileLocalData.svelte'),
     rules: () => import('$lib/components/tabs/RulesTab.svelte'),
     profiles: () => import('$lib/components/tabs/ProfilesTab.svelte'),
+    nodes: () => import('$lib/components/tabs/NodesTab.svelte'),
     subscriptions: () => import('$lib/components/tabs/SubscriptionsTab.svelte'),
   };
   let ActivePanel = $state<Component | null>(null);
@@ -57,7 +58,7 @@
 {:else if error}
   <div class="unavailable" role="alert"><p>页面加载失败：{error}</p><Button onclick={load}>重试</Button></div>
 {:else if ActivePanel}
-  <UiErrorBoundary context={{ tab: page, presentation: 'mobile' }}><ActivePanel /></UiErrorBoundary>
+  <UiErrorBoundary context={{ tab: page, presentation: 'mobile' }}>{#if page === 'profiles' || page === 'nodes'}<ActivePanel mobile={true} {locationTarget}/>{:else}<ActivePanel />{/if}</UiErrorBoundary>
 {:else}
   <p class="unavailable" role="status">正在加载…</p>
 {/if}

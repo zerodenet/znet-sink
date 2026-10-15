@@ -21,6 +21,15 @@
   import { getProfileSettings, getAppErrorInfo, getAppErrorMessage } from '$lib/services/core';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
+  import {mobilePlatform} from '$lib/features/mobile/platform.svelte';
+  import {optionalMobileNavigation} from '$lib/features/mobile/context';
+  import {runtimeNetworkPorts} from '$lib/features/runtime-network/client';
+  import {validSnapshot as validNetworkSnapshot} from '$lib/features/runtime-network/state';
+  const mobileNavigation=optionalMobileNavigation();
+  let canonicalMtu=$state<string>('—');
+  let mtuReadGeneration=0;
+  async function readCanonicalMtu(){const generation=++mtuReadGeneration;try{const current=await runtimeNetworkPorts.snapshot();if(alive&&generation===mtuReadGeneration)canonicalMtu=validNetworkSnapshot(current)&&current.values?String(current.values.mtu):'—';}catch{if(alive&&generation===mtuReadGeneration)canonicalMtu='—';}}
+  $effect(()=>{if(mobilePlatform.isMobileLayout&&(!mobileNavigation||mobileNavigation.current?.page==='tun'))void readCanonicalMtu();});
   import {
     inspectTunDnsHijackReadiness,
     type TunDnsHijackReadiness,
@@ -58,7 +67,7 @@
     acceptedForm = formValue(); readNotice = null;
   }
   function discardDraft() { setForm(acceptedForm ?? initialForm); error = null; errorCode = undefined; saved = false; readNotice = null; }
-  onDestroy(() => { alive = false; readGeneration++; });
+  onDestroy(() => { alive = false; readGeneration++; mtuReadGeneration++; });
 
   const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
@@ -132,7 +141,7 @@
         tag: normalizedTag,
         addr: normalizedAddr,
         secondaryAddr: normalizedSecondary || null,
-        mtu: normalizedMtu,
+        ...(mobilePlatform.isMobileLayout?{}:{mtu:normalizedMtu}),
         includeCidrs: includeCidrs.split('\n').map((value) => value.trim()).filter(Boolean),
         dualStack,
         dnsHijack,
@@ -253,6 +262,7 @@
       </div>
     </div>
 
+    {#if mobilePlatform.isMobileLayout}<div class="config-row"><div class="config-row-label"><span class="label-text">最终 MTU：{canonicalMtu}</span><span class="label-desc">只读本地配置最终值，不证明平台隧道已采用；统一在运行网络编辑。</span></div><Button variant="outline" onclick={()=>{if(mobileNavigation)mobileNavigation.open('network');else{store.settingsSection='network';store.activeTab='settings';}}}>打开运行网络设置</Button></div>{:else}
     <div class="config-row">
       <div class="config-row-label">
         <span class="label-text">MTU</span>
@@ -272,6 +282,7 @@
         />
       </div>
     </div>
+    {/if}
   {/if}
 </div>
 

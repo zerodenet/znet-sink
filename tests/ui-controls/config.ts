@@ -1,5 +1,6 @@
 import {dnsMigrationSettings} from './dns-migration';
 import {profileEditorListing} from './profile-editor';
+import {mobileLocationProfiles,mobileLocationNodes,mobileLocationClientSnapshot} from './mobile-location';
 // In-memory fixture only: the UI suite must never call Tauri, DNS or a kernel.
 import type { CommonRuleBindingInput, RuleSetSummary, RuleSetUpsert } from '../../src/lib/types/domain';
 import type { CoreKernelInfo } from '../../src/lib/types/core';
@@ -117,7 +118,7 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
   profiles[0].format = 'json';
   profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
 }
-export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return new URLSearchParams(location.search).get('fixture')==='rule-migration'
+export const listProxyConfigs = async () => { void proxyConfigSignal.revision; if(new URLSearchParams(location.search).get('fixture')==='mobile-location')return mobileLocationProfiles();return new URLSearchParams(location.search).get('fixture')==='rule-migration'
   ? (await import('./rule-migration')).ruleMigrationProfiles() : structuredClone(profileEditorListing(profiles)); };
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
@@ -263,6 +264,7 @@ export const guiSelectPolicy = async (policy: string, tag: string) => {
   return {accepted: true};
 };
 export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/types/gui-api').NodeScreenSnapshot> => {
+  if (new URLSearchParams(location.search).get('fixture')==='mobile-location') return mobileLocationNodes();
   const scope = {profileId: 'fixture', configRevision: 1, coreInstanceId: 1};
   const params = new URLSearchParams(location.search);
   if (params.get('layout') === 'global') {
@@ -387,6 +389,7 @@ export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {
 let fixtureClientGeneration: number | undefined = 1;
 window.addEventListener('fixture-client-snapshot-generation', event => { fixtureClientGeneration = (event as CustomEvent<number | undefined>).detail; });
 export const getClientCoreSnapshot = async () => {
+  if (new URLSearchParams(location.search).get('fixture')==='mobile-location') return mobileLocationClientSnapshot();
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
   return {revision:1,scopeGeneration:fixtureClientGeneration,scope:{profileId:new URLSearchParams(location.search).get('fixture') === 'overview' ? 'main' : 'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
 };

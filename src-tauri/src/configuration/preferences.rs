@@ -99,6 +99,23 @@ pub(crate) fn tun_params(state: &AppState, defaults: AppTunConfig) -> AppResult<
     tun_params_for(&app, &source, defaults)
 }
 
+/// One MTU precedence shared by the editor, final display and TUN command plan.
+pub(crate) fn effective_tun_mtu(app: &AppConfig, source: &Value) -> AppResult<u16> {
+    let explicit = app.client_edits.as_ref().and_then(|v| v.get("tun.mtu"));
+    if explicit.is_none() && app.overrides.tun {
+        return Ok(app.tun.mtu);
+    }
+    let selected = explicit
+        .or_else(|| source.pointer("/runtime/tun/mtu").filter(|v| !v.is_null()))
+        .or_else(|| source.pointer("/runtime/network/mtu"));
+    let mtu = selected
+        .map(|v| v.as_u64().and_then(|n| u16::try_from(n).ok()))
+        .unwrap_or(Some(1500))
+        .filter(|m| *m >= 576)
+        .ok_or_else(|| AppError::invalid_argument("MTU 必须是576到65535之间的整数"))?;
+    Ok(mtu)
+}
+
 pub(crate) fn tun_params_for(
     app: &AppConfig,
     source: &Value,
@@ -120,6 +137,7 @@ pub(crate) fn tun_params_for(
             }
         }
     }
+    params["mtu"] = json!(effective_tun_mtu(app, source)?);
     let source_exclusions =
         !app.overrides.tun && source.pointer("/runtime/tun/exclude_cidrs").is_some();
     if app.overrides.bypass || !source_exclusions {

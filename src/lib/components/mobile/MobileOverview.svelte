@@ -12,10 +12,11 @@
   import { guiState } from '$lib/services/gui-state.svelte';
   import { listProxyConfigs, type ProxyConfigProfile } from '$lib/services/config';
   import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
-  import { getAppErrorMessage, getClientCoreSnapshot } from '$lib/services/core';
-  import type { ClientScope } from '$lib/types/gui-api';
+  import { getAppErrorMessage, getClientCoreSnapshot, getNodeScreenSnapshot } from '$lib/services/core';
+  import type { ClientScope, NodeScreenSnapshot } from '$lib/types/gui-api';
+  import { getMobileLocationSnapshot } from '$lib/features/mobile/location-client';
+  import { locateNodeChain, sameLocationRead, type MobileLocationSnapshot } from '$lib/features/mobile/location';
   import { controlScope } from '$lib/features/nodes/scope';
-  import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import { Button } from '$lib/components/ui/button';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -26,6 +27,10 @@
   let view = $state(workspace.session.view);
   let platform = $state<MobilePlatformSnapshot | null>(null);
   let clientScope = $state<ClientScope | null>(null);
+  let locationSnapshot = $state<MobileLocationSnapshot | null>(null);
+  let nodeSnapshot = $state<NodeScreenSnapshot | null>(null);
+  let locating = $state(false);
+  let locationRequest = 0;
   let profiles = $state<ProxyConfigProfile[]>([]);
   let loadError = $state<string | null>(null);
   let feedback = $state<string | null>(null);
@@ -48,34 +53,44 @@
   const ready = $derived(runtimeFresh && guiState.connection?.coreAvailable === true);
   const modes = $derived(view.discovery?.capabilities.contracts?.controlApi?.minimumSupported === 1 && ready && clientScope?.profileId === activeProfile?.id ? guiState.proxyMode?.availableModes ?? [] : []);
   const sampled = $derived(!!row && !view.stale && !view.error && now - row.seenAt <= 10_000);
-  const scope = $derived(JSON.stringify([activeProfile?.id, row?.snapshot.core_instance_id, row?.snapshot.config_revision, clientScope]));
+  const scope = $derived(JSON.stringify([activeProfile?.id, row?.snapshot.core_instance_id, row?.snapshot.config_revision, clientScope, locationSnapshot?.binding?.binding]));
   const sessionTotal = $derived(session.up === null || session.down === null ? null : session.up + session.down);
   const share = $derived(trafficShare(session.up, session.down));
   const sampleTime = $derived(row && Number.isSafeInteger(Number(row.snapshot.sampled_at_unix_ms)) && Number(row.snapshot.sampled_at_unix_ms) <= 8.64e15 ? new Date(Number(row.snapshot.sampled_at_unix_ms)).toLocaleString() : '未提供');
   const currentTarget = $derived(guiState.proxyMode?.globalOutbound);
-  const effective = $derived(ready && currentTarget ? resolveEffectiveNodeSelection(guiState.policyGroups, currentTarget) : null);
+  const effective = $derived(ready && guiState.proxyMode?.currentMode === 'global' && currentTarget && nodeSnapshot && locationSnapshot?.binding
+    ? locateNodeChain(nodeSnapshot, locationSnapshot.binding, currentTarget) : null);
   const vpnLabel = $derived(!platform ? 'VPN 状态待核对' : platform.adaptationState === 'not-adapted' ? 'VPN 适配待完成' : mobilePlatform.responsivePreview ? '移动布局预览' : 'VPN 状态未确认');
 
   async function refresh() {
     const id = ++request;
     loading = true;
-    const results = await Promise.allSettled([getMobilePlatformSnapshot(), listProxyConfigs(), getClientCoreSnapshot()]);
+    let before: MobileLocationSnapshot | null = null;
+    try { before = await getMobileLocationSnapshot(); } catch { /* Other read-only panels remain available. */ }
+    const results = await Promise.allSettled([getMobilePlatformSnapshot(), listProxyConfigs(), getClientCoreSnapshot(), getNodeScreenSnapshot()]);
+    let after: MobileLocationSnapshot | null = null;
+    try { after = await getMobileLocationSnapshot(); } catch { /* Unconfirmed identities never authorize a shortcut. */ }
     if (!alive || request !== id) return;
     if (results[0].status === 'fulfilled') platform = results[0].value;
     if (results[1].status === 'fulfilled') profiles = results[1].value;
     if (results[2].status === 'fulfilled') clientScope = results[2].value.scope;
     else clientScope = null;
+    locationSnapshot = before && after && sameLocationRead(before, after) ? after : null;
+    nodeSnapshot = results[3].status === 'fulfilled' && locationSnapshot?.binding ? results[3].value : null;
     loadError = results.filter(result => result.status === 'rejected').map(result => getAppErrorMessage((result as PromiseRejectedResult).reason, '状态读取失败')).join('；') || null;
     loading = false;
   }
   onMount(() => {
     const stop = workspace.connect(next => view = next);
+    // A completed read cannot revive a navigation intent after leaving, even
+    // if the user has since returned to the same overview root (navigation ABA).
+    const cancelPendingLocation=navigation.guardBeforeLeave(()=>{if(navigation.activeTab==='overview' && !navigation.current){locationRequest++;locating=false;}return true;});
     const unsubscribe = proxyConfigSignal.onActiveChanged(() => { outletOpen = false; feedback = '配置已变化，请重新选择当前配置的出口'; void refresh(); });
     const clock = window.setInterval(() => now = Date.now(), 1000);
     const resume = () => { if (document.visibilityState === 'visible') { ledger.interrupt(); void refresh(); void workspace.session.refresh(true); } };
     document.addEventListener('visibilitychange', resume);
     void refresh();
-    return () => { alive = false; request++; stop(); unsubscribe(); window.clearInterval(clock); document.removeEventListener('visibilitychange', resume); };
+    return () => { alive = false; request++; locationRequest++; cancelPendingLocation(); stop(); unsubscribe(); window.clearInterval(clock); document.removeEventListener('visibilitychange', resume); };
   });
   $effect(() => {
     if (!sampled || document.visibilityState === 'hidden') ledger.interrupt();
@@ -86,6 +101,29 @@
   function statistics() {
     workspace.statistics = { kind: 'global', plane: 'flow', query: '', offset: 0 };
     navigation.open('traffic');
+  }
+  async function visitCurrent(kind: 'profile' | 'nodes') {
+    if (locating || loading) return;
+    const original = locationSnapshot;
+    if (!original) { feedback = '当前定位身份未确认，请重新检查；不会按名称选择替代对象。'; return; }
+    const tab = navigation.activeTab, key = navigation.current?.key ?? null, id = ++locationRequest;
+    const selection = ready && guiState.proxyMode?.currentMode === 'global' && currentTarget
+      ? { kind: 'global' as const, rootTag: currentTarget }
+      : ready && guiState.proxyMode?.currentMode === 'direct' ? { kind: 'direct' as const }
+      : ready && guiState.proxyMode?.currentMode === 'rule' ? { kind: 'rule' as const }
+      : { kind: 'unconfirmed' as const };
+    const modeIdentity=JSON.stringify([ready,guiState.proxyMode?.currentMode,currentTarget]);
+    locating = true;
+    try {
+      const fresh = await getMobileLocationSnapshot();
+      if (!alive || id !== locationRequest || navigation.activeTab !== tab || (navigation.current?.key ?? null) !== key) return;
+      if (!sameLocationRead(original, fresh)) { feedback = '定位身份已变化，请重新检查；不会打开同名替代对象。'; return; }
+      if(kind==='nodes' && modeIdentity!==JSON.stringify([ready,guiState.proxyMode?.currentMode,currentTarget])){feedback='模式或出口已变化，请重新查看当前出口。';return;}
+      if (kind === 'profile') navigation.visit('configuration', 'profiles', { kind: 'profile', profileId: fresh.profile?.id ?? null, binding: fresh.binding });
+      else if (fresh.binding) navigation.visit('nodes', 'nodes', { kind: 'nodes', binding: fresh.binding, selection });
+      else feedback = fresh.reason ?? '当前没有可定位配置，请先添加或选择配置。';
+    } catch { if (alive && id === locationRequest) feedback = '定位读取失败，请重试；原页面和草稿保留。'; }
+    finally { if (alive && id === locationRequest) locating = false; }
   }
   function chooseOutlet() {
     outletTarget = '';
@@ -141,8 +179,8 @@
   <section class="card" aria-label="代理模式"><span class="label">代理模式</span><div class="modes">{#each [{value:'rule',label:'规则'},{value:'direct',label:'直连'},{value:'global',label:'全局'}] as mode}<button data-slot="surface-button" class:chosen={ready && guiState.proxyMode?.currentMode === mode.value} aria-pressed={ready && guiState.proxyMode?.currentMode === mode.value} disabled={busy || !modes.includes(mode.value as 'rule'|'direct'|'global')} onclick={() => void setMode(mode.value as 'rule'|'direct'|'global')}>{mode.label}</button>{/each}</div>{#if !modes.length}<p class="hint">内核控制能力待确认；本地配置仍可查看和编辑。</p>{/if}</section>
   {#if ready && guiState.proxyMode?.currentMode === 'global'}<button data-slot="surface-button" class="card entry" onclick={chooseOutlet}><span><span class="label">全局出口</span><strong>{currentTarget ?? '请重新选择出口'}</strong></span><ChevronRight size={18}/></button>{/if}
   {#if feedback}<p role="status" class="hint">{feedback}</p>{/if}
-  <button data-slot="surface-button" class="card entry" onclick={() => navigation.selectTab('configuration')}><span><span class="label">当前配置</span><strong>{activeProfile?.name ?? (loading ? '加载中…' : '添加配置')}</strong></span><ChevronRight size={18}/></button>
-  <button data-slot="surface-button" class="card entry" onclick={() => navigation.selectTab('nodes')}><span><span class="label">当前有效出口</span><strong>{ready && guiState.proxyMode?.currentMode === 'direct' ? '直连' : effective?.leafTag ?? '—'}</strong>{#if effective?.groupPath.length}<small>{effective.groupPath.join(' → ')} → {effective.leafTag ?? '待确认'}</small>{/if}</span><ChevronRight size={18}/></button>
+  <button data-slot="surface-button" class="card entry" disabled={loading || locating} onclick={() => void visitCurrent('profile')}><span><span class="label">当前配置</span><strong>{locationSnapshot?.profile?.name ?? activeProfile?.name ?? (loading ? '加载中…' : '添加配置')}</strong></span><ChevronRight size={18}/></button>
+  <button data-slot="surface-button" class="card entry" disabled={loading || locating} onclick={() => void visitCurrent('nodes')}><span><span class="label">当前有效出口</span><strong>{!ready ? '—' : guiState.proxyMode?.currentMode === 'direct' ? '直连' : guiState.proxyMode?.currentMode === 'rule' ? '按规则选择出口' : effective?.leafTag ?? '未确认'}</strong>{#if effective?.groups.length}<small>{effective.groups.join(' → ')} → {effective.leafTag ?? '待确认'}</small>{/if}{#if ready && guiState.proxyMode?.currentMode === 'rule'}<small>不同连接按规则选择；查看当前配置的策略与节点。</small>{/if}</span><ChevronRight size={18}/></button>
   <div class="cumulative"><span>累计上传 {formatBytes(counters.up)}</span><span>累计下载 {formatBytes(counters.down)}</span></div>
   {#if row && (!sampled || view.error)}<p class="hint">累计快照采样于 {sampleTime}；实时速率待核对。</p>{/if}
   {#if view.error}<p class="error" role="alert">{getAppErrorMessage(view.error, '统计读取中断')}</p>{/if}

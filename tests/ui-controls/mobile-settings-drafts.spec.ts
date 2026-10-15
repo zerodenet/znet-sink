@@ -15,15 +15,15 @@ async function openSettings(page: Page) {
 async function openForm(page: Page, form: Form) {
   await page.getByRole('button', { name: form.entry, exact: true }).click();
   if (form.kind === 'dns') await expect(page.getByRole('radio', { name: 'Fake-IP', exact: true })).toBeVisible();
-  else await expect(page.getByRole(form.kind === 'network' ? 'spinbutton' : 'textbox', { name: form.field, exact: true })).toHaveValue(form.original);
+  else await expect(page.getByRole('textbox', { name: form.field, exact: true })).toHaveValue(form.original);
 }
 async function edit(page: Page, form: Form) {
   if (form.kind === 'dns') await page.getByRole('radio', { name: 'Fake-IP', exact: true }).click();
-  else await page.getByRole(form.kind === 'network' ? 'spinbutton' : 'textbox', { name: form.field, exact: true }).fill(form.value);
+  else await page.getByRole('textbox', { name: form.field, exact: true }).fill(form.value);
 }
 async function retained(page: Page, form: Form) {
   if (form.kind === 'dns') await expect(page.getByRole('radio', { name: 'Fake-IP', exact: true })).toHaveAttribute('aria-checked', 'true');
-  else await expect(page.getByRole(form.kind === 'network' ? 'spinbutton' : 'textbox', { name: form.field, exact: true })).toHaveValue(form.value);
+  else await expect(page.getByRole('textbox', { name: form.field, exact: true })).toHaveValue(form.value);
 }
 const nativeBack = (page: Page) => page.evaluate(() => window.dispatchEvent(new CustomEvent('mobile:back', { cancelable: true })));
 async function controls(page: Page, action: 'hold' | 'fail' | 'release' | 'source') {
@@ -36,7 +36,12 @@ async function controls(page: Page, action: 'hold' | 'fail' | 'release' | 'sourc
   }, action);
 }
 const writes = (page: Page) => page.evaluate(() => (window as unknown as { settingsDraftFixture: { writes: number } }).settingsDraftFixture.writes);
-const save = (page: Page, form: Form) => page.getByRole('button', { name: form.kind === 'dns' || form.kind === 'tun' ? '保存并应用' : '应用', exact: true });
+async function save(page:Page,form:Form){
+  if(form.kind==='network'){
+    await page.getByRole('button',{name:'预览本地网络设置',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'确认仅保存本地',exact:true}).click();
+  }else await page.getByRole('button',{name:form.kind==='dns'||form.kind==='tun'?'保存并应用':'应用',exact:true}).click();
+}
 for (const form of cases) {
   test(`${form.entry}: native return and bottom tab require explicit discard and cancellation keeps the draft`, async ({ page }) => {
     await openSettings(page); await openForm(page, form); await edit(page, form);
@@ -60,22 +65,30 @@ for (const form of cases) {
     await expect(nav.getByRole('button', { name: '节点', exact: true })).toHaveAttribute('aria-current', 'page');
     await nav.getByRole('button', { name: '更多', exact: true }).click();
     if (form.kind === 'dns') await expect(page.getByRole('radio', { name: 'Fake-IP', exact: true })).toHaveAttribute('aria-checked', 'false');
-    else await expect(page.getByRole(form.kind === 'network' ? 'spinbutton' : 'textbox', { name: form.field, exact: true })).toHaveValue(form.original);
+    else await expect(page.getByRole('textbox', { name: form.field, exact: true })).toHaveValue(form.original);
     expect(await writes(page)).toBe(0);
   });
   test(`${form.entry}: submission blocks navigation without cancellation/replay and confirmed offline save clears the guard`, async ({ page }) => {
     await openSettings(page); await openForm(page, form); await edit(page, form); await controls(page, 'hold');
-    await save(page, form).click(); await expect.poll(() => writes(page)).toBe(1);
+    await save(page, form); await expect.poll(() => writes(page)).toBe(1);
     expect(await nativeBack(page)).toBe(false);
-    await expect(page.getByRole('heading', { name: '设置正在提交' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '放弃修改', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: '继续编辑', exact: true }).click();
-    await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '节点', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '设置正在提交' })).toBeVisible();
+    if(form.kind==='network'){
+      await expect(page.getByRole('dialog').getByRole('heading',{name:'确认仅保存本地网络设置'})).toBeVisible();
+      await expect(page.getByRole('button',{name:'返回编辑网络设置',exact:true})).toBeDisabled();
+      await page.getByRole('navigation',{name:'主导航'}).getByRole('button',{name:'节点',exact:true}).click({force:true});
+      await expect(page.getByRole('dialog').getByRole('heading',{name:'确认仅保存本地网络设置'})).toBeVisible();
+    }else{
+      await expect(page.getByRole('heading', { name: '设置正在提交' })).toBeVisible();
+      await expect(page.getByRole('button', { name: '放弃修改', exact: true })).toHaveCount(0);
+      await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+      await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '节点', exact: true }).click();
+      await expect(page.getByRole('heading', { name: '设置正在提交' })).toBeVisible();
+    }
     await controls(page, 'release');
     await expect(page.getByRole('heading', { name: '设置正在提交' })).toHaveCount(0);
     await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText(form.entry);
-    await expect(page.getByRole('button', { name: form.kind === 'dns' ? '已保存，待内核' : '已保存，启动后生效', exact: true })).toBeVisible();
+    if(form.kind==='network')await expect(page.getByText('已确认本地网络覆盖，待应用；内核、监听、系统代理与 VPN 未改变。',{exact:true})).toBeVisible();
+    else await expect(page.getByRole('button', { name: form.kind === 'dns' ? '已保存，待内核' : '已保存，启动后生效', exact: true })).toBeVisible();
     expect(await writes(page)).toBe(1);
     expect(await nativeBack(page)).toBe(false);
     await expect(page.getByRole('heading', { name: '放弃未保存的设置？' })).toHaveCount(0);
@@ -83,7 +96,8 @@ for (const form of cases) {
   });
   test(`${form.entry}: failed/unknown save preserves input and guard, never automatically repeats`, async ({ page }) => {
     await openSettings(page); await openForm(page, form); await edit(page, form); await controls(page, 'fail');
-    await save(page, form).click(); await expect(page.getByRole('alert').filter({ hasText: '原设置提交结果未确认' })).toBeVisible();
+    await save(page, form); if(form.kind==='network')await expect(page.getByText('原网络保存或保存后核对未确认；原操作保留，不会重复提交。',{exact:true})).toBeVisible();
+    else await expect(page.getByRole('alert').filter({ hasText: '原设置提交结果未确认' })).toBeVisible();
     await retained(page, form); expect(await nativeBack(page)).toBe(false);
     await expect(page.getByRole('heading', { name: '放弃未保存的设置？' })).toBeVisible();
     await page.getByRole('button', { name: '继续编辑', exact: true }).click(); await retained(page, form);

@@ -10,7 +10,7 @@
   let { overview, nodes, configuration }: { overview: Snippet; nodes: Snippet; configuration: Snippet } = $props();
   const navigation = provideMobileNavigation();
   const tabs = [{ id: 'overview', label: '概览', icon: CircleGauge }, { id: 'nodes', label: '节点', icon: Waypoints }, { id: 'configuration', label: '配置', icon: Layers3 }, { id: 'more', label: '更多', icon: Grid2X2 }] as const;
-  const titles: Record<MobilePage, string> = { traffic: '流量统计', endpoints: '端点', connections: '连接', packet: 'Packet 路径', plugins: '插件', logs: '日志', diagnostics: '诊断', kernel: '内核管理', updates: '客户端升级', settings: '设置', about: '关于', tun: 'VPN 与接管', dns: 'DNS', network: '运行网络', probes: '节点延迟测试', workspace: '配置工作区', migration: '设置迁移', data: '本地数据', rules: '路由与规则集', profiles: '配置', subscriptions: '订阅' };
+  const titles: Record<MobilePage, string> = { traffic: '流量统计', endpoints: '端点', connections: '连接', packet: 'Packet 路径', plugins: '插件', logs: '日志', diagnostics: '诊断', kernel: '内核管理', updates: '客户端升级', settings: '设置', about: '关于', tun: 'VPN 与接管', dns: 'DNS', network: '运行网络', probes: '节点延迟测试', workspace: '配置工作区', migration: '设置迁移', data: '本地数据', rules: '路由与规则集', profiles: '配置', subscriptions: '订阅', nodes: '节点' };
   const visited = new SvelteSet<MobileTab>(['overview']);
   let shell: HTMLElement;
   function selectTab(tab: MobileTab) {
@@ -81,6 +81,7 @@
   });
 </script>
 <div class="mobile-shell" bind:this={shell} data-platform={mobilePlatform.runtimePlatform} data-responsive-preview={mobilePlatform.responsivePreview}>
+  {#if navigation.returnNotice}<p class="return-notice" role="status">{navigation.returnNotice}</p>{/if}
   <div class="mobile-content">
     {#each tabs as tab}
       {#if visited.has(tab.id)}
@@ -91,7 +92,7 @@
           {#each navigation.stacks[tab.id] as route (route.key)}
             <div class="secondary-pane" class:inactive={route.key !== navigation.stacks[tab.id].at(-1)?.key} inert={route.key !== navigation.stacks[tab.id].at(-1)?.key}>
               <header class="secondary-header"><button data-slot="surface-button" aria-label="返回" onclick={back}><ChevronLeft size={22} aria-hidden="true" /></button><h1>{titles[route.page]}</h1></header>
-              <div class="secondary-content"><MobileSecondary page={route.page} routeKey={route.key} tab={tab.id} trafficVisit={route.trafficVisit} /></div>
+              <div class="secondary-content"><MobileSecondary page={route.page} routeKey={route.key} tab={tab.id} trafficVisit={route.trafficVisit} locationTarget={route.locationTarget} origin={route.origin} /></div>
             </div>
           {/each}
         </section>
@@ -105,6 +106,7 @@
 <style>
   .mobile-shell { display:flex; flex-direction:column; height:100vh; height:100dvh; width:100%; min-width:0; overflow:hidden; padding-top:env(safe-area-inset-top,0px); background:var(--background); color:var(--foreground); }
   .mobile-content { margin-left:env(safe-area-inset-left,0px); margin-right:env(safe-area-inset-right,0px); flex:1; min-height:0; position:relative; overflow:hidden; }
+  .return-notice { margin:0; padding:8px 14px; font-size:.875rem; overflow-wrap:anywhere; color:var(--muted-foreground); flex-shrink:0; }
   .tab-pane,.root-pane,.secondary-pane { position:absolute; inset:0; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
   .inactive { display:none; }
   .overview-root { overflow:auto; flex:1; min-height:0; padding:12px 14px 24px; }

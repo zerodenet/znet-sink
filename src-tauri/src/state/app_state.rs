@@ -48,6 +48,7 @@ pub struct AppState {
     route_editor: crate::configuration::route_editor::Owner,
     dns_migration: crate::configuration::dns_migration::Owner,
     rule_migration: crate::configuration::rule_migration::Owner,
+    runtime_network: crate::configuration::runtime_network::Owner,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -128,6 +129,7 @@ impl AppState {
             route_editor: crate::configuration::route_editor::Owner::default(),
             dns_migration: crate::configuration::dns_migration::Owner::default(),
             rule_migration: crate::configuration::rule_migration::Owner::default(),
+            runtime_network: crate::configuration::runtime_network::Owner::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -287,6 +289,10 @@ impl AppState {
 
     pub(crate) fn rule_migration(&self) -> &crate::configuration::rule_migration::Owner {
         &self.rule_migration
+    }
+
+    pub(crate) fn runtime_network(&self) -> &crate::configuration::runtime_network::Owner {
+        &self.runtime_network
     }
 
     pub(crate) fn commit_diagnostic_capture(

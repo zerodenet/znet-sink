@@ -4,18 +4,18 @@ import { sameProbeScope } from '$lib/features/nodes/scope';
 export { sameProbeScope, controlScope } from '$lib/features/nodes/scope';
 import { filterNodes } from '$lib/components/tabs/nodes-view-model';
 
-export function mobileGroups(groups: PolicyGroup[], nodes: ProxyNode[], query: string) {
+export function mobileGroups(groups: PolicyGroup[], nodes: ProxyNode[], query: string, revealTags?: ReadonlySet<string>) {
   const term = query.trim().toLowerCase();
   return groups.flatMap(group => {
     const nameMatches = group.name.toLowerCase().includes(term);
-    const members = filterNodes({ allNodes: nodes, groups, selectedGroup: group.name, query: nameMatches ? '' : term });
-    return !term || nameMatches || members.length ? [{ group, members }] : [];
+    const members = filterNodes({ allNodes: nodes, groups, selectedGroup: group.name, query: nameMatches ? '' : term, revealTags });
+    return !term || nameMatches || members.length || revealTags?.has(group.name) ? [{ group, members }] : [];
   });
 }
-export function ungroupedNodes(groups: PolicyGroup[], nodes: ProxyNode[], query: string) {
+export function ungroupedNodes(groups: PolicyGroup[], nodes: ProxyNode[], query: string, revealTags?: ReadonlySet<string>) {
   const grouped = new Set(groups.flatMap(group => group.outbounds.map(member => member.tag)));
   const groupNames = new Set(groups.map(group => group.name));
-  return filterNodes({ allNodes: nodes, groups, selectedGroup: null, query: query.trim().toLowerCase() })
+  return filterNodes({ allNodes: nodes, groups, selectedGroup: null, query: query.trim().toLowerCase(), revealTags })
     .filter(node => !grouped.has(node.tag) && !groupNames.has(node.tag));
 }
 /** Failed targets remain fixed to the original job; no new group members join a retry. */

@@ -4,12 +4,16 @@
   import { getNativeDocumentCapabilities, pickNativeDocument } from '$lib/services/native-documents';
   import NativeProfileExport from '$lib/components/mobile/NativeProfileExport.svelte';
   import ProfileRemovalDialog from '$lib/components/mobile/ProfileRemovalDialog.svelte';
-  import { useMobileNavigation } from '$lib/features/mobile/context';
+  import { optionalMobileRoute, useMobileNavigation } from '$lib/features/mobile/context';
+  import { getMobileLocationSnapshot } from '$lib/features/mobile/location-client';
+  import { locationSnapshotMatches, sameLocationRead, type MobileLocationTarget } from '$lib/features/mobile/location';
   import { ProfileEditor } from '$lib/features/profile-editor/state';
   import { Textarea } from '$lib/components/ui/textarea';
   import { open as openFile } from '@tauri-apps/plugin-dialog';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
+  import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { getAppErrorMessage, handleAppError } from '$lib/services/core';
   import { listProxyConfigs, setActiveProxyConfig } from '$lib/services/config';
   import { getProfileEditorSnapshot, validateProfileEditor, saveProfileEditor, readProfileEditorFile } from '$lib/features/profile-editor/client';
@@ -20,8 +24,16 @@
   import { AlertTriangle, FolderOpen, Plus, Search, Trash2 } from '@lucide/svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
   import * as Dialog from '$lib/components/ui/dialog';
-  let { mobile = false }: {mobile?:boolean} = $props();
+  let { mobile = false, locationTarget }: {mobile?:boolean;locationTarget?:MobileLocationTarget} = $props();
   const mobileNavigation=untrack(()=>mobile ? useMobileNavigation() : null);
+  const routeOwner=untrack(()=>optionalMobileRoute());
+  let locationReleased=$state(false),locationConfirmed=$state(false),locationError=$state<string|null>(null),locationChecking=$state(false);
+  const profileLocation=$derived(!locationReleased && locationTarget?.kind==='profile' ? locationTarget : null);
+  let locationReadReason=$state<string|null>(null);
+  let profileRoot:HTMLDivElement;
+  let alive=true,readSequence=0,locateFrame=0,locationActionSequence=0;
+  let locatedProfileKey='',wasLocationActive=false;
+  const ownPageActive=()=>!!mobileNavigation && mobileNavigation.activeTab===(routeOwner?.tab??'configuration') && (routeOwner ? mobileNavigation.current?.key===routeOwner.key : !mobileNavigation.current);
   const editor=new ProfileEditor({snapshot:getProfileEditorSnapshot,validate:validateProfileEditor,save:saveProfileEditor},value=>{editorView=value;},()=>{localNotice='原本地保存结果已返回，当前草稿未被替换；请核对本地版本。';});
   let editorView=$state(editor.view);
   let configs=$state<ProxyConfigProfile[]>([]),loading=$state(true),loadError=$state<string|null>(null);
@@ -34,20 +46,55 @@
   const dirty=$derived(editorView.name!==editorView.originalName || editorView.sourceJson!==editorView.originalJson);
   const canEdit=$derived(store.isActionOperable('proxyConfig.upsert'));
   const canRemove=$derived(store.isActionOperable('proxyConfig.remove'));
-  const busy=$derived(saving || activatingId!==null || deleteOpen);
+  const busy=$derived(saving || activatingId!==null || deleteOpen || locationChecking || (!!profileLocation && (loading || !locationConfirmed)));
   const canValidate=$derived(canEdit && !!editorView.binding && !editorView.readOnlyReason && !['loading','saving','validating','unknown','error'].includes(editorView.phase));
   const canSave=$derived(canValidate && !editorView.readingFile && !!editorView.name.trim() && !!editorView.sourceJson.trim());
   const filteredConfigs=$derived(configs.filter(item=>[item.name,item.id,item.path??''].join(' ').toLowerCase().includes(query.trim().toLowerCase())));
   const activeProfile=$derived(configs.find(item=>item.active)??null);
   onMount(()=>{
-    let alive=true;
+    const unregister=mobileNavigation?.guardBeforeLeave(()=>{if(ownPageActive())locationActionSequence++;return true;});
+    const changed=proxyConfigSignal.onActiveChanged(()=>{if(profileLocation)void refresh();});
+    const event=mobile && profileLocation ? listen('client-core:updated',()=>{void refresh();}).catch(()=>()=>{}):null;
+    const resume=()=>{if(document.visibilityState==='visible' && profileLocation)void refresh();};
+    document.addEventListener('visibilitychange',resume);
     if(mobilePlatform.runtimePlatform!=='desktop')void getNativeDocumentCapabilities().then(value=>{if(alive){nativeFilesAvailable=value.available;nativeFilesReason=value.reason??'取消文件选择会保留草稿。';}}).catch(()=>{if(alive)nativeFilesReason='系统文件适配不可用，仍可粘贴 JSON。';});
-    return()=>{alive=false;editor.dispose();};
+    return()=>{alive=false;readSequence++;locationActionSequence++;unregister?.();changed();void event?.then(stop=>stop());document.removeEventListener('visibilitychange',resume);cancelAnimationFrame(locateFrame);editor.dispose();};
   });
-  async function refresh(){loading=true;loadError=null;try{configs=await listProxyConfigs();}catch(error){loadError=getAppErrorMessage(error,'加载代理配置失败');}finally{loading=false;}}
-  function openCreate(){if(busy)return;editingId=null;selectedProfile=null;editorTitle='新建代理配置';discardEditor=false;showEditor=true;void editor.open();}
-  function openEdit(profile:ProxyConfigProfile){if(busy)return;editingId=profile.id;selectedProfile=profile;editorTitle='配置原文';discardEditor=false;showEditor=true;void editor.open(profile.id);}
-  $effect(()=>{if(!mobileNavigation || !showEditor)return;return mobileNavigation.guardBeforeLeave(next=>{if(!showEditor)return true;if(saving){pendingNavigation=null;discardEditor=true;return false;}if(dirty || editorView.phase==='unknown'){pendingNavigation=next;discardEditor=true;return false;}showEditor=false;editor.close();return true;});});
+  async function refresh(){
+    const sequence=++readSequence,target=profileLocation;
+    loading=true;loadError=null;
+    try{
+      const before=target?await getMobileLocationSnapshot():null;
+      const next=await listProxyConfigs();
+      const after=target?await getMobileLocationSnapshot():null;
+      if(!alive || sequence!==readSequence)return;
+      configs=next;
+      locationReadReason=after?.reason??null;
+      locationConfirmed=!target || (!!before && !!after && sameLocationRead(before,after) && locationSnapshotMatches(target,before) && locationSnapshotMatches(target,after)
+        && (target.profileId===null || next.some(p=>p.id===target.profileId && p.active)));
+      locationError=target && !locationConfirmed?'定位身份已变化；原目标仅供历史核对，请浏览最新列表。':null;
+    }catch(error){if(alive && sequence===readSequence){loadError=getAppErrorMessage(error,'加载代理配置失败');if(target){locationConfirmed=false;locationError='定位读取失败；不会按名称打开替代配置。';}}}
+    finally{if(alive && sequence===readSequence)loading=false;}
+  }
+  async function ensureLocated(){
+    const target=profileLocation;if(!target)return true;if(!locationConfirmed || locationChecking)return false;
+    const sequence=++locationActionSequence,active=ownPageActive();
+    locationChecking=true;
+    try{const fresh=await getMobileLocationSnapshot();if(!alive || sequence!==locationActionSequence || !active || !ownPageActive())return false;if(!locationSnapshotMatches(target,fresh)){locationConfirmed=false;locationError='定位身份已变化；原目标仅供历史核对，请浏览最新列表。';return false;}return true;}
+    catch{if(alive){locationConfirmed=false;locationError='定位读取失败；不会按名称打开替代配置。';}return false;}
+    finally{if(alive)locationChecking=false;}
+  }
+  async function openCreate(){if(busy || !await ensureLocated())return;editingId=null;selectedProfile=null;editorTitle='新建代理配置';discardEditor=false;showEditor=true;void editor.open();}
+  async function openEdit(profile:ProxyConfigProfile){if(busy || !await ensureLocated())return;editingId=profile.id;selectedProfile=profile;editorTitle='配置原文';discardEditor=false;showEditor=true;void editor.open(profile.id);}
+  $effect(()=>{if(!mobileNavigation || !showEditor)return;return mobileNavigation.guardBeforeLeave(next=>{if(!showEditor || !ownPageActive())return true;if(saving){pendingNavigation=null;discardEditor=true;return false;}if(dirty || editorView.phase==='unknown'){pendingNavigation=next;discardEditor=true;return false;}showEditor=false;editor.close();return true;});});
+  $effect(()=>{
+    if(!profileLocation?.profileId || !locationConfirmed || !ownPageActive() || !profileRoot || loading)return;
+    const id=profileLocation.profileId,key=`${profileLocation.binding?.binding}:${id}`;
+    if(locatedProfileKey===key)return;
+    locateFrame=requestAnimationFrame(()=>{if(!alive || !ownPageActive())return;const row=[...profileRoot.querySelectorAll<HTMLElement>('[data-profile-id]')].find(e=>e.dataset.profileId===id);if(row){row.scrollIntoView({block:'nearest'});row.querySelector<HTMLElement>('.row-open')?.focus({preventScroll:true});locatedProfileKey=key;}});
+    return()=>cancelAnimationFrame(locateFrame);
+  });
+  $effect(()=>{const active=!!profileLocation && ownPageActive();if(active && !wasLocationActive && !loading)untrack(()=>void refresh());wasLocationActive=active;});
   $effect(()=>{if(discardEditor && !saving && pendingNavigation===null && !dirty && editorView.phase!=='unknown')discardEditor=false;});
   function discardEditorDraft(){if(saving)return;discardEditor=false;showEditor=false;editor.close();const next=pendingNavigation;pendingNavigation=null;next?.();}
   function closeEditor(){if(saving){discardEditor=true;return;}if(dirty || editorView.phase==='unknown'){pendingNavigation=null;discardEditor=true;return;}showEditor=false;editor.close();}
@@ -58,9 +105,9 @@
   async function handleSave(){if(!canSave)return;if(await editor.save()){localNotice='已保存，待应用；当前选择和内核运行确认分别核对。';await refresh();}}
   function openWorkspace(){if(saving)return;if(showEditor && dirty){pendingNavigation=openWorkspace;discardEditor=true;return;}showEditor=false;editor.close();if(mobileNavigation)mobileNavigation.open('workspace');else{store.settingsSection='config';store.activeTab='settings';}}
   function openSource(){if(saving)return;showEditor=false;editor.close();const page=selectedProfile?.managedSource?'plugins':'subscriptions';if(mobileNavigation)mobileNavigation.open(page);else store.activeTab=page;}
-  function requestRemove(profile:ProxyConfigProfile){if(!canRemove || busy)return;deleteTarget=profile;deleteOpen=true;}
+  async function requestRemove(profile:ProxyConfigProfile){if(!canRemove || busy || !await ensureLocated())return;deleteTarget=profile;deleteOpen=true;}
   async function profileRemoved(){if(deleteTarget?.id===editingId){showEditor=false;editor.close();}deleteTarget=null;deleteOpen=false;await refresh();await guiState.refreshNodeStateAfterConfigChange();}
-  async function handleSetActive(id:string){if(!canEdit || busy)return;activatingId=id;try{await setActiveProxyConfig(id);await refresh();await guiState.refreshNodeStateAfterConfigChange();}catch(error){handleAppError(error,'切换当前代理配置失败');}finally{activatingId=null;}}
+  async function handleSetActive(id:string){if(!canEdit || busy || !await ensureLocated())return;activatingId=id;try{await setActiveProxyConfig(id);await refresh();await guiState.refreshNodeStateAfterConfigChange();}catch(error){handleAppError(error,'切换当前代理配置失败');}finally{activatingId=null;}}
   function editorDate(value:string|null){if(!value)return '未提供';const n=BigInt(value);return n<=8640000000000000n ? new Date(Number(n)).toLocaleString() : '时间超出可显示范围';}
   function formatDate(value:number){return new Intl.DateTimeFormat('zh-CN',{dateStyle:'medium',timeStyle:'short'}).format(value);}
   function managedPluginLabel(pluginId:string){if(pluginId==='org.zerodenet.connect.znet-sink')return 'Connect';const segment=pluginId.split('.').filter(Boolean).at(-1)??pluginId;return segment.charAt(0).toUpperCase()+segment.slice(1);}
@@ -68,7 +115,8 @@
   $effect(() => { refresh(); });
 </script>
 
-<div class="profiles-root animate-fade-in">
+<div class="profiles-root animate-fade-in" bind:this={profileRoot}>
+  {#if profileLocation}<section class="location-notice" aria-label="概览配置定位"><strong>定位当前配置</strong><p role="status">{locationError ?? (loading ? '正在核对原配置身份…' : profileLocation.profileId ? `仅定位配置 ID ${profileLocation.profileId}；不按名称选择或启用。` : locationReadReason ?? '未取得可定位当前配置；显示最新列表，可自行选择或添加。')}</p><Button variant="outline" onclick={()=>{locationReleased=true;locationConfirmed=false;locationError=null;void refresh();}}>浏览最新配置列表</Button></section>{/if}
   <div class="toolbar">
     <div class="toolbar-top">
       <div class="title-block">
@@ -122,7 +170,7 @@
       {#if mobile && !guiState.connection?.coreAvailable}<p class="local-material-note" role="status">当前显示本地配置。内核运行态未确认；已保存的材料待应用，不代表 VPN 已接管。</p>{/if}
       <div class="config-list">
         {#each filteredConfigs as config (config.id)}
-          <div class="config-row">
+          <div class="config-row" data-profile-id={config.id} class:location-target={locationConfirmed && profileLocation?.profileId===config.id}>
             <button data-slot="surface-button"
               type="button"
               class="row-open"
@@ -224,6 +272,9 @@
 <Dialog.Root bind:open={discardEditor}><Dialog.Content><Dialog.Header><Dialog.Title>{saving ? '配置正在保存' : editorView.phase==='unknown' ? '关闭结果未确认的编辑器？' : '放弃未保存的修改？'}</Dialog.Title><Dialog.Description>{saving ? '原保存操作仍在等待结果。不会取消、重放或在返回后自动离开。' : editorView.phase==='unknown' ? '放弃当前草稿并关闭，原本地保存结果仍未确认，不会撤回或重放。' : '配置正文与名称尚未保存。继续编辑可保留当前草稿；放弃只关闭编辑器。'}</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={()=>{discardEditor=false;pendingNavigation=null;}}>继续编辑</Button>{#if !saving}<Button variant="destructive" onclick={discardEditorDraft}>放弃修改</Button>{/if}</Dialog.Footer></Dialog.Content></Dialog.Root>
 
 <style>
+  .location-notice { padding:12px; margin-bottom:8px; border:1px solid var(--border); border-radius:9px; overflow-wrap:anywhere; }
+  .location-notice p { font-size:.875rem; color:var(--muted-foreground); }
+  .config-row.location-target { outline:2px solid var(--ring); outline-offset:-2px; }
   .profile-editor-form {display:grid;gap:16px;min-width:0;}
   .profile-editor-footer {display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;min-width:0;}
   .profile-editor-facts {font-size:12px;overflow-wrap:anywhere;display:grid;gap:4px;}

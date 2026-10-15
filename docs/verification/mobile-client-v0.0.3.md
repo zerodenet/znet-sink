@@ -923,3 +923,38 @@ Cache 只靠 File close 释放锁；[Rust 文件锁契约](https://doc.rust-lang
 仅将该点击与既有可见断言限定到标题精确为“设置正在提交”的 dialog；完整 save-once、草稿、返回及 saved_pending_apply 断言保留。
 不增加 sleep、retry、timeout，不改变产品逻辑。正确复用4177的本地 Chromium 定点真实 1/1 通过（0失败/重试/跳过），
 日志 `/tmp/reference-migration-dialog-locator-chromium.log`。本地无 WebKit，最终双引擎按新 head CI 记录，不借451的重试结果。
+
+## 2026-10-15：概览对象定位与有限运行网络
+
+本批基线 `90557080d337258f956dea68a22ba8323b43e43c`，继续同一 Draft PR #46 → develop。
+契约见[概览定位与移动运行网络](../gui/mobile-location-network-v0.0.3.md)。
+A04新增只读公开目录binding及真实NodeScreen选择链，不读取正文或SQLite，不授予控制权限。
+跨底栏guarded visit保留原搜索、过滤、滚动、订阅分段、嵌套栈及草稿；返回精确来源。
+规则/直连/运行未确认分别表达，不借历史globalOutbound制造唯一叶子；同名、旧实例及导航ABA不重定位或执行。
+
+A12新增普通内嵌Zero上下文中的四字段窄预览/本地CAS：MTU、完整u64 UDP超时、既有监听IP和端口。
+TUN复用统一只读MTU，非回环LAN范围固定确认；没有监听不新建。Direct leaf地址族/物理出口保留真实只读值与工作区入口。
+旧未规范化覆盖、托管/保护/path-only或混合身份明确只读，不在网络保存中暗迁其它字段。
+来源schema只做typed投影，不打开规则集或GeoIP依赖。原owned文件回执、SQLite关系epoch与scope/session共同核对，保存仍待应用，无IPC/TUN/进程/系统代理操作。
+返回/前台只读刷新保留同binding脏草稿；变化后只读，明确放弃后才采用新来源。error禁编辑/预览，busy/unknown不替换原操作。
+
+完整locked workspace/all-features Rust：**1457 passed / 0 failed / 7 ignored，45组**；GUI **1183/0/5**。
+新增A04目录8及A12网络17共25项；包括实际磁盘/SQLite重开、零IPC、严格字段/u64、原文保留、ABA、未知及后来写入者。
+全目标workspace/all-feature check与fmt通过。完整Clippy按仓库标准通过，既有警告保留；额外尝试 `-D warnings` 因既有native-io/plugin及其它警告失败，不当成绿色证据。
+本批新增网络测试的default字段初始化警告已修，原17项再次实际通过，不压制lint或改变断言。
+完整 `pnpm verify:frontend` 通过，Svelte **0错误/0警告**及生产build通过。
+最终新增production Node **54/54**（导航13、身份19、网络22），0失败/跳过。
+实际相关Chromium **69/69**（新定位20/旧20，加新网络14/原设置15），0失败/重试/flaky/跳过。
+日志 `/tmp/mobile-location-browser-unconfirmed-final.log`、`/tmp/runtime-network-browser-resume.log`；fixture只提供明确宿主事实，不作设备成功证据。
+本地WebKit未安装，不下载或绕过；最终双引擎和新提交四组CI/七份artifact按实际head记录于同一PR。
+
+失败过程保留：初始Rust test compile误用另一owner私有test hook，修正为本域owner；其后1项原生schema fixture错误，修正为真实schema，没有放宽parser。
+legacy检查的MutexGuard引用类型错误修正后全目标通过。首轮前端声明次序及非交互tabindex产生2错误/1警告，修正为实际行按钮focus，最终0/0。
+A04早期失败包括配置按钮正则同时命中出口说明、离线过滤fixture错误使用会被保留的已选对象；限定实际按钮并采用真实未选离线节点，业务断言保持。
+实际概览异步定位ABA回归先失败，再补离开取消代次，同一反例及后续完整相关回归通过。
+A12旧三项网络草稿fixture误称存在监听，改为无监听来源事实；原草稿、返回、busy和保存断言保留通过。
+本地日志：`/tmp/mobile-location-network-{tests-candidate,network-tests-refined,check-final,fmt-refined,clippy-repo,clippy-refined,frontend-final,node-final}.log`。
+
+DNS rename、跨配置/托管引用迁移及完整网络条件编辑仍分别待办；不把本批称作整个A04/A12或移动端完成。
+原生VPN/core/宿主装配与Galaxy S8/iPhone验收继续后置，四项Android许可材料缺口保留。
+没有core、依赖、锁文件或版本变更，没有使用用户Mac、创建签名凭据、合并、发布或修改分支保护。

@@ -8,6 +8,8 @@ export default defineConfig({
   root: absolute('./'),
   plugins: [productComposition(), tailwindcss(), svelte({ configFile: false })],
   resolve: { alias: [
+    { find: '$lib/features/runtime-network/client', replacement: absolute('./runtime-network.ts') },
+    { find: '$lib/features/mobile/location-client', replacement: absolute('./mobile-location.ts') },
     { find: '$lib/services/settings-transfer', replacement: absolute('./settings-transfer.ts') },
     { find: '$lib/services/native-documents', replacement: absolute('./native-documents.ts') },
     { find: '$lib/features/route-editor/client', replacement: absolute('./route-editor.ts') },
