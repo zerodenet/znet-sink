@@ -21,7 +21,7 @@
 
 ## 控制、权限和失效
 
-控制通道最多64个排队请求，拒绝超量，不新增 probe/tool 业务队列。每个请求绑定实际 core_instance_id/config_revision，在串行分派点重新核对，实例或版本不符时拒绝；owner 从不暗中切到替代 Proxy。配置修改后的身份从真实 Engine 重读，停止回执也保留最后实际身份。新所有者使用新的内核实例，旧 handle 停止后不能对它执行命令。
+控制通道最多64个排队请求，拒绝超量，不新增 probe/tool 业务队列。每个请求绑定实际 core_instance_id/config_revision，在串行分派点重新核对，实例或版本不符时拒绝；owner 从不暗中切到替代 Proxy。配置修改后的身份从真实 Engine 重读，并在交付原命令回执、唤醒等待者之前发布；错误回执也遵循同一发布顺序，不假定失败意味着运行版本没有变化。发布只更新身份，不覆盖并发宿主停止意图。查询仍核对调用者固定身份，不自动换新身份或重放写命令。停止回执也保留最后实际身份。新所有者使用新的内核实例，旧 handle 停止后不能对它执行命令。
 
 本库是可信 native Rust API，AuthContext 由原生宿主校验并传入；该参数不是 guest/JS 自报的登录或授权凭据。它使用 zero-api 的 required_permission 和 AuthContext::allows 进行准入，与内核 IPC 命令的权限边界一致。公共 ProxyHandle::execute_acknowledged 没有 AuthContext/principal 参数，不假称向它传输了调用主体；可信调用者、平台权限、客户端 capability lease、授权撤销与结果交付检查仍须由现有宿主 bridge 组合。严禁直接将这些参数暴露为未鉴权 invoke。错误仅返回固定类别或 ApiErrorCode，不回显内核配置和错误正文。
 
@@ -59,3 +59,5 @@ cargo clippy --manifest-path src-tauri/crates/mobile-runtime/Cargo.toml --locked
 Linux 默认特性实际生命周期5项通过。主代理已执行真实 Android NDK check；固定 core 在 `zero-tun/src/lib.rs:165` 的不支持目标分支 `create() -> io::Result<impl TunDevice>` 报 E0282，错误分支没有可推断的具体 TunDevice 类型。即使不启用 TUN/额外协议，Proxy 的该无条件依赖也阻止当前 Android owner 构建（CORE-05）。客户端没有改写 core、Cargo cache 或 vendor 副本规避该错误；修复需在 core 通用目标构建边界协调，仍不代表 external TUN/protect 已完成。证据：`/tmp/embedded-mobile-runtime-android-check.log`。
 
 最终全特性 test、fmt/check/clippy、iOS 编译证据由 PR 验证报告分别记录。未完成实际 VpnService/PacketTunnelProvider 注册、跨进程 IPC 鉴权、外部 TUN、protect/bind、网络变化、TCP/UDP/DNS/Fake-IP 真机转发、签名发行或随包产品验收；iOS SDK 编译也不等于真 iPhone VPN 验收。
+
+命令回执发布顺序回归使用实际 Proxy 和自定义同步 waker，在 oneshot 唤醒调用者的瞬间检查真实更新后的身份；旧顺序可稳定失败。另以32次真实模式提交、当前身份查询、旧 revision 拒绝及明确拒绝后的原配置核对检查交付契约。它们不依赖串行测试调度，也不放宽 core_instance_id/config_revision 前置条件。

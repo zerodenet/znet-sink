@@ -312,3 +312,65 @@ async fn canceled_start_or_dropped_native_owner_still_requests_real_cleanup() {
     .unwrap();
     assert!(TcpListener::bind(("127.0.0.1", proxy_port)).is_ok());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acknowledged_round_trips_publish_identity_and_keep_exact_dispatch_preconditions() {
+    let mut owner = RuntimeOwner::start(
+        RuntimeConfig::parse(r#"{"route":{"rules":[],"final":{"type":"direct"}}}"#).unwrap(),
+    )
+    .await
+    .unwrap();
+    let handle = owner.control();
+    let admin = auth(vec![Permission::Admin]);
+    let read = auth(vec![Permission::Read]);
+    for mode in ["direct", "rule"].into_iter().cycle().take(32) {
+        let original = handle.status().identity.unwrap();
+        let receipt = handle
+            .command(
+                &original,
+                &admin,
+                command(serde_json::json!({"method":"mode.set","params":{"mode":mode}})),
+            )
+            .await
+            .unwrap();
+        assert!(receipt.accepted);
+        let current = handle.status().identity.unwrap();
+        assert_eq!(current.core_instance_id, original.core_instance_id);
+        assert!(current.config_revision > original.config_revision);
+        let QueryResponse::Runtime(runtime) = handle
+            .query(&current, &read, query(serde_json::json!({"runtime":{}})))
+            .await
+            .unwrap()
+        else {
+            panic!("wrong runtime reply")
+        };
+        assert_eq!(runtime.config_revision, current.config_revision);
+        assert_eq!(
+            handle
+                .query(&original, &read, query(serde_json::json!({"runtime":{}})))
+                .await
+                .unwrap_err(),
+            Error::StaleIdentity
+        );
+        assert!(matches!(
+            handle
+                .command(
+                    &current,
+                    &admin,
+                    command(serde_json::json!({"method":"mode.set","params":{"mode":"invalid"}})),
+                )
+                .await,
+            Err(Error::Api(_))
+        ));
+        assert_eq!(handle.status().identity.as_ref(), Some(&current));
+        let QueryResponse::Config(config) = handle
+            .query(&current, &admin, query(serde_json::json!({"config":{}})))
+            .await
+            .unwrap()
+        else {
+            panic!("wrong config reply")
+        };
+        assert_eq!(config.mode.kind, mode);
+    }
+    owner.shutdown().await.unwrap();
+}

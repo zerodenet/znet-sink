@@ -67,6 +67,16 @@ all-targets/all-features check、全特性 tests、clippy 及实际 license buil
 分类持久化沿用应用私有日志；它不提供对直接改磁盘主体的密码学真实性，也不用于控制
 内核、恢复旧任务或判断当前 VPN 健康。其他自由正文保持省略，仍有真机后台/分享等验收缺口。
 
+## CI 后续：运行所有者回执与身份发布顺序
+
+`00462b0` 的实际 isolated Proxy CI 揭示命令结果先唤醒调用方、再发布新 revision 的竞态；
+立即读取身份再查询时可能得到 StaleIdentity。客户端 owner 改为先发布实际操作后的身份，
+再交付原始成功或失败回执；保留正在关闭阶段、精确 CAS、原操作结果和不重放约束。
+同步回执 waker 的确定性测试在旧实现失败、修复后通过；新增真实 Proxy 的 32 次模式事务
+检查新身份、运行 revision、旧身份拒绝及失败命令不改变已确认模式。原 CI 用例另外重复
+200 次通过。isolated workspace fmt、all-targets/all-features check、7 项全特性测试和
+clippy（拒绝 warnings）通过；core 与锁文件未修改。原生 VPN 装配仍未启用。
+
 ## 本次代码
 
 - 原生 Android/iOS 或窄窗口采用四固定底栏。高级管理由移动投影保留，不修改

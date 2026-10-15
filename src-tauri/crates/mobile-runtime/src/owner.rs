@@ -200,8 +200,12 @@ async fn run(
                         // Drain an already-dispatched acknowledged operation;
                         // caller cancellation is not kernel cancellation.
                         let result=handle.execute_acknowledged(command).await.map_err(|error|Error::Api(error.code));
-                        let _=reply.send(result);
+                        // Publish the actual post-operation identity before waking
+                        // the caller. A receipt waiter may run on another executor
+                        // immediately inside send(), including for an error result.
+                        // Preserve a concurrent native owner's stopping phase.
                         shared.status.send_modify(|status| { status.identity=Some(Identity { core_instance_id:proxy.engine().core_instance_id().into(),config_revision:proxy.engine().config_revision() }); });
+                        let _=reply.send(result);
                     },
                 }
             },
@@ -236,4 +240,77 @@ async fn run(
     result
         .map(|_| final_identity)
         .map_err(|_| Error::CoreFailure)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::mpsc as channel,
+        task::{Context, Wake, Waker},
+        time::Duration,
+    };
+    use zero_api::{AuthContext, Permission};
+
+    struct ReceiptWake {
+        control: ControlHandle,
+        notified: channel::Sender<Identity>,
+    }
+    impl Wake for ReceiptWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            // This runs synchronously when the command receipt wakes its caller,
+            // rather than after the owner happens to get another scheduling turn.
+            let _ = self.notified.send(self.control.status().identity.unwrap());
+        }
+    }
+
+    #[test]
+    fn command_receipt_wake_observes_published_actual_revision() {
+        let ui = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut owner = ui
+            .block_on(RuntimeOwner::start(
+                RuntimeConfig::parse(r#"{"route":{"rules":[],"final":{"type":"direct"}}}"#)
+                    .unwrap(),
+            ))
+            .unwrap();
+        let control = owner.control();
+        let before = control.status().identity.unwrap();
+        let admin = AuthContext {
+            subject: Some("native-owner-ordering-test".into()),
+            permissions: vec![Permission::Admin],
+        };
+        let command = serde_json::from_value(serde_json::json!({
+            "method":"mode.set","params":{"mode":"direct"}
+        }))
+        .unwrap();
+        let mut pending = Box::pin(control.command(&before, &admin, command));
+        let (notified, receive) = channel::channel();
+        let waker = Waker::from(Arc::new(ReceiptWake {
+            control: control.clone(),
+            notified,
+        }));
+        // Hold a read guard only through the synchronous first poll. This forces
+        // identity publication to wait until the receipt receiver is registered;
+        // no watch guard is held across an await or a blocking receive.
+        let observed = owner.shared.status.borrow();
+        let first = pending.as_mut().poll(&mut Context::from_waker(&waker));
+        // The actual identity writer cannot finish while this read guard is
+        // held, so a correctly ordered receipt cannot already be available.
+        // Do not acquire another status read lock while a writer may be queued.
+        assert!(first.is_pending());
+        drop(observed);
+        let at_wake = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(at_wake.core_instance_id, before.core_instance_id);
+        assert!(at_wake.config_revision > before.config_revision);
+        let receipt = ui.block_on(pending).unwrap();
+        assert!(receipt.accepted);
+        ui.block_on(owner.shutdown()).unwrap();
+    }
 }
