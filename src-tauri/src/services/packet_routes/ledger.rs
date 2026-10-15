@@ -104,6 +104,41 @@ impl CloseLedger {
         }
         journal::save(path, &rows.values().cloned().collect::<Vec<_>>())
     }
+    /// Inspection does not refresh, initialize, repair, or publish state.
+    pub(super) fn inspect(&self) -> PacketLedgerInspection {
+        let (state, poisoned) = match self.state.lock() {
+            Ok(state) => (state, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        let mut report = match self.path() {
+            Ok(path) => journal::inspect(&path),
+            Err(_) => journal::report("io-unavailable", PacketLedgerEvidence::default()),
+        };
+        let override_code = if poisoned {
+            Some("state-unavailable")
+        } else if state.write_failed {
+            Some("publication-unconfirmed")
+        } else if self.process_id.is_none() {
+            Some("entropy-unavailable")
+        } else if state.rows.len() >= CAPACITY {
+            Some("capacity-reached")
+        } else if !state.rows.is_empty() && report.state == "not-initialized" {
+            Some("missing-initialized")
+        } else {
+            None
+        };
+        // Preserve a concrete disk fault as the primary diagnosis; process
+        // evidence stays independent and never makes malformed bytes trusted.
+        if report.state != "blocked" {
+            if let Some(code) = override_code {
+                report = journal::report(code, report.evidence);
+            }
+        }
+        report.publication_unconfirmed = state.write_failed;
+        report.in_memory_barrier_count = Some(state.rows.len());
+        report.new_close_blocked |= override_code.is_some();
+        report
+    }
     pub(super) fn view(&self) -> View {
         let mut state = match self.state.lock() {
             Ok(state) => state,

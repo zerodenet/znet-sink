@@ -122,23 +122,26 @@ fn original_confirmed_receipt_completes_only_local_candidate_after_reopen_and_re
     );
 }
 #[test]
-fn sqlite_commit_then_app_file_failure_retains_receipt_and_resumes_local_stages_without_reapply() {
+fn sqlite_commit_then_app_checkpoint_failure_retains_receipt_without_rewriting_settings() {
     let state = workspace::tests::state();
     let id = submitted(&state);
     confirmed(&state, &id);
     let dir = directory(&state).unwrap();
+    let app_before = fs_bytes(&dir.join("app-config.json"));
+    let app_history =
+        crate::services::app_config_store::current_history(&dir.join("app-config.json")).unwrap();
+    let conn = rusqlite::Connection::open(dir.join("znet-sink.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER reject_app_checkpoint BEFORE UPDATE ON workspace_recovery WHEN NEW.stage='app_confirmed' BEGIN SELECT RAISE(FAIL,'injected'); END;").unwrap();
     let record = load_checked(&state, &id).unwrap();
     let binding = context(&state).unwrap().binding;
-    let file = dir.join("app-config.json");
-    std::fs::remove_file(&file).unwrap();
-    std::fs::create_dir(&file).unwrap();
     assert!(finish_local(&state, &id, &binding, record.meta.version).is_err());
     let meta = metadata(&state, &id).unwrap().unwrap();
     assert_eq!(meta.stage, Stage::LocalCommitted);
     assert!(meta.receipt.is_some());
     assert!(ensure_unblocked(&state, "ordinary").is_err());
-    std::fs::remove_dir(&file).unwrap();
-    app_config_store::save(&file, &state.app_config().lock().unwrap()).unwrap();
+    conn.execute_batch("DROP TRIGGER reject_app_checkpoint;")
+        .unwrap();
+    drop(conn);
     let next = reopen(&state);
     let r = load_checked(&next, &id).unwrap();
     let epoch = r.meta.epoch;
@@ -149,6 +152,14 @@ fn sqlite_commit_then_app_file_failure_retains_receipt_and_resumes_local_stages_
         metadata(&next, &id).unwrap().unwrap().stage,
         Stage::Complete
     );
+    assert_eq!(fs_bytes(&dir.join("app-config.json")), app_before);
+    assert_eq!(
+        crate::services::app_config_store::current_history(&dir.join("app-config.json")).unwrap(),
+        app_history
+    );
+}
+fn fs_bytes(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap()
 }
 #[test]
 fn same_timestamp_relation_aba_is_rejected_by_persistent_epoch_across_owner_restart() {
@@ -457,9 +468,7 @@ fn actual_settings_file_drift_is_not_overwritten_by_local_completion() {
     let mut external = state.app_config().lock().unwrap().clone();
     external.routing.inject_common_rules = true;
     app_config_store::save(&dir.join("app-config.json"), &external).unwrap();
-    let r = load_checked(&state, &id).unwrap();
-    let binding = context(&state).unwrap().binding;
-    assert!(finish_local(&state, &id, &binding, r.meta.version).is_err());
+    assert!(load_checked(&state, &id).is_err());
     assert_eq!(
         app_config_store::load_or_default(&dir.join("app-config.json")).unwrap(),
         external
@@ -569,4 +578,60 @@ fn same_process_confirmed_local_completion_retires_only_original_memory_barrier(
     let again = reopen(&state);
     let snap = local_snapshot(&again).unwrap();
     assert_eq!(snap.last_transaction.unwrap().transaction_id, u64::MAX);
+}
+
+#[test]
+fn tracked_file_a_b_a_invalidates_original_recovery_even_when_all_current_values_match() {
+    for domain in ["app", "rules"] {
+        let state = workspace::tests::state();
+        let id = submitted(&state);
+        confirmed(&state, &id);
+        let dir = directory(&state).unwrap();
+        if domain == "app" {
+            let a = state.app_config().lock().unwrap().clone();
+            let mut b = a.clone();
+            b.local_proxy.port = 17891;
+            app_config_store::save(&dir.join("app-config.json"), &b).unwrap();
+            app_config_store::save(&dir.join("app-config.json"), &a).unwrap();
+        } else {
+            let rules=serde_json::from_value(json!({"id":"r","name":"B","enabled":false,"semanticIr":{"version":1,"rules":[]},"updatedAtUnixMs":1})).unwrap();
+            crate::services::domain_store::save_rule_sets_to_dir(&dir, &[rules]).unwrap();
+            crate::services::domain_store::save_rule_sets_to_dir(&dir, &[]).unwrap();
+        }
+        let next = reopen(&state);
+        assert!(load_checked(&next, &id).is_err(), "{domain}");
+        assert!(ensure_unblocked(&next, "ordinary").is_err());
+        assert_eq!(
+            operation(&next, &id).unwrap().state,
+            "runtime_confirmed_pending_local"
+        );
+    }
+}
+#[test]
+fn legacy_journal_rows_remain_readable_without_inventing_file_history_authority() {
+    let state = workspace::tests::state();
+    let id = submitted(&state);
+    confirmed(&state, &id);
+    let dir = directory(&state).unwrap();
+    let conn = rusqlite::Connection::open(dir.join("znet-sink.db")).unwrap();
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM workspace_recovery WHERE operation_id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut value: Value = serde_json::from_str(&raw).unwrap();
+    value["schema"] = json!(1);
+    value.as_object_mut().unwrap().remove("app_history");
+    value.as_object_mut().unwrap().remove("rules_history");
+    conn.execute(
+        "UPDATE workspace_recovery SET metadata_json=?2 WHERE operation_id=?1",
+        rusqlite::params![id, value.to_string()],
+    )
+    .unwrap();
+    drop(conn);
+    assert!(operation(&state, &id).unwrap().receipt.is_some());
+    assert!(load_checked(&state, &id).is_err());
+    assert!(ensure_unblocked(&state, "ordinary").is_err());
 }

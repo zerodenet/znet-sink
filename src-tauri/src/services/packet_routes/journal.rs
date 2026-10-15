@@ -6,6 +6,10 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+#[path = "inspection.rs"]
+mod inspection;
+pub(super) use inspection::{inspect, report};
+
 pub(super) const BYTE_LIMIT: usize = 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

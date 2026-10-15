@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256,serializeInventory,argumentsOf } from './license-common.mjs';
+import {validateReviewedLicenseMapping,applyReviewedLicenseMapping} from './license-reviewed-mapping.mjs';
 
 /** @param {any} row @returns {string[]} */
 export function declaredLicenseUrls(row) { return [...(row.licenseUrls||[]),...(row.evidence||[]).flatMap(/** @param {any} item */ item=>typeof item.detail==='string' && item.detail.startsWith('POM license URL: ')?[item.detail.slice(17)]:[])]; }
@@ -31,9 +32,11 @@ export function applyPackageMaterialCache(inventory,cache) {
       if(!['license','notice'].includes(material.kind)||typeof material.name!=='string'||!material.name||typeof material.source!=='string'||!material.source||typeof material.text!=='string'||!material.text.trim()||material.text.includes('\0')||Buffer.byteLength(material.text)>2*1024*1024||sha256(Buffer.from(material.text,'utf8'))!==material.sha256)throw new Error('Invalid original package material or digest');
       if(typeof material.origin?.url!=='string'||!/^https:\/\//.test(material.origin.url)||! /^[a-f0-9]{64}$/.test(material.origin.sha256))throw new Error('Original package material provenance missing');
     }
+    validateReviewedLicenseMapping(pkg);
     for(const row of result.entries) {
       if(!['ecosystem','name','version','source'].every(field=>row[field]===identity[field]))continue;
       if(!expected.every(([field,value])=>row[field]===value))throw new Error(`Stale package material binding: ${identity.ecosystem}:${identity.name}@${identity.version}`);
+      applyReviewedLicenseMapping(row,pkg);
       const reasons=new Set(resolved);
       for(const material of pkg.materials) {
         const id=`sha256-${material.sha256}`;

@@ -156,7 +156,7 @@ fn version_one_database_is_upgraded_without_changing_existing_metadata() {
         connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        4
+        5
     );
     let recovery_rows: i64 = connection
         .query_row(

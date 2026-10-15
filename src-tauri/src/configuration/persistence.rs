@@ -182,6 +182,7 @@ pub(crate) fn commit_workspace_if_current(
         Some(&binding.rules_digest),
         Some((&binding.scope, binding.generation)),
         Some(binding.domain_epoch),
+        Some(binding),
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -209,6 +210,7 @@ pub(crate) fn commit_checked(
         expected_rules,
         expected_scope,
         None,
+        None,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -224,6 +226,7 @@ fn commit_checked_with_epoch(
     expected_rules: Option<&str>,
     expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
     expected_epoch: Option<i64>,
+    expected_files: Option<&super::workspace::Binding>,
 ) -> AppResult<()> {
     let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
@@ -248,6 +251,47 @@ fn commit_checked_with_epoch(
             ensure_managed_system_proxy_compatible(active.content.as_ref())?;
         }
     }
+    let active_changed = serde_json::to_value(previous_profiles.iter().find(|p| p.active))
+        .map_err(|_| AppError::internal("profile snapshot encoding failed"))?
+        != serde_json::to_value(next_active.as_ref())
+            .map_err(|_| AppError::internal("profile snapshot encoding failed"))?;
+    if let Some(binding) = expected_files {
+        // Workspace changes no application preference. Hold both file histories
+        // through the relational CAS instead of rewriting an unchanged file.
+        let app = lock(state.app_config(), "app_config")?;
+        if &*app != expected_app {
+            return Err(super::workspace::conflict());
+        }
+        let dir = super::workspace::recovery::directory(state)?;
+        let files = super::workspace::recovery::guard_files(
+            &dir,
+            &binding.app_history,
+            &binding.rules_history,
+            &binding.app_digest,
+            &binding.rules_digest,
+        )?;
+        state.with_client_scope_generation(&binding.scope, binding.generation, || {
+            crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                binding.domain_epoch,
+                &super::workspace::digest(&(previous_profiles, previous_subscriptions))?,
+                &next_profiles,
+                &next_subscriptions,
+            )?;
+            *profiles = next_profiles;
+            *subscriptions = next_subscriptions;
+            Ok(())
+        })?;
+        drop(files);
+        drop(app);
+        drop(rules);
+        drop(subscriptions);
+        drop(profiles);
+        if active_changed {
+            state.client_core_configuration_committed(next_active.as_ref());
+        }
+        return Ok(());
+    }
     let mut candidate = expected_app.clone();
     if !preserve_binding {
         candidate.local_proxy.source_proxy_config_id = None;
@@ -259,10 +303,6 @@ fn commit_checked_with_epoch(
             .profile_edits
             .retain(|id, _| retained.contains(id.as_str()));
     }
-    let active_changed = serde_json::to_value(previous_profiles.iter().find(|p| p.active))
-        .map_err(|_| AppError::internal("profile snapshot encoding failed"))?
-        != serde_json::to_value(next_active.as_ref())
-            .map_err(|_| AppError::internal("profile snapshot encoding failed"))?;
     let publish = || -> AppResult<()> {
         {
             let transaction = CheckedPublication {

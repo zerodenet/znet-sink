@@ -20,6 +20,13 @@ async fn unknown_recovery_review_never_queries_or_invents_runtime_receipt() {
     let state = workspace::tests::state();
     state.app_config().lock().unwrap().core.socket =
         Some("/tmp/no-workspace-runtime-for-unknown.sock".into());
+    crate::services::app_config_store::save(
+        &workspace::recovery::directory(&state)
+            .unwrap()
+            .join("app-config.json"),
+        &state.app_config().lock().unwrap(),
+    )
+    .unwrap();
     let plan = workspace::store(&state, workspace::tests::prepared(&state)).unwrap();
     workspace::submit(&state, &plan.plan_id).unwrap();
     let review = recovery_review_locked(&state, &plan.plan_id).await.unwrap();

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StorageInspectionPanel from '$lib/components/settings/StorageInspectionPanel.svelte';
   import { onMount, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { Button } from '$lib/components/ui/button';
@@ -19,7 +20,7 @@
   let hostError = $state<unknown>(null);
   let hostReady = $state(false);
   let hostGeneration = $state<number | null>(null);
-  let scope: string | null = null;
+  let scope: string | null = $state(null);
   let hostRevision = -1;
   let alive = true;
   const controlsReady = $derived(hostReady && view.snapshot?.clientScopeGeneration === hostGeneration);
@@ -70,6 +71,7 @@
 </script>
 <section class="packet-panel" aria-label="Packet 路径">
   <header><div><h2>Packet 路径</h2><p>原生 IP Packet 会话，独立于 TCP / UDP Flow</p></div><Button variant="outline" disabled={view.loading || !!view.busy} onclick={() => refresh(true)}>重新检查</Button></header>
+  <StorageInspectionPanel kind="packet" scopeKey={JSON.stringify([scope, view.snapshot?.hostSessionId])} />
   <Input aria-label="仅筛选本页 Packet 会话" placeholder="仅筛选本页地址、会话或端点" bind:value={query} />
   <p class="sample">仅筛选本页；每页独立读取实时会话，各页之间可能新增、结束或移位，不是冻结的完整历史。</p>
   {#if view.loading}<p role="status">正在读取 Packet 会话…</p>{/if}

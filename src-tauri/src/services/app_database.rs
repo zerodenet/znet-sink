@@ -15,8 +15,9 @@ use crate::models::subscription::SubscriptionProfile;
 use super::domain_store;
 
 const DATABASE_FILE: &str = "znet-sink.db";
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
+pub(crate) mod inspection;
 pub(crate) mod ordinary_recovery;
 pub(crate) mod storage;
 pub(crate) mod workspace_recovery;

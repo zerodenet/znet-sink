@@ -103,6 +103,10 @@ pub(crate) struct Metadata {
     pub rules_digest: String,
     pub effective_digest: String,
     pub capture_digest: String,
+    #[serde(default)]
+    pub app_history: Option<crate::services::file_history::HistoryToken>,
+    #[serde(default)]
+    pub rules_history: Option<crate::services::file_history::HistoryToken>,
     pub original_core_instance_id: String,
     pub original_config_revision: u64,
     pub original_scope_digest: String,
@@ -157,8 +161,8 @@ fn hex(value: &str, len: usize) -> bool {
 fn bounded(value: &str, limit: usize) -> bool {
     !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
 }
-fn validate_meta(m: &Metadata) -> AppResult<()> {
-    if m.schema != 1
+pub(super) fn validate_meta(m: &Metadata) -> AppResult<()> {
+    if !matches!(m.schema, 1 | 2)
         || !hex(&m.operation_id, 32)
         || !hex(&m.session, 32)
         || m.version <= 0
@@ -184,6 +188,14 @@ fn validate_meta(m: &Metadata) -> AppResult<()> {
         if !hex(hash, 64) {
             return Err(fail());
         }
+    }
+    match (&m.app_history, &m.rules_history) {
+        (Some(app), Some(rules)) => {
+            crate::services::file_history::validate_token(app)?;
+            crate::services::file_history::validate_token(rules)?;
+        }
+        (None, None) if m.schema == 1 => {}
+        _ => return Err(fail()),
     }
     let confirmed = matches!(
         m.stage,
@@ -217,7 +229,7 @@ fn row_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, String
         row.get(4)?,
     ))
 }
-fn metadata(row: (String, String, String, i64, String)) -> AppResult<Metadata> {
+pub(super) fn metadata(row: (String, String, String, i64, String)) -> AppResult<Metadata> {
     let (id, profile, stage, version, raw) = row;
     if raw.len() > 65536 {
         return Err(fail());
@@ -452,7 +464,11 @@ pub(crate) fn publish(dir: &Path, id: &str, version: i64) -> AppResult<Record> {
         version,
         &[Stage::RuntimeConfirmedPendingLocal],
         |tx, r| {
-            if graph(tx)? != r.meta.before_graph_digest || r.meta.receipt.is_none() {
+            if graph(tx)? != r.meta.before_graph_digest
+                || r.meta.receipt.is_none()
+                || r.meta.app_history.is_none()
+                || r.meta.rules_history.is_none()
+            {
                 return Err(changed());
             }
             let mut profiles = load_proxy_configs(tx)?;

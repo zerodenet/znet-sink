@@ -15,7 +15,7 @@
   let licenseSearch=$state('');
   let licenseFilter=$state('all');
   async function loadLicenses(){licensesLoading=true;licenses=await loadLicenseInventories();licensesLoading=false;}
-  const rows=$derived.by(()=>{const records=new Map<string,{entry:LicenseEntry;inventory:LicenseInventory}>();for(const inventory of licenses.inventories)for(const entry of inventory.entries){const old=records.get(entry.id);if(!old||entry.evidence.length>old.entry.evidence.length)records.set(entry.id,{entry,inventory});}return [...records.values()].filter(({entry})=>(licenseFilter==='all'||entry.ecosystem===licenseFilter)&&`${entry.name} ${entry.declaredLicense??''} ${entry.source}`.toLowerCase().includes(licenseSearch.toLowerCase()));});
+  const rows=$derived.by(()=>{const records=new Map<string,{entry:LicenseEntry;inventory:LicenseInventory}>();for(const inventory of licenses.inventories)for(const entry of inventory.entries){const old=records.get(entry.id);if(!old||entry.evidence.length>old.entry.evidence.length)records.set(entry.id,{entry,inventory});}return [...records.values()].filter(({entry})=>(licenseFilter==='all'||entry.ecosystem===licenseFilter)&&`${entry.name} ${entry.declaredLicense??''} ${entry.reviewedLicenseMapping?.expression??''} ${entry.source}`.toLowerCase().includes(licenseSearch.toLowerCase()));});
   onMount(()=>{void controller.load();void loadLicenses();return()=>controller.dispose();});
 </script>
 <section class="mobile-about" aria-label="关于 ZNet Sink">
@@ -60,6 +60,7 @@
     <p aria-live="polite">显示 {rows.length} 个依赖</p>
     {#each rows as {entry,inventory} (entry.id)}
       <details><summary>{entry.name} · {entry.declaredLicense??'许可声明未提供'}</summary>
+        {#if entry.reviewedLicenseMapping}<p>已审阅正文映射：{entry.reviewedLicenseMapping.expression}；包 manifest 未声明许可。此映射不替代原始声明，资料缺口保留。</p>{/if}
         <p class="address">{entry.ecosystem} · 版本 / 修订：{entry.version??'未提供'}<br />来源：{entry.source}</p>
         {#each entry.evidence as evidence}<p>{licenseEvidenceLabels[evidence.kind]??evidence.kind}：{evidence.detail}</p>{/each}
         {#if entry.missing.length}<p role="status">资料缺口：{entry.missing.join('；')}</p>{/if}

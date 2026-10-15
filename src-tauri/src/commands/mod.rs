@@ -17,6 +17,7 @@ pub mod logs;
 pub mod platform;
 pub mod proxy_config;
 pub mod proxy_mode;
+pub mod recovery_storage;
 pub mod rule_set;
 pub mod runtime_performance;
 pub mod subscription;

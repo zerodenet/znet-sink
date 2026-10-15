@@ -637,3 +637,54 @@ Interrupted 的继续语义后，最终格式/check/全集/Clippy 均重新通�
 修复提交仍需重新核对完整 CI，不将 2eceeb4 的 630 项或 APK 充作新 head 的产物。
 日志：`/tmp/client-handshake-focused.log`、
 `/tmp/client-handshake-final-{fmt,check,tests,clippy}.log`。
+
+
+## 2026-10-15：文件历史与只读账本诊断
+
+本批从全绿 `d8e6ac1272b02b4064044deb195206ac0e203950` 继续，在同一 Draft PR 中增加
+AppConfig/规则正式持久写入的 OS 文件锁、随机存储身份、单调 epoch、原操作 intent/receipt
+和主备字节核对；工作区、普通订阅及端点恢复固定原文件 tokens，拒绝合作 writer 的
+同值保存与 A→B→A。schema5 保留旧数据；旧无 tokens 记录仅作历史，不补发控制许可。
+原 owned 文件写已完成、检查点中断时，纯查看仅 probe，明确原操作恢复才可补确认
+元资料；不重复写正文、不 apply、不下载。没有原 intent 或材料变化时保持未知。
+
+工作区与 Packet 增加显式有界只读检查及固定错误分类，原草稿、文件和未知屏障保留。
+工作区不读候选列，不进入正常创建/迁移/修复路径；SQLite READ_ONLY 仍可能写 SHM，
+因此实际存在 WAL 时直接报告原因，无 WAL 时使用 immutable 只读主库并再次核对变化。
+有真实临时库/WAL/SHM 保留与子进程检查测试，未操作用户数据。没有归档/删除/清账按钮。
+
+冻结启动仍 unsupported；已逐项记录普通空 bootstrap、当前材料重读、Proxy 实际启动
+顺序及公开快照缺失字段。PID/health 不确认 startup-only 字段；客户端安全材料/依赖封存/
+watchdog 可独立继续，实际 Proxy startup acknowledgement 的最小协调范围见
+[启动边界](../gui/frozen-startup-boundary-v0.0.3.md)，没有修改 core。
+
+许可补入 svelte-toolbelt 0.10.6 精确包 LICENSE 的显式已审阅 MIT 映射，保留
+manifest 未声明的事实及原两作者版权。其它三包仅补真实审计来源/限制；四项原缺口仍
+保留，不用 sibling 版权或通用条款冒充该包材料，不声称最终链接材料完整。
+
+本地 locked workspace/all-features 测试 **1292 passed / 0 failed / 7 ignored，45组**，
+GUI lib **1019/0/5**。包括 file_history 10、SQLite只读检查15、Packet只读检查13、
+端点文件历史10、普通订阅服务15与数据库17项；子进程输出不重复计入父 harness。
+忽略项范围与前批一致，未当作执行。首轮两个失败分别是迁移 fixture 仍期待 schema4、
+ABA fixture 捕获了规范化前 AppConfig；修正基准并保留旧数据/主备原字节及旧票据拒绝
+断言后，完整重跑通过，没有放松生产校验。
+
+完整 `pnpm verify:frontend`、生产 build、类型检查通过（0 errors / 0 warnings）。
+新增只读诊断 Node16/16；冻结 Chromium 31/31 后 WAL 分类新增1例，最终该页9/9，
+均0重试/0失败/0跳过；浏览器使用宿主事实 fixture，不代替真实进程或手机验收。
+本地 WebKit 未运行，官方下载403没有绕过，最终双引擎结果以新提交CI为准。
+
+日志：`/tmp/client-history-tests-{initial,final}.log`、
+`/tmp/client-history-frontend-final.log`、`/tmp/storage-inspection-{node,check,browser}-wal.log`。
+本批不改版本或 lockfile；只为已有 rusqlite 启用 hooks/limits 来限制只读 SQL 预算。
+新 commit CI、无签名 APK 及 SDK 收据在同一 PR 中逐项记录，不借前批全绿替代。
+
+最终源码又经 fmt、locked workspace/all-targets/all-features check、完整 tests 与同范围
+Clippy 通过；测试仍为1292/0/7。Clippy 首轮拒绝两处权限测试的十进制零，修为八进制
+`0o0`，同时简化两处新代码冗余引用/闭包；随后全集和检查重跑通过。现有及非拒绝级
+警告保留，没有按 `-D warnings` 宣称零警告。最终日志：
+`/tmp/client-history-tests-after-clippy.log`、`/tmp/client-history-fmt-final.log`、
+`/tmp/client-history-check-final.log`、`/tmp/client-history-clippy-fixed.log`。
+
+实际 Rust 许可 build-hook fixture 也通过：首次执行缺少云端 Cargo PATH 未启动检查，
+补齐与正式构建相同工具链环境后成功，日志 `/tmp/client-history-license-build-hook-fixed.log`。

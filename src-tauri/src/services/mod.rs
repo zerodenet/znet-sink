@@ -15,6 +15,7 @@ pub mod diagnostic_storage;
 pub(crate) mod diagnostics;
 pub mod domain_store;
 pub(crate) mod download;
+pub(crate) mod file_history;
 pub mod file_logger;
 pub(crate) mod flow_observation;
 pub mod gui_connection;

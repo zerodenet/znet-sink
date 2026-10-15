@@ -264,6 +264,53 @@
         "sourceManifestUrl": "https://raw.githubusercontent.com/tauri-apps/plugins-workspace/d6a3898001a4bcc659e045f9501498751b77dbe6/plugins/updater/package.json",
         "sourceManifestSha256": "31addd6dc8f7929925ed857046ad66bcc1cbf56fd153d117ed2e1d81839f6878"
       }
+    },
+    {
+      "identity": {
+        "ecosystem": "npm",
+        "name": "svelte-toolbelt",
+        "version": "0.10.6",
+        "source": "npm:svelte-toolbelt@0.10.6"
+      },
+      "expected": {
+        "manifestSha256": "b0dd8c15c05e68d20b0642f9bfd72ef07740a8e6fa8e4838baeed9cb7d0ef69b",
+        "lockIntegrity": "sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ=="
+      },
+      "resolves": [],
+      "materials": [
+        {
+          "name": "LICENSE (published MIT text)",
+          "kind": "license",
+          "source": "https://registry.npmjs.org/svelte-toolbelt/-/svelte-toolbelt-0.10.6.tgz#package/LICENSE",
+          "sha256": "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b",
+          "text": "MIT License\n\nCopyright (c) 2024 Hunter Johnston <https://github.com/huntabyte>\nCopyright (c) 2024 Thomas G. Lopes <https://github.com/tglide>\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+          "origin": {
+            "url": "https://registry.npmjs.org/svelte-toolbelt/-/svelte-toolbelt-0.10.6.tgz",
+            "sha256": "37e3a20a2a45bd494329279c57a157356b9103bc9fe5059fca23aecef39895ca",
+            "member": "package/LICENSE"
+          }
+        }
+      ],
+      "reviewedLicenseMapping": {
+        "expression": "MIT",
+        "basis": "reviewed-package-license-text",
+        "manifestDeclared": false,
+        "materialSha256": "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b"
+      },
+      "acquisition": {
+        "kind": "locked-npm-archive-and-installed-byte-comparison",
+        "archiveSha256": "37e3a20a2a45bd494329279c57a157356b9103bc9fe5059fca23aecef39895ca",
+        "lockIntegrity": "sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ==",
+        "metadata": {
+          "url": "https://registry.npmjs.org/svelte-toolbelt/0.10.6",
+          "sha256": "58821220ecf6744b377dd9ebaa4c6f01a5a84bee3c094fbecf3168a980a2ff36"
+        },
+        "compared": [
+          "package/package.json",
+          "package/LICENSE"
+        ],
+        "limitations": "The exact published LICENSE explicitly says MIT License and provides its own copyright notices. This is a reviewed SPDX mapping of that text, not a package.json declaration. The manifest declaration gap and final-link retention limits remain."
+      }
     }
   ]
 }

@@ -13,6 +13,10 @@ use zero_api::{
     PacketRouteListSnapshot as PageWire, PacketRouteSnapshot as RouteWire, PacketRouteState,
 };
 
+pub fn inspect_ledger() -> PacketLedgerInspection {
+    LEDGER.inspect()
+}
+
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> AppResult<T> {
     serde_json::from_value(value)
         .map_err(|_| AppError::internal("Packet 路径响应格式不兼容，请更新内核或重新检查"))

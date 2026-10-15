@@ -58,7 +58,7 @@ pub(crate) fn prepare_submitted(
         .find(|x| x.id == candidate.id)
         .ok_or_else(conflict)? = candidate.clone();
     let meta = db::Metadata {
-        schema: 1,
+        schema: 2,
         operation_id: p.plan.plan_id.clone(),
         profile_id: candidate.id.clone(),
         session: p.binding.host_session_id.clone(),
@@ -74,6 +74,8 @@ pub(crate) fn prepare_submitted(
         rules_digest: p.binding.rules_digest.clone(),
         effective_digest: p.plan.effective_digest.clone(),
         capture_digest: p.capture_digest.clone(),
+        app_history: Some(p.binding.app_history.clone()),
+        rules_history: Some(p.binding.rules_history.clone()),
         original_core_instance_id: expected.core_instance_id.clone(),
         original_config_revision: expected.config_revision,
         original_scope_digest: digest(&p.binding.scope)?,
@@ -91,6 +93,13 @@ pub(crate) fn prepare_submitted(
     {
         return Err(conflict());
     }
+    let _files = guard_files(
+        &dir,
+        &p.binding.app_history,
+        &p.binding.rules_history,
+        &p.binding.app_digest,
+        &p.binding.rules_digest,
+    )?;
     state.with_client_scope_generation(&p.binding.scope, p.binding.generation, || {
         if state.host_session_id()? != p.binding.host_session_id {
             return Err(conflict());
@@ -163,6 +172,7 @@ pub(crate) fn reconcile(state: &AppState, record: &Record) -> AppResult<()> {
     if digest(&*rules)? != record.meta.rules_digest || digest(&*app)? != record.meta.app_digest {
         return Err(db::changed());
     }
+    let _files = record_file_guards(&dir, &record.meta)?;
     let memory = digest(&(&*profiles, &*subs))?;
     if memory != record.meta.before_graph_digest && memory != record.meta.after_graph_digest {
         return Err(db::changed());
@@ -196,7 +206,9 @@ pub(crate) fn load_checked(state: &AppState, id: &str) -> AppResult<Record> {
     let record = db::load(&directory(state)?, id)?.ok_or_else(conflict)?;
     reconcile(state, &record)?;
     let current = context(state)?;
-    if current.binding.graph_digest != expected_graph(&record.meta)
+    if record.meta.app_history.as_ref() != Some(&current.binding.app_history)
+        || record.meta.rules_history.as_ref() != Some(&current.binding.rules_history)
+        || current.binding.graph_digest != expected_graph(&record.meta)
         || current.binding.app_digest != record.meta.app_digest
         || current.binding.rules_digest != record.meta.rules_digest
         || db::current_epoch(&directory(state)?)? != record.meta.epoch
@@ -307,6 +319,7 @@ pub(crate) fn finish_local(
     {
         return Err(conflict());
     }
+    let _files = record_file_guards(&dir, &r.meta)?;
     let was_published = r.meta.stage == Stage::RuntimeConfirmedPendingLocal;
     let active = state.with_client_scope_generation(&binding.scope, binding.generation, || {
         if binding.host_session_id != state.host_session_id()?
@@ -314,24 +327,13 @@ pub(crate) fn finish_local(
         {
             return Err(conflict());
         }
-        let app_path = dir.join("app-config.json");
-        if app_path.is_file() {
-            let bytes = std::fs::read(&app_path).map_err(|_| db::changed())?;
-            if bytes.len() > 16 * 1024 * 1024 {
-                return Err(db::changed());
-            }
-            let persisted: AppConfig = serde_json::from_slice(&bytes).map_err(|_| db::changed())?;
-            if digest(&persisted)? != r.meta.app_digest {
-                return Err(db::changed());
-            }
-        }
         if r.meta.stage == Stage::RuntimeConfirmedPendingLocal {
             r = db::publish(&dir, id, r.meta.version)?;
         }
         if r.meta.stage == Stage::LocalCommitted {
-            // The workspace preserves AppConfig and local-proxy ownership. Save
-            // the exact held value atomically, then checkpoint this separate file.
-            app_config_store::save(&dir.join("app-config.json"), &app)?;
+            // AppConfig is unchanged. The held OS guards prove the original
+            // persisted file/default and history; never rewrite it merely to
+            // manufacture a new file receipt or self-advance its history.
             r = db::app_confirmed(&dir, id, r.meta.version)?;
         }
         if r.meta.stage == Stage::AppConfirmed {
@@ -380,7 +382,9 @@ pub(crate) fn completed_transaction(
     let Some(meta) = db::latest(&directory(state)?, &context.profile.id)? else {
         return Ok(None);
     };
-    if meta.stage != Stage::Complete
+    if meta.app_history.as_ref() != Some(&context.binding.app_history)
+        || meta.rules_history.as_ref() != Some(&context.binding.rules_history)
+        || meta.stage != Stage::Complete
         || meta.epoch != context.binding.domain_epoch
         || meta.after_graph_digest != context.binding.graph_digest
         || meta.app_digest != context.binding.app_digest
@@ -391,4 +395,50 @@ pub(crate) fn completed_transaction(
         return Ok(None);
     }
     Ok(meta.receipt.as_ref().map(|r| r.view(&meta)))
+}
+
+/// Caller holds AppState domain guards before acquiring these OS locks. Never
+/// take AppState mutexes or call a normal store wrapper while retaining them.
+pub(crate) fn guard_files(
+    dir: &std::path::Path,
+    app: &crate::services::file_history::HistoryToken,
+    rules: &crate::services::file_history::HistoryToken,
+    app_digest: &str,
+    rules_digest: &str,
+) -> AppResult<(
+    crate::services::file_history::Guard,
+    crate::services::file_history::Guard,
+)> {
+    use crate::services::{
+        domain_store,
+        file_history::{self, Domain},
+    };
+    let app_file = file_history::acquire(&dir.join("app-config.json"), Domain::AppConfig)?;
+    let rules_file = file_history::acquire(&dir.join("rule-sets.json"), Domain::RuleSets)?;
+    app_file.require(app)?;
+    rules_file.require(rules)?;
+    if digest(&app_config_store::read_current_locked(&app_file)?)? != app_digest
+        || digest(&domain_store::read_rule_sets_locked(&rules_file)?)? != rules_digest
+    {
+        return Err(conflict());
+    }
+    Ok((app_file, rules_file))
+}
+fn record_file_guards(
+    dir: &std::path::Path,
+    meta: &db::Metadata,
+) -> AppResult<(
+    crate::services::file_history::Guard,
+    crate::services::file_history::Guard,
+)> {
+    let (app, rules) = meta
+        .app_history
+        .as_ref()
+        .zip(meta.rules_history.as_ref())
+        .ok_or_else(|| AppError {
+            code: "file_history_unavailable",
+            message: "旧操作没有原文件的持久历史代次；保留历史，不能补造本地完成权限".into(),
+            details: None,
+        })?;
+    guard_files(dir, app, rules, &meta.app_digest, &meta.rules_digest)
 }

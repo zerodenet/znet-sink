@@ -45,12 +45,23 @@ fn input(profiles: &[ProxyConfigProfile], subs: &[SubscriptionProfile], id: &str
         expected_graph_fingerprint: graph_fingerprint(profiles, subs).unwrap(),
         expected_rule_sets_fingerprint: fingerprint(&Vec::<String>::new()).unwrap(),
         expected_app_fingerprint: fingerprint(&json!({"before":"app"})).unwrap(),
-        projected_app_fingerprint: fingerprint(&json!({"after":"app"})).unwrap(),
+        expected_app_history: history_token('a'),
+        expected_rule_sets_history: history_token('b'),
+        // This DB fixture exercises no-op app projections; real file writes are
+        // covered by the service tests and the owned checkpoint test below.
+        projected_app_fingerprint: fingerprint(&json!({"before":"app"})).unwrap(),
         effective_config_fingerprint: fingerprint(&next_profile.content).unwrap(),
         capture_plan_fingerprint: fingerprint(&json!({"capture":"plan"})).unwrap(),
         next_profile,
         next_subscription,
         created_at_unix_ms: 15,
+    }
+}
+fn history_token(digit: char) -> HistoryToken {
+    HistoryToken {
+        store_id: digit.to_string().repeat(32),
+        file_id: digit.to_string().repeat(64),
+        epoch: 1,
     }
 }
 fn receipt() -> ConfirmedIdentity {
@@ -296,7 +307,7 @@ fn schema_two_upgrade_preserves_relationships_and_existing_capability_rows() {
     let version: i32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, SCHEMA_VERSION);
     let bytes: Vec<u8> = connection
         .query_row(
             "SELECT value FROM capability_values WHERE owner='owner'",
@@ -580,4 +591,115 @@ fn candidate_digest_tampering_and_invalid_ids_cannot_create_executable_records()
     assert!(load_domain_data(root.path()).unwrap().subscriptions[0]
         .last_error
         .is_some());
+}
+
+#[test]
+fn owned_projection_checkpoint_is_cas_bound_and_survives_complete_tombstone() {
+    let root = tempfile::tempdir().unwrap();
+    let (profiles, subs) = baseline(root.path());
+    let mut input = input(&profiles, &subs, "owned-checkpoint");
+    input.projected_app_fingerprint = fingerprint(&json!({"after":"app"})).unwrap();
+    let prepared = prepare(root.path(), input).unwrap().record;
+    let pending = mark_apply_pending(root.path(), &prepared.recovery_id, prepared.version).unwrap();
+    let confirmed = confirm(
+        root.path(),
+        &pending.recovery_id,
+        pending.version,
+        receipt(),
+    )
+    .unwrap();
+    let local = publish_local(root.path(), &confirmed.recovery_id, confirmed.version).unwrap();
+    assert!(complete(root.path(), &local.recovery_id, local.version).is_err());
+    let before = local.expected_app_history.clone().unwrap();
+    let mut after = before.clone();
+    after.epoch += 1;
+    let owned = WriteReceipt {
+        before,
+        after,
+        owner_operation: Some(local.recovery_id.clone()),
+    };
+    let mut foreign = owned.clone();
+    foreign.owner_operation = Some("another-operation".into());
+    assert!(
+        record_app_projection(root.path(), &local.recovery_id, local.version, foreign).is_err()
+    );
+    assert!(record_app_projection(
+        root.path(),
+        &local.recovery_id,
+        local.version + 1,
+        owned.clone()
+    )
+    .is_err());
+    let checkpoint = record_app_projection(
+        root.path(),
+        &local.recovery_id,
+        local.version,
+        owned.clone(),
+    )
+    .unwrap();
+    let completed = complete(root.path(), &checkpoint.recovery_id, checkpoint.version).unwrap();
+    let reopened = load(root.path(), &completed.recovery_id).unwrap().unwrap();
+    assert_eq!(reopened.app_projection_receipt, Some(owned));
+    assert!(reopened.next_profile.is_none());
+    assert_eq!(
+        load_metadata(root.path(), &completed.recovery_id)
+            .unwrap()
+            .unwrap()
+            .expected_app_history,
+        completed.expected_app_history
+    );
+}
+#[test]
+fn legacy_tokenless_record_remains_readable_but_cannot_gain_mutation_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let (profiles, subs) = baseline(root.path());
+    let record = prepare(root.path(), input(&profiles, &subs, "legacy-history"))
+        .unwrap()
+        .record;
+    let connection = db_open(root.path()).unwrap();
+    connection.execute("UPDATE ordinary_subscription_recovery SET metadata_json=json_remove(metadata_json,'$.expected_app_history','$.expected_rule_sets_history','$.app_projection_receipt') WHERE recovery_id=?1", [&record.recovery_id]).unwrap();
+    let reopened = load(root.path(), &record.recovery_id).unwrap().unwrap();
+    assert!(reopened.expected_app_history.is_none());
+    assert!(load_metadata(root.path(), &record.recovery_id)
+        .unwrap()
+        .is_some());
+    assert!(has_pending(root.path(), &record.subscription_id).unwrap());
+    assert!(mark_apply_pending(root.path(), &record.recovery_id, record.version).is_err());
+}
+
+#[test]
+fn partial_or_corrupt_history_metadata_is_not_silently_upgraded() {
+    for corrupt in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (profiles, subs) = baseline(root.path());
+        let record = prepare(root.path(), input(&profiles, &subs, "invalid-history"))
+            .unwrap()
+            .record;
+        let connection = db_open(root.path()).unwrap();
+        let expression = if corrupt {
+            "json_set(metadata_json,'$.expected_app_history.epoch',0)"
+        } else {
+            "json_remove(metadata_json,'$.expected_rule_sets_history')"
+        };
+        connection.execute(&format!("UPDATE ordinary_subscription_recovery SET metadata_json={expression} WHERE recovery_id=?1"), [&record.recovery_id]).unwrap();
+        assert!(load(root.path(), &record.recovery_id).is_err());
+        assert!(load_metadata(root.path(), &record.recovery_id).is_err());
+        assert!(has_pending(root.path(), &record.subscription_id).unwrap());
+    }
+}
+
+#[test]
+fn required_projection_epoch_overflow_is_rejected_before_durable_apply_intent() {
+    let root = tempfile::tempdir().unwrap();
+    let (profiles, subs) = baseline(root.path());
+    let mut candidate = input(&profiles, &subs, "history-overflow");
+    candidate.projected_app_fingerprint = fingerprint(&json!({"after":"app"})).unwrap();
+    candidate.expected_app_history.epoch = u64::MAX;
+    assert!(prepare(root.path(), candidate).is_err());
+    assert!(!has_pending(root.path(), &subs[0].id).unwrap());
+    let graph = load_domain_data(root.path()).unwrap();
+    assert_eq!(
+        graph_fingerprint(&graph.proxy_configs, &graph.subscriptions).unwrap(),
+        graph_fingerprint(&profiles, &subs).unwrap()
+    );
 }

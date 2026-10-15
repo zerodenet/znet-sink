@@ -135,3 +135,50 @@ pub struct PacketLedgerRecovery {
     pub reason: Option<String>,
     pub recovered_count: Option<usize>,
 }
+
+/// Closed metadata projection. Never includes target IDs, record bodies,
+/// parser/OS messages or paths; inspection cannot authorize or clear a close.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketLedgerInspection {
+    pub host_session_id: Option<String>,
+    pub sampled_at_unix_ms: String,
+    pub state: &'static str,
+    pub reason_code: &'static str,
+    pub summary: &'static str,
+    pub read_only: bool,
+    pub barriers_retained: bool,
+    pub new_close_blocked: bool,
+    pub in_memory_barrier_count: Option<usize>,
+    pub publication_unconfirmed: bool,
+    pub evidence: PacketLedgerEvidence,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketLedgerEvidence {
+    pub journal_present: Option<bool>,
+    pub marker_present: Option<bool>,
+    pub marker_state: &'static str,
+    pub lock_state: &'static str,
+    pub journal_bytes: Option<String>,
+    pub journal_sha256: Option<String>,
+    pub schema_version: Option<u32>,
+    pub verified_record_count: Option<usize>,
+    pub snapshot_stable: bool,
+}
+
+impl Default for PacketLedgerEvidence {
+    fn default() -> Self {
+        Self {
+            journal_present: None,
+            marker_present: None,
+            marker_state: "not-read",
+            lock_state: "not-checked",
+            journal_bytes: None,
+            journal_sha256: None,
+            schema_version: None,
+            verified_record_count: None,
+            snapshot_stable: false,
+        }
+    }
+}

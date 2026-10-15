@@ -22,6 +22,8 @@ const TTL: u64 = 300_000;
 pub(crate) struct Binding {
     pub host_session_id: String,
     pub domain_epoch: i64,
+    pub app_history: crate::services::file_history::HistoryToken,
+    pub rules_history: crate::services::file_history::HistoryToken,
     pub scope: ClientScope,
     pub generation: u64,
     pub source_digest: String,
@@ -101,7 +103,19 @@ pub(crate) fn context(state: &AppState) -> AppResult<Context> {
     if snapshot.scope_generation.0 == 0 || snapshot.scope_generation.0 > 9_007_199_254_740_991 {
         return Err(conflict());
     }
+    let rules_digest = digest(&*lock(state.rule_sets(), "rule_set")?)?;
+    let directory = recovery::directory(state)?;
+    let app_file = crate::services::file_history::acquire(
+        &directory.join("app-config.json"),
+        crate::services::file_history::Domain::AppConfig,
+    )?;
+    let rules_file = crate::services::file_history::acquire(
+        &directory.join("rule-sets.json"),
+        crate::services::file_history::Domain::RuleSets,
+    )?;
     let binding = Binding {
+        app_history: app_file.token()?,
+        rules_history: rules_file.token()?,
         host_session_id: state.host_session_id()?.to_owned(),
         domain_epoch: crate::services::app_database::workspace_recovery::current_epoch(
             &recovery::directory(state)?,
@@ -111,7 +125,7 @@ pub(crate) fn context(state: &AppState) -> AppResult<Context> {
         source_digest: digest(&profile)?,
         graph_digest: digest(&(&profiles, &subscriptions))?,
         app_digest: digest(&app)?,
-        rules_digest: digest(&*lock(state.rule_sets(), "rule_set")?)?,
+        rules_digest,
     };
     Ok(Context {
         profile,

@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::Mutex;
-fn source() -> Value {
+pub(super) fn source() -> Value {
     json!({"endpoints":[{"tag":"a","enabled":true,"directions":{"inbound":false,"outbound":true},"protocol":{"type":"wireguard"}}]})
 }
 fn row() -> Value {
@@ -29,9 +29,28 @@ pub(super) fn record() -> Record {
         expires_at_unix_ms: "301000".into(),
     };
     Record {
+        owner: Some(history::Owner {
+            host: "fixture-host".into(),
+            generation: 1,
+        }),
+        local_write_started: false,
+        save_only: false,
+        app_write: None,
         receipt: receipt_for(&plan),
         plan,
         binding: Binding {
+            files: Some(history::Files {
+                app: crate::services::file_history::HistoryToken {
+                    store_id: "a".repeat(32),
+                    file_id: "b".repeat(64),
+                    epoch: 1,
+                },
+                rules: crate::services::file_history::HistoryToken {
+                    store_id: "a".repeat(32),
+                    file_id: "c".repeat(64),
+                    epoch: 1,
+                },
+            }),
             target,
             source_digest: "source-digest".into(),
             source_updated_at: 1,
@@ -75,7 +94,13 @@ impl Backend for Fake {
         self.note("validate");
         Ok(())
     }
-    async fn apply(&self, _: &Value, _: &Value) -> AppResult<RuntimeReceipt> {
+    async fn apply(
+        &self,
+        _: &Record,
+        _: &AppConfig,
+        _: &Value,
+        _: &Value,
+    ) -> AppResult<RuntimeReceipt> {
         self.note("apply");
         if self.fail_apply {
             return Err(AppError::internal("lost reply"));
@@ -91,7 +116,7 @@ impl Backend for Fake {
             config_revision: "5".into(),
         })
     }
-    async fn clear(&self, row: &Value) -> AppResult<Value> {
+    async fn clear(&self, _: &Record, _: &AppConfig, row: &Value) -> AppResult<Value> {
         self.note("clear");
         assert_eq!(row["intent_revision"], 8);
         assert_eq!(row["config_revision"], 5);
@@ -107,12 +132,27 @@ impl Backend for Fake {
         self.note(&format!("save:{:?}", record.receipt.phase));
         Ok(())
     }
-    fn publish(&self, _: &AppConfig, _: AppConfig) -> AppResult<()> {
+    fn guard_files(&self, record: &Record, _: &AppConfig) -> AppResult<()> {
+        record
+            .binding
+            .files
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| conflict("legacy record is read-only"))
+    }
+    fn publish(&self, record: &Record, _: &AppConfig, _: AppConfig) -> AppResult<WriteReceipt> {
         self.note("publish");
         if self.fail_publish {
             Err(conflict("CAS refusal"))
         } else {
-            Ok(())
+            let before = record.binding.files.as_ref().unwrap().app.clone();
+            let mut after = before.clone();
+            after.epoch += 1;
+            Ok(WriteReceipt {
+                before,
+                after,
+                owner_operation: Some(record.plan.plan_id.clone()),
+            })
         }
     }
 }

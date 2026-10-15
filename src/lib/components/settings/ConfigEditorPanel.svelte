@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StorageInspectionPanel from '$lib/components/settings/StorageInspectionPanel.svelte';
   import { Textarea } from '$lib/components/ui/textarea';
   import { configEditor, type ValidationError, type ConfigImpactItem } from '$lib/services/config-workspace.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -135,6 +136,8 @@
       </Button>
     </div>
   </div>
+
+  <StorageInspectionPanel kind="workspace" scopeKey={JSON.stringify([configEditor.profileName, configEditor.readOnlyReason, configEditor.conflict])} />
 
   {#if confirmRefresh}
     <div role="alertdialog" aria-label="刷新来源确认" class="error-panel">

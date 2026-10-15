@@ -4,7 +4,7 @@ use crate::{
     services::{common, core_config, packet_routes},
     state::app_state::AppState,
 };
-use tauri::State;
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 const JS_SAFE: u64 = 9_007_199_254_740_991;
 fn valid_generation(value: u64) -> AppResult<()> {
     if value == 0 || value > JS_SAFE {
@@ -151,5 +151,77 @@ mod host_recovery_tests {
         )
         .is_err());
         assert!(ensure_host_session(second.host_session_id().unwrap(), "").is_err());
+    }
+}
+
+fn admit_ledger_inspection(label: &str) -> AppResult<()> {
+    crate::services::native_documents::require_host(label)
+}
+fn bind_ledger_inspection_host(
+    mut report: PacketLedgerInspection,
+    host_session: Option<String>,
+) -> PacketLedgerInspection {
+    report.host_session_id = host_session;
+    if report.host_session_id.is_none() {
+        report.new_close_blocked = true;
+        if report.state != "blocked" {
+            report.state = "blocked";
+            report.reason_code = "entropy-unavailable";
+            report.summary = "宿主安全身份不可用；只读证据可查看，控制继续拒绝";
+        }
+    }
+    report
+}
+#[tauri::command]
+pub async fn gui_packet_ledger_inspect(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> AppResult<PacketLedgerInspection> {
+    admit_ledger_inspection(window.label())?;
+    // Random identity loss blocks controls, not pure read-only diagnosis.
+    let host_session = app
+        .state::<AppState>()
+        .host_session_id()
+        .ok()
+        .map(str::to_owned);
+    tauri::async_runtime::spawn_blocking(move || {
+        bind_ledger_inspection_host(packet_routes::inspect_ledger(), host_session)
+    })
+    .await
+    .map_err(|_| AppError::internal("Packet 账本只读检查未完成；原文件与屏障保持不变"))
+}
+#[cfg(test)]
+mod inspection_admission_tests {
+    use super::*;
+    #[test]
+    fn only_main_host_can_request_private_metadata_without_material_authority() {
+        assert!(admit_ledger_inspection("main").is_ok());
+        for guest in ["", "plugin", "plugin-page", "main-child"] {
+            assert!(admit_ledger_inspection(guest).is_err());
+        }
+    }
+    #[test]
+    fn missing_host_identity_preserves_read_only_evidence_but_never_allows_control() {
+        let fixture = PacketLedgerInspection {
+            host_session_id: None,
+            sampled_at_unix_ms: "1".into(),
+            state: "ready",
+            reason_code: "ready",
+            summary: "fixture",
+            read_only: true,
+            barriers_retained: true,
+            new_close_blocked: false,
+            in_memory_barrier_count: Some(0),
+            publication_unconfirmed: false,
+            evidence: PacketLedgerEvidence {
+                journal_bytes: Some("42".into()),
+                ..Default::default()
+            },
+        };
+        let report = bind_ledger_inspection_host(fixture, None);
+        assert_eq!(report.reason_code, "entropy-unavailable");
+        assert!(report.host_session_id.is_none());
+        assert!(report.read_only && report.barriers_retained && report.new_close_blocked);
+        assert_eq!(report.evidence.journal_bytes.as_deref(), Some("42"));
     }
 }

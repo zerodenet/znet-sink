@@ -952,7 +952,37 @@
         "officialDownload": "Proxy tunnel HTTP 403; no official download body obtained.",
         "actualBody": "Existing standard MPL 2.0 terms from the pinned client repository LICENSE; contains no client or selectors component copyright. Not a selectors repository file.",
         "vcsRevision": "635e1a19d02960588a00e189bd4bd5bdb150ec3d",
-        "packagePath": "selectors"
+        "packagePath": "selectors",
+        "followUpAudit": {
+          "scope": "Exact published crate source files and selectors directory plus repository root at recorded VCS revision; no other component copyright assigned.",
+          "publishedMembers": [
+            "selectors-0.36.1/.cargo_vcs_info.json",
+            "selectors-0.36.1/CHANGES.md",
+            "selectors-0.36.1/Cargo.lock",
+            "selectors-0.36.1/Cargo.toml",
+            "selectors-0.36.1/Cargo.toml.orig",
+            "selectors-0.36.1/README.md",
+            "selectors-0.36.1/attr.rs",
+            "selectors-0.36.1/bloom.rs",
+            "selectors-0.36.1/build.rs",
+            "selectors-0.36.1/builder.rs",
+            "selectors-0.36.1/context.rs",
+            "selectors-0.36.1/kleene_value.rs",
+            "selectors-0.36.1/lib.rs",
+            "selectors-0.36.1/matching.rs",
+            "selectors-0.36.1/nth_index_cache.rs",
+            "selectors-0.36.1/parser.rs",
+            "selectors-0.36.1/relative_selector/cache.rs",
+            "selectors-0.36.1/relative_selector/filter.rs",
+            "selectors-0.36.1/relative_selector/mod.rs",
+            "selectors-0.36.1/sink.rs",
+            "selectors-0.36.1/tree.rs",
+            "selectors-0.36.1/visitor.rs"
+          ],
+          "publisherAttribution": "Cargo.toml.orig authors = [\"The Servo Project Developers\"]; this is author metadata, not a supplied copyright notice.",
+          "upstreamDirectory": "https://github.com/servo/stylo/tree/635e1a19d02960588a00e189bd4bd5bdb150ec3d/selectors",
+          "result": "Only existing MPL source notices were found in this scope; no package-specific copyright/NOTICE or repository license body was supplied. Original gap retained."
+        }
       }
     },
     {
@@ -1027,7 +1057,22 @@
           "Cargo.toml",
           "Cargo.lock"
         ],
-        "limitations": "Published archive has no VCS record. Exact version-specific tag plus all published source/examples and original manifest match is recorded as separate evidence. Only the actual Apache alternative is available; no MIT text or attribution was invented."
+        "limitations": "Published archive has no VCS record. Exact version-specific tag plus all published source/examples and original manifest match is recorded as separate evidence. Only the actual Apache alternative is available; no MIT text or attribution was invented.",
+        "followUpAudit": {
+          "scope": "Exact version tag root legal paths and previously byte-matched complete published package source set.",
+          "upstreamMetadata": "https://raw.githubusercontent.com/tauri-apps/tao/340684d932b6126bed449fc1f4edca81776ad592/LICENSE.spdx",
+          "result": "LICENSE.spdx names PackageName tao and PackageLicenseDeclared Apache-2.0. Its tao copyright is not assigned to tao-macros. No MIT full text was found in this scope; optional MIT alternative gap retained.",
+          "publishedMembers": [
+            "tao-macros-0.1.3/CHANGELOG.md",
+            "tao-macros-0.1.3/Cargo.lock",
+            "tao-macros-0.1.3/Cargo.toml",
+            "tao-macros-0.1.3/Cargo.toml.orig",
+            "tao-macros-0.1.3/README.md",
+            "tao-macros-0.1.3/examples/android_fn.rs",
+            "tao-macros-0.1.3/examples/generate_package_name.rs",
+            "tao-macros-0.1.3/src/lib.rs"
+          ]
+        }
       }
     },
     {
@@ -1333,7 +1378,47 @@
         "registryArchiveSha256": "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
       },
       "reason": "published-archive-has-no-pinned-vcs-revision",
-      "audit": "Published .crate has no immutable repository revision. No current/tag license was substituted."
+      "audit": "Published .crate has no immutable repository revision. No current/tag license was substituted.",
+      "followUpAudit": {
+        "registryMetadata": {
+          "url": "https://crates.io/api/v1/crates/rustls-platform-verifier-android/0.1.1",
+          "sha256": "df38069d4247acadd374e55cebb43f9496aaa74384d4bfc618f55bd9a105179c",
+          "publishedAt": "2024-07-29T13:27:11.000250Z",
+          "declaredLicense": "MIT OR Apache-2.0"
+        },
+        "publishedMembers": [
+          "rustls-platform-verifier-android-0.1.1/Cargo.toml",
+          "rustls-platform-verifier-android-0.1.1/Cargo.toml.orig",
+          "rustls-platform-verifier-android-0.1.1/maven/pom.xml",
+          "rustls-platform-verifier-android-0.1.1/maven/rustls/rustls-platform-verifier/0.1.1/_remote.repositories",
+          "rustls-platform-verifier-android-0.1.1/maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.aar",
+          "rustls-platform-verifier-android-0.1.1/maven/rustls/rustls-platform-verifier/0.1.1/rustls-platform-verifier-0.1.1.pom",
+          "rustls-platform-verifier-android-0.1.1/maven/rustls/rustls-platform-verifier/maven-metadata-local.xml",
+          "rustls-platform-verifier-android-0.1.1/src/lib.rs"
+        ],
+        "nestedAar": {
+          "member": "rustls-platform-verifier-0.1.1.aar",
+          "sha256": "667292cadd8fa589229dd0f716541236a761f29b774930868d218175633830fd",
+          "members": [
+            "R.txt",
+            "AndroidManifest.xml",
+            "classes.jar",
+            "META-INF/com/android/build/gradle/aar-metadata.properties"
+          ],
+          "classesJarMembers": [
+            "org/rustls/platformverifier/CertificateVerifier$makeLazyTrustManager$1.class",
+            "org/rustls/platformverifier/CertificateVerifier.class",
+            "org/rustls/platformverifier/StatusCode.class",
+            "org/rustls/platformverifier/VerificationResult.class",
+            "META-INF/rustls-platform-verifier_release.kotlin_module"
+          ]
+        },
+        "upstreamAttempt": {
+          "url": "https://api.github.com/repos/rustls/rustls-platform-verifier",
+          "result": "Proxy tunnel HTTP 403; no repository body obtained; no alternate host or domain used."
+        },
+        "result": "Exact crate and embedded AAR/classes.jar provide no observed legal text or immutable VCS revision. Publication metadata is not substituted for missing copyright or license full text; original gap retained."
+      }
     }
   ]
 }

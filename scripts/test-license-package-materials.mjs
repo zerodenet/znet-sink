@@ -5,6 +5,9 @@ import {sha256,finalizeInventory,verifyMaterialInputs} from './license-common.mj
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {readFileSync,globSync} from 'node:fs';
+import {packageEntry} from './license-vite.mjs';
+import {svelteToolbeltReview} from './license-reviewed-mapping.mjs';
 
 const row={id:'cargo:fixture',ecosystem:'cargo',name:'fixture',version:'1.2.3',source:'registry+https://example.org/index',manifestSha256:sha256('manifest'),licenseTextIds:[],noticeTextIds:[],materialReferences:[],evidence:[],missing:['license-body-missing','package-specific-legal-material-not-provided','license-declaration-not-provided'],textStatus:'missing'};
 const inventory={entries:[row],texts:[],gaps:row.missing.map(reason=>({id:row.id,reason}))};
@@ -59,3 +62,31 @@ test('packaging checks nested cache input hashes and missing provenance',()=>{
   assert.throws(()=>verifyMaterialInputs(composed,root,['cache.json']),/Stale or missing/);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+function reviewedSvelteFixture() {
+ const checked=JSON.parse(readFileSync(new URL('../resources/licenses/frontend-package-materials.json',import.meta.url),'utf8'));
+ const original=checked.packages.find(p=>p.identity.name==='svelte-toolbelt');assert(original);
+ const paths=globSync('node_modules/.pnpm/svelte-toolbelt@0.10.6*/node_modules/svelte-toolbelt');assert.equal(paths.length,1);
+ const manifest=paths[0]+'/package.json';
+ const {entry,materials}=packageEntry({directory:paths[0],manifest,value:JSON.parse(readFileSync(manifest,'utf8'))},[{kind:'build-input',detail:'Test only: installed package material; no bundling claim.'}]);
+ return {cache:{schemaVersion:1,packages:[structuredClone(original)]},inventory:{entries:[entry],texts:materials.texts,gaps:entry.missing.map(reason=>({id:entry.id,reason}))}};
+}
+test('actual locked svelte package preserves its own MIT copyrights and missing manifest declaration',()=>{
+ const f=reviewedSvelteFixture(),result=finalizeInventory(applyPackageMaterialCache(f.inventory,f.cache)),r=result.entries[0];
+ assert.equal(r.declaredLicense,null);assert.equal(r.reviewedLicenseMapping.expression,'MIT');assert.equal(r.reviewedLicenseMapping.manifestDeclared,false);
+ assert.deepEqual(r.missing,['license-declaration-not-provided']);assert(result.gaps.some(g=>g.reason==='license-declaration-not-provided'));
+ const body=result.texts.find(t=>t.sha256===svelteToolbeltReview.materialSha256);assert(body.text.includes('2024 Hunter Johnston'));assert(body.text.includes('2024 Thomas G. Lopes'));
+ assert(r.evidence.some(e=>e.kind==='reviewed-license-mapping'));assert.equal(r.materialReferences.find(m=>m.origin)?.origin.sha256,svelteToolbeltReview.archiveSha256);
+ assert.equal(f.inventory.entries[0].reviewedLicenseMapping,undefined,'production function does not mutate its input');
+});
+for(const [label,mutate] of [
+ ['other version',f=>{f.cache.packages[0].identity.version='0.10.7';}],
+ ['other package',f=>{f.cache.packages[0].identity.name='another-package';}],
+ ['changed lock',f=>{f.cache.packages[0].expected.lockIntegrity='sha512-AAAA';}],
+ ['changed manifest',f=>{f.inventory.entries[0].manifestSha256=sha256('new manifest');}],
+ ['changed installed LICENSE',f=>{f.inventory.entries[0].licenseTextIds=[];}],
+ ['unreviewed expression',f=>{f.cache.packages[0].reviewedLicenseMapping.expression='Apache-2.0';}],
+ ['claimed manifest declaration',f=>{f.cache.packages[0].reviewedLicenseMapping.manifestDeclared=true;}],
+ ['other archive',f=>{f.cache.packages[0].materials[0].origin.sha256=sha256('other archive');}],
+ ['notice instead of license',f=>{f.cache.packages[0].materials[0].kind='notice';}]
+])test(`reviewed MIT mapping rejects ${label}`,()=>{const f=reviewedSvelteFixture();mutate(f);assert.throws(()=>applyPackageMaterialCache(f.inventory,f.cache));});

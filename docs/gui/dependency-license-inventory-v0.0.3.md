@@ -31,6 +31,19 @@
 
 当前材料仍有明确限制：`svelte-toolbelt@0.10.6` 有原始正文但没有包级许可声明；`rustls-platform-verifier-android@0.1.1` 发布包无原始全文或可核实的 VCS 版本；`selectors@0.36.1` 的原包 MPL 注释与明确指向的共同条款可读，包专属版权归属仍未提供；`tao-macros@0.1.3` 的实际 tag 与发布源码逐文件匹配，仅取到 Apache 原文，另一可选 MIT 全文仍缺失。Swift 缓存有固定 revision 原文，但没有实际构建 pin 时仍 unresolved。共同 MPL 条款来源如实标为客户端固定提交中未增加组件归属的标准全文，官方 Mozilla 获取 403 不写成成功，绝不把客户端作者或 sibling crate 版权转给 selectors。
 
+### 四项缺口的独立复核
+
+本轮不改变这四项缺口数量，也不修改已有 APK。补充的材料进入下一次真实构建，其身份与 cache SHA 仍由现有生成、打包检查验证。
+
+- `svelte-toolbelt@0.10.6`：从官方 npm registry 取得 exact tarball，SHA-512 与 pnpm lock 和官方版本元数据一致；原始 `package/package.json` 与 `package/LICENSE` 又与安装目录逐字节相同。该 LICENSE 明写 MIT License，并保留 Hunter Johnston、Thomas G. Lopes 原始版权。新 `reviewedLicenseMapping` 仅将这个已审阅正文映射为 MIT，绑定确切版本、manifest SHA、lock integrity、archive SHA 与正文 SHA；`declaredLicense` 仍为 null，`license-declaration-not-provided` 继续存在。About 单独显示“已审阅正文映射；包 manifest 未声明许可”，不把维护者复核说成发行包自带 SPDX 声明。
+- `selectors@0.36.1`：按发布包 VCS `635e1a19d02960588a00e189bd4bd5bdb150ec3d` 核对 Servo/stylo root 与 selectors 目录，并复核完整发布源文件集合。该范围只有既有 MPL 头；manifest 的 `The Servo Project Developers` 是作者元数据，不能补造带年份的版权声明。未观察到本包额外版权/NOTICE，缺口保留；不借 style、servo_arc 或 Mozilla 其他组件的归属材料。
+- `tao-macros@0.1.3`：精确 tag commit `340684d932b6126bed449fc1f4edca81776ad592` 已与发布源逐文件匹配；本轮再核 root `LICENSE.spdx` 明确属于 `PackageName: tao`、声明 Apache-2.0。不能将其 Tao 版权冒作宏包 MIT 材料，缺失的 MIT 全文仍保留。
+- `rustls-platform-verifier-android@0.1.1`：官方 crates.io 版本 metadata checksum 与 lock/archive 相同；完整发布包及其 AAR、嵌套 classes.jar 均未观察到 LICENSE/NOTICE/COPYRIGHT 或不可变 VCS 记录。官方 GitHub repository API 获取返回 proxy tunnel HTTP 403，未换域绕过。官方元数据中的 MIT OR Apache-2.0 声明不替代缺失原文，不借同仓其他版本材料。
+
+以上检索范围、原始 archive 成员、AAR SHA 和阻塞结果保留在各 package/gap 的 `followUpAudit`。它们描述实际观察范围，不声称已经穷尽世界上所有法律资料。
+
+`scripts/license-review-svelte-toolbelt.mjs` 是显式离线维护器，输入维护者已下载的官方 tarball、原 registry metadata、安装目录与 pnpm lock，拒绝输入漂移后才更新 frontend cache。正常构建没有新增网络访问。`scripts/license-reviewed-mapping.mjs` 只接受此包已审阅的完整身份和正文摘要，并要求当前安装包实际提供相同 LICENSE；不能用缓存遮盖安装文件变化。测试在既有 `test-license-package-materials.mjs` 与 `test-mobile-about.mjs` 中运行实际生产函数，覆盖错版本、错包、锁/manifest/原文漂移、错误映射与伪称 manifest 声明。
+
 ## 构建接线
 
 1. `pnpm build` 自动通过 Vite 插件产生 `build/license-inventory.frontend.json`（client only）。`build/` 已忽略。

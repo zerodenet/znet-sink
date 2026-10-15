@@ -866,3 +866,11 @@ export type DebugCaptureStatus = { detailed: boolean; expiresAtMs: number };
 export async function setDebugCapture(enabled?: boolean): Promise<DebugCaptureStatus> {
   return invoke('gui_debug_capture', { enabled });
 }
+
+/** Explicit local metadata reads; never query/apply runtime or grant control. */
+export async function inspectWorkspaceStorage(): Promise<import('$lib/features/storage-inspection/model').WorkspaceStorageInspection> {
+  return invoke('gui_workspace_storage_inspect');
+}
+export async function inspectPacketLedger(): Promise<import('$lib/features/storage-inspection/model').PacketLedgerInspection> {
+  return invoke('gui_packet_ledger_inspect');
+}

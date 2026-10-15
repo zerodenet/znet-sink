@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, rmSync, existsSync, globSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,10 @@ const cache = JSON.parse(readFileSync(join(repo, 'resources/licenses/frontend-pa
 const lock = readFileSync(join(repo, 'pnpm-lock.yaml'), 'utf8');
 
 function installedEntry(pkg) {
-  const manifest = realpathSync(join(repo, 'node_modules', pkg.identity.name, 'package.json'));
+  const direct=join(repo,'node_modules',pkg.identity.name,'package.json');
+  const candidates=existsSync(direct)?[direct]:globSync(join(repo,'node_modules/.pnpm',`${pkg.identity.name.replace('/','+')}@${pkg.identity.version}*`,'node_modules',pkg.identity.name,'package.json'));
+  const matching=candidates.filter(path=>sha256(readFileSync(path))===pkg.expected.manifestSha256);assert.equal(matching.length,1,'exact installed manifest must be unique');
+  const manifest = realpathSync(matching[0]);
   const owner = {manifest, directory:dirname(manifest), value:JSON.parse(readFileSync(manifest, 'utf8'))};
   return packageEntry(owner, [{kind:'build-input', detail:'Test reads the actual locked installed package, not a distribution claim.'}], lock);
 }
@@ -41,13 +44,21 @@ test('reviewed npm bodies bind actual package identity, manifest and archive int
     const applied = applyPackageMaterialCache(fixtureInventory(entry,materials.texts),cache);
     const resolved = applied.entries[0];
     assert.ok(resolved.licenseTextIds.length);
-    assert.ok(resolved.noticeTextIds.length);
-    assert.ok(applied.texts.some(text=>text.text.includes('Copyright 2019-2023 Tauri Programme within The Commons Conservancy')));
+    if(pkg.reviewedLicenseMapping) {
+      assert.equal(resolved.reviewedLicenseMapping.expression,'MIT');assert.equal(resolved.declaredLicense,null);
+      assert(applied.texts.some(text=>text.text.includes('2024 Hunter Johnston')&&text.text.includes('2024 Thomas G. Lopes')));
+      assert(resolved.missing.includes('license-declaration-not-provided'));
+    } else {
+      assert.ok(resolved.noticeTextIds.length);
+      assert.ok(applied.texts.some(text=>text.text.includes('Copyright 2019-2023 Tauri Programme within The Commons Conservancy')));
+    }
     for (const material of pkg.materials) {
       assert.equal(sha256(Buffer.from(material.text)),material.sha256);
       assert.match(material.origin.url,/^https:\/\/(raw\.githubusercontent\.com|registry\.npmjs\.org)\//);
       assert.match(material.origin.sha256,/^[a-f0-9]{64}$/);
-      if (material.kind === 'license') assert.ok(material.origin.url.includes(pkg.acquisition.gitHead));
+      if (material.kind === 'license'&&pkg.reviewedLicenseMapping) {
+        assert.equal(material.origin.sha256,pkg.acquisition.archiveSha256);assert.equal(material.origin.member,'package/LICENSE');
+      } else if (material.kind === 'license') assert.ok(material.origin.url.includes(pkg.acquisition.gitHead));
       else {
         assert.equal(material.origin.sha256,pkg.acquisition.archiveSha256);
         assert.equal(material.origin.byteRange[1]-material.origin.byteRange[0],Buffer.byteLength(material.text));

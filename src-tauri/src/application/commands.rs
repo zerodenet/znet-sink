@@ -64,6 +64,8 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         crate::commands::settings_transfer::settings_transfer_commit,
         crate::commands::settings_transfer::settings_transfer_status,
         crate::commands::packet_routes::gui_packet_routes_snapshot,
+        crate::commands::packet_routes::gui_packet_ledger_inspect,
+        crate::commands::recovery_storage::gui_workspace_storage_inspect,
         crate::commands::packet_routes::gui_packet_route_detail,
         crate::commands::packet_routes::gui_close_packet_route,
         plugin_commands::plugins_supported,

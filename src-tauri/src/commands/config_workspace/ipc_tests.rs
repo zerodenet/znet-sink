@@ -25,6 +25,13 @@ async fn workspace_actual_ipc_preflight_lost_ack_bad_receipt_and_late_source_nev
         let state = Arc::new(crate::configuration::workspace::tests::state());
         state.app_config().lock().unwrap().core.socket =
             Some(socket.to_string_lossy().into_owned());
+        crate::services::app_config_store::save(
+            &workspace::recovery::directory(&state)
+                .unwrap()
+                .join("app-config.json"),
+            &state.app_config().lock().unwrap(),
+        )
+        .unwrap();
         let mut prepared = crate::configuration::workspace::tests::prepared(&state);
         prepared.identity = Some(queries::KernelRuntimeIdentity {
             core_instance_id: "original".into(),

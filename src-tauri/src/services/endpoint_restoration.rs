@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{future::Future, path::PathBuf};
+mod history;
 mod journal;
+use crate::services::file_history::WriteReceipt;
 pub use journal::EndpointRestoration;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Binding {
+    #[serde(default)]
+    files: Option<history::Files>,
     target: RestorationTarget,
     source_digest: String,
     source_updated_at: u64,
@@ -30,6 +34,14 @@ struct Binding {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
+    #[serde(default)]
+    owner: Option<history::Owner>,
+    #[serde(default)]
+    local_write_started: bool,
+    #[serde(default)]
+    save_only: bool,
+    #[serde(default)]
+    app_write: Option<WriteReceipt>,
     plan: RestorationPlan,
     binding: Binding,
     app_digest: String,
@@ -175,6 +187,7 @@ pub(crate) async fn remember_catalog(
         &app,
     )?;
     let current_digest = digest(&current.config)?;
+    let files = history::capture(state, &app)?;
     let mut journal = state.endpoint_restoration().read()?;
     let mut targets = vec![];
     for row in rows {
@@ -194,6 +207,7 @@ pub(crate) async fn remember_catalog(
                         &profile.id,
                         row["endpoint_id"].as_str().unwrap_or(""),
                     )
+                    .filter(|record| history::published_matches(record, &files))
                     .is_none()
                 {
                     continue;
@@ -215,14 +229,15 @@ pub(crate) async fn remember_catalog(
             &profile.id,
             row["endpoint_id"].as_str().unwrap_or(""),
         ) {
-            pending_receipt_matches(
-                &previous,
-                &app,
-                &profile.id,
-                &source,
-                profile.updated_at_unix_ms,
-                &receipt.effective_digest,
-            )?
+            history::published_matches(&previous, &files)
+                && pending_receipt_matches(
+                    &previous,
+                    &app,
+                    &profile.id,
+                    &source,
+                    profile.updated_at_unix_ms,
+                    &receipt.effective_digest,
+                )?
         } else {
             false
         };
@@ -237,7 +252,8 @@ pub(crate) async fn remember_catalog(
             profile.id,
             digest(&source)?,
             snapshot,
-            receipt.effective_digest
+            receipt.effective_digest,
+            files
         ]))?;
         let target = RestorationTarget {
             binding_id: binding_id.clone(),
@@ -249,6 +265,7 @@ pub(crate) async fn remember_catalog(
         journal.bindings.insert(
             binding_id,
             Binding {
+                files: Some(files.clone()),
                 target: target.clone(),
                 source_digest: digest(&source)?,
                 source_updated_at: profile.updated_at_unix_ms,
@@ -273,6 +290,8 @@ pub(crate) async fn remember_catalog(
     state.endpoint_restoration().replace(journal)?;
     Ok(targets)
 }
+// Material comparison only. Callers additionally require the exact original
+// owned file receipt and current history tokens; hashes alone grant nothing.
 fn pending_receipt_matches(
     record: &Record,
     app: &AppConfig,
@@ -338,6 +357,12 @@ pub(crate) async fn preview(
         .ok_or_else(|| conflict("没有可信的来源绑定；请先核对配置工作区并刷新端点"))?;
     let (profile, source, app) = active(state)?;
     check_source(&binding, &profile, &source)?;
+    history::require_binding(state, &binding, &app)?;
+    let owner = history::owner(state)?;
+    let files = binding
+        .files
+        .as_ref()
+        .ok_or_else(|| conflict("来源绑定缺少文件历史"))?;
     let client_scope = state.client_core_snapshot().scope;
     if journal.records.values().any(|record| {
         record.binding.target.profile_id == profile.id
@@ -357,7 +382,8 @@ pub(crate) async fn preview(
             "此端点有未核对事务，请先读取原恢复结果；不会自动重放",
         ));
     }
-    let pending = pending(&journal, &profile.id, &binding.target.endpoint_id);
+    let pending = pending(&journal, &profile.id, &binding.target.endpoint_id)
+        .filter(|record| history::published_matches(record, files));
     let next = match endpoints::restore_candidate(&app, &profile.id, &source, &binding.snapshot) {
         Ok(next) => next,
         Err(error) => {
@@ -395,7 +421,8 @@ pub(crate) async fn preview(
             .or_default()
             .entry("endpoints".into())
             .or_insert_with(|| json!({}))[&binding.target.tag] = pending.overlay.clone();
-        base_confirmed |= digest(&original)? == pending.app_digest
+        base_confirmed |= history::published_matches(pending, files)
+            && digest(&original)? == pending.app_digest
             && (pending.plan.previous_effective_digest == binding.receipt_digest
                 || pending.plan.effective_digest == binding.receipt_digest);
     }
@@ -443,7 +470,12 @@ pub(crate) async fn preview(
         expires_at_unix_ms: created.saturating_add(300_000).to_string(),
         impact: "仅移除此端点的客户端启用/方向覆盖，保留来源、其他端点与 DNS；运行应用会重载配置并协调此端点，可能中断相关连接。".into(),
     };
+    history::require_binding(state, &binding, &app)?;
     let record = Record {
+        owner: Some(owner),
+        local_write_started: false,
+        save_only: false,
+        app_write: None,
         receipt: receipt_for(&plan),
         plan: plan.clone(),
         binding,
@@ -520,12 +552,25 @@ trait Backend: Sync {
     fn validate(&self, config: &Value) -> impl Future<Output = AppResult<()>> + Send;
     fn apply(
         &self,
+        record: &Record,
+        previous: &AppConfig,
         expected: &Value,
         config: &Value,
     ) -> impl Future<Output = AppResult<RuntimeReceipt>> + Send;
-    fn clear(&self, row: &Value) -> impl Future<Output = AppResult<Value>> + Send;
+    fn clear(
+        &self,
+        record: &Record,
+        previous: &AppConfig,
+        row: &Value,
+    ) -> impl Future<Output = AppResult<Value>> + Send;
     fn checkpoint(&self, record: &Record) -> AppResult<()>;
-    fn publish(&self, expected: &AppConfig, next: AppConfig) -> AppResult<()>;
+    fn guard_files(&self, record: &Record, expected: &AppConfig) -> AppResult<()>;
+    fn publish(
+        &self,
+        record: &Record,
+        expected: &AppConfig,
+        next: AppConfig,
+    ) -> AppResult<WriteReceipt>;
 }
 struct Live<'a> {
     state: &'a AppState,
@@ -557,13 +602,20 @@ impl Backend for Live<'_> {
         }
         Err(AppError::internal("无法识别配置校验回执，不能应用"))
     }
-    async fn apply(&self, expected: &Value, config: &Value) -> AppResult<RuntimeReceipt> {
+    async fn apply(
+        &self,
+        record: &Record,
+        previous: &AppConfig,
+        expected: &Value,
+        config: &Value,
+    ) -> AppResult<RuntimeReceipt> {
         let current = queries::runtime_identity(Some(self.options.clone())).await?;
         if expected["core_instance_id"] != current.core_instance_id
             || expected["config_revision"].as_u64() != Some(current.config_revision)
         {
             return Err(conflict("配置提交前内核身份已变化"));
         }
+        self.guard_files(record, previous)?;
         let identity = crate::configuration::apply::apply_with_identity(
             self.state.capabilities(),
             config.clone(),
@@ -578,7 +630,8 @@ impl Backend for Live<'_> {
             config_revision: identity.config_revision.to_string(),
         })
     }
-    async fn clear(&self, row: &Value) -> AppResult<Value> {
+    async fn clear(&self, record: &Record, previous: &AppConfig, row: &Value) -> AppResult<Value> {
+        self.guard_files(record, previous)?;
         network_endpoint::control_at_revision(
             network_endpoint::ControlInput {
                 endpoint_id: row["endpoint_id"]
@@ -602,8 +655,18 @@ impl Backend for Live<'_> {
     fn checkpoint(&self, record: &Record) -> AppResult<()> {
         save_record(self.state, record)
     }
-    fn publish(&self, expected: &AppConfig, next: AppConfig) -> AppResult<()> {
-        crate::services::app_config::compare_and_replace_local(self.state, expected, next)
+    fn guard_files(&self, record: &Record, expected: &AppConfig) -> AppResult<()> {
+        history::require_owner(self.state, record)?;
+        history::require(self.state, record, expected)
+    }
+    fn publish(
+        &self,
+        record: &Record,
+        expected: &AppConfig,
+        next: AppConfig,
+    ) -> AppResult<WriteReceipt> {
+        history::require_owner(self.state, record)?;
+        history::publish(self.state, record, expected, next)
     }
 }
 fn phase(
@@ -647,6 +710,7 @@ async fn execute(
         return Err(conflict("端点正在协调，请等待后重新预检"));
     }
     backend.validate(candidate).await?;
+    backend.guard_files(record, previous)?;
     // Persist before either network mutation. Repeated calls with this plan
     // only read its receipt, including after process loss.
     phase(
@@ -655,7 +719,7 @@ async fn execute(
         RestorePhase::Applying,
         "正在应用来源配置；本地覆盖尚未移除",
     )?;
-    let applied = match backend.apply(&row, candidate).await {
+    let applied = match backend.apply(record, previous, &row, candidate).await {
         Ok(identity) => identity,
         Err(_) => {
             return Ok(uncertain_result(
@@ -704,6 +768,13 @@ async fn execute(
             "配置应用后目标资源或实例未能核对；没有发送清除运行覆盖命令",
         ));
     }
+    if backend.guard_files(record, previous).is_err() {
+        return Ok(uncertain_result(
+            backend,
+            record,
+            "配置应用已返回，但本地文件历史已变化；未继续清除或保存",
+        ));
+    }
     record.clear_started = true;
     phase(
         backend,
@@ -711,7 +782,7 @@ async fn execute(
         RestorePhase::Clearing,
         "正在清除目标运行覆盖；新 revision 和意图已重新核对",
     )?;
-    let cleared = match backend.clear(&current).await {
+    let cleared = match backend.clear(record, previous, &current).await {
         Ok(row) => row,
         Err(_) => {
             return Ok(uncertain_result(
@@ -734,18 +805,29 @@ async fn execute(
     }
     record.receipt.endpoint = Some(public_snapshot(&cleared));
     record.receipt.runtime_confirmed = true;
+    if backend.guard_files(record, previous).is_err() {
+        return Ok(uncertain_result(
+            backend,
+            record,
+            "运行回执已收到，但本地文件历史已变化；未继续保存旧候选",
+        ));
+    }
+    record.local_write_started = true;
     phase(
         backend,
         record,
         RestorePhase::RuntimeConfirmed,
         "配置应用和端点清除回执已确认，尚待本地保存",
     )?;
-    if backend.publish(previous, next).is_err() {
-        return Ok(uncertain_result(
-            backend,
-            record,
-            "运行恢复已确认，但客户端覆盖保存冲突或失败；没有声称回滚，请核对原操作",
-        ));
+    match backend.publish(record, previous, next) {
+        Ok(receipt) => record.app_write = Some(receipt),
+        Err(_) => {
+            return Ok(uncertain_result(
+                backend,
+                record,
+                "运行恢复已确认，但客户端覆盖保存冲突或失败；没有声称回滚，请核对原操作",
+            ))
+        }
     }
     record.receipt.local_saved = true;
     if phase(
@@ -770,20 +852,33 @@ fn save_pending(
     previous: &AppConfig,
     next: AppConfig,
 ) -> AppResult<RestorationReceipt> {
+    backend.guard_files(record, previous)?;
+    record.local_write_started = true;
+    record.save_only = true;
     phase(
         backend,
         record,
         RestorePhase::SavedPending,
         "准备保存此端点覆盖移除意图；运行态尚未提交",
     )?;
-    if backend.publish(previous, next).is_err() {
-        phase(
-            backend,
-            record,
-            RestorePhase::Rejected,
-            "本地保存被拒绝或失败，运行态没有提交",
-        )?;
-        return Ok(record.receipt.clone());
+    match backend.publish(record, previous, next) {
+        Ok(receipt) => record.app_write = Some(receipt),
+        Err(error) if error.code == "conflict" => {
+            phase(
+                backend,
+                record,
+                RestorePhase::Rejected,
+                "本地保存被拒绝，运行态没有提交",
+            )?;
+            return Ok(record.receipt.clone());
+        }
+        Err(_) => {
+            return Ok(uncertain_result(
+                backend,
+                record,
+                "本地保存结果未确认；保留原操作，不会重写或重放",
+            ))
+        }
     }
     record.receipt.local_saved = true;
     if phase(
@@ -841,6 +936,7 @@ pub(crate) async fn apply(
     if record.receipt.phase != RestorePhase::Prepared {
         return Ok(record.receipt);
     }
+    history::require_owner(state, &record)?;
     state.ensure_client_scope(Some(&record.plan.client_scope))?;
     validate_plan(
         &record.plan,
@@ -852,6 +948,7 @@ pub(crate) async fn apply(
     if digest(&app)? != record.app_digest {
         return Err(conflict("客户端设置或覆盖已变化，请重新预检"));
     }
+    history::require(state, &record, &app)?;
     let next =
         match endpoints::restore_candidate(&app, &profile.id, &source, &record.binding.snapshot) {
             Ok(next) => next,
@@ -929,14 +1026,15 @@ pub(crate) async fn reconcile(
     // Read-only reconciliation may inspect a completed operation; publishing
     // local preferences from an old client scope is never allowed.
     state.ensure_client_scope(Some(&record.plan.client_scope))?;
-    if record.receipt.phase == RestorePhase::SavedPending {
-        let (profile, source, app) = active(state)?;
+    if record.save_only || record.receipt.phase == RestorePhase::SavedPending {
+        let (profile, source, _app) = active(state)?;
         check_source(&record.binding, &profile, &source)?;
-        if overlay(&app, &profile.id, &record.binding.target.tag).is_none() {
-            record.receipt.local_saved = true;
-            record.receipt.message = "本地覆盖移除已核对，运行态仍待应用".into();
-            save_record(state, &record)?;
-        }
+        record.app_write = Some(history::confirm_local(state, &record, &source)?);
+        record.receipt.local_saved = true;
+        record.receipt.phase = RestorePhase::SavedPending;
+        record.receipt.message =
+            "原本地保存已由固定文件历史回执核对，运行态仍待应用；没有重写正文".into();
+        save_record(state, &record)?;
         return Ok(record.receipt);
     }
     let (profile, source, app) = active(state)?;
@@ -962,20 +1060,16 @@ pub(crate) async fn reconcile(
     }
     record.receipt.runtime_confirmed = true;
     record.receipt.endpoint = Some(public_snapshot(&row));
-    let current_overlay = app
-        .profile_edits
-        .get(&profile.id)
-        .and_then(|edits| edits.get("endpoints"))
-        .and_then(|prefs| prefs.get(&record.binding.target.tag));
-    if let Some(current) = current_overlay {
-        if current != &record.overlay {
-            return Err(conflict(
-                "客户端端点覆盖已被其他操作更新；不能用旧恢复事务移除",
-            ));
-        }
+    if record.local_write_started {
+        record.app_write = Some(history::confirm_local(state, &record, &source)?);
+    } else {
+        history::require_owner(state, &record)?;
+        history::require(state, &record, &app)?;
         let next =
             endpoints::restore_candidate(&app, &profile.id, &source, &record.binding.snapshot)?;
-        crate::services::app_config::compare_and_replace_local(state, &app, next)?;
+        record.local_write_started = true;
+        save_record(state, &record)?;
+        record.app_write = Some(history::publish(state, &record, &app, next)?);
     }
     record.receipt.local_saved = true;
     record.receipt.phase = RestorePhase::Confirmed;

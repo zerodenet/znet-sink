@@ -385,3 +385,5 @@ export const getClientCoreSnapshot = async () => {
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
   return {revision:1,scopeGeneration:fixtureClientGeneration,scope:{profileId:new URLSearchParams(location.search).get('fixture') === 'overview' ? 'main' : 'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
 };
+// Explicit metadata reads only; never invoke the operation/Packet fixture gateway.
+export { inspectWorkspaceStorage, inspectPacketLedger } from './storage-inspection';

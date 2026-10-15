@@ -1,6 +1,7 @@
 //! Trusted ordinary-material recovery ledger. Never used for managed/protected
 //! bodies or exported as a frontend DTO. Database phases cannot issue network IO.
 use super::*;
+use crate::services::file_history::{HistoryToken, WriteReceipt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -75,6 +76,12 @@ pub(crate) struct Record {
     pub published_graph_fingerprint: Option<String>,
     pub expected_rule_sets_fingerprint: String,
     pub expected_app_fingerprint: String,
+    #[serde(default)]
+    pub expected_app_history: Option<HistoryToken>,
+    #[serde(default)]
+    pub expected_rule_sets_history: Option<HistoryToken>,
+    #[serde(default)]
+    pub app_projection_receipt: Option<WriteReceipt>,
     pub projected_app_fingerprint: String,
     pub effective_config_fingerprint: String,
     pub capture_plan_fingerprint: String,
@@ -100,6 +107,8 @@ pub(crate) struct Prepare {
     pub expected_graph_fingerprint: String,
     pub expected_rule_sets_fingerprint: String,
     pub expected_app_fingerprint: String,
+    pub expected_app_history: HistoryToken,
+    pub expected_rule_sets_history: HistoryToken,
     pub projected_app_fingerprint: String,
     pub effective_config_fingerprint: String,
     pub capture_plan_fingerprint: String,
@@ -185,7 +194,52 @@ fn ordinary(profile: &ProxyConfigProfile, source: &SubscriptionProfile) -> bool 
             .as_ref()
             .is_some_and(|content| zero_config::RuntimeConfig::parse(&content.to_string()).is_ok())
 }
+fn valid_history(token: &HistoryToken) -> bool {
+    token.epoch > 0
+        && token.store_id.len() == 32
+        && token
+            .store_id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        && valid_hash(&token.file_id)
+}
+fn history_bound(record: &Record) -> bool {
+    record
+        .expected_app_history
+        .as_ref()
+        .is_some_and(valid_history)
+        && record
+            .expected_rule_sets_history
+            .as_ref()
+            .is_some_and(valid_history)
+}
+fn valid_projection(record: &Record, receipt: &WriteReceipt) -> bool {
+    record.expected_app_history.as_ref() == Some(&receipt.before)
+        && valid_history(&receipt.after)
+        && receipt.before.store_id == receipt.after.store_id
+        && receipt.before.file_id == receipt.after.file_id
+        && receipt.before.epoch.checked_add(1) == Some(receipt.after.epoch)
+        && receipt.owner_operation.as_deref() == Some(record.recovery_id.as_str())
+        && matches!(record.stage, Stage::LocalCommitted | Stage::Complete)
+        && record.confirmed_identity.is_some()
+        && record.expected_app_fingerprint != record.projected_app_fingerprint
+}
 fn validate_metadata(record: &Record) -> AppResult<()> {
+    match (
+        &record.expected_app_history,
+        &record.expected_rule_sets_history,
+    ) {
+        (None, None) if record.app_projection_receipt.is_none() => {} // historical only
+        (Some(app), Some(rules)) if valid_history(app) && valid_history(rules) => {}
+        _ => return Err(failure()),
+    }
+    if record
+        .app_projection_receipt
+        .as_ref()
+        .is_some_and(|r| !valid_projection(record, r))
+    {
+        return Err(failure());
+    }
     if record.schema != 1
         || record.version <= 0
         || !valid_recovery_id(&record.recovery_id)
@@ -445,6 +499,9 @@ pub(crate) struct Metadata {
     pub published_source_fingerprint: Option<String>,
     pub expected_rule_sets_fingerprint: String,
     pub expected_app_fingerprint: String,
+    pub expected_app_history: Option<HistoryToken>,
+    pub expected_rule_sets_history: Option<HistoryToken>,
+    pub app_projection_receipt: Option<WriteReceipt>,
     pub projected_app_fingerprint: String,
     pub effective_config_fingerprint: String,
     pub capture_plan_fingerprint: String,
@@ -489,6 +546,9 @@ fn metadata(connection: &Connection, id: &str) -> AppResult<Option<Metadata>> {
             published_source_fingerprint: record.published_source_fingerprint,
             expected_rule_sets_fingerprint: record.expected_rule_sets_fingerprint,
             expected_app_fingerprint: record.expected_app_fingerprint,
+            expected_app_history: record.expected_app_history,
+            expected_rule_sets_history: record.expected_rule_sets_history,
+            app_projection_receipt: record.app_projection_receipt,
             projected_app_fingerprint: record.projected_app_fingerprint,
             effective_config_fingerprint: record.effective_config_fingerprint,
             capture_plan_fingerprint: record.capture_plan_fingerprint,
@@ -530,7 +590,11 @@ fn prepare_with_limits(
     mut input: Prepare,
     limits: BudgetLimits,
 ) -> AppResult<Prepared> {
-    if !valid_recovery_id(&input.recovery_id)
+    if !valid_history(&input.expected_app_history)
+        || !valid_history(&input.expected_rule_sets_history)
+        || (input.expected_app_fingerprint != input.projected_app_fingerprint
+            && input.expected_app_history.epoch.checked_add(1).is_none())
+        || !valid_recovery_id(&input.recovery_id)
         || input
             .expected_source
             .target_proxy_config_id
@@ -626,6 +690,9 @@ fn prepare_with_limits(
         published_graph_fingerprint: None,
         expected_rule_sets_fingerprint: input.expected_rule_sets_fingerprint,
         expected_app_fingerprint: input.expected_app_fingerprint,
+        expected_app_history: Some(input.expected_app_history),
+        expected_rule_sets_history: Some(input.expected_rule_sets_history),
+        app_projection_receipt: None,
         projected_app_fingerprint: input.projected_app_fingerprint,
         effective_config_fingerprint: input.effective_config_fingerprint,
         capture_plan_fingerprint: input.capture_plan_fingerprint,
@@ -684,7 +751,7 @@ fn transition(
     let mut connection = db_open(dir)?;
     let tx = immediate_transaction(&mut connection).map_err(|_| failure())?;
     let mut record = require_version(&tx, id, expected)?;
-    if record.stage != from {
+    if !history_bound(&record) || record.stage != from {
         return Err(conflict());
     }
     record.updated_at_unix_ms = record
@@ -701,7 +768,7 @@ pub(crate) fn publish_local(dir: &Path, id: &str, expected: i64) -> AppResult<Re
     let mut connection = db_open(dir)?;
     let tx = immediate_transaction(&mut connection).map_err(|_| failure())?;
     let mut record = require_version(&tx, id, expected)?;
-    if record.stage != Stage::RuntimeConfirmed {
+    if !history_bound(&record) || record.stage != Stage::RuntimeConfirmed {
         return Err(conflict());
     }
     let mut graph = load_graph(&tx)?;
@@ -762,14 +829,49 @@ pub(crate) fn publish_local(dir: &Path, id: &str, expected: i64) -> AppResult<Re
     finish_tx(tx, dir)?;
     Ok(record)
 }
+/// Checkpoint only an actual owned file write/metadata confirmation. This does
+/// not issue file IO, runtime commands or infer a receipt from a current value.
+pub(crate) fn record_app_projection(
+    dir: &Path,
+    id: &str,
+    expected: i64,
+    receipt: WriteReceipt,
+) -> AppResult<Record> {
+    let mut connection = db_open(dir)?;
+    let tx = immediate_transaction(&mut connection).map_err(|_| failure())?;
+    let mut record = require_version(&tx, id, expected)?;
+    if !history_bound(&record) || !valid_projection(&record, &receipt) {
+        return Err(conflict());
+    }
+    if let Some(existing) = &record.app_projection_receipt {
+        if existing == &receipt {
+            return Ok(record);
+        }
+        return Err(conflict());
+    }
+    record.app_projection_receipt = Some(receipt);
+    record.updated_at_unix_ms = record
+        .updated_at_unix_ms
+        .max(crate::services::common::now_unix_ms());
+    record.version = next_version(&tx)?;
+    update(&tx, &record, expected)?;
+    finish_tx(tx, dir)?;
+    Ok(record)
+}
 pub(crate) fn complete(dir: &Path, id: &str, expected: i64) -> AppResult<Record> {
     let mut connection = db_open(dir)?;
     let tx = immediate_transaction(&mut connection).map_err(|_| failure())?;
     let mut record = require_version(&tx, id, expected)?;
+    if !history_bound(&record) {
+        return Err(conflict());
+    }
     if record.stage == Stage::Complete {
         return Ok(record);
     }
-    if record.stage != Stage::LocalCommitted {
+    if record.stage != Stage::LocalCommitted
+        || (record.expected_app_fingerprint != record.projected_app_fingerprint
+            && record.app_projection_receipt.is_none())
+    {
         return Err(conflict());
     }
     let mut graph = load_graph(&tx)?;
