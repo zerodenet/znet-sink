@@ -156,6 +156,8 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         config_workspace_commands::gui_config_workspace_format,
         config_workspace_commands::gui_config_workspace_validate,
         config_workspace_commands::gui_config_workspace_operation,
+        config_workspace_commands::gui_config_workspace_recovery_review,
+        config_workspace_commands::gui_config_workspace_complete_local,
         config_workspace_commands::gui_config_workspace_discard,
         core_config_commands::core_download_latest,
         gui_core_commands::gui_core_overview,

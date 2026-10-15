@@ -5,6 +5,7 @@
   import { AlertTriangle, Check, Loader2, RefreshCcw, RotateCcw, Send, ScanSearch, Zap, Power } from '@lucide/svelte';
   import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
   import KernelSettingsTransfer from '$lib/components/settings/KernelSettingsTransfer.svelte';
+  import * as Dialog from '$lib/components/ui/dialog';
 
   // Textarea.ref has a null fallback. Svelte rejects binding an undefined
   // parent value to a bindable prop with a non-undefined fallback.
@@ -12,6 +13,14 @@
   let tabSize = 2;
   let workspaceView: 'source' | 'overrides' | 'effective' = $state('source');
   let confirmRefresh = $state(false);
+  let recoveryConfirm = $state(false);
+  let reviewedToken = $state<string | null>(null);
+  let reviewedPlanId = $state<string | null>(null);
+  function recoveryDeadline(value: string): string {
+    if (!/^(0|[1-9]\d*)$/.test(value) || BigInt(value) > 8640000000000000n) return '检查有效期未提供，请重新检查';
+    const timestamp = Number(value);
+    return timestamp <= Date.now() ? '恢复检查已过期，请重新检查' : `本次检查有效至 ${new Date(timestamp).toLocaleString('zh-CN') }；提交时再次校验，过期须重新检查`;
+  }
 
   $effect(() => {
     // Auto-load on mount
@@ -137,7 +146,27 @@
   {#if configEditor.readOnlyReason}<div role="status" class="error-panel">{configEditor.readOnlyReason}；来源、覆盖及最终正文均未提供。</div>{/if}
   {#if configEditor.conflict}<div role="alert" class="error-panel">来源已变化，原草稿保留。旧预检已失效，请明确刷新后重新预检。</div>{/if}
   {#if configEditor.pendingApply}<p role="status">{configEditor.phase === 'saved' ? '已保存，待应用' : '本地材料已保存，运行待应用或核对'}；保存不等于内核或 VPN 生效。</p>{/if}
-  {#if configEditor.operationId}<div role="status" class="error-panel">原事务结果未确认；只核对原操作，不会重新提交。<Button variant="outline" onclick={() => configEditor.checkOperation()}>核对原事务</Button></div>{/if}
+  {#if configEditor.operationId}
+    <section aria-label="原工作区操作恢复" class="error-panel">
+      <p role="status">原事务结果未确认；只核对原操作，不会重新提交。</p>
+      <p class="operation-id">原操作：{configEditor.operationId}</p>
+      <p>{configEditor.operation?.state === 'runtime_confirmed_pending_local' ? '原运行操作已有确认回执，本地发布尚未完成；不代表当前运行态仍有效。' : '原操作的运行结果未确认；恢复元资料不代表运行成功，不会自动重放。'}</p>
+      {#if configEditor.operation?.reason}<p>{configEditor.operation.reason}</p>{/if}
+      <Button variant="outline" disabled={isLoading} onclick={() => configEditor.checkOperation()}>核对原事务</Button>
+      <Button variant="outline" disabled={isLoading} onclick={() => configEditor.reviewRecovery()}>检查原操作恢复</Button>
+      {#if configEditor.recoveryReview}
+        <p role="status">{configEditor.recoveryReview.reason}</p>
+        {#if configEditor.recoveryReview.expiresAtUnixMs}<p>{recoveryDeadline(configEditor.recoveryReview.expiresAtUnixMs)}</p>{/if}
+        {#if configEditor.recoveryReview.canCompleteLocal}
+          <p>仅完成此原操作的本地发布，不发送新的配置应用或 TUN 命令。</p>
+          {#if configEditor.dirty}<p>未保存草稿仍保留；先明确放弃草稿，再重新检查原操作。</p>{/if}
+          <Button disabled={!configEditor.canCompleteLocal} onclick={() => { reviewedToken = configEditor.recoveryReview?.reviewId ?? null; reviewedPlanId = configEditor.recoveryReview?.planId ?? null; recoveryConfirm = true; }}>完成原本地发布</Button>
+        {/if}
+      {/if}
+    </section>
+  {:else if configEditor.operation}
+    <p role="status" class="operation-id">原操作历史：{configEditor.operation.planId} · {configEditor.operation.state === 'confirmed' ? '原事务已完成' : '原事务已拒绝'}。历史回执不代表当前运行态。</p>
+  {/if}
   {#if configEditor.runtime}
     <div class="runtime-card" class:confirmed={configEditor.runtime.confirmed}>
       <div class="runtime-main">
@@ -181,6 +210,8 @@
         </span>
       {:else if configEditor.phase === 'saved'}<span class="status-badge">已保存，待应用</span>
       {:else if configEditor.phase === 'saving'}<span class="status-badge">本地保存中</span>
+      {:else if configEditor.phase === 'checking'}<span class="status-badge">原操作检查中</span>
+      {:else if configEditor.phase === 'completing'}<span class="status-badge">原本地发布提交中</span>
       {:else if configEditor.phase === 'unknown'}<span class="status-badge error">结果未确认</span>
       {:else if configEditor.phase === 'applied'}
         <span class="status-badge success">
@@ -439,6 +470,14 @@
   <KernelSettingsTransfer />
 </div>
 
+<Dialog.Root bind:open={recoveryConfirm}>
+  <Dialog.Content class="workspace-recovery-confirm">
+    <Dialog.Header><Dialog.Title>完成原操作的本地发布？</Dialog.Title><Dialog.Description>只使用已检查的原操作及其冻结候选；不会重新预检、重新应用运行配置或重建 TUN。取消保留草稿与原屏障。</Dialog.Description></Dialog.Header>
+    <Dialog.Body><p class="operation-id">{reviewedPlanId}</p><p>来源、覆盖、规则或运行身份变化后，原检查失效，需重新核对。</p></Dialog.Body>
+    <Dialog.Footer><Button variant="outline" onclick={() => { recoveryConfirm = false; reviewedToken = null; reviewedPlanId = null; }}>取消</Button><Button disabled={!configEditor.canCompleteLocal || !reviewedToken || reviewedToken !== configEditor.recoveryReview?.reviewId || reviewedPlanId !== configEditor.recoveryReview?.planId} onclick={() => { const token = reviewedToken; recoveryConfirm = false; reviewedToken = null; reviewedPlanId = null; if (token) void configEditor.completeLocal(token); }}>确认完成本地发布</Button></Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <style>
   .panel {
     min-width: 0;
@@ -446,6 +485,7 @@
     flex-direction: column;
     gap: 10px;
   }
+  .operation-id { overflow-wrap: anywhere; word-break: break-word; }
 
   .header {
     display: flex;
@@ -872,6 +912,7 @@
     .status-left { flex-wrap: wrap; }
     .actions-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
     .actions-bar :global(button), .header :global(button) { min-height: 44px; min-width: 44px; }
+    .error-panel :global(button), :global(.workspace-recovery-confirm button) { min-height: 44px; min-width: 44px; }
     .editor-container :global(textarea) { font-size: 16px; min-width: 0; }
     .workspace-tabs button { font-size: 12px; }
     .runtime-card, .error-panel, .panel { overflow-wrap: anywhere; }

@@ -5,6 +5,7 @@ use crate::{
     models::{core::CoreIpcOptions, gui_core::GuiZeroCapabilities, packet_routes::*},
 };
 use serde_json::{json, Value};
+mod journal;
 mod ledger;
 use ledger::{CloseLedger, LEDGER};
 
@@ -39,6 +40,7 @@ fn route(w: RouteWire) -> AppResult<PacketRoute> {
         ip_protocol: w.ip_protocol,
         translated: w.translated,
         started_at_unix_ms: w.started_at_unix_ms.to_string(),
+        close_operation_id: None,
         state: match w.state {
             PacketRouteState::Active => "active",
             PacketRouteState::Closing => "closing",
@@ -135,12 +137,17 @@ async fn snapshot_with_ledger(
     ledger: &CloseLedger,
 ) -> AppResult<PacketSnapshot> {
     validate_page(&query)?;
-    let (blocked_targets, close_ledger_full) = ledger.snapshot()?;
+    let ledger_view = ledger.view();
+    let blocked_targets = ledger_view.targets;
+    let close_ledger_full = ledger_view.full;
     let caps = queries::zero_capabilities(Some(options.clone())).await?;
     let reason = support_reason(&caps);
     let close_reason = close_reason(&caps);
     if reason.is_some() {
         return Ok(PacketSnapshot {
+            close_records: ledger_view.records,
+            close_ledger_recovery: ledger_view.recovery,
+            host_session_id: String::new(),
             offset: query.offset,
             limit: query.limit,
             client_scope_generation,
@@ -226,17 +233,15 @@ async fn snapshot_with_ledger(
         // Such rows remain observable but cannot be closed with an old revision.
         routes.push(row);
     }
-    for row in routes.iter().filter(|row| row.state == "closed") {
-        ledger.ended(&PacketTarget {
-            profile_id: profile_id.clone(),
-            client_scope_generation,
-            route_id: row.route_id.clone(),
-            core_instance_id: row.core_instance_id.clone(),
-            config_revision: row.config_revision.clone(),
-        })?;
-    }
-    let (blocked_targets, close_ledger_full) = ledger.snapshot()?;
+    // Catalog membership/closed rows never reconcile an original operation.
+    let ledger_view = ledger.view();
+    let blocked_targets = ledger_view.targets;
+    let close_ledger_full = ledger_view.full;
+    let close_reason = ledger_view.recovery.reason.clone().or(close_reason);
     Ok(PacketSnapshot {
+        close_records: ledger_view.records,
+        close_ledger_recovery: ledger_view.recovery,
+        host_session_id: String::new(),
         offset: query.offset,
         limit: query.limit,
         client_scope_generation,
@@ -278,6 +283,7 @@ async fn detail_with_ledger(
     ledger: &CloseLedger,
 ) -> AppResult<PacketRoute> {
     revision(&target)?;
+    let original_operation = ledger.observe(&target)?;
     let caps = queries::zero_capabilities(Some(options.clone())).await?;
     if let Some(reason) = support_reason(&caps) {
         return Err(AppError {
@@ -287,6 +293,13 @@ async fn detail_with_ledger(
         });
     }
     let before = queries::runtime_identity(Some(options.clone())).await?;
+    if before.core_instance_id != target.core_instance_id {
+        return Err(AppError::conflict(
+            "packet_route",
+            "",
+            "原内核实例不再是当前实例，仅保留历史屏障",
+        ));
+    }
     let current = get(&target.route_id, options.clone()).await;
     let after = queries::runtime_identity(Some(options)).await?;
     if before != after || after.core_instance_id != target.core_instance_id {
@@ -297,19 +310,29 @@ async fn detail_with_ledger(
         ));
     }
     match current {
-        Ok(current) => {
+        Ok(mut current) => {
             ensure(&current, &target)?;
             if current.state == "closed" {
-                ledger.ended(&target)?;
+                if let Some(original) = original_operation {
+                    ledger.complete(&original)?;
+                    current.close_operation_id = Some(original.record.operation_id);
+                }
             }
             Ok(current)
         }
         Err(error) if error.code == "not_found" => {
-            ledger.ended(&target)?;
+            let operation_id = if let Some(original) = original_operation {
+                ledger.complete(&original)?;
+                Some(original.record.operation_id)
+            } else {
+                None
+            };
             Err(AppError {
                 code: "not_found",
                 message: "同一内核实例已确认原 Packet 会话不再存在".into(),
-                details: Some(json!({"packetTargetEnded":PacketPhysicalTarget::from(&target)})),
+                details: Some(
+                    json!({"packetTargetEnded":PacketPhysicalTarget::from(&target),"closeOperationId":operation_id}),
+                ),
             })
         }
         Err(error) => Err(error),
@@ -323,6 +346,11 @@ async fn close_with_ledger(
     options: CoreIpcOptions,
     ledger: &CloseLedger,
 ) -> AppResult<PacketCloseResult> {
+    if target.close_operation_id.is_some() {
+        return Err(AppError::invalid_argument(
+            "恢复记录仅供只读核对，不能用原 operationId 重新关闭",
+        ));
+    }
     if ledger.contains(&target)? {
         return Err(AppError::conflict(
             "packet_close",
@@ -348,7 +376,7 @@ async fn close_with_ledger(
             "会话正在关闭或已结束，请重新检查",
         ));
     }
-    ledger.reserve(&target)?;
+    let reservation = ledger.reserve(&target)?;
     let response = commands::run_command(
         "packet_routes.close",
         json!(zero_api::PacketRouteCloseCommand {
@@ -364,28 +392,50 @@ async fn close_with_ledger(
             if v["accepted"].as_bool() == Some(false) {
                 let error = AppError::core_response(v);
                 if explicit_rejection(&error) {
-                    ledger.ended(&target)?;
-                    return Err(error);
+                    if ledger.complete(&reservation).is_err() {
+                        return Ok(unconfirmed_for(
+                            &reservation,
+                            "原操作回执已收到，但账本协调存盘未确认；保留屏障且不重放",
+                        ));
+                    }
+                    return Err(rejection_for(error, &reservation));
                 }
-                return Ok(unconfirmed("关闭回执未提供兼容的明确拒绝，保留原目标屏障"));
+                return Ok(unconfirmed_for(
+                    &reservation,
+                    "关闭回执未提供兼容的明确拒绝，保留原目标屏障",
+                ));
             }
             if v["accepted"].as_bool() != Some(true) {
-                return Ok(unconfirmed("内核未提供明确关闭回执；请重新检查原会话"));
+                return Ok(unconfirmed_for(
+                    &reservation,
+                    "内核未提供明确关闭回执；请重新检查原会话",
+                ));
             }
             let result = &v["result"];
             let receipt = match decode(result["route"].clone()).and_then(route) {
                 Ok(receipt) if ensure(&receipt, &target).is_ok() => receipt,
-                _ => return Ok(unconfirmed("关闭回执身份或格式不兼容，请重新检查原会话")),
+                _ => {
+                    return Ok(unconfirmed_for(
+                        &reservation,
+                        "关闭回执身份或格式不兼容，请重新检查原会话",
+                    ))
+                }
             };
             (result["closed"].as_bool() == Some(true) && receipt.state == "closed")
                 .then_some(receipt)
         }
         Err(error) if explicit_rejection(&error) => {
-            ledger.ended(&target)?;
-            return Err(error);
+            if ledger.complete(&reservation).is_err() {
+                return Ok(unconfirmed_for(
+                    &reservation,
+                    "原操作回执已收到，但账本协调存盘未确认；保留屏障且不重放",
+                ));
+            }
+            return Err(rejection_for(error, &reservation));
         }
         Err(_) => {
-            return Ok(unconfirmed(
+            return Ok(unconfirmed_for(
+                &reservation,
                 "关闭结果未确认；回执缺失、不兼容或读取中断，保留原目标屏障且不重放",
             ))
         }
@@ -393,7 +443,8 @@ async fn close_with_ledger(
     let identity = match queries::runtime_identity(Some(options.clone())).await {
         Ok(i) => i,
         Err(_) => {
-            return Ok(unconfirmed(
+            return Ok(unconfirmed_for(
+                &reservation,
                 "关闭回执已收到，但内核状态读取失败；请重新检查",
             ))
         }
@@ -401,7 +452,10 @@ async fn close_with_ledger(
     if identity.core_instance_id != target.core_instance_id
         || identity.config_revision != expected_revision
     {
-        return Ok(unconfirmed("内核或配置已变化，原关闭结果仅供历史核对"));
+        return Ok(unconfirmed_for(
+            &reservation,
+            "内核或配置已变化，原关闭结果仅供历史核对",
+        ));
     }
     let current = get(&target.route_id, options.clone()).await;
     let final_identity = queries::runtime_identity(Some(options)).await;
@@ -409,28 +463,39 @@ async fn close_with_ledger(
         .as_ref()
         .is_ok_and(|after| after == &identity)
     {
-        return Ok(unconfirmed(
+        return Ok(unconfirmed_for(
+            &reservation,
             "核对原会话时内核身份发生变化或读取失败，请保留原关闭屏障",
         ));
     }
     let result: AppResult<PacketCloseResult> = match current {
         Ok(r) if ensure(&r, &target).is_ok() && r.state == "closed" => Ok(PacketCloseResult {
+            operation_id: Some(reservation.record.operation_id.clone()),
             status: "confirmed".into(),
             message: "原 Packet 会话已结束；端点启用意图保持不变".into(),
             route: Some(r),
         }),
         Err(e) if e.code == "not_found" && receipt.is_some() => Ok(PacketCloseResult {
+            operation_id: Some(reservation.record.operation_id.clone()),
             status: "confirmed".into(),
             message: "内核已确认释放原 Packet 会话".into(),
             route: receipt,
         }),
-        _ => Ok(unconfirmed("原会话尚未确认释放，请重新检查其状态")),
+        _ => Ok(unconfirmed_for(
+            &reservation,
+            "原会话尚未确认释放，请重新检查其状态",
+        )),
     };
     if result
         .as_ref()
         .is_ok_and(|result| result.status == "confirmed")
     {
-        ledger.ended(&target)?;
+        if ledger.complete(&reservation).is_err() {
+            return Ok(unconfirmed_for(
+                &reservation,
+                "原操作回执已收到，但账本协调存盘未确认；保留屏障且不重放",
+            ));
+        }
     }
     result
 }
@@ -450,8 +515,23 @@ fn explicit_rejection(error: &AppError) -> bool {
             receipt["ok"].as_bool() == Some(false) || receipt["accepted"].as_bool() == Some(false)
         })
 }
+fn rejection_for(mut error: AppError, reservation: &ledger::Reservation) -> AppError {
+    if let Some(Value::Object(details)) = &mut error.details {
+        details.insert(
+            "closeOperationId".into(),
+            json!(reservation.record.operation_id),
+        );
+    }
+    error
+}
+fn unconfirmed_for(reservation: &ledger::Reservation, message: &str) -> PacketCloseResult {
+    let mut result = unconfirmed(message);
+    result.operation_id = Some(reservation.record.operation_id.clone());
+    result
+}
 fn unconfirmed(message: &str) -> PacketCloseResult {
     PacketCloseResult {
+        operation_id: None,
         status: "unconfirmed".into(),
         message: message.into(),
         route: None,
@@ -502,6 +582,8 @@ mod tests {
         let target = PacketTarget {
             profile_id: None,
             client_scope_generation: 1,
+            close_operation_id: None,
+            host_session_id: "fixture-session".into(),
             route_id: "r".into(),
             core_instance_id: "i".into(),
             config_revision: "18446744073709551615".into(),

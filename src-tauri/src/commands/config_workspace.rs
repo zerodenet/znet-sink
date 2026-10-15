@@ -98,6 +98,106 @@ pub async fn gui_config_workspace_operation(
     Ok(operation)
 }
 #[tauri::command]
+pub async fn gui_config_workspace_recovery_review(
+    state: State<'_, AppState>,
+    window: Window,
+    plan_id: String,
+) -> AppResult<ConfigWorkspaceRecoveryReview> {
+    host(state.inner(), &window)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    recovery_review_locked(state.inner(), &plan_id).await
+}
+async fn recovery_identity(
+    state: &AppState,
+    record: &workspace::recovery::Record,
+) -> AppResult<()> {
+    let receipt = record
+        .meta
+        .receipt
+        .as_ref()
+        .ok_or_else(workspace::conflict)?;
+    let control = crate::kernel::configuration::BoundControl::connect(ipc_options(state)?).await?;
+    let expected = queries::KernelRuntimeIdentity {
+        core_instance_id: receipt.core_instance_id.clone(),
+        config_revision: receipt.config_revision,
+    };
+    if control.identity().await? != expected || control.identity().await? != expected {
+        return Err(workspace::conflict());
+    }
+    Ok(())
+}
+async fn recovery_review_locked(
+    state: &AppState,
+    plan_id: &str,
+) -> AppResult<ConfigWorkspaceRecoveryReview> {
+    // Admission before candidate body; a latest runtime query cannot manufacture a receipt.
+    workspace::context(state)?;
+    let metadata =
+        workspace::recovery::metadata(state, plan_id)?.ok_or_else(workspace::conflict)?;
+    let operation = workspace::recovery::view(&metadata);
+    let mut result = ConfigWorkspaceRecoveryReview {
+        plan_id: plan_id.into(),
+        review_id: None,
+        state: operation.state,
+        can_complete_local: false,
+        reason: operation.reason.unwrap_or_default(),
+        receipt: operation.receipt,
+        expires_at_unix_ms: None,
+    };
+    if !matches!(
+        metadata.stage,
+        workspace::recovery::Stage::RuntimeConfirmedPendingLocal
+            | workspace::recovery::Stage::LocalCommitted
+            | workspace::recovery::Stage::AppConfirmed
+            | workspace::recovery::Stage::Complete
+    ) {
+        return Ok(result);
+    }
+    let record = workspace::recovery::load_checked(state, plan_id)?;
+    recovery_identity(state, &record).await?;
+    // Both local material and the original receipt are checked again after async reads.
+    let latest = workspace::recovery::load_checked(state, plan_id)?;
+    if latest.meta.version != record.meta.version {
+        return Err(workspace::conflict());
+    }
+    let (id, expires) = workspace::recovery::issue_review(state, &latest)?;
+    result.review_id = Some(id);
+    result.expires_at_unix_ms = Some(expires.to_string());
+    result.can_complete_local = true;
+    result.reason =
+        "原回执与当前运行身份及本地材料精确匹配；确认后只完成原候选的本地发布，不重放运行操作"
+            .into();
+    Ok(result)
+}
+#[tauri::command]
+pub async fn gui_config_workspace_complete_local(
+    state: State<'_, AppState>,
+    window: Window,
+    input: ConfigWorkspaceCompleteInput,
+) -> AppResult<ConfigWorkspaceOperation> {
+    host(state.inner(), &window)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    complete_local_locked(state.inner(), input).await
+}
+async fn complete_local_locked(
+    state: &AppState,
+    input: ConfigWorkspaceCompleteInput,
+) -> AppResult<ConfigWorkspaceOperation> {
+    let review = workspace::recovery::consume_review(state, &input.plan_id, &input.review_id)?;
+    let record = workspace::recovery::load_checked(state, &input.plan_id)?;
+    if record.meta.version != review.version {
+        return Err(workspace::conflict());
+    }
+    recovery_identity(state, &record).await?;
+    workspace::verify(state, &review.binding)?;
+    let result =
+        workspace::recovery::finish_local(state, &input.plan_id, &review.binding, review.version)?;
+    if let Some(receipt) = &result.receipt {
+        state.configuration().record_transaction(receipt.clone());
+    }
+    Ok(result)
+}
+#[tauri::command]
 pub fn gui_config_workspace_discard(
     state: State<'_, AppState>,
     window: Window,
@@ -300,7 +400,7 @@ async fn apply_locked(
         {
             return Err(workspace::conflict());
         }
-        let mut transaction = ConfigTransactionReceipt {
+        let transaction = ConfigTransactionReceipt {
             transaction_id: state.configuration().next_transaction_id(),
             profile_id: context.profile.id.clone(),
             strategy: input.strategy,
@@ -311,13 +411,18 @@ async fn apply_locked(
             runtime_identity: receipt.identity.into(),
         };
         workspace::runtime_confirmed(state, &input.plan_id, transaction.clone())?;
-        workspace::publish(state, &context, prepared.source)?;
-        transaction.state = "confirmed";
-        state
-            .configuration()
-            .record_transaction(transaction.clone());
-        workspace::finish(state, &input.plan_id, transaction)?;
-        workspace::operation(state, &input.plan_id)
+        workspace::verify(state, &prepared.binding)?;
+        let record = workspace::recovery::load_checked(state, &input.plan_id)?;
+        let operation = workspace::recovery::finish_local(
+            state,
+            &input.plan_id,
+            &prepared.binding,
+            record.meta.version,
+        )?;
+        if let Some(receipt) = &operation.receipt {
+            state.configuration().record_transaction(receipt.clone());
+        }
+        Ok(operation)
     }
     .await;
     if result
@@ -581,3 +686,7 @@ mod tests {
 
 #[cfg(all(test, unix))]
 mod ipc_tests;
+
+#[cfg(all(test, unix))]
+#[path = "config_workspace/recovery_tests.rs"]
+mod recovery_tests;

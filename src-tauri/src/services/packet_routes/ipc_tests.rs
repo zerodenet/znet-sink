@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 struct Peer {
-    ledger: CloseLedger,
+    ledger: Arc<CloseLedger>,
     options: CoreIpcOptions,
     calls: Arc<Mutex<Vec<Value>>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -60,7 +60,9 @@ impl Peer {
             }
         });
         Self {
-            ledger: CloseLedger::default(),
+            ledger: Arc::new(CloseLedger::at(
+                &directory.path().join("packet-close-pending-v1.json"),
+            )),
             options: CoreIpcOptions {
                 socket: Some(path.to_string_lossy().into_owned()),
                 timeout_ms: Some(2000),
@@ -93,6 +95,8 @@ fn target() -> PacketTarget {
     PacketTarget {
         profile_id: Some("p1".into()),
         client_scope_generation: 1,
+        host_session_id: "fixture-session".into(),
+        close_operation_id: None,
         route_id: "opaque:packet:1".into(),
         core_instance_id: "core-a".into(),
         config_revision: u64::MAX.to_string(),
@@ -335,6 +339,7 @@ fn page_query(offset: u32) -> PacketPageQuery {
             core_instance_id: "core-a".into(),
             config_revision: u64::MAX.to_string(),
             client_scope_generation: 1,
+            host_session_id: "fixture-session".into(),
         }),
     }
 }
@@ -634,4 +639,290 @@ async fn malformed_outer_receipts_and_unclassified_errors_retain_barrier_and_nev
             1
         );
     }
+}
+
+#[tokio::test]
+async fn durable_unknown_reopens_with_original_token_and_lists_never_release_it() {
+    for mode in ["missing", "closed"] {
+        let peer = Peer::new(move |request| {
+            if request["type"] == "command" {
+                return ok(json!({"accepted":true,"result":{}}));
+            }
+            if request["request"]["packet_routes"].is_object() {
+                let routes = if mode == "missing" {
+                    vec![]
+                } else {
+                    vec![row("closed")]
+                };
+                return ok(
+                    json!({"packet_routes":{"core_instance_id":"core-a","config_revision":u64::MAX,"observed_at_unix_ms":1,"total":routes.len(),"routes":routes,"next_offset":null}}),
+                );
+            }
+            read(request)
+        });
+        let result = close_with_ledger(target(), peer.options.clone(), &peer.ledger)
+            .await
+            .unwrap();
+        assert_eq!(result.status, "unconfirmed");
+        let restored =
+            CloseLedger::at(&peer._directory.path().join("packet-close-pending-v1.json"));
+        let snapshot = snapshot_with_ledger(
+            Some("p1".into()),
+            peer.options.clone(),
+            PacketPageQuery::default(),
+            1,
+            &restored,
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.close_records.len(), 1);
+        assert!(snapshot.close_records[0].recovered);
+        assert_eq!(
+            snapshot.close_records[0].operation_id,
+            result.operation_id.unwrap()
+        );
+        assert!(close_with_ledger(target(), peer.options.clone(), &restored)
+            .await
+            .is_err());
+        assert_eq!(
+            peer.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call["type"] == "command")
+                .count(),
+            1
+        );
+    }
+}
+#[tokio::test]
+async fn corrupt_storage_still_reads_actual_routes_and_reserve_failure_never_sends_close() {
+    for mode in ["corrupt", "publication"] {
+        let peer = Peer::new(read);
+        let path = peer._directory.path().join("packet-close-pending-v1.json");
+        if mode == "corrupt" {
+            std::fs::write(&path, b"broken-private-metadata").unwrap();
+        } else {
+            assert_eq!(peer.ledger.view().recovery.state, "ready");
+            peer.ledger.fail_next_publication();
+        }
+        if mode == "corrupt" {
+            let page = snapshot_with_ledger(
+                Some("p1".into()),
+                peer.options.clone(),
+                PacketPageQuery::default(),
+                1,
+                &peer.ledger,
+            )
+            .await
+            .unwrap();
+            assert_eq!(page.routes.len(), 1);
+            assert!(page.supported);
+            assert!(!page.can_close);
+            assert_eq!(page.close_ledger_recovery.state, "blocked");
+        }
+        assert_eq!(
+            close_with_ledger(target(), peer.options.clone(), &peer.ledger)
+                .await
+                .unwrap_err()
+                .code,
+            "packet_ledger_unavailable"
+        );
+        assert!(!peer
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call["type"] == "command"));
+        if mode == "corrupt" {
+            assert_eq!(std::fs::read(&path).unwrap(), b"broken-private-metadata");
+        } else {
+            assert_eq!(peer.ledger.view().records.len(), 1);
+            assert_eq!(peer.ledger.view().recovery.state, "blocked");
+        }
+    }
+}
+#[tokio::test]
+async fn completion_publication_failure_keeps_barrier_even_after_closed_or_rejected_receipt() {
+    for mode in ["closed", "rejected"] {
+        let captured = Arc::new(Mutex::new(None::<Arc<CloseLedger>>));
+        let writer = captured.clone();
+        let mut closed = false;
+        let peer = Peer::new(move |request| {
+            if request["type"] == "command" {
+                writer
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .fail_next_publication();
+                closed = true;
+                return if mode == "rejected" {
+                    Some(
+                        json!({"ok":false,"error":{"code":"permission_denied","message":"denied"}}),
+                    )
+                } else {
+                    ok(json!({"accepted":true,"result":{"closed":true,"route":row("closed")}}))
+                };
+            }
+            if closed && request["request"]["packet_route"].is_object() {
+                return ok(json!({"packet_route":row("closed")}));
+            }
+            read(request)
+        });
+        *captured.lock().unwrap() = Some(peer.ledger.clone());
+        let result = close_with_ledger(target(), peer.options.clone(), &peer.ledger)
+            .await
+            .unwrap();
+        assert_eq!(result.status, "unconfirmed");
+        assert!(result.operation_id.is_some());
+        let restored =
+            CloseLedger::at(&peer._directory.path().join("packet-close-pending-v1.json"));
+        assert_eq!(restored.view().records.len(), 1);
+        assert!(restored.contains(&target()).unwrap());
+        assert!(close_with_ledger(target(), peer.options.clone(), &restored)
+            .await
+            .is_err());
+        assert_eq!(
+            peer.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call["type"] == "command")
+                .count(),
+            1
+        );
+    }
+}
+#[tokio::test]
+async fn late_original_receipt_cannot_clear_newer_same_physical_operation() {
+    let captured = Arc::new(Mutex::new(None::<Arc<CloseLedger>>));
+    let writer = captured.clone();
+    let original = Arc::new(Mutex::new(None::<String>));
+    let save_original = original.clone();
+    let mut closed = false;
+    let peer = Peer::new(move |request| {
+        if request["type"] == "command" {
+            let ledger = writer.lock().unwrap().clone().unwrap();
+            let first = ledger.observe(&target()).unwrap().unwrap();
+            *save_original.lock().unwrap() = Some(first.record.operation_id.clone());
+            // Deterministic concurrent authoritative reconciliation plus a new
+            // operation, before this old IPC acknowledgement arrives.
+            ledger.complete(&first).unwrap();
+            ledger.reserve(&target()).unwrap();
+            closed = true;
+            return ok(json!({"accepted":true,"result":{"closed":true,"route":row("closed")}}));
+        }
+        if closed && request["request"]["packet_route"].is_object() {
+            return ok(json!({"packet_route":row("closed")}));
+        }
+        read(request)
+    });
+    *captured.lock().unwrap() = Some(peer.ledger.clone());
+    let result = close_with_ledger(target(), peer.options.clone(), &peer.ledger)
+        .await
+        .unwrap();
+    assert_eq!(result.status, "unconfirmed");
+    assert_eq!(result.operation_id, *original.lock().unwrap());
+    let newer = peer.ledger.view().records[0].operation_id.clone();
+    assert_ne!(Some(newer.clone()), result.operation_id);
+    let mut old = target();
+    old.close_operation_id = result.operation_id;
+    assert!(detail_with_ledger(old, peer.options.clone(), &peer.ledger)
+        .await
+        .is_err());
+    assert_eq!(peer.ledger.view().records[0].operation_id, newer);
+    assert_eq!(
+        peer.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call["type"] == "command")
+            .count(),
+        1
+    );
+}
+#[tokio::test]
+async fn recovered_original_detail_is_the_only_read_that_can_durably_release_token() {
+    for mode in ["closed", "not-found", "different-revision"] {
+        let peer = Peer::new(move |request| {
+            if request["request"]["packet_route"].is_object() {
+                if mode == "not-found" {
+                    return Some(
+                        json!({"ok":false,"error":{"code":"not_found","message":"ended"}}),
+                    );
+                }
+                let mut value = row("closed");
+                if mode == "different-revision" {
+                    value["config_revision"] = json!(2);
+                }
+                return ok(json!({"packet_route":value}));
+            }
+            read(request)
+        });
+        let original = peer.ledger.reserve(&target()).unwrap();
+        let restored =
+            CloseLedger::at(&peer._directory.path().join("packet-close-pending-v1.json"));
+        let mut fixed = target();
+        fixed.close_operation_id = Some(original.record.operation_id.clone());
+        let result = detail_with_ledger(fixed, peer.options.clone(), &restored).await;
+        if mode == "different-revision" {
+            assert!(result.is_err());
+            assert_eq!(restored.view().records.len(), 1);
+        } else {
+            if mode == "closed" {
+                assert_eq!(
+                    result.unwrap().close_operation_id,
+                    Some(original.record.operation_id)
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().details.unwrap()["closeOperationId"],
+                    original.record.operation_id
+                );
+            }
+            assert!(restored.view().records.is_empty());
+            assert!(
+                CloseLedger::at(&peer._directory.path().join("packet-close-pending-v1.json"))
+                    .view()
+                    .records
+                    .is_empty()
+            );
+        }
+        assert!(!peer
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call["type"] == "command"));
+    }
+}
+#[tokio::test]
+async fn legitimate_negative_receipt_releases_only_its_original_token_durably() {
+    let peer = Peer::new(|request| {
+        if request["type"] == "command" {
+            Some(json!({"ok":false,"error":{"code":"permission_denied","message":"denied"}}))
+        } else {
+            read(request)
+        }
+    });
+    let error = close_with_ledger(target(), peer.options.clone(), &peer.ledger)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "permission_denied");
+    assert!(error.details.unwrap()["closeOperationId"]
+        .as_str()
+        .unwrap()
+        .starts_with("packet-close-"));
+    let restored = CloseLedger::at(&peer._directory.path().join("packet-close-pending-v1.json"));
+    assert!(restored.view().records.is_empty());
+    assert_eq!(
+        peer.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call["type"] == "command")
+            .count(),
+        1
+    );
 }

@@ -77,6 +77,8 @@
   {#if view.error}<p class="notice" role="alert">{getAppErrorMessage(view.error, 'Packet 路径读取或操作失败')}。请重新检查。</p>{/if}
   {#if view.refreshError}<p class="notice" role="alert">{getAppErrorMessage(view.refreshError, 'Packet 路径读取失败')}。缓存已过期，请重新检查。</p>{/if}
   {#if view.message}<p class="notice" role="status">{view.message}</p>{/if}
+  {#if view.snapshot?.closeLedgerRecovery.state === 'blocked'}<p class="notice" role="alert">{view.snapshot.closeLedgerRecovery.reason ?? '关闭账本恢复未确认'}。保留只读查看；不会发送新的关闭，也不会把读取失败当作原会话已结束。</p>
+  {:else if view.snapshot && (view.snapshot.closeLedgerRecovery.recoveredCount ?? 0) > 0}<p class="notice" role="status">已读取 {view.snapshot.closeLedgerRecovery.recoveredCount} 条宿主恢复记录；这是原操作元资料，不代表会话已关闭，不会自动重放。</p>{/if}
   {#if view.snapshot && !view.snapshot.supported}<p class="notice">{view.snapshot.reason}。保留此入口，更新内核后可重新检查。</p>
   {:else if view.snapshot}
     <p class="sample">采样：{packetTime(view.snapshot.observedAtUnixMs)}{view.stale ? ' · 已过期，控制暂不可用' : ''}</p>
@@ -101,11 +103,18 @@
     {/each}
   {/if}
   {#if view.blockedTargets.length}
-    <article aria-label="原 Packet 关闭屏障"><h3>在途或未确认的原目标（{view.blockedTargets.length}）</h3><p class="sample">宿主进程内最多128个物理目标；跨页、返回页面及配置切回不解除。仅同实例原目标的权威结束事实可协调；这不是进程重建持久账本。</p>
-      {#each view.blockedTargets as target (physicalKey(target))}<div class="barrier"><p class="target">{target.routeId} · 实例 {target.coreInstanceId} · 配置版本 {target.configRevision}</p><Button variant="outline" disabled={!controlsReady || view.stale || view.loading || !!view.busy || view.snapshot?.coreInstanceId !== target.coreInstanceId} onclick={() => session.reconcile(target)}>只读核对原会话</Button></div>{/each}
+    <article aria-label="原 Packet 关闭屏障"><h3>在途或未确认的原目标（{view.blockedTargets.length}）</h3><p class="sample">最多128个物理目标；跨页、返回页面、宿主重建及配置切回均不解除。仅固定原操作的权威结束事实及本地账本持久确认可协调；恢复记录不授予新的关闭权限。</p>
+      {#each view.blockedTargets as target (physicalKey(target))}
+        {@const record = view.snapshot?.closeRecords.find(record => physicalKey(record.target) === physicalKey(target))}
+        <div class="barrier"><p class="target">{target.routeId} · 实例 {target.coreInstanceId} · 配置版本 {target.configRevision}</p>
+          {#if record}<p class="target">原操作：{record.operationId}</p><p class="sample">{record.recovered ? '从宿主持久记录恢复，仅供核对' : '本宿主已预留的原关闭操作'} · 原配置 {record.originProfileId ?? '未提供'} · 原客户端代次 {record.originClientScopeGeneration} · 发起于 {packetTime(record.reservedAtUnixMs)}</p>{/if}
+          {#if view.snapshot?.coreInstanceId !== target.coreInstanceId}<p class="sample">原内核实例已变化；此记录仅作历史，不对当前同名会话执行操作。</p>{/if}
+          <Button variant="outline" disabled={!controlsReady || view.stale || view.loading || !!view.busy || view.snapshot?.coreInstanceId !== target.coreInstanceId} onclick={() => session.reconcile(target)}>只读核对原会话</Button>
+        </div>
+      {/each}
     </article>
   {/if}
-  {#if view.snapshot?.closeLedgerFull || view.blockedTargets.length >= 128}<p class="notice">关闭目标预算已满，暂停新增关闭操作；读取、筛选和翻页仍可用，请先核对原目标。</p>{/if}
+  {#if view.snapshot?.closeLedgerRecovery.state !== 'blocked' && (view.snapshot?.closeLedgerFull || view.blockedTargets.length >= 128)}<p class="notice">关闭目标预算已满，暂停新增关闭操作；读取、筛选和翻页仍可用，请先核对原目标。</p>{/if}
   {#if view.detail}<article aria-label="Packet 会话详情"><h3>会话详情</h3><dl><dt>会话 ID</dt><dd>{view.detail.routeId}</dd><dt>内核实例</dt><dd>{view.detail.coreInstanceId}</dd><dt>配置版本</dt><dd>{view.detail.configRevision}</dd><dt>状态</dt><dd>{view.detail.state}</dd><dt>源 / 目的</dt><dd>{view.detail.source} / {view.detail.destination}</dd></dl></article>{/if}
 </section>
 <Dialog.Root bind:open={confirmOpen}>

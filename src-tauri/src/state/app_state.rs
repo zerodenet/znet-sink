@@ -20,6 +20,9 @@ use crate::models::{
 };
 
 pub struct AppState {
+    /// Distinguishes host lifetimes even when local scope counters restart at 1.
+    /// Missing secure entropy disables recovery admission; no weak fallback.
+    host_session_id: Option<String>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     plugins: crate::services::plugins::Host,
     #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
@@ -93,6 +96,7 @@ impl AppState {
         let config_revision = config_revision(active_profile);
 
         Self {
+            host_session_id: new_host_session_id(),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             plugins: crate::services::plugins::Host::default(),
             #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
@@ -139,6 +143,16 @@ impl AppState {
 
     pub(crate) fn next_core_event_generation(&self) -> u64 {
         self.core_event_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Recovery may inspect records from another session, but must explicitly
+    /// bind a new review to this session before publishing any local material.
+    pub(crate) fn host_session_id(&self) -> crate::errors::AppResult<&str> {
+        self.host_session_id.as_deref().ok_or_else(|| {
+            crate::errors::AppError::internal(
+                "无法建立安全宿主会话身份；恢复控制暂不可用，请保留原操作记录",
+            )
+        })
     }
 
     pub(crate) fn core_event_generation(&self) -> Arc<AtomicU64> {
@@ -713,6 +727,12 @@ impl AppState {
     }
 }
 
+fn new_host_session_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 fn normalize_proxy_configs(mut profiles: Vec<ProxyConfigProfile>) -> Vec<ProxyConfigProfile> {
     let mut active_index = None;
     for (index, profile) in profiles.iter_mut().enumerate() {
@@ -753,6 +773,89 @@ mod tests {
         logs::{LogEntry, LogLevel, LogSource},
         proxy_config::{ProxyConfigCapabilities, ProxyConfigProfile},
     };
+
+    #[test]
+    fn host_recreation_with_identical_local_counters_has_a_distinct_session() {
+        let first = AppState::default();
+        let second = AppState::default();
+        assert_eq!(
+            first.client_core_snapshot().scope,
+            second.client_core_snapshot().scope
+        );
+        assert_eq!(
+            first.client_core_snapshot().scope_generation,
+            second.client_core_snapshot().scope_generation
+        );
+        assert_ne!(
+            first.host_session_id().unwrap(),
+            second.host_session_id().unwrap()
+        );
+        assert_eq!(first.host_session_id().unwrap().len(), 32);
+    }
+
+    #[test]
+    fn missing_secure_host_identity_rejects_recovery_admission() {
+        let mut state = AppState::default();
+        state.host_session_id = None;
+        assert!(state.host_session_id().is_err());
+        let _ = state.client_core_snapshot();
+    }
+
+    #[test]
+    fn concurrent_host_identity_reads_share_the_same_session() {
+        let state = std::sync::Arc::new(AppState::default());
+        let original = state.host_session_id().unwrap().to_owned();
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let state = std::sync::Arc::clone(&state);
+                std::thread::spawn(move || state.host_session_id().unwrap().to_owned())
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(thread.join().unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn host_session_child_process_probe() {
+        let Some(output) = std::env::var_os("ZNET_TEST_HOST_SESSION_OUTPUT") else {
+            return;
+        };
+        let state = AppState::default();
+        let snapshot = state.client_core_snapshot();
+        let metadata = serde_json::json!({
+            "session": state.host_session_id().unwrap(),
+            "scope": snapshot.scope,
+            "generation": snapshot.scope_generation.0,
+        });
+        std::fs::write(output, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn actual_host_process_restart_cannot_reuse_scope_counter_as_session_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshots = Vec::new();
+        for index in 0..2 {
+            let output = directory.path().join(format!("owner-{index}.json"));
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "state::app_state::tests::host_session_child_process_probe",
+                    "--test-threads=1",
+                ])
+                .env("ZNET_TEST_HOST_SESSION_OUTPUT", &output)
+                .output()
+                .unwrap();
+            assert!(child.status.success(), "host identity child process failed");
+            snapshots.push(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(output).unwrap())
+                    .unwrap(),
+            );
+        }
+        assert_eq!(snapshots[0]["scope"], snapshots[1]["scope"]);
+        assert_eq!(snapshots[0]["generation"], snapshots[1]["generation"]);
+        assert_ne!(snapshots[0]["session"], snapshots[1]["session"]);
+    }
 
     #[test]
     fn next_record_id_continues_after_loaded_logs() {

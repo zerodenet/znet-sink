@@ -660,6 +660,11 @@ export interface ConfigWorkspaceOperation {
   planId: string; state: 'prepared' | 'rejected' | 'submitted_unknown' | 'runtime_confirmed_pending_local' | 'confirmed';
   receipt?: ConfigTransactionReceipt | null; reason?: string | null;
 }
+export interface ConfigWorkspaceRecoveryReview {
+  planId: string; reviewId: string | null; state: ConfigWorkspaceOperation['state'];
+  canCompleteLocal: boolean; reason: string; receipt: ConfigTransactionReceipt | null;
+  expiresAtUnixMs: string | null;
+}
 
 export interface ConfigCompositionLayer {
   source: string;

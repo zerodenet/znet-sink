@@ -296,7 +296,7 @@ fn schema_two_upgrade_preserves_relationships_and_existing_capability_rows() {
     let version: i32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let bytes: Vec<u8> = connection
         .query_row(
             "SELECT value FROM capability_values WHERE owner='owner'",

@@ -169,7 +169,8 @@ pub(crate) fn commit_workspace_if_current(
     next_profiles: Vec<ProxyConfigProfile>,
     binding: &super::workspace::Binding,
 ) -> AppResult<()> {
-    commit_checked(
+    let directory = super::workspace::recovery::directory(state)?;
+    commit_checked_with_epoch(
         state,
         previous_profiles,
         previous_subscriptions,
@@ -177,9 +178,10 @@ pub(crate) fn commit_workspace_if_current(
         next_profiles,
         previous_subscriptions.to_vec(),
         true,
-        None,
+        Some(&directory),
         Some(&binding.rules_digest),
         Some((&binding.scope, binding.generation)),
+        Some(binding.domain_epoch),
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -194,6 +196,34 @@ pub(crate) fn commit_checked(
     directory: Option<&std::path::Path>,
     expected_rules: Option<&str>,
     expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+) -> AppResult<()> {
+    commit_checked_with_epoch(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        next_subscriptions,
+        preserve_binding,
+        directory,
+        expected_rules,
+        expected_scope,
+        None,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn commit_checked_with_epoch(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    preserve_binding: bool,
+    directory: Option<&std::path::Path>,
+    expected_rules: Option<&str>,
+    expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+    expected_epoch: Option<i64>,
 ) -> AppResult<()> {
     let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
@@ -244,6 +274,8 @@ pub(crate) fn commit_checked(
                 expected_app,
                 candidate,
                 directory,
+                expected_epoch,
+                published_epoch: std::cell::Cell::new(None),
             };
             znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
         }
@@ -294,10 +326,28 @@ struct CheckedPublication<'a> {
     expected_app: &'a crate::models::app_config::AppConfig,
     candidate: crate::models::app_config::AppConfig,
     directory: Option<&'a std::path::Path>,
+    expected_epoch: Option<i64>,
+    published_epoch: std::cell::Cell<Option<i64>>,
 }
 impl Publication for CheckedPublication<'_> {
     type Error = AppError;
     fn write(&self) -> AppResult<()> {
+        if let Some(expected_epoch) = self.expected_epoch {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            let next = crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                expected_epoch,
+                &super::workspace::digest(&(self.previous_profiles, self.previous_subscriptions))?,
+                self.next_profiles,
+                self.next_subscriptions,
+            )?;
+            self.published_epoch.set(Some(next));
+            return Ok(());
+        }
         match self.directory {
             Some(dir) => domain_store::save_relational_data_to_dir(
                 dir,
@@ -323,6 +373,21 @@ impl Publication for CheckedPublication<'_> {
         )
     }
     fn restore(&self) -> AppResult<()> {
+        if let Some(epoch) = self.published_epoch.get() {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                epoch,
+                &super::workspace::digest(&(self.next_profiles, self.next_subscriptions))?,
+                self.previous_profiles,
+                self.previous_subscriptions,
+            )?;
+            return Ok(());
+        }
         match self.directory {
             Some(dir) => domain_store::save_relational_data_to_dir(
                 dir,

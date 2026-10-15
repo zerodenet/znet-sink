@@ -514,6 +514,12 @@ export async function inspectConfigWorkspaceOperation(planId: string): Promise<C
 export async function discardConfigWorkspacePlan(planId: string): Promise<void> {
   return invoke('gui_config_workspace_discard', { planId });
 }
+export async function reviewConfigWorkspaceRecovery(planId: string): Promise<import('$lib/types/gui-api').ConfigWorkspaceRecoveryReview> {
+  return invoke('gui_config_workspace_recovery_review', { planId });
+}
+export async function completeConfigWorkspaceLocal(input: { planId: string; reviewId: string }): Promise<ConfigWorkspaceOperation> {
+  return invoke('gui_config_workspace_complete_local', { input });
+}
 
 // Mode hot-switch
 

@@ -1,9 +1,9 @@
-import { applyConfigWorkspace, getConfigWorkspaceSnapshot, planConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan } from '$lib/services/core';
+import { applyConfigWorkspace, getConfigWorkspaceSnapshot, planConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan, reviewConfigWorkspaceRecovery, completeConfigWorkspaceLocal } from '$lib/services/core';
 import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
 import { normalizeConfigValidationError } from '$lib/services/config-validation';
 import { success, warning } from '$lib/services/toast.svelte';
-import type { ConfigCompositionLayer, ConfigImpactItem, ConfigPlanApplyResult, ConfigTransactionReceipt, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigWorkspaceDraftInput, ConfigWorkspaceOperation, ConfigWorkspaceSaveResult } from '$lib/types/gui-api';
-export type EditorPhase = 'idle' | 'loading' | 'loaded' | 'editing' | 'validating' | 'planning' | 'planned' | 'saving' | 'saved' | 'applying' | 'applied' | 'unknown' | 'error';
+import type { ConfigCompositionLayer, ConfigImpactItem, ConfigPlanApplyResult, ConfigTransactionReceipt, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigWorkspaceDraftInput, ConfigWorkspaceOperation, ConfigWorkspaceSaveResult, ConfigWorkspaceRecoveryReview } from '$lib/types/gui-api';
+export type EditorPhase = 'idle' | 'loading' | 'loaded' | 'editing' | 'validating' | 'planning' | 'planned' | 'saving' | 'saved' | 'applying' | 'checking' | 'completing' | 'applied' | 'unknown' | 'error';
 export interface ValidationError { fieldPath?: string; message: string; }
 export type { ConfigImpactItem, ConfigPlanApplyResult };
 export interface WorkspacePorts {
@@ -15,8 +15,10 @@ export interface WorkspacePorts {
   apply(input: { planId: string; strategy: 'hot_reload' | 'restart' }): Promise<ConfigWorkspaceOperation>;
   operation(planId: string): Promise<ConfigWorkspaceOperation>;
   discard(planId: string): Promise<void>;
+  review(planId: string): Promise<ConfigWorkspaceRecoveryReview>;
+  complete(input: { planId: string; reviewId: string }): Promise<ConfigWorkspaceOperation>;
 }
-const defaultPorts: WorkspacePorts = { snapshot: getConfigWorkspaceSnapshot, plan: planConfigWorkspace, validate: validateConfigWorkspace, format: formatConfigWorkspace, save: saveConfigWorkspaceLocal, apply: applyConfigWorkspace, operation: inspectConfigWorkspaceOperation, discard: discardConfigWorkspacePlan };
+const defaultPorts: WorkspacePorts = { snapshot: getConfigWorkspaceSnapshot, plan: planConfigWorkspace, validate: validateConfigWorkspace, format: formatConfigWorkspace, save: saveConfigWorkspaceLocal, apply: applyConfigWorkspace, operation: inspectConfigWorkspaceOperation, discard: discardConfigWorkspacePlan, review: reviewConfigWorkspaceRecovery, complete: completeConfigWorkspaceLocal };
 const message = (error: unknown, fallback: string): string => {
   // Workspace backend errors use fixed public messages; do not stringify arbitrary error objects.
   return error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : fallback;
@@ -32,6 +34,12 @@ export class ConfigWorkspaceService {
   runtime = $state<ConfigWorkspaceSnapshot['runtime'] | null>(null);
   lastTransaction = $state<ConfigTransactionReceipt | null>(null);
   supportsPlanApply = $state(true); operationId = $state<string | null>(null);
+  operation = $state<ConfigWorkspaceOperation | null>(null);
+  recoveryReview = $state<ConfigWorkspaceRecoveryReview | null>(null);
+  private activeCalls = $state(0);
+  private async tracked<T>(request: () => Promise<T>): Promise<T> { this.activeCalls++; try { return await request(); } finally { this.activeCalls--; } }
+  private operationEditVersion = -1;
+  private recoveryVersion = -1;
   private binding = $state<string | null>(null);
   private editVersion = 0; private readVersion = 0; private planVersion = -1;
   private readonly ports: WorkspacePorts;
@@ -39,7 +47,7 @@ export class ConfigWorkspaceService {
     this.ports = ports;
     if (ports === defaultPorts) proxyConfigSignal.onActiveChanged(() => { void this.reconcileExternalSource(); });
   }
-  get busy(): boolean { return ['loading', 'validating', 'planning', 'saving', 'applying'].includes(this.phase); }
+  get busy(): boolean { return this.activeCalls > 0 || ['loading', 'validating', 'planning', 'saving', 'applying', 'checking', 'completing'].includes(this.phase); }
   get writable(): boolean { return !!this.binding && !this.readOnlyReason && !this.conflict && !this.operationId; }
   private invalidatePlan(): void {
     const id = this.planResult?.planId; this.planResult = null; this.planVersion = -1;
@@ -69,7 +77,9 @@ export class ConfigWorkspaceService {
     this.effectiveJson = this.readOnlyReason ? '' : snapshot.effectiveJson ?? '';
     this.compositionLayers = snapshot.composition?.layers ?? [];
     this.runtime = snapshot.runtime; this.lastTransaction = snapshot.lastTransaction ?? null;
-    this.operationId = snapshot.pendingOperation?.planId ?? null;
+    this.operation = snapshot.pendingOperation ?? null;
+    this.operationId = this.operation && !['confirmed', 'rejected'].includes(this.operation.state) ? this.operation.planId : null;
+    this.operationEditVersion = this.editVersion; this.recoveryReview = null; this.recoveryVersion = -1;
     this.pendingApply = snapshot.pendingApply; this.dirty = false; this.conflict = false;
     this.validationErrors = []; this.lastError = null;
   }
@@ -80,19 +90,19 @@ export class ConfigWorkspaceService {
       const snapshot = await this.ports.snapshot();
       if (read !== this.readVersion || edit !== this.editVersion) return;
       if (snapshot.binding === this.binding && snapshot.readOnlyReason === this.readOnlyReason) return;
-      this.invalidatePlan();
+      this.invalidatePlan(); this.recoveryReview = null; this.recoveryVersion = -1;
       if (this.dirty || this.busy || this.operationId) {
         this.phase = this.operationId ? 'unknown' : 'editing';
         this.conflict = true; this.readOnlyReason = snapshot.readOnlyReason ?? null;
         this.lastError = '来源或运行代次已变化；原草稿保留，旧预检失效。请明确放弃草稿并刷新来源后重新预检';
       } else { this.acceptSnapshot(snapshot); this.phase = this.operationId ? 'unknown' : 'loaded'; }
     } catch {
-      if (read === this.readVersion && edit === this.editVersion) { this.invalidatePlan(); this.conflict = true; this.lastError = '来源读取未确认；原草稿保留，请重新核对'; }
+      if (read === this.readVersion && edit === this.editVersion) { this.invalidatePlan(); this.recoveryReview = null; this.conflict = true; this.lastError = '来源读取未确认；原草稿保留，请重新核对'; }
     }
   }
   updateDraft(text: string): void {
     this.editVersion++; this.readVersion++; this.draftJson = text; this.dirty = text !== this.sourceJson;
-    this.validationErrors = []; this.invalidatePlan();
+    this.validationErrors = []; this.invalidatePlan(); this.recoveryReview = null; this.recoveryVersion = -1;
     this.phase = this.operationId ? 'unknown' : this.dirty ? 'editing' : 'loaded';
   }
   parseDraft(): Record<string, unknown> | null {
@@ -140,7 +150,7 @@ export class ConfigWorkspaceService {
     const edit = this.editVersion, previousRuntime = this.runtime;
     this.readVersion++; this.phase = 'saving'; this.lastError = null;
     try {
-      const result = await this.ports.save(input);
+      const result = await this.tracked(() => this.ports.save(input));
       if (!this.current(edit, input.binding)) return false;
       if (result.state !== 'saved_pending_apply') throw new Error('本地保存结果未确认');
       this.acceptSnapshot(result.snapshot); this.phase = 'saved'; this.pendingApply = true;
@@ -162,9 +172,9 @@ export class ConfigWorkspaceService {
     if (!plan || this.planVersion !== this.editVersion || !this.writable || plan.binding !== this.binding) { this.lastError = '原预检已失效，请保留草稿并重新预检'; return false; }
     if (plan.applyUnavailableReason || !plan.runtimeValidated) { this.lastError = plan.applyUnavailableReason ?? '运行预检未确认；可保存本地待应用'; return false; }
     if (strategy === 'restart' || plan.requiresRestart.length) { this.lastError = '当前客户端安全启动及固定材料通道未适配；保留重启影响，可保存本地待应用'; return false; }
-    const edit = this.editVersion; this.readVersion++; this.operationId = plan.planId; this.phase = 'applying'; this.lastError = null;
+    const edit = this.editVersion; this.readVersion++; this.operationId = plan.planId; this.operationEditVersion = edit; this.operation = { planId: plan.planId, state: 'submitted_unknown' }; this.recoveryReview = null; this.phase = 'applying'; this.lastError = null;
     try {
-      const operation = await this.ports.apply({ planId: plan.planId, strategy });
+      const operation = await this.tracked(() => this.ports.apply({ planId: plan.planId, strategy }));
       return await this.acceptOperation(operation, plan.planId, edit);
     } catch (error) {
       if (edit !== this.editVersion || this.operationId !== plan.planId || this.conflict) return false;
@@ -177,24 +187,79 @@ export class ConfigWorkspaceService {
     }
   }
   async checkOperation(): Promise<boolean> {
-    const id = this.operationId; if (!id) return false;
-    const edit = this.editVersion;
-    try { return await this.acceptOperation(await this.ports.operation(id), id, edit); }
+    const id = this.operationId; if (!id || this.busy) return false;
+    if (this.conflict) { this.lastError = '来源或运行代次已变化；原操作仅作历史。保留草稿，请明确刷新后再核对'; return false; }
+    const edit = this.editVersion; this.phase = 'checking';
+    try { return await this.acceptOperation(await this.tracked(() => this.ports.operation(id)), id, edit); }
     catch { if (id === this.operationId && edit === this.editVersion && !this.conflict) { this.phase = 'unknown'; this.lastError = '原事务仍未确认；不会根据相同内容的旧回执宣称成功，也不会重放'; } return false; }
   }
+  async reviewRecovery(): Promise<boolean> {
+    const id = this.operationId; if (!id || this.busy) return false;
+    if (this.conflict) { this.lastError = '来源或运行代次已变化；原操作仅作历史。保留草稿，请明确刷新后再核对'; return false; }
+    const edit = this.editVersion, binding = this.binding;
+    this.recoveryReview = null; this.recoveryVersion = -1; this.phase = 'checking'; this.lastError = null;
+    try {
+      const review = await this.tracked(() => this.ports.review(id));
+      if (id !== this.operationId || edit !== this.editVersion || binding !== this.binding || this.conflict) return false;
+      if (review.planId !== id) throw new Error('恢复检查返回的原操作身份不一致');
+      this.recoveryReview = review; this.recoveryVersion = edit; this.phase = 'unknown';
+      return true;
+    } catch (error) {
+      if (id === this.operationId && edit === this.editVersion && binding === this.binding && !this.conflict) {
+        this.phase = 'unknown'; this.lastError = message(error, '原操作恢复检查失败；不会生成新计划或重放运行变更');
+      }
+      return false;
+    }
+  }
+  get canCompleteLocal(): boolean {
+    const review = this.recoveryReview;
+    return !this.busy && !this.dirty && !this.conflict && !!review?.canCompleteLocal && !!review.reviewId
+      && review.planId === this.operationId && this.recoveryVersion === this.editVersion
+      && !!review.expiresAtUnixMs && /^(0|[1-9]\d{0,19})$/.test(review.expiresAtUnixMs)
+      && BigInt(review.expiresAtUnixMs) > BigInt(Date.now());
+  }
+  async completeLocal(reviewId: string): Promise<boolean> {
+    const review = this.recoveryReview;
+    if (!review || !this.canCompleteLocal || !review.reviewId || review.reviewId !== reviewId) {
+      this.lastError = this.dirty ? '未保存草稿仍保留；明确放弃草稿后重新检查原操作' : '原恢复检查不可提交或已过期；请重新检查，不会重放运行操作'; return false;
+    }
+    const id = review.planId, edit = this.editVersion; this.operationEditVersion = edit;
+    // A review is a single-use local publication permit, never a new apply plan.
+    this.recoveryReview = null; this.recoveryVersion = -1; this.phase = 'completing'; this.lastError = null;
+    try { return await this.acceptOperation(await this.tracked(() => this.ports.complete({ planId: id, reviewId: review.reviewId! })), id, edit); }
+    catch (error) {
+      if (id === this.operationId && edit === this.editVersion && !this.conflict) { this.phase = 'unknown'; this.lastError = message(error, '原本地发布结果未确认；请重新检查原操作，不会自动重复提交'); }
+      return false;
+    }
+  }
   private async acceptOperation(operation: ConfigWorkspaceOperation, id: string, edit: number): Promise<boolean> {
-    if (id !== this.operationId || operation.planId !== id || edit !== this.editVersion || this.conflict) return false;
+    if (id !== this.operationId || edit !== this.editVersion || this.conflict) return false;
+    if (operation.planId !== id) { this.phase = 'unknown'; this.lastError = '回执不属于原操作；保留原屏障，请重新核对'; return false; }
+    this.operation = operation;
+    if (this.operationEditVersion !== edit) { this.phase = 'unknown'; this.lastError = '原操作回执仅作为历史；新草稿保留，请明确放弃后重新核对'; return false; }
     if (operation.state === 'rejected') { this.operationId = null; this.invalidatePlan(); this.phase = 'editing'; this.lastError = operation.reason ?? '副作用前预检被拒绝；未发送运行变更，请重新预检'; return false; }
     if (operation.state !== 'confirmed' || operation.receipt?.state !== 'confirmed') { this.phase = 'unknown'; this.lastError = operation.reason ?? '原事务未确认；不会重放'; return false; }
     const receipt = operation.receipt;
-    this.lastAppliedAt = receipt.completedAtUnixMs; this.lastTransaction = receipt; this.operationId = null;
+    this.operationId = null;
     try {
       const snapshot = await this.ports.snapshot();
       if (edit !== this.editVersion || this.conflict || this.operationId !== null) return false;
-      this.acceptSnapshot(snapshot); this.phase = 'applied';
-      if (!snapshot.runtime.confirmed) { this.lastError = '原事务已确认，但随后运行态变化；请核对当前状态'; warning(this.lastError); }
-      else success('原工作区事务及运行身份已确认');
-    } catch { if (edit !== this.editVersion || this.conflict || this.operationId !== null) return false; this.phase = 'applied'; this.lastError = '原事务已确认，工作区刷新失败；保留草稿，请手动核对'; }
+      const currentReceipt = snapshot.profileId === receipt.profileId && snapshot.runtime.confirmed
+        && snapshot.runtime.identity?.coreInstanceId === receipt.runtimeIdentity?.coreInstanceId
+        && snapshot.runtime.identity.configRevision === receipt.runtimeIdentity?.configRevision
+        && snapshot.runtime.effectiveDigest === receipt.effectiveDigest
+        && snapshot.lastTransaction?.transactionId === receipt.transactionId;
+      if (!currentReceipt) {
+        this.conflict = true; this.phase = 'loaded';
+        if (this.runtime) this.runtime = { ...this.runtime, confirmed: false, reason: '原操作已成为历史；当前运行状态需重新核对' };
+        this.lastError = '原事务回执仅作为历史；当前来源或运行身份不再匹配，原草稿保留，请明确刷新后核对'; warning(this.lastError);
+      } else {
+        this.acceptSnapshot(snapshot); this.operation ??= operation;
+        this.phase = this.operationId ? 'unknown' : 'applied';
+        this.lastAppliedAt = receipt.completedAtUnixMs;
+        if (!this.operationId) success('原工作区事务及运行身份已确认');
+      }
+    } catch { if (edit !== this.editVersion || this.conflict || this.operationId !== null) return false; this.conflict = true; this.phase = 'loaded'; this.lastError = '原事务回执已保存为历史，工作区刷新失败；保留草稿，请手动核对当前状态'; }
     return true;
   }
   reset(): void { this.updateDraft(this.sourceJson); this.lastError = null; }

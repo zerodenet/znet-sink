@@ -24,7 +24,22 @@ fn profile() -> ProxyConfigProfile {
 pub(crate) fn state() -> AppState {
     let mut app = AppConfig::default();
     app.routing.inject_common_rules = false;
-    AppState::with_domain_data(app, vec![profile()], vec![], vec![], vec![])
+    crate::services::bypass::normalize(&mut app).unwrap();
+    let state = AppState::with_domain_data(app, vec![profile()], vec![], vec![], vec![]);
+    let dir = tempfile::tempdir().unwrap().keep();
+    crate::services::app_database::save_domain_data(
+        &dir,
+        &state.proxy_configs().lock().unwrap(),
+        &[],
+    )
+    .unwrap();
+    crate::services::app_config_store::save(
+        &dir.join("app-config.json"),
+        &state.app_config().lock().unwrap(),
+    )
+    .unwrap();
+    *state.configuration().plans.1.lock().unwrap() = Some(dir);
+    state
 }
 fn input(state: &AppState, source: Value) -> ConfigWorkspaceDraftInput {
     ConfigWorkspaceDraftInput {
@@ -178,6 +193,7 @@ fn local_publication_reopens_sqlite_preserves_runtime_binding_and_does_not_confi
         vec![],
         vec![],
     );
+    recovery::set_test_directory(&reopened, dir.path().to_path_buf());
     let snapshot = local_snapshot(&reopened).unwrap();
     assert!(snapshot.pending_apply);
     assert!(!snapshot.runtime.confirmed);
@@ -220,7 +236,10 @@ pub(crate) fn prepared(state: &AppState) -> Prepared {
         effective: effective.clone(),
         capture_digest: digest(&capture).unwrap(),
         frozen_capture_parameters: capture,
-        identity: None,
+        identity: Some(crate::kernel::zero::queries::KernelRuntimeIdentity {
+            core_instance_id: "core".into(),
+            config_revision: 1,
+        }),
         confirmed_binding: None,
         plan: ConfigWorkspacePlan {
             impact: crate::models::gui_core::GuiConfigPlanApplyResult {
@@ -375,16 +394,30 @@ fn earlier_prepared_peer_cannot_bypass_unknown_or_runtime_confirmed_pending_loca
         let a = store(&state, prepared(&state)).unwrap();
         let b = store(&state, prepared(&state)).unwrap();
         submit(&state, &a.plan_id).unwrap();
-        state
-            .configuration()
-            .plans
-            .0
-            .lock()
-            .unwrap()
-            .get_mut(&a.plan_id)
-            .unwrap()
-            .operation
-            .state = phase;
+        if phase == "runtime_confirmed_pending_local" {
+            let created = recovery::metadata(&state, &a.plan_id)
+                .unwrap()
+                .unwrap()
+                .created_at_unix_ms;
+            runtime_confirmed(
+                &state,
+                &a.plan_id,
+                ConfigTransactionReceipt {
+                    transaction_id: 1,
+                    profile_id: "ordinary".into(),
+                    strategy: ConfigApplyStrategy::HotReload,
+                    state: "runtime_confirmed",
+                    effective_digest: a.effective_digest.clone(),
+                    started_at_unix_ms: created,
+                    completed_at_unix_ms: created,
+                    runtime_identity: ConfigRuntimeIdentityView {
+                        core_instance_id: "core".into(),
+                        config_revision: 2,
+                    },
+                },
+            )
+            .unwrap();
+        }
         assert!(review(&state, &b.plan_id).is_err());
         assert!(submit(&state, &b.plan_id).is_err());
         assert_eq!(operation(&state, &b.plan_id).unwrap().state, "prepared");
@@ -436,5 +469,15 @@ fn pre_side_effect_rejection_cannot_clear_other_phases_or_recorded_receipts() {
         entry.operation.receipt = Some(receipt);
     }
     assert!(reject_without_runtime_mutation(&state, &plan.plan_id).is_err());
-    assert!(operation(&state, &plan.plan_id).unwrap().receipt.is_some());
+    assert!(state
+        .configuration()
+        .plans
+        .0
+        .lock()
+        .unwrap()
+        .get(&plan.plan_id)
+        .unwrap()
+        .operation
+        .receipt
+        .is_some());
 }

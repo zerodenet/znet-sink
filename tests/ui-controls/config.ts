@@ -376,7 +376,7 @@ export async function getConfigWorkspaceSnapshot(): Promise<import('../../src/li
     runtime: { running: false, effectiveDigest: 'fixture', confirmed: false, reason: 'No kernel in UI fixture' },
   };
 }
-export { planConfigWorkspace, applyConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan } from './workspace-core';
+export { planConfigWorkspace, applyConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan, reviewConfigWorkspaceRecovery, completeConfigWorkspaceLocal } from './workspace-core';
 export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {};
 
 let fixtureClientGeneration: number | undefined = 1;

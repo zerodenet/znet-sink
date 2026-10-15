@@ -96,3 +96,21 @@ pub struct ConfigWorkspaceOperation {
     pub receipt: Option<ConfigTransactionReceipt>,
     pub reason: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWorkspaceRecoveryReview {
+    pub plan_id: String,
+    pub review_id: Option<String>,
+    pub state: &'static str,
+    pub can_complete_local: bool,
+    pub reason: String,
+    pub receipt: Option<ConfigTransactionReceipt>,
+    pub expires_at_unix_ms: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigWorkspaceCompleteInput {
+    pub plan_id: String,
+    pub review_id: String,
+}

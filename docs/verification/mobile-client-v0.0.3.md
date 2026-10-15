@@ -555,3 +555,48 @@ Rust源码及依赖未变，前述1181/0/7仍对应同一后端；新head CI另�
 本地WebKit官方下载返回403 Domain forbidden，未运行、未绕过；以同提交CI实际执行为准。
 日志：/tmp/client050607-ci-fix-browser-verified.log、/tmp/client050607-ci-fix-frontend-final.log、
 /tmp/client050607-closing-portal-negative-final.log。最终准确head、双引擎及新产物见同一PR。
+
+## 原操作与 Packet 持久恢复（a51c6ce 后续）
+
+本批在同一 Draft PR 增加普通工作区 schema4 原操作账本、持久关系 epoch 和随机
+宿主会话。副作用前持久预留，只有原真实回执持久确认后才可明确检查并完成本地
+原候选；SQLite 关系、AppConfig 确认和完成墓碑分阶段，不重放 apply/TUN/下载。
+预览后的关系 A→B→A、宿主重建后的相同本地计数、旧票据及晚回执均不能取得旧执行
+资格。AppConfig/规则文件仍只核当前值，不声称具有全部历史 epoch。
+
+Packet 账本使用私有有界元资料、跨进程文件锁、原子持久预留和原 operation token。
+读取列表缺行或已结束行不清账；只读核对原物理目标的权威结束事实或明确拒绝后，
+还需清账持久确认。坏记录、丢失已初始化账本、写失败和晚 token 保留屏障。
+
+审查中修复了 Complete 后内存屏障未退役、内存投影后可失败收尾漏配置失效通知、
+正常 apply 换用新 binding、预检未固定持久 epoch 等边界。真实回执保存为历史事实
+不因本地新 epoch 丢失；本地发布仍严格核对原 epoch。系统调时保留原始时间和标记，
+一次性恢复票据按进程单调时间到期。冻结材料重启仍未实施，具体源码证据和安全
+通道、实际依赖字节、路径、child/readiness/receipt/watchdog 条件已补入 todo。
+
+最终本地 Rust workspace/all-features 测试 **1224 passed / 0 failed / 7 ignored**，
+共45组，GUI lib为951/0/5。包括真实OS子进程重开、跨进程锁争用、SQLite回执与阶段
+故障、实际文件权限拒绝、关系ABA、并发预留、票据过期及真实Unix IPC纯查询恢复。
+专项工作区41/41、Packet37/37均通过；子进程子结果不再重复计入父harness总数。
+7忽略项为外部Zero配置/观测、两代快照、两项真实发布内核readiness、live订阅provider
+及Lifecycle文档测试；本地没有将它们计为执行。格式和全workspace/all-targets/
+all-features check和同范围Clippy均通过；编译及Clippy警告保留，未按`-D warnings`
+宣称零警告。准确提交CI以同一PR记录为准。
+
+前端完整 `pnpm verify:frontend`、生产build和类型检查通过（**0 errors / 0 warnings**）。
+Node工作区29+profile7=36、Packet26通过；320px实际Chromium旧14+新增9=
+**23/23通过，0重试**。浏览器只模拟宿主事实重建，不能替代上述Rust真实进程测试，
+也不能作为移动VPN验收。本地WebKit仍未安装，官方下载403没有绕过；待最终SHA CI
+执行完整双引擎套件，不以a51c6ce的612例或旧产物代替。
+
+早期专项实际出现18/8、34/5：测试候选错误省略真实合成、初始AppConfig未经过
+生产规范化，以及重开测试遗漏私有目录；修复测试材料和路径，未放松校验。全量
+首轮另有一个schema迁移断言仍期待3而实际为4；更新该版本断言并保留旧元资料检查后，
+全集重跑通过。浏览器编辑期间的一次HMR重建失败在冻结所有相关源码后23例重跑通过，
+未删除原分页重试断言或将其计为flaky通过。
+
+日志：`/tmp/client-persist-workspace-test-third.log`、
+`/tmp/client-persist-packet-tests-initial.log`、`/tmp/client-persist-final-tests-fixed.log`、
+`/tmp/client-persist-final-{fmt,check,clippy}.log`、
+`/tmp/client-persist-frontend-initial.log`、`/tmp/recovery-browser-freeze.log`。
+本批没有新增依赖，四项许可材料缺口、原生装配、Galaxy S8/iPhone及签名/安装未验收项保留。

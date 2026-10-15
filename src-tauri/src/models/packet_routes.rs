@@ -22,6 +22,7 @@ pub struct PacketRoute {
     pub translated: bool,
     pub started_at_unix_ms: String,
     pub state: String,
+    pub close_operation_id: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,8 +30,11 @@ pub struct PacketSnapshot {
     pub offset: u32,
     pub limit: u16,
     pub client_scope_generation: u64,
+    pub host_session_id: String,
     pub blocked_targets: Vec<PacketPhysicalTarget>,
     pub close_ledger_full: bool,
+    pub close_records: Vec<PacketCloseRecord>,
+    pub close_ledger_recovery: PacketLedgerRecovery,
     pub supported: bool,
     pub can_close: bool,
     pub reason: Option<String>,
@@ -48,6 +52,9 @@ pub struct PacketSnapshot {
 pub struct PacketTarget {
     pub profile_id: Option<String>,
     pub client_scope_generation: u64,
+    pub host_session_id: String,
+    #[serde(default)]
+    pub close_operation_id: Option<String>,
     pub route_id: String,
     pub core_instance_id: String,
     pub config_revision: String,
@@ -57,6 +64,7 @@ pub struct PacketTarget {
 pub struct PacketCloseResult {
     /// confirmed / unconfirmed; a transport failure never becomes fake success.
     pub status: String,
+    pub operation_id: Option<String>,
     pub message: String,
     pub route: Option<PacketRoute>,
 }
@@ -69,6 +77,7 @@ pub struct PacketPageIdentity {
     pub core_instance_id: String,
     pub config_revision: String,
     pub client_scope_generation: u64,
+    pub host_session_id: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -91,8 +100,8 @@ impl Default for PacketPageQuery {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PacketPhysicalTarget {
     pub core_instance_id: String,
     pub route_id: String,
@@ -106,4 +115,23 @@ impl From<&PacketTarget> for PacketPhysicalTarget {
             config_revision: target.config_revision.clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketCloseRecord {
+    pub target: PacketPhysicalTarget,
+    pub operation_id: String,
+    pub origin_process_id: String,
+    pub origin_profile_id: Option<String>,
+    pub origin_client_scope_generation: String,
+    pub reserved_at_unix_ms: String,
+    pub recovered: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketLedgerRecovery {
+    pub state: &'static str,
+    pub reason: Option<String>,
+    pub recovered_count: Option<usize>,
 }

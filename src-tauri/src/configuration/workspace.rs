@@ -20,6 +20,8 @@ const MAX_BYTES: usize = 16 * 1024 * 1024;
 const TTL: u64 = 300_000;
 #[derive(Clone, Serialize)]
 pub(crate) struct Binding {
+    pub host_session_id: String,
+    pub domain_epoch: i64,
     pub scope: ClientScope,
     pub generation: u64,
     pub source_digest: String,
@@ -47,7 +49,11 @@ pub(crate) struct Prepared {
     pub confirmed_binding: Option<String>,
 }
 #[derive(Default)]
-pub(crate) struct Plans(Mutex<BTreeMap<String, Prepared>>);
+pub(crate) struct Plans(
+    Mutex<BTreeMap<String, Prepared>>,
+    Mutex<Option<std::path::PathBuf>>,
+    Mutex<BTreeMap<String, recovery::Review>>,
+);
 pub(crate) fn conflict() -> AppError {
     AppError::conflict(
         "config_workspace",
@@ -96,6 +102,10 @@ pub(crate) fn context(state: &AppState) -> AppResult<Context> {
         return Err(conflict());
     }
     let binding = Binding {
+        host_session_id: state.host_session_id()?.to_owned(),
+        domain_epoch: crate::services::app_database::workspace_recovery::current_epoch(
+            &recovery::directory(state)?,
+        )?,
         scope: snapshot.scope,
         generation: snapshot.scope_generation.0,
         source_digest: digest(&profile)?,
@@ -231,9 +241,11 @@ pub(crate) fn local_snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnaps
         edits.insert("endpoints".into(), endpoints.clone());
     }
     verify(state, &context.binding)?;
+    let last_transaction = recovery::completed_transaction(state, &context, &candidate.config)?
+        .or_else(|| state.configuration().transaction());
     Ok(ConfigWorkspaceSnapshot { profile_id: context.profile.id.clone(), profile_name: context.profile.name.clone(), binding: Some(digest(&context.binding)?), read_only_reason: None,
         source_updated_at_unix_ms: context.profile.updated_at_unix_ms.to_string(), source_json: Some(pretty(source)?), local_edits_json: Some(pretty(&json!(edits))?), effective_json: Some(pretty(&candidate.config)?),
-        pending_apply: true, pending_operation: pending_operation(state, &context.profile.id)?, composition: Some(candidate.report), runtime: ConfigWorkspaceRuntimeView { running: None, identity: None, effective_digest: digest(&candidate.config)?, confirmed: false, reason: "本地配置已保存，运行状态未核对；待应用或重新核对。原生 schema 校验不代表运行协议及平台兼容".into() }, last_transaction: state.configuration().transaction() })
+        pending_apply: true, pending_operation: pending_operation(state, &context.profile.id)?, composition: Some(candidate.report), runtime: ConfigWorkspaceRuntimeView { running: None, identity: None, effective_digest: digest(&candidate.config)?, confirmed: false, reason: "本地配置已保存，运行状态未核对；待应用或重新核对。原生 schema 校验不代表运行协议及平台兼容".into() }, last_transaction })
 }
 pub(crate) fn save(
     state: &AppState,
@@ -259,9 +271,6 @@ pub(crate) fn save_at(
             details: None,
         })?,
     })
-}
-pub(crate) fn publish(state: &AppState, context: &Context, source: Value) -> AppResult<()> {
-    publish_at(state, context, source, None)
 }
 fn publish_at(
     state: &AppState,
@@ -365,7 +374,10 @@ fn pending_error() -> AppError {
 }
 pub(crate) fn review(state: &AppState, id: &str) -> AppResult<Prepared> {
     // Current source admission precedes reading the stored candidate body.
-    context(state)?;
+    let current = context(state)?;
+    if recovery::pending(state, &current.profile.id)?.is_some() {
+        return Err(pending_error());
+    }
     let prepared = {
         let plans = lock(&state.configuration().plans.0, "workspace_plans")?;
         let plan = plans.get(id).ok_or_else(|| {
@@ -403,7 +415,8 @@ pub(crate) fn submit(state: &AppState, id: &str) -> AppResult<Prepared> {
     if plan.operation.state != "prepared" {
         return Err(conflict());
     }
-    verify(state, &plan.binding)?;
+    let context = verify(state, &plan.binding)?;
+    recovery::prepare_submitted(state, plan, &context)?;
     plan.operation.state = "submitted_unknown";
     plan.operation.reason = Some("已进入运行变更；未取得完整回执前不能重放".into());
     Ok(plan.clone())
@@ -428,6 +441,7 @@ pub(crate) fn reject_without_runtime_mutation(state: &AppState, id: &str) -> App
     if plan.operation.state != "submitted_unknown" || plan.operation.receipt.is_some() {
         return Err(conflict());
     }
+    recovery::rejected(state, id)?;
     plan.operation.state = "rejected";
     plan.operation.reason =
         Some("冻结接管参数在副作用前已变化；未发送运行变更，草稿保留，请重新预检".into());
@@ -440,6 +454,7 @@ pub(crate) fn runtime_confirmed(
 ) -> AppResult<()> {
     let mut plans = lock(&state.configuration().plans.0, "workspace_plans")?;
     let plan = plans.get_mut(id).ok_or_else(conflict)?;
+    recovery::confirmed(state, id, &receipt)?;
     plan.operation.state = "runtime_confirmed_pending_local";
     plan.operation.receipt = Some(receipt);
     plan.operation.reason = Some(
@@ -452,6 +467,9 @@ pub(crate) fn pending_operation(
     state: &AppState,
     profile_id: &str,
 ) -> AppResult<Option<ConfigWorkspaceOperation>> {
+    if let Some(meta) = recovery::pending(state, profile_id)? {
+        return Ok(Some(recovery::view(&meta)));
+    }
     Ok(lock(&state.configuration().plans.0, "workspace_plans")?
         .values()
         .find(|p| {
@@ -467,21 +485,14 @@ pub(crate) fn pending_operation(
         })
         .map(|p| p.operation.clone()))
 }
-pub(crate) fn finish(
-    state: &AppState,
-    id: &str,
-    receipt: ConfigTransactionReceipt,
-) -> AppResult<()> {
-    let confirmed_binding = digest(&context(state)?.binding)?;
-    let mut plans = lock(&state.configuration().plans.0, "workspace_plans")?;
-    let plan = plans.get_mut(id).ok_or_else(conflict)?;
-    plan.confirmed_binding = Some(confirmed_binding);
-    plan.operation.state = "confirmed";
-    plan.operation.reason = None;
-    plan.operation.receipt = Some(receipt);
-    Ok(())
-}
 pub(crate) fn operation(state: &AppState, id: &str) -> AppResult<ConfigWorkspaceOperation> {
+    if let Some(meta) = recovery::metadata(state, id)? {
+        let current = context(state)?;
+        if current.profile.id != meta.profile_id {
+            return Err(conflict());
+        }
+        return Ok(recovery::view(&meta));
+    }
     let (mut operation, confirmed_binding) = {
         let plans = lock(&state.configuration().plans.0, "workspace_plans")?;
         let prepared = plans.get(id).ok_or_else(|| {
@@ -502,6 +513,9 @@ pub(crate) fn operation(state: &AppState, id: &str) -> AppResult<ConfigWorkspace
 }
 
 pub(crate) fn ensure_unblocked(state: &AppState, profile_id: &str) -> AppResult<()> {
+    if recovery::pending(state, profile_id)?.is_some() {
+        return Err(pending_error());
+    }
     if lock(&state.configuration().plans.0, "workspace_plans")?
         .values()
         .any(|p| {
@@ -534,6 +548,8 @@ pub(crate) fn discard(state: &AppState, id: &str) -> AppResult<()> {
     }
     Ok(())
 }
+
+pub(crate) mod recovery;
 
 #[cfg(test)]
 pub(crate) mod tests;

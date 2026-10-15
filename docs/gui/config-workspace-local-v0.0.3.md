@@ -47,9 +47,27 @@ TUN能力租约、15秒命令响应预算、DNS释放和Windows宿主依赖准�
 通用调用补偿行为保持独立。客户端核对不新增 Zero 远端 config
 命令的原子前置条件，相关 CORE-03 边界仍保留。
 
-当前操作与未知屏障在宿主进程内；换页或重新加载可找到原ID，进程重启持久恢复及
-自动补完本地发布尚未实现。真实运行已确认而本地CAS失败时，保留原回执并明确
-`runtime_confirmed_pending_local`，不能声称全部成功或覆盖新来源。
+原操作与未知屏障现使用 SQLite schema 4 持久化。副作用前保存原候选和阶段；
+`prepared`、`submitted_unknown` 没有真实运行回执时不能凭当前 revision 补造成功，
+也不恢复可执行计划。真实运行确认先持久保存原回执，再分阶段完成本地关系、
+AppConfig 确认及最终墓碑；跨文件不声称原子事务。完成后清除候选正文并退役对应
+内存屏障，其他未知操作保留。旧版从未持久记录的内存请求不能据此重建。
+
+来源关系使用持久单调 epoch，预检即固定其值；数据库写入后 A→B→A 也使旧计划失效。
+每个宿主另有安全随机会话身份，本地代次数重置不能使旧计划复活。原正常应用保留
+预览时的会话和代次；途中变化只保存历史事实，不自动重绑。原回执时间遇系统调时
+保留原值并标注，不用时间顺序代替权威身份。
+
+进程恢复后，界面提供“检查原操作恢复”，不自动补完或重放。只有普通当前来源、
+持久阶段、epoch、关系、设置、规则、合成及接管摘要和原运行实例/revision 均匹配，
+才能取得绑定新宿主和当前代次的短期单次票据；用户确认后只发布原候选，不 apply、
+下载、retarget 或操作 TUN。票据用进程单调时间到期，界面的本地时刻仅作说明。
+真实运行已确认而本地发布未完成时保留 `runtime_confirmed_pending_local`；
+运行实例已换代或原回执未持久保存时仍不能完成，不声称回滚或当前生效。
+
+AppConfig 与规则文件没有新增持久历史 epoch，不能证明宿主退出期间写回同值的
+全部历史；新明确检查只授权当前事实下的本地完成。预算、私有材料和各阶段边界
+详见[存储说明](storage.md)。手机原生运行所有权与真机恢复仍需单独验收。
 
 ## 工作区重启仍需适配
 
@@ -65,6 +83,21 @@ TUN能力租约、15秒命令响应预算、DNS释放和Windows宿主依赖准�
 回执、本地 CAS 及 watchdog 窗口。普通来源的受限安全启动材料通道尚未实现和验收；
 若受保护材料或具体平台确需通用 core 接口，再单独协调，不能将所有重启归为 core 阻塞。
 当前提供明确本地保存路径，不将缺回执降级为导出临时配置兜底。
+
+独立客户端实现必须使用专用 owned frozen-start，不能调用当前普通 restart：
+`runtime_host/start.rs` 准备空 bootstrap，`runtime_host/spawn.rs` 在精确 child
+readiness 后调用 `core_config::apply_active_runtime`，该路径会重读当前活动材料。
+专用入口需要私有、排他创建并验证摘要的启动通道、Unix 权限及 Windows ACL，
+持久 pending 窗口还须约束 watchdog 与自动启动。现有 `write_core_config` 的
+`fs::write` 和普通导出路径不提供这组保证。
+
+冻结 JSON 也不等于冻结依赖字节。固定 core
+[`application/run.rs`](https://github.com/zerodenet/core/blob/e74561f99acca941bfadf0d33e35a5ef08f34086/src/application/run.rs)
+在创建 Proxy 前预取 URL 规则缓存；
+[`RuntimeConfig::load_from_path`](https://github.com/zerodenet/core/blob/e74561f99acca941bfadf0d33e35a5ef08f34086/crates/config/src/model/mod.rs)
+使用配置父目录解释相对凭据、状态与产物路径。未来入口必须封存实际依赖并保留路径
+语义，或明确拒绝未封存范围；不能仅凭 typed 规则摘要、child 健康或一次热应用
+宣称冻结启动成功。受保护材料保持原授权与 opaque 边界，不降级落普通文件。
 
 验证结果及准确提交 CI 见[验证记录](../verification/mobile-client-v0.0.3.md)，剩余平台
 与真机条件见[验收账本](mobile-acceptance-ledger-v0.0.3.md)。
