@@ -8,7 +8,9 @@ pub(crate) mod native_validation;
 pub(crate) mod persistence;
 pub(crate) mod profile_editor;
 mod report;
+pub(crate) mod route_editor;
 pub(crate) mod route_integrity;
+pub(crate) mod route_rules;
 pub(crate) mod rules;
 
 pub use report::{CompositionReport, LayerReport};

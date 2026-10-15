@@ -801,3 +801,60 @@ alias，误调无Tauri的真实invoke；改为标准$lib feature别名，业务�
 日志：`/tmp/flow-diagnostics-{all-tests,clippy,frontend-final}.log`、
 `/tmp/flow-close-node-final.log`、`/tmp/flow-close-browser-alias.log`、
 `/tmp/a19-route-cache-browser-final`。新SHA全部CI仍须独立观察，历史66be结果不借用。
+
+## 2026-10-15：A10 配置路由规则覆盖纵向功能
+
+基线 `9b1e1a57c39c184e7a8eaf0080b307001131e202`，同一 Draft PR #46→develop。
+固定core schema只有condition/action/mode；本批不增加原生enabled/id/protocol条件。
+按用户允许的完整纵向范围，先交付普通来源规则CRUD、排序、启停及恢复来源；规则集
+引用迁移和关联A13默认DNS删除迁移明确留在矩阵，未沿旧删除/普通重启路径假报完成。
+
+`routeRules`只存AppConfig.profileEdits[profileId]。Rust保留完整原始source及逐行原生
+JSON文本；停用行仍在客户端保存并校验，仅启用rule进入合成。完整原source摘要变化
+后旧覆盖只作历史，须显式重建或恢复；普通订阅不改来源，托管/保护/非Zero或文件依赖
+来源不开放该入口。规则集/GeoIP在原生parse前拒绝，未新增文件授权resolver。
+
+宿主5RPC绑定完整来源/图/关系epoch、AppConfig与规则文件history、host session和
+scope generation；固定整组预览及单次本地保存。真实SQLite IMMEDIATE栅栏在AppConfig
+发布期间锁住协作关系写者，不初始化/迁移缺失或外来数据库，不在文件成功后追加可失败
+DB commit。成功视图核对原owned写入after token及自身代次，不借后来写者快照冒原回执。
+未知票据仅在会话RAM保留且不重放；不称跨进程计划恢复。保存后仍须显式工作区预检/应用。
+
+中央合成重新核来源归属，先profile投影、后公共规则；legacy DNS预览避免再次替换已
+合成规则。组合报告分开两层。旧profile_settings_apply的routeRules写入/恢复在读取和
+副作用前拒绝，不能绕过固定预览或触发运行。原设置导入白名单不扩到profile材料。
+
+前端最终独立Node **23/23**，实际MobileShell/配置入口Chromium **12/12**，含320px、
+44px、4底栏、CRUD/排序/启停、旧规则集、dirty/busy、来源重建、迟到及丢回执核对。
+最终完整 `pnpm verify:frontend`通过，类型检查0 errors/0 warnings，生产build通过。
+本地WebKit缺binary未运行，等待本提交CI，不借旧SHA结果。
+
+首轮移动fixture误接占位配置snippet，前4例失败后停止该测试进程；换专属HTML并保留
+真实组件/断言，依次10/10、11/11、最终12/12通过。Node/read-only复核修正了自身保存
+改变binding被误判外部漂移：原status确认saved后，必须与新鲜当前snapshot binding一致
+才交付本地成功，读失败/真实漂移仅历史，未重放保存。
+
+首轮Rust生产check通过；最初owner10通过，Root组合fixture未显式保存实际公共规则
+偏好导致1例失败，补真实client setting后组合通过。严格交付后核又拒一例手改来源但
+未通知scope的fixture；仅修测试模拟真实来源writer并断言revision/gen推进，另加保留
+未通知缓存必须unknown的反例。生产guard未放宽。SQLite graph栅栏专项4/4已执行。
+最终完整Rust及准确SHA CI结果在下方与PR追加。
+
+为容纳新双引擎覆盖，CI将Chromium/WebKit拆成并行任务，各自完整测试与独立产物；
+保留原“UI controls (Chromium and WebKit)”检查名作为两者必须成功的汇总门，不改分支保护。
+
+日志：`/tmp/route-editor-{check-initial,graph-fence,backend-initial,backend-final,backend-refrozen,frontend-final}.log`、
+`/tmp/route-editor-node-receipt-final.log`、`/tmp/route-editor-browser-receipt-final.log`。
+
+最终本地Rust完整全集 **1368 passed / 0 failed / 7 ignored，45组**，GUI lib
+**1094/0/5**。新宿主14+中央组合3专项17/17、纯投影11/11、SQLite图栅栏4/4及旧RPC
+旁路拒绝测试均执行；包含真实AppConfig文件重开、SQLite source/u64保留、关系/文件ABA、
+实际写锁、FIFO零读取、未知不重放及后继写者不能冒原回执。fmt与locked全workspace/
+all-targets/all-features check、同范围Clippy通过；现有非拒绝级warning保留，不称零warning。
+
+最终完整前端全集重新通过，含Node23/23、0错误/0警告类型检查及生产build。
+Chromium最终12/12，0失败/重试/跳过；本地WebKit未运行，双引擎以新SHA CI为准。
+最后的source writer fixture修复后，另一个未通知缓存反例也按预期unknown，无放宽生产准入。
+日志：`/tmp/route-editor-{all-tests,check-final,clippy,fmt-final,frontend-final}.log`、
+`/tmp/route-editor-backend-refrozen.log`、`/tmp/route-editor-projection.log`。
+CI YAML已解析核对；并行engine任务各有独立报告，原名汇总检查只在两者成功时通过。

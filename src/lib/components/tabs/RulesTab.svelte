@@ -1,4 +1,9 @@
 <script lang="ts">
+  import RouteRulesWorkspace from './RouteRulesWorkspace.svelte';
+  let routeSection=$state(false),routeMounted=$state(false);
+  let routeWorkspace:{requestLeave(next:()=>void):void}|undefined=$state();
+  function selectSection(next:boolean){if(next===routeSection)return;if(busy||showEditor){pageError='请先完成或关闭当前规则集编辑操作。';return;}const change=()=>{routeSection=next;if(next)routeMounted=true;};if(routeSection)routeWorkspace?.requestLeave(change);else change();}
+
   import { getProfileSettings } from '$lib/services/core';
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
@@ -418,7 +423,9 @@
   }
 </script>
 
-<div class="desk-card rules-root animate-fade-in">
+<div class="rule-sections" aria-label="路由与规则集页面"><Button variant={!routeSection?'secondary':'outline'} onclick={()=>selectSection(false)}>规则集</Button><Button variant={routeSection?'secondary':'outline'} onclick={()=>selectSection(true)}>路由规则</Button></div>
+{#if routeMounted}<div class:hidden={!routeSection} class="route-section"><RouteRulesWorkspace bind:this={routeWorkspace} active={routeSection}/></div>{/if}
+<div class:hidden={routeSection} class="desk-card rules-root animate-fade-in">
   <div class="panel-header">
     <div class="panel-title-group">
       <span class="panel-title">规则集</span>
@@ -925,6 +932,11 @@
 </DraggableModal>
 
 <style>
+  .rule-sections{display:flex;gap:8px;flex-wrap:wrap;padding:8px 12px;}
+  .rule-sections :global(button){min-height:44px;}
+  .route-section{flex:1;min-height:0;min-width:0;}
+  .route-section.hidden,.rules-root.hidden{display:none;}
+
   .rules-root {
     flex: 1;
     min-height: 0;

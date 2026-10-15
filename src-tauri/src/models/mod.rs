@@ -10,6 +10,7 @@ pub mod gui_core;
 pub mod logs;
 pub mod profile_editor;
 pub mod proxy_config;
+pub mod route_editor;
 pub mod rule_set;
 pub mod subscription;
 pub mod tool_job;

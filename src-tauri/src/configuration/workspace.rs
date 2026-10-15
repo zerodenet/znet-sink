@@ -247,12 +247,14 @@ pub(crate) fn local_snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnaps
     let mut app = context.app.clone();
     super::local_edits::migrate_legacy(&mut app, Some(&context.profile.id));
     let mut edits = app.client_edits.unwrap_or_default();
-    if let Some(endpoints) = app
-        .profile_edits
-        .get(&context.profile.id)
-        .and_then(|v| v.get("endpoints"))
-    {
-        edits.insert("endpoints".into(), endpoints.clone());
+    for key in ["endpoints", "routeRules"] {
+        if let Some(value) = app
+            .profile_edits
+            .get(&context.profile.id)
+            .and_then(|v| v.get(key))
+        {
+            edits.insert(key.into(), value.clone());
+        }
     }
     verify(state, &context.binding)?;
     let last_transaction = recovery::completed_transaction(state, &context, &candidate.config)?

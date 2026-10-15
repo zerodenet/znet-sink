@@ -53,6 +53,7 @@ const config = await invoke('app_config_get');
 - [Packet 真实分页与关闭屏障](./packet-route-pagination-v0.0.3.md)
 - [工作区本地保存、草稿与来源保护](./config-workspace-local-v0.0.3.md)
 - [PRD V3 完成度与剩余客户端能力](./mobile-client-completion-matrix-v0.0.3.md)
+- [原生路由规则客户端覆盖编辑](./route-rule-editor-v0.0.3.md)
 - [Flow 固定目标批量关闭](./flow-close-batch-v0.0.3.md)
 - [路由评估与独立 DNS 缓存](./route-cache-diagnostics-v0.0.3.md)
 - [普通配置无损文本编辑](./profile-editor-lossless-v0.0.3.md)

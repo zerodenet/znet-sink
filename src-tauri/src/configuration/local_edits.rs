@@ -1,4 +1,4 @@
-//! Sparse global client settings and profile-owned endpoint preferences.
+//! Sparse global client settings and profile-owned endpoint/rule preferences.
 use crate::errors::{AppError, AppResult};
 use crate::models::app_config::{AppConfig, AppConfigPatch};
 use crate::services::{app_config, common::lock, proxy_config};
@@ -11,6 +11,10 @@ mod migration;
 mod patch;
 pub(crate) use migration::migrate_legacy;
 pub(crate) use patch::prepare_patch;
+
+fn profile_scoped(key: &str) -> bool {
+    matches!(key, "endpoints" | "routeRules")
+}
 
 pub(crate) fn active(state: &AppState) -> AppResult<(String, Value)> {
     lock(state.proxy_configs(), "proxy_config")?
@@ -42,11 +46,22 @@ pub(crate) fn resolve(
     app.overrides = Default::default();
     let mut source = base.clone();
     let mut edits = app.client_edits.clone().unwrap_or_default();
-    if let Some(endpoints) = id
-        .and_then(|id| app.profile_edits.get(id))
-        .and_then(|edits| edits.get("endpoints"))
-    {
-        edits.insert("endpoints".into(), endpoints.clone());
+    if edits.contains_key("routeRules") {
+        return Err(AppError::invalid_argument(
+            "路由规则覆盖属于原配置，不能作为全局客户端设置使用",
+        ));
+    }
+    for key in ["endpoints", "routeRules"] {
+        if let Some(value) = id
+            .and_then(|id| app.profile_edits.get(id))
+            .and_then(|edits| edits.get(key))
+        {
+            edits.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(metadata) = edits.remove("routeRules") {
+        // The digest is of the complete original source, before global edits.
+        source = super::route_rules::apply(base, &metadata)?;
     }
     for (key, value) in &edits {
         match key.as_str() {
@@ -182,7 +197,7 @@ pub(crate) fn candidate(
     let mut next = previous.clone();
     migrate_legacy(&mut next, Some(id));
     for key in reset {
-        if key == "endpoints" {
+        if profile_scoped(key) {
             if let Some(edits) = next.profile_edits.get_mut(id) {
                 edits.remove(key);
             }
@@ -192,7 +207,7 @@ pub(crate) fn candidate(
     }
     for (key, value) in changes {
         validate_field(previous, &key, &value)?;
-        if key == "endpoints" {
+        if profile_scoped(&key) {
             next.profile_edits
                 .entry(id.to_owned())
                 .or_default()
@@ -210,6 +225,9 @@ pub(crate) fn candidate(
 fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
     if key == "endpoints" {
         return super::endpoints::validate(value);
+    }
+    if key == "routeRules" {
+        return super::route_rules::validate(value);
     }
     let (section, field) = key.split_once('.').unwrap_or((key, ""));
     let allowed = match section {
@@ -252,9 +270,9 @@ fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
 
 pub(crate) fn validate_client_edits(app: &AppConfig, edits: &Edits) -> AppResult<()> {
     for (key, value) in edits {
-        if key == "endpoints" {
+        if profile_scoped(key) {
             return Err(AppError::invalid_argument(
-                "端点偏好不能作为全局客户端设置导入",
+                "端点与路由规则偏好不能作为全局客户端设置导入",
             ));
         }
         validate_field(app, key, value)?;

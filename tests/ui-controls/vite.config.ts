@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: { alias: [
     { find: '$lib/services/settings-transfer', replacement: absolute('./settings-transfer.ts') },
     { find: '$lib/services/native-documents', replacement: absolute('./native-documents.ts') },
+    { find: '$lib/features/route-editor/client', replacement: absolute('./route-editor.ts') },
     { find: '$lib/features/flow-close/client', replacement: absolute('./flow-close.ts') },
     { find: '$lib/features/profile-editor/client', replacement: absolute('./profile-editor.ts') },
     { find: '$lib/features/mobile/runtime', replacement: absolute('./mobile-runtime.ts') },

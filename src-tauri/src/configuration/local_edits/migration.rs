@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 /// Promote the active profile's old network settings once, without choosing
 /// conflicting values from inactive profiles. Keep old records for recovery;
-/// resolve() only reads their endpoint preferences after this migration.
+/// resolve() retains profile-owned endpoint and route rule preferences.
 pub(crate) fn migrate_legacy(app: &mut AppConfig, id: Option<&str>) -> bool {
     let mut migrated = false;
     if app.client_edits.is_none() {
@@ -14,7 +14,7 @@ pub(crate) fn migrate_legacy(app: &mut AppConfig, id: Option<&str>) -> bool {
         app.client_edits = Some(
             edits
                 .into_iter()
-                .filter(|(key, _)| key != "endpoints")
+                .filter(|(key, _)| !super::profile_scoped(key))
                 .collect(),
         );
         migrated = true;

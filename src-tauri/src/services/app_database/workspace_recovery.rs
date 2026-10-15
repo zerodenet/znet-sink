@@ -152,6 +152,37 @@ fn epoch(c: &Connection) -> AppResult<i64> {
 pub(crate) fn current_epoch(dir: &Path) -> AppResult<i64> {
     epoch(&open(dir).map_err(|_| fail())?)
 }
+/// Fence an AppConfig-only publication against cooperating relationship writers.
+/// Open only an existing current-schema database: no initialization, migration,
+/// relation write or recovery stage is performed by this fence. Hold IMMEDIATE
+/// until the external publication finishes; no fallible database commit follows
+/// a successful file write. The callback must not re-enter this database.
+pub(crate) fn with_graph_epoch<T>(
+    dir: &Path,
+    expected_epoch: i64,
+    expected_graph: &str,
+    publish: impl FnOnce() -> AppResult<T>,
+) -> AppResult<T> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX;
+    let mut connection =
+        Connection::open_with_flags(database_path(dir), flags).map_err(|_| fail())?;
+    safe(connection.busy_timeout(BUSY_TIMEOUT))?;
+    safe(connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true))?;
+    safe(connection.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false))?;
+    let tx = immediate_transaction(&mut connection).map_err(|_| fail())?;
+    let version: i32 = safe(tx.pragma_query_value(None, "user_version", |r| r.get(0)))?;
+    let application: i32 = safe(tx.pragma_query_value(None, "application_id", |r| r.get(0)))?;
+    if version != SCHEMA_VERSION || application != APPLICATION_ID {
+        return Err(changed());
+    }
+    if epoch(&tx)? != expected_epoch || graph(&tx)? != expected_graph {
+        return Err(changed());
+    }
+    let result = publish();
+    drop(tx);
+    result
+}
+
 fn hex(value: &str, len: usize) -> bool {
     value.len() == len
         && value

@@ -45,6 +45,7 @@ pub struct AppState {
         crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler,
     runtime_bridge: znet_engine_client::bridge::RuntimeBridge,
     flow_closes: crate::services::flow_close::Owner,
+    route_editor: crate::configuration::route_editor::Owner,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -122,6 +123,7 @@ impl AppState {
                 ),
             runtime_bridge: znet_engine_client::bridge::RuntimeBridge::default(),
             flow_closes: crate::services::flow_close::Owner::default(),
+            route_editor: crate::configuration::route_editor::Owner::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -269,6 +271,10 @@ impl AppState {
 
     pub(crate) fn flow_closes(&self) -> &crate::services::flow_close::Owner {
         &self.flow_closes
+    }
+
+    pub(crate) fn route_editor(&self) -> &crate::configuration::route_editor::Owner {
+        &self.route_editor
     }
 
     pub(crate) fn commit_diagnostic_capture(

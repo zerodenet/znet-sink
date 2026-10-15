@@ -20,6 +20,7 @@ pub mod profile_editor;
 pub mod proxy_config;
 pub mod proxy_mode;
 pub mod recovery_storage;
+pub mod route_editor;
 pub mod rule_set;
 pub mod runtime_performance;
 pub mod subscription;

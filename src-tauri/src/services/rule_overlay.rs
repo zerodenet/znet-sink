@@ -23,6 +23,41 @@ use crate::services::{
 };
 use crate::state::app_state::AppState;
 
+/// A profile-scoped override never authorizes editing a later managed material
+/// with the same ID. Runtime composition rechecks ownership independently of UI.
+fn require_route_rules_source(
+    state: &AppState,
+    app: &AppConfig,
+    id: Option<&str>,
+) -> AppResult<()> {
+    let Some(id) = id.filter(|id| {
+        app.profile_edits
+            .get(*id)
+            .is_some_and(|v| v.contains_key("routeRules"))
+    }) else {
+        return Ok(());
+    };
+    let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
+    let subscriptions = common::lock(state.subscriptions(), "subscription")?;
+    let allowed = profiles.iter().find(|p| p.id == id).is_some_and(|profile| {
+        profile.kernel == "zero"
+            && profile.content.is_some()
+            && profile.managed_source.is_none()
+            && !subscriptions.iter().any(|subscription| {
+                subscription.target_proxy_config_id.as_deref() == Some(id)
+                    && subscription.managed_source.is_some()
+            })
+    });
+    if !allowed {
+        return Err(AppError {
+            code: "route_editor_read_only",
+            message: "当前来源归属不允许使用普通路由覆盖；请到来源管理核对".into(),
+            details: None,
+        });
+    }
+    Ok(())
+}
+
 pub fn compose_effective_config(state: &AppState, base: &Value) -> AppResult<Value> {
     let (id, _) = policy_selection::saved_selections(state, base)?;
     compose_effective_config_for(state, base, id.as_deref())
@@ -53,6 +88,7 @@ pub(crate) fn compose_effective_candidate_with_app(
     id: Option<&str>,
     app: &AppConfig,
 ) -> AppResult<crate::configuration::composition::Candidate> {
+    require_route_rules_source(state, app, id)?;
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let (app, edited) = crate::configuration::local_edits::resolve(app, id, base)?;
     let config = compose_rules_for(
@@ -114,6 +150,7 @@ pub(crate) fn validate_app_config_candidate(
     };
     let profiles = common::lock(state.rule_sets(), "rule_set")?.clone();
     let (id, _) = policy_selection::saved_selections(state, &base)?;
+    require_route_rules_source(state, app_config, id.as_deref())?;
     let (scoped, edited) =
         crate::configuration::local_edits::resolve(app_config, id.as_deref(), &base)?;
     let enabled = scoped.routing.inject_common_rules
@@ -138,13 +175,16 @@ fn compose_effective_with(
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
 ) -> AppResult<Value> {
-    let (scoped, _) = crate::configuration::preferences::current(state)?;
+    let app = common::lock(state.app_config(), "app_config")?.clone();
+    let (id, _) = policy_selection::saved_selections(state, base)?;
+    require_route_rules_source(state, &app, id.as_deref())?;
+    let (scoped, edited) = crate::configuration::local_edits::resolve(&app, id.as_deref(), base)?;
     let enabled = if scoped.overrides.rules {
         scoped.routing.inject_common_rules
     } else {
         enabled
     };
-    let config = compose_rules_for(base, enabled, profiles, scoped.overrides.rules)?;
+    let config = compose_rules_for(&edited, enabled, profiles, scoped.overrides.rules)?;
     finalize_effective_config(state, base, config, dns_override, tolerance_override, None)
 }
 
@@ -174,8 +214,22 @@ fn finalize_effective_config(
         app.url_test.tolerance_ms = tolerance;
     }
     let (source_profile_id, selections) = policy_selection::saved_selections(state, base)?;
-    let (app, config) =
+    require_route_rules_source(state, &app, source_profile_id.as_deref())?;
+    // Both callers have already projected routeRules before public rules. Do
+    // not replace that composed rule list a second time or fingerprint it as
+    // an original source. Retain the metadata for truthful composition reports.
+    let route_rules = source_profile_id
+        .as_ref()
+        .and_then(|id| app.profile_edits.get_mut(id))
+        .and_then(|edits| edits.remove("routeRules"));
+    let (mut app, config) =
         crate::configuration::local_edits::resolve(&app, source_profile_id.as_deref(), &config)?;
+    if let (Some(id), Some(metadata)) = (&source_profile_id, route_rules) {
+        app.profile_edits
+            .entry(id.clone())
+            .or_default()
+            .insert("routeRules".into(), metadata);
+    }
     let inputs = crate::configuration::composition::Inputs {
         source_profile_id,
         app,
@@ -707,7 +761,7 @@ mod tests {
             assert_eq!(dns["servers"]["cloudflare"]["detour"], target);
         }
     }
-    fn verified_profile(
+    pub(super) fn verified_profile(
         id: &str,
         order: u32,
         action: CommonRuleAction,
@@ -915,3 +969,7 @@ mod tests {
         assert_eq!(base["route"]["rules"].as_array().unwrap().len(), 3);
     }
 }
+
+#[cfg(test)]
+#[path = "rule_overlay_route_editor_tests.rs"]
+mod route_editor_tests;
