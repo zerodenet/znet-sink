@@ -39,9 +39,9 @@ try {
   const lock = { version: 2, pins: [{ identity: 'swift-rs', location: 'https://github.com/Brendonovich/swift-rs', state: { revision, version: '1.2.3' } }] };
   fs.writeFileSync(path.join(root, 'Package.resolved'), JSON.stringify(lock));
   fs.writeFileSync(path.join(root, 'workspace-state.json'), JSON.stringify({ object: { dependencies: [{ packageRef: { location: 'https://github.com/Brendonovich/swift-rs' }, subpath: 'swift-rs', state: { checkoutState: { revision, version: '1.2.3' } } }] } }));
-  const run = (extra = []) => {
+  const run = (extra = [], nodeOptions = []) => {
     const output = path.join(root, 'inventory.json');
-    execFileSync(process.execPath, [path.join(scripts, 'license-swift.mjs'), '--cargo-metadata', metadata,
+    execFileSync(process.execPath, [...nodeOptions, path.join(scripts, 'license-swift.mjs'), '--cargo-metadata', metadata,
       '--swift-build-path', root, '--cargo-lock', cargoLock, '--cargo-archive', archive, '--output', output, ...extra], { stdio: 'pipe' });
     return JSON.parse(fs.readFileSync(output));
   };
@@ -110,6 +110,22 @@ try {
   const sdkInventory = run(['--sdk-data', sdkFile]);
   assert.ok(sdkInventory.entries.filter((entry) => entry.ecosystem === 'platform').every((entry) => entry.textStatus === 'not-applicable' && entry.licenseTextIds.length === 0));
   assert.ok(sdkInventory.gaps.some((entry) => entry.reason.includes('without an SDK root')));
+  // Exercise actual Darwin discovery branches on Linux too, without depending
+  // on the runner's Xcode installation or disabling real discovery in production.
+  const fakeSdk = path.join(root, 'fixture-simulator-sdk');
+  fs.mkdirSync(fakeSdk);
+  fs.copyFileSync(sdkFile, path.join(fakeSdk, 'SDKSettings.json'));
+  const darwinPreload = path.join(root, 'darwin-sdk-fixture.mjs');
+  fs.writeFileSync(darwinPreload, `import child from 'node:child_process';\nimport {syncBuiltinESMExports} from 'node:module';\nObject.defineProperty(process,'platform',{value:'darwin'});\nconst original=child.execFileSync;\nchild.execFileSync=(file,...args)=>file==='xcrun'?${JSON.stringify(fakeSdk)}:original(file,...args);\nsyncBuiltinESMExports();\n`);
+  const explicitMetadata = run(['--sdk-data', sdkFile], ['--import', darwinPreload]);
+  assert.ok(explicitMetadata.gaps.some((entry) => entry.reason.includes('without an SDK root')));
+  assert.ok(!explicitMetadata.provenance.inputs.some((entry) => entry.label.includes('.framework/')));
+  const discoveredSdk = run([], ['--import', darwinPreload]);
+  assert.ok(!discoveredSdk.gaps.some((entry) => entry.reason.includes('without an SDK root') || entry.reason.includes('Apple SDK metadata unavailable')));
+  assert.ok(discoveredSdk.provenance.inputs.some((entry) => entry.label === 'apple-sdk/SDKSettings.json'));
+  assert.ok(!run(['--sdk-data', sdkFile, '--sdk-path', fakeSdk]).gaps.some((entry) => entry.reason.includes('without an SDK root')));
+  fs.writeFileSync(path.join(fakeSdk, 'SDKSettings.json'), JSON.stringify({CanonicalName:'iphonesimulator99.0',Version:'99.0'}));
+  assert.throws(() => run(['--sdk-data', sdkFile, '--sdk-path', fakeSdk]), /Command failed/);
   const buildLog = path.join(root, 'build.log');
   fs.writeFileSync(buildLog, 'SwiftCompile normal arm64 -module-name Tauri\n** BUILD SUCCEEDED **\n');
   assert.equal(run(['--build-log', buildLog]).entries.some((entry) => entry.evidence.some((evidence) => evidence.kind === 'compiled')), false);

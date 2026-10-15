@@ -254,12 +254,20 @@ for (const [, name, url, constraint] of remoteDeclarations) {
 }
 
 let sdkPath = args.get('sdk-path');
-if (!sdkPath && process.platform === 'darwin') {
+// An explicitly supplied SDKSettings file is standalone evidence. Do not bind
+// it to a different SDK installed on the runner unless its root was supplied.
+if (!sdkPath && !args.has('sdk-data') && process.platform === 'darwin') {
   try { sdkPath = execFileSync('xcrun', ['--sdk', triple === 'aarch64-apple-ios' ? 'iphoneos' : 'iphonesimulator', '--show-sdk-path'], { encoding: 'utf8' }).trim(); } catch { /* recorded below */ }
 }
 const sdkFile = args.get('sdk-data') ?? (sdkPath && path.join(sdkPath, 'SDKSettings.json'));
 let sdk = null;
 if (sdkFile && fs.existsSync(sdkFile)) sdk = JSON.parse(input(sdkFile, 'apple-sdk/SDKSettings.json').toString('utf8'));
+if (sdk && sdkPath && args.has('sdk-data')) {
+  const rootSettings = path.join(sdkPath, 'SDKSettings.json');
+  if (!fs.existsSync(rootSettings) || !fs.readFileSync(rootSettings).equals(fs.readFileSync(sdkFile))) {
+    throw new Error('Explicit SDK metadata differs from the supplied Apple SDK root');
+  }
+}
 if (!sdk) inventory.gaps.push({ ecosystem: 'platform', reason: 'Apple SDK metadata unavailable; framework entries describe source imports, not observed SDK linking or redistribution licenses.' });
 else if (!sdkPath) inventory.gaps.push({ ecosystem: 'platform', reason: 'SDKSettings metadata observed without an SDK root; individual framework/module metadata was not inspected.' });
 if (sdk) {
