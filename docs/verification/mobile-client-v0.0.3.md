@@ -489,3 +489,13 @@ Rust fmt、workspace all-targets/all-features check、全特性 tests 和 Clippy
 独立只读复核及独立重跑26项也通过。日志
 `/tmp/mobile-tool-id-boundary-{node,browser,frontend}.log`。首次容量fixture误用宿主不会
 分配的0号ID；改为合法1号后仍验证128条及活动优先，不放宽生产准入。
+
+
+### 双引擎 CI 时间预算
+
+`9c86efb` 的主 CI 双引擎 job 在20分钟预算处被取消：实际546项、单worker，
+已执行Chromium273与WebKit229（共502），44项未完成，日志无断言失败或重试，
+不能写成全量通过。job116249712447于04:37:19Z启动、04:57:38Z结束。
+其他已完成工作流与50,363,575字节unsigned APK只作该head历史证据。
+后续仅将该job预算增至30分钟，仍执行全部用例、原引擎及单worker，不改断言或运行代码。
+最终新head的完整结果与产物另在同一PR核对。
