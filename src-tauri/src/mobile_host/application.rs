@@ -49,22 +49,43 @@ pub(crate) fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building mobile UI application");
-    app.run(|app, event| match event {
-        tauri::RunEvent::Ready
-        | tauri::RunEvent::WindowEvent {
-            event: tauri::WindowEvent::Resumed,
-            ..
-        } => {
-            crate::services::mobile_subscription_scheduler::resume(app);
+    app.run(|app, event| {
+        // Only trusted main-window lifecycle events authorize release checks.
+        // This owns metadata GETs, never VPN forwarding or installation.
+        match &event {
+            tauri::RunEvent::Ready => crate::services::mobile_release_scheduler::resume(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Resumed,
+                ..
+            } if label == "main" => crate::services::mobile_release_scheduler::resume(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Suspended,
+                ..
+            } if label == "main" => crate::services::mobile_release_scheduler::suspend(app),
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
+                crate::services::mobile_release_scheduler::suspend(app)
+            }
+            _ => {}
         }
-        tauri::RunEvent::WindowEvent {
-            event: tauri::WindowEvent::Suspended,
-            ..
+        match event {
+            tauri::RunEvent::Ready
+            | tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Resumed,
+                ..
+            } => {
+                crate::services::mobile_subscription_scheduler::resume(app);
+            }
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Suspended,
+                ..
+            }
+            | tauri::RunEvent::Exit
+            | tauri::RunEvent::ExitRequested { .. } => {
+                crate::services::mobile_subscription_scheduler::suspend(app);
+            }
+            _ => {}
         }
-        | tauri::RunEvent::Exit
-        | tauri::RunEvent::ExitRequested { .. } => {
-            crate::services::mobile_subscription_scheduler::suspend(app);
-        }
-        _ => {}
     });
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::{app_config, common};
 use serde_json::json;
 
 fn raw(tag: &str) -> Value {
@@ -194,7 +195,14 @@ fn preferences_atomic_local_store_and_reload_retains_intent_without_runtime_work
             .release_preferences,
         next.release_preferences
     );
-    assert_eq!(preferences(&next).unwrap().scheduler_state, "not-adapted");
+    assert_eq!(
+        preferences(&next).unwrap().scheduler_state,
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            "native-foreground"
+        } else {
+            "not-native-host"
+        }
+    );
     assert_eq!(
         common::lock(state.app_config(), "app_config").unwrap().core,
         current.core

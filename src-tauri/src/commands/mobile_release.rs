@@ -1,8 +1,8 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::mobile_release::*;
-use crate::services::{common, mobile_release};
+use crate::services::mobile_release;
 use crate::state::app_state::AppState;
-use tauri::{State, Window};
+use tauri::{AppHandle, Emitter, Manager, Window};
 
 fn require_host_label(label: &str) -> AppResult<()> {
     if label != "main" {
@@ -14,45 +14,117 @@ fn require_host_label(label: &str) -> AppResult<()> {
     }
     Ok(())
 }
-
 #[tauri::command]
 pub async fn mobile_release_catalog(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     window: Window,
     source: MobileReleaseSource,
     channel: MobileReleaseChannel,
 ) -> AppResult<MobileReleaseCatalog> {
     require_host_label(window.label())?;
-    let manager = state.capabilities().clone();
-    tauri::async_runtime::spawn_blocking(move || mobile_release::catalog(&manager, source, channel))
-        .await
-        .map_err(|_| AppError::internal("发行目录读取未完成"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let result = mobile_release::catalog(state.inner(), source, channel);
+        let _ = app_handle.emit("mobile-release:schedule-updated", ());
+        result
+    })
+    .await
+    .map_err(|_| AppError::internal("发行目录读取未完成"))?
 }
-
 #[tauri::command]
 pub async fn mobile_release_preferences(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     window: Window,
 ) -> AppResult<ReleasePreferencesSnapshot> {
     require_host_label(window.label())?;
-    let _operation = state.proxy_config_operation().lock().await;
-    let current = common::lock(state.app_config(), "app_config")?;
-    mobile_release::preferences(&current)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state.mobile_release_scheduler().preferences(state.inner())
+    })
+    .await
+    .map_err(|_| AppError::internal("发行偏好读取未完成"))?
 }
-
 #[tauri::command]
 pub async fn mobile_release_preferences_save(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     window: Window,
     expected_revision: String,
     preferences: ReleasePreferences,
+    operation_id: Option<String>,
 ) -> AppResult<ReleasePreferencesSnapshot> {
     require_host_label(window.label())?;
-    // These ordinary app preferences do not grant runtime or installer permissions.
+    let id =
+        operation_id.ok_or_else(|| AppError::invalid_argument("保存前必须固定发行偏好操作身份"))?;
+    let state = app_handle.state::<AppState>();
     let _operation = state.proxy_config_operation().lock().await;
-    mobile_release::save_preferences(state.inner(), &expected_revision, preferences)
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let result = state.mobile_release_scheduler().save_preferences(
+            state.inner(),
+            &id,
+            &expected_revision,
+            preferences,
+        );
+        let _ = app.emit("mobile-release:schedule-updated", ());
+        result
+    })
+    .await
+    .map_err(|_| AppError::internal("发行偏好保存结果未确认；请核对原操作"))?
 }
-
+#[tauri::command]
+pub async fn mobile_release_schedule(
+    app_handle: AppHandle,
+    window: Window,
+) -> AppResult<ReleaseScheduleSnapshot> {
+    require_host_label(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state.mobile_release_scheduler().snapshot(state.inner())
+    })
+    .await
+    .map_err(|_| AppError::internal("发行检查状态读取未完成"))?
+}
+#[tauri::command]
+pub async fn mobile_release_preferences_operation(
+    app_handle: AppHandle,
+    window: Window,
+    operation_id: String,
+) -> AppResult<Option<ReleasePreferenceOperation>> {
+    require_host_label(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state
+            .mobile_release_scheduler()
+            .operation(state.inner(), &operation_id)
+    })
+    .await
+    .map_err(|_| AppError::internal("原发行偏好操作读取未完成"))?
+}
+#[tauri::command]
+pub async fn mobile_release_preferences_confirm(
+    app_handle: AppHandle,
+    window: Window,
+    operation_id: String,
+    review_binding: String,
+) -> AppResult<ReleasePreferencesSnapshot> {
+    require_host_label(window.label())?;
+    let state = app_handle.state::<AppState>();
+    let _operation = state.proxy_config_operation().lock().await;
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let result = state.mobile_release_scheduler().confirm_preferences(
+            state.inner(),
+            &operation_id,
+            &review_binding,
+        );
+        let _ = app.emit("mobile-release:schedule-updated", ());
+        result
+    })
+    .await
+    .map_err(|_| AppError::internal("原发行偏好确认结果未确认；请只读核对原操作"))?
+}
 #[cfg(test)]
 mod tests {
     #[test]

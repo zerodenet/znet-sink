@@ -56,6 +56,7 @@ const config = await invoke('app_config_get');
 - [原生路由规则客户端覆盖编辑](./route-rule-editor-v0.0.3.md)
 - [规则集引用与 DNS 删除迁移](./reference-migrations-v0.0.3.md)
 - [概览定位与移动运行网络](./mobile-location-network-v0.0.3.md)
+- [移动版本目录前台到期检查](./mobile-release-foreground-v0.0.3.md)
 - [Flow 固定目标批量关闭](./flow-close-batch-v0.0.3.md)
 - [路由评估与独立 DNS 缓存](./route-cache-diagnostics-v0.0.3.md)
 - [普通配置无损文本编辑](./profile-editor-lossless-v0.0.3.md)

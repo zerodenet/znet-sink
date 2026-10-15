@@ -156,6 +156,7 @@ pub mod endpoint_restoration;
 pub(crate) mod flow_close;
 pub(crate) mod mobile_notifications;
 pub mod mobile_release;
+pub(crate) mod mobile_release_scheduler;
 pub(crate) mod mobile_subscription_scheduler;
 pub mod native_documents;
 pub mod packet_routes;

@@ -43,6 +43,7 @@ pub struct AppState {
     diagnostic_exports: crate::services::diagnostics::DiagnosticExports,
     mobile_subscription_scheduler:
         crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler,
+    mobile_release_scheduler: crate::services::mobile_release_scheduler::MobileReleaseScheduler,
     runtime_bridge: znet_engine_client::bridge::RuntimeBridge,
     flow_closes: crate::services::flow_close::Owner,
     route_editor: crate::configuration::route_editor::Owner,
@@ -124,6 +125,8 @@ impl AppState {
             mobile_subscription_scheduler:
                 crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler::default(
                 ),
+            mobile_release_scheduler:
+                crate::services::mobile_release_scheduler::MobileReleaseScheduler::default(),
             runtime_bridge: znet_engine_client::bridge::RuntimeBridge::default(),
             flow_closes: crate::services::flow_close::Owner::default(),
             route_editor: crate::configuration::route_editor::Owner::default(),
@@ -269,6 +272,12 @@ impl AppState {
         &self,
     ) -> &crate::services::mobile_subscription_scheduler::MobileSubscriptionScheduler {
         &self.mobile_subscription_scheduler
+    }
+
+    pub(crate) fn mobile_release_scheduler(
+        &self,
+    ) -> &crate::services::mobile_release_scheduler::MobileReleaseScheduler {
+        &self.mobile_release_scheduler
     }
 
     pub(crate) fn runtime_bridge(&self) -> &znet_engine_client::bridge::RuntimeBridge {

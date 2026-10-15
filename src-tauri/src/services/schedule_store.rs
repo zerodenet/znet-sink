@@ -27,7 +27,7 @@ fn lease(manager: &Manager, scheduler: &str) -> AppResult<Lease> {
     // Native-only allowlist; no caller-provided plugin namespace or SQL.
     if !matches!(
         scheduler,
-        "subscriptions" | "rule-sets" | "mobile-subscriptions"
+        "subscriptions" | "rule-sets" | "mobile-subscriptions" | "mobile-releases"
     ) {
         return Err(failure());
     }
@@ -83,6 +83,42 @@ fn read_checkpoint<T: DeserializeOwned + Default>(
         None => Ok((T::default(), None)),
         Some(entry) => Ok((decode(&entry.value)?, Some(entry.revision))),
     }
+}
+/// Synchronous native-owner adapter. The caller selects a private store directory;
+/// no path, namespace or lease is accepted from a frontend/guest.
+pub(crate) fn load_at<T: DeserializeOwned + Default>(
+    dir: &std::path::Path,
+    manager: &Manager,
+    scheduler: &'static str,
+) -> AppResult<(T, Option<i64>)> {
+    read_checkpoint(dir, &lease(manager, scheduler)?)
+}
+pub(crate) fn save_at<T: Serialize>(
+    dir: &std::path::Path,
+    manager: &Manager,
+    scheduler: &'static str,
+    data: &T,
+    revision: &mut Option<i64>,
+) -> AppResult<()> {
+    let value = serde_json::to_vec(&Checkpoint {
+        schema_version: 1,
+        retries: data,
+    })
+    .map_err(|_| failure())?;
+    let access = lease(manager, scheduler)?;
+    let revisions = storage::change(
+        dir,
+        &access,
+        &[Change::Put {
+            key: "retry-state".into(),
+            expected: *revision,
+            value,
+        }],
+    )
+    .and_then(|r| r.take(&access))
+    .map_err(|_| failure())?;
+    *revision = revisions.last().copied();
+    Ok(())
 }
 pub(crate) async fn save<T: Serialize>(
     manager: Manager,

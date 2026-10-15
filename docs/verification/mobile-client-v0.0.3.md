@@ -958,3 +958,41 @@ A12旧三项网络草稿fixture误称存在监听，改为无监听来源事实�
 DNS rename、跨配置/托管引用迁移及完整网络条件编辑仍分别待办；不把本批称作整个A04/A12或移动端完成。
 原生VPN/core/宿主装配与Galaxy S8/iPhone验收继续后置，四项Android许可材料缺口保留。
 没有core、依赖、锁文件或版本变更，没有使用用户Mac、创建签名凭据、合并、发布或修改分支保护。
+
+
+## 2026-10-15：A23 版本目录前台到期执行
+
+本批基线 `6b4bdb46e06d7cc422d72141799ffe7525f4d249`，继续同一 Draft PR #46 → develop。
+契约见[移动版本目录的前台到期检查](../gui/mobile-release-foreground-v0.0.3.md)。
+原生宿主根据已保存 clientAutoCheck/clientChannel 和主窗口前台生命周期执行只读目录检查；
+持续前台也能跨到期点执行，成功六小时、失败十五分钟，手动与自动共用 single-flight。
+这不是 A09 订阅同步，也不复用业务写 UNKNOWN 的自动重放；不安装、下载包或修改运行配置。
+200 完整校验后发布缓存；304 需要实际发送的有效 validator 与同源已验证正文。
+偏好保存使用固定操作 ID、真实 owned 文件历史和持久回执；丢回复只核对原操作，不能以当前值相同补造确认。
+确认重新核对文件历史、作用域、宿主和前台代次；损坏记录或确认落盘失败暂停自动检查。
+原生事件仅唤醒 UI 只读刷新，页面挂载和可见性不发起目录 GET；脏草稿/未知操作保留，明确放弃才退休旧读并重新载入。
+
+最终完整 locked workspace/all-features Rust：**1477 passed / 0 failed / 7 ignored，45组**；GUI **1203/0/5**。
+新增调度 owner 20 项，包括真实 HTTP 200→304、有限正文、single-flight 等待者、晚到结果失效、
+真实磁盘/SQLite 重开与故障触发器、原回执、同值 ABA、跨宿主重新审阅和前后台 ABA。
+fmt --check、locked workspace/all-targets/all-features check 与完整 Clippy 均通过，既有警告保留。
+日志 `/tmp/a23-release-{fmt,check,tests,clippy}-refined.log`。
+完整 `pnpm verify:frontend` 通过：Svelte **0错误/0警告**和生产 build 通过；
+日志 `/tmp/a23-release-frontend-refined.log`。
+发行专项 Node **27/27**、Chromium **12/12**，0失败/重试/flaky/跳过；原7项Node及3项浏览器覆盖保留。
+日志 `/tmp/a23-mobile-releases-node-final-27.log`、`/tmp/a23-versions-browser-final-27.log`。
+本地 WebKit 未运行，不安装或绕过；最终双引擎、四组 CI 和七份 artifact 以实际最终 head 记录在同一 PR。
+
+失败过程保留：首次浏览器 8通过/2失败，fixture 错用 plugin:event 而真实事件 alias 是 window CustomEvent；
+修正专用 fixture，没有改变生产事件边界或放宽断言。随后明确放弃/重新读取的浏览器反例真实失败，
+补齐 active/visibility 只读恢复和显式放弃；Node 的在途只读 loading 放弃反例也真实失败，
+修复为退休旧读取代次，saving/unknown/confirming/checking 仍拒绝放弃。
+实际 Rust 前台 ABA 反例在旧实现 **0通过/1失败**，原确认错误接受 leave→enter；
+补核对生命周期后同一反例及最终完整1477项通过。日志 `/tmp/a23-release-lifecycle-red.log`、
+`/tmp/a23-versions-{browser-initial,discard-red}.log`、`/tmp/a23-mobile-releases-node-loading-discard-red.log`。
+先前1476项绿色在该修复前，只作历史，不替代最终1477项。
+
+A22 仅只读审计，具体资源预览、明确替代/停止、跨存储逐项剩余和重开恢复仍是独立待办，未实际卸载用户资源。
+OS 后台调度、安装器/商店渠道、签名安装、原生 VPN/core/宿主装配和 Galaxy S8/iPhone 真机均未验收；
+不能把本批称作整个 A23 或移动端完成。四项 Android 许可材料缺口保留。
+本批无 core、依赖、锁文件、版本或 CI YAML 变更，不使用用户 Mac，不创建签名凭据、合并、发布或修改分支保护。
