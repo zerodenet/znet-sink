@@ -1,11 +1,12 @@
 //! A profile change retains capture intent, not the old profile's TUN plan.
 //! Callers hold proxy_config_operation and publish profiles only after success.
 use crate::errors::{AppError, AppResult};
+use crate::kernel::configuration::BoundControl;
 use crate::kernel::zero::{queries::KernelRuntimeIdentity, runtime};
 use crate::models::{core::CoreIpcOptions, zero_runtime::GuiTunStatus};
 use crate::state::app_state::AppState;
 use serde_json::{json, Value};
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::Mutex, time::Duration};
 
 mod parameters;
 use parameters::{matches, matches_plan};
@@ -15,6 +16,11 @@ pub(crate) struct Snapshot {
     pub tun: GuiTunStatus,
 }
 trait Backend: Sync {
+    // Legacy callers retain their existing compensation contract. A fixed
+    // workspace plan has not captured authoritative previous runtime material.
+    fn can_restore_previous(&self) -> bool {
+        true
+    }
     fn snapshot(&self) -> impl Future<Output = AppResult<Snapshot>> + Send;
     fn apply(
         &self,
@@ -26,6 +32,28 @@ trait Backend: Sync {
 struct Live<'a> {
     state: &'a AppState,
     options: CoreIpcOptions,
+    pinned: Option<Pinned>,
+}
+struct Pinned {
+    control: BoundControl,
+    expected: Mutex<KernelRuntimeIdentity>,
+    capture: Value,
+}
+impl Pinned {
+    fn expected(&self) -> AppResult<KernelRuntimeIdentity> {
+        Ok(crate::services::common::lock(&self.expected, "capture_identity")?.clone())
+    }
+    async fn verify(&self) -> AppResult<()> {
+        owned_identity(&self.expected()?, &self.control.identity().await?)
+    }
+    fn advance(&self, receipt: &KernelRuntimeIdentity) -> AppResult<()> {
+        let mut expected = crate::services::common::lock(&self.expected, "capture_identity")?;
+        if receipt.core_instance_id != expected.core_instance_id {
+            return Err(conflict());
+        }
+        *expected = receipt.clone();
+        Ok(())
+    }
 }
 pub(crate) struct Receipt {
     pub identity: KernelRuntimeIdentity,
@@ -50,6 +78,7 @@ impl Receipt {
         let backend = Live {
             state,
             options: self.options.clone(),
+            pinned: None,
         };
         restore_receipt(
             &backend,
@@ -76,7 +105,17 @@ async fn restore_receipt(
         .map(|_| ())
 }
 impl Backend for Live<'_> {
+    fn can_restore_previous(&self) -> bool {
+        self.pinned.is_none()
+    }
     async fn snapshot(&self) -> AppResult<Snapshot> {
+        if let Some(pinned) = &self.pinned {
+            let identity = pinned.control.identity().await?;
+            owned_identity(&pinned.expected()?, &identity)?;
+            let tun = pinned.control.tun_status().await?;
+            owned_identity(&identity, &pinned.control.identity().await?)?;
+            return Ok(Snapshot { identity, tun });
+        }
         let identity =
             crate::kernel::zero::queries::runtime_identity(Some(self.options.clone())).await?;
         let tun = runtime::tun_status(Some(self.options.clone())).await?;
@@ -87,6 +126,18 @@ impl Backend for Live<'_> {
         Ok(Snapshot { identity, tun })
     }
     async fn apply(&self, config: &Value) -> AppResult<KernelRuntimeIdentity> {
+        if let Some(pinned) = &self.pinned {
+            let expected = pinned.expected()?;
+            let receipt = super::apply::apply_with_bound_identity(
+                self.state.capabilities(),
+                config.clone(),
+                pinned.control.clone(),
+                &expected,
+            )
+            .await?;
+            pinned.advance(&receipt)?;
+            return Ok(receipt);
+        }
         super::apply::apply_with_identity(
             self.state.capabilities(),
             config.clone(),
@@ -100,7 +151,25 @@ impl Backend for Live<'_> {
             "system.tun",
             "disable",
             Duration::from_secs(60),
-            runtime::disable_tun(Some(self.options.clone())),
+            async {
+                if let Some(pinned) = &self.pinned {
+                    pinned.verify().await?;
+                    // Preserve the existing host resolver release before the
+                    // original tunnel disappears. No endpoint rediscovery.
+                    tokio::task::spawn_blocking(crate::capture::dns::release)
+                        .await
+                        .map_err(|e| AppError::internal(e.to_string()))??;
+                    pinned.verify().await?;
+                    pinned.control.command("tun.stop", json!({})).await?;
+                    pinned.control.tun_status().await?;
+                    pinned.verify().await?;
+                    Ok(())
+                } else {
+                    runtime::disable_tun(Some(self.options.clone()))
+                        .await
+                        .map(|_| ())
+                }
+            },
         )
         .await
         .map(|_| ())
@@ -111,7 +180,25 @@ impl Backend for Live<'_> {
             "system.tun",
             "enable",
             Duration::from_secs(60),
-            runtime::enable_tun_params(params.clone(), Some(self.options.clone())),
+            async {
+                if let Some(pinned) = &self.pinned {
+                    pinned.verify().await?;
+                    let status = pinned.control.tun_status().await?;
+                    if status.enabled || !status.supported {
+                        return Ok(());
+                    }
+                    runtime::prepare_tun_runtime().await?;
+                    pinned.verify().await?;
+                    pinned.control.command("tun.start", params.clone()).await?;
+                    pinned.control.tun_status().await?;
+                    pinned.verify().await?;
+                    Ok(())
+                } else {
+                    runtime::enable_tun_params(params.clone(), Some(self.options.clone()))
+                        .await
+                        .map(|_| ())
+                }
+            },
         )
         .await
         .map(|_| ())
@@ -136,6 +223,44 @@ pub(crate) async fn apply_profile(
     config: Value,
     options: CoreIpcOptions,
 ) -> AppResult<Receipt> {
+    apply_profile_inner(state, source, profile, config, options, None).await
+}
+
+/// Keep the original plan identity through capture changes and config apply.
+/// The remote reads and commands remain separate wire operations.
+pub(crate) async fn apply_profile_expected(
+    state: &AppState,
+    source: &Value,
+    profile: Option<&str>,
+    config: Value,
+    options: CoreIpcOptions,
+    expected: &KernelRuntimeIdentity,
+    expected_capture: &Value,
+) -> AppResult<Receipt> {
+    let control = BoundControl::connect(options.clone()).await?;
+    apply_profile_inner(
+        state,
+        source,
+        profile,
+        config,
+        options,
+        Some(Pinned {
+            control,
+            expected: Mutex::new(expected.clone()),
+            capture: expected_capture.clone(),
+        }),
+    )
+    .await
+}
+
+async fn apply_profile_inner(
+    state: &AppState,
+    source: &Value,
+    profile: Option<&str>,
+    config: Value,
+    options: CoreIpcOptions,
+    pinned: Option<Pinned>,
+) -> AppResult<Receipt> {
     let app = crate::services::common::lock(state.app_config(), "app_config")?.clone();
     let (previous_app, previous_source) = super::preferences::current(state)?;
     let previous_params = super::preferences::tun_params_for(
@@ -146,6 +271,7 @@ pub(crate) async fn apply_profile(
     let (next_app, next_source) = super::local_edits::resolve(&app, profile, source)?;
     let next_params =
         super::preferences::tun_params_for(&next_app, &next_source, next_app.tun.clone())?;
+    ensure_capture_plan(pinned.as_ref().map(|p| &p.capture), &next_params)?;
     let previous_id = crate::services::common::lock(state.proxy_configs(), "proxy_config")?
         .iter()
         .find(|p| p.active)
@@ -159,6 +285,7 @@ pub(crate) async fn apply_profile(
         &Live {
             state,
             options: options.clone(),
+            pinned,
         },
         &previous_config,
         &config,
@@ -174,6 +301,16 @@ pub(crate) async fn apply_profile(
         applied_params: next_params,
         options,
     })
+}
+fn ensure_capture_plan(expected: Option<&Value>, actual: &Value) -> AppResult<()> {
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(AppError {
+            code: "capture_preflight_rejected",
+            message: "冻结捕获参数已变化；未发送TUN或配置命令，请重新预检".into(),
+            details: None,
+        });
+    }
+    Ok(())
 }
 fn conflict() -> AppError {
     AppError::conflict(
@@ -265,6 +402,12 @@ async fn apply(
     if !before.tun.enabled || before.tun.managed_by_config {
         return backend.apply(next).await;
     }
+    // A workspace's local previous configuration is not evidence of the live
+    // device. In particular, the route-only fast path must not confirm stored
+    // candidate parameters when the actual command-owned TUN has an override.
+    if !backend.can_restore_previous() && !matches(&before.tun, previous) {
+        return Err(conflict());
+    }
     // Rule-only edits can use live reload. Rebuild capture when its plan,
     // DNS bootstrap, execution resources or outbound carriers change.
     let network_changed = [
@@ -277,7 +420,14 @@ async fn apply(
     .iter()
     .any(|path| old.pointer(path) != next.pointer(path));
     if !network_changed && previous == candidate {
-        return backend.apply(next).await;
+        let confirmed = backend.apply(next).await?;
+        if !backend.can_restore_previous() {
+            let current = observe(backend, &confirmed).await?;
+            if !matches(&current.tun, candidate) {
+                return Err(conflict());
+            }
+        }
+        return Ok(confirmed);
     }
     if !matches(&before.tun, previous) {
         return Err(conflict());
@@ -301,8 +451,10 @@ async fn apply(
     let Err(mut error) = result else {
         return result;
     };
-    let recovery = if uncertain(&error) {
-        Err(AppError::internal("执行结果或归属不确定，未自动重发或回滚"))
+    let recovery = if uncertain(&error) || !backend.can_restore_previous() {
+        Err(AppError::internal(
+            "执行结果、归属或原运行材料未确认，未自动重发或回滚",
+        ))
     } else {
         async {
             let current = observe(backend, &expected).await?;

@@ -499,3 +499,39 @@ Rust fmt、workspace all-targets/all-features check、全特性 tests 和 Clippy
 其他已完成工作流与50,363,575字节unsigned APK只作该head历史证据。
 后续仅将该job预算增至30分钟，仍执行全部用例、原引擎及单worker，不改断言或运行代码。
 最终新head的完整结果与产物另在同一PR核对。
+
+## CLIENT-05/06/07：统计来源、真实分页与本地工作区
+
+本批继续同一个Draft PR #46，develop仍为`fd198ba52711f018334860b8a6704546ccd349fd`，
+不修改core源码或本批依赖锁，不接入后置的原生运行owner。
+
+- CLIENT-05：实际registry定位共用统计页；固定来源及客户端代次，返回和端点来源的
+  reset均重新核对。对象替换、删除、ABA及晚回执不能恢复旧详情；无真实scope不兜底。
+- CLIENT-06：真实offset/limit/next_offset，500/500/1分页与末项、当前页刷新及精确重试；
+  本页筛选和实时读取有明确说明。原物理目标的进程内关闭屏障跨页/重挂载保留，坏回执
+  和未知错误不释放，不重复发送。进程重启持久恢复仍未实施。
+- CLIENT-07：真实原生schema/引用校验、Rust JSON文本无损u64、独立SQLite本地保存、
+  来源/关系图/AppConfig/规则及客户端代次CAS；托管/受保护来源不返回普通正文。
+  脏草稿不被刷新覆盖；唯一导航guard在提交中阻止返回/切tab，完成不自动离开。
+- 运行提交固定候选、完整捕获参数及原连接/identity，保持TUN命令15秒响应预算和权限、
+  DNS及Windows准备。快速路径在配置提交前后核对真实TUN；未确认原运行材料不自动
+  apply本地旧配置或重建旧TUN。纯本地捕获漂移明确拒绝；late drift及缺回执保留屏障。
+  实际运行回执与本地发布分阶段，不用历史相同digest确认新事务或盲目整表恢复。
+
+最终本地`pnpm verify:frontend`及生产build通过，类型检查**0 errors / 0 warnings**。
+Rust fmt、workspace locked all-targets/all-features check、全特性tests及Clippy通过；
+实际**1181 passed / 0 failed / 7 ignored**，45组结果，编译/Clippy非阻塞警告保留。
+忽略项仍包括需外部Zero二进制/真实双版本capture/实时订阅的测试及文档测试；不写成已运行。
+日志：`/tmp/client050607-frontend-guard-final.log`、`/tmp/client050607-final-rust-{fmt,check,tests,clippy}.log`。
+
+针对性Node：端点与统计59项、Packet18项、工作区及激活24项。
+实际Chromium：端点统计17项、Packet320px8项、工作区320px6项均通过；整批先合跑29项，
+唯一导航guard修复后工作区6项再跑。分别使用明确fixture，不作为真实手机转发证据。
+Packet Rust18项、工作区真实Unix IPC九模式、延迟TUN回执及三项发布代次并发保护包含
+在上述最终Rust全集内。完整Chromium/WebKit及四组工作流以本批最终head的PR证据为准，
+不复用此前a9744a0的成功、APK或SDK记录。
+
+仍未完成：工作区冻结材料重启、安全启动通道及watchdog/CAS，工作区原操作和Packet关闭
+屏障的进程持久恢复，远端原子前置条件、原生VPN/core装配、后台调度/插件/真实安装与
+Galaxy S8/iPhone验收。A11及完整PRD不因本批通过而完成；四项许可材料限制继续保留。
+契约：[工作区](../gui/config-workspace-local-v0.0.3.md)、[统计导航](../gui/endpoint-statistics-navigation-v0.0.3.md)、[Packet分页](../gui/packet-route-pagination-v0.0.3.md)。

@@ -131,6 +131,14 @@ pub(crate) fn save_relational_data(
     app_database::save_domain_data(&data_dir()?, proxy_configs, subscriptions)
 }
 
+pub(crate) fn save_relational_data_to_dir(
+    dir: &Path,
+    profiles: &[ProxyConfigProfile],
+    subscriptions: &[SubscriptionProfile],
+) -> AppResult<()> {
+    app_database::save_domain_data(dir, profiles, subscriptions)
+}
+
 pub(crate) fn legacy_proxy_configs_path(dir: &Path) -> std::path::PathBuf {
     dir.join(PROXY_CONFIGS_FILE)
 }

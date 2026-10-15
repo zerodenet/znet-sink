@@ -20,6 +20,7 @@ pub(crate) struct Workspace {
     last_composition: Mutex<Option<CompositionReport>>,
     last_transaction: Mutex<Option<ConfigTransactionReceipt>>,
     next_transaction_id: AtomicU64,
+    pub(crate) plans: workspace::Plans,
 }
 impl Workspace {
     pub(crate) fn record(&self, report: CompositionReport) {
@@ -62,5 +63,6 @@ pub(crate) mod preferences;
 pub(crate) mod local_edits;
 
 pub(crate) mod material;
+pub(crate) mod workspace;
 
 pub(crate) mod endpoints;

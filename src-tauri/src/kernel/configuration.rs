@@ -33,8 +33,30 @@ impl BoundControl {
         })
     }
     pub(crate) async fn call(&self, frame: Value) -> AppResult<Value> {
+        self.call_with_minimum_response_timeout(frame, None).await
+    }
+    /// Keep command-specific response budgets on the original connection.
+    /// The cloned binding is used only for this request; query budgets and
+    /// endpoint discovery are unchanged, and this method never reconnects.
+    pub(crate) async fn command(&self, method: &str, params: Value) -> AppResult<Value> {
+        self.call_with_minimum_response_timeout(
+            json!({"type":"command","method":method,"params":params}),
+            commands::command_response_timeout(method),
+        )
+        .await
+    }
+    async fn call_with_minimum_response_timeout(
+        &self,
+        frame: Value,
+        minimum: Option<std::time::Duration>,
+    ) -> AppResult<Value> {
+        let mut response_binding = self.binding.clone();
+        if let Some(minimum) = minimum {
+            response_binding.timeout = response_binding.timeout.max(minimum);
+        }
         let result =
-            protocol::request_on_connection(frame, &self.binding, self.connection.clone()).await?;
+            protocol::request_on_connection(frame, &response_binding, self.connection.clone())
+                .await?;
         parsing::unwrap_call_result(result.response, result.error)
     }
     pub(crate) async fn identity(&self) -> AppResult<RuntimeIdentity> {

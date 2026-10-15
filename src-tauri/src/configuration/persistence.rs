@@ -145,6 +145,56 @@ pub(crate) fn commit_relational_if_current(
     next_profiles: Vec<ProxyConfigProfile>,
     next_subscriptions: Vec<SubscriptionProfile>,
 ) -> AppResult<()> {
+    commit_checked(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        next_subscriptions,
+        false,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Local workspace publication keeps all current runtime-listener ownership.
+/// The caller holds proxy_config_operation; no runtime, retarget or TUN calls.
+pub(crate) fn commit_workspace_if_current(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    binding: &super::workspace::Binding,
+) -> AppResult<()> {
+    commit_checked(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        previous_subscriptions.to_vec(),
+        true,
+        None,
+        Some(&binding.rules_digest),
+        Some((&binding.scope, binding.generation)),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_checked(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    preserve_binding: bool,
+    directory: Option<&std::path::Path>,
+    expected_rules: Option<&str>,
+    expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+) -> AppResult<()> {
     let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
     let mut subscriptions = lock(state.subscriptions(), "subscription")?;
     ensure_graph_current(
@@ -153,33 +203,60 @@ pub(crate) fn commit_relational_if_current(
         previous_profiles,
         previous_subscriptions,
     )?;
+    let rules = if let Some(expected) = expected_rules {
+        let rules = lock(state.rule_sets(), "rule_set")?;
+        if super::workspace::digest(&*rules)? != expected {
+            return Err(super::workspace::conflict());
+        }
+        Some(rules)
+    } else {
+        None
+    };
     let next_active = next_profiles.iter().find(|p| p.active).cloned();
-    if let Some(active) = &next_active {
-        ensure_managed_system_proxy_compatible(active.content.as_ref())?;
+    if !preserve_binding {
+        if let Some(active) = &next_active {
+            ensure_managed_system_proxy_compatible(active.content.as_ref())?;
+        }
     }
     let mut candidate = expected_app.clone();
-    candidate.local_proxy.source_proxy_config_id = None;
+    if !preserve_binding {
+        candidate.local_proxy.source_proxy_config_id = None;
+    }
     let retained: std::collections::HashSet<_> =
         next_profiles.iter().map(|p| p.id.as_str()).collect();
-    candidate
-        .profile_edits
-        .retain(|id, _| retained.contains(id.as_str()));
-    let transaction = CheckedPublication {
-        state,
-        previous_profiles,
-        previous_subscriptions,
-        next_profiles: &next_profiles,
-        next_subscriptions: &next_subscriptions,
-        expected_app,
-        candidate,
-    };
+    if !preserve_binding {
+        candidate
+            .profile_edits
+            .retain(|id, _| retained.contains(id.as_str()));
+    }
     let active_changed = serde_json::to_value(previous_profiles.iter().find(|p| p.active))
         .map_err(|_| AppError::internal("profile snapshot encoding failed"))?
         != serde_json::to_value(next_active.as_ref())
             .map_err(|_| AppError::internal("profile snapshot encoding failed"))?;
-    znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
-    *profiles = next_profiles;
-    *subscriptions = next_subscriptions;
+    let publish = || -> AppResult<()> {
+        {
+            let transaction = CheckedPublication {
+                state,
+                previous_profiles,
+                previous_subscriptions,
+                next_profiles: &next_profiles,
+                next_subscriptions: &next_subscriptions,
+                expected_app,
+                candidate,
+                directory,
+            };
+            znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
+        }
+        *profiles = next_profiles;
+        *subscriptions = next_subscriptions;
+        Ok(())
+    };
+    if let Some((scope, generation)) = expected_scope {
+        state.with_client_scope_generation(scope, generation, publish)?;
+    } else {
+        publish()?;
+    }
+    drop(rules);
     drop(profiles);
     drop(subscriptions);
     if active_changed {
@@ -216,13 +293,29 @@ struct CheckedPublication<'a> {
     next_subscriptions: &'a [SubscriptionProfile],
     expected_app: &'a crate::models::app_config::AppConfig,
     candidate: crate::models::app_config::AppConfig,
+    directory: Option<&'a std::path::Path>,
 }
 impl Publication for CheckedPublication<'_> {
     type Error = AppError;
     fn write(&self) -> AppResult<()> {
-        domain_store::save_relational_data(self.next_profiles, self.next_subscriptions)
+        match self.directory {
+            Some(dir) => domain_store::save_relational_data_to_dir(
+                dir,
+                self.next_profiles,
+                self.next_subscriptions,
+            ),
+            None => domain_store::save_relational_data(self.next_profiles, self.next_subscriptions),
+        }
     }
     fn project(&self) -> AppResult<()> {
+        if let Some(dir) = self.directory {
+            return crate::services::app_config::compare_and_replace_local_at(
+                self.state,
+                self.expected_app,
+                self.candidate.clone(),
+                &dir.join("app-config.json"),
+            );
+        }
         crate::services::app_config::compare_and_replace_local(
             self.state,
             self.expected_app,
@@ -230,7 +323,17 @@ impl Publication for CheckedPublication<'_> {
         )
     }
     fn restore(&self) -> AppResult<()> {
-        domain_store::save_relational_data(self.previous_profiles, self.previous_subscriptions)
+        match self.directory {
+            Some(dir) => domain_store::save_relational_data_to_dir(
+                dir,
+                self.previous_profiles,
+                self.previous_subscriptions,
+            ),
+            None => domain_store::save_relational_data(
+                self.previous_profiles,
+                self.previous_subscriptions,
+            ),
+        }
     }
 }
 

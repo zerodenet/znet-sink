@@ -1,69 +1,119 @@
-use std::collections::BTreeSet;
-
+use crate::{
+    configuration::workspace::{self, Prepared},
+    errors::{AppError, AppResult},
+    kernel::{
+        adapter::KernelAdapter,
+        zero::{adapter::ZeroAdapter, queries},
+    },
+    models::{
+        config_workspace::*,
+        core::CoreIpcOptions,
+        core_process::CoreProcessState,
+        gui_core::{GuiConfigImpactItem, GuiConfigPlanApplyResult},
+    },
+    services::{common, core_config, core_process, interaction_mode, proxy_config},
+    state::app_state::AppState,
+};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager, State};
-
-use crate::errors::{AppError, AppResult};
-use crate::kernel::{
-    adapter::KernelAdapter,
-    zero::{adapter::ZeroAdapter, queries},
-};
-use crate::models::config_workspace::{
-    ConfigApplyStrategy, ConfigRuntimeIdentityView, ConfigTransactionReceipt,
-    ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceRuntimeView,
-    ConfigWorkspaceSnapshot,
-};
-use crate::models::core::CoreIpcOptions;
-use crate::models::core_process::CoreProcessState;
-use crate::models::gui_core::{GuiConfigImpactItem, GuiConfigPlanApplyResult};
-use crate::models::proxy_config::ProxyConfigProfile;
-use crate::services::{
-    common, core_config, core_process, interaction_mode, proxy_config, rule_overlay,
-};
-use crate::state::app_state::AppState;
-
+use std::collections::BTreeSet;
+use tauri::{AppHandle, Manager, State, Window};
+fn host(state: &AppState, window: &Window) -> AppResult<()> {
+    crate::services::native_documents::require_host(window.label())?;
+    interaction_mode::require_pro_mode(state, "config_workspace")
+}
 #[tauri::command]
 pub async fn gui_config_workspace_snapshot(
     state: State<'_, AppState>,
+    window: Window,
 ) -> AppResult<ConfigWorkspaceSnapshot> {
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
+    host(state.inner(), &window)?;
     snapshot(state.inner()).await
 }
-
 #[tauri::command]
 pub async fn gui_config_workspace_plan(
     state: State<'_, AppState>,
-    source_config: Value,
+    window: Window,
+    input: ConfigWorkspaceDraftInput,
 ) -> AppResult<ConfigWorkspacePlan> {
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
-    let active = active_profile(state.inner())?;
-    plan(state.inner(), &active, source_config, true).await
+    host(state.inner(), &window)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    plan(state.inner(), input).await
 }
-
+#[tauri::command]
+pub async fn gui_config_workspace_save_local(
+    state: State<'_, AppState>,
+    window: Window,
+    input: ConfigWorkspaceDraftInput,
+) -> AppResult<ConfigWorkspaceSaveResult> {
+    host(state.inner(), &window)?;
+    let _operation = state.proxy_config_operation().lock().await;
+    workspace::save(state.inner(), input)
+}
+#[tauri::command]
+pub fn gui_config_workspace_validate(
+    state: State<'_, AppState>,
+    window: Window,
+    input: ConfigWorkspaceDraftInput,
+) -> AppResult<Value> {
+    host(state.inner(), &window)?;
+    let (_, source, effective) = workspace::from_input(state.inner(), &input)?;
+    Ok(
+        json!({"sourceJson":workspace::pretty(&source)?, "effectiveJson":workspace::pretty(&effective)?}),
+    )
+}
+#[tauri::command]
+pub fn gui_config_workspace_format(window: Window, source_json: String) -> AppResult<String> {
+    crate::services::native_documents::require_host(window.label())?;
+    workspace::pretty(&workspace::parse(&source_json)?)
+}
 #[tauri::command]
 pub async fn gui_config_workspace_apply(
     app_handle: AppHandle,
+    window: Window,
     input: ConfigWorkspaceApplyInput,
-) -> AppResult<ConfigTransactionReceipt> {
+) -> AppResult<ConfigWorkspaceOperation> {
     let state = app_handle.state::<AppState>();
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
+    host(state.inner(), &window)?;
     let _operation = state.proxy_config_operation().lock().await;
-    apply_locked(app_handle.clone(), state.clone(), input).await
+    apply_locked(state.inner(), input).await
 }
-
+#[tauri::command]
+pub async fn gui_config_workspace_operation(
+    state: State<'_, AppState>,
+    window: Window,
+    plan_id: String,
+) -> AppResult<ConfigWorkspaceOperation> {
+    host(state.inner(), &window)?;
+    let mut operation = workspace::operation(state.inner(), &plan_id)?;
+    // Only the original plan's receipt may be checked; equal digests do not grant authority.
+    if let Some(receipt) = &operation.receipt {
+        let identity = queries::runtime_identity(Some(ipc_options(state.inner())?)).await?;
+        if identity.core_instance_id != receipt.runtime_identity.core_instance_id
+            || identity.config_revision != receipt.runtime_identity.config_revision
+        {
+            operation.state = "submitted_unknown";
+            operation.reason = Some("原回执后的运行身份已变化；不能将历史事务当作当前确认".into());
+        }
+    }
+    Ok(operation)
+}
+#[tauri::command]
+pub fn gui_config_workspace_discard(
+    state: State<'_, AppState>,
+    window: Window,
+    plan_id: String,
+) -> AppResult<()> {
+    host(state.inner(), &window)?;
+    workspace::discard(state.inner(), &plan_id)
+}
 async fn snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnapshot> {
-    let active = active_profile(state)?;
-    let source = active
-        .content
-        .clone()
-        .ok_or_else(|| AppError::invalid_argument("当前活动配置没有可编辑的 JSON 内容"))?;
-    let candidate =
-        rule_overlay::compose_effective_candidate_for(state, &source, Some(&active.id))?;
-    let digest = digest(&candidate.config)?;
-    let last_transaction = state.configuration().transaction();
+    let mut snapshot = workspace::local_snapshot(state)?;
+    if snapshot.read_only_reason.is_some() {
+        return Ok(snapshot);
+    }
+    let binding = snapshot.binding.clone();
     let running = core_process::refresh_status(state)?.state == CoreProcessState::Running;
-    let identity: Option<ConfigRuntimeIdentityView> = if running {
+    let identity = if running {
         queries::runtime_identity(Some(ipc_options(state)?))
             .await
             .ok()
@@ -71,275 +121,229 @@ async fn snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnapshot> {
     } else {
         None
     };
-    let confirmed = last_transaction.as_ref().is_some_and(|receipt| {
-        receipt.profile_id == active.id
-            && receipt.effective_digest == digest
-            && identity.as_ref().is_some_and(|current| {
-                current.core_instance_id == receipt.runtime_identity.core_instance_id
-                    && current.config_revision == receipt.runtime_identity.config_revision
-            })
-    });
-    let reason = if confirmed {
-        "最终生效配置与最近一次已确认事务一致"
-    } else if !running {
-        "内核未运行，最终配置尚未提交到运行态"
-    } else if identity.is_none() {
-        "内核正在运行，但当前无法读取运行态配置身份"
-    } else if last_transaction.is_none() {
-        "本次客户端会话中尚无已确认的配置事务"
-    } else {
-        "来源、客户端覆盖或内核实例已在最近一次事务后变化"
-    };
-    let mut settings = common::lock(state.app_config(), "app_config")?.clone();
-    crate::configuration::local_edits::migrate_legacy(&mut settings, Some(&active.id));
-    let mut edits = settings.client_edits.unwrap_or_default();
-    if let Some(endpoints) = settings
-        .profile_edits
-        .get(&active.id)
-        .and_then(|v| v.get("endpoints"))
-    {
-        edits.insert("endpoints".into(), endpoints.clone());
+    if workspace::local_snapshot(state)?.binding != binding {
+        return Err(workspace::conflict());
     }
-    let local_edits = json!(edits);
-
-    state.configuration().record(candidate.report.clone());
-    Ok(ConfigWorkspaceSnapshot {
-        profile_id: active.id,
-        profile_name: active.name,
-        source_updated_at_unix_ms: active.updated_at_unix_ms,
-        source_config: source,
-        local_edits,
-        effective_config: candidate.config,
-        composition: Some(candidate.report),
-        runtime: ConfigWorkspaceRuntimeView {
-            running,
-            identity,
-            effective_digest: digest,
-            confirmed,
-            reason: reason.to_string(),
-        },
-        last_transaction,
-    })
+    let confirmed = snapshot.last_transaction.as_ref().is_some_and(|r| {
+        r.profile_id == snapshot.profile_id
+            && r.effective_digest == snapshot.runtime.effective_digest
+            && identity
+                .as_ref()
+                .is_some_and(|i: &ConfigRuntimeIdentityView| {
+                    i.core_instance_id == r.runtime_identity.core_instance_id
+                        && i.config_revision == r.runtime_identity.config_revision
+                })
+    });
+    snapshot.runtime.running = Some(running);
+    snapshot.runtime.identity = identity;
+    snapshot.runtime.confirmed = confirmed;
+    snapshot.pending_apply = !confirmed;
+    snapshot.runtime.reason = if confirmed {
+        "运行身份与已确认事务一致"
+    } else if !running {
+        "本地配置已保存，内核未运行；待应用。schema校验不代表实际运行兼容"
+    } else {
+        "本地来源与运行态尚未确认一致；待应用或核对"
+    }
+    .into();
+    Ok(snapshot)
 }
-
 async fn plan(
     state: &AppState,
-    active: &ProxyConfigProfile,
-    source_config: Value,
-    validate_runtime: bool,
+    input: ConfigWorkspaceDraftInput,
 ) -> AppResult<ConfigWorkspacePlan> {
-    if !source_config.is_object() {
-        return Err(AppError::invalid_argument("配置必须是 JSON 对象"));
-    }
-    let previous_source = active
-        .content
-        .as_ref()
-        .ok_or_else(|| AppError::invalid_argument("当前活动配置没有可编辑的 JSON 内容"))?;
-    let previous =
-        rule_overlay::compose_effective_candidate_for(state, previous_source, Some(&active.id))?;
-    let next =
-        rule_overlay::compose_effective_candidate_for(state, &source_config, Some(&active.id))?;
-    if validate_runtime {
-        ensure_running(state)?;
-        let response = ZeroAdapter::new()
-            .validate_config(next.config.clone(), ipc_options(state)?)
-            .await?;
-        ensure_validation_accepted(&response)?;
-    }
+    let (context, source, effective) = workspace::from_input(state, &input)?;
+    let previous = crate::services::rule_overlay::compose_effective_candidate_with_app(
+        state,
+        context
+            .profile
+            .content
+            .as_ref()
+            .ok_or_else(workspace::conflict)?,
+        Some(&context.profile.id),
+        &context.app,
+    )?;
     let impact = classify_impact(
-        previous_source,
-        &source_config,
+        context
+            .profile
+            .content
+            .as_ref()
+            .ok_or_else(workspace::conflict)?,
+        &source,
         &previous.config,
-        &next.config,
+        &effective,
     );
-    Ok(ConfigWorkspacePlan {
+    let capture = crate::configuration::capture_apply::candidate_capture_parameters(
+        state,
+        &source,
+        Some(&context.profile.id),
+    )?;
+    let running = core_process::refresh_status(state)?.state == CoreProcessState::Running;
+    let mut identity = None;
+    let mut reason = if running {
+        None
+    } else {
+        Some("内核未运行；本地原生schema/引用校验已通过，可保存本地待应用".into())
+    };
+    if !impact.requires_restart.is_empty() {
+        reason = Some("此变更需要冻结启动材料和重启回执适配；当前工作区尚不能安全提交，保留来源并可保存本地。内核管理的普通重启仍独立可用".into());
+    }
+    if running && reason.is_none() {
+        if crate::services::system_proxy_guard::is_enabled_by_guard()?
+            && workspace::digest(
+                &proxy_config::extract_local_proxy(&previous.config).map(|v| (v.host, v.port)),
+            )? != workspace::digest(
+                &proxy_config::extract_local_proxy(&effective).map(|v| (v.host, v.port)),
+            )?
+        {
+            reason = Some(
+                "当前系统代理绑定会受影响；请先明确关闭系统代理，再重新预检，不会隐式重定向".into(),
+            );
+        } else {
+            let original = queries::runtime_identity(Some(ipc_options(state)?)).await?;
+            let response = ZeroAdapter::new()
+                .validate_config(effective.clone(), ipc_options(state)?)
+                .await
+                .map_err(|_| AppError::internal("运行内核预检未完成；草稿保留，未应用"))?;
+            ensure_validation_accepted(&response)?;
+            if queries::runtime_identity(Some(ipc_options(state)?)).await? != original {
+                return Err(workspace::conflict());
+            }
+            identity = Some(original);
+        }
+    }
+    workspace::verify(state, &context.binding)?;
+    let plan = ConfigWorkspacePlan {
         impact,
-        effective_digest: digest(&next.config)?,
-        effective_config: next.config,
-    })
-}
-
-async fn apply_locked(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    input: ConfigWorkspaceApplyInput,
-) -> AppResult<ConfigTransactionReceipt> {
-    ensure_running(state.inner())?;
-    let active = active_profile(state.inner())?;
-    if active.id != input.profile_id || active.updated_at_unix_ms != input.source_updated_at_unix_ms
-    {
-        return Err(AppError::conflict(
-            "proxy_config",
-            input.profile_id,
-            "活动配置已切换或被更新；草稿未提交，请刷新后重新预检",
-        ));
-    }
-    let transaction_id = state.configuration().next_transaction_id();
-    let started_at_unix_ms = common::now_unix_ms();
-    let plan = plan(state.inner(), &active, input.source_config.clone(), true).await?;
-    if input.strategy == ConfigApplyStrategy::HotReload && !plan.impact.requires_restart.is_empty()
-    {
-        return Err(AppError::conflict(
-            "config_transaction",
-            transaction_id.to_string(),
-            "预检发现需要重启的变更；请选择重启应用",
-        ));
-    }
-    let previous_profiles = common::lock(state.proxy_configs(), "proxy_config")?.clone();
-    let applied_identity = match input.strategy {
-        ConfigApplyStrategy::HotReload => {
-            let receipt = crate::configuration::capture_apply::apply_profile(
-                state.inner(),
-                &input.source_config,
-                Some(&active.id),
-                plan.effective_config.clone(),
-                ipc_options(state.inner())?,
-            )
-            .await?;
-            if let Err(mut error) = persist_export_retarget(state.clone(), input.source_config) {
-                rollback_hot(state.clone(), &previous_profiles, &receipt, &mut error).await;
-                return Err(error);
-            }
-            Some(receipt.identity)
-        }
-        ConfigApplyStrategy::Restart => {
-            if let Err(mut error) =
-                persist_and_restart(app_handle.clone(), state.clone(), input.source_config).await
-            {
-                rollback_restart(app_handle, state.clone(), &previous_profiles, &mut error).await;
-                return Err(error);
-            }
-            None
-        }
+        plan_id: String::new(),
+        binding: workspace::digest(&context.binding)?,
+        source_json: workspace::pretty(&source)?,
+        effective_json: workspace::pretty(&effective)?,
+        effective_digest: workspace::digest(&effective)?,
+        expires_at_unix_ms: String::new(),
+        runtime_validated: identity.is_some(),
+        apply_unavailable_reason: reason,
     };
-
-    let identity: ConfigRuntimeIdentityView = match applied_identity {
-        Some(identity) => identity.into(),
-        None => match queries::runtime_identity(Some(ipc_options(state.inner())?)).await {
-            Ok(identity) => identity.into(),
-            Err(mut error) => {
-                error.code = "config_apply_uncertain";
-                error.message = format!("配置已提交但最终运行态身份无法确认：{}", error.message);
-                // Hot reload already carries its confirmed identity above.
-                rollback_restart(app_handle, state.clone(), &previous_profiles, &mut error).await;
-                return Err(error);
-            }
+    workspace::store(
+        state,
+        Prepared {
+            binding: context.binding,
+            source,
+            effective,
+            capture_digest: workspace::digest(&capture)?,
+            frozen_capture_parameters: capture,
+            identity,
+            confirmed_binding: None,
+            plan,
+            operation: ConfigWorkspaceOperation {
+                plan_id: String::new(),
+                state: "prepared",
+                receipt: None,
+                reason: None,
+            },
         },
-    };
-    let receipt = ConfigTransactionReceipt {
-        transaction_id,
-        profile_id: active.id,
-        strategy: input.strategy,
-        state: "confirmed",
-        effective_digest: plan.effective_digest,
-        started_at_unix_ms,
-        completed_at_unix_ms: common::now_unix_ms(),
-        runtime_identity: identity,
-    };
-    state.configuration().record_transaction(receipt.clone());
-    Ok(receipt)
+    )
 }
-
-fn persist_export_retarget(state: State<'_, AppState>, source: Value) -> AppResult<()> {
-    proxy_config::update_active_content(state.inner(), source)?;
-    proxy_config::retarget_managed_system_proxy(state.inner())
-}
-
-async fn persist_and_restart(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    source: Value,
-) -> AppResult<()> {
-    proxy_config::update_active_content(state.inner(), source)?;
-    crate::commands::core_process::restart_managed(app_handle)
-        .await?
-        .require_restored()?;
-    proxy_config::retarget_managed_system_proxy(state.inner())
-}
-
-async fn rollback_hot(
-    state: State<'_, AppState>,
-    previous_profiles: &[ProxyConfigProfile],
-    receipt: &crate::configuration::capture_apply::Receipt,
-    error: &mut AppError,
-) {
-    append_recovery(
-        error,
-        "profile storage",
-        proxy_config::restore_profiles(state.inner(), previous_profiles),
-    );
-    append_recovery_async(error, "runtime", receipt.restore(state.inner()).await);
-    append_recovery(
-        error,
-        "system proxy",
-        proxy_config::retarget_managed_system_proxy(state.inner()),
-    );
-}
-
-async fn rollback_restart(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-    previous_profiles: &[ProxyConfigProfile],
-    error: &mut AppError,
-) {
-    append_recovery(
-        error,
-        "profile storage",
-        proxy_config::restore_profiles(state.inner(), previous_profiles),
-    );
-    let restarted = crate::commands::core_process::restart_managed(app_handle)
-        .await
-        .and_then(|response| response.require_restored())
-        .map(|_| ());
-    append_recovery_async(error, "runtime restart", restarted);
-    append_recovery(
-        error,
-        "system proxy",
-        proxy_config::retarget_managed_system_proxy(state.inner()),
-    );
-}
-
-fn append_recovery(error: &mut AppError, component: &str, recovery: AppResult<()>) {
-    append_recovery_async(error, component, recovery);
-}
-
-fn append_recovery_async(error: &mut AppError, component: &str, recovery: AppResult<()>) {
-    if let Err(rollback) = recovery {
-        error.code = "config_apply_uncertain";
-        error
-            .message
-            .push_str(&format!("；{component} 恢复失败：{}", rollback.message));
-        error.details = Some(json!({
-            "cause": error.details,
-            "recovery": {"component": component, "code": rollback.code, "message": rollback.message}
-        }));
+async fn apply_locked(
+    state: &AppState,
+    input: ConfigWorkspaceApplyInput,
+) -> AppResult<ConfigWorkspaceOperation> {
+    if input.strategy == ConfigApplyStrategy::Restart {
+        return Err(AppError::invalid_argument("工作区重启暂缺冻结启动材料及回执适配；草稿保留，可保存本地待应用，不会执行旧的非CAS恢复"));
     }
-}
-
-fn active_profile(state: &AppState) -> AppResult<ProxyConfigProfile> {
-    common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .cloned()
-        .ok_or_else(|| AppError::invalid_argument("当前没有活动配置"))
-}
-
-fn ensure_running(state: &AppState) -> AppResult<()> {
-    if core_process::refresh_status(state)?.state != CoreProcessState::Running {
-        return Err(AppError::conflict(
-            "core",
-            "runtime",
-            "内核未运行，无法校验并确认最终生效配置",
-        ));
+    let original = workspace::operation(state, &input.plan_id)?;
+    if original.state != "prepared" {
+        return Err(AppError {
+            code: if original.state == "rejected" {
+                "workspace_preflight_rejected"
+            } else {
+                "config_apply_uncertain"
+            },
+            message: "原计划已结束或已提交；只能核对原操作，不能再次运行变更".into(),
+            details: None,
+        });
     }
-    Ok(())
+    let preflight = async {
+        let prepared = workspace::review(state, &input.plan_id)?;
+        let expected = prepared.identity.as_ref().ok_or_else(workspace::conflict)?;
+        if &queries::runtime_identity(Some(ipc_options(state)?)).await? != expected {
+            return Err(workspace::conflict());
+        }
+        workspace::verify(state, &prepared.binding)?;
+        Ok::<_, AppError>(prepared)
+    }
+    .await;
+    if preflight.is_err() {
+        workspace::reject_before_submit(state, &input.plan_id)?;
+        return Err(AppError {
+            code: "workspace_preflight_rejected",
+            message: "副作用前预检未通过；未发送运行变更，草稿保留，请重新预检".into(),
+            details: None,
+        });
+    }
+    let prepared = workspace::submit(state, &input.plan_id)?;
+    let result = async {
+        let context = workspace::verify(state, &prepared.binding)?;
+        let started = common::now_unix_ms();
+        let receipt = crate::configuration::capture_apply::apply_profile_expected(
+            state,
+            &prepared.source,
+            Some(&context.profile.id),
+            prepared.effective.clone(),
+            ipc_options(state)?,
+            prepared.identity.as_ref().ok_or_else(workspace::conflict)?,
+            &prepared.frozen_capture_parameters,
+        )
+        .await?;
+        if workspace::digest(receipt.applied_config())? != prepared.plan.effective_digest
+            || workspace::digest(receipt.applied_capture_parameters())? != prepared.capture_digest
+        {
+            return Err(workspace::conflict());
+        }
+        let mut transaction = ConfigTransactionReceipt {
+            transaction_id: state.configuration().next_transaction_id(),
+            profile_id: context.profile.id.clone(),
+            strategy: input.strategy,
+            state: "runtime_confirmed",
+            effective_digest: prepared.plan.effective_digest,
+            started_at_unix_ms: started,
+            completed_at_unix_ms: common::now_unix_ms(),
+            runtime_identity: receipt.identity.into(),
+        };
+        workspace::runtime_confirmed(state, &input.plan_id, transaction.clone())?;
+        workspace::publish(state, &context, prepared.source)?;
+        transaction.state = "confirmed";
+        state
+            .configuration()
+            .record_transaction(transaction.clone());
+        workspace::finish(state, &input.plan_id, transaction)?;
+        workspace::operation(state, &input.plan_id)
+    }
+    .await;
+    if result
+        .as_ref()
+        .is_err_and(|error| error.code == "capture_preflight_rejected")
+    {
+        workspace::reject_without_runtime_mutation(state, &input.plan_id)?;
+        return Err(AppError {
+            code: "workspace_preflight_rejected",
+            message: "冻结接管参数在副作用前已变化；未发送运行变更，草稿保留，请重新预检".into(),
+            details: None,
+        });
+    }
+    result.map_err(|_| AppError {
+        code: "config_apply_uncertain",
+        message: "原工作区事务未完整确认；请核对原操作的运行回执与本地阶段，不能重放或声称已回滚"
+            .into(),
+        details: Some(json!({"planId":input.plan_id})),
+    })
 }
 
 fn ipc_options(state: &AppState) -> AppResult<CoreIpcOptions> {
-    let app = common::lock(state.app_config(), "app_config")?;
-    Ok(core_config::ipc_options_from_app_config(&app.core))
+    Ok(core_config::ipc_options_from_app_config(
+        &common::lock(state.app_config(), "app_config")?.core,
+    ))
 }
-
 fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
     let mut current = response;
     for _ in 0..6 {
@@ -349,13 +353,9 @@ fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
         if current.get("valid").and_then(Value::as_bool) == Some(false)
             || current.get("ok").and_then(Value::as_bool) == Some(false)
         {
-            return Err(AppError::invalid_argument(format!(
-                "内核配置校验失败：{}",
-                current
-                    .get("errors")
-                    .or_else(|| current.get("error"))
-                    .unwrap_or(current)
-            )));
+            return Err(AppError::invalid_argument(
+                "运行内核未接受配置校验；原草稿保留",
+            ));
         }
         if let Some(result) = current.get("result") {
             current = result;
@@ -363,14 +363,8 @@ fn ensure_validation_accepted(response: &Value) -> AppResult<()> {
             break;
         }
     }
-    Err(AppError::internal("无法识别内核配置校验响应"))
+    Err(AppError::internal("运行内核未提供可识别的校验回执"))
 }
-
-fn digest(value: &Value) -> AppResult<String> {
-    let bytes = serde_json::to_vec(value).map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
 impl From<queries::KernelRuntimeIdentity> for ConfigRuntimeIdentityView {
     fn from(value: queries::KernelRuntimeIdentity) -> Self {
         Self {
@@ -379,7 +373,6 @@ impl From<queries::KernelRuntimeIdentity> for ConfigRuntimeIdentityView {
         }
     }
 }
-
 fn classify_impact(
     previous_source: &Value,
     next_source: &Value,
@@ -456,7 +449,7 @@ fn classify_runtime(
     hot_reload: &mut Vec<GuiConfigImpactItem>,
     requires_restart: &mut Vec<GuiConfigImpactItem>,
 ) {
-    let restart_keys = ["api", "ipc"];
+    let restart_keys = ["api", "ipc", "principal_quota_state_path"];
     for key in restart_keys {
         let old = before.and_then(|value| value.get(key));
         let new = after.and_then(|value| value.get(key));
@@ -565,6 +558,18 @@ mod tests {
     }
 
     #[test]
+    fn native_principal_quota_state_path_is_startup_only() {
+        let before = json!({"runtime":{"principal_quota_state_path":"before"}});
+        let after = json!({"runtime":{"principal_quota_state_path":"after"}});
+        let plan = classify_impact(&before, &after, &before, &after);
+        assert!(plan.hot_reload.is_empty());
+        assert_eq!(
+            plan.requires_restart[0].section,
+            "runtime.principal_quota_state_path"
+        );
+    }
+
+    #[test]
     fn endpoint_changes_are_managed_reload_operations() {
         let before = json!({"endpoints":[{"tag":"a","enabled":true}]});
         let after = json!({"endpoints":[{"tag":"a","enabled":false}]});
@@ -573,3 +578,6 @@ mod tests {
         assert_eq!(plan.hot_reload[0].section, "endpoints");
     }
 }
+
+#[cfg(all(test, unix))]
+mod ipc_tests;

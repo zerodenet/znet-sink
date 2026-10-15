@@ -26,6 +26,35 @@ pub(crate) async fn apply_with_identity(
     config: Value,
     options: CoreIpcOptions,
 ) -> AppResult<queries::KernelRuntimeIdentity> {
+    apply_with_control_source(manager, config, ControlSource::Discover(options)).await
+}
+
+/// A workspace plan keeps the original connection and identity. This guard
+/// does not add a remote atomic precondition to config.apply_runtime.
+pub(crate) async fn apply_with_bound_identity(
+    manager: &Manager,
+    config: Value,
+    control: BoundControl,
+    expected: &queries::KernelRuntimeIdentity,
+) -> AppResult<queries::KernelRuntimeIdentity> {
+    apply_with_control_source(
+        manager,
+        config,
+        ControlSource::Fixed(control, expected.clone()),
+    )
+    .await
+}
+
+enum ControlSource {
+    Discover(CoreIpcOptions),
+    Fixed(BoundControl, queries::KernelRuntimeIdentity),
+}
+
+async fn apply_with_control_source(
+    manager: &Manager,
+    config: Value,
+    source: ControlSource,
+) -> AppResult<queries::KernelRuntimeIdentity> {
     let permission = Permission::new("configuration.apply", "active-runtime");
     let grants = BTreeSet::from([permission]);
     let failure = |error| AppError::invalid_argument(format!("配置能力不可用：{error}"));
@@ -50,7 +79,18 @@ pub(crate) async fn apply_with_identity(
             Arc::new(AtomicBool::new(false)),
         )
         .map_err(failure)?;
-    apply_authorized(&lease, config, options).await
+    match source {
+        ControlSource::Discover(options) => apply_authorized(&lease, config, options).await,
+        fixed => {
+            apply_authorized_source(
+                &lease,
+                Permission::new("configuration.apply", "active-runtime"),
+                config,
+                fixed,
+            )
+            .await
+        }
+    }
 }
 
 pub(crate) async fn apply_authorized(
@@ -68,6 +108,15 @@ pub(crate) async fn apply_authorized_for(
     config: Value,
     options: CoreIpcOptions,
 ) -> AppResult<queries::KernelRuntimeIdentity> {
+    apply_authorized_source(lease, permission, config, ControlSource::Discover(options)).await
+}
+
+async fn apply_authorized_source(
+    lease: &Lease,
+    permission: Permission,
+    config: Value,
+    source: ControlSource,
+) -> AppResult<queries::KernelRuntimeIdentity> {
     lease
         .check(Some(&permission))
         .map_err(|reason| AppError::invalid_argument(format!("配置操作未获授权：{reason}")))?;
@@ -78,8 +127,14 @@ pub(crate) async fn apply_authorized_for(
                 if !config.is_object() {
                     return Err(AppError::invalid_argument("config must be a JSON object"));
                 }
-                let control = BoundControl::connect(options).await?;
+                let (control, expected) = match source {
+                    ControlSource::Discover(options) => {
+                        (BoundControl::connect(options).await?, None)
+                    }
+                    ControlSource::Fixed(control, expected) => (control, Some(expected)),
+                };
                 let target = control.identity().await?;
+                ensure_expected_identity(expected.as_ref(), &target)?;
                 let _claim = lease
                     .claim_resource(format!("configuration:{}", target.core_instance_id))
                     .map_err(|reason| {
@@ -94,6 +149,7 @@ pub(crate) async fn apply_authorized_for(
                     control,
                     lease,
                     permission: permission.clone(),
+                    expected,
                 })
                 .await
             }
@@ -119,6 +175,7 @@ struct Live<'a> {
     config: Value,
     control: BoundControl,
     permission: Permission,
+    expected: Option<queries::KernelRuntimeIdentity>,
 }
 
 impl Backend for Live<'_> {
@@ -130,8 +187,27 @@ impl Backend for Live<'_> {
         self.lease
             .check(Some(&self.permission))
             .map_err(|error| AppError::invalid_argument(format!("配置提交授权失效：{error}")))?;
+        // Do not adopt a new instance/revision as a fresh baseline after the
+        // caller's plan. The check and command still are separate wire calls.
+        if self.expected.is_some() {
+            ensure_expected_identity(self.expected.as_ref(), &self.control.identity().await?)?;
+        }
         self.control.apply(self.config.clone()).await
     }
+}
+
+fn ensure_expected_identity(
+    expected: Option<&queries::KernelRuntimeIdentity>,
+    actual: &queries::KernelRuntimeIdentity,
+) -> AppResult<()> {
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(AppError::conflict(
+            "config",
+            "runtime",
+            "原预检运行身份已变化，未改用新实例或版本提交配置",
+        ));
+    }
+    Ok(())
 }
 
 // Callers may persist only after this returns. A lost reply is not a rejection

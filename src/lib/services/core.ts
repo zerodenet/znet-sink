@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, ClientScope, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, ClientScope, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspaceDraftInput, ConfigWorkspaceOperation, ConfigWorkspaceSaveResult, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -493,16 +493,26 @@ export async function getConfigWorkspaceSnapshot(): Promise<ConfigWorkspaceSnaps
   return invoke('gui_config_workspace_snapshot');
 }
 
-export async function planConfigWorkspace(
-  sourceConfig: Record<string, unknown>,
-): Promise<ConfigWorkspacePlan> {
-  return invoke('gui_config_workspace_plan', { sourceConfig });
+export async function planConfigWorkspace(input: ConfigWorkspaceDraftInput): Promise<ConfigWorkspacePlan> {
+  return invoke('gui_config_workspace_plan', { input });
 }
-
-export async function applyConfigWorkspace(
-  input: ConfigWorkspaceApplyInput,
-): Promise<ConfigTransactionReceipt> {
+export async function saveConfigWorkspaceLocal(input: ConfigWorkspaceDraftInput): Promise<ConfigWorkspaceSaveResult> {
+  return invoke('gui_config_workspace_save_local', { input });
+}
+export async function formatConfigWorkspace(sourceJson: string): Promise<string> {
+  return invoke('gui_config_workspace_format', { sourceJson });
+}
+export async function validateConfigWorkspace(input: ConfigWorkspaceDraftInput): Promise<{sourceJson: string; effectiveJson: string}> {
+  return invoke('gui_config_workspace_validate', { input });
+}
+export async function applyConfigWorkspace(input: ConfigWorkspaceApplyInput): Promise<ConfigWorkspaceOperation> {
   return invoke('gui_config_workspace_apply', { input });
+}
+export async function inspectConfigWorkspaceOperation(planId: string): Promise<ConfigWorkspaceOperation> {
+  return invoke('gui_config_workspace_operation', { planId });
+}
+export async function discardConfigWorkspacePlan(planId: string): Promise<void> {
+  return invoke('gui_config_workspace_discard', { planId });
 }
 
 // Mode hot-switch

@@ -49,6 +49,9 @@ const config = await invoke('app_config_get');
 
 - [移动客户端 v0.0.3 验证边界](../verification/mobile-client-v0.0.3.md)
 - [移动运行与 core 接口交接](./mobile-platform-v0.0.3.md)
+- [端点统计定位与来源返回](./endpoint-statistics-navigation-v0.0.3.md)
+- [Packet 真实分页与关闭屏障](./packet-route-pagination-v0.0.3.md)
+- [工作区本地保存、草稿与来源保护](./config-workspace-local-v0.0.3.md)
 
 - [网络工具箱架构与现有实现迁移计划（当前工作方向）](./internal-modules.md)
 - [流量拦截、抓包、HTTPS 调试与改写（目标边界）](./network-inspection.md)

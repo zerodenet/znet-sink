@@ -309,6 +309,31 @@ impl AppState {
         Ok(())
     }
 
+    /// Fence a bounded synchronous local publication against lifecycle events.
+    /// Acquire any profile/subscription/rule guards before this call. The
+    /// callback may publish local storage and settings, but must not await,
+    /// emit events, or call a method that locks client_core. Notify the client
+    /// of a committed configuration only after this fence and data guards drop.
+    pub(crate) fn with_client_scope_generation<T>(
+        &self,
+        expected: &ClientScope,
+        generation: u64,
+        publish: impl FnOnce() -> crate::errors::AppResult<T>,
+    ) -> crate::errors::AppResult<T> {
+        let core = self.client_core.lock().unwrap_or_else(|e| e.into_inner());
+        let snapshot = core.snapshot();
+        if &snapshot.scope != expected || snapshot.scope_generation.0 != generation {
+            return Err(crate::errors::AppError::conflict(
+                "client_scope",
+                "",
+                "配置或实例代次已变化，未发布本地材料；请保留草稿并重新核对",
+            ));
+        }
+        let result = publish();
+        drop(core);
+        result
+    }
+
     pub(crate) fn bind_runtime_bridge(
         &self,
         expected: &ClientScope,
@@ -1018,6 +1043,86 @@ mod tests {
         assert_eq!(
             state.tool_runtime.get(job.id).unwrap().state,
             ToolJobState::Queued
+        );
+    }
+
+    #[test]
+    fn local_publication_scope_fence_refuses_aba_before_any_write() {
+        let state = AppState::default();
+        let before = state.client_core_snapshot();
+        state.client_core_configuration_committed(Some(&proxy_profile("other", true)));
+        state.client_core_configuration_committed(None);
+        assert_eq!(state.client_core_snapshot().scope, before.scope);
+        let writes = std::cell::Cell::new(0);
+        let result =
+            state.with_client_scope_generation(&before.scope, before.scope_generation.0, || {
+                writes.set(writes.get() + 1);
+                Ok(())
+            });
+        assert_eq!(result.unwrap_err().code, "conflict");
+        assert_eq!(writes.get(), 0);
+    }
+
+    #[test]
+    fn local_publication_scope_fence_holds_lifecycle_events_until_publish_finishes() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let state = AppState::default();
+        let before = state.client_core_snapshot();
+        let published = AtomicBool::new(false);
+        let (attempted, attempted_rx) = mpsc::channel();
+        let (completed, completed_rx) = mpsc::channel();
+        std::thread::scope(|threads| {
+            let mut worker = None;
+            state
+                .with_client_scope_generation(&before.scope, before.scope_generation.0, || {
+                    // A deterministic assertion of the actual lifecycle lock,
+                    // followed by a real lifecycle event on another thread.
+                    assert!(state.client_core.try_lock().is_err());
+                    worker = Some(threads.spawn(|| {
+                        attempted.send(()).unwrap();
+                        state.client_core_instance_started();
+                        assert!(published.load(Ordering::SeqCst));
+                        completed.send(()).unwrap();
+                    }));
+                    attempted_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    assert!(matches!(
+                        completed_rx.try_recv(),
+                        Err(mpsc::TryRecvError::Empty)
+                    ));
+                    published.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .unwrap();
+            worker.unwrap().join().unwrap();
+        });
+        completed_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_ne!(
+            state.client_core_snapshot().scope_generation,
+            before.scope_generation
+        );
+    }
+
+    #[test]
+    fn local_publication_scope_fence_preserves_failure_and_releases_lifecycle_lock() {
+        let state = AppState::default();
+        let before = state.client_core_snapshot();
+        let result: crate::errors::AppResult<()> =
+            state.with_client_scope_generation(&before.scope, before.scope_generation.0, || {
+                Err(crate::errors::AppError::internal("publication failed"))
+            });
+        assert_eq!(result.unwrap_err().message, "publication failed");
+        assert!(state.client_core.try_lock().is_ok());
+        state.client_core_instance_started();
+        assert_ne!(
+            state.client_core_snapshot().scope_generation,
+            before.scope_generation
         );
     }
 

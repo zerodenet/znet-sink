@@ -39,7 +39,7 @@ const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
 /// startup/restart restoration and legacy adapter callers all pass here.
 const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn command_response_timeout(method: &str) -> Option<Duration> {
+pub(crate) fn command_response_timeout(method: &str) -> Option<Duration> {
     match method {
         "tun.start" | "tun.stop" | "tun.recover" => Some(TUN_RESPONSE_TIMEOUT),
         _ => None,

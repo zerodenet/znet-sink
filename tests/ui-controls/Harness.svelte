@@ -1,6 +1,7 @@
 <script lang="ts">
   import PacketPaginationFixture from './PacketPaginationFixture.svelte';
   import DesktopDiagnosticExportFixture from './DesktopDiagnosticExportFixture.svelte';
+  import WorkspaceFixture from './WorkspaceFixture.svelte';
   import PluginPageFixture from './PluginPageFixture.svelte';
   import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
   import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
@@ -57,6 +58,8 @@
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
 {#if selectedPanel === 'packet-pagination'}
   <PacketPaginationFixture />
+{:else if selectedPanel === 'workspace'}
+  <WorkspaceFixture />
 {:else if selectedPanel === 'desktop-diagnostic-export'}
   <DesktopDiagnosticExportFixture />
 {:else if selectedPanel === 'plugin-page'}

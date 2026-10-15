@@ -9,8 +9,7 @@ pub use original::{
     LocalProxyEndpoint,
 };
 pub(crate) use original::{
-    ensure_managed_system_proxy_compatible, remove_managed_runtime, restore_profiles,
-    retarget_managed_system_proxy, upsert_runtime_locked,
+    ensure_managed_system_proxy_compatible, remove_managed_runtime, upsert_runtime_locked,
 };
 
 use serde_json::{json, Value};

@@ -180,10 +180,10 @@ assert.ok(
 );
 assert.ok(
   configEditor.includes('getConfigWorkspaceSnapshot') &&
-    configEditor.includes('snapshot.sourceConfig') &&
-    configEditor.includes('snapshot.effectiveConfig') &&
+    configEditor.includes('snapshot.sourceJson') &&
+    configEditor.includes('snapshot.effectiveJson') &&
     !configEditor.includes('getCoreConfig'),
-  'the Pro config workspace must edit the backend-owned active source and never the read-only core ConfigSnapshot',
+  'the Pro config workspace must use lossless backend-owned source/effective text instead of the read-only core ConfigSnapshot',
 );
 assert.ok(
   overviewTab.includes("store.activeTab = 'nodes'") &&
