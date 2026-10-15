@@ -343,8 +343,33 @@ fn unavailable_and_unsupported_lock_classifications_never_echo_os_messages_or_pa
     let parent = directory.path().join("not-directory");
     fs::write(&parent, b"secret-token-canary").unwrap();
     let path = parent.join("packet.json");
+    // A file used as a parent is not one portable io::ErrorKind: Windows
+    // reports this child as NotFound, while Unix reports NotADirectory.
+    // Assert the actual platform boundary, without changing production rules.
+    let error = fs::symlink_metadata(&path).unwrap_err();
     let report = inspect(&path);
+    #[cfg(windows)]
+    {
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(report.reason_code, "not-initialized");
+        assert_eq!(report.evidence.journal_present, Some(false));
+        assert_eq!(report.evidence.marker_present, Some(false));
+    }
+    #[cfg(unix)]
+    {
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+        assert_eq!(report.reason_code, "io-unavailable");
+    }
+    safe(&report, &path);
+    assert_eq!(fs::read(&parent).unwrap(), b"secret-token-canary");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    // Deterministically cover generic IO projection on every OS as well,
+    // instead of relying on an OS-specific pathname error to trigger it.
+    let error = io::Error::other("secret-token-canary");
+    assert_eq!(io_code(&error), "io-unavailable");
+    let report = super::report(io_code(&error), PacketLedgerEvidence::default());
     assert_eq!(report.reason_code, "io-unavailable");
+    assert!(report.new_close_blocked);
     safe(&report, &path);
 }
 #[cfg(unix)]

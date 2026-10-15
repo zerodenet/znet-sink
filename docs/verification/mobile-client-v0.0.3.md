@@ -688,3 +688,17 @@ Clippy 通过；测试仍为1292/0/7。Clippy 首轮拒绝两处权限测试的�
 
 实际 Rust 许可 build-hook fixture 也通过：首次执行缺少云端 Cargo PATH 未启动检查，
 补齐与正式构建相同工具链环境后成功，日志 `/tmp/client-history-license-build-hook-fixed.log`。
+
+
+### 45c8838 的 Windows 路径分类 fixture 失败
+
+该提交 Windows latest 和 Windows 2022 客户端各实际1210 passed / 1 failed / 5 ignored，
+两者发布内核readiness步骤均未运行。失败来自新增Packet只读测试将普通文件作为父目录，却固定期待Linux的
+`NotADirectory`→`io-unavailable`；Windows实际`NotFound`→`not-initialized`。
+生产代码按操作系统实际错误分类，没有向UI回传路径或原始错误。修复仅调整测试按
+平台核对真实错误种类、固定分类、canary隐私、原文件字节和目录条目保留，并显式
+测试普通IO错误分类。不能用该提交的其它通过结果声称它全绿；修复commit重新验证。
+
+修复后本地fmt、locked全workspace/all-target/all-feature check、完整tests及Clippy重新
+通过，仍为1292 passed / 0 failed / 7 ignored（45组）。前端未变，不重复刚通过的
+完整前端验证；新SHA仍重新观察全部CI。日志 `/tmp/client-history-windows-{fmt,tests,check,clippy}.log`。
