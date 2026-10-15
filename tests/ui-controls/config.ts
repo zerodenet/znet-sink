@@ -361,8 +361,22 @@ export async function getGuiDebugFrames(query: import('../../src/lib/types/debug
       removedSinceClientStart: 3, writeFailuresSinceClientStart: 0, completeness: 'unknown' as const}};
 }
 
-// Workspace IO fixtures are isolated; generation and settings fixtures below remain intact.
-export { getConfigWorkspaceSnapshot, planConfigWorkspace, applyConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan } from './workspace-core';
+// The dedicated workspace panel owns the offline/u64 scenarios. Other settings
+// panels retain the source/override/effective baseline used by shared regressions.
+import { getConfigWorkspaceSnapshot as getDedicatedWorkspaceSnapshot } from './workspace-core';
+export async function getConfigWorkspaceSnapshot(): Promise<import('../../src/lib/types/gui-api').ConfigWorkspaceSnapshot> {
+  if (new URLSearchParams(location.search).get('panel') === 'workspace') return getDedicatedWorkspaceSnapshot();
+  return {
+    profileId: 'main', profileName: '日常网络配置', binding: 'settings-workspace-source',
+    sourceUpdatedAtUnixMs: '1', sourceJson: JSON.stringify({ log: { level: 'info' } }, null, 2),
+    localEditsJson: JSON.stringify({ 'localProxy.port': 7890 }, null, 2),
+    effectiveJson: JSON.stringify({ log: { level: 'info' }, inbounds: [{ tag: 'local', listen: { port: 7890 } }] }, null, 2),
+    pendingApply: true,
+    composition: { layers: [{ source: 'client', changedPaths: ['/inbounds'] }] },
+    runtime: { running: false, effectiveDigest: 'fixture', confirmed: false, reason: 'No kernel in UI fixture' },
+  };
+}
+export { planConfigWorkspace, applyConfigWorkspace, saveConfigWorkspaceLocal, formatConfigWorkspace, validateConfigWorkspace, inspectConfigWorkspaceOperation, discardConfigWorkspacePlan } from './workspace-core';
 export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {};
 
 let fixtureClientGeneration: number | undefined = 1;

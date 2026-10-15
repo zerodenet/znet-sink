@@ -535,3 +535,23 @@ Packet Rust18项、工作区真实Unix IPC九模式、延迟TUN回执及三项�
 屏障的进程持久恢复，远端原子前置条件、原生VPN/core装配、后台调度/插件/真实安装与
 Galaxy S8/iPhone验收。A11及完整PRD不因本批通过而完成；四项许可材料限制继续保留。
 契约：[工作区](../gui/config-workspace-local-v0.0.3.md)、[统计导航](../gui/endpoint-statistics-navigation-v0.0.3.md)、[Packet分页](../gui/packet-route-pagination-v0.0.3.md)。
+
+### c422292 完整CI失败及修复
+
+c422292的主CI真实执行608项：Chromium303通过/1失败，WebKit302通过/2失败，
+总605通过/3失败；三项各重试一次仍失败，没有flaky或skip，非超时。其余13个主CI
+job及另外三组工作流成功，仅作为该head历史证据，不能称本批最终全量通过。
+
+修复共享settings fixture误用专项u64样例：保留原日志、客户端覆盖和最终inbounds三视图，
+专项样例只供workspace panel。移动返回只把尚未关闭的dialog视为顶层；真实Portal已
+closed但仍在退出动画时，不吞掉下一次浏览器/系统返回。原有返回详情断言保持。
+新增两项显式保留2秒退出动画的回归；暂用旧逻辑时，两项都到达原详情返回断言并失败，
+恢复修复逻辑后通过。最初仅改animation-duration的试验未保留Portal，停在前置条件，
+不计为正反验证结果；使用显式keyframes后的日志才是有效证据。
+
+修复后相关Chromium **75/75通过**，涵盖端点/共用统计、移动shell、旧端点/统计、
+settings三视图和工作区；完整pnpm verify:frontend、生产build、类型0/0通过。
+Rust源码及依赖未变，前述1181/0/7仍对应同一后端；新head CI另行核对。
+本地WebKit官方下载返回403 Domain forbidden，未运行、未绕过；以同提交CI实际执行为准。
+日志：/tmp/client050607-ci-fix-browser-verified.log、/tmp/client050607-ci-fix-frontend-final.log、
+/tmp/client050607-closing-portal-negative-final.log。最终准确head、双引擎及新产物见同一PR。

@@ -18,9 +18,10 @@
     if (navigation.activeTab === tab) store.activeTab = tab === 'configuration' ? 'profiles' : tab;
   }
   function back(): boolean {
-    // Dialogs own their Escape and return handling; never navigate underneath one.
+    // Open dialogs own return. A closed Portal may still be visible during its
+    // exit animation; it must not consume the next return as an active layer.
     const dialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'))
-      .filter(element => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true').at(-1);
+      .filter(element => element.getAttribute('data-state') !== 'closed' && element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true').at(-1);
     if (dialog) {
       dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       return true;

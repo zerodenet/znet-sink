@@ -89,6 +89,26 @@ test('unsupported previous plane chooses actual endpoint plane and preserves ful
   await expect(page.getByRole('dialog')).toContainText('wg-a · 观测详情');
 });
 
+for (const kind of ['browser', 'system'] as const) {
+  test(`${kind} return ignores a closed statistics portal retained by its exit animation`, async ({ page }) => {
+    await openDetails(page);
+    // Keep the real closed Portal mounted so Chromium and WebKit exercise the
+    // same second-return boundary, independently of their animation timing.
+    await page.addStyleTag({ content: '@keyframes fixture-retain-closed { from { opacity: 1; } to { opacity: .99; } } [role="dialog"][data-state="closed"] { animation: fixture-retain-closed 2s linear !important; }' });
+    await page.getByRole('button', { name: '查看 resource:wg-a 统计详情', exact: true }).click();
+    const portal = page.getByRole('dialog');
+    await expect(portal).toContainText('resource:wg-a');
+    await portal.evaluate(element => element.setAttribute('data-fixture-closing-portal', 'true'));
+    await page.keyboard.press('Escape');
+    const closing = page.locator('[data-fixture-closing-portal="true"]');
+    await expect(closing).toHaveAttribute('data-state', 'closed');
+    await expect(closing).toBeVisible();
+    if (kind === 'browser') await page.goBack();
+    else await page.evaluate(() => window.dispatchEvent(new Event('mobile:back', { cancelable: true })));
+    await expect(page.getByRole('dialog')).toContainText('wg-a · 观测详情');
+  });
+}
+
 
 test('client generation ABA cannot restore a previous visit even when endpoint fields return unchanged', async ({ page }) => {
   await openDetails(page);
