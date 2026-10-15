@@ -277,6 +277,9 @@ pub struct NodeScreenSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ClientCoreSnapshot {
     pub revision: SnapshotRevision,
+    /// Lifecycle/configuration generation, independent of observation updates.
+    #[serde(default)]
+    pub scope_generation: SnapshotRevision,
     pub scope: ClientScope,
     pub source_status: SourceStatus,
     pub active_probe_jobs: Vec<ProbeJobSnapshot>,

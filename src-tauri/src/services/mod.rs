@@ -27,6 +27,7 @@ pub(crate) mod kernel_command;
 pub mod kernel_manager;
 pub mod kernel_settings;
 pub mod local_proxy;
+pub mod log_export;
 pub mod log_store;
 pub mod logs;
 #[cfg(target_os = "macos")]

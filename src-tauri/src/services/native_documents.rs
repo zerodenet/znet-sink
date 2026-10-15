@@ -191,6 +191,7 @@ pub(crate) fn export_diagnostics(
     plan_id: Option<String>,
 ) -> AppResult<DocumentReceipt> {
     let state = app.state::<AppState>();
+    let snapshot = state.client_core_snapshot();
     // Legacy explicit export calls retain compatibility. The new mobile flow
     // always supplies a host-prepared preview ID and never resnapshots here.
     let id = match plan_id {
@@ -207,7 +208,16 @@ pub(crate) fn export_diagnostics(
         false,
     )
     .map_err(policy_error)?;
-    deliver_prepared(app, prepared, delivery)
+    state.ensure_client_scope_generation(&snapshot.scope, snapshot.scope_generation.0)?;
+    let result = deliver_prepared(app, prepared, delivery);
+    state
+        .ensure_client_scope_generation(&snapshot.scope, snapshot.scope_generation.0)
+        .map_err(|_| {
+            AppError::internal(
+                "交付期间配置或实例代次变化；系统可能已处理原操作，结果未确认，不会自动重试",
+            )
+        })?;
+    result
 }
 
 #[cfg(test)]

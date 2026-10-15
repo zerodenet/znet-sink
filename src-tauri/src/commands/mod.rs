@@ -12,6 +12,7 @@ pub mod gui_core;
 pub mod gui_events;
 pub mod gui_self_test;
 pub mod kernel_version;
+pub mod log_export;
 pub mod logs;
 pub mod platform;
 pub mod proxy_config;

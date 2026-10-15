@@ -2,9 +2,9 @@
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
   async function loadGlobalDnsSettings() {
-    profileSnapshot = await getProfileSettings();
-    const source = profileSnapshot.settings.dns;
-    return {source, draft: readDnsSettings(source)};
+    const profile = await getProfileSettings();
+    const source = profile.settings.dns;
+    return {profile, source, draft: readDnsSettings(source)};
   }
   async function applyGlobalDnsSettings(source: DnsSettingsInput, draft: DnsSettingsDraft) {
     if (!profileSnapshot) throw new Error('请先读取当前配置');
@@ -12,19 +12,22 @@
     if (issues.length) throw new Error(issues.map(issue => issue.message).join('；'));
     const next = projectDnsSettings(source, draft);
     profileSnapshot = await saveProfileSettings(profileSnapshot, {dns: next});
+    savedPending = profileSnapshot.applied === false;
     return profileSnapshot.settings.dns;
   }
   async function restoreDnsSource() {
     if (!profileSnapshot || saving) return;
     saving = true;
-    try { profileSnapshot = await restoreProfileSettings(profileSnapshot, 'dns'); await load(); }
+    try { const next = await restoreProfileSettings(profileSnapshot, 'dns'); if (alive) { profileSnapshot = next; source = next.settings.dns; acceptDraft(readDnsSettings(source)); } }
     catch (cause) {error = getAppErrorMessage(cause, '恢复 DNS 配置失败');}
     finally {saving = false;}
   }
 
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import { Textarea } from '$lib/components/ui/textarea';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
+  import { settingsDraftKey, captureSettingsDraftRead, canAcceptSettingsDraftRead } from '$lib/features/mobile/settings-draft';
   import { AlertTriangle, Braces, ChevronDown, ChevronUp, FileDiff, Pencil, Plus, RefreshCw, RotateCcw, Save, Server, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import ErrorRecoveryActions from '$lib/components/core/ErrorRecoveryActions.svelte';
@@ -103,6 +106,22 @@
   let effectiveError = $state('');
   let effectiveInspection = $state<DnsEffectiveConfigInspection | null>(null);
   let automaticAddressFamilyPolicy = $state<DnsAddressFamilyPolicy>('prefer_ipv4');
+  let acceptedDraft = $state.raw<DnsSettingsDraft | null>(null);
+  let readNotice = $state<string | null>(null);
+  let alive = true, readGeneration = 0;
+  const dirty = $derived(draft !== null && settingsDraftKey(draft) !== settingsDraftKey(acceptedDraft));
+  function acceptDraft(next: DnsSettingsDraft) {
+    draft = cloneDnsValue(next); acceptedDraft = cloneDnsValue(next);
+    nativeJson = JSON.stringify(next.dns, null, 2); readNotice = null;
+  }
+  function discardDraft() {
+    if (acceptedDraft) draft = cloneDnsValue(acceptedDraft);
+    nativeJson = draft ? JSON.stringify(draft.dns, null, 2) : '';
+    jsonDialogOpen = false; serverDialogOpen = false; dispatchDialogOpen = false;
+    error = ''; errorCode = undefined; nativeError = ''; saved = false; savedPending = false; readNotice = null;
+  }
+  onDestroy(() => { alive = false; readGeneration++; });
+
 
   const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
   const routeTargetTags = $derived(new Set(routeTargetOptions.map((option) => option.tag)));
@@ -403,6 +422,8 @@
   }
 
   async function load() {
+    const generation = ++readGeneration;
+    const read = captureSettingsDraftRead(acceptedDraft, draft);
     loading = true;
     error = '';
     errorCode = undefined;
@@ -414,6 +435,11 @@
         getEffectiveRuleSetOptions().catch(() => []),
         Promise.all([getConfigProxyNodes(), getConfigPolicyGroups()]).catch(() => null),
       ]);
+      if (!alive || generation !== readGeneration) return;
+      if (!canAcceptSettingsDraftRead(read, acceptedDraft, draft)) {
+        readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
+        return;
+      }
       automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
         tunStatus?.ipv4Egress.availability ?? 'unknown',
         tunStatus?.ipv6Egress.availability ?? 'unknown',
@@ -427,8 +453,9 @@
               { features: kernelCompatibility.features, addressFamily: automaticAddressFamilyPolicy },
             ),
           };
+      profileSnapshot = result.profile;
       source = result.source;
-      draft = nextDraft;
+      acceptDraft(nextDraft);
       compatibility = kernelCompatibility;
       ruleSetOptions = effectiveRuleSets;
       routeTargetsKnown = configTargets !== null;
@@ -439,11 +466,12 @@
       saved = false;
       savedPending = false;
     } catch (cause) {
+      if (!alive || generation !== readGeneration) return;
       const info = getAppErrorInfo(cause, '加载 DNS 配置失败');
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
     } finally {
-      loading = false;
+      if (alive && generation === readGeneration) loading = false;
     }
   }
 
@@ -815,7 +843,7 @@
   }
 
   async function save() {
-    if (!draft || !source || saving) return;
+    if (!draft || !source || saving || loading) return;
     saving = true;
     saved = false;
     savedPending = false;
@@ -823,16 +851,19 @@
     errorCode = undefined;
     nativeError = '';
     try {
-      const nextDraft = draft;
+      const submittedKey = settingsDraftKey(draft);
+      const nextDraft = cloneDnsValue(draft);
       if (nextDraft.mode === 'fake_ip' && compatibility.status === 'unsupported') {
         throw new Error("当前内核不支持此 DNS 设置，请先更新内核后再应用");
 
       } else {
         source = await applyGlobalDnsSettings(source, nextDraft);
       }
-      draft = nextDraft;
-      nativeJson = JSON.stringify(nextDraft.dns, null, 2);
-      saved = true;
+      if (!alive) return;
+      const confirmedDraft = readDnsSettings(source);
+      acceptedDraft = cloneDnsValue(confirmedDraft);
+      if (settingsDraftKey(draft) === submittedKey) acceptDraft(confirmedDraft);
+      saved = settingsDraftKey(draft) === settingsDraftKey(acceptedDraft);
     } catch (cause) {
       const info = getAppErrorInfo(cause, '保存 DNS 配置失败，已保留上次可用配置');
       errorCode = info.code;
@@ -847,6 +878,9 @@
     return ruleSetSignal.onChanged(() => void refreshRuleSetReferences());
   });
 </script>
+<MobileSettingsDraftGuard {dirty} busy={saving} label="DNS 设置" onDiscard={discardDraft} />
+{#if readNotice}<p role="status">{readNotice}</p>{/if}
+<fieldset class="dns-editor" disabled={saving}>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
   <span>{isLocallyEdited(profileSnapshot, 'dns') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
@@ -1199,6 +1233,7 @@
   <div class="actions"><Button onclick={save} disabled={saving || errors.length > 0}><Save />{saving ? '保存并应用中…' : saved ? savedPending ? '已保存，待内核' : '已保存' : '保存并应用'}</Button></div>
 {/if}
 
+</fieldset>
 <Dialog.Root bind:open={serverDialogOpen}>
   <Dialog.Content class="sm:max-w-[560px]">
     <form
@@ -1501,6 +1536,7 @@
 </Dialog.Root>
 
 <style>
+  .dns-editor { min-width:0; margin:0; padding:0; border:0; }
   .panel-head,
   .section-head,
   .head-actions,

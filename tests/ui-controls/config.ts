@@ -372,6 +372,7 @@ export const getConfigWorkspaceSnapshot = async (): Promise<import('../../src/li
 });
 export const planConfigWorkspace = async () => { throw new Error('Workspace planning is not provided by this fixture'); };
 export const applyConfigWorkspace = async () => { throw new Error('The UI fixture cannot apply a workspace'); };
+export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {};
 
 export const getClientCoreSnapshot = async () => {
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};

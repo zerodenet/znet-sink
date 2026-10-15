@@ -49,7 +49,7 @@
 
 计量字符串 u64 保持十进制字符串，不转为 JS number。历史标为 bounded_client_storage_across_instances，不能据当前 profile 标题断言所有历史帧属于当前内核或配置。帧读取失败显示数量未知及原因，不能展示“真实空记录”。输入先受每域读取预算约束，最终 JSON writer 再限制 2 MiB；超限明确失败，不交付声称完整的截断文件。
 
-准备结果只给 UI plan ID、scope、数量、文件字节与省略说明，不把原始材料交给 WebView。宿主缓存最多四份快照、五分钟有效。交付核对原 ClientScope 和期限，使用准备时的字节，不重新读取扩大范围。每个计划在系统调用前单次消费，超时/未知不自动重放；取消可重新明确预览，原存储资料不变。新进程旧 plan 不存在，需重新预览。
+准备结果只给 UI plan ID、scope、数量、文件字节与省略说明，不把原始材料交给 WebView。宿主缓存最多四份快照、五分钟有效。预览起始固定原 ClientScope 与客户端生命周期 scope generation；配置提交、实例启动/失联推进 generation，A→B→A 的相同内容身份不能复活旧计划；普通测速快照 revision 更新不影响该 generation，也不将它作为远端内核 revision。交付前后均核对固定 generation，系统 IO 期间变化只报告结果未确认，不自动重放。交付核对原 ClientScope、generation 和期限，使用准备时的字节，不重新读取扩大范围。每个计划在系统调用前单次消费，超时/未知不自动重放；取消可重新明确预览，原存储资料不变。新进程旧 plan 不存在，需重新预览。
 
 ## 系统交付与 UI
 

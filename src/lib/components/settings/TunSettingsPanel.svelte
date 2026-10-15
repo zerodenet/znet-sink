@@ -4,13 +4,16 @@
   async function restoreSource() {
     if (!snapshot || saving) return;
     saving = true;
-    try {snapshot = await restoreProfileSettings(snapshot, 'tun'); await load();}
+    try { const next = await restoreProfileSettings(snapshot, 'tun'); if (alive) accept(next); }
     catch (cause) {error = getAppErrorMessage(cause, '恢复 TUN 配置失败');}
     finally {saving = false;}
   }
 
   import { Textarea } from '$lib/components/ui/textarea';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
+  import { settingsDraftKey, captureSettingsDraftRead, canAcceptSettingsDraftRead } from '$lib/features/mobile/settings-draft';
+
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Switch } from '$lib/components/ui/switch';
@@ -39,6 +42,24 @@
   let dnsHijack = $state(false);
   let dnsReadiness = $state<TunDnsHijackReadiness | null>(null);
 
+  function formValue() { return { name, tag, addr, secondaryAddr, mtu: String(mtu), includeCidrs, dualStack, dnsHijack }; }
+  const initialForm = formValue();
+  let acceptedForm = $state.raw<ReturnType<typeof formValue> | null>(null);
+  let readNotice = $state<string | null>(null);
+  let alive = true, readGeneration = 0;
+  const dirty = $derived(settingsDraftKey(formValue()) !== settingsDraftKey(acceptedForm ?? initialForm));
+  function setForm(value: ReturnType<typeof formValue>) { ({ name, tag, addr, secondaryAddr, mtu, includeCidrs, dualStack, dnsHijack } = value); }
+  function accept(next: ProfileSettings) {
+    snapshot = next;
+    const config = next.settings;
+    setForm({ name: config.tun.name ?? '', tag: config.tun.tag, addr: config.tun.addr,
+      secondaryAddr: config.tun.secondaryAddr ?? '', mtu: String(config.tun.mtu),
+      includeCidrs: (config.tun.includeCidrs ?? []).join('\n'), dualStack: config.tun.dualStack, dnsHijack: config.tun.dnsHijack });
+    acceptedForm = formValue(); readNotice = null;
+  }
+  function discardDraft() { setForm(acceptedForm ?? initialForm); error = null; errorCode = undefined; saved = false; readNotice = null; }
+  onDestroy(() => { alive = false; readGeneration++; });
+
   const locked = $derived(saving || guiState.isSwitchingTun);
   const dualStackUnsupported = $derived(dnsReadiness?.features?.tunDualStack.state === 'unsupported');
   const dnsHijackUnsupported = $derived(dnsReadiness?.features?.tunDnsHijack.state === 'unsupported');
@@ -50,30 +71,23 @@
   }
 
   async function load() {
-    loading = true;
-    error = null;
+    const generation = ++readGeneration;
+    const read = captureSettingsDraftRead(acceptedForm ?? initialForm, formValue());
+    loading = true; error = null;
     try {
-      snapshot = await getProfileSettings();
-      const config = snapshot.settings;
-      name = config.tun.name ?? '';
-      tag = config.tun.tag;
-      addr = config.tun.addr;
-      secondaryAddr = config.tun.secondaryAddr ?? '';
-      mtu = String(config.tun.mtu);
-      includeCidrs = (config.tun.includeCidrs ?? []).join('\n');
-      dualStack = config.tun.dualStack;
-      dnsHijack = config.tun.dnsHijack;
-      dnsReadiness = await inspectTunDnsHijackReadiness(config.dns);
+      const next = await getProfileSettings();
+      const readiness = await inspectTunDnsHijackReadiness(next.settings.dns);
+      if (!alive || generation !== readGeneration) return;
+      dnsReadiness = readiness;
+      if (canAcceptSettingsDraftRead(read, acceptedForm ?? initialForm, formValue())) accept(next);
+      else readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
     } catch (cause) {
-      const info = getAppErrorInfo(cause, '加载 TUN 配置失败');
-      errorCode = info.code;
-      error = getAppErrorMessage(cause, info.message);
-    } finally {
-      loading = false;
-    }
+      if (alive && generation === readGeneration) { const info = getAppErrorInfo(cause, '加载 TUN 配置失败'); errorCode = info.code; error = getAppErrorMessage(cause, info.message); }
+    } finally { if (alive && generation === readGeneration) loading = false; }
   }
 
   async function save() {
+    if (saving || loading) return;
     const normalizedAddr = addr.trim();
     const normalizedTag = tag.trim();
     const normalizedMtu = Number.parseInt(mtu, 10);
@@ -113,7 +127,7 @@
     saving = true;
     try {
       if (!snapshot) return;
-      snapshot = await saveProfileSettings(snapshot, {tun: {
+      const next = await saveProfileSettings(snapshot, {tun: {
         name: name.trim() || null,
         tag: normalizedTag,
         addr: normalizedAddr,
@@ -123,22 +137,15 @@
         dualStack,
         dnsHijack,
       }});
-      const config = snapshot.settings;
-      name = config.tun.name ?? '';
-      tag = config.tun.tag;
-      addr = config.tun.addr;
-      secondaryAddr = config.tun.secondaryAddr ?? '';
-      mtu = String(config.tun.mtu);
-      includeCidrs = config.tun.includeCidrs.join('\n');
-      dualStack = config.tun.dualStack;
-      dnsHijack = config.tun.dnsHijack;
+      if (!alive) return;
+      accept(next);
       saved = true;
     } catch (cause) {
       const info = getAppErrorInfo(cause, '保存 TUN 配置失败');
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
     } finally {
-      await guiState.refreshTunStatus();
+      await guiState.refreshTunStatus().catch(() => { if (alive) error = '设置回执已返回，但接管状态读取未确认；请重新核对。'; });
       saving = false;
     }
   }
@@ -147,6 +154,8 @@
     void Promise.allSettled([load(), guiState.refreshTunStatus()]);
   });
 </script>
+<MobileSettingsDraftGuard {dirty} busy={saving} label="VPN 与接管设置" onDiscard={discardDraft} />
+{#if readNotice}<p role="status">{readNotice}</p>{/if}
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
   <span>{isLocallyEdited(snapshot, 'tun') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreSource} disabled={saving || !isLocallyEdited(snapshot, 'tun')}>恢复配置值</Button>
@@ -345,7 +354,7 @@
 {#if !loading}
   <div class="settings-actions">
     <Button size="sm" onclick={save} disabled={locked}>
-      {saving ? '应用中...' : saved ? '已保存' : guiState.isTunEnabled ? '保存并应用' : '保存'}
+      {saving ? '应用中...' : saved ? snapshot?.applied === false ? '已保存，启动后生效' : '已应用' : guiState.isTunEnabled ? '保存并应用' : '保存'}
     </Button>
   </div>
 {/if}

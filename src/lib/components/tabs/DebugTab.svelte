@@ -369,7 +369,7 @@
   async function copyFrame(frame: DebugFrame): Promise<void> {
     await copyWithFeedback(
       serializeDebugFrameForClipboard(frame),
-      `已复制 IPC 帧 #${frame.id}`,
+      `已复制 IPC 帧 #${frame.id} 的脱敏元数据；payload与错误正文省略`,
     );
   }
 
@@ -379,7 +379,7 @@
       frameType: filterType,
       hasMore,
     });
-    await copyWithFeedback(content, `已复制当前 ${visibleFrames.length} 条 IPC 帧`);
+    await copyWithFeedback(content, `已复制当前 ${visibleFrames.length} 条 IPC 帧的脱敏元数据；payload与错误正文省略`);
   }
 
   onDestroy(() => {
@@ -407,7 +407,7 @@
     <div class="debug-content">
       <div class="debug-toolbar">
         <div class="debug-toolbar-copy">
-          <span class="debug-toolbar-title">IPC 帧</span>
+          <span class="debug-toolbar-title">IPC 帧</span><span class="debug-toolbar-meta">复制仅含脱敏元数据；payload与错误正文省略。安全计量请使用诊断预览。</span>
           <span class="debug-toolbar-meta">
             {hasMore ? `${frames.length}+` : frames.length} · TX {frames.filter(f => f.direction === 'tx').length} / RX {frames.filter(f => f.direction === 'rx').length}
           </span>
@@ -439,7 +439,7 @@
           disabled={visibleFrames.length === 0}
           variant="outline"
           size="sm"
-          title="复制当前筛选下已加载的 IPC 记录"
+          title="复制当前筛选的脱敏元数据；payload与错误正文不交付"
         ><Clipboard />复制</Button>
         <Button onclick={() => refresh({ replace: true })} size="sm" disabled={refreshing || clearing}>
           <RefreshCcw class={refreshing ? 'animate-spin' : undefined} />
@@ -503,7 +503,7 @@
                 class="debug-frame-copy"
                 variant="ghost"
                 size="xs"
-                title={`复制 IPC 帧 #${frame.id}`}
+                title={`复制 IPC 帧 #${frame.id} 的脱敏元数据（省略payload与错误正文）`}
                 aria-label={`复制 IPC 帧 #${frame.id}`}
                 onclick={() => void copyFrame(frame)}
               ><Clipboard />复制</Button>

@@ -445,3 +445,35 @@ all-targets/all-features check 与同范围 clippy 均通过，Rust/Clippy警告
 同步仍保留原实际重定位/协调链路。未恢复HTTP validator、没有持久确认回执及
 移动owner未注册时的运行核对/恢复均不宣称完成。独立原生Proxy、真机VPN及发行
 验收继续遵循现有todo；本批没有修改core来源或缓存。
+
+
+## 客户端草稿、任务作用域与安全导出增量
+
+本批在同一个 draft PR 继续完成三类可独立验证的客户端工作：
+
+- DNS、VPN/TUN、运行网络和测速参数设置保留未保存草稿，离开需继续编辑或明确放弃；
+  提交期间阻止切换，失败保留输入，刷新不覆盖脏表单。
+- DNS/路由工具任务将历史与当前结果分开；共享客户端增加 `scopeGeneration`，对配置或
+  实例的 A→B→A 变化仍使旧资格失效。普通观测 revision 不会清掉当前结果。开始/停止
+  携带原作用域及客户端 revision，由 Rust 在分配任务 ID 或取消前核对。前后台和事件
+  恢复重读实际宿主记录，旧完成记录不会重放 Fake-IP 副作用。此处不替代 Zero 的远端 CAS。
+- 日志复制、当前筛选导出以及桌面旧诊断入口均使用有界安全投影。筛选固定实际 ID/时间，
+  搜索正文不进入请求或导出；未经分类的原文/字段明确省略。预览计划绑定用途、作用域和
+  generation，单次消费，交付前后核对；系统取消与结果未知保留实际事实。旧桌面接口
+  没有 planId 时拒绝，错误恢复按钮先进入关于页预览，不直接写文件。
+
+实际本地完整 `pnpm verify:frontend`（含生产 build）通过，类型检查 **0 errors / 0 warnings**。
+Rust fmt、workspace all-targets/all-features check、全特性 tests 和 Clippy 通过；测试为
+**1150 passed / 0 failed / 7 ignored**。编译及 Clippy 既有警告保留。日志
+`/tmp/mobile-client-followup-{frontend-final,fmt,rust-check,rust-tests,rust-clippy}.log`。
+
+新增/相关语义验证：任务作用域23项、原任务归属13项及实际 Tauri wrapper/观察器3项；
+设置草稿4项、桌面诊断2项、复制安全投影4项。实际组件 Chromium 回归为设置39项、
+日志导出4项、桌面诊断8项、工具作用域3项，全部通过；采用明确服务 fixture，不充当
+真实内核应用或手机转发证据。系统 Chromium 与 CI 使用的浏览器版本分别记录。
+
+最终推送提交的完整双引擎及四组工作流需另外核对，结果记在同一 PR。
+上个 `1433527` 的 CI/产物仅为历史。Android API24 与 Galaxy S8 契约、iOS 无签名/
+真实设备限制不变；四项依赖许可缺口仍明确保留。台账另列三项独立客户端后续工作：
+端点统计定位与来源返回、Packet 分页、工作区离线草稿与来源冲突/托管只读准入。
+它们不归到原生 VPN 后置范围，也不宣称本 PR 完成完整 PRD。

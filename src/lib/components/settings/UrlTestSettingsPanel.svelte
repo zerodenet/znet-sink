@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
+  import { settingsDraftKey, captureSettingsDraftRead, canAcceptSettingsDraftRead } from '$lib/features/mobile/settings-draft';
+
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { getProfileSettings, getAppErrorMessage } from '$lib/services/core';
@@ -18,30 +21,43 @@
   let error = $state<string | null>(null);
   let saved = $state(false);
 
+  function formValue() { return { url, tolerance: String(tolerance) }; }
+  const initialForm = formValue();
+  let acceptedForm = $state.raw<ReturnType<typeof formValue> | null>(null);
+  let readNotice = $state<string | null>(null);
+  let alive = true, readGeneration = 0;
+  const dirty = $derived(settingsDraftKey(formValue()) !== settingsDraftKey(acceptedForm ?? initialForm));
+  function accept(next: ProfileSettings) {
+    snapshot = next; url = next.settings.urlTest?.url || DEFAULT_URL;
+    tolerance = String(next.settings.urlTest?.toleranceMs ?? DEFAULT_TOLERANCE_MS);
+    acceptedForm = formValue(); readNotice = null;
+  }
+  function discardDraft() { const previous = acceptedForm ?? initialForm; url = previous.url; tolerance = previous.tolerance; error = null; saved = false; readNotice = null; }
+  onDestroy(() => { alive = false; readGeneration++; });
+
   async function resetDefault() {
     if (!snapshot || saving) return;
     saving = true; error = null; saved = false;
-    try { snapshot = await restoreProfileSettings(snapshot, 'urlTest'); await loadSetting(); }
+    try { const next = await restoreProfileSettings(snapshot, 'urlTest'); if (alive) accept(next); }
     catch (cause) { error = getAppErrorMessage(cause, '恢复配置值失败'); }
     finally { saving = false; }
   }
 
   async function loadSetting() {
-    loading = true;
-    error = null;
+    const generation = ++readGeneration;
+    const read = captureSettingsDraftRead(acceptedForm ?? initialForm, formValue());
+    loading = true; error = null;
     try {
-      snapshot = await getProfileSettings();
-      const config = snapshot.settings;
-      url = config.urlTest?.url || DEFAULT_URL;
-      tolerance = String(config.urlTest?.toleranceMs ?? DEFAULT_TOLERANCE_MS);
-    } catch (cause) {
-      error = getAppErrorMessage(cause, '加载测速设置失败');
-    } finally {
-      loading = false;
-    }
+      const next = await getProfileSettings();
+      if (!alive || generation !== readGeneration) return;
+      if (canAcceptSettingsDraftRead(read, acceptedForm ?? initialForm, formValue())) accept(next);
+      else readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
+    } catch (cause) { if (alive && generation === readGeneration) error = getAppErrorMessage(cause, '加载测速设置失败'); }
+    finally { if (alive && generation === readGeneration) loading = false; }
   }
 
   async function saveSetting() {
+    if (saving || loading) return;
     const normalized = Number(tolerance);
     saved = false;
     error = null;
@@ -62,12 +78,9 @@
     saving = true;
     try {
       if (!snapshot) return;
-      snapshot = await saveProfileSettings(snapshot, {
-        urlTest: { url: normalizedUrl.toString(), toleranceMs: normalized },
-      });
-      const config = snapshot.settings;
-      url = config.urlTest.url;
-      tolerance = String(config.urlTest.toleranceMs);
+      const next = await saveProfileSettings(snapshot, { urlTest: { url: normalizedUrl.toString(), toleranceMs: normalized } });
+      if (!alive) return;
+      accept(next);
       saved = true;
     } catch (cause) {
       error = getAppErrorMessage(cause, '保存测速设置失败');
@@ -80,6 +93,8 @@
     void loadSetting();
   });
 </script>
+<MobileSettingsDraftGuard {dirty} busy={saving} label="节点延迟测试设置" onDiscard={discardDraft} />
+{#if readNotice}<p role="status">{readNotice}</p>{/if}
 
 <div class="config-section">
   <div class="config-section-title">公共测速与自动选择</div>

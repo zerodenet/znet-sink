@@ -24,7 +24,7 @@ export default defineConfig({
     { find: '$lib/services/store.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/tun', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/config', replacement: absolute('./config.ts') },
-    { find: '$lib/services/core', replacement: absolute('./config.ts') },
+    { find: '$lib/services/core', replacement: absolute('./settings-draft-core.ts') },
     { find: '$lib', replacement: absolute('../../src/lib') },
   ] },
   server: { host: '127.0.0.1', port: 4177, strictPort: true },

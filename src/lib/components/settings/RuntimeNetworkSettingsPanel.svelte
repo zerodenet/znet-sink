@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import MobileSettingsDraftGuard from '$lib/components/mobile/MobileSettingsDraftGuard.svelte';
+  import { settingsDraftKey, captureSettingsDraftRead, canAcceptSettingsDraftRead } from '$lib/features/mobile/settings-draft';
+
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { getAppErrorMessage, getProfileSettings } from '$lib/services/core';
@@ -13,20 +16,35 @@
   let saved = $state(false);
   let error = $state<string | null>(null);
 
+  function formValue() { return { udpIdleSeconds: String(udpIdleSeconds) }; }
+  const initialForm = formValue();
+  let acceptedForm = $state.raw<ReturnType<typeof formValue> | null>(null);
+  let readNotice = $state<string | null>(null);
+  let alive = true, readGeneration = 0;
+  const dirty = $derived(settingsDraftKey(formValue()) !== settingsDraftKey(acceptedForm ?? initialForm));
+  function accept(next: ProfileSettings) {
+    snapshot = next;
+    udpIdleSeconds = String(next.settings.runtime?.udpUpstreamIdleTimeoutSeconds ?? DEFAULT_UDP_IDLE_SECONDS);
+    acceptedForm = formValue(); readNotice = null;
+  }
+  function discardDraft() { udpIdleSeconds = (acceptedForm ?? initialForm).udpIdleSeconds; error = null; saved = false; readNotice = null; }
+  onDestroy(() => { alive = false; readGeneration++; });
+
   async function load() {
-    loading = true;
-    error = null;
+    const generation = ++readGeneration;
+    const read = captureSettingsDraftRead(acceptedForm ?? initialForm, formValue());
+    loading = true; error = null;
     try {
-      snapshot = await getProfileSettings();
-      udpIdleSeconds = String(snapshot.settings.runtime?.udpUpstreamIdleTimeoutSeconds ?? DEFAULT_UDP_IDLE_SECONDS);
-    } catch (cause) {
-      error = getAppErrorMessage(cause, '加载连接超时设置失败');
-    } finally {
-      loading = false;
-    }
+      const next = await getProfileSettings();
+      if (!alive || generation !== readGeneration) return;
+      if (canAcceptSettingsDraftRead(read, acceptedForm ?? initialForm, formValue())) accept(next);
+      else readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
+    } catch (cause) { if (alive && generation === readGeneration) error = getAppErrorMessage(cause, '加载连接超时设置失败'); }
+    finally { if (alive && generation === readGeneration) loading = false; }
   }
 
   async function save() {
+    if (saving || loading) return;
     const value = Number(udpIdleSeconds);
     saved = false;
     error = null;
@@ -37,10 +55,9 @@
     if (!snapshot) return;
     saving = true;
     try {
-      snapshot = await saveProfileSettings(snapshot, {
-        runtime: { udpUpstreamIdleTimeoutSeconds: value },
-      });
-      udpIdleSeconds = String(snapshot.settings.runtime.udpUpstreamIdleTimeoutSeconds);
+      const next = await saveProfileSettings(snapshot, { runtime: { udpUpstreamIdleTimeoutSeconds: value } });
+      if (!alive) return;
+      accept(next);
       saved = true;
     } catch (cause) {
       error = getAppErrorMessage(cause, '保存 UDP 空闲时间失败');
@@ -55,8 +72,8 @@
     saved = false;
     error = null;
     try {
-      snapshot = await restoreProfileSettings(snapshot, 'runtime.udpUpstreamIdleTimeoutSeconds');
-      await load();
+      const next = await restoreProfileSettings(snapshot, 'runtime.udpUpstreamIdleTimeoutSeconds');
+      if (alive) accept(next);
     } catch (cause) {
       error = getAppErrorMessage(cause, '恢复 UDP 空闲时间失败');
     } finally {
@@ -66,6 +83,8 @@
 
   onMount(() => void load());
 </script>
+<MobileSettingsDraftGuard {dirty} busy={saving} label="运行网络设置" onDiscard={discardDraft} />
+{#if readNotice}<p role="status">{readNotice}</p>{/if}
 
 <div class="config-section">
   <div class="config-section-title">连接生命周期</div>

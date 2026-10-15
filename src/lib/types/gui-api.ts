@@ -35,6 +35,8 @@ export interface ClientScope {
 /** Revisioned recovery point owned by the Rust Client Core. */
 export interface ClientCoreSnapshot {
   revision: number;
+  /** Client lifecycle/configuration generation; absent on older hosts. */
+  scopeGeneration?: number;
   scope: ClientScope;
   sourceStatus: ClientSourceStatus;
   activeProbeJobs: ProbeJobSnapshot[];
@@ -126,6 +128,8 @@ export interface ToolJobSnapshot<TResult = unknown> {
   deadlineAtUnixMs: number;
 }
 export interface StartToolJobRequest {
+  expectedScope?: ClientScope;
+  expectedClientRevision?: number;
   kind: ToolJobKind;
   params?: Record<string, unknown>;
   timeoutMs?: number;

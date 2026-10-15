@@ -28,6 +28,63 @@ pub(crate) fn append(entry: &LogEntry, limit: usize) -> AppResult<()> {
     Ok(())
 }
 
+/// Read only fixed IDs from authoritative private JSONL; bound the retained
+/// result and each decoded line. Oversized/malformed selected rows fail closed
+/// through a missing identity rather than copying their arbitrary body.
+pub(crate) fn read_selection(ids: &std::collections::BTreeSet<u64>) -> AppResult<Vec<LogEntry>> {
+    use std::io::BufRead as _;
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
+    let path = logs_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = fs::File::open(path).map_err(|_| AppError::internal("日志读取失败，原列表保留"))?;
+    let mut reader = BufReader::new(file);
+    let mut rows = BTreeMap::new();
+    loop {
+        let mut line = Vec::new();
+        let mut oversized = false;
+        loop {
+            let buffer = reader
+                .fill_buf()
+                .map_err(|_| AppError::internal("日志读取失败，原列表保留"))?;
+            if buffer.is_empty() {
+                break;
+            }
+            let count = buffer
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(buffer.len(), |index| index + 1);
+            let ended = buffer[count - 1] == b'\n';
+            if !oversized {
+                if line.len().saturating_add(count) > 2 * 1024 * 1024 {
+                    oversized = true;
+                    line.clear();
+                } else {
+                    line.extend_from_slice(&buffer[..count]);
+                }
+            }
+            reader.consume(count);
+            if ended {
+                break;
+            }
+        }
+        if !oversized && line.is_empty() {
+            break;
+        }
+        if oversized {
+            continue;
+        }
+        if let Ok(mut entry) = serde_json::from_slice::<LogEntry>(&line) {
+            if ids.contains(&entry.id) {
+                repair_log_entry(&mut entry);
+                rows.insert(entry.id, entry);
+            }
+        }
+    }
+    Ok(rows.into_values().collect())
+}
+
 pub(crate) fn rotate(limit: usize) -> AppResult<()> {
     let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     rotate_path(&logs_path()?, persisted_limit(limit))

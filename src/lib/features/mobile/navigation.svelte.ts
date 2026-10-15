@@ -11,7 +11,7 @@ export class MobileNavigation {
   /** Host hook for browser/system return integration; contains no business data. */
   onOpen: (() => void) | null = null;
   private sequence = 0;
-  private beforeLeave: ((continueNavigation: () => void) => boolean) | null = null;
+  private beforeLeave = new Set<(continueNavigation: () => void) => boolean>();
   selectTab(tab: MobileTab) {
     if (tab !== this.activeTab && !this.canLeave(() => this.selectTab(tab))) return;
     this.activeTab = tab;
@@ -30,8 +30,11 @@ export class MobileNavigation {
   get current() { return this.stacks[this.activeTab].at(-1); }
   /** Editors can retain their draft and require an explicit discard decision. */
   guardBeforeLeave(guard: (continueNavigation: () => void) => boolean): () => void {
-    this.beforeLeave = guard;
-    return () => { if (this.beforeLeave === guard) this.beforeLeave = null; };
+    this.beforeLeave.add(guard);
+    return () => { this.beforeLeave.delete(guard); };
   }
-  private canLeave(continueNavigation: () => void) { return this.beforeLeave?.(continueNavigation) ?? true; }
+  private canLeave(continueNavigation: () => void) {
+    for (const guard of [...this.beforeLeave].reverse()) if (!guard(continueNavigation)) return false;
+    return true;
+  }
 }

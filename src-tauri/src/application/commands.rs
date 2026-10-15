@@ -46,6 +46,9 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         crate::commands::native_documents::native_document_export_settings,
         crate::commands::native_documents::native_document_export_diagnostics,
         crate::commands::native_documents::native_document_preview_diagnostics,
+        crate::commands::log_export::log_export_preview,
+        crate::commands::log_export::log_export_deliver,
+        crate::commands::log_export::log_export_discard,
         crate::commands::native_documents::native_diagnostic_capture,
         crate::commands::mobile_release::mobile_release_catalog,
         crate::commands::mobile_release::mobile_release_preferences,
@@ -294,6 +297,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_core_commands::gui_debug_storage_summary,
         gui_core_commands::gui_clear_debug_storage,
         gui_core_commands::gui_export_diagnostics,
+        gui_core_commands::gui_discard_diagnostics,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::desktop::tray::tray_update_status,
     ];

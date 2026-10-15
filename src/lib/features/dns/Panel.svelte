@@ -3,6 +3,7 @@
   import { onDestroy } from 'svelte';
   import { Clipboard, LoaderCircle, Search, Settings2, Trash2, XCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import ToolJobHistory from '$lib/features/tool-jobs/History.svelte';
   import { Input } from '$lib/components/ui/input';
   import * as Select from '$lib/components/ui/select';
   import { getAppErrorMessage } from '$lib/services/core';
@@ -11,6 +12,8 @@
     listToolJobs,
     startToolJob,
     subscribeToolJobs,
+    getToolScope,
+    subscribeToolScope,
   } from '$lib/features/tool-jobs/client';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import { store } from '$lib/services/store.svelte';
@@ -21,6 +24,8 @@
     list: listToolJobs,
     cancel: cancelToolJob,
     subscribe: subscribeToolJobs,
+    scope: getToolScope,
+    subscribeScope: subscribeToolScope,
     getAppErrorMessage,
     confirm: (message) => window.confirm(message),
   });
@@ -70,6 +75,8 @@
   });
 </script>
 
+  <ToolJobHistory jobs={dns.jobs} />
+
   {#if dns.jobs.active().length > 0}
     <div class="job-strip" aria-label="DNS 与 Fake-IP 活动任务">
       {#each dns.jobs.active() as job (job.id)}
@@ -97,7 +104,7 @@
         onkeydown={onDnsKey}
         disabled={dns.dnsLoading}
       />
-      <Button size="sm" onclick={() => dns.runDns()} disabled={dns.dnsLoading || !dns.dnsHost.trim()}>
+      <Button size="sm" onclick={() => dns.runDns()} disabled={!dns.jobs.ready || dns.dnsLoading || !dns.dnsHost.trim()}>
         {#if dns.dnsLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}
         {dns.dnsLoading ? '查询中…' : '查询'}
       </Button>
@@ -187,13 +194,13 @@
         </Select.Content>
       </Select.Root>
       <Input class="diag-input" placeholder={dns.fakeDirection === 'domain' ? 'open.bigmodel.cn' : '198.18.0.2'} bind:value={dns.fakeQuery} onkeydown={(event) => event.key === 'Enter' && dns.runFakeIp()} disabled={dns.fakeLoading || dns.fakeClearLoading} />
-      <Button size="sm" onclick={() => dns.runFakeIp()} disabled={dns.fakeLoading || dns.fakeClearLoading || !dns.fakeQuery.trim()}>
+      <Button size="sm" onclick={() => dns.runFakeIp()} disabled={!dns.jobs.ready || dns.fakeLoading || dns.fakeClearLoading || !dns.fakeQuery.trim()}>
         {#if dns.fakeLoading}<LoaderCircle class="animate-spin" />{:else}<Search />{/if}{dns.fakeLoading ? '查询中…' : '查询'}
       </Button>
-      <Button variant="outline" size="sm" onclick={() => dns.clearFakeIp('selected')} disabled={dns.fakeLoading || dns.fakeClearLoading || !dns.fakeQuery.trim()}>
+      <Button variant="outline" size="sm" onclick={() => dns.clearFakeIp('selected')} disabled={!dns.jobs.ready || dns.fakeLoading || dns.fakeClearLoading || !dns.fakeQuery.trim()}>
         {#if dns.fakeClearLoading}<LoaderCircle class="animate-spin" />{:else}<Trash2 />{/if}删除当前映射
       </Button>
-      <Button variant="destructive" size="sm" onclick={() => dns.clearFakeIp('all')} disabled={dns.fakeLoading || dns.fakeClearLoading}>
+      <Button variant="destructive" size="sm" onclick={() => dns.clearFakeIp('all')} disabled={!dns.jobs.ready || dns.fakeLoading || dns.fakeClearLoading}>
         {#if dns.fakeClearLoading}<LoaderCircle class="animate-spin" />{:else}<Trash2 />{/if}清空全部
       </Button>
     </div>

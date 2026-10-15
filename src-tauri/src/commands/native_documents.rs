@@ -70,8 +70,22 @@ pub async fn native_document_export_diagnostics(
     plan_id: Option<String>,
 ) -> AppResult<DocumentReceipt> {
     native_documents::require_host(window.label())?;
+    use tauri::Manager;
+    let snapshot = app
+        .state::<crate::state::app_state::AppState>()
+        .client_core_snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        native_documents::export_diagnostics(&app, delivery, plan_id)
+        let state = app.state::<crate::state::app_state::AppState>();
+        state.ensure_client_scope_generation(&snapshot.scope, snapshot.scope_generation.0)?;
+        let result = native_documents::export_diagnostics(&app, delivery, plan_id);
+        state
+            .ensure_client_scope_generation(&snapshot.scope, snapshot.scope_generation.0)
+            .map_err(|_| {
+                AppError::internal(
+                    "交付期间配置或实例代次变化；系统可能已处理原操作，结果未确认，不会自动重试",
+                )
+            })?;
+        result
     })
     .await
     .map_err(|_| AppError::internal("系统导出任务结果未确认，请先检查目标文件"))?

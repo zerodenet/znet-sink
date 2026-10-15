@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DesktopDiagnosticExportFixture from './DesktopDiagnosticExportFixture.svelte';
   import PluginPageFixture from './PluginPageFixture.svelte';
   import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
   import ProfileRemovalFixture from './ProfileRemovalFixture.svelte';
@@ -53,7 +54,9 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'plugin-page'}
+{#if selectedPanel === 'desktop-diagnostic-export'}
+  <DesktopDiagnosticExportFixture />
+{:else if selectedPanel === 'plugin-page'}
   <PluginPageFixture />
 {:else if selectedPanel === 'native-documents'}
   <NativeDocumentsFixture />

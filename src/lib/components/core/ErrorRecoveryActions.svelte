@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Download, RefreshCw, RotateCw, Settings2, ScrollText } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
-  import { guiExportDiagnostics, restartCoreProcess } from '$lib/services/core';
+  import { restartCoreProcess } from '$lib/services/core';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { success, warning } from '$lib/services/toast.svelte';
@@ -43,18 +43,10 @@
     }
   }
 
-  async function exportDiagnostics() {
-    if (busy) return;
-    busy = true;
-    try {
-      const result = await guiExportDiagnostics();
-      success(`诊断材料已导出到 ${result.directory}`);
-    } catch {
-      warning('导出诊断材料失败，请前往“关于”页面重试');
-    } finally {
-      busy = false;
-    }
+  function exportDiagnostics() {
+    store.openSettings('about');
   }
+
 </script>
 
 <div class="recovery-actions" aria-label="错误恢复操作">
@@ -77,7 +69,7 @@
   {#if mobilePlatform.runtimePlatform !== 'desktop'}
     <NativeDiagnosticExport disabled={busy} />
   {:else}
-    <Button variant="ghost" size="sm" onclick={exportDiagnostics} disabled={busy}><Download />导出诊断</Button>
+    <Button variant="ghost" size="sm" onclick={exportDiagnostics} disabled={busy}><Download />预览诊断导出</Button>
   {/if}
 </div>
 

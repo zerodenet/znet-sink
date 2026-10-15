@@ -20,9 +20,11 @@ const TTL: u64 = 300_000;
 #[derive(Clone)]
 struct Prepared {
     scope: ClientScope,
+    scope_generation: u64,
     expires: u64,
     bytes: Vec<u8>,
     submitted: bool,
+    kind: &'static str,
 }
 #[derive(Default)]
 pub(crate) struct DiagnosticExports {
@@ -190,7 +192,7 @@ pub(crate) fn strip_untrusted_marker(fields: &mut Option<Value>) {
         object.remove(HOST_MARKER);
     }
 }
-fn log(entry: &LogEntry) -> Value {
+pub(crate) fn log(entry: &LogEntry) -> Value {
     let event = entry
         .diagnostic_event
         .filter(|event| event.valid_for_source(&entry.source));
@@ -246,7 +248,9 @@ fn frame(entry: &DebugFrame) -> Value {
 }
 pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
     let now = now_unix_ms();
-    let scope = state.client_core_snapshot().scope;
+    let snapshot = state.client_core_snapshot();
+    let scope_generation = snapshot.scope_generation.0;
+    let scope = snapshot.scope;
     let (logs, log_total, source_counts) = {
         let rows = lock(state.logs(), "logs")?;
         let mut counts = [0u64; 3];
@@ -362,7 +366,7 @@ pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
     };
     let document = json!({"schemaVersion":"znet.mobile-diagnostics.v3","createdAtUnixMs":now.to_string(),"appVersion":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"scope":public_scope,"platformContract":crate::mobile_host::snapshot(),"clientSourceStatus":state.client_core_snapshot().source_status,"historyScope":"bounded_client_storage_across_instances","capture":crate::models::debug::capture_status(),"logs":logs,"frames":frames,"tasks":tasks,"omissions":omissions});
     let bytes = bounded_document(&document)?;
-    state.ensure_client_scope(Some(&scope))?;
+    state.ensure_client_scope_generation(&scope, scope_generation)?;
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|_| AppError::internal("无法创建诊断快照标识"))?;
     let plan_id = random
@@ -389,14 +393,16 @@ pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
         plan_id,
         Prepared {
             scope,
+            scope_generation,
             expires: now.saturating_add(TTL),
             bytes,
             submitted: false,
+            kind: "diagnostics",
         },
     );
     Ok(preview)
 }
-fn bounded_document(document: &Value) -> AppResult<Vec<u8>> {
+pub(crate) fn bounded_document(document: &Value) -> AppResult<Vec<u8>> {
     // Inputs are independently bounded before serialization, then a writer
     // enforces the final file budget without allocating an oversized result.
     struct Writer(Vec<u8>);
@@ -418,12 +424,73 @@ fn bounded_document(document: &Value) -> AppResult<Vec<u8>> {
     })?;
     Ok(writer.0)
 }
+pub(crate) fn store_selected(
+    state: &AppState,
+    scope: ClientScope,
+    scope_generation: u64,
+    bytes: Vec<u8>,
+    now: u64,
+) -> AppResult<(String, u64)> {
+    if bytes.len() > EXPORT_BYTES {
+        return Err(conflict("脱敏材料超过2MiB预算"));
+    }
+    state.ensure_client_scope_generation(&scope, scope_generation)?;
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|_| AppError::internal("无法创建脱敏快照标识"))?;
+    let id = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut plans = lock(&state.diagnostic_exports().plans, "diagnostic_exports")?;
+    plans.retain(|_, plan| plan.expires > now && !plan.submitted);
+    if plans.len() >= 4 {
+        return Err(conflict("已有多个未交付脱敏快照，请关闭旧预览后重试"));
+    }
+    let expires = now.saturating_add(TTL);
+    plans.insert(
+        id.clone(),
+        Prepared {
+            scope,
+            scope_generation,
+            expires,
+            bytes,
+            submitted: false,
+            kind: "logs",
+        },
+    );
+    Ok((id, expires))
+}
+pub(crate) fn discard_selected(state: &AppState, plan_id: &str) -> AppResult<()> {
+    discard_kind(state, plan_id, "logs")
+}
+pub(crate) fn discard(state: &AppState, plan_id: &str) -> AppResult<()> {
+    discard_kind(state, plan_id, "diagnostics")
+}
+fn discard_kind(state: &AppState, plan_id: &str, kind: &str) -> AppResult<()> {
+    let mut plans = lock(&state.diagnostic_exports().plans, "diagnostic_exports")?;
+    if plans
+        .get(plan_id)
+        .is_some_and(|plan| plan.kind == kind && !plan.submitted)
+    {
+        plans.remove(plan_id);
+    }
+    Ok(())
+}
 pub(crate) fn take(state: &AppState, plan_id: &str) -> AppResult<Vec<u8>> {
+    take_kind(state, plan_id, "diagnostics")
+}
+pub(crate) fn take_selected(state: &AppState, plan_id: &str) -> AppResult<Vec<u8>> {
+    take_kind(state, plan_id, "logs")
+}
+fn take_kind(state: &AppState, plan_id: &str, kind: &str) -> AppResult<Vec<u8>> {
     let mut plans = lock(&state.diagnostic_exports().plans, "diagnostic_exports")?;
     let plan = plans
         .get_mut(plan_id)
         .ok_or_else(|| conflict("诊断预览不存在，请重新预览"))?;
-    state.ensure_client_scope(Some(&plan.scope))?;
+    if plan.kind != kind {
+        return Err(conflict("脱敏快照用途不匹配，请使用原操作"));
+    }
+    state.ensure_client_scope_generation(&plan.scope, plan.scope_generation)?;
     if now_unix_ms() >= plan.expires {
         return Err(conflict("诊断预览已过期，请重新预览"));
     }
@@ -473,6 +540,8 @@ mod tests {
         let state = AppState::default();
         let scope = state.client_core_snapshot().scope;
         let plan = Prepared {
+            kind: "diagnostics",
+            scope_generation: state.client_core_snapshot().scope_generation.0,
             scope,
             expires: now_unix_ms() + 1000,
             bytes: b"original".to_vec(),
@@ -487,11 +556,107 @@ mod tests {
         assert_eq!(take(&state, "fixed").unwrap(), b"original");
         assert!(take(&state, "fixed").is_err());
     }
+    fn transient_profile() -> crate::models::proxy_config::ProxyConfigProfile {
+        crate::models::proxy_config::ProxyConfigProfile {
+            id: "transient".into(),
+            name: "fixture".into(),
+            kernel: "zero".into(),
+            format: "json".into(),
+            path: None,
+            content: Some(json!({"outbounds": []})),
+            active: true,
+            managed_source: None,
+            updated_at_unix_ms: 1,
+            capabilities: Default::default(),
+        }
+    }
+    #[test]
+    fn diagnostic_and_log_plans_cannot_revive_after_a_b_a() {
+        for kind in ["diagnostics", "logs"] {
+            let state = AppState::default();
+            let original = state.client_core_snapshot();
+            let plan = Prepared {
+                scope: original.scope.clone(),
+                scope_generation: original.scope_generation.0,
+                expires: now_unix_ms() + TTL,
+                bytes: b"fixed".to_vec(),
+                submitted: false,
+                kind,
+            };
+            state
+                .diagnostic_exports()
+                .plans
+                .lock()
+                .unwrap()
+                .insert("aba".into(), plan);
+            state.client_core_configuration_committed(Some(&transient_profile()));
+            state.client_core_configuration_committed(None);
+            let current = state.client_core_snapshot();
+            assert_eq!(current.scope, original.scope);
+            assert!(current.scope_generation.0 > original.scope_generation.0);
+            assert!(take_kind(&state, "aba", kind).is_err());
+            assert!(!state.diagnostic_exports().plans.lock().unwrap()["aba"].submitted);
+        }
+    }
+    #[test]
+    fn selected_snapshot_built_across_a_b_a_cannot_be_stored_with_fresh_authority() {
+        let state = AppState::default();
+        let original = state.client_core_snapshot();
+        state.client_core_configuration_committed(Some(&transient_profile()));
+        state.client_core_configuration_committed(None);
+        assert_eq!(state.client_core_snapshot().scope, original.scope);
+        assert!(store_selected(
+            &state,
+            original.scope,
+            original.scope_generation.0,
+            b"old-snapshot".to_vec(),
+            now_unix_ms()
+        )
+        .is_err());
+        assert!(state.diagnostic_exports().plans.lock().unwrap().is_empty());
+    }
+    #[cfg(feature = "tool-node-probe")]
+    #[test]
+    fn ordinary_probe_revision_preserves_both_fixed_export_plans() {
+        let state = AppState::default();
+        state.client_core_configuration_committed(Some(&transient_profile()));
+        let original = state.client_core_snapshot();
+        for kind in ["diagnostics", "logs"] {
+            state.diagnostic_exports().plans.lock().unwrap().insert(
+                kind.into(),
+                Prepared {
+                    scope: original.scope.clone(),
+                    scope_generation: original.scope_generation.0,
+                    expires: now_unix_ms() + TTL,
+                    bytes: b"fixed".to_vec(),
+                    submitted: false,
+                    kind,
+                },
+            );
+        }
+        let outcome = state
+            .start_client_probe(crate::client_core::StartProbeRequest {
+                kind: crate::client_core::ProbeJobKind::Outbound,
+                target_tags: vec!["only-original-target".into()],
+                timeout_ms: Some(1_000),
+            })
+            .unwrap();
+        assert!(outcome.created);
+        let current = state.client_core_snapshot();
+        assert!(current.revision.0 > original.revision.0);
+        assert_eq!(current.scope, original.scope);
+        assert_eq!(current.scope_generation, original.scope_generation);
+        for kind in ["diagnostics", "logs"] {
+            assert_eq!(take_kind(&state, kind, kind).unwrap(), b"fixed");
+        }
+    }
     #[test]
     fn expired_or_changed_instance_preview_never_submits() {
         let state = AppState::default();
         let scope = state.client_core_snapshot().scope;
         let plan = Prepared {
+            kind: "diagnostics",
+            scope_generation: state.client_core_snapshot().scope_generation.0,
             scope,
             expires: now_unix_ms() + 1000,
             bytes: b"fixed".to_vec(),
@@ -507,6 +672,7 @@ mod tests {
         assert!(take(&state, "changed").is_err());
         let expired = Prepared {
             scope: state.client_core_snapshot().scope,
+            scope_generation: state.client_core_snapshot().scope_generation.0,
             expires: 0,
             ..plan
         };

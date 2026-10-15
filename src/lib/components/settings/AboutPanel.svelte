@@ -6,16 +6,16 @@
   import { Button } from '$lib/components/ui/button';
   import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
   import NativeDiagnosticExport from '$lib/components/mobile/NativeDiagnosticExport.svelte';
+  import DesktopDiagnosticExport from './DesktopDiagnosticExport.svelte';
   import {
     appendLog,
     guiClearDebugStorage,
     guiDebugStorageSummary,
-    guiExportDiagnostics,
+    type GuiDiagnosticExport,
     type GuiDebugStorageSummary,
   } from '$lib/services/core';
   import { openPath, revealItemInDir } from '$lib/services/platform';
   import {
-    error as toastError,
     success as toastSuccess,
     warning as toastWarning,
   } from '$lib/services/toast.svelte';
@@ -113,18 +113,7 @@
     }
   }
 
-  async function handleExportDiagnostics() {
-    if (exportingDiagnostics) return;
-    exportingDiagnostics = true;
-    let result: Awaited<ReturnType<typeof guiExportDiagnostics>>;
-    try {
-      result = await guiExportDiagnostics();
-    } catch (error) {
-      toastError(`导出诊断材料失败：${error instanceof Error ? error.message : String(error)}`);
-      exportingDiagnostics = false;
-      return;
-    }
-
+  async function handleExportedDiagnostics(result: GuiDiagnosticExport) {
     toastSuccess(`诊断材料已导出（${result.files.length} 个文件）`);
     try {
       await openPath(result.directory);
@@ -145,7 +134,6 @@
       }
     }
     await loadDebugStorage();
-    exportingDiagnostics = false;
   }
 </script>
 
@@ -300,7 +288,7 @@
     <div class="config-section-title">故障诊断</div>
     <div class="config-row">
       <span class="config-label">诊断材料</span>
-      <span class="config-value desc">导出应用日志、IPC 调试记录、内核日志和版本清单；不会包含代理配置、订阅地址或凭据。</span>
+      <span class="config-value desc">先预览版本、状态与有界公共诊断事实。原始日志正文、未知字段、错误、原始文件及秘密均省略，原始本地记录保持不变。</span>
     </div>
     <div class="config-row">
       <span class="config-label">本地调试数据</span>
@@ -320,9 +308,7 @@
         {#if mobilePlatform.runtimePlatform !== 'desktop'}
           <NativeDiagnosticExport disabled={exportingDiagnostics || cleaningDebugStorage} />
         {:else}
-        <Button variant="outline" size="sm"  onclick={handleExportDiagnostics} disabled={exportingDiagnostics || cleaningDebugStorage}>
-          <span>{exportingDiagnostics ? '导出中…' : '导出诊断材料'}</span>
-        </Button>
+        <DesktopDiagnosticExport disabled={cleaningDebugStorage} onbusy={(value) => exportingDiagnostics = value} onexported={handleExportedDiagnostics} />
         {/if}
         <Button variant="destructive" size="sm"  onclick={openCleanupConfirm} disabled={exportingDiagnostics || cleaningDebugStorage}>
           <span>清理本地调试数据</span>

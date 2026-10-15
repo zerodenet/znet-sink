@@ -3,6 +3,7 @@
   import { onDestroy } from 'svelte';
   import { Clipboard, LoaderCircle, Network, XCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import ToolJobHistory from '$lib/features/tool-jobs/History.svelte';
   import { Input } from '$lib/components/ui/input';
   import { getAppErrorMessage } from '$lib/services/core';
   import {
@@ -10,6 +11,8 @@
     listToolJobs,
     startToolJob,
     subscribeToolJobs,
+    getToolScope,
+    subscribeToolScope,
   } from '$lib/features/tool-jobs/client';
   import { copyTextToClipboard } from '$lib/services/clipboard';
   import type { TraceRouteResult, TraceHop } from '$lib/types/diagnostics';
@@ -19,6 +22,8 @@
     list: listToolJobs,
     cancel: cancelToolJob,
     subscribe: subscribeToolJobs,
+    scope: getToolScope,
+    subscribeScope: subscribeToolScope,
     getAppErrorMessage,
   });
 
@@ -62,6 +67,8 @@
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
   });
 </script>
+
+  <ToolJobHistory jobs={route.jobs} />
 
   {#if route.jobs.active('route_trace').length > 0}
     <div class="job-strip" aria-label="路由追踪活动任务">
@@ -107,7 +114,7 @@
         bind:value={route.traceInboundTag}
         disabled={route.traceLoading}
       />
-      <Button size="sm" onclick={() => route.runTrace()} disabled={route.traceLoading || !route.traceTarget.trim()}>
+      <Button size="sm" onclick={() => route.runTrace()} disabled={!route.jobs.ready || route.traceLoading || !route.traceTarget.trim()}>
         {#if route.traceLoading}<LoaderCircle class="animate-spin" />{:else}<Network />{/if}
         {route.traceLoading ? '追踪中…' : '追踪'}
       </Button>

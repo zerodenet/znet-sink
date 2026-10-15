@@ -17,12 +17,11 @@
   } from '@lucide/svelte';
   import { getAppErrorMessage, getLogs, clearLogs } from '$lib/services/core';
   import { coreEvents } from '$lib/services/core-events.svelte';
-  import { copyTextToClipboard } from '$lib/services/clipboard';
+  import { previewLogExport, deliverLogExport, discardLogExport } from '$lib/services/log-export';
+  import { fixedLogSelection, type LogExportPreview } from '$lib/types/log-export';
+  import {getNativeDocumentCapabilities,documentReceiptMessage} from '$lib/services/native-documents';
+  import * as Dialog from '$lib/components/ui/dialog';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
-  import {
-    serializeLogForClipboard,
-    serializeLogsForClipboard,
-  } from '$lib/services/diagnostic-copy';
   import { logWindow } from '$lib/services/log-window';
   import { mergeLogPage } from '$lib/services/log-page';
   import { logHeadline, logContext, rawLogMessage as displayMessage } from '$lib/services/log-presentation';
@@ -55,6 +54,13 @@
   let loadError = $state('');
   let copyFeedback = $state<CopyFeedback | null>(null);
   let clearArmed = $state(false);
+  let exportOpen = $state(false);
+  let exportBusy = $state(false);
+  let exportPreview = $state<LogExportPreview|null>(null);
+  let nativeDelivery = $state(false);
+  let exportMessage = $state<string|null>(null);
+  let exportGeneration = 0;
+  let exportRangeLabel = $state('');
 
   let viewportTop = $state(0);
   let viewportHeight = $state(500);
@@ -312,31 +318,38 @@
     }, tone === 'success' ? 2_200 : 5_000);
   }
 
-  async function copyWithFeedback(text: string, successMessage: string): Promise<void> {
+  async function prepareExport(selected:LogEntry[]) {
+    if(exportBusy)return;
+    const generation=++exportGeneration;
+    exportRangeLabel=`来源：${selectedSource==='all'?'全部':selectedSource}；级别：${selectedLevel==='all'?'全部':selectedLevel}；${searchQuery.trim()?'已应用搜索（原词不交付）':'未搜索'}`;
+    exportOpen=true;exportBusy=true;exportPreview=null;exportMessage=null;
     try {
-      await copyTextToClipboard(text);
-      // Copying is a local, reversible action. Keep its acknowledgement in
-      // the log toolbar instead of interrupting the user with a toast.
-      showFeedback('success', successMessage);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      showFeedback('error', `复制失败：${message}`);
-    }
+      const request=fixedLogSelection([...selected],selectedSource,selectedLevel,searchQuery,selected.length===1?false:hasMore);
+      const prepared=await previewLogExport(request);
+      if(disposed||generation!==exportGeneration||!exportOpen){void discardLogExport(prepared.planId).catch(()=>{});return;}
+      exportPreview=prepared;
+    } catch(cause) {
+      if(!disposed&&generation===exportGeneration)exportMessage=getAppErrorMessage(cause,'脱敏预览失败，筛选与列表保留');
+    } finally {if(!disposed&&generation===exportGeneration)exportBusy=false;}
   }
-
-  async function copyLog(log: LogEntry): Promise<void> {
-    await copyWithFeedback(serializeLogForClipboard(log), `已复制日志 #${log.id}`);
+  async function copyLog(log:LogEntry):Promise<void>{await prepareExport([log]);}
+  async function copyVisibleLogs():Promise<void>{await prepareExport(visibleLogs);}
+  function closeExport() {
+    exportOpen=false;exportGeneration++;
+    const fixed=exportPreview;exportPreview=null;
+    if(fixed)void discardLogExport(fixed.planId).catch(()=>{});
   }
-
-  async function copyVisibleLogs(): Promise<void> {
-    if (visibleLogs.length === 0) return;
-    const content = serializeLogsForClipboard(visibleLogs, {
-      source: selectedSource,
-      level: selectedLevel,
-      search: searchQuery.trim() || undefined,
-      hasMore,
-    });
-    await copyWithFeedback(content, `已复制当前 ${visibleLogs.length} 条日志`);
+  async function deliverExport(delivery:'copy'|'save'|'share') {
+    const fixed=exportPreview;if(!fixed||exportBusy)return;
+    exportBusy=true;exportPreview=null;exportMessage=null;
+    try {
+      const receipt=await deliverLogExport(fixed.planId,delivery);
+      if(disposed)return;
+      exportMessage=receipt.status==='copied'?'脱敏日志已复制；原始正文和任意字段未交付':receipt.document?documentReceiptMessage(receipt.document):'系统结果未确认；不会自动重试';
+      if(receipt.status==='copied'||receipt.document?.status==='saved'||receipt.document?.status==='share-accepted')showFeedback('success',exportMessage);
+      else if(receipt.document?.status==='failed'||receipt.document?.status==='result-unknown')showFeedback('error',exportMessage);
+    }catch(cause){if(!disposed)exportMessage=getAppErrorMessage(cause,'交付结果未确认；原筛选与列表保留，不自动重试');}
+    finally{if(!disposed)exportBusy=false;}
   }
 
   function toggleLiveUpdates() {
@@ -420,6 +433,7 @@
   }
 
   onMount(() => {
+    void getNativeDocumentCapabilities().then(value=>{if(!disposed)nativeDelivery=value.available;}).catch(()=>{});
     const handleKeydown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'f') {
         event.preventDefault();
@@ -436,6 +450,7 @@
 
     return () => {
       disposed = true;
+      closeExport();
       refreshGate.reset();
       rowObserver?.disconnect();
       rowIds.clear();
@@ -603,10 +618,10 @@
         class="max-[900px]:px-2"
         onclick={copyVisibleLogs}
         disabled={visibleLogs.length === 0}
-        title="复制当前筛选和搜索结果中的完整日志"
+        title="预览当前已加载筛选结果的脱敏日志；原文与任意字段省略"
       >
         <Copy class="h-3.5 w-3.5" />
-        <span>复制</span>
+        <span>脱敏复制 / 导出</span>
       </Button>
 
       <Button variant="destructive" size="sm"
@@ -777,7 +792,22 @@
   </div>
 </section>
 
+<Dialog.Root open={exportOpen} onOpenChange={value=>{if(!exportBusy&&!value)closeExport();}}>
+  <Dialog.Content>
+    <Dialog.Header><Dialog.Title>固定脱敏日志范围</Dialog.Title><Dialog.Description>只交付打开面板时的实际日志 ID。搜索原文、原日志正文、任意字段和帧 payload 不交付；匹配宿主封闭分类时重建固定安全文案。列表和筛选保留。</Dialog.Description></Dialog.Header>
+    <Dialog.Body>
+    {#if exportBusy}<p role="status">正在处理原脱敏快照…</p>{/if}
+    {#if exportPreview}<article aria-label="固定脱敏日志预览"><p>{exportRangeLabel}</p><p>{exportPreview.count} 条日志，{exportPreview.bytes} 字节；安全文案 {exportPreview.classifiedCount} 条，未分类正文省略 {exportPreview.unclassifiedCount} 条。</p><p>{exportPreview.partial?'仅当前已加载的筛选结果；更早日志未包含。':'固定当前选择，不包含随后新增日志。'}五分钟内有效，最多2000条 / 2MiB；配置或实例变化须重新预览。</p><p>历史可能来自其他实例；不是当前内核或 VPN 健康证明。</p></article>{/if}
+    {#if exportMessage}<p role="status">{exportMessage}</p>{/if}
+    {#if !nativeDelivery}<p>系统保存/分享适配不可用；仍可通过宿主复制脱敏材料。</p>{/if}
+    </Dialog.Body>
+    <Dialog.Footer class="log-export-footer"><Button class="min-h-11" variant="outline" disabled={exportBusy} onclick={closeExport}>返回日志</Button><Button class="min-h-11" variant="outline" disabled={exportBusy||!exportPreview} onclick={()=>deliverExport('copy')}>复制原脱敏快照</Button><Button class="min-h-11" variant="outline" disabled={!nativeDelivery||exportBusy||!exportPreview} onclick={()=>deliverExport('share')}>系统分享原快照</Button><Button class="min-h-11" disabled={!nativeDelivery||exportBusy||!exportPreview} onclick={()=>deliverExport('save')}>保存原快照</Button></Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <style>
+  :global(.log-export-footer) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); min-width:0; }
+  :global(.log-export-footer button) { min-height:44px; max-width:100%; height:auto; white-space:normal; }
   .log-panel {
     height: 100%;
     display: flex;

@@ -19,7 +19,9 @@ export class RouteTraceState {
 
   constructor(ports: Ports) {
     this.ports = ports;
-    this.jobs = new ToolJobsState(['route_trace'], ports, (job) => this.applyJob(job));
+    this.jobs = new ToolJobsState(['route_trace'], ports, (job) => this.applyJob(job), () => {
+      this.traceResult = null; this.traceError = null; this.starting = false; this.traceInboundTag = '';
+    });
     void this.jobs.init();
   }
 
@@ -32,11 +34,13 @@ export class RouteTraceState {
   }
 
   async runTrace(): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed) return;
     const target = this.traceTarget.trim();
     if (!target || this.traceLoading) return;
     this.traceError = null;
     this.traceResult = null;
     this.starting = true;
+    const epoch = this.jobs.epoch;
     try {
       await this.jobs.start({
         kind: 'route_trace',
@@ -48,17 +52,18 @@ export class RouteTraceState {
         },
       });
     } catch (error) {
-      this.traceError = this.ports.getAppErrorMessage(error, '路由追踪任务启动失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.traceError = this.ports.getAppErrorMessage(error, '路由追踪任务启动失败');
     } finally {
-      this.starting = false;
+      if (epoch === this.jobs.epoch) this.starting = false;
     }
   }
 
   async cancel(jobId: number): Promise<void> {
+    const epoch = this.jobs.epoch;
     try {
       await this.jobs.cancel(jobId);
     } catch (error) {
-      this.traceError = this.ports.getAppErrorMessage(error, '取消路由追踪失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.traceError = this.ports.getAppErrorMessage(error, '取消路由追踪失败');
     }
   }
 

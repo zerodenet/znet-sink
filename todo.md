@@ -86,6 +86,44 @@
 
 解除条件：在选定 Android/iOS 执行/分发形态下验收真实 SDK IO、非 JIT/所需隔离、权限撤销、原生来源通知、敏感运行材料和前后台生命周期。共享 worker 及浏览器/桌面服务测试不算移动插件执行或 A20–A22 全验收；它不是 CORE 业务。
 
+## 本批独立客户端安全与交互闭环
+
+2026-10-15 从 `1433527` 继续：四设置表单的草稿离开/提交保护；日志固定筛选的安全
+复制、保存和分享；IPC复制的明确元数据边界；旧桌面诊断出口改为实际v3预览后的单次
+固定计划。任务历史与当前DNS/路由结果分开，恢复只接纳当前活动事实，A→B→A由客户端
+真实 `scopeGeneration` 识别；入队/取消另核对本地 snapshot revision。诊断/日志计划也
+固定该代次，旧计划不能因配置切回相同内容重新执行。没有改变 Zero/core 或后置原生装配。
+具体代码与验证见[工具任务边界](docs/gui/tool-job-scope-v0.0.3.md)和[固定日志选择](docs/gui/filtered-log-export-v0.0.3.md)。
+
+## CLIENT-05
+
+**仍可独立实施：端点进入共用统计页的定位和返回。**
+当前 `EndpointCard.svelte` 的观测详情只在本地弹窗中展示 `TrafficScopeDetails`；
+`TrafficWorkspace` 没有实际资源定位参数，移动 route 只保存 page。
+已有 `features/endpoints/observation.ts` 能按真实实例/revision/generation匹配scope，
+无需新增core接口。退出条件：共用统计页定位实际endpoint registry资源，缺失/失效明确解释，
+返回原端点详情；不能生成同名假scope。既有测试只验证本地观测弹窗，不证明此链路已实现。
+
+## CLIENT-06
+
+**仍可独立实施：Packet 列表后续分页。**
+`services/packet_routes.rs` 查询固定首500条，客户端 `features/packet/client.ts` 没有
+分页参数，`PacketRoutesPanel.svelte` 仅提示 `nextOffset`。固定zero-api已有offset/limit/
+next_offset，不依赖新core。退出条件：有界翻页、末项可达、明确本页筛选范围，翻页失败
+保留原页，身份或配置变化使旧页详情/控制失效。当前单页fixture不覆盖第二页。
+
+## CLIENT-07
+
+**仍可独立实施：配置工作区的离线保存、草稿冲突与来源编辑归属。**
+`commands/config_workspace.rs::plan/apply_locked` 均要求运行，工作区没有独立本地保存
+命令；普通配置其他编辑入口不能代替工作区“已保存，待应用”。前端
+`ConfigWorkspaceService::reconcileExternalSource` 直接acceptSnapshot，会替换脏草稿；
+source变更应该保留输入、使预检失效并要求明确刷新。工作区 `active_profile/plan/apply`
+还需补插件托管来源的只读准入，不能绕过普通配置upsert已有的来源归属限制。
+退出条件：实际Zero schema/引用校验、固定来源CAS、本地保存与运行确认分开、托管正文
+不可从普通工作区写回；覆盖离线、来源更新、切换、晚到回执和拒绝后的草稿保留。
+这是独立客户端待办，不归为CORE-01/02或真机阻塞；本批未实现这些工作区能力。
+
 ## PLATFORM-01
 
 **平台与真机条件。** iOS 主应用/extension/App Group/允许 entitlement、移动 Host 采样器、插件执行与 SDK/敏感材料边界、发行安装路径和缺少许可材料仍按验收账本推进；平台不允许与尚未适配分别标注。没有付费 Apple 账号，不创建签名凭据，不合并或发布。

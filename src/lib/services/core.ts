@@ -595,8 +595,12 @@ export interface GuiDebugStorageCleanupResult {
   failures: GuiDebugStorageCleanupFailure[];
 }
 
-export async function guiExportDiagnostics(): Promise<GuiDiagnosticExport> {
-  return invoke('gui_export_diagnostics');
+export async function guiExportDiagnostics(planId: string): Promise<GuiDiagnosticExport> {
+  return invoke('gui_export_diagnostics', { planId });
+}
+
+export async function guiDiscardDiagnostics(planId: string): Promise<void> {
+  return invoke('gui_discard_diagnostics', { planId });
 }
 
 export async function guiDebugStorageSummary(): Promise<GuiDebugStorageSummary> {

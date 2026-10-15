@@ -174,6 +174,69 @@ impl AppState {
         snapshot
     }
 
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    pub(crate) fn start_client_tool_job(
+        &self,
+        request: crate::models::tool_job::StartToolJobRequest,
+    ) -> crate::errors::AppResult<crate::models::tool_job::ToolJobSnapshot> {
+        let core = self
+            .client_core
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let snapshot = core.snapshot();
+        let scope = snapshot.scope;
+        if request
+            .expected_scope
+            .as_ref()
+            .is_some_and(|expected| expected != &scope)
+            || request
+                .expected_client_revision
+                .is_some_and(|expected| expected != snapshot.revision.0)
+        {
+            return Err(crate::errors::AppError::conflict(
+                "tool_job",
+                "",
+                "任务所属配置或内核实例已变化，请在当前配置重新发起",
+            ));
+        }
+        // Same core -> tool-runtime lock order as invalidation. Admission and
+        // insertion are one client coordination boundary, not a remote-core CAS.
+        self.tool_runtime
+            .start(scope, request, crate::services::common::now_unix_ms())
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    pub(crate) fn cancel_client_tool_job(
+        &self,
+        id: crate::models::tool_job::ToolJobId,
+        expected: Option<&ClientScope>,
+        expected_revision: Option<u64>,
+    ) -> crate::errors::AppResult<crate::models::tool_job::ToolJobSnapshot> {
+        let core = self
+            .client_core
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let snapshot = core.snapshot();
+        let scope = snapshot.scope;
+        let job = self
+            .tool_runtime
+            .get(id)
+            .ok_or_else(|| crate::errors::AppError::not_found("tool_job", id.0.to_string()))?;
+        if expected.is_some_and(|expected| expected != &scope)
+            || job.scope != scope
+            || expected_revision.is_some_and(|expected| expected != snapshot.revision.0)
+        {
+            return Err(crate::errors::AppError::conflict(
+                "tool_job",
+                id.0.to_string(),
+                "历史任务不属于当前配置或实例，不能继续控制",
+            ));
+        }
+        self.tool_runtime
+            .cancel(id, crate::services::common::now_unix_ms())
+            .ok_or_else(|| crate::errors::AppError::not_found("tool_job", id.0.to_string()))
+    }
+
     pub(crate) fn diagnostic_exports(&self) -> &crate::services::diagnostics::DiagnosticExports {
         &self.diagnostic_exports
     }
@@ -219,6 +282,28 @@ impl AppState {
                 "client_scope",
                 "",
                 "所属配置或内核实例已变化，请刷新后重选",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Client lifecycle generation also rejects A -> B -> A when a content
+    /// digest is reused. This is not a remote kernel transaction precondition.
+    pub(crate) fn ensure_client_scope_generation(
+        &self,
+        expected: &ClientScope,
+        generation: u64,
+    ) -> crate::errors::AppResult<()> {
+        let core = self
+            .client_core
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let snapshot = core.snapshot();
+        if &snapshot.scope != expected || snapshot.scope_generation.0 != generation {
+            return Err(crate::errors::AppError::conflict(
+                "client_scope",
+                "",
+                "配置或实例代次已变化，请重新预览原范围",
             ));
         }
         Ok(())
@@ -778,6 +863,162 @@ mod tests {
         .unwrap();
         let error = state.commit_diagnostic_capture(&old, request).unwrap_err();
         assert_eq!(error.code, "conflict");
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    #[test]
+    fn stale_tool_start_is_rejected_before_id_allocation_and_cannot_cancel_old_history() {
+        use crate::models::tool_job::{StartToolJobRequest, ToolJobKind, ToolJobState};
+        let state = AppState::default();
+        let original = state.client_core_snapshot().scope;
+        let request = |scope| StartToolJobRequest {
+            expected_scope: Some(scope),
+            expected_client_revision: None,
+            kind: ToolJobKind::DnsCache,
+            params: serde_json::json!({"limit": 50}),
+            timeout_ms: None,
+        };
+        let first = state
+            .start_client_tool_job(request(original.clone()))
+            .unwrap();
+        assert_eq!(first.id.0, 1);
+        state.client_core.lock().unwrap().configuration_committed(
+            Some(crate::client_core::ProfileId("replacement".into())),
+            crate::client_core::ConfigRevision(7),
+            1,
+        );
+        assert_eq!(
+            state
+                .start_client_tool_job(request(original.clone()))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(state.tool_runtime.list(None).len(), 1);
+        let replacement = state.client_core_snapshot().scope;
+        assert_eq!(
+            state
+                .cancel_client_tool_job(first.id, Some(&replacement), None)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(
+            state.tool_runtime.get(first.id).unwrap().state,
+            ToolJobState::Queued
+        );
+        let second = state
+            .start_client_tool_job(request(replacement.clone()))
+            .unwrap();
+        assert_eq!(second.id.0, 2);
+        assert_eq!(
+            state
+                .cancel_client_tool_job(second.id, Some(&replacement), None)
+                .unwrap()
+                .state,
+            ToolJobState::Cancelled
+        );
+        state.client_core.lock().unwrap().core_instance_started(2);
+        assert_eq!(
+            state
+                .start_client_tool_job(request(replacement.clone()))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(
+            state
+                .cancel_client_tool_job(second.id, Some(&replacement), None)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    #[test]
+    fn same_profile_tool_revision_change_rejects_old_request_without_rebinding() {
+        use crate::models::tool_job::StartToolJobRequest;
+        let state = AppState::default();
+        let original = state.client_core_snapshot().scope;
+        state.client_core.lock().unwrap().configuration_committed(
+            original.profile_id.clone(),
+            crate::client_core::ConfigRevision(u64::MAX),
+            1,
+        );
+        let request: StartToolJobRequest = serde_json::from_value(serde_json::json!({
+            "expectedScope": original, "kind":"dns_lookup", "params":{"hostname":"same.example"}
+        }))
+        .unwrap();
+        assert_eq!(
+            state.start_client_tool_job(request).unwrap_err().code,
+            "conflict"
+        );
+        assert!(state.tool_runtime.list(None).is_empty());
+        let current = state.client_core_snapshot().scope;
+        let request: StartToolJobRequest = serde_json::from_value(serde_json::json!({
+            "expectedScope": current, "kind":"dns_lookup", "params":{"hostname":"same.example"}
+        }))
+        .unwrap();
+        assert_eq!(
+            state
+                .start_client_tool_job(request)
+                .unwrap()
+                .scope
+                .config_revision,
+            crate::client_core::ConfigRevision(u64::MAX)
+        );
+    }
+
+    #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
+    #[test]
+    fn tool_snapshot_revision_rejects_aba_before_queue_allocation_and_old_cancel() {
+        use crate::models::tool_job::{StartToolJobRequest, ToolJobState};
+        let state = AppState::default();
+        let before = state.client_core_snapshot();
+        {
+            let mut core = state.client_core.lock().unwrap();
+            core.configuration_committed(
+                Some(crate::client_core::ProfileId("B".into())),
+                crate::client_core::ConfigRevision(7),
+                1,
+            );
+            core.configuration_committed(
+                before.scope.profile_id.clone(),
+                before.scope.config_revision,
+                2,
+            );
+        }
+        assert_eq!(state.client_core_snapshot().scope, before.scope);
+        let stale: StartToolJobRequest = serde_json::from_value(serde_json::json!({
+            "kind":"dns_cache", "params":{"limit":50}, "expectedScope":before.scope,
+            "expectedClientRevision":before.revision,
+        }))
+        .unwrap();
+        assert_eq!(
+            state.start_client_tool_job(stale).unwrap_err().code,
+            "conflict"
+        );
+        assert!(state.tool_runtime.list(None).is_empty());
+        let current = state.client_core_snapshot();
+        let fresh: StartToolJobRequest = serde_json::from_value(serde_json::json!({
+            "kind":"dns_cache", "params":{"limit":50}, "expectedScope":current.scope,
+            "expectedClientRevision":current.revision,
+        }))
+        .unwrap();
+        let job = state.start_client_tool_job(fresh).unwrap();
+        assert_eq!(job.id.0, 1);
+        assert_eq!(
+            state
+                .cancel_client_tool_job(job.id, Some(&before.scope), Some(before.revision.0))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(
+            state.tool_runtime.get(job.id).unwrap().state,
+            ToolJobState::Queued
+        );
     }
 
     fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {
