@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FlowCloseFixture from './FlowCloseFixture.svelte';
   import PacketPaginationFixture from './PacketPaginationFixture.svelte';
   import DesktopDiagnosticExportFixture from './DesktopDiagnosticExportFixture.svelte';
   import WorkspaceFixture from './WorkspaceFixture.svelte';
@@ -56,7 +57,9 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'packet-pagination'}
+{#if selectedPanel === 'flow-close'}
+  <FlowCloseFixture/>
+{:else if selectedPanel === 'packet-pagination'}
   <PacketPaginationFixture />
 {:else if selectedPanel === 'workspace'}
   <WorkspaceFixture />

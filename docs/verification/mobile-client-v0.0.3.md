@@ -762,3 +762,42 @@ feature client alias均在本次17项执行中使用。完整类型检查0 error
 通过、类型检查0/0、build通过；同17 Chromium再次17/17（0失败/重试/跳过）。
 日志`/tmp/profile-editor-heading-frontend.log`、`/tmp/profile-editor-browser-headingfinal.log`。
 新SHA的CI仍须重新观察，001da结果仅历史，不借作标题修正后的准确提交绿灯。
+
+## 2026-10-15：A18 Flow 固定选择与 A19 真实诊断
+
+基线 `66be1d154860ee55403d5bc3a5a5399ed1a907ad`，沿用 Draft PR #46→develop；
+不改 core、不重做原生 VPN/宿主装配、不创建签名或发布。A04 已审计，当前入口定位和
+规则模式出口事实仍有完整导航/dirty guard 工作，本批继续明确保留缺口。
+
+A18 增加宿主真实 Flow 清单、显式多选、固定预览、单次提交与逐项六态。旧活动行或
+暂停快照不自动勾选新清单；旧 GUI 关闭兜底与 fulfilled 计成功已移除。闭合到同一
+物理连接、真实运行实例/revision、观察租约和客户端代次。closed:false、缺字段、
+not_found 或缺行均不算关闭成功；未知只读核对原操作，不换计划重放。
+现有 core wire 仅有 flow_id，无远端原子实例/revision 前置条件；当前宿主记录只在
+会话内，明确不称跨进程持久恢复。移动实际控制桥未接入时 unsupported。
+
+A19 路由工具消费实际 CommandResponse，展示模式、匹配规则与路由动作，删除伪逐跳
+TTL/RTT；索引及 DNS 缓存 TTL 保留十进制字符串。独立 dns_cache 入口复用共享任务，
+未启用、未命中、有效空列表、失败和不完整响应分别呈现，不制造查询来填缓存。
+
+本地新增后端专项：Flow实际Unix IPC 11/11、严格legacy回执1/1、路由5/5与DNS缓存3/3；
+观察租约4/4。fmt、locked workspace/all-targets/all-features check已通过。类型检查
+0 errors / 0 warnings。上述专项不代替完整测试或最终SHA CI，后续准确结果在下方追加。
+日志：`/tmp/a18-flow-close-rust.log`、`/tmp/a18-legacy-close-rust.log`、
+`/tmp/a19-{route,dns-cache}-rust.log`、`/tmp/flow-diagnostics-{subscription,fmt,check,typecheck}.log`。
+
+最终本地完整Rust全集 **1335 passed / 0 failed / 7 ignored，45组**，GUI lib
+**1061/0/5**；fmt、locked workspace/all-targets/all-features check及同范围Clippy
+通过，保留现有非拒绝级warning，不称零warning。完整 `pnpm verify:frontend`
+最终从头通过，含新增Flow Node20/20、路由/缓存Node9/9、原tool scope26/26、
+0错误/0警告类型检查及生产build。Chromium：Flow新11+旧history1 **12/12**；
+A19新6+旧tool scope4 **10/10**，均无重试或跳过。本地WebKit缺binary未运行，
+不能以Chromium或旧提交CI代替本批双引擎验证。
+
+首轮Flow浏览器因新增spec参数语法错误未执行测试，同轮前端全集在类型检查失败。
+修正spec后第二轮旧history1通过、新11失败，发现session相对client导入绕过专用fixture
+alias，误调无Tauri的真实invoke；改为标准$lib feature别名，业务逻辑不变，Node20与
+原12浏览器重跑通过。修正后的完整前端全集再次通过，没有删用例或弱化关闭断言。
+日志：`/tmp/flow-diagnostics-{all-tests,clippy,frontend-final}.log`、
+`/tmp/flow-close-node-final.log`、`/tmp/flow-close-browser-alias.log`、
+`/tmp/a19-route-cache-browser-final`。新SHA全部CI仍须独立观察，历史66be结果不借用。

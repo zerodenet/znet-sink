@@ -42,3 +42,23 @@ fn independent_owners_do_not_cancel_each_other() {
     a.stop();
     assert!(sub.is_current());
 }
+
+#[test]
+fn current_is_a_read_only_coherent_lease_and_same_endpoint_aba_cannot_revive_it() {
+    let owner = SubscriptionOwner::default();
+    assert!(owner.current().is_none());
+    let original = owner.begin(binding("same"));
+    let first = owner.current().unwrap();
+    let second = owner.current().unwrap();
+    assert_eq!(first.generation, original.generation);
+    assert_eq!(second.generation, original.generation);
+    assert_eq!(first.binding.endpoint, original.binding.endpoint);
+    assert!(first.is_current());
+    owner.stop();
+    assert!(owner.current().is_none());
+    assert!(!first.is_current());
+    let replacement = owner.begin(binding("same"));
+    assert!(replacement.generation > first.generation);
+    assert!(owner.current().unwrap().is_current());
+    assert!(!second.is_current());
+}

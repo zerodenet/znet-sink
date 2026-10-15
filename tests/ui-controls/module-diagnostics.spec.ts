@@ -17,8 +17,8 @@ test('module diagnostics preserves partial results and the last snapshot after r
   await page.getByRole('button',{name:'切换主题',exact:true}).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
   await page.screenshot({path:'/tmp/znet-modules-dark.png',fullPage:true});
-  await panel.getByRole('heading',{name:'路由追踪',exact:true}).scrollIntoViewIfNeeded();
-  await expect(panel.getByRole('heading',{name:'路由追踪',exact:true})).toBeVisible();
+  await panel.getByRole('heading',{name:'路由评估',exact:true}).scrollIntoViewIfNeeded();
+  await expect(panel.getByRole('heading',{name:'路由评估',exact:true})).toBeVisible();
   await panel.getByRole('button',{name:'刷新',exact:true}).click();
   await expect(panel.getByRole('alert')).toContainText('仍显示上次快照');
   await expect(panel.getByRole('heading',{name:'内核托管'})).toBeVisible();

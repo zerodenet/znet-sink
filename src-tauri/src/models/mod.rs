@@ -5,6 +5,7 @@ pub mod core;
 pub mod core_config;
 pub mod core_process;
 pub mod dns_config;
+pub mod flow_close;
 pub mod gui_core;
 pub mod logs;
 pub mod profile_editor;

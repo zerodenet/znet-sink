@@ -7,6 +7,7 @@ pub mod core;
 pub mod core_config;
 pub mod core_process;
 pub mod debug;
+pub mod flow_close;
 pub mod gui_connection;
 pub mod gui_core;
 pub mod gui_events;

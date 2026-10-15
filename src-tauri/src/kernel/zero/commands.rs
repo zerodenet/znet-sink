@@ -171,31 +171,21 @@ pub async fn probe_outbound(
 
 /// Close an active flow.
 ///
-/// Flow rows are event-driven, so a flow may naturally complete between the
-/// user's click and the `flows.close` command reaching Zero. For the GUI,
-/// "already absent" satisfies the requested end state and is therefore
-/// normalized to an idempotent success. Transport failures and every other
-/// core error remain real failures.
+/// Require the actual public CommandResponse and matching explicit close
+/// result. Absence is not proof of completion; configuration cleanup retains
+/// its separate end-state semantics through BoundControl::close_flow.
 pub async fn close_connection(
     flow_id: String,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<GuiConnectionCloseResult> {
     let flow_id = normalize_non_empty(flow_id, "flowId")?;
-    match run_command(
+    let value = run_command(
         "flows.close",
         json!({ "flow_id": flow_id.clone() }),
         options,
     )
-    .await
-    {
-        Ok(value) => Ok(parse_connection_close(&value, flow_id)),
-        Err(error) if is_flow_already_completed_error(&error) => Ok(GuiConnectionCloseResult {
-            flow_id,
-            closed: true,
-            message: Some("flow already completed".to_string()),
-        }),
-        Err(error) => Err(error),
-    }
+    .await?;
+    parse_connection_close(&value, flow_id)
 }
 
 pub(crate) fn is_flow_already_completed_error(error: &crate::errors::AppError) -> bool {

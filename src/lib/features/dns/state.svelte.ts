@@ -1,6 +1,7 @@
 import type { DnsCacheResult, DnsLookupResult, FakeIpLookupResult } from '$lib/types/diagnostics';
 import type { GuiFakeIpClearResult, ToolJobSnapshot } from '$lib/types/gui-api';
 import { ToolJobsState, type ToolJobPorts } from '$lib/features/tool-jobs/state.svelte';
+import { parseDnsCache, cacheCompatibilityError } from './cache-result';
 
 interface Ports extends ToolJobPorts {
   getAppErrorMessage(error: unknown, fallback?: string): string;
@@ -24,6 +25,9 @@ export class DnsState {
   fakeDirection = $state<'domain' | 'ip'>('domain');
   fakeResult = $state<FakeIpLookupResult | null>(null);
   cacheResult = $state<DnsCacheResult | null>(null);
+  cacheDomain = $state('');
+  cacheLimit = $state(50);
+  cacheError = $state<string | null>(null);
   fakeMessage = $state<string | null>(null);
   fakeError = $state<string | null>(null);
   readonly jobs: ToolJobsState;
@@ -32,6 +36,7 @@ export class DnsState {
   private dnsStarting = $state(false);
   private fakeStarting = $state(false);
   private clearStarting = $state(false);
+  private cacheStarting = $state(false);
 
   constructor(ports: Ports) {
     this.ports = ports;
@@ -49,9 +54,11 @@ export class DnsState {
     this.dnsError = null;
     this.fakeResult = null;
     this.cacheResult = null;
+    this.cacheError = null;
     this.fakeMessage = null;
     this.fakeError = null;
     this.dnsStarting = this.fakeStarting = this.clearStarting = false;
+    this.cacheStarting = false;
     this.refreshedClearJobs.clear();
   }
 
@@ -60,8 +67,23 @@ export class DnsState {
   }
 
   get fakeLoading(): boolean {
-    return this.fakeStarting || this.jobs.active('fake_ip_lookup').length > 0
-      || this.jobs.active('dns_cache').length > 0;
+    return this.fakeStarting || this.jobs.active('fake_ip_lookup').length > 0;
+  }
+  get cacheLoading(): boolean { return this.cacheStarting || this.jobs.active('dns_cache').length > 0; }
+
+  async runCache(): Promise<void> {
+    if (!this.jobs.ready || this.jobs.disposed || this.cacheLoading) return;
+    if (!Number.isInteger(this.cacheLimit) || this.cacheLimit < 1 || this.cacheLimit > 500) {
+      this.cacheError = '缓存读取上限必须为1–500整数'; return;
+    }
+    this.cacheError = null; this.cacheResult = null; this.cacheStarting = true;
+    const epoch = this.jobs.epoch;
+    try {
+      const domain = this.cacheDomain.trim();
+      await this.jobs.start({kind:'dns_cache',params:{...(domain ? {domain} : {}),limit:this.cacheLimit}});
+    } catch(error) {
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.cacheError = this.ports.getAppErrorMessage(error, 'DNS 缓存读取未完成');
+    } finally { if (epoch === this.jobs.epoch) this.cacheStarting = false; }
   }
 
   get fakeClearLoading(): boolean {
@@ -101,13 +123,10 @@ export class DnsState {
     this.fakeStarting = true;
     const epoch = this.jobs.epoch;
     try {
-      await Promise.all([
-        this.jobs.start({
+      await this.jobs.start({
           kind: 'fake_ip_lookup',
           params: this.fakeDirection === 'domain' ? { domain: query } : { ip: query },
-        }),
-        this.jobs.start({ kind: 'dns_cache', params: { limit: 50 } }),
-      ]);
+        });
     } catch (error) {
       if (!this.jobs.disposed && epoch === this.jobs.epoch) this.fakeError = this.ports.getAppErrorMessage(error, 'Fake-IP 诊断任务启动失败');
     } finally {
@@ -147,10 +166,16 @@ export class DnsState {
 
   async cancel(jobId: number): Promise<void> {
     const epoch = this.jobs.epoch;
+    const kind = this.jobs.jobs.get(jobId)?.kind;
     try {
       await this.jobs.cancel(jobId);
     } catch (error) {
-      if (!this.jobs.disposed && epoch === this.jobs.epoch) this.fakeError = this.ports.getAppErrorMessage(error, '取消诊断任务失败');
+      if (!this.jobs.disposed && epoch === this.jobs.epoch) {
+        const message = this.ports.getAppErrorMessage(error, '取消诊断任务失败');
+        if (kind === 'dns_cache') this.cacheError = message;
+        else if (kind === 'dns_lookup') this.dnsError = message;
+        else this.fakeError = message;
+      }
     }
   }
 
@@ -166,8 +191,10 @@ export class DnsState {
       return;
     }
     if (job.kind === 'dns_cache') {
-      if (job.state === 'completed') this.cacheResult = job.result as DnsCacheResult;
-      else this.fakeError = terminalMessage(job, 'DNS 缓存读取失败');
+      if (job.state === 'completed') {
+        try { this.cacheResult = parseDnsCache(job.result); this.cacheError = null; }
+        catch { this.cacheResult = null; this.cacheError = cacheCompatibilityError; }
+      } else this.cacheError = terminalMessage(job, 'DNS 缓存读取失败');
       return;
     }
     if (job.kind === 'fake_ip_lookup') {

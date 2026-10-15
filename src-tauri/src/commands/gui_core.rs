@@ -300,12 +300,12 @@ pub async fn gui_close_connection(
     flow_id: String,
 ) -> AppResult<GuiConnectionCloseResult> {
     interaction_mode::require_pro_mode(state.inner(), "connections")?;
-    let binding = crate::services::flow_observation::binding(state.inner())?;
-    let opts = crate::models::core::CoreIpcOptions {
-        socket: Some(binding.endpoint.path),
-        timeout_ms: Some(binding.timeout.as_millis() as u64),
-    };
-    ZeroAdapter::new().close_connection(flow_id, opts).await
+    let _ = flow_id;
+    Err(AppError {
+        code: "unsupported",
+        message: "旧连接关闭入口不具备原实例与目标绑定；请重新核对并选择连接关闭".into(),
+        details: None,
+    })
 }
 
 #[tauri::command]
