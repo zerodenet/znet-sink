@@ -4,6 +4,7 @@ pub(crate) mod apply;
 pub(crate) mod capture_apply;
 pub(crate) mod composition;
 pub(crate) mod dns;
+pub(crate) mod dns_migration;
 pub(crate) mod native_validation;
 pub(crate) mod persistence;
 pub(crate) mod profile_editor;
@@ -11,6 +12,8 @@ mod report;
 pub(crate) mod route_editor;
 pub(crate) mod route_integrity;
 pub(crate) mod route_rules;
+pub(crate) mod rule_migration;
+pub(crate) mod rule_references;
 pub(crate) mod rules;
 
 pub use report::{CompositionReport, LayerReport};

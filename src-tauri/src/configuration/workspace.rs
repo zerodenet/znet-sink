@@ -152,7 +152,7 @@ pub(crate) fn from_input(
         return Err(conflict());
     }
     ensure_unblocked(state, &context.profile.id)?;
-    let source = parse(&input.source_json)?;
+    let source = source_for_input(&context, &input.source_json)?;
     let candidate = rule_overlay::compose_effective_candidate_with_app(
         state,
         &source,
@@ -165,6 +165,39 @@ pub(crate) fn from_input(
     validate(&candidate.config)?;
     verify(state, &context.binding)?;
     Ok((context, source, candidate.config))
+}
+fn source_for_input(context: &Context, text: &str) -> AppResult<Value> {
+    let reference_overlay = context
+        .app
+        .profile_edits
+        .get(&context.profile.id)
+        .and_then(|edits| edits.get("ruleSetReferences"));
+    let Some(metadata) = reference_overlay else {
+        return parse(text);
+    };
+    if text.len() > MAX_BYTES {
+        return Err(AppError::invalid_argument("配置超过16MiB工作区预算"));
+    }
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // Keep native duplicate-field/type/schema rejection on the original text.
+    // The existing unchanged source can reference client-provided definitions;
+    // its original owned projection must run before complete native validation.
+    serde_json::from_str::<zero_config::RuntimeConfig>(text)
+        .map_err(|_| AppError::invalid_argument("原来源 schema 无法核对；迁移覆盖保留"))?;
+    let value: Value =
+        serde_json::from_str(text).map_err(|_| AppError::invalid_argument("配置 JSON 无效"))?;
+    let original = context.profile.content.as_ref().ok_or_else(conflict)?;
+    if &value != original {
+        return Err(AppError::conflict(
+            "rule_references",
+            "",
+            "来源已有引用迁移覆盖；先明确处理原覆盖，再修改来源，不自动重新绑定",
+        ));
+    }
+    super::rule_references::apply(original, &value, metadata)?;
+    // from_input still validates the fully composed candidate using the real
+    // native parser. No new material or file dependency bypass is authorized.
+    Ok(value)
 }
 pub(crate) fn parse(text: &str) -> AppResult<Value> {
     if text.len() > MAX_BYTES {
@@ -247,7 +280,7 @@ pub(crate) fn local_snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnaps
     let mut app = context.app.clone();
     super::local_edits::migrate_legacy(&mut app, Some(&context.profile.id));
     let mut edits = app.client_edits.unwrap_or_default();
-    for key in ["endpoints", "routeRules"] {
+    for key in ["endpoints", "routeRules", "ruleSetReferences"] {
         if let Some(value) = app
             .profile_edits
             .get(&context.profile.id)

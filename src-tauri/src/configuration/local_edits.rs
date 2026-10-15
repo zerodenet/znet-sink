@@ -13,7 +13,7 @@ pub(crate) use migration::migrate_legacy;
 pub(crate) use patch::prepare_patch;
 
 fn profile_scoped(key: &str) -> bool {
-    matches!(key, "endpoints" | "routeRules")
+    matches!(key, "endpoints" | "routeRules" | "ruleSetReferences")
 }
 
 pub(crate) fn active(state: &AppState) -> AppResult<(String, Value)> {
@@ -46,12 +46,12 @@ pub(crate) fn resolve(
     app.overrides = Default::default();
     let mut source = base.clone();
     let mut edits = app.client_edits.clone().unwrap_or_default();
-    if edits.contains_key("routeRules") {
+    if edits.contains_key("routeRules") || edits.contains_key("ruleSetReferences") {
         return Err(AppError::invalid_argument(
             "路由规则覆盖属于原配置，不能作为全局客户端设置使用",
         ));
     }
-    for key in ["endpoints", "routeRules"] {
+    for key in ["endpoints", "routeRules", "ruleSetReferences"] {
         if let Some(value) = id
             .and_then(|id| app.profile_edits.get(id))
             .and_then(|edits| edits.get(key))
@@ -62,6 +62,9 @@ pub(crate) fn resolve(
     if let Some(metadata) = edits.remove("routeRules") {
         // The digest is of the complete original source, before global edits.
         source = super::route_rules::apply(base, &metadata)?;
+    }
+    if let Some(metadata) = edits.remove("ruleSetReferences") {
+        source = super::rule_references::apply(base, &source, &metadata)?;
     }
     for (key, value) in &edits {
         match key.as_str() {
@@ -228,6 +231,9 @@ fn validate_field(app: &AppConfig, key: &str, value: &Value) -> AppResult<()> {
     }
     if key == "routeRules" {
         return super::route_rules::validate(value);
+    }
+    if key == "ruleSetReferences" {
+        return super::rule_references::validate_metadata(value);
     }
     let (section, field) = key.split_once('.').unwrap_or((key, ""));
     let allowed = match section {

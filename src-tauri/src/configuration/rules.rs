@@ -22,19 +22,20 @@ pub(crate) fn compose_with(
 ) -> AppResult<ComposeResult> {
     let mut config = base.clone();
     strip_common_overlay(&mut config)?;
-    crate::configuration::route_integrity::validate(&config)?;
     let mode = proxy_mode::detect_route_mode(base).map(|detected| match detected.mode {
         GuiProxyMode::Global => "global".to_string(),
         GuiProxyMode::Rule => "rule".to_string(),
         GuiProxyMode::Direct => "direct".to_string(),
     });
     if !enabled {
+        crate::configuration::route_integrity::validate(&config)?;
         return Ok(ComposeResult {
             config,
             injected_count: 0,
         });
     }
     if mode.as_deref() != Some("rule") {
+        crate::configuration::route_integrity::validate(&config)?;
         return Ok(ComposeResult {
             config,
             injected_count: 0,
@@ -50,6 +51,7 @@ pub(crate) fn compose_with(
         (binding.order, profile.id.as_str())
     });
     if selected.is_empty() {
+        crate::configuration::route_integrity::validate(&config)?;
         return Ok(ComposeResult {
             config,
             injected_count: 0,
@@ -108,6 +110,7 @@ pub(crate) fn compose_with(
     // domain set). Preserve those semantics by evaluating the subscription
     // first and using common rules only as a fallback before `route.final`.
     existing_rules.extend(rules);
+    crate::configuration::route_integrity::validate(&config)?;
     Ok(ComposeResult {
         config,
         injected_count,
@@ -148,6 +151,15 @@ fn strip_common_overlay(config: &mut Value) -> AppResult<()> {
     let Some(route) = root.get_mut("route").and_then(Value::as_object_mut) else {
         return Ok(());
     };
+    let generated_tags = route
+        .get("rule_sets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("tag").and_then(Value::as_str))
+        .filter(|tag| tag.starts_with(COMMON_TAG_PREFIX))
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
     if let Some(items) = route.get_mut("rule_sets").and_then(Value::as_array_mut) {
         items.retain(|item| {
             !item
@@ -157,13 +169,19 @@ fn strip_common_overlay(config: &mut Value) -> AppResult<()> {
         });
     }
     if let Some(items) = route.get_mut("rules").and_then(Value::as_array_mut) {
-        items.retain(|item| {
-            !item
-                .get("condition")
-                .and_then(|condition| condition.get("tag"))
-                .and_then(Value::as_str)
-                .is_some_and(|tag| tag.starts_with(COMMON_TAG_PREFIX))
-        });
+        // A common projection appends exactly one simple rule per generated
+        // definition. Keep earlier explicit source references, including rules
+        // whose entire condition is the same tag. A prefix alone is not proof
+        // that a source policy belongs to the generated overlay.
+        for tag in generated_tags {
+            let condition = json!({"type":"rule_set","tag":tag});
+            if let Some(index) = items
+                .iter()
+                .rposition(|item| item.get("condition") == Some(&condition))
+            {
+                items.remove(index);
+            }
+        }
     }
     Ok(())
 }

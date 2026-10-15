@@ -1,4 +1,16 @@
 <script lang="ts">
+  import DnsServerMigrationDialog from './DnsServerMigrationDialog.svelte';
+  import { migrationFailure } from '$lib/features/dns-migration/state';
+  import { optionalMobileNavigation } from '$lib/features/mobile/context';
+  import { untrack } from 'svelte';
+  const dnsNavigation=untrack(()=>optionalMobileNavigation());
+  let migrationOpen=$state(false),migrationRequestedName=$state<string|null>(null),migrationBusy=$state(false),migrationUnknown=$state(false),migrationPending=$state(false),migrationNeedsReload=$state(false);
+  function migrationState(value:{busy:boolean;unknown:boolean}){migrationBusy=value.busy;migrationUnknown=value.unknown;}
+  async function migrationSaved(){migrationPending=true;migrationNeedsReload=true;const loaded=await load();if(alive){migrationNeedsReload=!loaded;saved=false;savedPending=true;}}
+  async function rereadMigration(){const loaded=await load();if(alive)migrationNeedsReload=!loaded;}
+  async function discardForMigration(){discardDraft();await load();}
+  function migrationWorkspace(){if(saving||migrationBusy||migrationUnknown)return;if(dnsNavigation)dnsNavigation.open('workspace');else{store.settingsSection='config';store.activeTab='settings';}}
+
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
   async function loadGlobalDnsSettings() {
@@ -435,10 +447,10 @@
         getEffectiveRuleSetOptions().catch(() => []),
         Promise.all([getConfigProxyNodes(), getConfigPolicyGroups()]).catch(() => null),
       ]);
-      if (!alive || generation !== readGeneration) return;
+      if (!alive || generation !== readGeneration) return false;
       if (!canAcceptSettingsDraftRead(read, acceptedDraft, draft)) {
         readNotice = '来源已刷新，未覆盖未保存草稿；请继续编辑或明确放弃。';
-        return;
+        return false;
       }
       automaticAddressFamilyPolicy = recommendedDnsAddressFamily(
         tunStatus?.ipv4Egress.availability ?? 'unknown',
@@ -465,11 +477,13 @@
       nativeError = '';
       saved = false;
       savedPending = false;
+      return true;
     } catch (cause) {
-      if (!alive || generation !== readGeneration) return;
+      if (!alive || generation !== readGeneration) return false;
       const info = getAppErrorInfo(cause, '加载 DNS 配置失败');
       errorCode = info.code;
       error = getAppErrorMessage(cause, info.message);
+      return false;
     } finally {
       if (alive && generation === readGeneration) loading = false;
     }
@@ -734,33 +748,9 @@
   }
 
   function removeServer(name: string) {
-    if (!draft) return;
-    if (Object.keys(draft.dns.servers).length === 1) {
-      error = '至少保留一个 DNS 服务器';
-      return;
-    }
-    if (draft.dns.dispatch.some((rule) => rule.server === name)) {
-      error = `服务器“${name}”仍被分流规则引用，请先修改或删除对应规则`;
-      return;
-    }
-    const policy = draft.dns.policy;
-    const policyReferences = [
-      policy?.node_server,
-      policy?.direct_server,
-      ...(policy?.fallback_servers ?? []),
-      ...(policy?.node_fallback_servers ?? []),
-      ...(policy?.direct_fallback_servers ?? []),
-      ...(policy?.server_timeout_ms && Object.hasOwn(policy.server_timeout_ms, name) ? [name] : []),
-    ];
-    if (policyReferences.includes(name)) {
-      error = `服务器“${name}”仍被解析策略引用，请先调整主服务器、回退链或单独超时`;
-      return;
-    }
-    delete draft.dns.servers[name];
-    if (draft.dns.default_server === name) {
-      draft.dns.default_server = Object.keys(draft.dns.servers)[0] ?? '';
-    }
-    touch();
+    if (!draft || saving || migrationBusy) return;
+    migrationRequestedName = name;
+    migrationOpen = true;
   }
 
   function openAddDispatch() {
@@ -843,7 +833,7 @@
   }
 
   async function save() {
-    if (!draft || !source || saving || loading) return;
+    if (!draft || !source || saving || loading || migrationBusy || migrationUnknown || migrationNeedsReload) return;
     saving = true;
     saved = false;
     savedPending = false;
@@ -867,7 +857,7 @@
     } catch (cause) {
       const info = getAppErrorInfo(cause, '保存 DNS 配置失败，已保留上次可用配置');
       errorCode = info.code;
-      error = getAppErrorMessage(cause, info.message);
+      error = info.code === 'dns_migration_preview_required' ? migrationFailure(cause) : getAppErrorMessage(cause, info.message);
     } finally {
       saving = false;
     }
@@ -878,9 +868,13 @@
     return ruleSetSignal.onChanged(() => void refreshRuleSetReferences());
   });
 </script>
-<MobileSettingsDraftGuard {dirty} busy={saving} label="DNS 设置" onDiscard={discardDraft} />
+<MobileSettingsDraftGuard {dirty} busy={saving||migrationBusy} label="DNS 设置" onDiscard={discardDraft} />
 {#if readNotice}<p role="status">{readNotice}</p>{/if}
-<fieldset class="dns-editor" disabled={saving}>
+<DnsServerMigrationDialog open={migrationOpen} profileId={profileSnapshot?.profileId??null} requestedName={migrationRequestedName} {dirty} onClose={()=>migrationOpen=false} onDiscard={discardForMigration} onSaved={()=>void migrationSaved()} onStateChange={migrationState}/>
+{#if migrationUnknown}<p role="status">原 DNS 删除迁移保存结果未确认；当前编辑与普通保存已暂停，不能创建新计划或重放。</p><Button variant="outline" onclick={()=>migrationOpen=true}>核对原 DNS 删除迁移</Button>{/if}
+{#if migrationPending}<p role="status">DNS 删除及引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。</p><Button variant="outline" disabled={saving||migrationBusy||migrationUnknown} onclick={migrationWorkspace}>前往工作区预检/应用 DNS 变更</Button>{/if}
+{#if migrationNeedsReload}<p role="status">迁移已保存本地，但 DNS 表单尚未完成重新读取；原展示不恢复普通保存权限。</p><Button variant="outline" disabled={loading||saving||migrationBusy||migrationUnknown} onclick={()=>void rereadMigration()}>重新读取 DNS 本地结果</Button>{/if}
+<fieldset class="dns-editor" disabled={saving||migrationBusy||migrationUnknown||migrationNeedsReload}>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
   <span>{isLocallyEdited(profileSnapshot, 'dns') ? '客户端设置 · 全局生效' : '来自配置 · 缺失项使用默认值'}</span>
   <Button variant="outline" size="sm" onclick={restoreDnsSource} disabled={saving || !isLocallyEdited(profileSnapshot, 'dns')}>恢复配置值</Button>
@@ -907,7 +901,7 @@
   <div class="load-error" role="alert">
     <AlertTriangle />
     <span>{error}</span>
-    <ErrorRecoveryActions code={errorCode} context="dns" onretry={load} />
+    <ErrorRecoveryActions code={errorCode} context="dns" onretry={async()=>{await load();}} />
   </div>
 {:else if draft}
   {#if compatibility.status === 'unsupported' && draft.mode === 'fake_ip'}
@@ -1252,6 +1246,7 @@
           <label>
             <span>服务器名称</span>
             <Input bind:value={serverNameDraft} placeholder="例如 cloudflare" autofocus />
+            {#if editingServerName && serverNameDraft.trim() !== editingServerName}<span role="status">名称变更仅保留为草稿。删除或重命名需专用预览，原材料保留；当前专用流程支持删除与引用迁移，重命名流程尚未适配，普通保存会明确拒绝此改名。</span>{/if}
           </label>
           <label>
             <span>协议</span>

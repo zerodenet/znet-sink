@@ -858,3 +858,43 @@ Chromium最终12/12，0失败/重试/跳过；本地WebKit未运行，双引擎�
 日志：`/tmp/route-editor-{all-tests,check-final,clippy,fmt-final,frontend-final}.log`、
 `/tmp/route-editor-backend-refrozen.log`、`/tmp/route-editor-projection.log`。
 CI YAML已解析核对；并行engine任务各有独立报告，原名汇总检查只在两者成功时通过。
+
+
+## 2026-10-15：规则集引用与 DNS 删除迁移
+
+本批基线64d1f53，同一Draft PR46，先核源码引用/所有权及真正本地提交边界。
+新增[迁移契约](../gui/reference-migrations-v0.0.3.md)，不把GUI id、原生tag、同名或path作为相同资源。
+规则集扫描来源规则/旁路/DNS、所有覆盖行（含disabled）、全局及保留DNS；保护/托管/无法检查及不安全跨配置范围明确阻断，原文不改。
+当前普通配置以sourceDigest绑定的ruleSetReferences纯投影迁移；AppConfig先发布引用，再删除规则集记录，明确非跨文件原子。
+两份owned回执与严格后置状态确认成功；阶段失败保留原操作/阶段事实，不盲目回滚或重放，票据仅宿主会话内有界保留。
+替代产物验证精确私有owner目录、普通文件、64MiB预算、完整ZRS版本/大小/checksum/entrycount及实际SHA256；FIFO/链接/外部路径拒绝。
+
+实际消费链也已验证：common定义注入后再核全部路由/旁路/DNS引用，重组合只移除匹配的最后生成行，保留显式source规则。
+工作区只对带原合法迁移覆盖且Value完全未变的source，先typed schema/duplicate检查、组合后完整nativeparse；来源变化不能借此读新依赖。
+测试使用实际encoded ZRS和工作区from_input完成真实最终原生编译，不以pure helper通过冒充应用链可用。
+
+DNS删除迁移从host保存材料取原值，只接明确服务器/替代intent，列全default/dispatch/node/direct/三回退链/独立timeout键。
+超时键碰撞、重复链/主备冲突与不能核对的extra不隐式归并；禁用DNS仍核保留配置。
+保存全局客户端覆盖待应用，明确影响全部配置；不验证其它保护来源的运行兼容性。
+旧shortcut server删除/rename在effects/落盘前拒绝；本批专用流只有delete+migrate，rename固定预览未适配并提前提示保留草稿。
+
+最终本地完整locked Rust workspace/all-features：**1431 passed / 0 failed / 7 ignored，45组**，GUI lib **1157/0/5**。
+其中新DNS18、规则集owner15、纯引用20、真实artifact7，以及中央组合/完整引用/保留source规则3项，共新增63项。
+完整全集先通过；随后收口新增publish参数数量Clippy警告为固定LocalCandidate，并补legacy新字段及原文重复键断言后，再次完整1431/0/7通过。
+不将ignored称作已运行。格式、全目标workspace check及Clippy以最终执行日志/准确head PR回执为准，既有警告不隐藏。
+
+完整pnpm verify:frontend通过，类型检查0错误/0警告及生产build通过。
+新增实际production state/client Node：DNS21 + rules23 = **44/44**；最终同源Chromium新两套 **23/23，0失败/重试/跳过**。
+DNS原3项另原断言回归通过；本地WebKit未安装，不绕过或下载，最终双引擎以新SHA CI真实执行为准。
+本地日志为/tmp/reference-migration-{all-tests-final,frontend-final,browser-final,check-refrozen,clippy-refrozen}.log。
+
+失败过程保留：首轮all-target编译时pure测试文件尚未落，production lib已过而test编译停止；之后配置namespace187/0/1实际通过。
+首轮typecheck发现onretry Promise<boolean>不匹配，已修并完整0/0通过。
+DNS首轮存在未完成并行fixture alias、同名关闭locator以及真实busy Escape可关Bits内部modal问题，修复后新11+旧3=14/14；未放宽旧断言。
+Rules浏览器发现非rune writable不更新及无当前profile刷新仍留旧选择，已修为view派生和明确失效，最终12/12。
+Root第一次合并browser命令缺PLAYWRIGHT_REUSE_SERVER开关，启动前报4177占用、未跑用例；保持现server，正确参数后实际23/23。
+
+本批无core/dependency/lockfile/version修改，不用用户Mac，不创建签名凭据、不合并发布。
+原生VPN/core/宿主装配及Galaxy S8/iPhone真机验收仍后置；四项许可材料缺口保持。
+跨配置或保护来源迁移、完整rename/其余A10/A13条件能力不因本批通过而完成。
+最终提交四组CI及七份artifact按实际新head记录在同一Draft PR，不借64d1或更早head的成功。

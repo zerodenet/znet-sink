@@ -21,3 +21,17 @@ fn complete_and_dependency_free_policies_remain_usable() {
     validate(&json!({"route":{"rule_sets":[{"tag":"deny"}],"rules":[{"condition":{"type":"rule_set","tag":"deny"},"action":{"type":"reject"}}]}})).unwrap();
     validate(&json!({"route":{"rules":[],"final":{"type":"direct"}}})).unwrap();
 }
+
+#[test]
+fn bypass_and_dns_missing_dependencies_are_not_silently_accepted() {
+    for value in [
+        json!({"route":{"bypass":[{"type":"rule_set","tag":"old"}]}}),
+        json!({"route":{},"runtime":{"dns":{"dispatch":[{"condition":{"type":"or","items":[{"type":"rule_set","tag":"old"}]},"server":"system"}]}}}),
+        json!({"runtime":{"dns":{"dispatch":[{"condition":{"type":"rule_set","tag":"old"},"server":"system"}]}}}),
+    ] {
+        assert_eq!(
+            validate(&value).unwrap_err().code,
+            "rule_set_dependency_unavailable"
+        );
+    }
+}

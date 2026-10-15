@@ -76,6 +76,60 @@ fn actual_and_dns_preview_composition_project_once_before_verified_public_rules(
     );
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn actual_verified_public_target_and_dns_preview_consume_reference_migration_once() {
+    let mut source = base();
+    let old = common_tag("retired");
+    let target = common_tag("replacement");
+    source["route"]["rules"] = json!([{"condition":{"type":"rule_set","tag":old},"action":{"type":"reject"},"mode":"flow"}]);
+    source["route"]["bypass"] = json!([{"type":"rule_set","tag":old}]);
+    let mut app = AppConfig::default();
+    app.client_edits
+        .as_mut()
+        .unwrap()
+        .insert("routing.injectCommonRules".into(), json!(true));
+    let metadata = crate::configuration::rule_references::metadata(
+        &source,
+        &[crate::models::rule_references::Replacement {
+            from_tag: old,
+            to_tag: target.clone(),
+        }],
+    )
+    .unwrap();
+    app.profile_edits
+        .entry("ordinary-route".into())
+        .or_default()
+        .insert("ruleSetReferences".into(), metadata);
+    let (public, path) = super::tests::verified_profile("replacement", 0, CommonRuleAction::Direct);
+    let state = AppState::with_domain_data(
+        app.clone(),
+        vec![profile(&source)],
+        vec![],
+        vec![public],
+        vec![],
+    );
+    for effective in [
+        compose_effective_candidate_with_app(&state, &source, Some("ordinary-route"), &app)
+            .unwrap()
+            .config,
+        compose_effective_config_with_dns(&state, &source, &app.dns).unwrap(),
+    ] {
+        assert_eq!(effective["route"]["rules"].as_array().unwrap().len(), 2);
+        assert_eq!(effective["route"]["rules"][0]["condition"]["tag"], target);
+        assert_eq!(effective["route"]["rules"][0]["action"]["type"], "reject");
+        assert_eq!(effective["route"]["bypass"][0]["tag"], target);
+        assert_eq!(
+            effective["runtime"]["log"]["files"][0]["max_bytes"].as_u64(),
+            Some(u64::MAX)
+        );
+    }
+    assert_eq!(
+        state.proxy_configs().lock().unwrap()[0].content.as_ref(),
+        Some(&source)
+    );
+    fs::remove_file(path).unwrap();
+}
 #[test]
 fn managed_same_id_with_identical_source_cannot_inherit_ordinary_route_override() {
     let source = base();

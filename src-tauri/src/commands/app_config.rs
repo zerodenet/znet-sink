@@ -66,6 +66,11 @@ pub async fn app_config_import_kernel_settings(
     if new_config == old_config {
         return Ok(new_config);
     }
+    crate::configuration::dns_migration::require_legacy_server_preserved(
+        state.inner(),
+        &old_config,
+        &new_config,
+    )?;
     rule_overlay::validate_app_config_candidate(state.inner(), &new_config)?;
 
     let kernel_running =
@@ -173,6 +178,11 @@ pub(crate) async fn apply_candidate(
     old_config: AppConfig,
     new_config: AppConfig,
 ) -> AppResult<AppConfig> {
+    crate::configuration::dns_migration::require_legacy_server_preserved(
+        state.inner(),
+        &old_config,
+        &new_config,
+    )?;
     // Read legacy capture intent before replacing settings or stopping the process.
     let was_running =
         core_process::refresh_status(state.inner())?.state == CoreProcessState::Running;

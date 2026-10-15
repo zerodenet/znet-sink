@@ -8,7 +8,12 @@ use tauri::{AppHandle, State};
 /// Route rule edits require a host-owned fixed preview and local-only save.
 /// This legacy settings entry can trigger runtime effects and cannot substitute.
 fn require_legacy_settings_fields(changes: &Edits, reset: &[String]) -> AppResult<()> {
-    if changes.contains_key("routeRules") || reset.iter().any(|key| key == "routeRules") {
+    if changes.contains_key("routeRules")
+        || changes.contains_key("ruleSetReferences")
+        || reset
+            .iter()
+            .any(|key| matches!(key.as_str(), "routeRules" | "ruleSetReferences"))
+    {
         return Err(AppError {
             code: "route_editor_preview_required",
             message: "路由规则覆盖需要专用预览确认；请使用路由规则编辑器，本入口不会提交".into(),
@@ -74,6 +79,16 @@ mod tests {
         for error in [
             require_legacy_settings_fields(&edits, &[]).unwrap_err(),
             require_legacy_settings_fields(&Edits::new(), &["routeRules".into()]).unwrap_err(),
+            require_legacy_settings_fields(
+                &Edits::from([(
+                    "ruleSetReferences".into(),
+                    serde_json::json!({"secret":"do-not-echo"}),
+                )]),
+                &[],
+            )
+            .unwrap_err(),
+            require_legacy_settings_fields(&Edits::new(), &["ruleSetReferences".into()])
+                .unwrap_err(),
         ] {
             assert_eq!(error.code, "route_editor_preview_required");
             assert!(error.details.is_none());

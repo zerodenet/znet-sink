@@ -33,7 +33,7 @@ fn require_route_rules_source(
     let Some(id) = id.filter(|id| {
         app.profile_edits
             .get(*id)
-            .is_some_and(|v| v.contains_key("routeRules"))
+            .is_some_and(|v| v.contains_key("routeRules") || v.contains_key("ruleSetReferences"))
     }) else {
         return Ok(());
     };
@@ -222,6 +222,10 @@ fn finalize_effective_config(
         .as_ref()
         .and_then(|id| app.profile_edits.get_mut(id))
         .and_then(|edits| edits.remove("routeRules"));
+    let rule_references = source_profile_id
+        .as_ref()
+        .and_then(|id| app.profile_edits.get_mut(id))
+        .and_then(|edits| edits.remove("ruleSetReferences"));
     let (mut app, config) =
         crate::configuration::local_edits::resolve(&app, source_profile_id.as_deref(), &config)?;
     if let (Some(id), Some(metadata)) = (&source_profile_id, route_rules) {
@@ -229,6 +233,12 @@ fn finalize_effective_config(
             .entry(id.clone())
             .or_default()
             .insert("routeRules".into(), metadata);
+    }
+    if let (Some(id), Some(metadata)) = (&source_profile_id, rule_references) {
+        app.profile_edits
+            .entry(id.clone())
+            .or_default()
+            .insert("ruleSetReferences".into(), metadata);
     }
     let inputs = crate::configuration::composition::Inputs {
         source_profile_id,

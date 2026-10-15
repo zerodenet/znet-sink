@@ -1,3 +1,4 @@
+import {dnsMigrationSettings} from './dns-migration';
 import {profileEditorListing} from './profile-editor';
 // In-memory fixture only: the UI suite must never call Tauri, DNS or a kernel.
 import type { CommonRuleBindingInput, RuleSetSummary, RuleSetUpsert } from '../../src/lib/types/domain';
@@ -10,7 +11,8 @@ let items: RuleSetSummary[] = names.map((name, index) => ({
   commonBinding: { enabled: true, action: index === 3 ? 'proxy' : 'direct', order: (index + 1) * 10 },
   artifact: { path: '', majorVersion: 1, minorVersion: 0, checksum: 1, fileSize: 1024, entryCount: index === 1 ? 111868 : 18, builtAtUnixMs: 0 },
 }));
-export const listRuleSets = async () => structuredClone(items);
+export const listRuleSets = async () => new URLSearchParams(location.search).get('fixture')==='rule-migration'
+  ? (await import('./rule-migration')).ruleMigrationList() : structuredClone(items);
 export const getCommonRuleInjectionStatus = async () => ({ enabled: true, effective: true, eligibleCount: 4, injectedCount: 4 });
 export const setCommonRuleInjectionEnabled = getCommonRuleInjectionStatus;
 export const setCommonRuleBinding = async ({ ruleSetId, ...commonBinding }: CommonRuleBindingInput) => {
@@ -115,7 +117,8 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
   profiles[0].format = 'json';
   profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
 }
-export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profileEditorListing(profiles)); };
+export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return new URLSearchParams(location.search).get('fixture')==='rule-migration'
+  ? (await import('./rule-migration')).ruleMigrationProfiles() : structuredClone(profileEditorListing(profiles)); };
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
 let recoveredOrdinarySource = false;
@@ -317,6 +320,7 @@ export const getNodeScreenSnapshot = async (): Promise<import('../../src/lib/typ
 
 let localFieldEdits: Record<string, unknown> = {};
 export const getProfileSettings = async () => {
+  if(new URLSearchParams(location.search).get('fixture')==='dns-migration') return dnsMigrationSettings(await getAppConfig());
   if (new URLSearchParams(location.search).has('config-unavailable')) throw new Error('当前配置不可用');
   const defaults = await getAppConfig();
   const settings = JSON.parse(JSON.stringify(defaults));

@@ -46,6 +46,8 @@ pub struct AppState {
     runtime_bridge: znet_engine_client::bridge::RuntimeBridge,
     flow_closes: crate::services::flow_close::Owner,
     route_editor: crate::configuration::route_editor::Owner,
+    dns_migration: crate::configuration::dns_migration::Owner,
+    rule_migration: crate::configuration::rule_migration::Owner,
     runtime_operation: tokio::sync::Mutex<()>,
     subscription_syncs: Mutex<HashSet<String>>,
     rule_set_updates: Mutex<HashSet<String>>,
@@ -124,6 +126,8 @@ impl AppState {
             runtime_bridge: znet_engine_client::bridge::RuntimeBridge::default(),
             flow_closes: crate::services::flow_close::Owner::default(),
             route_editor: crate::configuration::route_editor::Owner::default(),
+            dns_migration: crate::configuration::dns_migration::Owner::default(),
+            rule_migration: crate::configuration::rule_migration::Owner::default(),
             runtime_operation: tokio::sync::Mutex::new(()),
             subscription_syncs: Mutex::new(HashSet::new()),
             rule_set_updates: Mutex::new(HashSet::new()),
@@ -275,6 +279,14 @@ impl AppState {
 
     pub(crate) fn route_editor(&self) -> &crate::configuration::route_editor::Owner {
         &self.route_editor
+    }
+
+    pub(crate) fn dns_migration(&self) -> &crate::configuration::dns_migration::Owner {
+        &self.dns_migration
+    }
+
+    pub(crate) fn rule_migration(&self) -> &crate::configuration::rule_migration::Owner {
+        &self.rule_migration
     }
 
     pub(crate) fn commit_diagnostic_capture(

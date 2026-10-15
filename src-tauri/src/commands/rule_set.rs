@@ -36,8 +36,14 @@ pub async fn rule_set_upsert(
 pub async fn rule_set_remove(app_handle: AppHandle, id: String) -> AppResult<()> {
     let state = app_handle.state::<AppState>();
     interaction_mode::require_pro_mode(state.inner(), "ruleSets")?;
-    rule_set::remove(state, id)?;
-    rule_overlay::reconcile_after_rule_change(app_handle).await
+    let _ = id;
+    Err(crate::errors::AppError {
+        code: "rule_migration_preview_required",
+        message:
+            "规则集删除需要完整引用预览及固定确认；请使用规则集迁移入口，本请求没有删除或运行操作"
+                .into(),
+        details: None,
+    })
 }
 
 #[tauri::command]

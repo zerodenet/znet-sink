@@ -160,5 +160,6 @@ pub(crate) mod mobile_subscription_scheduler;
 pub mod native_documents;
 pub mod packet_routes;
 pub mod profile_removal;
+pub(crate) mod rule_migration_artifact;
 pub(crate) mod runtime_bridge;
 pub mod settings_transfer;

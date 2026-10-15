@@ -675,35 +675,6 @@ pub fn kernel_payloads(state: State<'_, AppState>) -> AppResult<Vec<RuleSetKerne
         .collect()
 }
 
-pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    let id = normalize_required(id, "id")?;
-    let _in_flight = begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
-    let mut items = lock(state.rule_sets(), "rule_set")?;
-    if items
-        .iter()
-        .any(|item| item.id == id && is_subscription_managed_rule_set(item))
-    {
-        return Err(AppError::invalid_argument(
-            "subscription-managed rules must be removed through their subscription",
-        ));
-    }
-    if items.iter().any(|item| item.id == id && item.built_in) {
-        return Err(AppError::invalid_argument(
-            "built-in rules can be disabled, but not removed",
-        ));
-    }
-    let mut next = items.clone();
-    let before = next.len();
-    next.retain(|item| item.id != id);
-    if next.len() == before {
-        return Err(AppError::not_found("rule_set", id));
-    }
-    // Published generations are intentionally retained: a running kernel may still mmap them.
-    domain_store::save_rule_sets(&next)?;
-    *items = next;
-    Ok(())
-}
-
 fn normalize_source(mut source: RuleSetSource) -> AppResult<RuleSetSource> {
     source.url = normalize_required(source.url, "source.url")?;
     if !source.url.starts_with("https://") && !source.url.starts_with("http://") {

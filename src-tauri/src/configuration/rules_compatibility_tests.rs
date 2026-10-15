@@ -64,3 +64,23 @@ fn explicit_action_does_not_inherit_an_unrelated_final_packet_mode() {
         assert!(result["route"]["rules"][0].get("mode").is_none());
     }
 }
+
+#[test]
+fn explicit_source_references_to_generated_tag_survive_injection_and_recomposition() {
+    let public = profile(CommonRuleAction::Direct);
+    let tag = common_tag(&public.id);
+    let source = json!({"mode":{"type":"rule"},"route":{"rules":[
+        {"condition":{"type":"rule_set","tag":tag},"action":{"type":"reject"},"mode":"flow"}],
+        "bypass":[{"type":"rule_set","tag":tag}],"final":{"type":"direct"}}});
+    let original = source.clone();
+    let composed = compose_with(&source, true, std::slice::from_ref(&public), |_, _| Ok(()))
+        .unwrap()
+        .config;
+    assert_eq!(composed["route"]["rules"].as_array().unwrap().len(), 2);
+    assert_eq!(composed["route"]["rules"][0], source["route"]["rules"][0]);
+    let repeated = compose_with(&composed, true, &[public], |_, _| Ok(()))
+        .unwrap()
+        .config;
+    assert_eq!(repeated, composed);
+    assert_eq!(source, original);
+}

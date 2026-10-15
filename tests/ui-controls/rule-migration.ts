@@ -1,0 +1,24 @@
+import type {MigrationPorts,MigrationSnapshot,MigrationPlan,MigrationStatus} from '../../src/lib/features/rule-migration/types';
+import type {RuleSetSummary,ProxyConfigProfile} from '../../src/lib/types/domain';
+export const sourceName='原规则集 · 这是用于窄屏换行核对的较长来源名称';
+export const targetName='替换公共规则集 · 保留自己的动作与顺序';
+const control={calls:[] as {kind:string;input?:unknown}[],mode:'normal',blocker:'',references:true,noProfile:false,removed:false,version:1,holdPreview:false,holdSave:false,releasePreview:()=>{},releaseSave:()=>{},statusReads:0};
+let sequence=0;
+const plans=new Map<string,{plan:MigrationPlan;receipt:MigrationStatus|null}>();
+const binding=()=>`current-${control.version}-${control.removed?'absent':'present'}`;
+function snapshot(profileId:string,ruleSetId:string):MigrationSnapshot {return{profileId,profileName:'当前普通配置',ruleSetId,ruleSetName:control.removed?null:sourceName,resourceExists:!control.removed,tag:'gui-common-original',binding:binding(),references:!control.removed&&control.references?[{profileId:'main',fieldPath:'/route/rules/0/condition/items/1',tag:'gui-common-original',kind:'route_rule'},{profileId:'main',fieldPath:'/runtime/dns/dispatch/2/condition',tag:'gui-common-original',kind:'dns_dispatch'}]:[],blockers:control.blocker?[{profileId:control.blocker==='cross_profile_reference'?'other':null,profileName:control.blocker==='cross_profile_reference'?'另一个配置':null,reasonCode:control.blocker,reason:'固定测试阻止原因'}]:[],targets:control.removed?[]:[{id:'replacement',name:targetName,tag:'gui-common-replacement',unavailableReason:null}],commonBindingRemoved:true,notice:'宿主测试事实；AppConfig 先发布、RuleSets 后删除，非跨文件原子。',pendingApply:control.removed};}
+function receipt(plan:MigrationPlan,state:MigrationStatus['state']='saved_pending_apply'):MigrationStatus{return{planId:plan.planId,profileId:plan.profileId,ruleSetId:plan.ruleSetId,state,reason:'固定测试阶段事实',appConfigPublished:true,ruleSetRemoved:state==='saved_pending_apply',afterBinding:state==='saved_pending_apply'?binding():null};}
+export const ruleMigrationPorts:MigrationPorts={
+ snapshot:async(profileId,ruleSetId)=>{control.calls.push({kind:'snapshot',input:{profileId,ruleSetId}});return snapshot(profileId,ruleSetId);},
+ preview:async input=>{control.calls.push({kind:'preview',input:structuredClone(input)});if(control.holdPreview)await new Promise<void>(r=>control.releasePreview=r);if(input.binding!==binding())throw{code:'rule_migration_conflict',message:'SECRET_MIGRATION_CANARY'};const current=snapshot(input.profileId,input.ruleSetId);if(current.blockers.length)throw{code:'rule_migration_blocked'};const plan:MigrationPlan={planId:`migration-plan-${++sequence}`,profileId:input.profileId,ruleSetId:input.ruleSetId,ruleSetName:sourceName,targetId:input.targetId,targetName:input.targetId?targetName:null,fromTag:current.tag,toTag:input.targetId?'gui-common-replacement':null,references:structuredClone(current.references),commonBindingRemoved:true,expiresAtUnixMs:String(Date.now()+300000),state:'prepared',notice:'仅迁移固定引用、删除原公共绑定与本地资源；不改变目标动作/顺序，不执行内核。'};plans.set(plan.planId,{plan,receipt:null});return plan;},
+ save:async planId=>{control.calls.push({kind:'save',input:planId});if(control.holdSave)await new Promise<void>(r=>control.releaseSave=r);const stored=plans.get(planId)!;
+  if(control.mode==='partial'){stored.receipt=receipt(stored.plan,'submitted_unknown');throw{code:'io_error',message:'SECRET_MIGRATION_CANARY'};}
+  if(control.mode==='rejected'){stored.receipt={...receipt(stored.plan,'rejected'),appConfigPublished:false,ruleSetRemoved:false,afterBinding:null};return stored.receipt;}
+  control.removed=true;stored.receipt=receipt(stored.plan);if(control.mode==='later-writer')control.version++;if(control.mode==='existing-after')control.removed=false;if(control.mode==='lost')throw{code:'timeout',message:'SECRET_MIGRATION_CANARY'};return stored.receipt;
+ },
+ status:async planId=>{control.calls.push({kind:'status',input:planId});control.statusReads++;const stored=plans.get(planId)!;if(control.mode==='bad-status')return{...stored.receipt!,planId:'wrong'};return stored.receipt??{...receipt(stored.plan,'prepared'),appConfigPublished:false,ruleSetRemoved:false,afterBinding:null};},
+ discard:async planId=>{control.calls.push({kind:'discard',input:planId});},
+};
+export function ruleMigrationList():RuleSetSummary[]{return control.removed?[]:[{id:'original',name:sourceName,enabled:true,builtIn:false,editableRuleCount:1,sourceState:{},updatedAtUnixMs:1,commonBinding:{enabled:true,action:'reject',order:40},artifact:{path:'not-exposed-by-migration',majorVersion:1,minorVersion:0,checksum:1,fileSize:1,entryCount:1,builtAtUnixMs:1}}];}
+export function ruleMigrationProfiles():ProxyConfigProfile[]{return control.noProfile?[]:[{id:'main',name:'当前普通配置',active:true,kernel:'zero',format:'json',updatedAtUnixMs:1,capabilities:{} as ProxyConfigProfile['capabilities']}];}
+Object.assign(window,{ruleMigrationFixture:control});

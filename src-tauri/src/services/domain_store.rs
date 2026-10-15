@@ -193,3 +193,24 @@ pub(crate) fn read_rule_sets_locked(guard: &file_history::Guard) -> AppResult<Ve
     }
     load_rule_sets_body(guard.path())
 }
+
+/// Publish a fixed migration candidate using its original held history guard.
+/// Artifact generations stay on disk: an existing runtime may still map them.
+pub(crate) fn save_rule_sets_owned_locked(
+    guard: &mut file_history::Guard,
+    items: &[RuleSetProfile],
+    owner: &str,
+) -> AppResult<file_history::WriteReceipt> {
+    if guard.domain() != Domain::RuleSets {
+        return Err(AppError::invalid_argument("incorrect file history domain"));
+    }
+    let content = serde_json::to_vec_pretty(items)
+        .map_err(|_| AppError::internal("rule sets encoding failed"))?;
+    let path = guard.path().to_path_buf();
+    guard
+        .mutate(&content, None, Some(owner), || {
+            super::atomic_file::write(&path, &content)
+                .map_err(|_| AppError::internal("rule sets file could not be published"))
+        })
+        .map(|(_, receipt)| receipt)
+}
