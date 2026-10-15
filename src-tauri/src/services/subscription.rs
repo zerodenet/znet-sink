@@ -1,3 +1,4 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, RuleDependencyEvent, ScheduleEvent};
 use std::{collections::HashMap, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -866,26 +867,7 @@ async fn prepare_parsed_subscription(
     }
     let injection = inject_synced_rule_sets(&mut parsed.content, &managed_tags, outcome.artifacts);
     for failure in outcome.failures {
-        logs::znet_log_fields(
-            Some(state),
-            LogLevel::Warn,
-            format!(
-                "subscription rule provider failed; {}",
-                if failure.used_previous_artifact {
-                    "continuing with the last verified ZRS"
-                } else {
-                    "configuration application is blocked until this dependency is available"
-                }
-            ),
-            json!({
-                "schema": "znet.subscription-rule-provider.v1",
-                "operation": "sync",
-                "subscriptionId": subscription.id,
-                "subscriptionName": subscription.name,
-                "usedPreviousArtifact": failure.used_previous_artifact,
-                "routeReferencesRemoved": false,
-            }),
-        );
+        log_rule_provider_failure(state, &subscription.id, &subscription.name, &failure);
     }
 
     injection?;
@@ -1508,6 +1490,39 @@ fn default_user_agent_for_format(format: &str) -> &'static str {
         }
         _ => DEFAULT_USER_AGENT,
     }
+}
+
+fn log_rule_provider_failure(
+    state: &AppState,
+    subscription_id: &str,
+    subscription_name: &str,
+    failure: &rule_set::ManagedRuleSetFailure,
+) {
+    logs::znet_host_log_fields(
+        state,
+        HostEvent::RuleDependency(if failure.used_previous_artifact {
+            RuleDependencyEvent::PreviousArtifactRetained
+        } else {
+            RuleDependencyEvent::ArtifactUnavailable
+        }),
+        LogLevel::Warn,
+        format!(
+            "subscription rule provider failed; {}",
+            if failure.used_previous_artifact {
+                "continuing with the last verified ZRS"
+            } else {
+                "no verified artifact is available for this dependency"
+            }
+        ),
+        json!({
+            "schema": "znet.subscription-rule-provider.v1",
+            "operation": "sync",
+            "subscriptionId": subscription_id,
+            "subscriptionName": subscription_name,
+            "usedPreviousArtifact": failure.used_previous_artifact,
+            "routeReferencesRemoved": false,
+        }),
+    );
 }
 
 fn inject_synced_rule_sets(
@@ -2947,8 +2962,9 @@ pub fn spawn_auto_sync_scheduler(app: AppHandle) {
         {
             Ok(value) => value,
             Err(error) => {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::Subscription(ScheduleEvent::StorageLoadFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"subscriptions"}),
@@ -2967,8 +2983,9 @@ pub fn spawn_auto_sync_scheduler(app: AppHandle) {
             )
             .await
             {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::Subscription(ScheduleEvent::StorageSaveFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"subscriptions"}),
@@ -2992,8 +3009,9 @@ async fn run_auto_sync_pass(
     let due = match collect_due_subscription_attempts(state.inner(), retry_states, now) {
         Ok(attempts) => attempts,
         Err(error) => {
-            logs::znet_log_fields(
-                Some(state.inner()),
+            logs::znet_host_log_fields(
+                state.inner(),
+                HostEvent::Subscription(ScheduleEvent::CollectDueFailed),
                 LogLevel::Warn,
                 format!(
                     "subscription auto-sync: failed to collect due subscriptions: {}",
@@ -3024,8 +3042,9 @@ async fn run_auto_sync_pass(
         match sync_by_id(app, state.inner(), &attempt.id, true).await {
             Ok(profile) => {
                 retry_states.remove(&attempt.id);
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::Subscription(ScheduleEvent::Succeeded),
                     LogLevel::Info,
                     format!(
                         "subscription auto-sync: refreshed '{}' ({} nodes)",
@@ -3044,8 +3063,9 @@ async fn run_auto_sync_pass(
                 );
             }
             Err(error) if error.code == "conflict" => {
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::Subscription(ScheduleEvent::SkippedConflict),
                     LogLevel::Debug,
                     format!(
                         "subscription auto-sync: skipped '{}' because another sync is already running",
@@ -3087,8 +3107,13 @@ async fn run_auto_sync_pass(
                         true,
                     ),
                 };
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::Subscription(if retry_exhausted {
+                        ScheduleEvent::RetryLimitReached
+                    } else {
+                        ScheduleEvent::RetryScheduled
+                    }),
                     LogLevel::Warn,
                     message,
                     json!({
@@ -3903,6 +3928,43 @@ rule-providers:
             "proxies:\n  - {name: HK, type: ss, server: s, port: 1, password: p}\nrules:\n  - RULE-SET,Missing,DIRECT\n",
             "clash",
         ).is_err());
+    }
+
+    #[test]
+    fn diagnostic_unused_failed_provider_does_not_claim_application_is_blocked() {
+        let mut content = json!({"route":{"rule_sets":[{"tag":"Unused","type":"url","format":"zrs","url":"https://provider.invalid/rules"}],
+            "rules":[{"condition":{"type":"domain","values":["example.com"]},"action":{"type":"direct"}}]}});
+        let previous_rules = content["route"]["rules"].clone();
+        let failure = rule_set::ManagedRuleSetFailure {
+            tag: "Unused".into(),
+            message: "secret-canary-provider-error".into(),
+            used_previous_artifact: false,
+        };
+        inject_synced_rule_sets(
+            &mut content,
+            &std::collections::BTreeSet::from([failure.tag.clone()]),
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(content["route"]["rules"], previous_rules);
+        assert!(content["route"]["rule_sets"].as_array().unwrap().is_empty());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        crate::services::log_store::with_test_path(&path, || {
+            let state = AppState::default();
+            log_rule_provider_failure(&state, "source", "source-name", &failure);
+            let reopened = crate::services::log_store::load_recent_from_path(&path, 10).unwrap();
+            assert_eq!(reopened.len(), 1);
+            let event = reopened[0].diagnostic_event.unwrap();
+            assert_eq!(
+                event,
+                HostEvent::RuleDependency(RuleDependencyEvent::ArtifactUnavailable)
+            );
+            assert_eq!(event.public_message(), "规则依赖更新失败，未取得可用产物");
+            assert!(!reopened[0].message.contains("blocked"));
+            assert!(!event.public_message().contains("阻止"));
+            assert!(!serde_json::to_string(&event).unwrap().contains("canary"));
+        });
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use crate::errors::{AppError, AppResult};
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProcessEvent};
 use crate::models::{
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
-    logs::{LogLevel, LogSource},
+    logs::LogLevel,
 };
 use crate::services::{common::lock, logs, system_proxy_guard};
 use crate::state::app_state::AppState;
@@ -123,9 +124,9 @@ fn stop_with_cleanup(
             process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
             process.status.last_error = None;
 
-            let _ = logs::append_entry(
+            let _ = logs::append_host_entry(
                 state.inner(),
-                LogSource::App,
+                HostEvent::Process(ProcessEvent::Stopped),
                 LogLevel::Info,
                 "core process stopped".to_string(),
                 Some(json!({ "pid": pid, "exitCode": status.code() })),
@@ -151,9 +152,9 @@ fn stop_with_cleanup(
             process.status.state = CoreProcessState::Failed;
             process.status.last_error = Some(message.clone());
 
-            let _ = logs::append_entry(
+            let _ = logs::append_host_entry(
                 state.inner(),
-                LogSource::App,
+                HostEvent::Process(ProcessEvent::StopFailed),
                 LogLevel::Error,
                 message.clone(),
                 Some(json!({ "pid": pid })),

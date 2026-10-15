@@ -312,7 +312,7 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
                             state.inner(),
                             &task.plugin_id,
                             &task.component_id,
-                            &format!("scheduled.{}", task.action),
+                            crate::models::logs::PluginAction::ScheduledComponentAction,
                             execution_result,
                         );
                         if let Err(error) = state.plugins().record_schedule_result(

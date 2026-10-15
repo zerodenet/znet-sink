@@ -1,3 +1,4 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, NodeSnapshotEvent};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -211,8 +212,13 @@ fn log_snapshot_refresh(
     runtime_error_code: Option<&str>,
     runtime_error_message: Option<&str>,
 ) {
-    logs::znet_log_fields(
-        Some(state),
+    logs::znet_host_log_fields(
+        state,
+        HostEvent::NodeSnapshot(if runtime_groups_available {
+            NodeSnapshotEvent::Runtime
+        } else {
+            NodeSnapshotEvent::StaticFallback
+        }),
         LogLevel::Debug,
         if runtime_groups_available {
             "节点页面快照刷新完成"
@@ -826,5 +832,35 @@ mod tests {
         assert!(!action_valid("selector"));
         assert!(!action_valid("DIRECT"));
         assert!(!action_valid("block"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn actual_no_profile_snapshot_records_local_fallback_without_trusting_reason_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        crate::services::log_store::with_test_path(&path, || {
+            let state = AppState::default();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let observed = runtime
+                .block_on(snapshot(&state, Some("secret-canary-reason")))
+                .unwrap();
+            assert!(observed.scope.profile_id.is_none());
+            let entries = crate::services::log_store::load_recent_from_path(&path, 10).unwrap();
+            assert_eq!(entries.len(), 1);
+            let event = entries[0].diagnostic_event.unwrap();
+            assert_eq!(
+                event,
+                HostEvent::NodeSnapshot(NodeSnapshotEvent::StaticFallback)
+            );
+            assert!(!serde_json::to_string(&event).unwrap().contains("canary"));
+            assert!(!event.public_message().contains("canary"));
+        });
     }
 }

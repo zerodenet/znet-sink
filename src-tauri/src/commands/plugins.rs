@@ -5,6 +5,7 @@ pub fn plugins_supported() -> bool {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod desktop {
+    use crate::models::logs::PluginAction;
     use crate::{
         errors::AppResult,
         services::plugins::{InstallReview, Review, Snapshot},
@@ -49,7 +50,7 @@ mod desktop {
                 state.inner(),
                 plugin_id,
                 component_id,
-                &format!("sdk.{method:?}"),
+                crate::services::logs::plugin_sdk_action(method),
                 result.as_ref().map(|_| ()),
             );
         }
@@ -169,13 +170,41 @@ mod desktop {
                     state,
                     plugin_id,
                     component_id,
-                    "run",
+                    PluginAction::Run,
                     result.as_ref().map(|_| ()),
                 );
             }
             result
         })
         .await
+    }
+    /// All guest-selected VM action names share one component category. An
+    /// action called "uninstall" or "sdk.SubscriptionApply" is still not the
+    /// owning uninstall command or a typed SDK dispatch.
+    fn invoke_component_with_log(
+        state: &AppState,
+        app: Option<AppHandle>,
+        plugin_id: &str,
+        component_id: &str,
+        action: String,
+        payload: serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        let result = state.plugins().invoke(
+            state.capabilities(),
+            app,
+            plugin_id,
+            component_id,
+            action,
+            payload,
+        );
+        crate::services::logs::plugin_host_event(
+            state,
+            plugin_id,
+            component_id,
+            PluginAction::ComponentAction,
+            result.as_ref().map(|_| ()),
+        );
+        result
     }
     #[tauri::command]
     pub async fn plugins_invoke(
@@ -186,31 +215,7 @@ mod desktop {
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
         blocking(app.clone(), move |state| {
-            let result = state.plugins().invoke(
-                state.capabilities(),
-                Some(app.clone()),
-                &plugin_id,
-                &component_id,
-                action.clone(),
-                payload,
-            );
-            let log_action = if action.len() <= 128
-                && action
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-            {
-                action.as_str()
-            } else {
-                "invalid-action"
-            };
-            crate::services::logs::plugin_host_event(
-                state,
-                &plugin_id,
-                &component_id,
-                log_action,
-                result.as_ref().map(|_| ()),
-            );
-            result
+            invoke_component_with_log(state, Some(app), &plugin_id, &component_id, action, payload)
         })
         .await
     }
@@ -701,12 +706,68 @@ mod desktop {
                 state,
                 &id,
                 "host",
-                "uninstall",
+                PluginAction::Uninstall,
                 result.as_ref().map(|_| ()),
             );
             result
         })
         .await
+    }
+    #[cfg(test)]
+    mod diagnostic_tests {
+        use super::*;
+        #[test]
+        fn guest_known_action_name_collisions_are_only_generic_component_attempts() {
+            use crate::models::logs::{HostDiagnosticEvent, HostOutcome};
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("logs.jsonl");
+            crate::services::log_store::with_test_path(&path, || {
+                let state = AppState::default();
+                for action in [
+                    "run",
+                    "uninstall",
+                    "sdk.SubscriptionApply",
+                    "sdk.SubscriptionMetadataUpdate",
+                    "sdk.SubscriptionSyncComplete",
+                    "sdk.SubscriptionRemove",
+                    "sdk.ProtectedLoad",
+                    "scheduled.secret-canary",
+                ] {
+                    let result = invoke_component_with_log(
+                        &state,
+                        None,
+                        "missing.diagnostic.collision",
+                        "worker",
+                        action.into(),
+                        serde_json::json!({"secret":"secret-canary"}),
+                    );
+                    assert!(
+                        result.is_err(),
+                        "No registered component may execute or gain SDK permission"
+                    );
+                    let entry = state.logs().lock().unwrap().last().unwrap().clone();
+                    assert_eq!(
+                        entry.diagnostic_event,
+                        Some(HostDiagnosticEvent::Plugin {
+                            action: PluginAction::ComponentAction,
+                            outcome: HostOutcome::Failed
+                        })
+                    );
+                }
+                let reopened =
+                    crate::services::log_store::load_recent_from_path(&path, 20).unwrap();
+                assert_eq!(reopened.len(), 8);
+                assert!(reopened
+                    .iter()
+                    .all(|entry| entry.diagnostic_event.is_some_and(|event| matches!(
+                        event,
+                        HostDiagnosticEvent::Plugin {
+                            action: PluginAction::ComponentAction,
+                            ..
+                        }
+                    ))));
+            });
+        }
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

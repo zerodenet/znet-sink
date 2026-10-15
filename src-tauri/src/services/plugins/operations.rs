@@ -153,13 +153,15 @@ fn sdk_dispatcher(
             )
         {
             let state = app.state::<crate::state::app_state::AppState>();
-            let action = observed_method
-                .map_or_else(|| "sdk_call".to_owned(), |method| format!("sdk.{method:?}"));
+            let action = observed_method.map_or(
+                crate::models::logs::PluginAction::ComponentAction,
+                crate::services::logs::plugin_sdk_action,
+            );
             crate::services::logs::plugin_host_event(
                 state.inner(),
                 &plugin_id,
                 &component_id,
-                &action,
+                action,
                 result.as_ref().map(|_| ()),
             );
         }

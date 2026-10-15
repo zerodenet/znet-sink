@@ -32,16 +32,20 @@
 
 `services/diagnostics.rs` 准备最多 2 MiB 的 JSON 文件，只读取：
 
-- 最多最近 1000 条实际日志的来源、级别、时间、ID，以及宿主分类的固定 action/outcome；任意日志字段（包括数字）默认排除。
+- 最多最近 1000 条实际日志的来源、级别、时间、ID，以及宿主封闭事件类型和由该类型重建的固定安全文案；原消息与任意日志字段（包括数字）仍排除。
 - 实际 debug_store 的有界页（最多 512 KiB），包含帧时间、方向、类别、耗时、错误存在事实和截断标记。只有宿主已绑定遥测来源的成功统计回执或规范统计事件导出安全计量结构；Flow/Inner/Outer/Host 平面保留各自结构，同名计量不合并。
 - 当前 ClientScope 的共享 probe/tool 任务类型、状态、真实完成/成功/失败/目标数量及生命周期时间。不创建 UI 私有任务队列。
 - 实际客户端 source 状态、平台契约和捕获回执。实时 Proxy/kernel 健康未读取时明确省略，不以验证组件状态冒充。
 
 `DebugFrame.telemetry` 是宿主内部类型字段，历史记录缺省为 None。protocol 在核对返回 ID 后，从原始且单一的 stats/traffic_stat/traffic_stats QueryRequest 分配查询来源；connection reader 只对规范 zero.event.v1 的 stats.sampled/scopes_sampled/host_interfaces_sampled 事件分配事件来源。请求/命令正文、配置及诊断响应不能通过自报 method 或 payload marker 取得来源。导出还核对接收方向、成功回执、对应 result 分支或事件类型；无来源、失败、形状冲突和有界副本缺计量分别保留明确省略原因及数量，旧帧只导出元数据，不视为零。借用的 typed event 解析忽略原正文，来源判定不复制任意大 payload。
 
-所有普通 `logs::append_entry` 调用（包括公共 append、guest SDK、IPC 与内核记录）移除输入里的保留 provenance marker；私有可信 writer 仅由 `plugin_host_event` 调用并写入固定材料分类。导出只保留有限 action/outcome 枚举，动态 action、SDK参数、错误与身份不进入该分类。guest SDK 字段仍嵌套，不能冒充宿主分类。
+诊断文件 schema 为 `znet.mobile-diagnostics.v3`。`LogEntry.diagnosticEvent` 是宿主内部的封闭枚举，不含自由字符串、任意 JSON、身份、路径或 URL；`LogAppend` 不接受此字段。普通 append、guest SDK、IPC 与内核记录的输入不能给该字段赋值，旧保留 marker 仍移除。只有实际宿主分支通过类型化 writer 选择事件，包含进程创建/就绪/停止/监测、订阅与规则调度、规则依赖、节点快照、测速、旧连接清理以及插件宿主操作。事件记录历史事实，不授予控制权限、不代替当前内核/VPN 健康。
 
-自由消息、任意错误正文、unknown fields、目标标签、subject、params、result、协议私有材料和未经确认的插件组件身份不具备普遍无秘密保证，默认排除。配置正文、订阅 URL/headers/token、凭据与插件秘密不会交付。每个日志来源分别列出省略数量与原因。该材料包含实际安全公共事实，但不称作完整日志正文导出；若要扩展消息，需要在可信宿主 writer 引入可证明安全的事件材料分类，不能凭关键词扫描认定任意消息安全。
+导出核对事件预期来源，`safeMessage` 完全从有限枚举重建；不读取原 `message` 或字段来拼接。动态动作、SDK 参数、错误、进程参数、目标和未经确认的组件身份都不进入安全正文。原消息仍标 `messageOmitted:true`，缺少或来源不符的分类给出省略原因。测速的请求未发送/本地失败与远端结果区分，不把权限错误或未取得结果改为节点不可达。
+
+分类随现有应用私有 JSONL 保存、分页、轮转和重开，不建新的业务队列；旧日志没有分类，旧 marker 不升级为可信事件。未知、畸形或带额外字段的分类只降为无分类，保留其余日志元数据；不会因新版本事件让整页不可读。该信任边界是宿主拥有的私有存储，不提供对可直接修改磁盘主体的密码学真实性保证，也不使用历史分类控制新实例。
+
+自由消息、任意错误正文、unknown fields、目标标签、subject、params、result、协议私有材料和未经确认的插件组件身份不具备普遍无秘密保证，默认排除。配置正文、订阅 URL/headers/token、凭据与插件秘密不会交付。每个日志来源分别列出省略数量与原因。新增固定文案只覆盖已接入的宿主事件，仍不称作完整日志正文导出；扩展分类必须新增可审阅的类型与实际 writer，不能凭关键词扫描认定任意消息安全。
 
 计量字符串 u64 保持十进制字符串，不转为 JS number。历史标为 bounded_client_storage_across_instances，不能据当前 profile 标题断言所有历史帧属于当前内核或配置。帧读取失败显示数量未知及原因，不能展示“真实空记录”。输入先受每域读取预算约束，最终 JSON writer 再限制 2 MiB；超限明确失败，不交付声称完整的截断文件。
 

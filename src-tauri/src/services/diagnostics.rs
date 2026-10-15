@@ -190,52 +190,15 @@ pub(crate) fn strip_untrusted_marker(fields: &mut Option<Value>) {
         object.remove(HOST_MARKER);
     }
 }
-pub(crate) fn host_telemetry(action: &str, outcome: &str) -> Value {
-    let action = match action {
-        "run" => "run",
-        "uninstall" => "uninstall",
-        "sdk.SubscriptionApply" => "managed-subscription-apply",
-        "sdk.SubscriptionMetadataUpdate" => "managed-subscription-metadata",
-        "sdk.SubscriptionSyncComplete" => "managed-subscription-sync",
-        "sdk.SubscriptionRemove" => "managed-subscription-remove",
-        "sdk.ProtectedLoad" => "protected-material-load",
-        action if action.starts_with("scheduled.") => "scheduled-component-action",
-        _ => "component-action",
-    };
-    if !matches!(outcome, "ok" | "failed") {
-        return Value::Null;
-    }
-    json!({"schema":"host-action-outcome.v1","action":action,"outcome":outcome})
-}
-fn host_facts(marker: &Value) -> Option<Value> {
-    let action = marker["action"].as_str()?;
-    let outcome = marker["outcome"].as_str()?;
-    if marker["schema"] != "host-action-outcome.v1"
-        || ![
-            "run",
-            "uninstall",
-            "managed-subscription-apply",
-            "managed-subscription-metadata",
-            "managed-subscription-sync",
-            "managed-subscription-remove",
-            "protected-material-load",
-            "scheduled-component-action",
-            "component-action",
-        ]
-        .contains(&action)
-        || !matches!(outcome, "ok" | "failed")
-    {
-        return None;
-    }
-    Some(json!({"action":action,"outcome":outcome}))
-}
 fn log(entry: &LogEntry) -> Value {
-    let host_facts = entry
-        .fields
-        .as_ref()
-        .and_then(|fields| fields.get(HOST_MARKER))
-        .and_then(host_facts);
-    json!({"id":entry.id.to_string(),"occurredAtUnixMs":entry.occurred_at_unix_ms.to_string(),"source":entry.source,"level":entry.level,"hostFacts":host_facts,"messageOmitted":true,"rawFieldsOmitted":true})
+    let event = entry
+        .diagnostic_event
+        .filter(|event| event.valid_for_source(&entry.source));
+    json!({"id":entry.id.to_string(),"occurredAtUnixMs":entry.occurred_at_unix_ms.to_string(),
+        "source":entry.source,"level":entry.level,"hostFacts":event,
+        "safeMessage":event.map(|event| event.public_message()),
+        "safeMessageOmittedReason":if event.is_some() { None } else { Some("no_matching_host_event_classification") },
+        "messageOmitted":true,"rawFieldsOmitted":true})
 }
 
 fn frame(entry: &DebugFrame) -> Value {
@@ -309,7 +272,7 @@ pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
         omission(
             "rawLogFields",
             log_total as u64,
-            "原始字段即使是数字也不视为可信公共事实；仅保留宿主分类的固定action/outcome",
+            "原始字段即使是数字也不视为可信公共事实；仅保留宿主封闭枚举分类及其重新生成的固定文案",
         ),
         unknown_omission(
             "configurationAndSecrets",
@@ -322,7 +285,7 @@ pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
         "该快照仅包含真实客户端/平台状态，未读取实时Proxy健康；不会用验证组件或UI布尔值代替",
     ));
     for (source, count) in ["app", "core", "plugin"].into_iter().zip(source_counts) {
-        omissions.push(omission(&format!("{source}LogTextAndUnknownFields"),count,"只导出存储来源、级别、时间及宿主分类的固定action/outcome；任意字段和未经宿主确认的组件身份不导出"));
+        omissions.push(omission(&format!("{source}LogTextAndUnknownFields"),count,"只导出存储来源、级别、时间及匹配来源的宿主封闭枚举和固定文案；任意字段、原始正文和组件身份不导出"));
     }
     if log_total > logs.len() {
         omissions.push(omission(
@@ -397,7 +360,7 @@ pub(crate) fn preview(state: &AppState) -> AppResult<DiagnosticPreview> {
         config_revision: scope.config_revision.0.to_string(),
         client_instance_id: scope.core_instance_id.0.to_string(),
     };
-    let document = json!({"schemaVersion":"znet.mobile-diagnostics.v2","createdAtUnixMs":now.to_string(),"appVersion":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"scope":public_scope,"platformContract":crate::mobile_host::snapshot(),"clientSourceStatus":state.client_core_snapshot().source_status,"historyScope":"bounded_client_storage_across_instances","capture":crate::models::debug::capture_status(),"logs":logs,"frames":frames,"tasks":tasks,"omissions":omissions});
+    let document = json!({"schemaVersion":"znet.mobile-diagnostics.v3","createdAtUnixMs":now.to_string(),"appVersion":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"scope":public_scope,"platformContract":crate::mobile_host::snapshot(),"clientSourceStatus":state.client_core_snapshot().source_status,"historyScope":"bounded_client_storage_across_instances","capture":crate::models::debug::capture_status(),"logs":logs,"frames":frames,"tasks":tasks,"omissions":omissions});
     let bytes = bounded_document(&document)?;
     state.ensure_client_scope(Some(&scope))?;
     let mut random = [0u8; 16];
@@ -651,30 +614,110 @@ mod tests {
         assert!(frame(&entry)["facts"].is_null());
     }
     #[test]
-    fn guest_cannot_forge_host_classification_and_arbitrary_numeric_log_fields_are_not_public() {
-        let mut fields =
-            Some(json!({"rx_bytes":123456789,"__znetHostDiagnosticV1":host_telemetry("run","ok")}));
+    fn legacy_marker_cannot_promote_persisted_or_guest_text() {
+        let mut fields = Some(json!({"rx_bytes":123456789,"__znetHostDiagnosticV1":
+            {"schema":"host-action-outcome.v1","action":"run","outcome":"ok"}}));
+        let original = fields.clone();
         strip_untrusted_marker(&mut fields);
         assert!(fields.as_ref().unwrap().get(HOST_MARKER).is_none());
-        let entry = LogEntry {
-            id: 1,
-            source: crate::models::logs::LogSource::Plugin,
-            level: crate::models::logs::LogLevel::Info,
-            message: "canary-secret".into(),
-            fields,
-            occurred_at_unix_ms: 1,
+        for fields in [fields, original] {
+            let entry = LogEntry {
+                diagnostic_event: None,
+                id: 1,
+                source: crate::models::logs::LogSource::Plugin,
+                level: crate::models::logs::LogLevel::Info,
+                message: "canary-secret".into(),
+                fields,
+                occurred_at_unix_ms: 1,
+            };
+            let output = log(&entry);
+            assert!(output["hostFacts"].is_null());
+            assert!(output["safeMessage"].is_null());
+            assert!(!output.to_string().contains("123456789"));
+            assert!(!output.to_string().contains("canary"));
+        }
+    }
+    #[test]
+    fn actual_host_log_export_uses_fixed_copy_and_rejects_source_mismatch() {
+        use crate::models::logs::{
+            HostDiagnosticEvent as Event, HostOutcome, LogLevel, LogSource, NodeSnapshotEvent,
+            PluginAction, ProbeEvent, ProcessEvent, ScheduleEvent,
         };
-        let output = log(&entry);
-        assert!(output["hostFacts"].is_null());
-        assert!(!output.to_string().contains("123456789"));
-        assert!(!output.to_string().contains("canary"));
-        assert_eq!(
-            host_telemetry("scheduled.secret-canary", "failed")["action"],
-            "scheduled-component-action"
-        );
-        assert_eq!(
-            host_facts(&host_telemetry("run", "ok")).unwrap(),
-            json!({"action":"run","outcome":"ok"})
-        );
+        let directory = tempfile::tempdir().unwrap();
+        crate::services::log_store::with_test_path(&directory.path().join("logs.jsonl"), || {
+            let state = AppState::default();
+            for event in [
+                Event::Process(ProcessEvent::Started),
+                Event::Subscription(ScheduleEvent::RetryScheduled),
+                Event::RuleSet(ScheduleEvent::RuntimeRecomposeFailed),
+                Event::NodeSnapshot(NodeSnapshotEvent::StaticFallback),
+                Event::NodeProbe(ProbeEvent::Unreachable),
+                Event::PreviousConnectionCleanupIncomplete,
+                Event::Plugin {
+                    action: PluginAction::ManagedSubscriptionApply,
+                    outcome: HostOutcome::Failed,
+                },
+            ] {
+                let mut entry=crate::services::logs::append_host_entry(&state,event,LogLevel::Info,
+                    "secret-canary https://private.example/?opaque=private-token".into(),
+                    Some(json!({"rx_bytes":87654321,"message":"secret-canary","reason":"private-token","config":{"value":"secret-canary"}}))).unwrap();
+                let exported = log(&entry);
+                assert_eq!(exported["safeMessage"], event.public_message());
+                assert!(!exported["hostFacts"].is_null());
+                assert_eq!(exported["messageOmitted"], true);
+                assert_eq!(exported["rawFieldsOmitted"], true);
+                for canary in [
+                    "secret-canary",
+                    "private-token",
+                    "87654321",
+                    "private.example",
+                ] {
+                    assert!(!exported.to_string().contains(canary));
+                }
+                entry.source = if event.source() == LogSource::Plugin {
+                    LogSource::App
+                } else {
+                    LogSource::Plugin
+                };
+                let rejected = log(&entry);
+                assert!(rejected["hostFacts"].is_null());
+                assert!(rejected["safeMessage"].is_null());
+                assert_eq!(
+                    rejected["safeMessageOmittedReason"],
+                    "no_matching_host_event_classification"
+                );
+            }
+        });
+    }
+    #[test]
+    fn real_preview_freezes_typed_log_copy_without_exporting_later_or_original_text() {
+        use crate::models::logs::{HostDiagnosticEvent as Event, LogLevel, ProcessEvent};
+        let directory = tempfile::tempdir().unwrap();
+        crate::services::log_store::with_test_path(&directory.path().join("logs.jsonl"), || {
+            let state = AppState::default();
+            crate::services::logs::append_host_entry(
+                &state,
+                Event::Process(ProcessEvent::Started),
+                LogLevel::Info,
+                "secret-canary-original".into(),
+                Some(json!({"token":"secret-canary-field"})),
+            )
+            .unwrap();
+            let prepared = preview(&state).unwrap();
+            crate::services::logs::append_host_entry(
+                &state,
+                Event::Process(ProcessEvent::Stopped),
+                LogLevel::Info,
+                "secret-canary-later".into(),
+                None,
+            )
+            .unwrap();
+            let bytes = take(&state, &prepared.plan_id).unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["logs"].as_array().unwrap().len(), 1);
+            assert_eq!(value["logs"][0]["safeMessage"], "内核进程已启动");
+            assert!(!String::from_utf8(bytes).unwrap().contains("secret-canary"));
+            assert!(take(&state, &prepared.plan_id).is_err());
+        });
     }
 }

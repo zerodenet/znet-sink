@@ -30,9 +30,42 @@ Rust fmt、workspace all-targets/all-features check、全特性 tests 与 clippy
 测试 1116 通过、0 失败、7 ignored，已有警告仍保留。
 
 新的真实 Gradle release collect 已通过，68 Maven 与 6 本地项目的实际归档/POM 摘要
-和原文材料可合并；APK build/receipt 与提交 CI 独立核对，不把旧 APK 或上述源级检查
-当作本批产物。Swift 在 Linux 只核对实际 locked 源材料，Apple 编译仍需对应 CI；
+和原文材料可合并。许可批次 `0d20849` 与 SDK 修复 `a55e84b` 的云端无签名 APK
+已实际构建并通过 final receipt：50,117,939 字节、arm64-v8a、min API24 / target36、
+`org.zerodenet.znetsink`，Native IO 已包含；500 项、484 份唯一正文、4 项明确限制。
+APK SHA-256 为 `4dafb7a8b2c8f634cdcc313ed8b2d5f59a111951828df06977e472f3671818fa`。
+后续日志源码改动不借此产物宣称已打包，其最终 commit 仍由对应 CI 重新构建。
+
+`a55e84b` 的 Native documents CI 已成功完成 Android library、Swift policy 8 项测试
+与真实无签名 UIKit Simulator SDK 构建（arm64/x86_64）。SDK 清单各 9 项、3 项明确缺口，
+没有称作 iPhone app/provider 产物。之前 `0d20849` 的 Apple 测试错误依赖 runner SDK
+自动发现，导致实际 UIKit 步骤跳过；修复将显式 metadata 与隐式发现隔离，并校验同时
+给出的 SDK root 原始字节匹配，补入跨平台执行的 Darwin 分支 fixture。
 没有 iPhone、Galaxy S8、VPN 服务/扩展和设备网络验收。
+
+## 2026-10-15：宿主类型化的诊断日志正文
+
+诊断文件使用 `znet.mobile-diagnostics.v3`。真实进程、调度、节点、测速、旧连接清理
+和插件宿主路径通过不含自由字符串/任意 JSON 的封闭事件提供固定 `safeMessage`；原消息、
+动态字段及未确认的身份仍排除。普通 RPC、Core 和 guest 日志不授予分类；来源不符、
+旧 marker、未知或畸形持久分类只保留可读元数据，不升级为当前运行事实。
+
+插件分类来自实际 Run/Uninstall、SDK typed Method 或调度调用点；generic invoke 固定
+ComponentAction，名称碰巧叫 `sdk.SubscriptionApply` 或 `uninstall` 也不会借用其语义。
+规则依赖缺产物只记录 ArtifactUnavailable；未使用的 provider 更新失败仍可通过真实配置
+注入校验，不声称一定阻止配置应用。测速本地失败不标为远端不可达。
+
+最终 focused 39 项、JSONL store 11 项及既有被引用 provider 缺失拒绝回归 1 项通过。
+覆盖真实通用 invoke 的 8 个同名碰撞、6 个 SDK 类型映射、未使用 provider、RPC/普通入口
+伪造、混合秘密 canary、source 冲突、JSONL 轮转重开与固定 preview/take。独立只读复核
+已核对调用点、SDK desktop 条件编译和两项事实问题的修复。最终 Rust fmt、workspace
+all-targets/all-features check、全特性 tests、clippy 及实际 license build-hook fixture
+通过；tests 为 1129 通过、0 失败、7 ignored（45 组）。完整前端验证、后续权限/归属和
+115 项移动语义回归通过。准确提交 CI 在交付前另外核对；旧 APK 仅证明前一许可批次，
+不作为这批日志源码的手机验收。
+
+分类持久化沿用应用私有日志；它不提供对直接改磁盘主体的密码学真实性，也不用于控制
+内核、恢复旧任务或判断当前 VPN 健康。其他自由正文保持省略，仍有真机后台/分享等验收缺口。
 
 ## 本次代码
 

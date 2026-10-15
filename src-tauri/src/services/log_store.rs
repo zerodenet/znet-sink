@@ -282,7 +282,28 @@ pub fn rotate_path(path: &Path, limit: usize) -> AppResult<()> {
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_LOG_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+/// Exercise actual writers without process-wide environment changes or sharing
+/// a history file with concurrent tests. Never compiled into application builds.
+#[cfg(test)]
+pub(crate) fn with_test_path<T>(path: &Path, action: impl FnOnce() -> T) -> T {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_LOG_PATH.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_LOG_PATH.with(|slot| slot.replace(Some(path.to_owned()))));
+    action()
+}
 fn logs_path() -> AppResult<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_LOG_PATH.with(|slot| slot.borrow().clone()) {
+        return Ok(path);
+    }
     Ok(data_dir()?.join(LOGS_FILE))
 }
 
@@ -308,6 +329,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source,
                     level: LogLevel::Info,
@@ -344,6 +366,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::App,
                     level: LogLevel::Info,
@@ -373,6 +396,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::Core,
                     level: LogLevel::Error,
@@ -407,6 +431,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::App,
                 level: LogLevel::Info,
@@ -433,6 +458,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: if id % 2 == 0 {
                         LogSource::Core
@@ -486,6 +512,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id,
                     source: LogSource::App,
                     level: LogLevel::Info,
@@ -542,6 +569,7 @@ mod tests {
             append_to_path(
                 &path,
                 &LogEntry {
+                    diagnostic_event: None,
                     id: index as u64 + 1,
                     source: LogSource::Core,
                     level,
@@ -585,6 +613,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::Core,
                 level: LogLevel::Info,
@@ -611,6 +640,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 1,
                 source: LogSource::App,
                 level: LogLevel::Info,
@@ -629,6 +659,7 @@ mod tests {
         append_to_path(
             &path,
             &LogEntry {
+                diagnostic_event: None,
                 id: 2,
                 source: LogSource::Core,
                 level: LogLevel::Error,
@@ -646,5 +677,86 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn closed_host_events_roundtrip_through_real_jsonl_and_rotation() {
+        use crate::models::logs::{HostDiagnosticEvent as Event, ProcessEvent};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        for id in 1..=3 {
+            let entry = LogEntry {
+                id,
+                source: LogSource::App,
+                level: LogLevel::Info,
+                message: "private-original-canary".into(),
+                fields: Some(serde_json::json!({"opaque":"private-field-canary"})),
+                occurred_at_unix_ms: id,
+                diagnostic_event: Some(Event::Process(ProcessEvent::Started)),
+            };
+            append_to_path(&path, &entry).unwrap();
+        }
+        rotate_path(&path, 2).unwrap();
+        let reopened = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(
+            reopened.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.diagnostic_event == Some(Event::Process(ProcessEvent::Started))));
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page
+            .items
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_some()));
+    }
+    #[test]
+    fn unknown_malformed_and_legacy_classification_preserve_history_without_promotion() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        for (index, classification) in [
+            serde_json::Value::Null,
+            serde_json::json!("secret-canary"),
+            serde_json::json!({"kind":"future-secret-canary","event":"started"}),
+            serde_json::json!({"kind":"process","event":"started","extra":"secret-canary"}),
+            serde_json::json!({"kind":"plugin","event":{"action":"run","outcome":"secret-canary"}}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut record = serde_json::json!({"id":index+1,"source":"app","level":"info","message":"historical secret-canary",
+                "fields":{"__znetHostDiagnosticV1":{"schema":"host-action-outcome.v1","action":"run","outcome":"ok"}},"occurredAtUnixMs":1});
+            if index != 0 {
+                record["diagnosticEvent"] = classification;
+            }
+            use std::io::Write as _;
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+                "{}",
+                record
+            )
+            .unwrap();
+        }
+        let reopened = load_recent_from_path(&path, 10).unwrap();
+        assert_eq!(reopened.len(), 5);
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_none()));
+        assert!(reopened
+            .iter()
+            .all(|entry| entry.message == "historical secret-canary"));
+        let page = query_page_from_path(&path, &LogQuery::default()).unwrap();
+        assert_eq!(page.items.len(), 5);
+        assert!(page
+            .items
+            .iter()
+            .all(|entry| entry.diagnostic_event.is_none()));
+        rotate_path(&path, 3).unwrap();
+        assert_eq!(load_recent_from_path(&path, 10).unwrap().len(), 3);
     }
 }

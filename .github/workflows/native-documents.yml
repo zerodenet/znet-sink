@@ -135,6 +135,11 @@ jobs:
               --build-log "$build_log" \
               --output "$evidence/ios-licenses-$triple.json" \
               "${sdk_args[@]}" "${lock_args[@]}" "${artifact_args[@]}"
+            node --input-type=module - "$evidence/ios-licenses-$triple.json" <<'JS'
+          import fs from 'node:fs';
+          const inventory = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          console.log(JSON.stringify({ target: inventory.target, gaps: inventory.gaps }, null, 2));
+          JS
           done < "$evidence/ios-compiler-targets.txt"
       - uses: actions/upload-artifact@v4
         if: always()

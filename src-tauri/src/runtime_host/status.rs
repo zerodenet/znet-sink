@@ -1,7 +1,8 @@
 use crate::errors::AppResult;
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProcessEvent};
 use crate::models::{
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
-    logs::{LogLevel, LogSource},
+    logs::LogLevel,
 };
 use crate::services::{common::lock, logs, system_proxy_guard};
 use crate::state::app_state::AppState;
@@ -83,9 +84,15 @@ pub(super) fn refresh_locked_status(
                     )
                 };
 
-            let _ = logs::append_entry(
+            let _ = logs::append_host_entry(
                 state,
-                LogSource::App,
+                HostEvent::Process(
+                    if process.status.exit_reason == Some(CoreProcessExitReason::Crashed) {
+                        ProcessEvent::Crashed
+                    } else {
+                        ProcessEvent::Exited
+                    },
+                ),
                 level,
                 message,
                 Some(
@@ -101,9 +108,9 @@ pub(super) fn refresh_locked_status(
             process.status.state = CoreProcessState::Failed;
             process.status.last_error = Some(format!("failed to poll core process: {error}"));
 
-            let _ = logs::append_entry(
+            let _ = logs::append_host_entry(
                 state,
-                LogSource::App,
+                HostEvent::Process(ProcessEvent::PollFailed),
                 LogLevel::Error,
                 format!("failed to poll core process: {error}"),
                 Some(serde_json::json!({ "pid": pid })),

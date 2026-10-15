@@ -1,3 +1,4 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ScheduleEvent};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -847,8 +848,9 @@ pub fn spawn_auto_update_scheduler(app: AppHandle) {
         {
             Ok(value) => value,
             Err(error) => {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::RuleSet(ScheduleEvent::StorageLoadFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
@@ -866,8 +868,9 @@ pub fn spawn_auto_update_scheduler(app: AppHandle) {
             )
             .await
             {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::RuleSet(ScheduleEvent::StorageSaveFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
@@ -888,8 +891,9 @@ async fn run_auto_update_pass(
     let due = match collect_due_rule_set_attempts(state.inner(), retry_states, now) {
         Ok(attempts) => attempts,
         Err(error) => {
-            logs::znet_log_fields(
-                Some(state.inner()),
+            logs::znet_host_log_fields(
+                state.inner(),
+                HostEvent::RuleSet(ScheduleEvent::CollectDueFailed),
                 LogLevel::Warn,
                 format!(
                     "rule-set auto-update: failed to collect due assets: {}",
@@ -916,8 +920,9 @@ async fn run_auto_update_pass(
             Ok((profile, changed)) => {
                 retry_states.remove(&attempt.id);
                 if let Err(error) = rule_overlay::reconcile_after_rule_change(app.clone()).await {
-                    logs::znet_log_fields(
-                        Some(state.inner()),
+                    logs::znet_host_log_fields(
+                        state.inner(),
+                        HostEvent::RuleSet(ScheduleEvent::RuntimeRecomposeFailed),
                         LogLevel::Warn,
                         format!(
                             "rule-set auto-update: '{}' was stored but runtime recomposition failed: {}",
@@ -933,8 +938,13 @@ async fn run_auto_update_pass(
                         }),
                     );
                 }
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(if changed {
+                        ScheduleEvent::Updated
+                    } else {
+                        ScheduleEvent::Unchanged
+                    }),
                     LogLevel::Info,
                     format!(
                         "rule-set auto-update: '{}' {}",
@@ -956,8 +966,9 @@ async fn run_auto_update_pass(
                 );
             }
             Err(error) if error.code == "conflict" => {
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(ScheduleEvent::SkippedConflict),
                     LogLevel::Debug,
                     format!(
                         "rule-set auto-update: skipped '{}' because an update is already running",
@@ -999,8 +1010,13 @@ async fn run_auto_update_pass(
                         true,
                     ),
                 };
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(if retry_exhausted {
+                        ScheduleEvent::RetryLimitReached
+                    } else {
+                        ScheduleEvent::RetryScheduled
+                    }),
                     LogLevel::Warn,
                     message,
                     json!({

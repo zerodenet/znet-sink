@@ -1,6 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::core_process::{CoreProcessState, CoreProcessStatus};
-use crate::models::logs::{LogLevel, LogSource};
+use crate::models::logs::LogLevel;
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProcessEvent};
 use crate::services::{common::lock, core_config, local_proxy, logs};
 use crate::state::app_state::AppState;
 use serde_json::json;
@@ -38,9 +39,9 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
 
     if let Err(error) = snapshot.validate_launchable() {
         let message = format!("failed to start core process: {error}");
-        let _ = logs::append_entry(
+        let _ = logs::append_host_entry(
             state.inner(),
-            LogSource::App,
+            HostEvent::Process(ProcessEvent::ConfigurationRejected),
             LogLevel::Error,
             message.clone(),
             Some(json!({
@@ -95,9 +96,9 @@ fn start_inner(app_handle: AppHandle, state: State<'_, AppState>) -> AppResult<C
     if let Ok(Err(error)) = port_check {
         let (proxy_host, proxy_port) = endpoint.as_ref().unwrap();
         let message = error.message.clone();
-        let _ = logs::append_entry(
+        let _ = logs::append_host_entry(
             state.inner(),
-            LogSource::App,
+            HostEvent::Process(ProcessEvent::ProxyPortUnavailable),
             LogLevel::Error,
             format!("core process: {message}"),
             Some(json!({ "host": proxy_host, "port": proxy_port })),

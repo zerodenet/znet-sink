@@ -653,6 +653,7 @@ mod tests {
             Vec::new(),
             vec![
                 LogEntry {
+                    diagnostic_event: None,
                     id: 2,
                     source: LogSource::App,
                     level: LogLevel::Info,
@@ -661,6 +662,7 @@ mod tests {
                     occurred_at_unix_ms: 1,
                 },
                 LogEntry {
+                    diagnostic_event: None,
                     id: 7,
                     source: LogSource::Core,
                     level: LogLevel::Error,
