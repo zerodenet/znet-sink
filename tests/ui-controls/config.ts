@@ -1,3 +1,4 @@
+import {profileEditorListing} from './profile-editor';
 // In-memory fixture only: the UI suite must never call Tauri, DNS or a kernel.
 import type { CommonRuleBindingInput, RuleSetSummary, RuleSetUpsert } from '../../src/lib/types/domain';
 import type { CoreKernelInfo } from '../../src/lib/types/core';
@@ -114,7 +115,7 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
   profiles[0].format = 'json';
   profiles[0].managedSource = {pluginId:'connect',providerId:'provider',remoteSubscriptionId:'company',sourceName:'狗梯'};
 }
-export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profiles); };
+export const listProxyConfigs = async () => { void proxyConfigSignal.revision; return structuredClone(profileEditorListing(profiles)); };
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
 let recoveredOrdinarySource = false;

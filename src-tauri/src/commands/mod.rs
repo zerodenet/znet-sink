@@ -15,6 +15,7 @@ pub mod kernel_version;
 pub mod log_export;
 pub mod logs;
 pub mod platform;
+pub mod profile_editor;
 pub mod proxy_config;
 pub mod proxy_mode;
 pub mod recovery_storage;

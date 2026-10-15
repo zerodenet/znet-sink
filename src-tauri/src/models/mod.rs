@@ -7,6 +7,7 @@ pub mod core_process;
 pub mod dns_config;
 pub mod gui_core;
 pub mod logs;
+pub mod profile_editor;
 pub mod proxy_config;
 pub mod rule_set;
 pub mod subscription;

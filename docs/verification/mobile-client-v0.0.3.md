@@ -702,3 +702,52 @@ Clippy 通过；测试仍为1292/0/7。Clippy 首轮拒绝两处权限测试的�
 修复后本地fmt、locked全workspace/all-target/all-feature check、完整tests及Clippy重新
 通过，仍为1292 passed / 0 failed / 7 ignored（45组）。前端未变，不重复刚通过的
 完整前端验证；新SHA仍重新观察全部CI。日志 `/tmp/client-history-windows-{fmt,tests,check,clippy}.log`。
+
+
+## 2026-10-15：先审计剩余功能，再补普通配置文本编辑
+
+基线 `19682c75dee28e3a11f45b805e5b25b0268f85c7`，仍为同一 Draft PR #46。
+先记录[完整A01–A24完成度/剩余矩阵](../gui/mobile-client-completion-matrix-v0.0.3.md)，
+区分已有客户端链、用户明确后置的原生装配、可独立继续的真实用户功能及外部条件。
+未新增秘密启动临时文件、启动器或假Proxy加载回执；完整冻结启动仍有私有通道/
+实际依赖/原child与watchdog工作，以及需要协调的实际加载绑定事实。
+
+本批新增普通内嵌Zero来源的Rust文本快照、原生schema/引用校验及固定材料本地CAS；
+JS不再将列表Value stringify或parse用户正文。原生校验返回原Value，保留u64及
+被省略的默认字段，不表示逐字节保留JSON排版、修复历史舍入或通过编译协议/平台验收。
+规则集/GeoIP在固定core的parse中可能读取文件，当前入口在此之前明确拒绝，未获授权
+不读、不删字段、不伪称通过。managed/受保护/path-only来源不降级；普通订阅只读。
+新建固定对象保持未启用；编辑保留当前选择、AppConfig及运行代理归属；保存为待应用，
+没有IPC/TUN/运行事务，未知只读核对原固定目标，不重放。
+
+本地locked全workspace/all-features测试 **1314 passed / 0 failed / 7 ignored，45组**；
+GUI lib **1041/0/5**，包含原生文本校验10及本地保存12。覆盖实际SQLite重开、
+最大u64、离线保存、零Unix控制端点连接、完整来源CAS/并发单成功、只读秘密边界、
+实际FIFO在依赖读取前拒绝、文件原文字节及失败后原材料保留。仅Unix测试在Windows
+不会编译为执行项，不能算Windows已覆盖。fmt、locked workspace/all-target/all-feature
+check及同范围Clippy通过，现有非拒绝级警告保留，不称零警告。
+
+首轮Rust测试fixture编译失败是socket字段应为Option<String>；随后原生聚焦9/10，
+DoH域名服务器遗漏固定core要求的bootstrap。补合法文档测试IP后完整全集通过，
+未放宽生产校验。首轮frontend静态测试仍将已移除的文件/JSON分段当消费者，更新
+实际分段消费者集合；第二轮严格订阅harness发现配置服务转导出新增依赖，改为组件
+直接调用独立feature client及专用浏览器alias，不放宽订阅测试或mock。
+
+日志：`/tmp/profile-editor-{fmt-final,check,all-tests,clippy}.log`、
+`/tmp/profile-editor-backend-second.log`、`/tmp/profile-editor-native-second.log`。
+本地前端全集与双引擎/原生构建的最终SHA CI结果在同PR分别追加；任何未运行项
+不借前批成功替代。不改依赖、lockfile或版本，四项许可缺口保持。
+
+新编辑器Node **20/20**；最终Chromium聚焦 **17/17**、0失败/重试/跳过，
+含新编辑器8、原生文档原4、原profiles4、mobile配置1。首轮17中15通过，2项是
+测试对同名关闭按钮的严格定位冲突、试图点击真实禁用关闭；改为明确footer定位并
+通过真实导航guard验证busy阻止离开，未删断言/测试。最终专用fixture完整字段与
+feature client alias均在本次17项执行中使用。完整类型检查0 errors/0 warnings，
+生产构建通过；类型检查曾发现fixture缺领域必填字段及旧switch CSS，已修正。
+日志：`/tmp/profile-editor-node.log`、`/tmp/profile-editor-browser-typedfinal.log`、
+`/tmp/profile-editor-check-frontend-fixed.log`、`/tmp/profile-editor-build-final.log`。
+本地WebKit未运行；Chromium宿主事实fixture不等于系统文件提供者、SQLite或真机验收。
+
+最终源码的完整 `pnpm verify:frontend` 已从头重跑通过，日志
+`/tmp/profile-editor-frontend-verified.log`，含全部功能回归、新Node20、许可检查、
+0错误/0警告类型检查及生产构建。没有将前轮失败命令记为通过。

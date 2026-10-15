@@ -104,7 +104,6 @@ const segmentedConsumers = [
   'src/lib/components/tabs/NodesToolbar.svelte',
   'src/lib/components/tabs/SubscriptionsTab.svelte',
   'src/lib/components/tabs/RulesTab.svelte',
-  'src/lib/components/tabs/ProfilesTab.svelte',
   'src/lib/components/core/LogPanel.svelte',
 ].map(read);
 assert.ok(
