@@ -29,11 +29,11 @@ fn remote(manager: &Manager) -> AppResult<Remote<'_>> {
 
 impl Host {
     pub fn catalog(&self, manager: &Manager) -> AppResult<Vec<Registration>> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         Ok(io::directory(manager)?.plugins)
     }
     pub fn releases(&self, manager: &Manager, id: &str) -> AppResult<Vec<Release>> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
         remote(manager)?
@@ -48,7 +48,7 @@ impl Host {
         approval_digest: Option<&str>,
         progress: impl Fn(crate::services::download::Progress),
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
         let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {
@@ -75,7 +75,7 @@ impl Host {
         tag: &str,
         progress: impl Fn(crate::services::download::Progress),
     ) -> AppResult<InstallReview> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
         let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {

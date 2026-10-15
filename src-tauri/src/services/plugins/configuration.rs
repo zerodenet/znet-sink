@@ -59,6 +59,7 @@ fn read(root: &Path) -> AppResult<State> {
 }
 
 fn write(root: &Path, state: &State) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     let bytes = serde_json::to_vec(state)
         .map_err(|error| AppError::internal(format!("无法序列化插件配置：{error}")))?;
     if bytes.len() > MAX_BYTES {
@@ -76,12 +77,5 @@ pub(super) fn values(root: &Path, key: &str) -> AppResult<BTreeMap<String, Strin
 pub(super) fn save(root: &Path, key: &str, values: BTreeMap<String, String>) -> AppResult<()> {
     let mut state = read(root)?;
     state.components.insert(key.to_owned(), values);
-    write(root, &state)
-}
-
-pub(super) fn remove_plugin(root: &Path, plugin_id: &str) -> AppResult<()> {
-    let mut state = read(root)?;
-    let prefix = format!("{plugin_id}/");
-    state.components.retain(|key, _| !key.starts_with(&prefix));
     write(root, &state)
 }

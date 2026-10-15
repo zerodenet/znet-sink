@@ -145,6 +145,7 @@ fn save_metadata(
     plugin_id: &str,
     metadata: &Metadata,
 ) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     if metadata.state_schema == 0 || metadata.cache_schema == 0 {
         return Err(AppError::invalid_argument("插件命名空间版本无效"));
     }
@@ -206,6 +207,7 @@ fn save(
     area: Area,
     values: &Values,
 ) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     validate(values, area)?;
     let directory = directory(root, publisher, plugin_id)?;
     let bytes = serde_json::to_vec(values).map_err(io::failure)?;
@@ -369,29 +371,13 @@ pub(super) fn apply_runtime_updates(
     save(root, publisher, plugin_id, Area::State, &values)
 }
 
-pub(super) fn remove_plugin(root: &Path, publisher: &str, plugin_id: &str) -> AppResult<()> {
-    let path = directory(root, publisher, plugin_id)?;
-    reject_symlink(&path)?;
-    if path.exists() {
-        fs::remove_dir_all(path).map_err(io::failure)?;
-    }
-    Ok(())
-}
-
 impl Host {
     pub(super) fn namespace_publisher(&self, plugin_id: &str) -> AppResult<String> {
-        self.state
-            .lock()
-            .unwrap()
-            .loaded
-            .values()
-            .find(|loaded| loaded.component.manifest().plugin_id == plugin_id)
-            .map(|loaded| loaded.publisher_fingerprint.clone())
-            .ok_or_else(|| AppError::invalid_argument("插件未安装或尚未完成校验"))
+        self.ensure_installation_current(plugin_id)
     }
 
     pub fn storage_get(&self, plugin_id: &str, area: Area, key: &str) -> AppResult<Option<String>> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         get(&self.root()?, &publisher, plugin_id, area, key)
     }
@@ -403,19 +389,19 @@ impl Host {
         key: String,
         value: String,
     ) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         put(&self.root()?, &publisher, plugin_id, area, key, value)
     }
 
     pub fn storage_delete(&self, plugin_id: &str, area: Area, key: &str) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         delete(&self.root()?, &publisher, plugin_id, area, key)
     }
 
     pub fn storage_list(&self, plugin_id: &str, area: Area) -> AppResult<Vec<String>> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         list(&self.root()?, &publisher, plugin_id, area)
     }
@@ -425,13 +411,13 @@ impl Host {
         plugin_id: &str,
         area: Area,
     ) -> AppResult<(u32, BTreeMap<String, String>)> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         export(&self.root()?, &publisher, plugin_id, area)
     }
 
     pub fn storage_clear(&self, plugin_id: &str, area: Area) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         clear(&self.root()?, &publisher, plugin_id, area)
     }
@@ -444,7 +430,7 @@ impl Host {
         to: u32,
         values: BTreeMap<String, String>,
     ) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let publisher = self.namespace_publisher(plugin_id)?;
         migrate(&self.root()?, &publisher, plugin_id, area, from, to, values)
     }

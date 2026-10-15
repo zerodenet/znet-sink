@@ -12,6 +12,7 @@ pub(crate) mod page_channel;
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
+pub(crate) mod uninstall;
 mod vault;
 use crate::errors::{AppError, AppResult};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -51,6 +52,7 @@ pub struct Host {
     callbacks: callback::Store,
     sensitive: sensitive::Store,
     page_documents: page_channel::Store,
+    uninstalls: uninstall::Owner,
 }
 #[derive(Default)]
 struct State {
@@ -60,6 +62,7 @@ struct State {
     notices: Vec<String>,
 }
 struct Loaded {
+    installation_generation: u64,
     component: Arc<Component>,
     authority: Option<Authority>,
     name: String,
@@ -198,6 +201,14 @@ impl Host {
         }
     }
     fn restore_cached(&self, manager: &Manager) {
+        let Ok(root) = self.root() else {
+            return;
+        };
+        // Reserve before restore mutex: normal operations call snapshot while
+        // holding the root guard, so reverse ordering could deadlock.
+        let Ok(_root_guard) = uninstall::storage::RootGuard::acquire(&root) else {
+            return;
+        };
         let _restore = self.restore.lock().unwrap();
         if self.state.lock().unwrap().directory.is_some() {
             return;
@@ -250,12 +261,18 @@ impl Host {
         let mut next_pages = BTreeMap::new();
         let mut notices = Vec::new();
         for id in ids {
+            if self.uninstall_available(&id).is_err() {
+                notices.push("原插件卸载尚未解决，组件保持停用；请查看卸载记录".into());
+                continue;
+            }
             let package = directory.find(&id).and_then(|registration| {
                 store
-                    .current(registration)
-                    .map(|package| (registration, package))
+                    .review_uninstall(registration)
+                    .map(|(review, package)| {
+                        (registration, review.installation_generation, package)
+                    })
             });
-            let (registration, package) = match package {
+            let (registration, installation_generation, package) = match package {
                 Ok(value) => value,
                 Err(_) => {
                     notices.push(format!(
@@ -277,6 +294,13 @@ impl Host {
             for component in package.components {
                 let manifest = component.manifest();
                 let key = format!("{}/{}", manifest.plugin_id, manifest.component_id);
+                if state
+                    .loaded
+                    .get(&key)
+                    .is_some_and(|l| l.installation_generation != installation_generation)
+                {
+                    manager.remove_component(&key);
+                }
                 let configuration = configuration::values(&self.root()?, &key)?;
                 let declaration: BTreeSet<_> = manifest
                     .required
@@ -317,6 +341,7 @@ impl Host {
                     None
                 };
                 let mut loaded = Loaded {
+                    installation_generation,
                     component: Arc::new(component),
                     authority: None,
                     name: registration.name.chars().take(128).collect(),

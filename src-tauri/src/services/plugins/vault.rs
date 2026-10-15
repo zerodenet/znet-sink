@@ -100,6 +100,7 @@ fn load(root: &Path, publisher: &str, plugin_id: &str) -> AppResult<Entries> {
 }
 
 fn save(root: &Path, publisher: &str, plugin_id: &str, entries: &Entries) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     if entries.0.len() > MAX_KEYS {
         return Err(AppError::invalid_argument("插件凭据项超过容量限制"));
     }

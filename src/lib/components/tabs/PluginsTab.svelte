@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PluginUninstall from './PluginUninstall.svelte';
   import PluginCatalog from './PluginCatalog.svelte';
   import PluginPageFrame from './PluginPageFrame.svelte';
   import DraggableModal from '$lib/components/DraggableModal.svelte';
@@ -13,9 +14,8 @@
   import { openExternalUrl as openUrl } from '$lib/services/platform';
   import { Choice } from '$lib/components/ui/choice';
   import { Button } from '$lib/components/ui/button';
-  import * as Dialog from '$lib/components/ui/dialog';
   import { getAppErrorInfo } from '$lib/services/core';
-  import { pluginApi, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot } from '$lib/services/plugins';
+  import { pluginApi, readPluginUninstallObservations, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot } from '$lib/services/plugins';
   import { canApprove, initialPermissionSelection, requiredPermissionSelection, selectedGrants, supportedPermissionSelection, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
   import * as toast from '$lib/services/toast.svelte';
   import { pluginNavigation, type PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
@@ -274,6 +274,12 @@
     configurationErrors = {};
     message = ''; error = ''; clearResult();
   }
+  async function uninstallChanged() {
+    const next=await readPluginUninstallObservations();
+    if(!alive || !next)return;
+    snapshot=next;
+    if(selectedPluginId && !next.components.some(component=>component.plugin_id===selectedPluginId))selectedPluginId=null;
+  }
   function closeDetails() {
     selectedPluginId = null;
     initialRoute = null;
@@ -442,6 +448,7 @@
     </div>
   {/if}
 
+  <div class="plugin-uninstall-entry"><Button variant="outline" size="sm" onclick={() => { removePlugin=null;removeOpen=true; }}>卸载记录</Button></div>
   {#if supported === null}<div class="plugins-empty" role="status">正在读取插件状态…</div>
   {:else if !supported}<div class="plugins-empty"><Puzzle size={28} />当前设备尚未开放插件运行。</div>
   {:else if selectedPlugin}
@@ -529,7 +536,7 @@
           </div>
           <dl><div><dt>插件 ID</dt><dd title={selectedPlugin.id}>{selectedPlugin.id}</dd></div><div><dt>发布者</dt><dd>{selectedPlugin.publisher}</dd></div>{#if selectedPlugin.license}<div><dt>许可证</dt><dd>{selectedPlugin.license}</dd></div>{/if}<div><dt>组件</dt><dd>{selectedPlugin.components.map(componentLabel).join('、')}</dd></div></dl>
           <div class="plugin-about-links">{#if selectedPlugin.repository}<Button variant="outline" size="sm" onclick={() => openExternal(selectedPlugin.repository)}><ExternalLink size={14} />代码仓库</Button>{/if}{#if selectedPlugin.documentation}<Button variant="outline" size="sm" onclick={() => openExternal(selectedPlugin.documentation)}><ExternalLink size={14} />使用文档</Button>{/if}{#if selectedPlugin.homepage}<Button variant="outline" size="sm" onclick={() => openExternal(selectedPlugin.homepage)}><ExternalLink size={14} />主页</Button>{/if}</div>
-          <div class="plugin-danger-zone"><div><strong>卸载插件</strong><p>移除全部组件、配置、插件状态、缓存和已批准权限。</p></div><Button variant="destructive" size="sm" disabled={busy || runningKey !== null} onclick={() => { removePlugin = selectedPlugin; removeOpen = true; }}><Trash2 size={14} />卸载</Button></div>
+          <div class="plugin-danger-zone"><div><strong>卸载插件</strong><p>先预览固定归属资源及依赖，确认后逐项处理；保留项与未确认结果会单独列出。</p></div><Button variant="destructive" size="sm" disabled={busy || runningKey !== null} onclick={() => { removePlugin = selectedPlugin; removeOpen = true; }}><Trash2 size={14} />卸载</Button></div>
         </section>
       {/if}
     </div>
@@ -614,9 +621,7 @@
   </div>
 </DraggableModal>
 
-<Dialog.Root bind:open={removeOpen}>
-  <Dialog.Content class="sm:max-w-[420px]"><Dialog.Header><Dialog.Title>卸载插件</Dialog.Title><Dialog.Description>卸载 {removePlugin?.name} 的全部组件，并删除它托管的订阅、关联配置和规则，以及插件状态、缓存和已批准权限。正在使用其配置时将切换到剩余配置；没有可用配置时会停止代理。是否继续？</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { removeOpen = false; }}>取消</Button><Button variant="destructive" onclick={() => { const id = removePlugin?.id; removeOpen = false; if (id) void action(() => pluginApi.uninstall(id), '插件已卸载').then(success => { if (success) selectedPluginId = null; }); }}>卸载</Button></Dialog.Footer></Dialog.Content>
-</Dialog.Root>
+<PluginUninstall open={removeOpen} pluginId={removePlugin?.id ?? null} onClose={() => removeOpen=false} onChanged={uninstallChanged} />
 
 <style>
   .plugin-permission-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted-foreground); font-size: 11px; }

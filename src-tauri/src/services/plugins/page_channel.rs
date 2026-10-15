@@ -111,7 +111,7 @@ impl Host {
         plugin_id: &str,
         page_id: &str,
     ) -> AppResult<PageDocument> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
         let html = self.page(plugin_id, page_id)?;
         let components = self
@@ -220,7 +220,7 @@ impl Host {
         result
     }
     pub fn page_check(&self, manager: &Manager, token: &str) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.rescan_page(manager, token)?;
         self.checked_page_binding(manager, token, None).map(|_| ())
     }
@@ -230,7 +230,7 @@ impl Host {
         token: &str,
         review: &Review,
     ) -> AppResult<PageBinding> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.rescan_page(manager, token)?;
         self.checked_page_binding(manager, token, Some(review))
     }
@@ -244,7 +244,7 @@ impl Host {
         call: &Call,
     ) -> AppResult<(PageBinding, Lease)> {
         super::sdk::validate_page_call(call)?;
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.rescan_page(manager, token)?;
         let doc = self.checked_page_binding(manager, token, Some(review))?;
         let component_id = review

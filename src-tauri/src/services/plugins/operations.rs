@@ -188,7 +188,7 @@ impl Host {
     }
 
     pub fn refresh(&self, manager: &Manager) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let directory = match io::directory(manager) {
             Ok(directory) => directory,
             Err(error) => return Err(error),
@@ -205,7 +205,7 @@ impl Host {
         review: Review,
         grants: Vec<Request>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
         if grants.iter().any(|request| !supported(request)) {
             return Err(AppError::invalid_argument("所选权限尚未开放"));
@@ -303,7 +303,7 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn stop(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -324,7 +324,7 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn revoke_permissions(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -354,8 +354,11 @@ impl Host {
         review: Review,
         app: Option<tauri::AppHandle>,
     ) -> AppResult<serde_json::Value> {
+        let plugin = review.key.split_once('/').ok_or_else(stale)?.0;
+        let _activity = self.activity_checked(manager, plugin)?;
+
         let (component, authority, configuration) = {
-            let _operation = self.operation.lock().unwrap();
+            let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             self.current_review(manager, &review).map_err(|_| {
                 super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
@@ -479,6 +482,8 @@ impl Host {
         cancelled: Arc<AtomicBool>,
         injected_dispatcher: Option<runtime::HostSdkDispatcher>,
     ) -> AppResult<serde_json::Value> {
+        let _activity = self.activity_checked(manager, plugin_id)?;
+
         if action.is_empty()
             || action.len() > 128
             || !action
@@ -489,7 +494,7 @@ impl Host {
             return Err(AppError::invalid_argument("插件页面操作参数无效"));
         }
         let (component, authority, configuration, publisher, plugin_state, binding) = {
-            let _operation = self.operation.lock().unwrap();
+            let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             if cancelled.load(Ordering::Acquire) {
                 return Err(super::sdk::invocation_failure(
@@ -576,7 +581,7 @@ impl Host {
         if envelope.znet_plugin_result != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
@@ -606,11 +611,17 @@ impl Host {
         action: String,
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
+        let _activity = self.activity_checked(
+            app.state::<crate::state::app_state::AppState>()
+                .capabilities(),
+            plugin_id,
+        )?;
+
         if !action.starts_with("lifecycle.scheduled.") {
             return Err(AppError::invalid_argument("插件后台动作无效"));
         }
         let (component, authority, configuration, publisher, plugin_state, binding) = {
-            let _operation = self.operation.lock().unwrap();
+            let _operation = self.operation_guard()?;
             let manager = app.state::<crate::state::app_state::AppState>();
             self.checked_rescan(manager.capabilities())?;
             let key = format!("{plugin_id}/{component_id}");
@@ -673,7 +684,7 @@ impl Host {
         if envelope.znet_plugin_result != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
@@ -766,7 +777,7 @@ impl Host {
         original_review: Option<&Review>,
         cancelled: Arc<AtomicBool>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
         if cancelled.load(Ordering::Acquire) {
             return Err(super::sdk::invocation_failure(
@@ -806,76 +817,20 @@ impl Host {
         }
         Ok(self.snapshot(manager))
     }
+    #[cfg(test)]
     pub fn uninstall(
         &self,
-        manager: &Manager,
-        id: &str,
-        cleanup: impl FnOnce() -> AppResult<()>,
+        _manager: &Manager,
+        _id: &str,
+        _cleanup: impl FnOnce() -> AppResult<()>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
-        let (keys, publisher) = {
-            let state = self.state.lock().unwrap();
-            (
-                state
-                    .loaded
-                    .iter()
-                    .filter(|(_, value)| value.component.manifest().plugin_id == id)
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>(),
-                state
-                    .loaded
-                    .values()
-                    .find(|value| value.component.manifest().plugin_id == id)
-                    .map(|value| value.publisher_fingerprint.clone()),
-            )
-        };
-        // Revoke old leases before deleting host-owned projections. Keep the
-        // package and its private data available for retry if cleanup fails.
-        for key in keys {
-            if let Some(loaded) = self.state.lock().unwrap().loaded.get_mut(&key) {
-                local_state::set_enabled(
-                    &self.root()?,
-                    &loaded.publisher_fingerprint,
-                    id,
-                    &loaded.component.manifest().component_id,
-                    false,
-                )?;
-                loaded.consent.enabled = false;
-            }
-            manager.remove_component(&key);
-        }
-        self.remove_plugin_schedules(id)?;
-        self.callbacks.cancel_plugin(id);
-        self.sensitive.clear_plugin(id);
-        if let Err(mut error) = cleanup() {
-            error.message = format!(
-                "卸载清理未完成，插件已停用并保留，请重试：{}",
-                error.message
-            );
-            return Err(error);
-        }
-        io::manage(manager, || self.store()?.uninstall(id).map_err(io::failure))?;
-        configuration::remove_plugin(&self.root()?, id)?;
-        local_state::remove_plugin(&self.root()?, id)?;
-        local_state::remove_local_registration(&self.root()?, id)?;
-        self.remove_plugin_schedules(id)?;
-        self.callbacks.cancel_plugin(id);
-        self.sensitive.clear_plugin(id);
-        self.state.lock().unwrap().directory = local_state::effective_directory(
-            &self.root()?,
-            local_state::load_directory(&self.root()?)?,
-        )?;
-        if let Some(publisher) = publisher {
-            namespace::remove_plugin(&self.root()?, &publisher, id)?;
-        }
-        self.state
-            .lock()
-            .unwrap()
-            .loaded
-            .retain(|_, value| value.component.manifest().plugin_id != id);
-        self.state.lock().unwrap().pages.remove(id);
-        Ok(self.snapshot(manager))
+        Err(AppError {
+            code: "plugin_uninstall_preview_required",
+            message: "卸载必须在主应用预览固定资源并明确确认".into(),
+            details: None,
+        })
     }
+
     fn selected_package(&self, manager: &Manager, path: String) -> AppResult<Vec<u8>> {
         let selected = znet_client_capabilities::files::Selection::from_user_path(path.into());
         let lease = io::lease(manager, BTreeSet::from([selected.permission()]))?;
@@ -884,7 +839,7 @@ impl Host {
             .map_err(io::failure)
     }
     pub fn preview_install(&self, manager: &Manager, path: String) -> AppResult<InstallReview> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
         self.preview_local_bytes(manager, &bytes, &plugin_id)
@@ -895,7 +850,7 @@ impl Host {
         path: String,
         approval_digest: Option<String>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
         self.install_local_bytes(manager, &bytes, &plugin_id, approval_digest.as_deref())
@@ -1175,6 +1130,9 @@ impl Host {
         registration: Registration,
         central_directory: Option<Directory>,
     ) -> AppResult<Snapshot> {
+        self.uninstall_available(&registration.id)?;
+        let _exclusive_activity =
+            super::uninstall::storage::Activity::acquire(&self.root()?, &registration.id, true)?;
         let verified = package::verify(bytes, &registration).map_err(io::failure)?;
         let target = Target::native_desktop().map_err(io::failure)?;
         verified

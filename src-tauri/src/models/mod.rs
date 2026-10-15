@@ -28,6 +28,7 @@ pub mod endpoint_restoration;
 pub mod mobile_release;
 pub mod native_documents;
 pub mod packet_routes;
+pub mod plugin_uninstall;
 pub mod profile_removal;
 pub mod recovery_storage;
 pub mod settings_transfer;

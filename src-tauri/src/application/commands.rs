@@ -153,6 +153,16 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_preview,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_execute,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_status,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_discard,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_uninstall_recent,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_catalog,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_releases,

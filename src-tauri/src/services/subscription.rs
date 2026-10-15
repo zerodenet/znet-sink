@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 mod conditional_sync;
 pub use conditional_sync::{reset_conditional_cache, ConditionalCacheReset};
 #[path = "subscription/plugin_cleanup.rs"]
+#[cfg(test)]
 mod plugin_cleanup;
-pub(crate) use plugin_cleanup::remove_plugin_owned;
 
 #[path = "subscription/sync_complete.rs"]
 mod sync_complete;

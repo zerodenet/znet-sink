@@ -144,6 +144,17 @@ async function fixture(page: Page, discover = false, count = 1, configurable = f
         }
         if (command === 'plugins_stop') { component.enabled = false; component.running = false; component.review.revision++; return state(); }
         if (command === 'plugins_revoke_permissions') { component.enabled = false; component.permissions.forEach(permission => { permission.granted = false; }); component.review.revision++; return state(); }
+        if (command === 'plugins_uninstall_preview') return {
+          planId:'fixture-uninstall-plan',pluginId:component.plugin_id,pluginName:component.name,version:component.version,packageDigest:'digest',publisherId:component.publisher,publisherFingerprint:'fingerprint',hostSessionId:'fixture-host',binding:'fixed-binding',expiresAtUnixMs:String(Date.now()+300000),canExecute:true,blockedReasons:[],activeProfile:null,replacementCandidates:[],requiresManualSwitch:false,requiresStop:false,
+          resources:[{resourceId:'package',kind:'plugin-package',name:'示例插件包',ownership:'verified-package',dependencies:[],protectedReason:null}],notice:'仅删除精确归属资源，物理规则缓存保留。'
+        };
+        if (command === 'plugins_uninstall_execute') {
+          if(args.planId!=='fixture-uninstall-plan'||args.confirmOwnedResources!==true||!/^[0-9a-f]{32}$/.test(args.operationId))throw {code:'plugin_uninstall_preflight_rejected'};
+          calls.push({command,args:structuredClone(args)});installed=false;
+          return {operationId:args.operationId,planId:args.planId,pluginId:component.plugin_id,pluginName:component.name,version:component.version,packageDigest:'digest',publisherFingerprint:'fingerprint',state:'completed',reason:null,startedAtUnixMs:'1788697000000',finishedAtUnixMs:'1788697000001',items:[{resourceId:'package',kind:'plugin-package',name:'示例插件包',state:'completed',reason:null}],canRetry:false,notice:'原操作逐项回执。'};
+        }
+        if (command === 'plugins_uninstall_discard') return;
+        if (command === 'plugins_uninstall_recent') return [];
         if (command === 'plugins_uninstall') { installed = false; return state(); }
         throw new Error(`Unexpected command: ${command}`);
       } },
@@ -176,6 +187,7 @@ test('permissions are explicit and unsupported access cannot be selected; stoppi
   await page.getByRole('radio', { name: '关于', exact: true }).click();
   await page.getByRole('button', { name: '卸载', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('托管的订阅、关联配置和规则');
+  await page.getByRole('dialog').getByRole('checkbox',{name:'确认仅清理以上固定归属资源',exact:true}).check();
   await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click();
   await expect(page.getByText('插件已卸载', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__pluginFixture.calls.some((call: { command: string }) => call.command === 'gui_tun_status'))).toBe(true);

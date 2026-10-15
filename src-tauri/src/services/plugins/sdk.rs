@@ -417,6 +417,7 @@ impl PreparedManagedSubscription {
 }
 
 pub(crate) struct ManagedSubscriptionAuthorization {
+    _activity: super::uninstall::storage::Activity,
     lease: znet_plugin_sandbox::policy::Lease,
     request: Request,
 }
@@ -637,6 +638,7 @@ impl Host {
                 revision: args.revision,
             },
             authorization: ManagedSubscriptionAuthorization {
+                _activity: self.activity_checked(manager, plugin_id)?,
                 lease,
                 request: call.request,
             },
@@ -673,6 +675,7 @@ impl Host {
             subscription_id: args.subscription_id,
             remove_associated_config: args.remove_associated_config,
             authorization: ManagedSubscriptionAuthorization {
+                _activity: self.activity_checked(manager, plugin_id)?,
                 lease,
                 request: call.request,
             },
@@ -713,6 +716,7 @@ impl Host {
                 usage: args.usage,
             },
             authorization: ManagedSubscriptionAuthorization {
+                _activity: self.activity_checked(manager, plugin_id)?,
                 lease,
                 request: call.request,
             },
@@ -753,6 +757,7 @@ impl Host {
                 revision: args.revision,
             },
             authorization: ManagedSubscriptionAuthorization {
+                _activity: self.activity_checked(manager, plugin_id)?,
                 lease,
                 request: call.request,
             },
@@ -809,6 +814,7 @@ impl Host {
         Arc<znet_plugin_sandbox::contract::Component>,
         znet_plugin_sandbox::policy::Authority,
     )> {
+        let _root_reservation = super::uninstall::storage::RootGuard::acquire(&self.root()?)?;
         self.checked_rescan(manager)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
@@ -895,6 +901,8 @@ impl Host {
         network_proxy: Option<String>,
         log_state: Option<&crate::state::app_state::AppState>,
     ) -> AppResult<Value> {
+        let _activity = self.activity_checked(manager, plugin_id)?;
+
         validate_page_call(&call)?;
         // BrowserOpen only prepares a checked URL here. The actual OS action
         // consumes this original invocation in open_browser_with_lease.
@@ -1231,7 +1239,7 @@ impl Host {
                 })
             }
             Method::PersistentSecretGet => {
-                let _operation = self.operation.lock().unwrap();
+                let _operation = self.operation_guard()?;
                 lease
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
@@ -1242,7 +1250,7 @@ impl Host {
                 }
             }
             Method::PersistentSecretPut => {
-                let _operation = self.operation.lock().unwrap();
+                let _operation = self.operation_guard()?;
                 lease
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
@@ -1257,7 +1265,7 @@ impl Host {
                 Value::Bool(true)
             }
             Method::PersistentSecretDelete => {
-                let _operation = self.operation.lock().unwrap();
+                let _operation = self.operation_guard()?;
                 lease
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
@@ -1265,7 +1273,7 @@ impl Host {
                 Value::Bool(self.vault_delete(plugin_id, &args.key)?)
             }
             Method::CryptoKeyGenerate => {
-                let _operation = self.operation.lock().unwrap();
+                let _operation = self.operation_guard()?;
                 lease
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
@@ -1288,7 +1296,7 @@ impl Host {
                 json!({"algorithm":"ed25519","publicKeyBase64":STANDARD.encode(signing.verifying_key().as_bytes())})
             }
             Method::CryptoSign => {
-                let _operation = self.operation.lock().unwrap();
+                let _operation = self.operation_guard()?;
                 lease
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;

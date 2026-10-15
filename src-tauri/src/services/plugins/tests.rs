@@ -118,7 +118,7 @@ const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
     serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read","subscriptions.manage"]})).unwrap()
 }
-fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
+pub(super) fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";
     let request = if unsupported {
         serde_json::json!({"capability":"records.summary.read","scope":"selection:test"})
@@ -1078,61 +1078,32 @@ fn tampering_or_registry_withdrawal_revokes_an_already_authorized_component() {
     }
 }
 #[test]
-fn uninstall_prevents_execution_and_cached_registry_survives_restart() {
-    let (_root, host, manager) = setup(false);
-    let review = approve(&host, &manager);
-    host.uninstall(&manager, "org.example.plugin", || Ok(()))
-        .unwrap();
-    assert!(host.run(&manager, review).is_err());
+fn legacy_uninstall_cannot_execute_cleanup_or_remove_installed_material() {
     let (root, host, manager) = setup(false);
     let _review = approve(&host, &manager);
-    let restarted = Host {
-        root: Some(root.path().into()),
-        ..Host::default()
-    };
-    let restarted_manager = Manager::default();
-    let snapshot = restarted.snapshot(&restarted_manager);
-    assert!(snapshot.checked);
-    assert!(snapshot.components[0].enabled);
-}
-
-#[test]
-fn uninstall_cleanup_failure_keeps_package_disabled_and_allows_retry() {
-    let (root, host, manager) = setup(false);
-    let review = approve(&host, &manager);
+    let called = std::cell::Cell::new(false);
+    let before = std::fs::read(root.path().join("installed.json")).unwrap();
     let error = host
         .uninstall(&manager, "org.example.plugin", || {
-            assert!(manager.component_snapshots().iter().all(|p| !p.enabled));
-            Err(AppError::internal("cleanup failed"))
+            called.set(true);
+            Ok(())
         })
         .err()
         .unwrap();
-    assert!(error.message.contains("插件已停用并保留"));
-    assert!(host
-        .store()
-        .unwrap()
-        .list()
-        .unwrap()
-        .contains(&"org.example.plugin".into()));
-    assert!(host.run(&manager, review).is_err());
+    assert_eq!(error.code, "plugin_uninstall_preview_required");
+    assert!(!called.get());
+    assert_eq!(
+        std::fs::read(root.path().join("installed.json")).unwrap(),
+        before
+    );
     let restarted = Host {
         root: Some(root.path().into()),
-        ..Host::default()
+        ..Default::default()
     };
-    let restarted_manager = Manager::default();
-    let snapshot = restarted.snapshot(&restarted_manager);
+    let snapshot = restarted.snapshot(&Manager::default());
+    assert!(snapshot.checked);
     assert_eq!(snapshot.components.len(), 1);
-    assert!(!snapshot.components[0].enabled);
-    let snapshot = host
-        .uninstall(&manager, "org.example.plugin", || Ok(()))
-        .unwrap();
-    assert!(snapshot.components.is_empty());
-    assert!(!host
-        .store()
-        .unwrap()
-        .list()
-        .unwrap()
-        .contains(&"org.example.plugin".into()));
+    assert!(snapshot.components[0].enabled);
 }
 
 #[test]

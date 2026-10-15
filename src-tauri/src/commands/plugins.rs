@@ -495,16 +495,18 @@ mod desktop {
             let plugin_id = plugin_id.clone();
             let component_id = component_id.clone();
             move |state| {
-                state.plugins().take_protected_material(
+                let activity = state.plugins().activity(&plugin_id)?;
+                let (lease, bytes) = state.plugins().take_protected_material(
                     state.capabilities(),
                     &plugin_id,
                     &component_id,
                     call,
-                )
+                )?;
+                Ok((lease, bytes, activity))
             }
         })
         .await;
-        let (lease, bytes) = match extracted {
+        let (lease, bytes, _activity) = match extracted {
             Ok(value) => value,
             Err(error) => {
                 return sdk_reply_with_log(
@@ -694,24 +696,120 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn plugins_uninstall(app: AppHandle, id: String) -> AppResult<Snapshot> {
-        let cleanup_app = app.clone();
+        let _ = (app, id);
+        Err(crate::errors::AppError {
+            code: "plugin_uninstall_preview_required",
+            message: "卸载必须先在主应用预览固定资源并明确确认；旧直接卸载入口已关闭".into(),
+            details: None,
+        })
+    }
+    fn uninstall_public_error(error: crate::errors::AppError) -> crate::errors::AppError {
+        match error.code {
+            "plugin_uninstall_preflight_rejected"
+            | "plugin_uninstall_pending"
+            | "plugin_uninstall_storage" => error,
+            "not_found" => crate::errors::AppError {
+                code: "not_found",
+                message: "没有可供核对的原卸载记录；未重放任何删除".into(),
+                details: None,
+            },
+            _ => crate::errors::AppError {
+                code: "plugin_uninstall_storage",
+                message: "卸载材料或执行结果无法安全核对；请保留原操作，仅查看记录，不会自动重放"
+                    .into(),
+                details: None,
+            },
+        }
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_preview(
+        app: AppHandle,
+        window: tauri::Window,
+        plugin_id: String,
+    ) -> AppResult<crate::models::plugin_uninstall::Preview> {
+        page_host(&window)?;
         blocking(app, move |state| {
-            let result = state.plugins().uninstall(state.capabilities(), &id, || {
-                tauri::async_runtime::block_on(crate::services::subscription::remove_plugin_owned(
-                    cleanup_app,
-                    &id,
-                ))
-            });
-            crate::services::logs::plugin_host_event(
+            state.plugins().uninstall_preview(state, &plugin_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_execute(
+        app: AppHandle,
+        window: tauri::Window,
+        plan_id: String,
+        operation_id: String,
+        confirm_owned_resources: bool,
+    ) -> AppResult<crate::models::plugin_uninstall::Status> {
+        page_host(&window)?;
+        let state = app.state::<AppState>();
+        let _operation = state.proxy_config_operation().lock().await;
+        blocking(app.clone(), move |state| {
+            let result = state.plugins().uninstall_execute(
                 state,
-                &id,
-                "host",
-                PluginAction::Uninstall,
-                result.as_ref().map(|_| ()),
+                &plan_id,
+                &operation_id,
+                confirm_owned_resources,
             );
+            let failure = crate::errors::AppError {
+                code: "plugin_uninstall_incomplete",
+                message: "原卸载未取得全部固定项目的完成回执".into(),
+                details: None,
+            };
+            if let Ok(status) = &result {
+                crate::services::logs::plugin_host_event(
+                    state,
+                    &status.plugin_id,
+                    "host",
+                    PluginAction::Uninstall,
+                    if status.state == "completed" {
+                        Ok(())
+                    } else {
+                        Err(&failure)
+                    },
+                );
+            }
             result
         })
         .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_status(
+        app: AppHandle,
+        window: tauri::Window,
+        operation_id: String,
+    ) -> AppResult<crate::models::plugin_uninstall::Status> {
+        page_host(&window)?;
+        blocking(app, move |state| {
+            state.plugins().uninstall_status(&operation_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_recent(
+        app: AppHandle,
+        window: tauri::Window,
+    ) -> AppResult<Vec<crate::models::plugin_uninstall::Status>> {
+        page_host(&window)?;
+        blocking(app, move |state| state.plugins().uninstall_recent())
+            .await
+            .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_discard(
+        app: AppHandle,
+        window: tauri::Window,
+        plan_id: String,
+    ) -> AppResult<()> {
+        page_host(&window)?;
+        blocking(app, move |state| {
+            state.plugins().uninstall_discard(&plan_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
     }
     #[cfg(test)]
     mod diagnostic_tests {

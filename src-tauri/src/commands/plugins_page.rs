@@ -163,14 +163,15 @@ async fn page_sdk_execute(
     let prepare_call = call.clone();
     let prepare_review = review.clone();
     let token = document_review.clone();
-    let (binding, lease) = blocking(app.clone(), move |state| {
+    let (binding, lease, _activity) = blocking(app.clone(), move |state| {
         let (binding, lease) = state.plugins().page_lease(
             state.capabilities(),
             &token,
             &prepare_review,
             &prepare_call,
         )?;
-        Ok((binding, std::sync::Arc::new(lease)))
+        let activity = state.plugins().activity(&binding.plugin_id)?;
+        Ok((binding, std::sync::Arc::new(lease), activity))
     })
     .await?;
     let plugin_id = binding.plugin_id.clone();
@@ -331,7 +332,7 @@ pub async fn plugins_page_protected_load(
         let request = call.request.clone();
         let prepare_call = call.clone();
         let token = document_review.clone();
-        let (binding, lease, bytes) = blocking(app.clone(), move |state| {
+        let (binding, lease, bytes, _activity) = blocking(app.clone(), move |state| {
             let (binding, lease) =
                 state
                     .plugins()
@@ -347,7 +348,8 @@ pub async fn plugins_page_protected_load(
                 &lease,
                 prepare_call,
             )?;
-            Ok((binding, lease, bytes))
+            let activity = state.plugins().activity(&binding.plugin_id)?;
+            Ok((binding, lease, bytes, activity))
         })
         .await?;
         let content: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {

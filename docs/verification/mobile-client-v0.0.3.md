@@ -996,3 +996,47 @@ A22 仅只读审计，具体资源预览、明确替代/停止、跨存储逐项
 OS 后台调度、安装器/商店渠道、签名安装、原生 VPN/core/宿主装配和 Galaxy S8/iPhone 真机均未验收；
 不能把本批称作整个 A23 或移动端完成。四项 Android 许可材料缺口保留。
 本批无 core、依赖、锁文件、版本或 CI YAML 变更，不使用用户 Mac，不创建签名凭据、合并、发布或修改分支保护。
+
+## 2026-10-15：A22 固定归属卸载与持久逐项回执
+
+本批基线 `c216a77ce9b19a31c9f6633b14f76ee66cd38213`，继续同一 Draft PR #46 → develop。
+契约见[插件卸载的固定预览与逐项结果](../gui/mobile-plugin-uninstall-v0.0.3.md)。
+预览固定实际安装材料、发布者、原 namespace、托管订阅/配置/规则及引用；确认重新核对版本和历史。
+同名、ID 前缀、插件路径与后来新增资源均不是归属。活动配置、受保护/共享/无法检查的关系明确阻止，
+展示手动配置/断开路径；不隐式切换、停止或取首个剩余配置。仅可证明安全的非活动范围进入本地执行。
+持久原操作逐项记录完成、残留、未知和手动状态；独立最近记录不依赖包目录存在。
+只读核对读取原持久回执，不重新扫描当前物理资源、不推进清理，也不自动重放未知操作。
+合作文件历史、SQLite 关系 epoch、原安装代次与跨宿主活动租约拒绝后来写入者及旧回调；
+这是分阶段多存储操作，不宣称跨文件原子事务或对恶意整体回滚的保护。
+包 blob、已编译 ZRS 和共享 vault.key 刻意保留并说明，不宣称清空全部物理材料。
+
+最终完整 locked workspace/all-features Rust：**1515 passed / 0 failed / 7 ignored，45 组**；
+GUI **1241/0/5**。新增卸载域 39 项源码用例（26 owner、13 collector），包含实际磁盘/SQLite 重开、
+子进程写入与未知操作恢复、固定归属/全部引用、同值 ABA、跨宿主迟到回调、同包重装、
+祖先链接替换、伪造回执、UTF-8 预算、锁争用，以及真实签名但无运行授权包的登记删除。
+缺少运行授权不制造组件删除项；存在的退役/错材料授权仍阻止本入口。
+fmt --check、locked workspace/all-targets/all-features check 与完整 Clippy 均通过，既有警告保留。
+日志 `/tmp/a22-rust-{fmt,check,tests,clippy}-final.log`。
+
+最终完整 `pnpm verify:frontend` 通过，Svelte **0 错误/0 警告**及生产 build 通过；
+日志 `/tmp/a22-frontend-precommit-final.log`。新增 production Node **16/16**，
+新增实际 Chromium **14/14**，包含 320px 浅深色大字号与 44px 控件；原插件 Chromium **22/22** 保留通过。
+legacy wrapper 清理后原完整流程再次定点 **1/1** 通过。浏览器均 0 失败/重试/flaky/跳过。
+日志 `/tmp/a22-plugin-uninstall-node-final-16.log`、`/tmp/a22-uninstall-browser-complete-final.log`、
+`/tmp/a22-plugins-existing-browser.log`、`/tmp/a22-plugin-uninstall-legacy-browser-final.log`。
+本地未运行 WebKit，不安装或绕过；最终提交的双引擎、四组 CI 和七份 artifact 以实际 head 记录于 PR。
+
+失败过程保留：初始 Rust check 的私有可见性错误修正为插件域内部权限；首次 focused
+16 通过/17 失败均在 fixture 材料非 Base64 的构造处，修正 fixture 而不放宽校验。
+随后 33 通过/2 失败为冷宿主未初始化目录的 fixture，改用真实 snapshot 恢复并保留 checked/component 断言。
+完整插件域首次 88 通过/1 失败发现实际授权退役顺序回归，原授权撤销断言保留。
+随后 89 通过/1 失败为敏感标识 canary 缺少真实待删规则；补齐严格归属及持久材料后，
+完整候选 1514 通过/0 失败/7 忽略，仍不替代后续修复未获运行授权包卸载后的最终结果。
+前端首次 Node 14 通过/1 失败修复明确拒绝后的 pending 槽；浏览器确认勾选后按钮响应失败，
+改为实际响应式依赖。旧 wrapper 拒绝卸载后仍触发 TUN/配置副作用的反例真实失败，改为纯 invoke 后通过。
+路径祖先替换、伪造回执及跨宿主迟到写入由源码审计发现并补回归；没有执行旧实现反例的不称 red 证据。
+
+所有删除测试使用隔离 fixture，未实际卸载用户资源。完整活动配置运行替代/停止、移动插件容器与 SDK、
+原生 VPN/core/宿主装配、签名发行及 Galaxy S8/iPhone 真机仍未验收，不能称整个 A22 或移动端完成。
+四项 Android 许可材料缺口保留；无 core、依赖、锁文件、版本或 CI YAML 变更，
+不使用用户 Mac、不购买账号或创建签名凭据、不合并、发布或修改分支保护。
