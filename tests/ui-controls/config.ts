@@ -374,7 +374,9 @@ export const planConfigWorkspace = async () => { throw new Error('Workspace plan
 export const applyConfigWorkspace = async () => { throw new Error('The UI fixture cannot apply a workspace'); };
 export const guiDiscardDiagnostics = async (_planId: string): Promise<void> => {};
 
+let fixtureClientGeneration: number | undefined = 1;
+window.addEventListener('fixture-client-snapshot-generation', event => { fixtureClientGeneration = (event as CustomEvent<number | undefined>).detail; });
 export const getClientCoreSnapshot = async () => {
   if (new URLSearchParams(location.search).has('host-failure')) throw {message:'host snapshot unavailable'};
-  return {revision:1,scope:{profileId:new URLSearchParams(location.search).get('fixture') === 'overview' ? 'main' : 'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
+  return {revision:1,scopeGeneration:fixtureClientGeneration,scope:{profileId:new URLSearchParams(location.search).get('fixture') === 'overview' ? 'main' : 'fixture',configRevision:1,coreInstanceId:1},sourceStatus:'ready',activeProbeJobs:[]};
 };

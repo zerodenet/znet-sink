@@ -31,10 +31,14 @@ for(const row of fixture.rows) {
   if(row.scope.kind==='endpoint'||row.scope.kind==='peer') row.generation='1';
 }
 if(params.has('missing-endpoint-stat')) fixture.rows=fixture.rows.filter(row=>row.scope.kind!=='endpoint');
+if(params.has('endpoint-inner-only')) fixture.rows[3].planes=fixture.rows[3].planes.filter(row=>row.plane==='inner');
+if(params.has('endpoint-large-counter')) fixture.rows[3].planes.find(row=>row.plane==='inner')!.counters.rx_bytes='18446744073709551615';
 fixture.pageLimit=2;
 if (!enabled) { fixture.caps.supported=false; fixture.caps.capabilities.features=[]; }
 if (params.has('traffic-poll')) fixture.caps.capabilities.trafficStatistics!.automatic_sampling=false;
 fixture.mode=params.get('traffic-reset') ?? 'success';
+window.addEventListener('fixture-traffic-remove-endpoint',()=>{fixture.rows=fixture.rows.filter(row=>row.scope.kind!=='endpoint');fixture.registry=String(BigInt(fixture.registry)+1n);fixture.status?.('gap');});
+window.addEventListener('fixture-traffic-replace-endpoint',()=>{ const row=fixture.rows.find(row=>row.scope.kind==='endpoint'); if(row)row.generation='2';fixture.registry=String(BigInt(fixture.registry)+1n);fixture.status?.('gap'); });
 let subscriptions=0;
 let recoveryDelay=0;
 let recoveryError=false;

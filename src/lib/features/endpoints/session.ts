@@ -28,6 +28,7 @@ export class EndpointSession {
   private restorationPlans = new Map<string,{endpoint:NetworkEndpoint;profileId:string}>();
   private selectedDetailId: string | null = null;
   private refreshRequest: number | null = null;
+  private refreshSettled: Promise<void> | null = null;
   private gateway: EndpointGateway;
   private changed: (view: EndpointView) => void;
   constructor(gateway: EndpointGateway, changed: (view: EndpointView) => void) {
@@ -51,9 +52,19 @@ export class EndpointSession {
       stale: true, loading: false, error: null, refreshError: null, result: null, restoration:null });
   }
   dispose() { this.restorationPlans.clear(); this.disposed = true; this.epoch++; }
+  /** Await an existing directory read, then obtain a new authoritative navigation check. */
+  async refreshForNavigation(): Promise<boolean> {
+    if (this.refreshSettled) await this.refreshSettled;
+    if (this.disposed || this.view.busy || this.view.detailsLoading || this.refreshRequest !== null) return false;
+    await this.refresh(false);
+    return !this.disposed && !this.view.stale && !this.view.loading && this.refreshRequest === null;
+  }
   async refresh(clearError = true, background = false) {
     if (this.disposed || this.view.busy || this.refreshRequest !== null || this.view.detailsLoading) return;
     const epoch = ++this.epoch;
+    let finish!: () => void;
+    const settled = new Promise<void>(resolve => { finish = resolve; });
+    this.refreshSettled = settled;
     this.refreshRequest = epoch;
     if (!background) this.publish({ loading: true });
     try {
@@ -87,6 +98,8 @@ export class EndpointSession {
     } catch (refreshError) {
       if (this.current(epoch)) this.publish({ stale: true, refreshError, details: null });
     } finally {
+      finish();
+      if (this.refreshSettled === settled) this.refreshSettled = null;
       if (this.refreshRequest === epoch) this.refreshRequest = null;
       if (this.current(epoch) && !background) this.publish({ loading: false });
     }

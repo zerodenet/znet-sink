@@ -3,7 +3,7 @@ import { MobileNavigation } from './navigation.svelte';
 export type { MobileTab, MobilePage } from './navigation.svelte';
 const key = Symbol('mobile-navigation');
 const routeKey = Symbol('mobile-route');
-export type MobileRouteOwner = { key: number; tab: import('./navigation.svelte').MobileTab; page: import('./navigation.svelte').MobilePage };
+export type MobileRouteOwner = { key: number; tab: import('./navigation.svelte').MobileTab; page: import('./navigation.svelte').MobilePage; trafficVisit?: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit };
 export function provideMobileRoute(route: MobileRouteOwner) { setContext(routeKey, route); }
 export function optionalMobileRoute(): MobileRouteOwner | undefined { return getContext(routeKey); }
 export function optionalMobileNavigation(): MobileNavigation | undefined { return getContext(key); }

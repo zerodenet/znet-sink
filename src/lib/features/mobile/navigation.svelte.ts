@@ -1,8 +1,9 @@
+import type { EndpointTrafficVisit } from '$lib/features/endpoints/traffic-navigation';
 export type MobileTab = 'overview' | 'nodes' | 'configuration' | 'more';
 export type MobilePage = 'traffic' | 'endpoints' | 'connections' | 'packet' | 'plugins' | 'logs' |
   'diagnostics' | 'kernel' | 'updates' | 'settings' | 'about' | 'tun' | 'dns' | 'network' |
   'probes' | 'workspace' | 'migration' | 'data' | 'rules' | 'profiles' | 'subscriptions';
-export type MobileRoute = { key: number; page: MobilePage };
+export type MobileRoute = { key: number; page: MobilePage; trafficVisit?: EndpointTrafficVisit };
 
 /** Each bottom tab owns its return stack. Mounted panes retain drafts and scroll. */
 export class MobileNavigation {
@@ -16,15 +17,17 @@ export class MobileNavigation {
     if (tab !== this.activeTab && !this.canLeave(() => this.selectTab(tab))) return;
     this.activeTab = tab;
   }
-  open(page: MobilePage) {
-    if (!this.canLeave(() => this.open(page))) return;
-    this.stacks[this.activeTab] = [...this.stacks[this.activeTab], { key: ++this.sequence, page }];
+  open(page: MobilePage, trafficVisit?: EndpointTrafficVisit) {
+    if (!this.canLeave(() => this.open(page, trafficVisit))) return;
+    this.stacks[this.activeTab] = [...this.stacks[this.activeTab], { key: ++this.sequence, page, trafficVisit }];
     this.onOpen?.();
   }
   back(): boolean {
     if (!this.canLeave(() => this.back())) return true;
     if (!this.current) return false;
+    const returning = this.current;
     this.stacks[this.activeTab] = this.stacks[this.activeTab].slice(0, -1);
+    returning?.trafficVisit?.restore();
     return true;
   }
   get current() { return this.stacks[this.activeTab].at(-1); }

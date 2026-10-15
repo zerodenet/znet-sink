@@ -90,7 +90,7 @@
           {#each navigation.stacks[tab.id] as route (route.key)}
             <div class="secondary-pane" class:inactive={route.key !== navigation.stacks[tab.id].at(-1)?.key} inert={route.key !== navigation.stacks[tab.id].at(-1)?.key}>
               <header class="secondary-header"><button data-slot="surface-button" aria-label="返回" onclick={back}><ChevronLeft size={22} aria-hidden="true" /></button><h1>{titles[route.page]}</h1></header>
-              <div class="secondary-content"><MobileSecondary page={route.page} routeKey={route.key} tab={tab.id} /></div>
+              <div class="secondary-content"><MobileSecondary page={route.page} routeKey={route.key} tab={tab.id} trafficVisit={route.trafficVisit} /></div>
             </div>
           {/each}
         </section>

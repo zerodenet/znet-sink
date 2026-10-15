@@ -97,12 +97,14 @@
 
 ## CLIENT-05
 
-**仍可独立实施：端点进入共用统计页的定位和返回。**
-当前 `EndpointCard.svelte` 的观测详情只在本地弹窗中展示 `TrafficScopeDetails`；
-`TrafficWorkspace` 没有实际资源定位参数，移动 route 只保存 page。
-已有 `features/endpoints/observation.ts` 能按真实实例/revision/generation匹配scope，
-无需新增core接口。退出条件：共用统计页定位实际endpoint registry资源，缺失/失效明确解释，
-返回原端点详情；不能生成同名假scope。既有测试只验证本地观测弹窗，不证明此链路已实现。
+**已实现客户端链路；本批最终提交 CI 待核验。** 端点详情及更多菜单进入共用
+`TrafficWorkspace`，固定来源配置、实例、revision、endpoint generation 与客户端
+`scopeGeneration`；只定位实际 registry 资源。旧式端点仅可定位其唯一已声明的真实
+入站/出站角色，并说明不是端点总计；缺失、过期、不安全身份或不支持均给出原因。
+返回前重新读取宿主与端点目录，保留原详情模式；对象替换、配置 ABA 和晚回执不能
+恢复旧详情。端点来源的统计清空确认也重新核对原目标，不能重选或重放。
+隐藏页面保留状态但不轮询或改写当前统计浏览条件；共享事件通道继续保留。
+源码与浏览器回归不代表手机端点或统计真机验收，也不提供远端新增原子保证。
 
 ## CLIENT-06
 

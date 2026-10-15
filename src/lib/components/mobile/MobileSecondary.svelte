@@ -7,9 +7,9 @@
   import MobileApplicationSettings from './MobileApplicationSettings.svelte';
   import { Button } from '$lib/components/ui/button';
   import UiErrorBoundary from '$lib/components/UiErrorBoundary.svelte';
-  let { page, routeKey, tab }: { page: MobilePage; routeKey: number; tab: MobileTab } = $props();
+  let { page, routeKey, tab, trafficVisit }: { page: MobilePage; routeKey: number; tab: MobileTab; trafficVisit?: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit } = $props();
   // The keyed host route owns this scope even if its async panel loads while hidden.
-  untrack(() => provideMobileRoute({ key: routeKey, page, tab }));
+  untrack(() => provideMobileRoute({ key: routeKey, page, tab, trafficVisit }));
   type Loader = () => Promise<{ default: Component }>;
   const loaders: Partial<Record<MobilePage, Loader>> = {
     traffic: () => import('./MobileTraffic.svelte'),
