@@ -9,6 +9,9 @@
 {#if jobs.error}
   <div role="status" class="scope-notice"><span>{jobs.error}</span><Button variant="outline" onclick={() => { void jobs.init().then(() => jobs.refreshScope()).catch(() => {}); }}>重新核对</Button></div>
 {/if}
+{#if jobs.unsupportedIdentity}
+  <p role="status">部分任务身份无法无损表示，未加入当前结果或控制目标；已提交操作保持未确认，不会自动重放。需宿主提供受支持的身份格式后重新核对。</p>
+{/if}
 {#if jobs.history().length}
   <details class="tool-history">
     <summary>任务历史（{jobs.history().length}）</summary>

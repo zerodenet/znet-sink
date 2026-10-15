@@ -8,7 +8,7 @@
 </script>
 <main>
 <h1>真实工具组件的作用域夹具</h1>
-<div class="fixture-actions"><button onclick={()=>action('switch')}>切换配置</button><button onclick={()=>action('restart')}>重启内核</button><button onclick={()=>action('old-clear')}>旧清理事件</button><button onclick={()=>action('dns')}>完成当前 DNS</button><button onclick={()=>action('clear')}>完成当前清理</button></div>
+<div class="fixture-actions"><button onclick={()=>action('switch')}>切换配置</button><button onclick={()=>action('restart')}>重启内核</button><button onclick={()=>action('old-clear')}>旧清理事件</button><button onclick={()=>action('unsafe-id')}>超范围任务事件</button><button onclick={()=>action('dns')}>完成当前 DNS</button><button onclick={()=>action('clear')}>完成当前清理</button></div>
 <pre aria-label="任务请求">{requests}</pre>
 <section aria-label="DNS 页面"><DnsPanel/></section>
 <section aria-label="路由页面"><RoutePanel/></section>

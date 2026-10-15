@@ -27,6 +27,7 @@ window.addEventListener('tool-fixture:action',event=>{
  const action=(event as CustomEvent<string>).detail;
  if(action==='switch'){current={...current,revision:current.revision+1,scopeGeneration:current.scopeGeneration!+1,scope:{...current.scope,profileId:'replacement',configRevision:'18446744073709551615'}};emit('client-core:updated',current);return;}
  if(action==='restart'){current={...current,revision:current.revision+1,scopeGeneration:current.scopeGeneration!+1,scope:{...current.scope,coreInstanceId:current.scope.coreInstanceId+1}};emit('client-core:updated',current);return;}
+ if(action==='unsafe-id'){emit('client-core:tool-job-updated',{...allJobs[0],id:JSON.parse('9007199254740993'),scope:current.scope,state:'running',updatedAtUnixMs:20});return;}
  if(action==='old-clear'){emit('client-core:tool-job-updated',{...allJobs[1],updatedAtUnixMs:20});return;}
  const kind=action==='dns'?'dns_lookup':'fake_ip_clear';
  const job=allJobs.findLast(job=>job.kind===kind&&job.id>100);

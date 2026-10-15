@@ -10,8 +10,16 @@ export interface ToolJobPorts {
 }
 const active = (job: ToolJobSnapshot) => ['queued', 'running', 'cancelling'].includes(job.state);
 const stage = (job: ToolJobSnapshot) => job.state === 'queued' ? 0 : job.state === 'running' ? 1 : job.state === 'cancelling' ? 2 : 3;
+const safeId = (id: number): boolean => Number.isSafeInteger(id) && id > 0;
+const safeScope = (scope: ClientScope): boolean => {
+  if (!Number.isSafeInteger(scope.coreInstanceId) || scope.coreInstanceId < 0) return false;
+  const revision = scope.configRevision;
+  if (typeof revision === 'number') return Number.isSafeInteger(revision) && revision >= 0;
+  return /^(0|[1-9][0-9]*)$/.test(revision) && revision.length <= 20 && BigInt(revision) <= 18446744073709551615n;
+};
+const safeJob = (job: ToolJobSnapshot): boolean => safeId(job.id) && safeScope(job.scope);
 export const sameToolScope = (left: ClientScope | null, right: ClientScope | null): boolean =>
-  left !== null && right !== null && left.profileId === right.profileId
+  left !== null && right !== null && safeScope(left) && safeScope(right) && left.profileId === right.profileId
   && String(left.configRevision) === String(right.configRevision) && left.coreInstanceId === right.coreInstanceId;
 
 /** Read projection only: the existing host runtime owns the queue and execution. */
@@ -21,6 +29,7 @@ export class ToolJobsState {
   ready = $state(false);
   epoch = $state(0);
   error = $state<string | null>(null);
+  unsupportedIdentity = $state(false);
   disposed = false;
   private readonly kinds: ReadonlySet<ToolJobKind>;
   private readonly ports: ToolJobPorts;
@@ -80,7 +89,8 @@ export class ToolJobsState {
   bind(snapshot: ClientCoreSnapshot | null): void {
     if (this.disposed) return;
     if (snapshot && (!Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0
-      || !Number.isSafeInteger(snapshot.scopeGeneration) || snapshot.scopeGeneration! < 1)) snapshot = null;
+      || !Number.isSafeInteger(snapshot.scopeGeneration) || snapshot.scopeGeneration! < 1
+      || !safeScope(snapshot.scope))) snapshot = null;
     if (snapshot && snapshot.revision < this.revision) return;
     if (snapshot) this.revision = snapshot.revision;
     const next = snapshot?.scope ?? null;
@@ -127,6 +137,7 @@ export class ToolJobsState {
     const jobs = await this.ports.list();
     if (this.disposed) return;
     for (const job of jobs) {
+      if (!safeJob(job)) { this.unsupportedIdentity = true; continue; }
       // Only this epoch's authoritative active read may grant recovery.
       // Do this before merging: a newer completion may already be retained.
       if (epoch === this.epoch && this.ready && sameToolScope(scope, this.scope)
@@ -148,6 +159,10 @@ export class ToolJobsState {
     if (!this.ready || !this.scope || (invokedEpoch !== null && invokedEpoch !== this.epoch) || (expected && !sameToolScope(expected, this.scope))) throw new Error('任务范围已变化或未就绪，请重新核对后发起');
     const scope = { ...this.scope }, epoch = this.epoch;
     const job = await this.ports.start({ ...request, expectedScope: scope, expectedClientRevision: this.revision });
+    if (!safeJob(job)) {
+      this.unsupportedIdentity = true;
+      throw new Error('任务已提交，但宿主返回的身份无法无损表示；结果未确认，不会重放或停止舍入后的目标');
+    }
     try { await this.refreshScope(); } catch { this.apply(job, false); throw new Error('任务已提交，但当前范围未确认；不会自动重放'); }
     if (this.disposed || epoch !== this.epoch || !sameToolScope(job.scope, scope)) {
       this.revoked.add(job.id);
@@ -162,6 +177,7 @@ export class ToolJobsState {
   }
 
   async cancel(jobId: number): Promise<ToolJobSnapshot> {
+    if (!safeId(jobId)) throw new Error('任务身份无法无损表示，不能停止舍入后的目标');
     const epoch = this.epoch;
     const expected = this.jobs.get(jobId)?.scope;
     if (!expected || !active(this.jobs.get(jobId)!)) throw new Error('仅能停止当前范围的活动任务');
@@ -175,6 +191,7 @@ export class ToolJobsState {
 
   apply(job: ToolJobSnapshot, live = false): void {
     if (this.disposed || !this.kinds.has(job.kind)) return;
+    if (!safeJob(job)) { this.unsupportedIdentity = true; return; }
     const current = this.jobs.get(job.id);
     if (current && (current.updatedAtUnixMs > job.updatedAtUnixMs || (current.updatedAtUnixMs === job.updatedAtUnixMs && (current.state === job.state || stage(current) > stage(job))))) return;
     const jobs = new Map(this.jobs);

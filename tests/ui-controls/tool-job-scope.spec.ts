@@ -43,3 +43,14 @@ test('a live clear issues one scope-bound cache read and remains usable on a 320
  expect(JSON.parse(text!).filter((r:{kind:string})=>r.kind==='dns_cache')).toHaveLength(1);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 });
+
+
+test('an imprecise task ID is explained and never offered as a current result or stop target',async({page})=>{
+ await page.goto('/tool-job-scope.html');
+ const dns=page.getByRole('region',{name:'DNS 页面'});
+ await page.getByRole('button',{name:'超范围任务事件'}).click();
+ await expect(dns.getByText(/部分任务身份无法无损表示/)).toBeVisible();
+ await expect(dns.getByText(/#9007199254740992/)).toHaveCount(0);
+ await expect(page.getByLabel('任务请求')).toHaveText('[]');
+ await expect(dns.getByText('任务历史（2）')).toBeVisible();
+});

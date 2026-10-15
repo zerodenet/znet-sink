@@ -137,10 +137,10 @@ test('disposing a page releases both late subscriptions and never cancels backen
 });
 
 test('history projection is bounded and retains active current jobs over older terminal history', async () => {
-  const history = Array.from({ length: 200 }, (_, index) => job(index + 1, 'dns_lookup', 'completed'));
-  history.unshift(job(0, 'dns_lookup', 'running'));
+  const history = Array.from({ length: 200 }, (_, index) => job(index + 2, 'dns_lookup', 'completed'));
+  history.unshift(job(1, 'dns_lookup', 'running'));
   const f = fixture(history); const owner = new ToolJobsState(['dns_lookup'], f.ports); await owner.init();
-  assert.equal(owner.jobs.size, 128); assert.equal(owner.active().length, 1); assert.equal(owner.active()[0].id, 0); owner.dispose();
+  assert.equal(owner.jobs.size, 128); assert.equal(owner.active().length, 1); assert.equal(owner.active()[0].id, 1); owner.dispose();
 });
 
 test('completion racing the initial active snapshot is recovered from the newer actual record', async () => {
@@ -230,4 +230,28 @@ test('an older host without a lifecycle generation remains readable but cannot a
   const f = fixture([job(1, 'dns_lookup', 'completed')]); const dns = new DnsState(f.ports); await dns.jobs.init();
   const unsupported = snapshot(); delete unsupported.scopeGeneration; f.set(unsupported);
   dns.dnsHost = 'same.example'; await dns.runDns(); assert.equal(dns.jobs.ready, false); assert.equal(f.calls.length, 0); assert.equal(dns.jobs.history().length, 1); dns.dispose();
+});
+
+
+test('unsafe restored and event task IDs never gain current eligibility or reach cancellation', async () => {
+  const id = Number.MAX_SAFE_INTEGER + 1;
+  const f = fixture([job(id, 'dns_lookup', 'running')]); const dns = new DnsState(f.ports); await dns.jobs.init();
+  f.emit(job(id, 'dns_lookup', 'completed', scope(), { answers: ['rounded'] }, 2)); await flush();
+  assert.equal(dns.jobs.jobs.size, 0); assert.equal(dns.jobs.unsupportedIdentity, true); assert.equal(dns.dnsResult, null);
+  await assert.rejects(dns.jobs.cancel(id), /无损/); assert.equal(f.cancellations.length, 0); dns.dispose();
+  const safe = fixture([job(Number.MAX_SAFE_INTEGER, 'dns_lookup', 'running')]); const owner = new ToolJobsState(['dns_lookup'], safe.ports); await owner.init();
+  assert.equal(owner.active().length, 1); await owner.cancel(Number.MAX_SAFE_INTEGER); assert.equal(safe.cancellations.length, 1); owner.dispose();
+});
+
+test('unsafe start acknowledgement stays unknown without replay or a rounded control target', async () => {
+  const f = fixture(); let count = 0; f.ports.start = async request => { count++; return job(Number.MAX_SAFE_INTEGER + 1, request.kind, 'queued', scope()); };
+  const dns = new DnsState(f.ports); await dns.jobs.init(); dns.dnsHost = 'same.example'; await dns.runDns();
+  assert.equal(count, 1); assert.match(dns.dnsError, /结果未确认/); assert.equal(dns.jobs.jobs.size, 0); assert.equal(f.cancellations.length, 0); dns.dispose();
+});
+
+test('unsafe numeric scope identities cannot authorize a new tool request', async () => {
+  for (const value of [scope('one', '1', Number.MAX_SAFE_INTEGER + 1), scope('one', Number.MAX_SAFE_INTEGER + 1), scope('one', '18446744073709551616')]) {
+    const f = fixture([], snapshot(value)); const dns = new DnsState(f.ports); await dns.jobs.init();
+    dns.dnsHost = 'same.example'; await dns.runDns(); assert.equal(dns.jobs.ready, false); assert.equal(f.calls.length, 0); dns.dispose();
+  }
 });
