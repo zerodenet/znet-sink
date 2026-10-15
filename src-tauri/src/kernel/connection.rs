@@ -19,8 +19,8 @@
 //! | no top-level `ok` | event | broadcast to all event subscribers |
 //! | line starting with `:` | heartbeat | ignored (handled in [`transport::read_json_line`]) |
 //!
-//! Response frames without a matching waiter (e.g. the initial `subscribe`
-//! ack) are dropped silently.
+//! The initial subscribe acknowledgement is validated separately. Other
+//! response frames without a matching waiter are dropped silently.
 //!
 //! ## Lifecycle
 //!
@@ -34,7 +34,7 @@ use std::io::{BufReader, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot};
@@ -61,6 +61,9 @@ const SUBSCRIBE_FRAME_ID: &str = "znet-sink-subscribe";
 mod scoped;
 pub(crate) use scoped::ScopedConnection;
 pub(crate) mod event_filter;
+#[cfg(all(test, unix))]
+#[path = "connection/handshake_tests.rs"]
+mod handshake_tests;
 #[cfg(all(test, unix))]
 #[path = "connection/security_tests.rs"]
 mod security_tests;
@@ -106,6 +109,30 @@ pub struct MultiplexedConnection {
     inner: Arc<Inner>,
 }
 
+// A typed reader termination cannot be confused with a kernel rejection
+// that happens to contain an error code resembling a closed connection.
+enum SubscribeNotice {
+    Acknowledgement(AppResult<()>),
+    ReaderStopped(AppError),
+}
+enum HandshakeFailure {
+    ClosedBeforeAck(AppError),
+    Terminal(AppError),
+}
+impl From<AppError> for HandshakeFailure {
+    fn from(error: AppError) -> Self {
+        Self::Terminal(error)
+    }
+}
+const MAX_COLD_HANDSHAKE_ATTEMPTS: usize = 3;
+fn subscribe_timeout(endpoint: &CoreEndpoint, budget: Duration) -> AppError {
+    AppError {
+        code: "connection_closed",
+        message: "timed out waiting for kernel subscribe acknowledgement".into(),
+        details: Some(serde_json::json!({"endpoint":endpoint.path,"timeoutMs":budget.as_millis()})),
+    }
+}
+
 struct Inner {
     endpoint: CoreEndpoint,
     writer: Mutex<KernelWriter>,
@@ -119,15 +146,49 @@ struct Inner {
     /// acknowledgement arrives.  Taken by the reader on first response
     /// frame whose `id` matches [`SUBSCRIBE_FRAME_ID`], then read by
     /// `connect()` before it returns.
-    subscribe_ack_tx: Mutex<Option<mpsc::SyncSender<AppResult<()>>>>,
+    subscribe_ack_tx: Mutex<Option<mpsc::SyncSender<SubscribeNotice>>>,
 }
 
 impl MultiplexedConnection {
     /// Open a connection, send the initial `subscribe` frame, and spawn the
     /// background reader. Returns once the connection is established and the
-    /// reader is running.
+    /// reader is running. Before acknowledgement only, an observed closed
+    /// transport can rebuild the subscribe handshake up to three attempts.
+    /// All attempts share one deadline; existing platform socket-connect
+    /// limits remain owned by transport (not a hard OS syscall deadline).
     fn connect(endpoint: CoreEndpoint, connect_timeout: Duration) -> AppResult<Self> {
-        let (reader, writer, closer) = transport::connect_split(&endpoint, connect_timeout)?;
+        let deadline = Instant::now()
+            .checked_add(connect_timeout)
+            .ok_or_else(|| AppError::invalid_argument("IPC connect timeout is out of range"))?;
+        for attempt in 0..MAX_COLD_HANDSHAKE_ATTEMPTS {
+            if Instant::now() >= deadline {
+                return Err(subscribe_timeout(&endpoint, connect_timeout));
+            }
+            match Self::connect_once(endpoint.clone(), deadline, connect_timeout) {
+                Ok(connection) => return Ok(connection),
+                Err(HandshakeFailure::ClosedBeforeAck(error)) => {
+                    if attempt + 1 == MAX_COLD_HANDSHAKE_ATTEMPTS || Instant::now() >= deadline {
+                        return Err(error);
+                    }
+                    // Only subscribe was sent. No business frame, binding, or
+                    // permission has been accepted, and nothing is replayed.
+                }
+                Err(HandshakeFailure::Terminal(error)) => return Err(error),
+            }
+        }
+        unreachable!("bounded cold handshake loop always returns")
+    }
+
+    fn connect_once(
+        endpoint: CoreEndpoint,
+        deadline: Instant,
+        connect_timeout: Duration,
+    ) -> Result<Self, HandshakeFailure> {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| subscribe_timeout(&endpoint, connect_timeout))?;
+        let (reader, writer, closer) = transport::connect_split(&endpoint, remaining)?;
 
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (subscribe_ack_tx, subscribe_ack_rx) = mpsc::sync_channel(1);
@@ -164,8 +225,56 @@ impl MultiplexedConnection {
         });
         {
             let mut writer = recover_lock(&inner.writer);
-            writer.write_all(&subscribe_bytes).map_err(|error| {
-                AppError::from_io("failed to write IPC subscribe frame", &endpoint, error)
+            let mut remaining_bytes = subscribe_bytes.as_slice();
+            while !remaining_bytes.is_empty() {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|value| !value.is_zero())
+                    .ok_or_else(|| subscribe_timeout(&endpoint, connect_timeout))?;
+                writer.set_write_timeout(remaining).map_err(|error| {
+                    AppError::from_io(
+                        "failed to set IPC subscribe write timeout",
+                        &endpoint,
+                        error,
+                    )
+                })?;
+                let written = match writer.write(remaining_bytes) {
+                    Ok(written) => written,
+                    // Preserve write_all's signal-interruption behavior while
+                    // retaining the same absolute handshake deadline.
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        return Err(AppError::from_io(
+                            "failed to write IPC subscribe frame",
+                            &endpoint,
+                            error,
+                        )
+                        .into());
+                    }
+                };
+                if written == 0 {
+                    return Err(AppError::from_io(
+                        "failed to write IPC subscribe frame",
+                        &endpoint,
+                        std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "subscribe write made no progress",
+                        ),
+                    )
+                    .into());
+                }
+                remaining_bytes = &remaining_bytes[written..];
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|value| !value.is_zero())
+                .ok_or_else(|| subscribe_timeout(&endpoint, connect_timeout))?;
+            writer.set_write_timeout(remaining).map_err(|error| {
+                AppError::from_io(
+                    "failed to set IPC subscribe flush timeout",
+                    &endpoint,
+                    error,
+                )
             })?;
             writer.flush().map_err(|error| {
                 AppError::from_io("failed to flush IPC subscribe frame", &endpoint, error)
@@ -184,29 +293,49 @@ impl MultiplexedConnection {
         // Without this the first query can race with the subscribe
         // handshake — the kernel may not have registered the connection
         // as persistent yet, so a fast follow-up query can time out.
-        match subscribe_ack_rx.recv_timeout(connect_timeout) {
-            Ok(Ok(())) => {} // subscribe confirmed
-            Ok(Err(error)) => {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match subscribe_ack_rx.recv_timeout(remaining) {
+            Ok(SubscribeNotice::Acknowledgement(Ok(()))) => {}
+            Ok(SubscribeNotice::Acknowledgement(Err(error))) => {
                 inner.mark_dead();
-                return Err(error);
+                return Err(HandshakeFailure::Terminal(error));
+            }
+            Ok(SubscribeNotice::ReaderStopped(error)) => {
+                inner.mark_dead();
+                return Err(if error.code == "connection_closed" {
+                    HandshakeFailure::ClosedBeforeAck(error)
+                } else {
+                    HandshakeFailure::Terminal(error)
+                });
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 inner.mark_dead();
-                return Err(AppError {
-                    code: "connection_closed",
-                    message: "timed out waiting for kernel subscribe acknowledgement".to_string(),
-                    details: Some(serde_json::json!({
-                        "endpoint": endpoint.path,
-                        "timeoutMs": connect_timeout.as_millis(),
-                    })),
-                });
+                return Err(HandshakeFailure::Terminal(subscribe_timeout(
+                    &endpoint,
+                    connect_timeout,
+                )));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 inner.mark_dead();
-                return Err(AppError::connection_closed(&endpoint));
+                return Err(HandshakeFailure::Terminal(AppError::connection_closed(
+                    &endpoint,
+                )));
             }
         }
 
+        if Instant::now() >= deadline {
+            inner.mark_dead();
+            return Err(HandshakeFailure::Terminal(subscribe_timeout(
+                &endpoint,
+                connect_timeout,
+            )));
+        }
+        if let Err(error) = recover_lock(&inner.writer).set_write_timeout(connect_timeout) {
+            inner.mark_dead();
+            return Err(
+                AppError::from_io("failed to restore IPC write timeout", &endpoint, error).into(),
+            );
+        }
         Ok(Self { inner })
     }
 
@@ -440,11 +569,15 @@ impl Inner {
 /// pending waiter.
 fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
     let mut buf = BufReader::new(reader);
+    let mut read_failure = None;
 
     while inner.alive.load(Ordering::Acquire) {
         let frame = match transport::read_json_line(&mut buf, &inner.endpoint) {
             Ok(frame) => frame,
-            Err(_) => break, // connection closed / IO error → tear down
+            Err(error) => {
+                read_failure = Some(error);
+                break;
+            }
         };
         inner
             .last_received_at_ms
@@ -475,7 +608,9 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
                     error: None,
                 });
                 if let Some(tx) = recover_lock(&inner.subscribe_ack_tx).take() {
-                    let _ = tx.send(validate_subscribe_ack(&frame));
+                    let _ = tx.send(SubscribeNotice::Acknowledgement(validate_subscribe_ack(
+                        &frame,
+                    )));
                 }
                 continue;
             }
@@ -547,6 +682,14 @@ fn reader_loop(reader: KernelReader, inner: Arc<Inner>) {
     // Connection is gone: mark dead and wake every pending waiter so they
     // don't block until their own timeout.
     inner.mark_dead();
+    // Inner itself still owns this sender. Taking it on reader termination
+    // is essential: dropping only the reader Arc would leave connect() waiting
+    // for the entire acknowledgement timeout after an immediate EOF.
+    if let Some(tx) = recover_lock(&inner.subscribe_ack_tx).take() {
+        let _ = tx.send(SubscribeNotice::ReaderStopped(
+            read_failure.unwrap_or_else(|| AppError::connection_closed(&inner.endpoint)),
+        ));
+    }
     let drained: HashMap<String, PendingRequest> = {
         let mut guard = recover_lock(&inner.pending);
         std::mem::take(&mut *guard)

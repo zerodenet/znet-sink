@@ -61,7 +61,7 @@ fn spawn(dir: &std::path::Path) -> (OwnedChild, CoreEndpoint) {
     )
 }
 
-fn apply_listener(endpoint: &CoreEndpoint, port: u16) -> AppResult<()> {
+fn apply_listener(endpoint: &CoreEndpoint, port: u16, dir: &std::path::Path) -> AppResult<()> {
     tauri::async_runtime::block_on(async {
         let control = crate::kernel::configuration::BoundControl::connect(
             crate::models::core::CoreIpcOptions {
@@ -69,7 +69,14 @@ fn apply_listener(endpoint: &CoreEndpoint, port: u16) -> AppResult<()> {
                 timeout_ms: Some(5000),
             },
         )
-        .await?;
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "released kernel must acknowledge subscribe before testing runtime apply at {}: {error:?}\nkernel stderr:\n{}",
+                endpoint.path,
+                std::fs::read_to_string(dir.join("kernel-stderr.log")).unwrap_or_default()
+            )
+        });
         control.apply(listener_config(port)).await?;
         Ok(())
     })
@@ -91,7 +98,12 @@ fn real_kernel_ready_and_lifetime_pipe_shutdown_release_listener() {
             std::fs::read_to_string(dir.path().join("kernel-stderr.log")).unwrap_or_default()
         );
     }
-    apply_listener(&endpoint, port).expect("actual runtime-only listener application must confirm");
+    if let Err(error) = apply_listener(&endpoint, port, dir.path()) {
+        panic!(
+            "actual runtime-only listener application must confirm: {error:?}\nkernel stderr:\n{}",
+            std::fs::read_to_string(dir.path().join("kernel-stderr.log")).unwrap_or_default()
+        );
+    }
     crate::services::local_proxy::wait_until_listening("127.0.0.1", port).unwrap();
     drop(child.0.stdin.take());
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -116,7 +128,9 @@ fn real_kernel_bind_failure_is_never_reported_ready() {
     let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
     let (mut child, endpoint) = spawn(dir.path());
     wait_for_ready(&mut child.0, &endpoint).expect("IPC-only bootstrap must become controllable");
-    let result = apply_listener(&endpoint, occupied.local_addr().unwrap().port());
+    // Handshake failure must fail this test as well. Exercise the actual apply
+    // and require it to fail rather than accepting a pre-command failure.
+    let result = apply_listener(&endpoint, occupied.local_addr().unwrap().port(), dir.path());
     assert!(
         result.is_err(),
         "occupied listener must not pass acknowledged runtime application; kernel stderr:\n{}",

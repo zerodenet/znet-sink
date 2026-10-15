@@ -600,3 +600,40 @@ Node工作区29+profile7=36、Packet26通过；320px实际Chromium旧14+新增9=
 `/tmp/client-persist-final-{fmt,check,clippy}.log`、
 `/tmp/client-persist-frontend-initial.log`、`/tmp/recovery-browser-freeze.log`。
 本批没有新增依赖，四项许可材料缺口、原生装配、Galaxy S8/iPhone及签名/安装未验收项保留。
+
+### 2eceeb4 的 Windows 订阅握手失败
+
+该提交的 Windows latest 已实际通过客户端 **1154/0/5**，随后发布版内核 readiness
+为 **1 passed / 1 failed**：IPC 健康检查完成后，新控制连接等待 subscribe ACK
+5000ms 超时。Windows2022 同提交客户端与 readiness 合计 **1156/0/5**；对照通过
+不能代替失败平台结果。Android unsigned host、Mobile Rust、Native document adapters
+三组同提交工作流成功。主 CI 终态为13成功/1失败，双引擎 **630/630** 通过、
+0重试/0flaky/0跳过；不能将这些成功部分称为该提交全绿。
+
+只读核对实际发布的 core v0.0.1 `src/ipc/windows.rs`：同一 select 同时等待新管道连接
+和旧连接 task 完成，旧 task 先结束可能使当前监听实例被丢弃。这是失败的候选原因，
+未在此 Linux 环境声称复现 Windows 调度。客户端另有可确定的边界问题：reader
+在 ACK 前退出时，Inner 仍持有 ACK sender，连接方因此等待整个超时才知道已断开。
+本轮仅修复首次订阅、尚未交付业务请求的冷握手；已发送的 query/command 不因此
+重放，也不重新发现 BoundControl 的目标。实际平台结果须继续核对修复提交的 CI。
+
+readiness 占用端口测试同时加强：订阅握手失败本身必须使测试失败，不能当作实际
+运行配置调用失败；应用失败回报原内核 stderr。没有放宽运行确认、API 身份或权限检查，
+也未修改 core 源码。
+
+修复只允许 reader 的实际断连信号在 ACK 前触发最多三次冷订阅；三次共用原截止时间，
+每段订阅写入及 ACK 等待使用剩余预算，成功后恢复原业务写入预算。内核拒绝、坏 ACK、
+解码错误、订阅写失败和 ACK 后断连均不在此重试边界。CONNECT_GATE、缓存发布及
+BoundControl 的原物理连接保留。Unix 同步 connect、Windows 管道连接的既有底层等待
+仍按 transport 实现，不声称本次增加了全部 OS syscall 的硬总截止。
+
+修复后的实际 Unix IPC 控制连接专项 **14/14**，其中新增六项覆盖即时 EOF、第二次
+ACK、最多三次、迟到 ACK 不刷新预算、拒绝/坏 ACK/坏帧和业务零重放。全 workspace
+all-features 本地测试 **1230 passed / 0 failed / 7 ignored，45组**，GUI lib
+**957/0/5**；忽略项范围与上一批一致。格式及 locked workspace/all-targets/
+all-features check、同范围 Clippy 通过，保留现有警告。复核补回手动订阅写循环对
+Interrupted 的继续语义后，最终格式/check/全集/Clippy 均重新通过上述结果。
+前端源码未改，本地不重复执行刚完成的冻结前端套件；
+修复提交仍需重新核对完整 CI，不将 2eceeb4 的 630 项或 APK 充作新 head 的产物。
+日志：`/tmp/client-handshake-focused.log`、
+`/tmp/client-handshake-final-{fmt,check,tests,clippy}.log`。

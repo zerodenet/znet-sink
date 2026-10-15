@@ -331,6 +331,22 @@ pub fn connect_split(
     connect_split_platform(endpoint, StreamTimeouts::event_stream(timeout))
 }
 
+impl KernelWriter {
+    /// Tighten only the current handshake write budget. The caller restores
+    /// the original transport budget before publishing an acknowledged peer.
+    pub(crate) fn set_write_timeout(&mut self, timeout: Duration) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.0.set_write_timeout(Some(timeout))
+        }
+        #[cfg(windows)]
+        {
+            self.write_timeout = Some(timeout);
+            Ok(())
+        }
+    }
+}
+
 impl KernelCloser {
     /// Interrupt pending I/O so a dead multiplexed connection releases its
     /// reader task and transport resources promptly.
@@ -567,6 +583,14 @@ impl SharedPipe {
     }
 
     fn write_overlapped(&self, buffer: &[u8]) -> io::Result<usize> {
+        self.write_overlapped_with_timeout(buffer, self.write_timeout)
+    }
+
+    fn write_overlapped_with_timeout(
+        &self,
+        buffer: &[u8],
+        timeout: Option<Duration>,
+    ) -> io::Result<usize> {
         if buffer.is_empty() {
             return Ok(0);
         }
@@ -587,7 +611,7 @@ impl SharedPipe {
             return Ok(bytes_written as usize);
         }
 
-        self.finish_overlapped(operation.overlapped_mut(), self.write_timeout)
+        self.finish_overlapped(operation.overlapped_mut(), timeout)
     }
 
     fn finish_overlapped(
@@ -655,6 +679,7 @@ pub struct KernelReader {
 #[cfg(windows)]
 pub struct KernelWriter {
     shared: Arc<SharedPipe>,
+    write_timeout: Option<Duration>,
 }
 
 #[cfg(windows)]
@@ -672,7 +697,8 @@ impl Read for KernelReader {
 #[cfg(windows)]
 impl Write for KernelWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.shared.write_overlapped(buffer)
+        self.shared
+            .write_overlapped_with_timeout(buffer, self.write_timeout)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -685,6 +711,7 @@ fn connect_split_platform(
     endpoint: &CoreEndpoint,
     timeouts: StreamTimeouts,
 ) -> AppResult<(KernelReader, KernelWriter, KernelCloser)> {
+    let write_timeout = timeouts.write;
     let shared = Arc::new(
         SharedPipe::connect(&endpoint.path, timeouts)
             .map_err(|error| AppError::from_io("failed to connect to core IPC", endpoint, error))?,
@@ -695,6 +722,7 @@ fn connect_split_platform(
         },
         KernelWriter {
             shared: Arc::clone(&shared),
+            write_timeout,
         },
         KernelCloser { shared },
     ))
