@@ -49,7 +49,14 @@ async function fixture(page:Page,scenario='',dark=false,large=false){
 async function open(page:Page){await page.getByRole('button',{name:'打开 插件甲 详情',exact:true}).click();await page.getByRole('radio',{name:'关于',exact:true}).click();await page.getByRole('button',{name:'卸载',exact:true}).click();await expect(page.getByRole('region',{name:'固定归属资源'})).toBeVisible();}
 async function acknowledge(page:Page){await page.getByRole('checkbox',{name:'确认仅清理以上固定归属资源',exact:true}).check();}
 async function submit(page:Page){await acknowledge(page);await page.getByRole('dialog',{name:'卸载插件',exact:true}).getByRole('button',{name:'卸载',exact:true}).click();}
-async function closePanel(page:Page){await page.getByRole('dialog',{name:'卸载插件',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();const confirmation=page.getByRole('dialog',{name:'关闭仍需核对的卸载操作？'});if(await confirmation.isVisible())await confirmation.getByRole('button',{name:'明确关闭',exact:true}).click();}
+async function closePanel(page:Page){
+ const original=page.getByRole('dialog',{name:'卸载插件',exact:true});
+ await original.getByRole('button',{name:'关闭',exact:true}).click();
+ const confirmation=page.getByRole('dialog',{name:'关闭仍需核对的卸载操作？'});
+ if(await confirmation.isVisible())await confirmation.getByRole('button',{name:'明确关闭',exact:true}).click();
+ await expect(confirmation).toHaveCount(0);
+ await expect(original).toHaveCount(0);
+}
 
 test('fixed owned resources require acknowledgement, later resources are excluded, completed receipts and read-only observations remain separate',async({page})=>{
  await fixture(page);await open(page);await expect(page.getByRole('dialog',{name:'卸载插件',exact:true}).getByRole('button',{name:'卸载',exact:true})).toBeDisabled();await expect(page.getByRole('region',{name:'固定归属资源'})).toContainText('关联配置：插件甲配置');await page.evaluate(()=>(window as unknown as{uninstallFixture:Control}).uninstallFixture.addResource());await submit(page);await expect(page.getByText('插件已卸载',{exact:true})).toBeVisible();await expect(page.getByRole('region',{name:'逐项卸载结果'})).not.toContainText('后来新增');

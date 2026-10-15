@@ -1073,3 +1073,18 @@ Windows2025 job116633419280 均在真实安装锁争用测试失败，各 GUI 11
 修复后完整 locked workspace/all-features 再次 **1515/0/7，45组**（GUI1241/0/5），
 fmt、全目标全特性 check 与完整 Clippy 通过，既有警告保留；
 日志 `/tmp/a22-lock-{fmt,check,tests,clippy}-final.log`。
+
+### 同批 WebKit 关闭过渡期定位修复
+
+中间提交 `8b58b7d1bfe9c80a1a89d453c4f98286b9a2d752` 的 Main #209（run38798759888）
+Chromium 完整 441 通过；WebKit 440 通过/1 失败，失败项重试一次仍失败，0 flaky/skip，
+双引擎门禁因此失败。原锁争用用例已在两个 Windows 镜像实际通过，各工作区1412/0/5，
+随后各2项真实 released-kernel readiness 通过；不以这些通过抵销 WebKit 失败。
+
+失败是新增 `mobile-plugin-uninstall.spec.ts:75` 的全局“卸载记录”定位同时匹配
+已返回的页面入口及尚在关闭过渡期的旧面板按钮。日志未报告原操作编号、只读状态查询
+或不重复卸载的业务断言失败。helper 在明确关闭后等待原卸载及关闭确认 dialog 实际退役，
+再执行既有入口与全部业务断言，不修改产品逻辑、不 `.first()`、不增加 sleep/retry/timeout。
+本地无 WebKit，最终修复由新 head 的完整双引擎 CI 验证；旧 head 收据只作历史。
+修复后本地实际 A22 Chromium **14/14**，0失败/retry/flaky/skip；
+日志 `/tmp/a22-uninstall-browser-close-retirement.log`。4177 未重启，业务源及原全部业务断言不变。
