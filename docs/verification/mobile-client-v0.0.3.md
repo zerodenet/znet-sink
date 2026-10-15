@@ -914,3 +914,12 @@ Cache 只靠 File close 释放锁；[Rust 文件锁契约](https://doc.rust-lang
 修复后 fmt --check、locked workspace/all-targets/all-features check 与 Clippy 均通过，既有警告保留；
 后两项日志为 `/tmp/reference-migration-cache-fixed-{check,clippy}.log`。
 最终新 head CI 按实际结果记录于 PR；552e29e 的产物只作历史诊断。
+
+### 同批 WebKit 测试对话框定位修复
+
+451c372 的 Chromium 实际 384 通过；WebKit 实际 383 直接通过、1 项重试后通过，不能记为零重试。
+首次失败为 `mobile-route-editor.spec.ts:13` 的 locator strict violation：全局“继续编辑”同时匹配 busy guard 与正在退场的预览 Portal。
+“设置正在提交”已可见，日志没有保存状态或返回行为断言失败；这次证据只支持定位歧义，不称产品 busy guard 失效。
+仅将该点击与既有可见断言限定到标题精确为“设置正在提交”的 dialog；完整 save-once、草稿、返回及 saved_pending_apply 断言保留。
+不增加 sleep、retry、timeout，不改变产品逻辑。正确复用4177的本地 Chromium 定点真实 1/1 通过（0失败/重试/跳过），
+日志 `/tmp/reference-migration-dialog-locator-chromium.log`。本地无 WebKit，最终双引擎按新 head CI 记录，不借451的重试结果。
