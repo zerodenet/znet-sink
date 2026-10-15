@@ -26,6 +26,11 @@ pub struct PacketRoute {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PacketSnapshot {
+    pub offset: u32,
+    pub limit: u16,
+    pub client_scope_generation: u64,
+    pub blocked_targets: Vec<PacketPhysicalTarget>,
+    pub close_ledger_full: bool,
     pub supported: bool,
     pub can_close: bool,
     pub reason: Option<String>,
@@ -42,6 +47,7 @@ pub struct PacketSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PacketTarget {
     pub profile_id: Option<String>,
+    pub client_scope_generation: u64,
     pub route_id: String,
     pub core_instance_id: String,
     pub config_revision: String,
@@ -53,4 +59,51 @@ pub struct PacketCloseResult {
     pub status: String,
     pub message: String,
     pub route: Option<PacketRoute>,
+}
+
+/// Host view lifetime is independent of a physical Packet conversation.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PacketPageIdentity {
+    pub profile_id: Option<String>,
+    pub core_instance_id: String,
+    pub config_revision: String,
+    pub client_scope_generation: u64,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PacketPageQuery {
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default = "packet_page_limit")]
+    pub limit: u16,
+    pub expected: Option<PacketPageIdentity>,
+}
+fn packet_page_limit() -> u16 {
+    500
+}
+impl Default for PacketPageQuery {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: packet_page_limit(),
+            expected: None,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketPhysicalTarget {
+    pub core_instance_id: String,
+    pub route_id: String,
+    pub config_revision: String,
+}
+impl From<&PacketTarget> for PacketPhysicalTarget {
+    fn from(target: &PacketTarget) -> Self {
+        Self {
+            core_instance_id: target.core_instance_id.clone(),
+            route_id: target.route_id.clone(),
+            config_revision: target.config_revision.clone(),
+        }
+    }
 }

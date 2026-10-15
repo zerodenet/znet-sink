@@ -5,6 +5,8 @@ use crate::{
     models::{core::CoreIpcOptions, gui_core::GuiZeroCapabilities, packet_routes::*},
 };
 use serde_json::{json, Value};
+mod ledger;
+use ledger::{CloseLedger, LEDGER};
 
 use zero_api::{
     PacketRouteListSnapshot as PageWire, PacketRouteSnapshot as RouteWire, PacketRouteState,
@@ -79,7 +81,9 @@ fn close_reason(caps: &GuiZeroCapabilities) -> Option<String> {
 }
 
 fn revision(target: &PacketTarget) -> AppResult<u64> {
-    if target.route_id.trim().is_empty()
+    if target.route_id.len() > 1024
+        || target.core_instance_id.len() > 1024
+        || target.route_id.trim().is_empty()
         || target.core_instance_id.trim().is_empty()
         || target.config_revision.is_empty()
         || !target.config_revision.bytes().all(|b| b.is_ascii_digit())
@@ -107,12 +111,41 @@ fn ensure(route: &PacketRoute, target: &PacketTarget) -> AppResult<()> {
 pub async fn snapshot(
     profile_id: Option<String>,
     options: CoreIpcOptions,
+    query: PacketPageQuery,
+    client_scope_generation: u64,
 ) -> AppResult<PacketSnapshot> {
+    snapshot_with_ledger(profile_id, options, query, client_scope_generation, &LEDGER).await
+}
+fn validate_page(query: &PacketPageQuery) -> AppResult<()> {
+    if !(1..=500).contains(&query.limit) {
+        return Err(AppError::invalid_argument("Packet 每页数量须为1–500"));
+    }
+    if query.offset > 0 && query.expected.is_none() {
+        return Err(AppError::invalid_argument(
+            "后续页必须绑定原配置、实例和客户端代次",
+        ));
+    }
+    Ok(())
+}
+async fn snapshot_with_ledger(
+    profile_id: Option<String>,
+    options: CoreIpcOptions,
+    query: PacketPageQuery,
+    client_scope_generation: u64,
+    ledger: &CloseLedger,
+) -> AppResult<PacketSnapshot> {
+    validate_page(&query)?;
+    let (blocked_targets, close_ledger_full) = ledger.snapshot()?;
     let caps = queries::zero_capabilities(Some(options.clone())).await?;
     let reason = support_reason(&caps);
     let close_reason = close_reason(&caps);
     if reason.is_some() {
         return Ok(PacketSnapshot {
+            offset: query.offset,
+            limit: query.limit,
+            client_scope_generation,
+            blocked_targets,
+            close_ledger_full,
             supported: false,
             can_close: false,
             reason,
@@ -127,13 +160,26 @@ pub async fn snapshot(
         });
     }
     let before = queries::runtime_identity(Some(options.clone())).await?;
+    if query.expected.as_ref().is_some_and(|expected| {
+        expected.profile_id != profile_id
+            || expected.client_scope_generation != client_scope_generation
+            || expected.core_instance_id != before.core_instance_id
+            || expected.config_revision != before.config_revision.to_string()
+    }) {
+        return Err(AppError::conflict(
+            "packet_page",
+            "",
+            "分页所属配置、实例或代次已变化，请返回第一页重新检查",
+        ));
+    }
     // Bounded view, not an unlimited historical store. The current API lists
     // active/closing leases, and expired leases can disappear during a read.
     let page: PageWire = decode(
         queries::query_value(
             json!(zero_api::QueryRequest::PacketRoutes(
                 zero_api::PacketRouteListQuery {
-                    limit: Some(500),
+                    offset: query.offset as usize,
+                    limit: Some(query.limit as usize),
                     ..Default::default()
                 }
             )),
@@ -153,13 +199,21 @@ pub async fn snapshot(
             "内核实例或配置已变化，请重新检查",
         ));
     }
-    if page.routes.len() > 500
+    let end = (query.offset as usize)
+        .checked_add(page.routes.len())
+        .ok_or_else(|| AppError::internal("Packet 分页位置溢出"))?;
+    let expected_next = (end < page.total).then_some(end);
+    if page.routes.len() > query.limit as usize
         || page.routes.len() > page.total
-        || page
-            .next_offset
-            .is_some_and(|n| n != page.routes.len() || n >= page.total)
+        || (!page.routes.is_empty() && ((query.offset as usize) >= page.total || end > page.total))
+        || (end < page.total && page.routes.is_empty())
+        || page.next_offset != expected_next
+        || page.total > u32::MAX as usize
+        || page.next_offset.is_some_and(|n| n > u32::MAX as usize)
     {
-        return Err(AppError::internal("Packet 路径分页响应无效"));
+        return Err(AppError::internal(
+            "Packet 路径分页响应无效或超出客户端可表示范围",
+        ));
     }
     let mut ids = std::collections::HashSet::new();
     let mut routes = Vec::new();
@@ -172,7 +226,22 @@ pub async fn snapshot(
         // Such rows remain observable but cannot be closed with an old revision.
         routes.push(row);
     }
+    for row in routes.iter().filter(|row| row.state == "closed") {
+        ledger.ended(&PacketTarget {
+            profile_id: profile_id.clone(),
+            client_scope_generation,
+            route_id: row.route_id.clone(),
+            core_instance_id: row.core_instance_id.clone(),
+            config_revision: row.config_revision.clone(),
+        })?;
+    }
+    let (blocked_targets, close_ledger_full) = ledger.snapshot()?;
     Ok(PacketSnapshot {
+        offset: query.offset,
+        limit: query.limit,
+        client_scope_generation,
+        blocked_targets,
+        close_ledger_full,
         supported: true,
         can_close: close_reason.is_none(),
         reason: None,
@@ -201,6 +270,13 @@ async fn get(id: &str, options: CoreIpcOptions) -> AppResult<PacketRoute> {
     )?)
 }
 pub async fn detail(target: PacketTarget, options: CoreIpcOptions) -> AppResult<PacketRoute> {
+    detail_with_ledger(target, options, &LEDGER).await
+}
+async fn detail_with_ledger(
+    target: PacketTarget,
+    options: CoreIpcOptions,
+    ledger: &CloseLedger,
+) -> AppResult<PacketRoute> {
     revision(&target)?;
     let caps = queries::zero_capabilities(Some(options.clone())).await?;
     if let Some(reason) = support_reason(&caps) {
@@ -211,8 +287,7 @@ pub async fn detail(target: PacketTarget, options: CoreIpcOptions) -> AppResult<
         });
     }
     let before = queries::runtime_identity(Some(options.clone())).await?;
-    let current = get(&target.route_id, options.clone()).await?;
-    ensure(&current, &target)?;
+    let current = get(&target.route_id, options.clone()).await;
     let after = queries::runtime_identity(Some(options)).await?;
     if before != after || after.core_instance_id != target.core_instance_id {
         return Err(AppError::conflict(
@@ -221,9 +296,40 @@ pub async fn detail(target: PacketTarget, options: CoreIpcOptions) -> AppResult<
             "内核实例已变化，请刷新",
         ));
     }
-    Ok(current)
+    match current {
+        Ok(current) => {
+            ensure(&current, &target)?;
+            if current.state == "closed" {
+                ledger.ended(&target)?;
+            }
+            Ok(current)
+        }
+        Err(error) if error.code == "not_found" => {
+            ledger.ended(&target)?;
+            Err(AppError {
+                code: "not_found",
+                message: "同一内核实例已确认原 Packet 会话不再存在".into(),
+                details: Some(json!({"packetTargetEnded":PacketPhysicalTarget::from(&target)})),
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<PacketCloseResult> {
+    close_with_ledger(target, options, &LEDGER).await
+}
+async fn close_with_ledger(
+    target: PacketTarget,
+    options: CoreIpcOptions,
+    ledger: &CloseLedger,
+) -> AppResult<PacketCloseResult> {
+    if ledger.contains(&target)? {
+        return Err(AppError::conflict(
+            "packet_close",
+            "",
+            "原物理会话关闭仍在途或结果未确认，请只读核对原目标",
+        ));
+    }
     let expected_revision = revision(&target)?;
     let caps = queries::zero_capabilities(Some(options.clone())).await?;
     if let Some(reason) = close_reason(&caps) {
@@ -242,6 +348,7 @@ pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<P
             "会话正在关闭或已结束，请重新检查",
         ));
     }
+    ledger.reserve(&target)?;
     let response = commands::run_command(
         "packet_routes.close",
         json!(zero_api::PacketRouteCloseCommand {
@@ -255,7 +362,12 @@ pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<P
     let receipt = match response {
         Ok(v) => {
             if v["accepted"].as_bool() == Some(false) {
-                return Err(AppError::core_response(v));
+                let error = AppError::core_response(v);
+                if explicit_rejection(&error) {
+                    ledger.ended(&target)?;
+                    return Err(error);
+                }
+                return Ok(unconfirmed("关闭回执未提供兼容的明确拒绝，保留原目标屏障"));
             }
             if v["accepted"].as_bool() != Some(true) {
                 return Ok(unconfirmed("内核未提供明确关闭回执；请重新检查原会话"));
@@ -268,21 +380,15 @@ pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<P
             (result["closed"].as_bool() == Some(true) && receipt.state == "closed")
                 .then_some(receipt)
         }
-        Err(e)
-            if [
-                "timeout",
-                "connection_closed",
-                "core_unavailable",
-                "io_error",
-                "internal",
-            ]
-            .contains(&e.code) =>
-        {
+        Err(error) if explicit_rejection(&error) => {
+            ledger.ended(&target)?;
+            return Err(error);
+        }
+        Err(_) => {
             return Ok(unconfirmed(
-                "关闭结果未确认；请求可能仍在执行，请重新检查原会话，勿重复提交",
+                "关闭结果未确认；回执缺失、不兼容或读取中断，保留原目标屏障且不重放",
             ))
         }
-        Err(e) => return Err(e),
     };
     let identity = match queries::runtime_identity(Some(options.clone())).await {
         Ok(i) => i,
@@ -297,7 +403,17 @@ pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<P
     {
         return Ok(unconfirmed("内核或配置已变化，原关闭结果仅供历史核对"));
     }
-    match get(&target.route_id, options).await {
+    let current = get(&target.route_id, options.clone()).await;
+    let final_identity = queries::runtime_identity(Some(options)).await;
+    if !final_identity
+        .as_ref()
+        .is_ok_and(|after| after == &identity)
+    {
+        return Ok(unconfirmed(
+            "核对原会话时内核身份发生变化或读取失败，请保留原关闭屏障",
+        ));
+    }
+    let result: AppResult<PacketCloseResult> = match current {
         Ok(r) if ensure(&r, &target).is_ok() && r.state == "closed" => Ok(PacketCloseResult {
             status: "confirmed".into(),
             message: "原 Packet 会话已结束；端点启用意图保持不变".into(),
@@ -309,7 +425,30 @@ pub async fn close(target: PacketTarget, options: CoreIpcOptions) -> AppResult<P
             route: receipt,
         }),
         _ => Ok(unconfirmed("原会话尚未确认释放，请重新检查其状态")),
+    };
+    if result
+        .as_ref()
+        .is_ok_and(|result| result.status == "confirmed")
+    {
+        ledger.ended(&target)?;
     }
+    result
+}
+// Only typed, correlated, negative core receipts prove this reservation did
+// not start a mutation. Unknown transport/decoder/core errors stay fenced.
+fn explicit_rejection(error: &AppError) -> bool {
+    [
+        "permission_denied",
+        "invalid_argument",
+        "feature_disabled",
+        "conflict",
+        "unsupported",
+        "not_found",
+    ]
+    .contains(&error.code)
+        && error.details.as_ref().is_some_and(|receipt| {
+            receipt["ok"].as_bool() == Some(false) || receipt["accepted"].as_bool() == Some(false)
+        })
 }
 fn unconfirmed(message: &str) -> PacketCloseResult {
     PacketCloseResult {
@@ -333,9 +472,36 @@ mod tests {
         assert_eq!(row.endpoints[0].generation, Some(u64::MAX.to_string()));
     }
     #[test]
+    fn invalid_response_and_generic_errors_are_not_treated_as_safe_rejections() {
+        for code in [
+            "invalid_response",
+            "timeout",
+            "connection_closed",
+            "core_error",
+            "internal",
+            "io_error",
+        ] {
+            let error = AppError {
+                code,
+                message: "fixture".into(),
+                details: Some(json!({"ok":false})),
+            };
+            assert!(!explicit_rejection(&error));
+        }
+        assert!(!explicit_rejection(&AppError {
+            code: "permission_denied",
+            message: "fixture".into(),
+            details: None
+        }));
+        assert!(explicit_rejection(&AppError::core_response(
+            json!({"ok":false,"error":{"code":"permission_denied","message":"fixture"}})
+        )));
+    }
+    #[test]
     fn rejects_invalid_identity_and_revision() {
         let target = PacketTarget {
             profile_id: None,
+            client_scope_generation: 1,
             route_id: "r".into(),
             core_instance_id: "i".into(),
             config_revision: "18446744073709551615".into(),

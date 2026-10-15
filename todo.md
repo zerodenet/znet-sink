@@ -105,14 +105,18 @@
 恢复旧详情。端点来源的统计清空确认也重新核对原目标，不能重选或重放。
 隐藏页面保留状态但不轮询或改写当前统计浏览条件；共享事件通道继续保留。
 源码与浏览器回归不代表手机端点或统计真机验收，也不提供远端新增原子保证。
+契约及针对性检查见[端点统计导航](docs/gui/endpoint-statistics-navigation-v0.0.3.md)。
 
 ## CLIENT-06
 
-**仍可独立实施：Packet 列表后续分页。**
-`services/packet_routes.rs` 查询固定首500条，客户端 `features/packet/client.ts` 没有
-分页参数，`PacketRoutesPanel.svelte` 仅提示 `nextOffset`。固定zero-api已有offset/limit/
-next_offset，不依赖新core。退出条件：有界翻页、末项可达、明确本页筛选范围，翻页失败
-保留原页，身份或配置变化使旧页详情/控制失效。当前单页fixture不覆盖第二页。
+**已实现客户端分页；本批最终提交 CI 待核验。** 使用固定 zero-api 的真实
+offset/limit/next_offset，每页最多500条，支持前后页、末项、当前页刷新与原失败页重试。
+搜索明确只筛选本页，页面之间是实时读取；失败保留带时间的原页并使控制失效。
+后续页和确认固定配置、实例、revision 与客户端 scopeGeneration，变化或晚回执不能
+继续旧控制；分页、计数和无损 u64 均校验，越界响应不截断。
+宿主进程内128个物理目标的关闭屏障跨页、Panel重建与配置ABA保留，只有原目标权威
+结束事实或明确拒绝才协调；坏回执和未知错误不释放、不重放。该屏障尚无进程重启后的
+持久恢复账本，原生移动关闭仍不可用。契约见[Packet分页](docs/gui/packet-route-pagination-v0.0.3.md)。
 
 ## CLIENT-07
 

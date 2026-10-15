@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PacketPaginationFixture from './PacketPaginationFixture.svelte';
   import DesktopDiagnosticExportFixture from './DesktopDiagnosticExportFixture.svelte';
   import PluginPageFixture from './PluginPageFixture.svelte';
   import NativeDocumentsFixture from './NativeDocumentsFixture.svelte';
@@ -54,7 +55,9 @@
 </script>
 
 <div style="position:fixed;top:8px;left:0;right:0;z-index:9999"><Toast /></div>
-{#if selectedPanel === 'desktop-diagnostic-export'}
+{#if selectedPanel === 'packet-pagination'}
+  <PacketPaginationFixture />
+{:else if selectedPanel === 'desktop-diagnostic-export'}
   <DesktopDiagnosticExportFixture />
 {:else if selectedPanel === 'plugin-page'}
   <PluginPageFixture />

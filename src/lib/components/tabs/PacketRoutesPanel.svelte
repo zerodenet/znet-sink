@@ -1,56 +1,77 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import * as Dialog from '$lib/components/ui/dialog';
   import { packetGateway } from '$lib/features/packet/client';
   import { PacketSession } from '$lib/features/packet/session';
-  import { closeReason, packetTime } from '$lib/features/packet/types';
-  import type { PacketTarget } from '$lib/features/packet/types';
+  import { packetTime, physicalKey, safeGeneration } from '$lib/features/packet/types';
+  import type { PacketTarget, PacketGateway } from '$lib/features/packet/types';
   import { getAppErrorMessage, getClientCoreSnapshot } from '$lib/services/core';
   import type { ClientCoreSnapshot } from '$lib/types/gui-api';
-  const session = new PacketSession(packetGateway, value => { view = value; });
+  let { gateway = packetGateway, readHost = getClientCoreSnapshot }: { gateway?: PacketGateway; readHost?: () => Promise<ClientCoreSnapshot> } = $props();
+  const session = new PacketSession(untrack(() => gateway), value => { view = value; });
   let view = $state(session.view);
   let query = $state('');
   let pending = $state<PacketTarget | null>(null);
   let confirmOpen = $state(false);
   let hostError = $state<unknown>(null);
   let hostReady = $state(false);
+  let hostGeneration = $state<number | null>(null);
   let scope: string | null = null;
   let hostRevision = -1;
+  let alive = true;
+  const controlsReady = $derived(hostReady && view.snapshot?.clientScopeGeneration === hostGeneration);
   const rows = $derived((view.snapshot?.routes ?? []).filter(r => `${r.routeId} ${r.source} ${r.destination} ${r.inboundTag} ${r.outboundTag} ${r.endpoints.map(e => e.endpointId).join(' ')}`.toLowerCase().includes(query.toLowerCase())));
+  function clearConfirmation() { pending = null; confirmOpen = false; }
   function applyScope(snapshot: ClientCoreSnapshot) {
+    if (!alive) return;
+    if (!safeGeneration(snapshot.revision) || !safeGeneration(snapshot.scopeGeneration)) {
+      hostReady = false; hostError = { message: '客户端缺少正安全的作用域代次，控制暂不可用' };
+      clearConfirmation(); session.invalidate(); return;
+    }
     if (snapshot.revision < hostRevision) return;
     hostRevision = snapshot.revision;
-    const next = JSON.stringify(snapshot.scope);
-    if (scope !== null && scope !== next) { pending = null; confirmOpen = false; session.invalidate(); }
-    scope = next; hostReady = true; hostError = null;
+    const next = JSON.stringify([snapshot.scope, snapshot.scopeGeneration]);
+    if (scope !== null && scope !== next) { clearConfirmation(); session.invalidate(); }
+    scope = next; hostGeneration = snapshot.scopeGeneration; hostReady = true; hostError = null;
+  }
+  async function readScope() {
+    try { applyScope(await readHost()); }
+    catch (error) { if (alive) { hostError = error; hostReady = false; clearConfirmation(); } }
   }
   async function refresh(clearError = false) {
-    try { applyScope(await getClientCoreSnapshot()); } catch (error) { hostError = error; hostReady = false; }
-    await session.refresh(clearError);
+    if (!clearError && view.failedOffset !== null) return;
+    await readScope();
+    if (!alive) return;
+    if (clearError) { clearConfirmation(); await session.retry(); }
+    else await session.refresh();
+  }
+  async function navigate(direction: 'next' | 'previous' | 'first') {
+    clearConfirmation(); await readScope(); if (!alive) return;
+    await session[direction]();
   }
   onMount(() => {
-    let mounted = true;
     let stop: (() => void) | undefined;
     void listen<ClientCoreSnapshot>('client-core:updated', event => {
       applyScope(event.payload);
-      if (view.stale && !view.busy) void session.refresh();
+      if (view.stale && !view.busy && view.failedOffset === null) void refresh();
     }).then(unlisten => {
-      if (!mounted) { unlisten(); return; }
+      if (!alive) { unlisten(); return; }
       stop = unlisten; void refresh();
-    }).catch(error => { if (mounted) { hostError = error; hostReady = false; void session.refresh(); } });
+    }).catch(error => { if (alive) { hostError = error; hostReady = false; void session.refresh(); } });
     const focused = () => { if (!document.hidden) void refresh(); };
     window.addEventListener('focus', focused);
     document.addEventListener('visibilitychange', focused);
     const timer = setInterval(() => { if (!document.hidden && !confirmOpen) void refresh(); }, 5000);
-    return () => { mounted = false; clearInterval(timer); stop?.(); window.removeEventListener('focus', focused); document.removeEventListener('visibilitychange', focused); session.dispose(); };
+    return () => { alive = false; clearInterval(timer); stop?.(); window.removeEventListener('focus', focused); document.removeEventListener('visibilitychange', focused); session.dispose(); };
   });
 </script>
 <section class="packet-panel" aria-label="Packet 路径">
   <header><div><h2>Packet 路径</h2><p>原生 IP Packet 会话，独立于 TCP / UDP Flow</p></div><Button variant="outline" disabled={view.loading || !!view.busy} onclick={() => refresh(true)}>重新检查</Button></header>
-  <Input aria-label="搜索 Packet 会话" placeholder="搜索地址、会话或端点" bind:value={query} />
+  <Input aria-label="仅筛选本页 Packet 会话" placeholder="仅筛选本页地址、会话或端点" bind:value={query} />
+  <p class="sample">仅筛选本页；每页独立读取实时会话，各页之间可能新增、结束或移位，不是冻结的完整历史。</p>
   {#if view.loading}<p role="status">正在读取 Packet 会话…</p>{/if}
   {#if hostError}<p class="notice" role="alert">{getAppErrorMessage(hostError, '客户端状态未确认')}；控制暂不可用。</p>{/if}
   {#if view.error}<p class="notice" role="alert">{getAppErrorMessage(view.error, 'Packet 路径读取或操作失败')}。请重新检查。</p>{/if}
@@ -60,26 +81,38 @@
   {:else if view.snapshot}
     <p class="sample">采样：{packetTime(view.snapshot.observedAtUnixMs)}{view.stale ? ' · 已过期，控制暂不可用' : ''}</p>
     {#if view.snapshot.closeReason}<p class="notice">{view.snapshot.closeReason}</p>{/if}
-    {#if view.snapshot.nextOffset !== null}<p class="notice">当前显示前 {view.snapshot.routes.length} 条，共 {view.snapshot.total} 条；这是有界当前快照，不含无限历史。</p>{/if}
-    {#if rows.length === 0 && !view.loading}<p>{view.snapshot.routes.length ? '没有匹配的 Packet 会话' : '当前没有 Packet 会话'}</p>{/if}
+    <p class="sample" aria-label="Packet 分页范围">本页偏移 {view.snapshot.offset}，读取 {view.snapshot.routes.length} 条；本次读取时共 {view.snapshot.total ?? '—'} 条，每页最多 {view.snapshot.limit} 条。</p>
+    <nav class="actions" aria-label="Packet 分页">
+      <Button variant="outline" disabled={view.loading || !!view.busy || view.stale || view.snapshot.offset === 0} onclick={() => navigate('previous')}>上一页</Button>
+      <Button variant="outline" disabled={view.loading || !!view.busy || view.stale || view.snapshot.nextOffset === null} onclick={() => navigate('next')}>下一页</Button>
+      {#if view.failedOffset !== null}<Button variant="outline" disabled={view.loading || !!view.busy} onclick={() => refresh(true)}>重试偏移 {view.failedOffset}</Button>{/if}
+      {#if view.snapshot.offset > 0 || view.refreshError}<Button variant="outline" disabled={view.loading || !!view.busy} onclick={() => navigate('first')}>返回第一页重新检查</Button>{/if}
+    </nav>
+    {#if rows.length === 0 && !view.loading}<p>{view.snapshot.routes.length ? '本页没有匹配的 Packet 会话；可清除筛选后翻页' : view.snapshot.offset > 0 ? '此偏移当前没有 Packet 会话；会话数量可能已变化，可返回上一页或第一页' : '当前没有 Packet 会话'}</p>{/if}
     {#each rows as route (route.routeId)}
-      {@const reason = closeReason(view.snapshot, route, view.stale)}
+      {@const reason = session.reason(route)}
       <article>
         <div class="route-head"><strong>{route.source || '—'} → {route.destination || '—'}</strong><span>{route.state === 'active' ? '活动' : route.state === 'closing' ? '关闭中' : '已结束'}</span></div>
         <dl><dt>会话 ID</dt><dd>{route.routeId}</dd><dt>IP 协议</dt><dd>{route.ipProtocol}</dd><dt>路径方式</dt><dd>{route.translated ? '转换' : '原生'}</dd><dt>入站 / 出站</dt><dd>{route.inboundTag || '—'} / {route.outboundTag || '—'}</dd><dt>端点</dt><dd>{route.endpoints.length ? route.endpoints.map(e => `${e.endpointId} (generation ${e.generation ?? '—'})`).join('、') : '未提供'}</dd><dt>开始时间</dt><dd>{packetTime(route.startedAtUnixMs)}</dd></dl>
-        <div class="actions"><Button variant="outline" disabled={view.stale || !!view.busy} onclick={() => session.inspect(route)}>详情</Button><Button variant="outline" disabled={!hostReady || !!reason || !!view.busy || view.unconfirmed.includes(route.routeId)} onclick={() => { pending = session.target(route); confirmOpen = pending !== null; }}>关闭会话</Button></div>
+        <div class="actions"><Button variant="outline" disabled={view.loading || view.stale || !controlsReady || !!view.busy} onclick={() => session.inspect(route)}>详情</Button><Button variant="outline" disabled={!controlsReady || view.loading || !!reason || !!view.busy} onclick={() => { pending = session.target(route); confirmOpen = pending !== null; }}>关闭会话</Button></div>
         {#if reason}<p class="sample">{reason}</p>{/if}
-        {#if view.unconfirmed.includes(route.routeId)}<p class="notice">原关闭结果未确认；只核对原会话，不自动重复关闭。</p>{/if}
+        {#if view.blockedTargets.some(target => physicalKey(target) === physicalKey(route))}<p class="notice">原关闭结果未确认；只核对原会话，不自动重复关闭。</p>{/if}
       </article>
     {/each}
   {/if}
+  {#if view.blockedTargets.length}
+    <article aria-label="原 Packet 关闭屏障"><h3>在途或未确认的原目标（{view.blockedTargets.length}）</h3><p class="sample">宿主进程内最多128个物理目标；跨页、返回页面及配置切回不解除。仅同实例原目标的权威结束事实可协调；这不是进程重建持久账本。</p>
+      {#each view.blockedTargets as target (physicalKey(target))}<div class="barrier"><p class="target">{target.routeId} · 实例 {target.coreInstanceId} · 配置版本 {target.configRevision}</p><Button variant="outline" disabled={!controlsReady || view.stale || view.loading || !!view.busy || view.snapshot?.coreInstanceId !== target.coreInstanceId} onclick={() => session.reconcile(target)}>只读核对原会话</Button></div>{/each}
+    </article>
+  {/if}
+  {#if view.snapshot?.closeLedgerFull || view.blockedTargets.length >= 128}<p class="notice">关闭目标预算已满，暂停新增关闭操作；读取、筛选和翻页仍可用，请先核对原目标。</p>{/if}
   {#if view.detail}<article aria-label="Packet 会话详情"><h3>会话详情</h3><dl><dt>会话 ID</dt><dd>{view.detail.routeId}</dd><dt>内核实例</dt><dd>{view.detail.coreInstanceId}</dd><dt>配置版本</dt><dd>{view.detail.configRevision}</dd><dt>状态</dt><dd>{view.detail.state}</dd><dt>源 / 目的</dt><dd>{view.detail.source} / {view.detail.destination}</dd></dl></article>{/if}
 </section>
 <Dialog.Root bind:open={confirmOpen}>
   <Dialog.Content class="packet-confirm">
     <Dialog.Header><Dialog.Title>关闭此 Packet 会话？</Dialog.Title><Dialog.Description>只关闭打开确认面板时的会话 ID；端点启用意图及其他 Flow 保持不变。应用可能建立新会话。</Dialog.Description></Dialog.Header>
     <Dialog.Body><p class="target">{pending?.routeId}</p><p>实例：{pending?.coreInstanceId}<br/>配置版本：{pending?.configRevision}</p></Dialog.Body>
-    <Dialog.Footer><Button variant="outline" onclick={() => { confirmOpen = false; pending = null; }}>取消</Button><Button disabled={!pending || !hostReady || !!view.busy} onclick={() => { const target = pending; confirmOpen = false; pending = null; if (target) void session.close(target); }}>确认关闭</Button></Dialog.Footer>
+    <Dialog.Footer><Button variant="outline" onclick={() => { confirmOpen = false; pending = null; }}>取消</Button><Button disabled={!pending || !controlsReady || view.stale || view.loading || !!view.busy} onclick={() => { const target = pending; confirmOpen = false; pending = null; if (target) void session.close(target); }}>确认关闭</Button></Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 <style>
@@ -94,6 +127,7 @@
   dl { display: grid; grid-template-columns: minmax(70px, 90px) minmax(0, 1fr); gap: 6px 12px; font-size: 13px; } dt { color: var(--muted-foreground); } dd { min-width: 0; }
   .notice { padding: 12px; background: var(--muted); border-radius: 9px; font-size: 13px; overflow-wrap: anywhere; }
   .actions { justify-content: flex-end; }
+  .barrier {display:grid;gap:8px;border-top:1px solid var(--border);padding-top:8px;}
   :global(.packet-confirm button), :global(.packet-panel button), :global(.packet-panel input) { min-height: 44px; }
   @media (max-width: 360px) { .packet-panel { padding: 12px; } dl { grid-template-columns: 74px minmax(0, 1fr); } }
 </style>
