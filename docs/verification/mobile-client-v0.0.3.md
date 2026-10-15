@@ -1057,3 +1057,19 @@ macOS 同批 job116627516536 的相同许可步骤随后也真实失败，首错
 缺失材料及诚实 debug stub 原断言全部保留。日志 `/tmp/a22-license-{cold-red,cold-green,host-green}.log`。
 没有修改 CI YAML、依赖、锁文件或许可材料，不消除四项 Android 许可缺口。
 中间 head 的结果只作失败历史；最终 head 的四组 CI 与七份产物重新核对于同一 PR。
+
+### 同批 Windows 安装锁争用分类修复
+
+中间提交 `61f26723d20df17083082fbef36360fba566060d` 的 Main #208（run38796035683）
+Ubuntu/macOS 已通过上述许可 build-hook；Windows2022 job116633419200 与
+Windows2025 job116633419280 均在真实安装锁争用测试失败，各 GUI 1144 通过/1 失败/4 忽略。
+失败断言是持锁拒绝至少等待原五秒截止；此前拒绝本身已通过，后续释放后成功断言尚未执行。
+
+依据实际 fs2 源码，Windows 的锁冲突为 `ERROR_LOCK_VIOLATION`，不必映射为
+`ErrorKind::WouldBlock`。Store 原循环将其当成普通 IO 错误立即拒绝；现同时识别
+`fs2::lock_contended_error()` 的精确平台错误码，保持原五秒截止，其他 IO 错误仍立即失败。
+不删除或放宽原等待、八秒上界、材料不变及释放后成功断言，不增加重试或跳过 Windows。
+本地 Linux 不替代 Windows 修复后验收；新 head 的两实际 Windows 镜像重新验证。
+修复后完整 locked workspace/all-features 再次 **1515/0/7，45组**（GUI1241/0/5），
+fmt、全目标全特性 check 与完整 Clippy 通过，既有警告保留；
+日志 `/tmp/a22-lock-{fmt,check,tests,clippy}-final.log`。

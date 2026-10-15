@@ -173,16 +173,24 @@ impl Store {
             return Err("nonregular installation lock rejected".into());
         }
         let deadline = Instant::now() + Duration::from_secs(5);
+        // fs2 reports Windows contention as ERROR_LOCK_VIOLATION, whose
+        // ErrorKind is not necessarily WouldBlock. Compare its documented
+        // platform error as well; unrelated IO errors still fail immediately.
+        let contended = fs2::lock_contended_error().raw_os_error();
         loop {
             match FileExt::try_lock_exclusive(&file) {
                 Ok(()) => return Ok(StoreLock(file)),
                 Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
+                    if (error.kind() == std::io::ErrorKind::WouldBlock
+                        || (contended.is_some() && error.raw_os_error() == contended))
                         && Instant::now() < deadline =>
                 {
                     std::thread::sleep(Duration::from_millis(5))
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || (contended.is_some() && error.raw_os_error() == contended) =>
+                {
                     return Err("installation store busy".into())
                 }
                 Err(error) => return Err(error.into()),
