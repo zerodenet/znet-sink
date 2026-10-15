@@ -751,3 +751,14 @@ feature client alias均在本次17项执行中使用。完整类型检查0 error
 最终源码的完整 `pnpm verify:frontend` 已从头重跑通过，日志
 `/tmp/profile-editor-frontend-verified.log`，含全部功能回归、新Node20、许可检查、
 0错误/0警告类型检查及生产构建。没有将前轮失败命令记为通过。
+
+### 未确认保存的关闭标题修正
+
+`001da17c744d49c885898ea3df27ac3cbba90e8e` 四组CI实际全部success/attempt1，
+主CI14/14、双引擎664/664（每引擎332，新增编辑器各8），无失败/重试/波动/跳过。
+等待时发现：unknown关闭确认正文已说明原保存可能已完成，但标题仍称“未保存”。
+仅为unknown改为“关闭结果未确认的编辑器？”，普通dirty与saving标题保持；现有
+浏览器用例补正确标题及旧标题不存在断言，不增加恢复链。修正后完整前端验证重新
+通过、类型检查0/0、build通过；同17 Chromium再次17/17（0失败/重试/跳过）。
+日志`/tmp/profile-editor-heading-frontend.log`、`/tmp/profile-editor-browser-headingfinal.log`。
+新SHA的CI仍须重新观察，001da结果仅历史，不借作标题修正后的准确提交绿灯。

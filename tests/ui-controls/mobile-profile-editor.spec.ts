@@ -92,6 +92,8 @@ test('unknown create reads fixed original target metadata without replay; closin
  expect((await calls(page)).filter((item:any)=>item.kind==='save')).toHaveLength(1);
  expect((await calls(page)).filter((item:any)=>item.kind==='snapshot').at(-1).input).toBe('manual-fixture-create');
  await page.locator('.profile-editor-footer').getByRole('button',{name:'关闭',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'关闭结果未确认的编辑器？',exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'放弃未保存的修改？',exact:true})).toHaveCount(0);
  await expect(page.getByText('放弃当前草稿并关闭，原本地保存结果仍未确认，不会撤回或重放。',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'继续编辑',exact:true}).click();await expect(page.getByLabel('配置 JSON 原文')).toHaveValue(raw);
 });

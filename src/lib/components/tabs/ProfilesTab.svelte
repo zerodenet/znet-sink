@@ -221,7 +221,7 @@
   {/snippet}
 </DraggableModal>
 <ProfileRemovalDialog targetId={deleteTarget?.id ?? null} bind:open={deleteOpen} onremoved={profileRemoved}/>
-<Dialog.Root bind:open={discardEditor}><Dialog.Content><Dialog.Header><Dialog.Title>{saving ? '配置正在保存' : '放弃未保存的修改？'}</Dialog.Title><Dialog.Description>{saving ? '原保存操作仍在等待结果。不会取消、重放或在返回后自动离开。' : editorView.phase==='unknown' ? '放弃当前草稿并关闭，原本地保存结果仍未确认，不会撤回或重放。' : '配置正文与名称尚未保存。继续编辑可保留当前草稿；放弃只关闭编辑器。'}</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={()=>{discardEditor=false;pendingNavigation=null;}}>继续编辑</Button>{#if !saving}<Button variant="destructive" onclick={discardEditorDraft}>放弃修改</Button>{/if}</Dialog.Footer></Dialog.Content></Dialog.Root>
+<Dialog.Root bind:open={discardEditor}><Dialog.Content><Dialog.Header><Dialog.Title>{saving ? '配置正在保存' : editorView.phase==='unknown' ? '关闭结果未确认的编辑器？' : '放弃未保存的修改？'}</Dialog.Title><Dialog.Description>{saving ? '原保存操作仍在等待结果。不会取消、重放或在返回后自动离开。' : editorView.phase==='unknown' ? '放弃当前草稿并关闭，原本地保存结果仍未确认，不会撤回或重放。' : '配置正文与名称尚未保存。继续编辑可保留当前草稿；放弃只关闭编辑器。'}</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={()=>{discardEditor=false;pendingNavigation=null;}}>继续编辑</Button>{#if !saving}<Button variant="destructive" onclick={discardEditorDraft}>放弃修改</Button>{/if}</Dialog.Footer></Dialog.Content></Dialog.Root>
 
 <style>
   .profile-editor-form {display:grid;gap:16px;min-width:0;}
