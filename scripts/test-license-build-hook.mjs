@@ -10,7 +10,11 @@ try{
  const deps=join(root,'src-tauri/target/debug/deps');
  // The workspace also contains sha2 0.11 through other dependencies. Select the
  // build hook's actual Cargo-resolved build dependency, not the first filename.
- const metadata=JSON.parse(execFileSync('cargo',['metadata','--manifest-path',join(root,'src-tauri/Cargo.toml'),'--format-version','1','--locked','--offline'],{encoding:'utf8',maxBuffer:32*1024*1024}));
+ // These rlibs belong to the compiler host, even when the inventory fixture
+ // below exercises Android. Do not require unrelated target crates to be cached.
+ const host=/^host: ([A-Za-z0-9_.-]+)\r?$/m.exec(execFileSync('rustc',['-vV'],{encoding:'utf8'}))?.[1];
+ if(!host)throw new Error('Rust compiler host identity missing');
+ const metadata=JSON.parse(execFileSync('cargo',['metadata','--manifest-path',join(root,'src-tauri/Cargo.toml'),'--format-version','1','--locked','--offline','--filter-platform',host],{encoding:'utf8',maxBuffer:32*1024*1024}));
  const gui=metadata.packages.find(p=>p.name==='gui');
  const guiNode=metadata.resolve.nodes.find(n=>n.id===gui.id);
  const library=name=>{

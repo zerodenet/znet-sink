@@ -1040,3 +1040,20 @@ legacy wrapper 清理后原完整流程再次定点 **1/1** 通过。浏览器�
 原生 VPN/core/宿主装配、签名发行及 Galaxy S8/iPhone 真机仍未验收，不能称整个 A22 或移动端完成。
 四项 Android 许可材料缺口保留；无 core、依赖、锁文件、版本或 CI YAML 变更，
 不使用用户 Mac、不购买账号或创建签名凭据、不合并、发布或修改分支保护。
+
+### 同批许可测试的宿主依赖解析修复
+
+中间提交 `0ed6bd983b9e749a48f7d93c696037e796a5bcae` 的 Main #207（run38794587437）
+Ubuntu下载 job116627516485 在实际许可 build-hook 测试失败。此前五组 Rust 契约合计
+57 通过/0 失败/3 忽略；失败是未过滤目标的 `cargo metadata --locked --offline`
+要求缓存未编译目标的 `android_system_properties v0.1.5`，不能记为全绿。
+macOS 同批 job116627516536 的相同许可步骤随后也真实失败，首错同为缺少该 crate；
+两平台此前的五组 Rust 契约各 57 通过/0 失败/3 忽略，不抵销最终失败。
+
+在 `/tmp` 独立 Cargo cache fixture 仅省略该 crate 的 source/archive（原缓存不改），
+原完整脚本真实退出 1 并复现相同离线错误。修复为 `rustc -vV` 的真实宿主
+`--filter-platform` 元数据，只用于已构建 build-dependency rlib 身份；保留 locked/offline。
+同一冷缓存及普通缓存下完整脚本均通过；Android库存匹配、目标/feature/input SHA/正文篡改、
+缺失材料及诚实 debug stub 原断言全部保留。日志 `/tmp/a22-license-{cold-red,cold-green,host-green}.log`。
+没有修改 CI YAML、依赖、锁文件或许可材料，不消除四项 Android 许可缺口。
+中间 head 的结果只作失败历史；最终 head 的四组 CI 与七份产物重新核对于同一 PR。
