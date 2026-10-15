@@ -878,7 +878,7 @@ DNS删除迁移从host保存材料取原值，只接明确服务器/替代intent
 保存全局客户端覆盖待应用，明确影响全部配置；不验证其它保护来源的运行兼容性。
 旧shortcut server删除/rename在effects/落盘前拒绝；本批专用流只有delete+migrate，rename固定预览未适配并提前提示保留草稿。
 
-最终本地完整locked Rust workspace/all-features：**1431 passed / 0 failed / 7 ignored，45组**，GUI lib **1157/0/5**。
+迁移实现本地完整locked Rust workspace/all-features：**1431 passed / 0 failed / 7 ignored，45组**，GUI lib **1157/0/5**。
 其中新DNS18、规则集owner15、纯引用20、真实artifact7，以及中央组合/完整引用/保留source规则3项，共新增63项。
 完整全集先通过；随后收口新增publish参数数量Clippy警告为固定LocalCandidate，并补legacy新字段及原文重复键断言后，再次完整1431/0/7通过。
 不将ignored称作已运行。格式、全目标workspace check及Clippy以最终执行日志/准确head PR回执为准，既有警告不隐藏。
@@ -898,3 +898,19 @@ Root第一次合并browser命令缺PLAYWRIGHT_REUSE_SERVER开关，启动前报4
 原生VPN/core/宿主装配及Galaxy S8/iPhone真机验收仍后置；四项许可材料缺口保持。
 跨配置或保护来源迁移、完整rename/其余A10/A13条件能力不因本批通过而完成。
 最终提交四组CI及七份artifact按实际新head记录在同一Draft PR，不借64d1或更早head的成功。
+
+### 同批 CI 发现的下载锁释放修复
+
+552e29e 的 Main CI #202 / run38753766515 中，macOS 下载验证真实执行 19 项，18 通过、1 失败：
+`complete_on_disk_without_marker_handles_416_then_still_requires_caller_validation` 在 drop(Cache) 后重开返回“正在下载或校验”。
+后续五项 kernel/license 验证被跳过，该 run 不能作为最终绿色收据。
+Cache 只靠 File close 释放锁；[Rust 文件锁契约](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock)
+允许重复或继承描述符延长锁寿命。并发 spawn 是可能的持有者，CI 日志本身不证明实际发生了哪次 fork。
+新增 Unix 确定性回归保留 try_clone 描述符，旧实现真实复现同一 busy 拒绝（0 通过、1 失败）。
+修复在 Cache 唯一合法 owner Drop 时显式 unlock，Download 仍持有 Cache 到校验/消费完成；不删锁 inode、不添加等待或重试。
+回归同时验证 owner 活着时拒绝独立打开，owner 结束后副本仍活也可重开，以及旧副本关闭不能释放新 owner 的锁。
+修复后重新执行完整 locked workspace/all-features：**1432 passed / 0 failed / 7 ignored，45组**，GUI **1158/0/5**。
+新增描述符回归及原416用例均实际通过；日志 `/tmp/reference-migration-cache-fixed-all-tests.log`。
+修复后 fmt --check、locked workspace/all-targets/all-features check 与 Clippy 均通过，既有警告保留；
+后两项日志为 `/tmp/reference-migration-cache-fixed-{check,clippy}.log`。
+最终新 head CI 按实际结果记录于 PR；552e29e 的产物只作历史诊断。
