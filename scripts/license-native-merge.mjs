@@ -1,8 +1,8 @@
 import { readFileSync,writeFileSync,mkdirSync,existsSync } from 'node:fs';
 import { dirname,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sha256,serializeInventory,argumentsOf } from './license-common.mjs';
-import {applyMaterialCache} from './license-materials.mjs';
+import { sha256,serializeInventory,argumentsOf,verifyMaterialInputs } from './license-common.mjs';
+import {applyMaterialCache,applyPackageMaterialCache} from './license-materials.mjs';
 
 /** @param {any} gradle @param {any} cargo @param {any} frontend @param {any[]} compilerMessages */
 export function mergeInventories(gradle,cargo,frontend,compilerMessages=[]) {
@@ -31,7 +31,14 @@ if(process.argv[1]===fileURLToPath(import.meta.url)) {
   const read=/** @param {string} path */ path=>JSON.parse(readFileSync(path,'utf8'));
   const messages=args['cargo-messages']?readFileSync(args['cargo-messages'],'utf8').split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}}):[];
   let inventory=mergeInventories(read(gradle),read(cargo),read(frontend),messages);
+  verifyMaterialInputs(inventory,fileURLToPath(new URL('../',import.meta.url)),['resources/licenses/frontend-package-materials.json','resources/licenses/rust-package-materials.json']);
   if(args['materials-cache']){inventory=applyMaterialCache(inventory,read(args['materials-cache']));inventory.provenance.inputs.push({label:'resources/licenses/authoritative-materials.json',sha256:sha256(readFileSync(args['materials-cache']))});}
+  const packageLabel='resources/licenses/android-package-materials.json';
+  const packagePath=fileURLToPath(new URL(`../${packageLabel}`,import.meta.url));
+  if(existsSync(packagePath)){
+    inventory=applyPackageMaterialCache(inventory,read(packagePath));
+    inventory.provenance.inputs.push({label:packageLabel,sha256:sha256(readFileSync(packagePath))});
+  }
   mkdirSync(dirname(resolve(args.output)),{recursive:true});writeFileSync(args.output,serializeInventory(inventory));
   console.log(`Native packaged inventory: ${inventory.entries.length} records, ${inventory.gaps.length} explicit gaps`);
 }

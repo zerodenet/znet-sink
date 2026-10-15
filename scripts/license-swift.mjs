@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { applyPackageMaterialCache } from './license-materials.mjs';
 import { sha256 as hash, entryId as commonEntryId, readTextMaterials, serializeInventory } from './license-common.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,7 +16,7 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args.set(key.slice(2), process.argv[index + 1]);
 }
 const allowed = new Set(['cargo-metadata', 'swift-build-path', 'target', 'output', 'build-log',
-  'sdk-data', 'sdk-path', 'artifact', 'resolved-file', 'profile']);
+  'sdk-data', 'sdk-path', 'artifact', 'resolved-file', 'profile', 'cargo-lock', 'cargo-archive', 'materials-cache']);
 for (const key of args.keys()) if (!allowed.has(key)) throw new Error(`Unknown option: ${key}`);
 if (!args.has('cargo-metadata') || !args.has('output')) {
   throw new Error('Required: --cargo-metadata PATH --output PATH');
@@ -24,7 +25,7 @@ const triple = args.get('target') ?? 'aarch64-apple-ios-sim';
 if (!['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios'].includes(triple)) {
   throw new Error('Expected an iOS target triple');
 }
-const inventory = {
+let inventory = {
   schemaVersion: 1,
   target: { platform: 'ios', triple, profile: args.get('profile') ?? 'unsigned-native-library', features: [] },
   provenance: { kind: 'swift-source-and-unsigned-library', inputs: [] },
@@ -117,7 +118,31 @@ const node = metadata.resolve?.nodes.find((item) => item.id === host.id);
 const tauriId = node?.deps.find((dep) => dep.name === 'tauri')?.pkg;
 const tauri = metadata.packages.find((pkg) => pkg.id === tauriId);
 if (!tauri) throw new Error('Cargo metadata must resolve the native IO package direct Tauri dependency');
+const cargoLock = input(args.get('cargo-lock') ?? path.join(repo, 'src-tauri/Cargo.lock'), 'locked-Cargo.lock').toString('utf8');
+const lockedTauri = cargoLock.split('[[package]]').map((block) => {
+  const field = (name) => block.match(new RegExp(`^${name} = "([^"\\r\\n]+)"`, 'm'))?.[1];
+  return { name: field('name'), version: field('version'), source: field('source'), checksum: field('checksum') };
+}).find((pkg) => pkg.name === 'tauri' && pkg.version === tauri.version && pkg.source === tauri.source);
+if (!lockedTauri || !/^[a-f0-9]{64}$/.test(lockedTauri.checksum ?? '')) {
+  throw new Error('Resolved Tauri metadata is not bound to a checksummed Cargo.lock registry package');
+}
 const tauriRoot = path.dirname(tauri.manifest_path);
+const registryRoot = path.resolve(tauriRoot, '../../..');
+const crateArchive = args.get('cargo-archive') ?? path.join(registryRoot, 'cache', path.basename(path.dirname(tauriRoot)), `tauri-${tauri.version}.crate`);
+let verifiedTauriArchive = false;
+if (fs.existsSync(crateArchive)) {
+  const bytes = input(crateArchive, `locked-cargo-archive:tauri@${tauri.version}`);
+  if (hash(bytes) !== lockedTauri.checksum) throw new Error('Tauri Cargo archive does not match the locked checksum');
+  verifiedTauriArchive = true;
+} else gap('Locked Tauri Cargo archive unavailable; extracted Swift/legal files cannot be checked against the registry checksum.');
+function verifyTauriFiles(files) {
+  if (!verifiedTauriArchive) return;
+  for (const file of files) {
+    const relative = path.relative(tauriRoot, file).split(path.sep).join('/');
+    const archived = execFileSync('tar', ['-xOf', crateArchive, `tauri-${tauri.version}/${relative}`], { maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+    if (!archived.equals(fs.readFileSync(file))) throw new Error('Tauri Swift/legal source differs from the locked Cargo archive');
+  }
+}
 const tauriApi = path.join(tauriRoot, 'mobile/ios-api');
 if (!fs.existsSync(path.join(tauriApi, 'Package.swift'))) throw new Error('Resolved Cargo Tauri source lacks ios-api');
 const nativeManifest = input(path.join(nativeRoot, 'Package.swift'), 'native-io/Package.swift').toString('utf8');
@@ -135,11 +160,14 @@ inventory.entries.push({
   ...materials(repo, 'repository'), textStatus: 'available', missing: []
 });
 const tauriTexts = materials(tauriRoot, `cargo:tauri@${tauri.version}`);
+verifyTauriFiles([path.join(tauriApi, 'Package.swift'), ...tauriFiles,
+  ...inventory.texts.filter((text) => text.source.startsWith(`cargo:tauri@${tauri.version}/`))
+    .map((text) => path.join(tauriRoot, text.source.slice(`cargo:tauri@${tauri.version}/`.length)))]);
 tauriTexts.noticeTextIds.push(...observedHeaders(tauriFiles.concat(path.join(tauriApi, 'Package.swift')), tauriApi, tauriLabel));
 inventory.entries.push({
   id: entryId('Tauri', tauri.version), ecosystem: 'swift', name: 'Tauri', version: tauri.version,
   declaredLicense: tauri.license ?? null, source: `${tauri.source ?? 'cargo-local'}#tauri@${tauri.version}/mobile/ios-api`,
-  evidence: [{ kind: 'resolved-target', detail: 'Local Swift package source is supplied by this exact locked Cargo Tauri release; original Cargo source, not a generated .tauri copy.' },
+  evidence: [{ kind: 'resolved-target', detail: `Original Cargo source matches the locked registry identity tauri@${tauri.version}, checksum ${lockedTauri.checksum}; ${verifiedTauriArchive ? 'consumed Swift and legal bytes match that archive' : 'archive byte comparison unavailable'}.` },
     { kind: 'build-input', detail: 'NativeIO declares the generated local Tauri Swift package dependency.' }],
   ...tauriTexts, textStatus: tauriTexts.licenseTextIds.length ? 'available' : 'missing',
   missing: tauriTexts.licenseTextIds.length ? [] : ['Actual Tauri license text unavailable']
@@ -166,10 +194,11 @@ const state = stateFile ? JSON.parse(input(stateFile, 'actual-native-build/works
 const dependencies = state?.object?.dependencies ?? [];
 for (const [, name, url, constraint] of remoteDeclarations) {
   const pin = pins.find((item) => (item.location ?? item.repositoryURL)?.replace(/\.git$/, '').toLowerCase() === url.toLowerCase());
-  const revision = pin?.state?.revision;
+  const revision = typeof pin?.state?.revision === 'string' && /^[a-f0-9]{40}$/.test(pin.state.revision) ? pin.state.revision : null;
   const version = pin?.state?.version ?? (revision ? `revision-${revision}` : 'unresolved');
   const id = entryId(name, version);
   const entry = { id, ecosystem: 'swift', name, version, declaredLicense: null, source: revision ? `${url}#${revision}` : url,
+    manifestSha256: hash(tauriManifest), checkoutRevision: revision,
     evidence: [{ kind: 'build-input', detail: `Tauri Package.swift declares ${name} from ${constraint}; a lower bound is not an exact version.` }],
     licenseTextIds: [], noticeTextIds: [], textStatus: 'missing', missing: [] };
   if (pin && revision) entry.evidence.push({ kind: 'resolved-target', detail: `Actual NativeIO Package.resolved pins ${name} to ${version}, revision ${revision}.` });
@@ -183,7 +212,19 @@ for (const [, name, url, constraint] of remoteDeclarations) {
   if (revision && checkoutRoot && fs.existsSync(checkoutRoot)) {
     let checkoutRevision;
     try { checkoutRevision = execFileSync('git', ['-C', checkoutRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* no unchecked source claims */ }
-    if (checkoutRevision === revision) {
+    const checkoutState = dependency?.state?.checkoutState;
+    if (checkoutState?.revision !== revision || (pin.state.version && checkoutState.version !== pin.state.version)) {
+      entry.missing.push('SwiftPM workspace checkout state does not match the actual resolved pin');
+    } else if (checkoutRevision === revision) {
+      // HEAD alone is insufficient: every consumed file must be a tracked blob at
+      // this commit. A dirty worktree is not original revision evidence.
+      const tracked = execFileSync('git', ['-C', checkoutRoot, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }).split('\0').filter(Boolean);
+      const verifyCheckoutFile = (file) => {
+        const relative = path.relative(checkoutRoot, file).split(path.sep).join('/');
+        if (!tracked.includes(relative) || !execFileSync('git', ['-C', checkoutRoot, 'show', `${revision}:${relative}`], { maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).equals(fs.readFileSync(file))) {
+          throw new Error('Consumed Swift source/legal material differs from its pinned Git revision');
+        }
+      };
       const label = `swift:${name}@${revision}`;
       const packageFile = path.join(checkoutRoot, 'Package.swift');
       if (!fs.existsSync(packageFile)) throw new Error('Resolved Swift package checkout has no Package.swift');
@@ -194,6 +235,9 @@ for (const [, name, url, constraint] of remoteDeclarations) {
         gap(`Additional remote Swift dependencies declared by pinned ${name}; recursive resolution is not yet supported.`, id);
       }
       const records = materials(checkoutRoot, label);
+      const materialFiles = inventory.texts.filter((text) => text.source.startsWith(`${label}/`))
+        .map((text) => path.join(checkoutRoot, text.source.slice(`${label}/`.length)));
+      for (const file of [packageFile, ...files, ...materialFiles]) verifyCheckoutFile(file);
       entry.licenseTextIds = records.licenseTextIds;
       entry.noticeTextIds = records.noticeTextIds.concat(observedHeaders(files, checkoutRoot, label));
       const spdx = new Set(files.flatMap((file) => [...fs.readFileSync(file, 'utf8').matchAll(/SPDX-License-Identifier:\s*([^\r\n]+)/g)].map((match) => match[1].trim())));
@@ -218,6 +262,13 @@ let sdk = null;
 if (sdkFile && fs.existsSync(sdkFile)) sdk = JSON.parse(input(sdkFile, 'apple-sdk/SDKSettings.json').toString('utf8'));
 if (!sdk) inventory.gaps.push({ ecosystem: 'platform', reason: 'Apple SDK metadata unavailable; framework entries describe source imports, not observed SDK linking or redistribution licenses.' });
 else if (!sdkPath) inventory.gaps.push({ ecosystem: 'platform', reason: 'SDKSettings metadata observed without an SDK root; individual framework/module metadata was not inspected.' });
+if (sdk) {
+  const expectedSdk = triple === 'aarch64-apple-ios' ? 'iphoneos' : 'iphonesimulator';
+  if (typeof sdk.CanonicalName !== 'string' || !new RegExp(`^${expectedSdk}(?:[0-9.]*)$`).test(sdk.CanonicalName)
+      || typeof sdk.Version !== 'string' || !/^[0-9]+(?:\.[0-9]+)*$/.test(sdk.Version)) {
+    throw new Error('Observed Apple SDK identity does not match the requested iOS device/simulator target');
+  }
+}
 const sdkName = sdk?.CanonicalName ?? sdk?.DisplayName ?? 'unobserved-apple-sdk';
 const sdkVersion = sdk?.Version ?? 'unobserved';
 const localModules = new Set(['Tauri', 'NativeIoPolicy', 'SwiftRs']);
@@ -298,6 +349,11 @@ if (args.has('artifact')) {
   if (!compiledContext) gap('Archive artifact observed, but its iOS target compilation is not validated by the supplied build log.');
 } else gap('No unsigned Swift compiled-library archive supplied. Declared dependencies are not reported as bundled.');
 gap('No generated or verified iOS application host/provider artifact is covered. This inventory does not prove app bundling, SDK framework linkage, signing, or device acceptance.');
+const cacheFile = args.get('materials-cache') ?? path.join(repo, 'resources/licenses/swift-package-materials.json');
+if (fs.existsSync(cacheFile)) {
+  const cache = JSON.parse(input(cacheFile, 'resources/licenses/swift-package-materials.json').toString('utf8'));
+  inventory = applyPackageMaterialCache(inventory, cache);
+}
 for (const entry of inventory.entries) {
   entry.licenseTextIds = [...new Set(entry.licenseTextIds)].sort();
   entry.noticeTextIds = [...new Set(entry.noticeTextIds)].sort();

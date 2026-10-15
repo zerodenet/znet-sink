@@ -14,6 +14,26 @@ VPN 交付**。下列“通过”只指对应代码检查或替代 IO 的测试�
 [构建依赖许可目录](../gui/dependency-license-inventory-v0.0.3.md)。最新 commit 的
 CI 链接、计数与最终 APK 收据在同一 draft PR 描述和交付报告核对，不借历史成功替代。
 
+## 2026-10-15：锁定版本的原始许可材料
+
+本批从 `8c043cd53a831ac27237fbae9c46f21aeb452377` 继续。新增 npm/Cargo/Maven/Swift
+精确身份的原文缓存，保存原始版权、NOTICE、标准条款来源及字节摘要；字体、旗帜与 CSS
+按实际构建输入/输出记录，未安装或未使用的包不因 manifest 出现就声明打包。
+Cargo release、Android merge 与最终 APK receipt 检查材料缓存新鲜度；自有 crate
+明确引用实际 MPL 文件。具体缺失和共同条款边界见 [许可目录](../gui/dependency-license-inventory-v0.0.3.md)。
+
+云端 `pnpm verify:frontend` 通过，Svelte/TypeScript 为 0 错误/0 警告；最终许可专项
+31 项 Node 测试、12 项 Python 测试、Swift fixture 与原有清单断言通过。
+真实 Rust build-hook fixture 验证匹配清单、过期缓存/本地材料、非法路径、正文篡改及引用拒绝，
+并使用实际 Cargo build-dependency 版本，避免误取另一个 sha2 版本。
+Rust fmt、workspace all-targets/all-features check、全特性 tests 与 clippy 通过；
+测试 1116 通过、0 失败、7 ignored，已有警告仍保留。
+
+新的真实 Gradle release collect 已通过，68 Maven 与 6 本地项目的实际归档/POM 摘要
+和原文材料可合并；APK build/receipt 与提交 CI 独立核对，不把旧 APK 或上述源级检查
+当作本批产物。Swift 在 Linux 只核对实际 locked 源材料，Apple 编译仍需对应 CI；
+没有 iPhone、Galaxy S8、VPN 服务/扩展和设备网络验收。
+
 ## 本次代码
 
 - 原生 Android/iOS 或窄窗口采用四固定底栏。高级管理由移动投影保留，不修改

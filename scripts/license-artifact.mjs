@@ -2,10 +2,10 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {dirname,resolve,basename} from 'node:path';
-import {sha256,serializeInventory,argumentsOf} from './license-common.mjs';
+import {sha256,serializeInventory,argumentsOf,verifyMaterialInputs} from './license-common.mjs';
 import {fileURLToPath} from 'node:url';
-/** @param {string} apk @param {string} expectedFrontend */
-export function apkLicenseReceipt(apk,expectedFrontend) {
+/** @param {string} apk @param {string} expectedFrontend @param {string|null} repositoryRoot */
+export function apkLicenseReceipt(apk,expectedFrontend,repositoryRoot=null) {
   const extracted=JSON.parse(execFileSync('python3',['-c',`
 import json,sys,zipfile,hashlib
 with zipfile.ZipFile(sys.argv[1]) as archive:
@@ -27,6 +27,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
   const frontend=JSON.parse(readFileSync(expectedFrontend,'utf8'));
   const proof=inventory.provenance.inputs?.find(/** @param {any} item */ item=>item.label==='frontend-inventory');
   if(proof?.sha256!==sha256(JSON.stringify(frontend)))throw new Error('APK embeds a stale frontend inventory');
+  if(repositoryRoot)verifyMaterialInputs(inventory,repositoryRoot,['resources/licenses/frontend-package-materials.json','resources/licenses/rust-package-materials.json','resources/licenses/android-package-materials.json','resources/licenses/authoritative-materials.json']);
   if(!extracted.nativePayloads.some(/** @param {any} item */ item=>item.name==='lib/arm64-v8a/libgui_lib.so'))throw new Error('Android Rust host native payload missing');
   const receipt={schemaVersion:1,kind:'actual-unsigned-android-package-receipt',artifact:{name:basename(apk),sha256:sha256(readFileSync(apk))},licenseAsset:{name:'assets/license-inventory.native.json',sha256:extracted.assetSha256},nativePayloads:extracted.nativePayloads,
     limitation:'APK inclusion proves the inventory and native payload exist. Cargo target resolve and Gradle runtimeClasspath entries remain resolved inputs; no package-by-package linker/R8 retention is inferred.'};
@@ -35,7 +36,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)) {
  const args=argumentsOf(process.argv.slice(2));if(!args.apk||!args.frontend||!args.output)throw new Error('--apk --frontend --output required');
- const {inventory,receipt}=apkLicenseReceipt(args.apk,args.frontend);mkdirSync(dirname(resolve(args.output)),{recursive:true});writeFileSync(args.output,serializeInventory(inventory));
+ const {inventory,receipt}=apkLicenseReceipt(args.apk,args.frontend,fileURLToPath(new URL('../',import.meta.url)));mkdirSync(dirname(resolve(args.output)),{recursive:true});writeFileSync(args.output,serializeInventory(inventory));
  if(args.receipt)writeFileSync(args.receipt,JSON.stringify(receipt,null,2)+'\n');
  console.log(`Actual package license receipt: ${inventory.entries.length} records, ${inventory.gaps.length} explicit gaps; no final-link retention inference`);
 }

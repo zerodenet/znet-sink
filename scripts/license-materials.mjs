@@ -8,6 +8,50 @@ import { sha256,serializeInventory,argumentsOf } from './license-common.mjs';
 
 /** @param {any} row @returns {string[]} */
 export function declaredLicenseUrls(row) { return [...(row.licenseUrls||[]),...(row.evidence||[]).flatMap(/** @param {any} item */ item=>typeof item.detail==='string' && item.detail.startsWith('POM license URL: ')?[item.detail.slice(17)]:[])]; }
+/** Reviewed, package-scoped original materials. Matching SPDX identifiers alone never qualify.
+ * @param {any} inventory @param {any} cache
+ */
+export function applyPackageMaterialCache(inventory,cache) {
+  if(cache?.schemaVersion!==1||!Array.isArray(cache.packages)||cache.packages.length>4096)throw new Error('Invalid package material cache');
+  const result=structuredClone(inventory);
+  const cleared=new Map();
+  const identities=new Set();
+  for(const pkg of cache.packages) {
+    const identity=pkg.identity;
+    if(!identity||!['ecosystem','name','version','source'].every(key=>typeof identity[key]==='string'&&identity[key].length))throw new Error('Incomplete package material identity');
+    const key=JSON.stringify(['ecosystem','name','version','source'].map(field=>identity[field]));
+    if(identities.has(key))throw new Error('Duplicate package material identity');
+    identities.add(key);
+    const expected=Object.entries(pkg.expected||{});
+    if(!expected.length||!expected.some(([,value])=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value))||expected.some(([field,value])=>!field||typeof value!=='string'||!value.length))throw new Error('Package material requires exact source input hashes');
+    if(!Array.isArray(pkg.materials)||!pkg.materials.length||pkg.materials.length>4096)throw new Error('Package material list missing or exceeds budget');
+    const resolved=pkg.resolves||[];
+    if(!Array.isArray(resolved)||resolved.some(reason=>reason!=='package-specific-legal-material-not-provided'))throw new Error('Package material cannot clear unrelated gaps');
+    for(const material of pkg.materials) {
+      if(!['license','notice'].includes(material.kind)||typeof material.name!=='string'||!material.name||typeof material.source!=='string'||!material.source||typeof material.text!=='string'||!material.text.trim()||material.text.includes('\0')||Buffer.byteLength(material.text)>2*1024*1024||sha256(Buffer.from(material.text,'utf8'))!==material.sha256)throw new Error('Invalid original package material or digest');
+      if(typeof material.origin?.url!=='string'||!/^https:\/\//.test(material.origin.url)||! /^[a-f0-9]{64}$/.test(material.origin.sha256))throw new Error('Original package material provenance missing');
+    }
+    for(const row of result.entries) {
+      if(!['ecosystem','name','version','source'].every(field=>row[field]===identity[field]))continue;
+      if(!expected.every(([field,value])=>row[field]===value))throw new Error(`Stale package material binding: ${identity.ecosystem}:${identity.name}@${identity.version}`);
+      const reasons=new Set(resolved);
+      for(const material of pkg.materials) {
+        const id=`sha256-${material.sha256}`;
+        result.texts.push({id,sha256:material.sha256,name:material.name,kind:material.kind,source:material.source,text:material.text});
+        const ids=material.kind==='license'?'licenseTextIds':'noticeTextIds';
+        row[ids]=[...new Set([...(row[ids]||[]),id])].sort();
+        row.materialReferences=[...(row.materialReferences||[]),{id,name:material.name,kind:material.kind,source:material.source,sha256:material.sha256,origin:material.origin}];
+        row.evidence.push({kind:'license-material',detail:'Original package material bound to exact resolved identity and source input hashes.',source:material.source,sha256:material.sha256,origin:material.origin});
+        if(material.kind==='license')for(const reason of ['license-text-not-provided-by-installed-material','license-body-missing'])reasons.add(reason);
+      }
+      row.textStatus=row.licenseTextIds.length?'available':'missing';
+      row.missing=(row.missing||[]).filter(/** @param {string} reason */ reason=>!reasons.has(reason));
+      cleared.set(row.id,reasons);
+    }
+  }
+  result.gaps=result.gaps.filter(/** @param {any} gap */ gap=>!cleared.get(gap.id)?.has(gap.reason));
+  return result;
+}
 /** @param {any} inventory @param {any} cache */
 export function applyMaterialCache(inventory,cache) {
   const rows=structuredClone(inventory.entries),texts=[...inventory.texts],gaps=[...inventory.gaps];

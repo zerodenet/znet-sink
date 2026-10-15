@@ -40,7 +40,7 @@ export function readTextMaterials(directory, label, explicitLicenseFile = null, 
     const bytes = readFileSync(path);
     if (bytes.includes(0)) { gaps.push({reason:'license-material-not-text',source}); return; }
     let text;
-    try { text = new TextDecoder('utf-8', {fatal:true}).decode(bytes); }
+    try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); }
     catch { gaps.push({reason:'license-material-not-utf8',source}); return; }
     if (!text.trim()) { gaps.push({reason:'license-material-empty',source}); return; }
     const hash = sha256(bytes);
@@ -88,6 +88,24 @@ export function finalizeInventory(inventory) {
 }
 /** @param {any} value */
 export const serializeInventory = value => JSON.stringify(finalizeInventory(value),null,2)+'\n';
+/** Verify reviewed material inputs across composed provenance before packaging.
+ * @param {any} inventory @param {string} root @param {string[]} labels
+ */
+export function verifyMaterialInputs(inventory,root,labels) {
+  /** @type {any[]} */ const inputs=[];
+  /** @param {any} provenance */
+  const visit=provenance=>{
+    if(!provenance)return;
+    inputs.push(...(provenance.inputs||[]));
+    for(const child of provenance.inventories||[])visit(child);
+  };
+  visit(inventory.provenance);
+  for(const label of labels){
+    const path=join(root,label),proofs=inputs.filter(input=>input.label===label);
+    if(!existsSync(path)&&!proofs.length)continue;
+    if(!existsSync(path)||!proofs.length||proofs.some(proof=>proof.sha256!==sha256(readFileSync(path))))throw new Error(`Stale or missing package material input: ${label}`);
+  }
+}
 /** @param {string[]} argv @returns {Record<string,string>} */
 export function argumentsOf(argv) {
   /** @type {Record<string,string>} */ const result={};

@@ -74,6 +74,52 @@ pub fn emit(selected_features: &[&str]) {
                 return Err("precollected-inventory-workspace-input-changed".into());
             }
         }
+        // Reviewed originals affect the embedded text just as Cargo.lock affects
+        // dependency identity. Never accept an inventory collected before an edit.
+        let material_label = "resources/licenses/rust-package-materials.json";
+        let material_path = Path::new("..").join(material_label);
+        println!("cargo:rerun-if-changed={}", material_path.display());
+        let material_input = inputs.iter().find(|v| v["label"] == material_label);
+        if material_path.exists() || material_input.is_some() {
+            let expected = material_input
+                .and_then(|v| v["sha256"].as_str())
+                .ok_or("inventory-package-material-provenance-missing")?;
+            let actual = format!(
+                "{:x}",
+                Sha256::digest(
+                    fs::read(material_path).map_err(|_| "package-material-cache-unreadable")?
+                )
+            );
+            if actual != expected {
+                return Err("precollected-inventory-package-material-changed".into());
+            }
+        }
+        for input in inputs {
+            let Some(label) = input["label"].as_str() else {
+                continue;
+            };
+            if label != "LICENSE" && !label.starts_with("src-tauri/crates/") {
+                continue;
+            }
+            if !Path::new(label)
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err("inventory-local-input-path-invalid".into());
+            }
+            let path = Path::new("..").join(label);
+            println!("cargo:rerun-if-changed={}", path.display());
+            let expected = input["sha256"]
+                .as_str()
+                .ok_or("inventory-local-input-digest-missing")?;
+            let actual = format!(
+                "{:x}",
+                Sha256::digest(fs::read(path).map_err(|_| "inventory-local-input-unreadable")?)
+            );
+            if expected != actual {
+                return Err("precollected-inventory-local-input-changed".into());
+            }
+        }
         for text in value["texts"].as_array().ok_or("inventory-texts-missing")? {
             let content = text["text"].as_str().ok_or("inventory-text-invalid")?;
             let hash = format!("{:x}", Sha256::digest(content.as_bytes()));

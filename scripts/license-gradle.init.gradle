@@ -106,6 +106,7 @@ class ZnetNativeLicenses {
                     (kind(materialName) == 'license' ? entry.licenseTextIds : entry.noticeTextIds).add(textId)
                 } catch (Exception ignored) { entry.missing.add('license-material-invalid-or-over-budget') }
             }
+            def selectedArtifactHashes = []
             ownArtifacts.each { artifact ->
                 File file = artifact.file
                 String artifactLabel = "${id}!${file.name}"
@@ -114,6 +115,7 @@ class ZnetNativeLicenses {
                     return
                 }
                 String sha = fileHash(file)
+                selectedArtifactHashes.add([name:file.name, sha256:sha])
                 inputs.add([label:artifactLabel, sha256:sha])
                 entry.evidence.add([kind:'build-input', detail:"${file.name}; sha256=${sha}"])
                 if (file.name.endsWith('.jar') || file.name.endsWith('.aar')) {
@@ -143,10 +145,16 @@ class ZnetNativeLicenses {
                     }
                 }
             }
+            // Bind reviewed publisher materials to the actual selected bytes,
+            // not only GAV. Multi-artifact identities use a deterministic set hash.
+            selectedArtifactHashes = selectedArtifactHashes.unique().sort { it.name }
+            entry.artifactSha256 = selectedArtifactHashes.size() == 1 ? selectedArtifactHashes[0].sha256 :
+                selectedArtifactHashes ? hash(JsonOutput.toJson(selectedArtifactHashes).getBytes(StandardCharsets.UTF_8)) : null
             File pom = local ? null : poms[component.displayName]
             if (pom?.isFile()) {
                 String label = "${id}!pom"
-                inputs.add([label:label, sha256:fileHash(pom)])
+                entry.pomSha256 = fileHash(pom)
+                inputs.add([label:label, sha256:entry.pomSha256])
                 try {
                     if (pom.length() > 2 * 1024 * 1024) throw new IOException('pom-over-budget')
                     def factory = DocumentBuilderFactory.newInstance()
@@ -211,6 +219,14 @@ class ZnetNativeLicenses {
                     if (packageSection.find()) {
                         def declared = (packageSection.group(1) =~ /(?m)^license\s*=\s*"([^"]+)"/)
                         if (declared.find()) entry.declaredLicense = declared.group(1)
+                        def licenseFile = (packageSection.group(1) =~ /(?m)^license-file\s*=\s*"([^"]+)"/)
+                        if (licenseFile.find()) {
+                            File declaredFile = new File(sourceRoot, licenseFile.group(1)).canonicalFile
+                            if (declaredFile.isFile()) {
+                                inputs.add([label:"${id}!declared-license-file", sha256:fileHash(declaredFile)])
+                                declaredFile.withInputStream { collectMaterial(bounded(it, 1024 * 1024), declaredFile.name, "${id}!declared-license-file/${declaredFile.name}") }
+                            } else entry.missing.add('declared-license-file-unreadable')
+                        }
                     }
                     inputs.add([label:"${id}!Cargo.toml", sha256:fileHash(manifest)])
                     sourceRoot.listFiles().findAll { it.isFile() && material(it.name) }.sort { it.name }.each { file ->

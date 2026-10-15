@@ -3,6 +3,7 @@ name = "tauri-plugin-znet-native-io"
 version = "0.0.3"
 edition = "2021"
 license = "MPL-2.0"
+license-file = "../../../LICENSE"
 links = "znet-native-io"
 
 [dependencies]

@@ -16,11 +16,14 @@ try {
   assert.equal(meta.texts.filter(t=>t.kind==='license').length,0,'SPDX declaration is not a full license');
   assert.equal(attachMaterials({declaredLicense:'MIT'},meta).textStatus,'missing');
   writeFileSync(join(dir,'LICENSE'),'Full actual terms');
+  writeFileSync(join(dir,'NOTICE.bom'),Buffer.from('\uFEFFOriginal UTF-8 notice\n'));
   writeFileSync(join(dir,'COPYING.bad'),Buffer.from([255,254]));
   mkdirSync(join(dir,'node_modules'));writeFileSync(join(dir,'node_modules','LICENSE'),'unrelated');
   const material=readTextMaterials(dir,'fixture');
   assert(material.gaps.some(g=>g.reason==='license-material-not-utf8'));
   assert(!material.texts.some(t=>t.text==='unrelated'));
+  const bom=material.texts.find(t=>t.name==='NOTICE.bom');
+  assert.equal(sha256(Buffer.from(bom.text,'utf8')),bom.sha256,'UTF-8 BOM bytes are preserved');
   const row=attachMaterials({id:'row',ecosystem:'npm',name:'x',declaredLicense:'MIT',evidence:[]},material);
   const inventory={schemaVersion:1,target:{platform:'frontend',features:[]},entries:[row],texts:material.texts,gaps:[]};
   assert.equal(serializeInventory(inventory),serializeInventory(inventory),'deterministic serialization');
@@ -48,5 +51,5 @@ try {
   assert.equal(apkLicenseReceipt(apk,frontendPath).receipt.nativePayloads.length,1);
   writeFileSync(frontendPath,JSON.stringify({...inventory,provenance:{kind:'stale'}}));
   assert.throws(()=>apkLicenseReceipt(apk,frontendPath),/stale frontend/);
-  console.log('License inventory tests: 17 provenance/material/target/artifact assertions passed');
+  console.log('License inventory tests: provenance/material/target/artifact assertions passed (including exact UTF-8 BOM bytes)');
 }finally{rmSync(dir,{recursive:true,force:true});}
