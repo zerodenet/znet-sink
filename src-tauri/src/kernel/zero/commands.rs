@@ -37,9 +37,9 @@ const PROBE_IPC_TIMEOUT_MS: u64 = crate::config::MAX_IPC_TIMEOUT_MS;
 /// Creating/removing the device and routes can exceed the ordinary two-second
 /// IPC budget. Keep this at the adapter command boundary: manual toggles,
 /// startup/restart restoration and legacy adapter callers all pass here.
-const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+const TUN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 
-fn command_response_timeout(method: &str) -> Option<Duration> {
+pub(crate) fn command_response_timeout(method: &str) -> Option<Duration> {
     match method {
         "tun.start" | "tun.stop" | "tun.recover" => Some(TUN_RESPONSE_TIMEOUT),
         _ => None,

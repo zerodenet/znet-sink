@@ -2,6 +2,129 @@ use super::*;
 use std::cell::Cell;
 use std::future::ready;
 
+fn default_restoration_timeout() -> Duration {
+    super::super::tun::restoration_timeout(&crate::models::core::CoreIpcOptions {
+        socket: None,
+        timeout_ms: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn restoration_deadline_covers_the_command_and_preserves_longer_ipc_budgets() {
+    use crate::kernel::{protocol, zero::commands};
+    use crate::models::core::CoreIpcOptions;
+    for timeout_ms in [None, Some(90_000)] {
+        let options = CoreIpcOptions {
+            socket: None,
+            timeout_ms,
+        };
+        let response = protocol::response_timeout_from_options(
+            Some(&options),
+            commands::command_response_timeout("tun.start"),
+        )
+        .unwrap();
+        let restoration = super::super::tun::restoration_timeout(&options).unwrap();
+        assert!(
+            restoration > response + protocol::timeout_from_options(Some(&options)).unwrap() * 3
+        );
+    }
+    for timeout_ms in [0, crate::config::MAX_IPC_TIMEOUT_MS + 1] {
+        assert_eq!(
+            super::super::tun::restoration_timeout(&CoreIpcOptions {
+                socket: None,
+                timeout_ms: Some(timeout_ms),
+            })
+            .unwrap_err()
+            .code,
+            "invalid_argument"
+        );
+    }
+}
+
+#[test]
+fn slow_activation_and_lost_reply_recovery_fit_the_real_restoration_budget() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let calls = Cell::new(0);
+            restore(
+                || ready(Ok(status(false))),
+                || {
+                    calls.set(calls.get() + 1);
+                    async {
+                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        Ok(status(true))
+                    }
+                },
+                default_restoration_timeout(),
+                Duration::from_millis(100),
+            )
+            .await
+            .unwrap();
+            assert_eq!(calls.get(), 1);
+
+            let started = tokio::time::Instant::now();
+            let calls = Cell::new(0);
+            restore(
+                || ready(Ok(status(started.elapsed() >= Duration::from_secs(65)))),
+                || {
+                    calls.set(calls.get() + 1);
+                    async {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        Err(timeout())
+                    }
+                },
+                default_restoration_timeout(),
+                Duration::from_millis(100),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                calls.get(),
+                1,
+                "lost response must only trigger observation, not a second start"
+            );
+        });
+}
+
+#[test]
+fn expired_restoration_reports_ended_wait_and_residual_authorization_prompt() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let budget = default_restoration_timeout();
+            let started = tokio::time::Instant::now();
+            let calls = Cell::new(0);
+            let error = restore(
+                || ready(Ok(status(false))),
+                || {
+                    calls.set(calls.get() + 1);
+                    std::future::pending::<AppResult<GuiTunStatus>>()
+                },
+                budget,
+                Duration::from_millis(100),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(started.elapsed(), budget);
+            assert_eq!(calls.get(), 1);
+            assert_eq!(error.code, "tun_restore_unconfirmed");
+            assert!(error.message.contains("本次等待已结束"));
+            assert!(error.message.contains("系统授权窗口"));
+            assert_eq!(
+                error.details.unwrap()["timeoutMs"],
+                budget.as_millis() as u64
+            );
+        });
+}
+
 fn status(enabled: bool) -> GuiTunStatus {
     GuiTunStatus {
         enabled,

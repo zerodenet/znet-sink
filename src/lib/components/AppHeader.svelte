@@ -5,6 +5,8 @@
   import { pluginNavigation } from '$lib/services/plugin-navigation.svelte';
   import * as toast from '$lib/services/toast.svelte';
   import { NAV_TABS } from '$lib/constants/navigation';
+  import { ArrowLeft } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import Toast from '$lib/components/Toast.svelte';
   import * as Tabs from '$lib/components/AppTabs';
 
@@ -62,10 +64,15 @@
 
     <!-- Center: Main navigation -->
     <nav class="app-nav flex items-center gap-0.5 flex-shrink-0 max-w-full" aria-label="主导航">
+      {#if !store.isNavVisible(store.activeTab)}
+        <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => store.returnToPreviousPage()} aria-label="返回上一页" title="返回上一页">
+          <ArrowLeft size={16} />
+        </Button>
+      {/if}
       <Tabs.Root bind:value={store.activeTab} class="app-nav-root">
         <Tabs.List surface="transparent" class="app-nav-list">
           {#each NAV_TABS as tab}
-            {#if store.isNavVisible(tab.id)}
+            {#if store.isNavVisible(tab.id) || store.activeTab === tab.id}
               <Tabs.Trigger
                 value={tab.id}
                 disabled={!store.isNavOperable(tab.id)}

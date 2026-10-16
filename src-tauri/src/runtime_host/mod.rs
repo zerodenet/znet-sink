@@ -12,6 +12,7 @@ mod stop;
 pub(crate) use owner::Host;
 pub use owner::HostSnapshot;
 use owner::ManagedCoreProcess;
+pub(crate) use shutdown::persist_exit_tun_intent;
 pub use shutdown::shutdown_managed_runtime;
 pub use start::{restart, start};
 pub(crate) use status::refresh_status;

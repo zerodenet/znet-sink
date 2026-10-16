@@ -45,7 +45,9 @@ export const getAppConfig = async () => {
       type: 'udp', host: '192.168.1.180', port: 53, detour: 'wg-a',
     } }, default_server: 'system', answer: { type: 'real' },
     policy: { node_server: 'system' },
-    dispatch: [{ condition: { type: 'domain', values: ['office.internal.test'] }, server: 'wg-a-dns' }],
+    dispatch: [{ condition: new URLSearchParams(location.search).get('mode')?.startsWith('rule-')
+      ? { type: 'rule_set', tag: 'dler-domestic' }
+      : { type: 'domain', values: ['office.internal.test'] }, server: 'wg-a-dns' }],
   } } };
   if (panel === 'settings' && new URLSearchParams(location.search).get('mode') === 'precedence') {
     return { ...(await getTunConfig()), core: {cleanupProxyOnExit:true}, localProxy: {host:'127.0.0.1',port:7890,bypass:[]},
@@ -195,7 +197,10 @@ window.addEventListener('fixture-append-log', () => {
   const id = (logFixture.at(-1)?.id ?? 0) + 1;
   logFixture.push({ id, occurredAtUnixMs: Date.now(), source: 'app', level: 'info', message: `新日志 ${id}`, fields: {stage:'new'} });
 });
-export const getEffectiveRuleSetOptions = async () => [];
+export const getEffectiveRuleSetOptions = async () => {
+  if (new URLSearchParams(location.search).get('mode') === 'rule-read-failure') throw new Error('Rule inventory unavailable');
+  return [];
+};
 export const getConfigPolicyGroups = async () => new URLSearchParams(location.search).get('panel') === 'dns'
   ? [{ name: 'Proxy', kind: 'selector', outbounds: [], available: true }] : [];
 export const getConfigProxyNodes = async () => {

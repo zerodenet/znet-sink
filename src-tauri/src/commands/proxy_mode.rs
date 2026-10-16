@@ -18,12 +18,14 @@ pub async fn gui_set_proxy_mode(
     input: GuiSetProxyModeInput,
 ) -> AppResult<GuiProxyModeStatus> {
     let scope = format!("{:?}", input.mode);
-    crate::services::native_operation::execute_async(
+    // Tauri moves command futures through the shared invoke handler in release
+    // builds. Keep the capture transaction out of that handler's stack frame.
+    Box::pin(crate::services::native_operation::execute_async(
         state.inner(),
         "runtime.proxy-mode",
         &scope,
         Duration::from_secs(120),
-        proxy_mode::set(app_handle, state.clone(), input),
-    )
+        Box::pin(proxy_mode::set(app_handle, state.clone(), input)),
+    ))
     .await
 }

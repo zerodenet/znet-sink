@@ -1,6 +1,7 @@
 //! Application composition and service lifecycle, separate from platform UI.
 
 mod commands;
+mod shutdown;
 
 use crate::lifecycle::{self, phases};
 use crate::services::{core_process, network_probe, system_proxy_guard};
@@ -265,6 +266,21 @@ pub fn run() {
 
     let exit_shutdown_stage = shutdown_stage.clone();
     app.run(move |app_handle, event| {
+        shutdown::complete_final_exit(
+            &event,
+            &exit_shutdown_stage,
+            || {
+                core_process::persist_exit_tun_intent(app_handle);
+            },
+            || {
+                crate::services::file_logger::line(
+                    "shutdown: native Exit without ExitRequested; cleaning managed runtime",
+                );
+                tauri::async_runtime::block_on(core_process::shutdown_managed_runtime(
+                    app_handle.clone(),
+                ));
+            },
+        );
         if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
             use std::sync::atomic::Ordering;
 

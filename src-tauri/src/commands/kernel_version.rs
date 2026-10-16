@@ -3,7 +3,7 @@ use tauri::State;
 use crate::errors::AppResult;
 use crate::models::app_config::AppCoreConfig;
 use crate::models::kernel_version::{KernelInstallResult, KernelVersionDetect, KernelVersionList};
-use crate::services::{common, interaction_mode, kernel_manager};
+use crate::services::{common, kernel_manager};
 use crate::state::app_state::AppState;
 
 mod upgrade;
@@ -28,7 +28,6 @@ pub async fn kernel_install_version(
     install_dir: Option<String>,
     app: tauri::AppHandle,
 ) -> AppResult<KernelInstallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
     let _operation = state.proxy_config_operation().lock().await;
     kernel_manager::report_install_stage(
         &app,

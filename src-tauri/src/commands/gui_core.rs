@@ -31,7 +31,7 @@ use crate::models::gui_core::{
 };
 use crate::models::zero_runtime::GuiTunStatus;
 use crate::services::common;
-use crate::services::{core_config, core_process, diagnostic_storage, interaction_mode};
+use crate::services::{core_config, core_process, diagnostic_storage};
 use crate::state::app_state::AppState;
 
 mod dns_apply;
@@ -274,7 +274,6 @@ pub async fn gui_connections(
     state: State<'_, AppState>,
     options: Option<GuiConnectionListOptions>,
 ) -> AppResult<GuiConnectionList> {
-    interaction_mode::require_pro_mode(state.inner(), "connections")?;
     crate::services::flow_observation::connect(state.inner())
         .await?
         .active(options)
@@ -286,7 +285,6 @@ pub async fn gui_connection_detail(
     state: State<'_, AppState>,
     flow_id: String,
 ) -> AppResult<GuiConnection> {
-    interaction_mode::require_pro_mode(state.inner(), "connections")?;
     crate::services::flow_observation::connect(state.inner())
         .await?
         .detail(&flow_id)
@@ -298,7 +296,6 @@ pub async fn gui_close_connection(
     state: State<'_, AppState>,
     flow_id: String,
 ) -> AppResult<GuiConnectionCloseResult> {
-    interaction_mode::require_pro_mode(state.inner(), "connections")?;
     let binding = crate::services::flow_observation::binding(state.inner())?;
     let opts = crate::models::core::CoreIpcOptions {
         socket: Some(binding.endpoint.path),
@@ -309,7 +306,6 @@ pub async fn gui_close_connection(
 
 #[tauri::command]
 pub async fn gui_dns_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
-    interaction_mode::require_pro_mode(state.inner(), "dns")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().dns_status(opts).await
 }
@@ -374,14 +370,12 @@ pub async fn gui_tun_disable(state: State<'_, AppState>) -> AppResult<GuiTunStat
 
 #[tauri::command]
 pub async fn gui_stack_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
-    interaction_mode::require_pro_mode(state.inner(), "stack")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().stack_status(opts).await
 }
 
 #[tauri::command]
 pub async fn gui_rule_status(state: State<'_, AppState>) -> AppResult<GuiFeatureStatus> {
-    interaction_mode::require_pro_mode(state.inner(), "rules")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().rule_status(opts).await
 }
@@ -467,7 +461,6 @@ pub async fn gui_validate_config(
     state: State<'_, AppState>,
     config: serde_json::Value,
 ) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "validate_config")?;
     let opts = default_opts(state.inner());
     let effective =
         crate::services::rule_overlay::compose_effective_config(state.inner(), &config)?;
@@ -593,7 +586,6 @@ pub async fn gui_dns_lookup(
     state: State<'_, AppState>,
     hostname: String,
 ) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "dns_lookup")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().dns_lookup(hostname, opts).await
 }
@@ -605,7 +597,6 @@ pub async fn gui_dns_cache(
     domain: Option<String>,
     limit: Option<usize>,
 ) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "dns_cache")?;
     ZeroAdapter::new()
         .dns_cache(domain, limit, default_opts(state.inner()))
         .await
@@ -618,7 +609,6 @@ pub async fn gui_fakeip_lookup(
     domain: Option<String>,
     ip: Option<String>,
 ) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "fakeip_lookup")?;
     ZeroAdapter::new()
         .fakeip_lookup(domain, ip, default_opts(state.inner()))
         .await
@@ -631,7 +621,6 @@ pub async fn gui_clear_fake_ip(
     state: State<'_, AppState>,
     input: Option<GuiFakeIpClearInput>,
 ) -> AppResult<GuiFakeIpClearResult> {
-    interaction_mode::require_pro_mode(state.inner(), "fake_ip_clear")?;
     let input = input.unwrap_or_default();
     let opts = default_opts(state.inner());
     ZeroAdapter::new()
@@ -649,7 +638,6 @@ pub async fn gui_trace_route(
     protocol: Option<String>,
     inbound_tag: Option<String>,
 ) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "trace_route")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new()
         .trace_route(target, port.unwrap_or(80), protocol, inbound_tag, opts)
@@ -662,7 +650,6 @@ pub async fn gui_recent_connections(
     state: State<'_, AppState>,
     options: Option<GuiConnectionListOptions>,
 ) -> AppResult<GuiConnectionList> {
-    interaction_mode::require_pro_mode(state.inner(), "recent_connections")?;
     crate::services::flow_observation::connect(state.inner())
         .await?
         .recent(options)
@@ -672,7 +659,6 @@ pub async fn gui_recent_connections(
 /// Query event sink delivery status.
 #[tauri::command]
 pub async fn gui_sinks(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "sinks")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().sinks(opts).await
 }
@@ -680,7 +666,6 @@ pub async fn gui_sinks(state: State<'_, AppState>) -> AppResult<serde_json::Valu
 /// Query diagnostics overview.
 #[tauri::command]
 pub async fn gui_diagnostics(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
-    interaction_mode::require_pro_mode(state.inner(), "diagnostics")?;
     let opts = default_opts(state.inner());
     ZeroAdapter::new().diagnostics(opts).await
 }
