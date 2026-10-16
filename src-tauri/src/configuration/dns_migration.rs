@@ -1,4 +1,4 @@
-//! Fixed, host-owned DNS deletion/reference migration. Local publication only.
+//! Fixed, host-owned DNS deletion/rename reference migration. Local publication only.
 use super::workspace;
 use crate::{
     errors::{AppError, AppResult},
@@ -363,11 +363,22 @@ pub(crate) fn preview(state: &AppState, input: PreviewInput) -> AppResult<Plan> 
         return Err(conflict());
     }
     let mut wrapper = current_dns(&current)?;
-    let (candidate, references) = transforms::migrate(
-        dns_config(&wrapper)?,
-        &input.server_name,
-        input.replacement_name.as_deref(),
-    )?;
+    let (candidate, references) = if let Some(name) = &input.rename_to {
+        if input.replacement_name.is_some() {
+            return Err(failure(
+                "dns_migration_name",
+                "重命名不能同时指定已有替代服务器；请明确选择一个操作",
+            ));
+        }
+        require_rename_scope(state, &current)?;
+        transforms::rename(dns_config(&wrapper)?, &input.server_name, name)?
+    } else {
+        transforms::migrate(
+            dns_config(&wrapper)?,
+            &input.server_name,
+            input.replacement_name.as_deref(),
+        )?
+    };
     wrapper["config"] = candidate;
     let mut next = current.app.clone();
     super::local_edits::migrate_legacy(&mut next, Some(&input.profile_id));
@@ -383,6 +394,7 @@ pub(crate) fn preview(state: &AppState, input: PreviewInput) -> AppResult<Plan> 
         profile_id: input.profile_id,
         server_name: input.server_name,
         replacement_name: input.replacement_name,
+        rename_to: input.rename_to,
         references,
         notice: NOTICE.into(),
         state: "prepared",
@@ -428,6 +440,42 @@ pub(crate) fn preview(state: &AppState, input: PreviewInput) -> AppResult<Plan> 
         },
     );
     Ok(plan)
+}
+
+/// An existing global override is one closed DNS object. Promoting a source
+/// DNS object is different: do not enlarge this rename into a multi-profile
+/// source migration or silently bypass an existing source projection.
+fn require_rename_scope(state: &AppState, current: &Context) -> AppResult<()> {
+    // migrate_legacy prefers profile DNS before filling legacy global values
+    // with entry.or_insert. A global flag alone is not proof of provenance.
+    let preferred_legacy_profile_dns = current.app.client_edits.is_none()
+        && current
+            .app
+            .profile_edits
+            .get(&current.profile.id)
+            .is_some_and(|edits| edits.contains_key("dns"));
+    let explicit_global = current
+        .app
+        .client_edits
+        .as_ref()
+        .is_some_and(|edits| edits.contains_key("dns"))
+        || (current.app.overrides.dns && !preferred_legacy_profile_dns);
+    if explicit_global {
+        return Ok(());
+    }
+    if lock(state.proxy_configs(), "proxy_config")?.len() != 1
+        || current
+            .app
+            .profile_edits
+            .get(&current.profile.id)
+            .is_some_and(|edits| edits.contains_key("ruleSetReferences"))
+    {
+        return Err(failure(
+            "dns_migration_scope",
+            "来源 DNS 晋升全局会涉及其它配置或已有引用覆盖；本入口不迁移跨配置/托管来源，请先在配置工作区明确处理",
+        ));
+    }
+    Ok(())
 }
 pub(crate) fn status(state: &AppState, id: &str) -> AppResult<Status> {
     lock(&state.dns_migration().plans, "dns_migration")?

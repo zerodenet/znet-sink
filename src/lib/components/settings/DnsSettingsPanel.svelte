@@ -1,12 +1,14 @@
 <script lang="ts">
   import DnsServerMigrationDialog from './DnsServerMigrationDialog.svelte';
+  import type { DnsMigrationMode } from '$lib/features/dns-migration/types';
   import { migrationFailure } from '$lib/features/dns-migration/state';
   import { optionalMobileNavigation } from '$lib/features/mobile/context';
   import { untrack } from 'svelte';
   const dnsNavigation=untrack(()=>optionalMobileNavigation());
+  let migrationMode=$state<DnsMigrationMode>('delete'),migrationSavedMode=$state<DnsMigrationMode>('delete');
   let migrationOpen=$state(false),migrationRequestedName=$state<string|null>(null),migrationBusy=$state(false),migrationUnknown=$state(false),migrationPending=$state(false),migrationNeedsReload=$state(false);
-  function migrationState(value:{busy:boolean;unknown:boolean}){migrationBusy=value.busy;migrationUnknown=value.unknown;}
-  async function migrationSaved(){migrationPending=true;migrationNeedsReload=true;const loaded=await load();if(alive){migrationNeedsReload=!loaded;saved=false;savedPending=true;}}
+  function migrationState(value:{busy:boolean;unknown:boolean;mode:DnsMigrationMode}){migrationBusy=value.busy;migrationUnknown=value.unknown;if(value.unknown)migrationMode=value.mode;}
+  async function migrationSaved(mode:DnsMigrationMode){migrationSavedMode=mode;migrationPending=true;migrationNeedsReload=true;const loaded=await load();if(alive){migrationNeedsReload=!loaded;saved=false;savedPending=true;}}
   async function rereadMigration(){const loaded=await load();if(alive)migrationNeedsReload=!loaded;}
   async function discardForMigration(){discardDraft();await load();}
   function migrationWorkspace(){if(saving||migrationBusy||migrationUnknown)return;if(dnsNavigation)dnsNavigation.open('workspace');else{store.settingsSection='config';store.activeTab='settings';}}
@@ -750,6 +752,14 @@
   function removeServer(name: string) {
     if (!draft || saving || migrationBusy) return;
     migrationRequestedName = name;
+    migrationMode = 'delete';
+    migrationOpen = true;
+  }
+
+  function renameServer(name: string) {
+    if (!draft || saving || migrationBusy) return;
+    migrationRequestedName = name;
+    migrationMode = 'rename';
     migrationOpen = true;
   }
 
@@ -870,9 +880,9 @@
 </script>
 <MobileSettingsDraftGuard {dirty} busy={saving||migrationBusy} label="DNS 设置" onDiscard={discardDraft} />
 {#if readNotice}<p role="status">{readNotice}</p>{/if}
-<DnsServerMigrationDialog open={migrationOpen} profileId={profileSnapshot?.profileId??null} requestedName={migrationRequestedName} {dirty} onClose={()=>migrationOpen=false} onDiscard={discardForMigration} onSaved={()=>void migrationSaved()} onStateChange={migrationState}/>
-{#if migrationUnknown}<p role="status">原 DNS 删除迁移保存结果未确认；当前编辑与普通保存已暂停，不能创建新计划或重放。</p><Button variant="outline" onclick={()=>migrationOpen=true}>核对原 DNS 删除迁移</Button>{/if}
-{#if migrationPending}<p role="status">DNS 删除及引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。</p><Button variant="outline" disabled={saving||migrationBusy||migrationUnknown} onclick={migrationWorkspace}>前往工作区预检/应用 DNS 变更</Button>{/if}
+<DnsServerMigrationDialog open={migrationOpen} profileId={profileSnapshot?.profileId??null} requestedName={migrationRequestedName} requestedMode={migrationMode} {dirty} onClose={()=>migrationOpen=false} onDiscard={discardForMigration} onSaved={mode=>void migrationSaved(mode)} onStateChange={migrationState}/>
+{#if migrationUnknown}<p role="status">原 DNS 迁移保存结果未确认；当前编辑与普通保存已暂停，不能创建新计划或重放。</p><Button variant="outline" onclick={()=>migrationOpen=true}>{migrationMode==='rename'?'核对原 DNS 重命名迁移':'核对原 DNS 删除迁移'}</Button>{/if}
+{#if migrationPending}<p role="status">{migrationSavedMode==='rename'?'DNS 重命名及全部引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。':'DNS 删除及引用迁移已保存本地，待应用；全局客户端覆盖影响全部配置，运行状态尚未确认。'}</p><Button variant="outline" disabled={saving||migrationBusy||migrationUnknown} onclick={migrationWorkspace}>前往工作区预检/应用 DNS 变更</Button>{/if}
 {#if migrationNeedsReload}<p role="status">迁移已保存本地，但 DNS 表单尚未完成重新读取；原展示不恢复普通保存权限。</p><Button variant="outline" disabled={loading||saving||migrationBusy||migrationUnknown} onclick={()=>void rereadMigration()}>重新读取 DNS 本地结果</Button>{/if}
 <fieldset class="dns-editor" disabled={saving||migrationBusy||migrationUnknown||migrationNeedsReload}>
 <div class="flex items-center justify-between gap-3 mb-3 text-xs text-muted-foreground">
@@ -1133,6 +1143,7 @@
             </div>
             <div class="server-actions">
               <Button variant="ghost" size="icon-sm" onclick={() => openEditServer(name)} aria-label={`编辑 ${name}`}><Pencil /></Button>
+              <Button variant="ghost" size="sm" onclick={() => renameServer(name)} aria-label={`重命名 ${name}`}>重命名</Button>
               <Button variant="ghost" size="icon-sm" onclick={() => removeServer(name)} aria-label={`删除 ${name}`}><Trash2 /></Button>
             </div>
           </article>
@@ -1246,7 +1257,7 @@
           <label>
             <span>服务器名称</span>
             <Input bind:value={serverNameDraft} placeholder="例如 cloudflare" autofocus />
-            {#if editingServerName && serverNameDraft.trim() !== editingServerName}<span role="status">名称变更仅保留为草稿。删除或重命名需专用预览，原材料保留；当前专用流程支持删除与引用迁移，重命名流程尚未适配，普通保存会明确拒绝此改名。</span>{/if}
+            {#if editingServerName && serverNameDraft.trim() !== editingServerName}<span role="status">名称变更仅保留为草稿。删除或重命名需专用预览，原材料保留；请取消本编辑窗口后，使用服务器行的“重命名”入口核对全部引用。普通保存会明确拒绝此改名。</span>{/if}
           </label>
           <label>
             <span>协议</span>
@@ -1840,6 +1851,8 @@
 
   .server-actions {
     flex: none;
+    flex-wrap: wrap;
+    max-width: 148px;
     gap: 2px;
   }
 

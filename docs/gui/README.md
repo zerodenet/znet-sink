@@ -54,7 +54,7 @@ const config = await invoke('app_config_get');
 - [工作区本地保存、草稿与来源保护](./config-workspace-local-v0.0.3.md)
 - [PRD V3 完成度与剩余客户端能力](./mobile-client-completion-matrix-v0.0.3.md)
 - [原生路由规则客户端覆盖编辑](./route-rule-editor-v0.0.3.md)
-- [规则集引用与 DNS 删除迁移](./reference-migrations-v0.0.3.md)
+- [规则集引用与 DNS 删除/重命名迁移](./reference-migrations-v0.0.3.md)
 - [概览定位与移动运行网络](./mobile-location-network-v0.0.3.md)
 - [移动版本目录前台到期检查](./mobile-release-foreground-v0.0.3.md)
 - [插件卸载的固定预览与逐项结果](./mobile-plugin-uninstall-v0.0.3.md)

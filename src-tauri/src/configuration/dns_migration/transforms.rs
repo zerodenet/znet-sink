@@ -286,3 +286,77 @@ pub(super) fn migrate(
     validate(&next)?;
     Ok((next, references))
 }
+
+/// Rename one definition and its complete, enumerated DNS references. Keep the
+/// original Value for every other field; never serialize a reduced form model.
+pub(super) fn rename(
+    config: &Value,
+    name: &str,
+    target: &str,
+) -> AppResult<(Value, Vec<Reference>)> {
+    let servers = server_map(config)?;
+    if !servers.contains_key(name) {
+        return Err(failure(
+            "dns_migration_target",
+            "原 DNS 服务器已不存在，请重新读取",
+        ));
+    }
+    if target.is_empty()
+        || target != target.trim()
+        || target.len() > 512
+        || target.chars().any(char::is_control)
+        || target == name
+        || servers.contains_key(target)
+    {
+        return Err(failure(
+            "dns_migration_name",
+            "新名称须为不同且未占用的有效名称，不含首尾空白或控制字符，最多512字节",
+        ));
+    }
+    if config
+        .pointer("/policy/server_timeout_ms")
+        .and_then(Value::as_object)
+        .is_some_and(|timeouts| timeouts.contains_key(target))
+    {
+        return Err(failure(
+            "dns_migration_timeout_conflict",
+            "新名称已有独立超时键；不能覆盖或借重命名修复失效引用",
+        ));
+    }
+    if ambiguous(config, name) || ambiguous(config, target) {
+        return Err(failure(
+            "dns_migration_ambiguous",
+            "未知 DNS 扩展含原名或新名，无法证明引用语义；原材料保留",
+        ));
+    }
+    validate(config)?;
+    let references = references(config, name)?;
+    let mut next = config.clone();
+    for reference in &references {
+        if !reference.path.starts_with("/policy/server_timeout_ms/") {
+            *next.pointer_mut(&reference.path).ok_or_else(invalid)? = Value::String(target.into());
+        }
+    }
+    if let Some(timeouts) = next
+        .pointer_mut("/policy/server_timeout_ms")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(value) = timeouts.remove(name) {
+            timeouts.insert(target.into(), value);
+        }
+    }
+    let definitions = next
+        .get_mut("servers")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(invalid)?;
+    let original = definitions.remove(name).ok_or_else(invalid)?;
+    definitions.insert(target.into(), original);
+    // Expanded names must remain inside the same material budget. Validate
+    // every chain and timeout reference, including retained disabled DNS.
+    server_map(&next)?;
+    validate(&next)?;
+    if !self::references(&next, name)?.is_empty() {
+        return Err(invalid());
+    }
+    Ok((next, references))
+}

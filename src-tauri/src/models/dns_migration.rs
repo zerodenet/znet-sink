@@ -30,6 +30,9 @@ pub struct PreviewInput {
     pub binding: String,
     pub server_name: String,
     pub replacement_name: Option<String>,
+    /// None retains the existing delete-and-migrate intent. A rename cannot
+    /// also select an existing replacement backend.
+    pub rename_to: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +41,7 @@ pub struct Plan {
     pub profile_id: String,
     pub server_name: String,
     pub replacement_name: Option<String>,
+    pub rename_to: Option<String>,
     pub references: Vec<Reference>,
     pub notice: String,
     pub state: &'static str,

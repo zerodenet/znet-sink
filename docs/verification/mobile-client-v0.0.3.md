@@ -1088,3 +1088,62 @@ Chromium 完整 441 通过；WebKit 440 通过/1 失败，失败项重试一次�
 本地无 WebKit，最终修复由新 head 的完整双引擎 CI 验证；旧 head 收据只作历史。
 修复后本地实际 A22 Chromium **14/14**，0失败/retry/flaky/skip；
 日志 `/tmp/a22-uninstall-browser-close-retirement.log`。4177 未重启，业务源及原全部业务断言不变。
+
+## 2026-10-16：DNS 重命名固定预览与本地引用迁移
+
+用户明确授权从 `a7ebb36b815be8dfb9deffb49199e119039b8500` 继续云端开发并提交同一 PR #46。
+开工工作树干净，分支仍为 `feat/mobile-v0.0.3`，远端 develop 为 `fd198ba52711f018334860b8a6704546ccd349fd`。
+检查时发现原 PR 被转为 Ready；按本批 Draft 要求使用正式 convert-to-draft 接口恢复并核实成功，未新建 PR。
+
+本批复用 DNS 删除的宿主快照、固定计划、CAS 与 owned receipt，新增窄 `renameTo` 意图。
+明确选原服务器并输入新名称，预览完整真实引用，确认仅提交 planId；Rust 移动原定义 Value，
+只替换 default/dispatch/node/direct/三回退链/timeout 键，u64、顺序及未呈现的有效原生字段保留。
+不改 host/domain/bootstrap/TLS 名称/detour，不接收页面 DNS 正文，不自动合并同名服务器。
+原对象与候选均完整校验，禁用 DNS 也不跳过。取消不保存，过期、文件/图 ABA、scope 和所有权变化拒绝旧许可。
+保存只为 `saved_pending_apply`，不发内核运行命令，不称平台 DNS/VPN 已应用或跨文件原子事务。
+
+来源归属审查发现：原始 source DNS 若已有 ruleSetReferences 投影，再晋升全局会带回旧标签。
+无显式全局且多配置、或来源含此投影时明确返回 scope 拒绝；带真正全局 DNS 的对象可封闭迁移，
+不改变其它托管正文或 SQLite 来源关系。真实有效投影的正反例证明已迁移 tag 不回退，
+受限范围列入 todo 与完成矩阵。未知只读原 plan/status，原实际成功回执仍须当前 binding 相符；
+不自动重放、不换操作号，不提供跨宿主/进程重建保证。
+
+本地前端最终完整 `pnpm verify:frontend` 通过：19 个有数值汇总的 Node 组 **672/672，0失败/跳过**，
+其它合同脚本通过，Svelte **0错误/0警告**、生产 build 通过；日志 `/tmp/dns-rename-frontend-final.log`。
+DNS production state Node **33/33**（原删除21+新增12），日志 `/tmp/dns-rename-node-final.log`。
+实际同源 Chromium **24/24**（原删除11+新增重命名13），0失败/retry/flaky/skip，
+覆盖320px/大字号/44px控件、全部引用、取消、忙碌返回、冲突/过期、托管限制、原未知操作及面板重建；
+日志 `/tmp/dns-rename-browser-remount-final.log`。4177 未重启；本地无 WebKit，不安装或绕过，
+双浏览器及四工作流/七份产物以最终提交真实 CI 与上传收据记录于同一 PR。
+
+失败与修复保留：
+
+- 新增晚到只读 status 拒绝反例首轮 **31通过/1失败**，配置变代次后错误回到 choosing；
+  补原 epoch/conflict fence，含 status 和后续 snapshot 读取中变化的最终33项全部通过。
+  日志 `/tmp/dns-rename-node-red.log`、`/tmp/dns-rename-node-final.log`。
+- unknown rename 关闭 DNS、回到设置并重建面板的新增实浏览器反例 **1失败**：外层按钮误用 delete 模式。
+  由原操作同步 mode 后，保留原断言/timeout，最终完整24项通过；不重复 preview/save，只查原 ID。
+  日志 `/tmp/dns-rename-remount-red.log`、`/tmp/dns-rename-browser-remount-final.log`。
+- 首轮 Rust 完整候选 **1528通过/0失败/7忽略** 后，复审补 mixed legacy 反例真实 **0通过/1失败**：
+  clientEdits=None、旧全局标记与 profile DNS 共存时，实际优先 profile 值却错误允许 prepared。
+  该反例没有执行 save。按实际 wrapper 来源修正 global 豁免，补多配置/带引用覆盖零写入拒绝及
+  纯 legacy global 正例；原反例不放宽，最终完整检查重新执行，不借首轮结果代替修复后结果。
+  日志 `/tmp/dns-rename-legacy-red.log`。
+- 首次提交的pre-commit类型检查0错误/0警告，但commit-msg因标题中的大写DNS违反subject-case拒绝；
+  改为全小写标题后正常重提，不跳过Husky或commitlint。原拒绝日志 `/tmp/dns-rename-commit.log`。
+
+所有变更/删除回归仅使用隔离 TempDir/AppConfig/SQLite，未操作用户配置或真实隧道。
+没有 core、依赖、锁、版本或 CI YAML 变更；不使用用户 Mac、不创建签名凭据、不合并或发布。
+Android API24/Galaxy S8目标、四项许可缺口、iPhone/真实手机未验收状态保持。
+原生VPN/core/平台生命周期装配仍明确未支持，跨配置/托管来源及投影整合并未完成，不能称完整A13或移动端完成。
+
+修复后的最终 locked workspace/all-features Rust 完整测试：**1529通过/0失败/7忽略，45组**，
+GUI lib **1255/0/5**；14项新重命名用例及原18项DNS迁移均通过，最终fmt/check/Clippy全部通过。
+日志 `/tmp/dns-rename-rust-final-tests.log`；最终fmt、全目标全特性check及Clippy的收据
+分别为 `/tmp/dns-rename-rust-final-{fmt,check,clippy}.log`，既有警告不隐藏。
+七项实际ignored为：`supplied_zero_confirms_config_application_without_restarting`、
+`real_kernel_version_matrix`、`real_kernel_bind_failure_is_never_reported_ready`、
+`real_kernel_ready_and_lifetime_pipe_shutdown_release_listener`、
+`live_clash_subscription_rule_providers_compile_to_verified_zrs`、
+`supplied_zero_accepts_the_production_observation_contract`及Lifecycle doctest。
+前六项依赖显式真实内核/捕获或订阅环境；没有将忽略当作通过，未执行本地WebKit或手机验收。
