@@ -13,7 +13,7 @@ fn tun_commands_share_a_long_response_budget_without_delaying_connection_or_quer
         assert_eq!(
             response_timeout_from_options(Some(&options), command_response_timeout(method))
                 .unwrap(),
-            Duration::from_secs(15)
+            Duration::from_secs(60)
         );
         assert_eq!(
             timeout_from_options(Some(&options)).unwrap(),
@@ -44,11 +44,11 @@ fn tun_budget_preserves_longer_explicit_timeouts_and_rejects_invalid_options() {
     let minimum = command_response_timeout("tun.start");
     let options = CoreIpcOptions {
         socket: None,
-        timeout_ms: Some(30_000),
+        timeout_ms: Some(90_000),
     };
     assert_eq!(
         response_timeout_from_options(Some(&options), minimum).unwrap(),
-        Duration::from_secs(30)
+        Duration::from_secs(90)
     );
     for timeout_ms in [0, crate::config::MAX_IPC_TIMEOUT_MS + 1] {
         let options = CoreIpcOptions {
@@ -65,9 +65,9 @@ fn tun_budget_preserves_longer_explicit_timeouts_and_rejects_invalid_options() {
 }
 
 #[test]
-fn five_second_tun_response_succeeds_but_missing_response_still_times_out() {
+fn slow_tun_response_succeeds_but_missing_response_still_times_out() {
     // Virtual time + an in-memory response channel only. No kernel, network,
-    // device, privileges or real five-second sleep is needed for this test.
+    // device, privileges or real twenty-second sleep is needed for this test.
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
@@ -79,7 +79,7 @@ fn five_second_tun_response_succeeds_but_missing_response_still_times_out() {
                     response_timeout_from_options(None, command_response_timeout(method)).unwrap();
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(20)).await;
                     tx.send("completed").unwrap();
                 });
                 assert_eq!(
@@ -95,7 +95,7 @@ fn five_second_tun_response_succeeds_but_missing_response_still_times_out() {
             // The same delayed reply still exceeds an ordinary query budget.
             assert!(tokio::time::timeout(
                 response_timeout_from_options(None, None).unwrap(),
-                tokio::time::sleep(Duration::from_secs(5)),
+                tokio::time::sleep(Duration::from_secs(20)),
             )
             .await
             .is_err());

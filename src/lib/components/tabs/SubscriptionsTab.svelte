@@ -864,7 +864,7 @@
   .row-tag.outline-tag { background: transparent; border: 1px solid var(--border); color: var(--muted-foreground); }
   .row-meta, .row-meta-line { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted-foreground); flex-wrap: wrap; }
   .row-meta { opacity: 0.65; }
-  .row-meta-line { opacity: 0.85; }
+  .row-meta-line { align-items: baseline; opacity: 0.85; }
   .row-url { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(420px, 100%); }
   .row-sep { opacity: 0.4; }
   .expire-warn { color: var(--destructive); }

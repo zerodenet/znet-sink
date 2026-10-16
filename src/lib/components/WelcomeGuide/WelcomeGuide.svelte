@@ -63,7 +63,7 @@
         <div class="step-number">01</div>
         <h3 class="step-title">选择界面模式</h3>
         <p class="step-desc">
-          简约模式保留日常使用入口；专业模式开放节点、静态配置、规则、连接和调试等完整控制面。
+          简约模式保留日常入口；专业模式展示全部入口。两种模式的功能相同。
         </p>
         <div class="mode-cards">
           <button data-slot="surface-button"

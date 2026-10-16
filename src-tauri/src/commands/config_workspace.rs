@@ -18,16 +18,13 @@ use crate::models::core::CoreIpcOptions;
 use crate::models::core_process::CoreProcessState;
 use crate::models::gui_core::{GuiConfigImpactItem, GuiConfigPlanApplyResult};
 use crate::models::proxy_config::ProxyConfigProfile;
-use crate::services::{
-    common, core_config, core_process, interaction_mode, proxy_config, rule_overlay,
-};
+use crate::services::{common, core_config, core_process, proxy_config, rule_overlay};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
 pub async fn gui_config_workspace_snapshot(
     state: State<'_, AppState>,
 ) -> AppResult<ConfigWorkspaceSnapshot> {
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
     snapshot(state.inner()).await
 }
 
@@ -36,7 +33,6 @@ pub async fn gui_config_workspace_plan(
     state: State<'_, AppState>,
     source_config: Value,
 ) -> AppResult<ConfigWorkspacePlan> {
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
     let active = active_profile(state.inner())?;
     plan(state.inner(), &active, source_config, true).await
 }
@@ -47,7 +43,6 @@ pub async fn gui_config_workspace_apply(
     input: ConfigWorkspaceApplyInput,
 ) -> AppResult<ConfigTransactionReceipt> {
     let state = app_handle.state::<AppState>();
-    interaction_mode::require_pro_mode(state.inner(), "config_workspace")?;
     let _operation = state.proxy_config_operation().lock().await;
     apply_locked(app_handle.clone(), state.clone(), input).await
 }

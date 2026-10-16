@@ -135,7 +135,7 @@ pub(crate) async fn apply_profile(
         &previous_source,
         previous_id.as_deref(),
     )?;
-    let identity = apply(
+    let identity = Box::pin(apply(
         &Live {
             state,
             options: options.clone(),
@@ -144,7 +144,7 @@ pub(crate) async fn apply_profile(
         &config,
         &previous_params,
         &next_params,
-    )
+    ))
     .await?;
     Ok(Receipt {
         identity,

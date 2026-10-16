@@ -156,7 +156,7 @@ jobs:
   windows-client-core:
     name: Windows DNS and client core
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -181,6 +181,9 @@ jobs:
       - name: Run Windows portable kernel settings contract
         run: pnpm test:kernel-settings
 
+      - name: Check subscription publication ownership
+        run: pnpm test:subscriptions
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -204,6 +207,14 @@ jobs:
             Write-Output "::error title=Windows client core tests failed::$diagnostic"
             exit $status
           }
+
+      # Tauri boxes responder tasks only with debug_assertions. The release
+      # path must also fit Windows' default 1 MiB thread stack.
+      - name: Build embedded frontend for Release regression
+        run: pnpm build
+
+      - name: Verify Release subscription refresh on a bounded stack
+        run: cargo test --release --manifest-path src-tauri/Cargo.toml --locked --lib subscription_ -j 1 -- --test-threads=1
 
       - name: Verify readiness against released Windows kernel
         shell: pwsh

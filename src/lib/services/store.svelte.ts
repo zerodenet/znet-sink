@@ -13,7 +13,6 @@ export type UIMode = 'lite' | 'pro';
 export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'dns' | 'config' | 'logs' | 'about';
 
 const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings']);
-const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config']);
 
 class AppStateStore {
   isInitialized = $state(false);
@@ -23,6 +22,7 @@ class AppStateStore {
   isSwitchingUiMode = $state(false);
   activeTab = $state('overview');
   settingsSection = $state<SettingsSection>('general');
+  private returnLocation: { tab: string; section: SettingsSection } | null = null;
   selectedNodeId = $state('node-1');
   selectedTheme = $state<ThemeMode>('system');
   visibleTabs = $state<string[]>([]);
@@ -116,11 +116,23 @@ class AppStateStore {
   }
 
   openSettings(section: SettingsSection = 'core') {
+    this.openTab('settings');
+    this.settingsSection = section;
+  }
+
+  openTab(tab: string) {
+    if (this.activeTab !== tab && this.isNavVisible(this.activeTab)) {
+      this.returnLocation = { tab: this.activeTab, section: this.settingsSection };
+    }
     this.isInitialized = true;
-    this.activeTab = 'settings';
-    this.settingsSection = this.uiMode === 'lite' && PRO_ONLY_SETTINGS.has(section)
-      ? 'general'
-      : section;
+    this.activeTab = tab;
+  }
+
+  returnToPreviousPage() {
+    const target = this.returnLocation;
+    this.returnLocation = null;
+    this.activeTab = target?.tab ?? 'overview';
+    if (target) this.settingsSection = target.section;
   }
 
   async switchUIMode(mode: UIMode) {
@@ -135,13 +147,6 @@ class AppStateStore {
     this.uiMode = mode;
     if (browser) {
       localStorage.setItem('znet-ui-mode', mode);
-    }
-
-    if (mode === 'lite' && !LITE_MODE_NAV.has(this.activeTab)) {
-      this.activeTab = 'overview';
-    }
-    if (mode === 'lite' && PRO_ONLY_SETTINGS.has(this.settingsSection)) {
-      this.settingsSection = 'general';
     }
 
     // Persist in the background. The presentation switch must not stay
@@ -188,10 +193,7 @@ class AppStateStore {
         features: new Map(surface.features.map((item) => [item.key, item])),
       };
 
-      const navItem = this.interactionSurface.navigation.get(this.activeTab);
-      if (!navItem?.visible) {
-        this.activeTab = 'overview';
-      }
+      // Visibility controls navigation discovery, never an already open page.
       console.timeEnd('[ZNet] refreshInteractionSurface');
     } catch (e) {
       console.warn('[ZNet] refreshInteractionSurface failed:', e);

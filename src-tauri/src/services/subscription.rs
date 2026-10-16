@@ -546,6 +546,47 @@ async fn sync_subscription(
     state: &AppState,
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
+    Box::pin(sync_with_publish(state, subscription, |input| {
+        proxy_config::upsert_runtime(app_handle.clone(), input)
+    }))
+    .await
+}
+
+// Keep one orchestration path for the native publisher and isolated transport
+// regressions. The publisher retains the existing configuration transaction.
+async fn sync_with_publish<P, F>(
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    publish: P,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert) -> F,
+    F: std::future::Future<Output = AppResult<ProxyConfigProfile>>,
+{
+    let previous_rules = rule_set::subscription_sources(state, &subscription.id)?;
+    let id = subscription.id.clone();
+    let result = Box::pin(fetch_and_publish(state, subscription, publish)).await;
+    if let Err(mut error) = result {
+        if let Err(rollback) = rule_set::restore_subscription_sources(state, &id, previous_rules) {
+            error.details = Some(json!({
+                "cause": error.details,
+                "ruleSetRollback": {"succeeded": false, "message": rollback.message}
+            }));
+        }
+        return Err(error);
+    }
+    result
+}
+
+async fn fetch_and_publish<P, F>(
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    publish: P,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert) -> F,
+    F: std::future::Future<Output = AppResult<ProxyConfigProfile>>,
+{
     let user_agent = subscription
         .user_agent
         .clone()
@@ -571,8 +612,7 @@ async fn sync_subscription(
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
 
-    apply_parsed_subscription(
-        app_handle,
+    Box::pin(apply_parsed_subscription(
         state,
         subscription,
         parsed,
@@ -580,13 +620,12 @@ async fn sync_subscription(
         metadata,
         now,
         target_proxy_config_id,
-        None,
-    )
+        publish,
+    ))
     .await
 }
 
-async fn apply_parsed_subscription(
-    app_handle: &AppHandle,
+async fn apply_parsed_subscription<P, F>(
     state: &AppState,
     subscription: SubscriptionProfile,
     parsed: ParsedSubscriptionConfig,
@@ -594,26 +633,20 @@ async fn apply_parsed_subscription(
     metadata: SyncMetadata,
     now: u64,
     target_proxy_config_id: String,
-    commit_guard: Option<&(dyn Fn() -> AppResult<()> + Send + Sync)>,
-) -> AppResult<SubscriptionProfile> {
+    publish: P,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert) -> F,
+    F: std::future::Future<Output = AppResult<ProxyConfigProfile>>,
+{
     let parsed =
-        prepare_parsed_subscription(state, &subscription, parsed, user_agent, commit_guard).await?;
+        prepare_parsed_subscription(state, &subscription, parsed, user_agent, None).await?;
     ensure_subscription_unchanged(state, &subscription)?;
-    if let Some(guard) = commit_guard {
-        guard()?;
-    }
-
-    upsert_synced_proxy_config(
-        app_handle,
-        state,
-        &subscription,
-        &target_proxy_config_id,
-        parsed,
-    )
-    .await?;
-    if let Some(guard) = commit_guard {
-        guard()?;
-    }
+    let input =
+        prepare_synced_proxy_config_upsert(state, &subscription, &target_proxy_config_id, parsed)?;
+    // Separate the large native configuration/capture future from the fetch
+    // and parsing state; do not duplicate it through the IPC responder stack.
+    Box::pin(publish(input)).await?;
     update_sync_success(
         state,
         &subscription.id,
@@ -2478,19 +2511,6 @@ fn pad_base64(content: &str) -> String {
     padded
 }
 
-async fn upsert_synced_proxy_config(
-    app_handle: &AppHandle,
-    state: &AppState,
-    subscription: &SubscriptionProfile,
-    target_proxy_config_id: &str,
-    parsed: ParsedSubscriptionConfig,
-) -> AppResult<ProxyConfigProfile> {
-    let input =
-        prepare_synced_proxy_config_upsert(state, subscription, target_proxy_config_id, parsed)?;
-    ensure_subscription_unchanged(state, subscription)?;
-    proxy_config::upsert_runtime(app_handle.clone(), input).await
-}
-
 fn prepare_synced_proxy_config_upsert(
     state: &AppState,
     subscription: &SubscriptionProfile,
@@ -4207,3 +4227,7 @@ proxy-groups:
 #[cfg(test)]
 #[path = "subscription_capability_tests.rs"]
 mod capability_tests;
+
+#[cfg(test)]
+#[path = "subscription_stack_tests.rs"]
+mod stack_tests;
