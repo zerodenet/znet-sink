@@ -74,6 +74,7 @@ export type GuiEventType =
   | 'policy.probeCompleted'
   | 'traffic.sampled'
   | 'traffic.scopesSampled'
+  | 'traffic.hostInterfacesSampled'
   | 'traffic.reset'
   // v0.0.5+: TUN virtual network interface
   | 'tun.statusChanged'

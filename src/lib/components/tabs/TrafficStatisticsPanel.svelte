@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
+  import { optionalMobileNavigation, optionalMobileRoute } from '$lib/features/mobile/context';
+  import { resolveEndpointTraffic, type EndpointTrafficVisit } from '$lib/features/endpoints/traffic-navigation';
   import { RefreshCw, Search, Trash2, Activity, ChevronLeft, ChevronRight, Info } from '@lucide/svelte';
   import { Input } from '$lib/components/ui/input';
   import { Choice } from '$lib/components/ui/choice';
@@ -9,35 +12,52 @@
   import type { TrafficView, TrafficSession } from '$lib/features/traffic/session';
   import { scopeLabel } from '$lib/features/traffic/types';
   import type { ResetInput, TrafficScope } from '$lib/features/traffic/types';
-  import { supported, resetReason } from '$lib/features/traffic/policy';
+  import { supported, hostSupported, resetReason } from '$lib/features/traffic/policy';
   import { byteKeys, formatBytes, metric } from '$lib/features/traffic/history';
+  import { availablePlanes } from '$lib/features/traffic/presentation';
   import TrafficMiniChart from './TrafficMiniChart.svelte';
   import TrafficScopeDetails from './TrafficScopeDetails.svelte';
   import { useTrafficWorkspace } from '$lib/features/traffic/context';
-  let { session, view }: { session: TrafficSession; view: TrafficView } = $props();
+  let { session, view, endpointVisit }: { session: TrafficSession; view: TrafficView; endpointVisit?: EndpointTrafficVisit } = $props();
   const samplingHintId = $props.id();
   const workspace = useTrafficWorkspace();
-  const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'}];
+  const kinds: {kind: TrafficScope['kind']; label:string}[] = [{kind:'global',label:'全局'},{kind:'inbound',label:'入站'},{kind:'outbound',label:'出站'},{kind:'endpoint',label:'端点'},{kind:'peer',label:'Peer'},{kind:'host_interface',label:'宿主网卡'}];
   let kind = $state(workspace.statistics.kind);
-  let plane = $state(workspace.statistics.plane);
+  const initialPlane = workspace.statistics.plane;
+  let plane = $state(initialPlane);
   let query = $state(workspace.statistics.query);
   let offset = $state(workspace.statistics.offset);
   let selected = $state<string[]>([]);
   let plan = $state.raw<ResetInput | null>(null);
   let confirming = $state(false);
+  const sourceRoute = optionalMobileRoute();
+  const navigation = optionalMobileNavigation();
+  const routeActive = () => !navigation || (navigation.activeTab === sourceRoute?.tab && navigation.current?.key === sourceRoute?.key);
+  let alive = true;
+  let verificationSequence = 0;
+  let verifying = $state(false);
+  onDestroy(() => { alive = false; verificationSequence++; });
+  let preparedVisit: EndpointTrafficVisit | undefined;
   let inspected = $state<string | null>(null);
   let detailOpen = $state(false);
   let localError = $state<unknown>(null);
-  const filtered = $derived(view.order.filter(key => view.rows[key].snapshot.scope.kind === kind && JSON.stringify(view.rows[key].snapshot.scope).toLowerCase().includes(query.toLowerCase())));
+  $effect(() => {
+    if (!routeActive()) { verificationSequence++; verifying = false; confirming = false; detailOpen = false; plan = null; }
+  });
+  let focused = $state(true);
+  const location = $derived(endpointVisit && focused ? resolveEndpointTraffic(endpointVisit.target, view, endpointVisit.isCurrent()) : null);
+  const filtered = $derived(location ? (location.key ? [location.key] : []) : view.order.filter(key => view.rows[key].snapshot.scope.kind === kind && JSON.stringify(view.rows[key].snapshot.scope).toLowerCase().includes(query.toLowerCase())));
   const visible = $derived(filtered.slice(offset, offset + 24));
-  const planes = $derived([...new Set(['flow','inner','outer',...view.order.flatMap(key=>view.rows[key].snapshot.planes.map(p=>p.plane))])]);
+  const planes = $derived(availablePlanes(filtered.map(key => view.rows[key].snapshot)));
+  $effect(() => { if (location?.key) { kind = view.rows[location.key].snapshot.scope.kind; query = ''; offset = 0; } });
+  $effect(() => { if (planes.length && !planes.includes(plane)) plane = planes[0]; });
   const maximum = $derived(Math.min(256,view.discovery?.capabilities.trafficStatistics?.maximum_reset_targets ?? 0));
   const samplingError = $derived(view.error ? getAppErrorMessage(view.error,'统计查询失败') : null);
   const samplingLabel = $derived(view.stale && view.loading ? '正在同步' : samplingError ? '同步失败' : view.stale ? '采样中断' : view.streaming ? '实时' : '定时查询');
   const samplingHint = $derived(samplingError ?? (view.stale ? '采样中断，保留上次累计值和历史曲线；速率暂不可用。' : view.loading ? '正在后台更新统计，当前数据显示保持。' : view.streaming ? '正在接收内核采样' : '内核未提供采样订阅，使用定时查询'));
-  const selectionReason = $derived(selected.length ? selected.map(key => view.rows[key] ? resetReason(view.discovery,view.rows[key].snapshot) : '统计范围已不存在').find(Boolean) : '先选择统计范围');
-  $effect(() => { session.watch(visible); });
-  $effect(() => { workspace.statistics = { kind, plane, query, offset }; });
+  const selectionReason = $derived(location && !location.key ? '端点统计定位未确认，不能清空原目标' : selected.length ? selected.map(key => view.rows[key] ? resetReason(view.discovery,view.rows[key].snapshot) : '统计范围已不存在').find(Boolean) : '先选择统计范围');
+  $effect(() => { if (routeActive()) session.watch(visible); });
+  $effect(() => { if (routeActive()) workspace.statistics = { kind, plane, query, offset }; });
   $effect(() => {
     if (view.loading || view.stale) return;
     const remaining = selected.filter(key => !!view.rows[key]);
@@ -46,13 +66,36 @@
   $effect(() => { if (offset && offset >= filtered.length) offset = 0; });
   function toggle(key:string, checked:boolean) { selected = checked ? [...new Set([...selected,key])].slice(0,maximum) : selected.filter(k=>k!==key); }
   function prepare() {
-    try { plan = session.plan(selected); confirming = true; localError = null; }
+    try {
+      if (location && !location.key) throw new Error('端点统计定位已失效，请重新选择');
+      verificationSequence++; verifying = false;
+      plan = session.plan(selected); preparedVisit = focused ? endpointVisit : undefined; confirming = true; localError = null;
+    }
     catch(error) { localError = error; }
   }
-  function confirm() { if (plan) { const submitted = plan; confirming = false; plan = null; void session.reset(submitted); } }
+  async function confirm() {
+    if (verifying || view.resetting || !plan) return;
+    const submitted = plan;
+    const visit = preparedVisit;
+    const sequence = ++verificationSequence;
+    if (visit) {
+      verifying = true;
+      let verified = false;
+      try { verified = await visit.verifyCurrent(); } catch { /* A failed read grants no current source identity. */ }
+      if (!alive || sequence !== verificationSequence) return;
+      verifying = false;
+      if (!confirming || plan !== submitted || !routeActive()) return;
+      if (!verified || view.stale || view.loading || !resolveEndpointTraffic(visit.target, view, visit.isCurrent()).key) {
+        confirming = false; plan = null; localError = new Error('原端点统计目标已变化或状态未确认，未提交清空；请重新选择'); return;
+      }
+    }
+    confirming = false; plan = null; void session.reset(submitted);
+  }
+
 </script>
 <section class="statistics" aria-label="流量统计">
 
+  {#if endpointVisit && focused}<div aria-label="端点统计定位"><p class="notice">来源端点：{endpointVisit.target.label} · {endpointVisit.target.endpointId}</p>{#if location?.reason}<p class="notice" role="status">{location.reason}</p>{/if}{#if location?.planes.length && !location.planes.includes(initialPlane)}<p class="notice" role="status">原统计平面 {initialPlane} 不适用于此资源，已选择实际可用平面 {plane}；各平面独立计量。</p>{/if}<Button variant="outline" onclick={()=>{focused=false;selected=[];}}>浏览其他统计范围</Button></div>{/if}
   {#if localError || (view.error && !supported(view.discovery))}<p class="error" role="alert">{getAppErrorMessage(localError ?? view.error,'统计操作失败')}</p>{/if}
   {#if view.result}<p class="notice" role="status">{view.result}</p>{/if}
   {#if !supported(view.discovery)}<div class="unsupported-actions"><div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div></div>{/if}
@@ -61,19 +104,21 @@
   {:else if supported(view.discovery)}
     <div class="toolbar">
       <div class="kinds">
-        <SegmentedControl.Root value={kind} onValueChange={value=>{kind=value as TrafficScope['kind'];offset=0;}} aria-label="统计范围" class="flex-wrap max-w-full">
+        <SegmentedControl.Root value={kind} onValueChange={value=>{focused=false;selected=[];kind=value as TrafficScope['kind'];offset=0;}} aria-label="统计范围" class="flex-wrap max-w-full">
           {#each kinds as item}<SegmentedControl.Item value={item.kind}>{item.label}<span>{view.order.filter(key=>view.rows[key].snapshot.scope.kind===item.kind).length}</span></SegmentedControl.Item>{/each}
         </SegmentedControl.Root>
       </div>
       <div class="tools">
-        <label class="search"><Search size={15} aria-hidden="true"/><Input class="pl-8" aria-label="搜索统计范围" placeholder="搜索范围" bind:value={query} oninput={()=>offset=0}/></label>
+        <label class="search"><Search size={15} aria-hidden="true"/><Input class="pl-8" aria-label="搜索统计范围" placeholder="搜索范围" bind:value={query} oninput={()=>{focused=false;selected=[];offset=0;}}/></label>
         <div class="actions"><Button variant="ghost" size="icon-sm" aria-label="刷新统计" disabled={view.loading || view.resetting} onclick={()=>session.refresh(true)}><RefreshCw size={15} class={view.loading ? 'animate-spin' : ''}/></Button><Button variant="outline" size="sm" aria-label="清空选中统计" disabled={view.loading || view.stale || view.resetting || !!selectionReason || selected.length>maximum} title={selectionReason ?? '清空所选范围的累计统计'} onclick={prepare}><Trash2 size={14}/>{view.resetting ? '等待确认' : '清空统计'}{selected.length ? ` (${selected.length})` : ''}</Button></div>
       </div>
     </div>
     <div class="plane-controls">
-      <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
-      <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层；三个平面独立计量，不相加。"><Info size={14} aria-label="各平面独立统计"/></span></div>
+      {#if planes.length === 0}<p class="notice">当前范围没有声明可用的统计平面</p>{/if}
+      <SegmentedControl.Root value={plane} onValueChange={value=>plane=value} aria-label="统计平面">{#each planes as item}<SegmentedControl.Item value={item}>{item==='flow'?'Flow':item==='inner'?'Inner':item==='outer'?'Outer':item==='host'?'Host':item}</SegmentedControl.Item>{/each}</SegmentedControl.Root>
+      <div class="sampling"><span class:live={view.streaming && !view.stale && !samplingError} class:interrupted={view.stale} class:failed={!!samplingError && !view.loading} class="mode" aria-label="采样状态" aria-describedby={samplingHintId} title={samplingHint} role={samplingError && !view.loading ? 'alert' : undefined}><span class="status-dot"></span>{samplingLabel}</span><span id={samplingHintId} class="sr-only">{samplingHint}</span><span title="Flow 为逻辑流，Inner 为设备内层，Outer 为载体外层，Host 为宿主网卡；各平面独立计量，不相加，Host 不代表代理流量。"><Info size={14} aria-label="各平面独立统计"/></span></div>
     </div>
+    {#if kind==='host_interface'}<p class="notice">{hostSupported(view.discovery) ? '宿主网卡为系统接口观测，只读且不能清空；流量不等于本应用代理流量。' : '当前内核或平台未声明可读的宿主网卡统计；没有生成网卡或替代统计。'}</p>{/if}
     <div class="scope-grid">
       {#each visible as key (key)}
         {@const row=view.rows[key]}
@@ -83,7 +128,7 @@
         {@const reason=resetReason(view.discovery,snapshot)}
         <article class="scope" aria-label={`统计 ${scopeLabel(snapshot.scope)}`}>
           <div class="identity"><label title={reason ?? '选择此统计范围'}><Choice aria-label={`选择 ${scopeLabel(snapshot.scope)}`} checked={selected.includes(key)} disabled={!!reason || view.stale || view.resetting || (!selected.includes(key)&&selected.length>=maximum)} onchange={event=>toggle(key,event.currentTarget.checked)}/><strong>{scopeLabel(snapshot.scope)}</strong></label><Button variant="ghost" size="icon-sm" aria-label={`查看 ${scopeLabel(snapshot.scope)} 统计详情`} onclick={()=>{inspected=key;detailOpen=true;}}><Info size={14}/></Button></div>
-          <div class="role">{snapshot.scope.kind==='peer' ? snapshot.scope.endpoint_id : layer?.source_roles.join(' · ') || '—'}</div>
+          <div class="role">{snapshot.scope.kind==='host_interface' ? 'Host · 系统接口 · 只读' : snapshot.scope.kind==='peer' ? snapshot.scope.endpoint_id : layer?.source_roles.join(' · ') || '—'}</div>
           <dl class="totals">{#each keys as field}<div><dt>{field==='bytes_down'?'下载':field==='bytes_up'?'上传':field==='rx_bytes'?'RX':'TX'}</dt><dd title={metric(layer,field)?.toString() ?? '内核未提供此指标'}>{formatBytes(metric(layer,field))}</dd></div>{/each}</dl>
           <TrafficMiniChart observation={row} {plane} stale={view.stale}/>
           <div class="activity" title="活动流 / 数据报 / Packet 路由，清空累计统计不会修改这些值"><Activity size={12}/><span>{snapshot.activity.active_stream_flows ?? '—'}</span> / <span>{snapshot.activity.active_datagram_flows ?? '—'}</span> / <span>{snapshot.activity.active_packet_routes ?? '—'}</span></div>
@@ -98,8 +143,8 @@
     {/if}
   {/if}
 </section>
-<Dialog.Root bind:open={confirming}><Dialog.Content><Dialog.Header><Dialog.Title>清空所选统计？</Dialog.Title><Dialog.Description>开始新的统计周期。设备与连接继续运行；其他范围保持原值。</Dialog.Description></Dialog.Header><Dialog.Body><ul class="reset-targets">{#each plan?.targets ?? [] as target}<li><strong>{scopeLabel(target.scope)}</strong><span>{kinds.find(k=>k.kind===target.scope.kind)?.label}</span></li>{/each}</ul><p class="notice">清空这些范围全部可清空的累计指标。</p></Dialog.Body><Dialog.Footer><Button variant="outline" onclick={()=>confirming=false}>取消</Button><Button onclick={confirm}>确认清空</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
-<Dialog.Root bind:open={detailOpen}><Dialog.Content class="sm:max-w-[720px]"><Dialog.Header><Dialog.Title>{inspected&&view.rows[inspected] ? scopeLabel(view.rows[inspected].snapshot.scope) : '统计详情'}</Dialog.Title><Dialog.Description>独立统计平面 · 当前统计周期</Dialog.Description></Dialog.Header><Dialog.Body class="statistics-details-body">{#if inspected&&view.rows[inspected]}<TrafficScopeDetails observation={view.rows[inspected]} stale={view.stale}/>{:else}<p>此统计范围已不存在</p>{/if}</Dialog.Body></Dialog.Content></Dialog.Root>
+<Dialog.Root bind:open={confirming}><Dialog.Content><Dialog.Header><Dialog.Title>清空所选统计？</Dialog.Title><Dialog.Description>开始新的统计周期。设备与连接继续运行；其他范围保持原值。</Dialog.Description></Dialog.Header><Dialog.Body><ul class="reset-targets">{#each plan?.targets ?? [] as target}<li><strong>{scopeLabel(target.scope)}</strong><span>{kinds.find(k=>k.kind===target.scope.kind)?.label}</span></li>{/each}</ul><p class="notice">清空这些范围全部可清空的累计指标。</p></Dialog.Body><Dialog.Footer><Button variant="outline" onclick={()=>confirming=false}>取消</Button><Button disabled={verifying} onclick={confirm}>{verifying ? '正在核对原目标' : '确认清空'}</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+<Dialog.Root bind:open={detailOpen}><Dialog.Content class="sm:max-w-[720px]"><Dialog.Header><Dialog.Title>{inspected&&view.rows[inspected] ? scopeLabel(view.rows[inspected].snapshot.scope) : '统计详情'}</Dialog.Title><Dialog.Description>独立统计平面 · 当前统计周期</Dialog.Description></Dialog.Header><Dialog.Body class="statistics-details-body">{#if inspected&&view.rows[inspected] && (!location || location.key===inspected)}<TrafficScopeDetails observation={view.rows[inspected]} stale={view.stale}/>{:else}<p>此统计范围已不存在</p>{/if}</Dialog.Body></Dialog.Content></Dialog.Root>
 <style>
   .statistics { flex:1; overflow:auto; overflow-y:scroll; scrollbar-gutter:stable; min-width:0; padding:20px; }
   :global(.statistics-details-body) { height:min(440px,60vh); flex-shrink:0; scrollbar-gutter:stable; }

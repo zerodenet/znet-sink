@@ -27,13 +27,16 @@ export type ClientSourceStatus = 'initializing' | 'ready' | 'degraded' | 'offlin
 
 export interface ClientScope {
   profileId?: string;
-  configRevision: number;
+  /** Native content digest is a lossless decimal string; numeric fixtures remain compatible. */
+  configRevision: string | number;
   coreInstanceId: number;
 }
 
 /** Revisioned recovery point owned by the Rust Client Core. */
 export interface ClientCoreSnapshot {
   revision: number;
+  /** Client lifecycle/configuration generation; absent on older hosts. */
+  scopeGeneration?: number;
   scope: ClientScope;
   sourceStatus: ClientSourceStatus;
   activeProbeJobs: ProbeJobSnapshot[];
@@ -83,6 +86,7 @@ export interface ProbeJobSnapshot {
 }
 
 export interface StartProbeRequest {
+  expectedScope?: ClientScope;
   kind: ProbeJobKind;
   targetTags: string[];
   timeoutMs?: number;
@@ -124,6 +128,8 @@ export interface ToolJobSnapshot<TResult = unknown> {
   deadlineAtUnixMs: number;
 }
 export interface StartToolJobRequest {
+  expectedScope?: ClientScope;
+  expectedClientRevision?: number;
   kind: ToolJobKind;
   params?: Record<string, unknown>;
   timeoutMs?: number;
@@ -151,13 +157,13 @@ export interface ToolRuntimeSnapshot {
 
 export interface StableNodeId {
   profileId: string;
-  configRevision: number;
+  configRevision: string | number;
   tag: string;
 }
 
 export interface StablePolicyId {
   profileId: string;
-  configRevision: number;
+  configRevision: string | number;
   tag: string;
 }
 
@@ -312,6 +318,8 @@ export interface PolicyProbeAccepted {
 }
 
 export interface PolicyGroup {
+  available?: boolean;
+  reason?: string;
   name: string;
   kind?: string;
   selected?: string;
@@ -624,52 +632,38 @@ export interface ConfigPlanApplyResult {
 
 export type ConfigApplyStrategy = 'hot_reload' | 'restart';
 
-export interface ConfigRuntimeIdentityView {
-  coreInstanceId: string;
-  configRevision: number;
-}
-
+export interface ConfigRuntimeIdentityView { coreInstanceId: string; configRevision: string; }
 export interface ConfigTransactionReceipt {
-  transactionId: number;
-  profileId: string;
-  strategy: ConfigApplyStrategy;
-  state: 'confirmed';
-  effectiveDigest: string;
-  startedAtUnixMs: number;
-  completedAtUnixMs: number;
+  transactionId: string; profileId: string; strategy: ConfigApplyStrategy; state: 'confirmed' | 'runtime_confirmed';
+  effectiveDigest: string; startedAtUnixMs: number; completedAtUnixMs: number;
   runtimeIdentity: ConfigRuntimeIdentityView;
 }
-
-export interface ConfigWorkspaceApplyInput {
-  profileId: string;
-  sourceUpdatedAtUnixMs: number;
-  sourceConfig: Record<string, unknown>;
-  strategy: ConfigApplyStrategy;
-}
-
+export interface ConfigWorkspaceDraftInput { binding: string; sourceJson: string; }
+export interface ConfigWorkspaceApplyInput { planId: string; strategy: ConfigApplyStrategy; }
 export interface ConfigWorkspaceRuntimeView {
-  running: boolean;
-  identity?: ConfigRuntimeIdentityView;
-  effectiveDigest: string;
-  confirmed: boolean;
-  reason: string;
+  running?: boolean | null; identity?: ConfigRuntimeIdentityView | null; effectiveDigest: string;
+  confirmed: boolean; reason: string;
 }
-
 export interface ConfigWorkspaceSnapshot {
-  profileId: string;
-  profileName: string;
-  sourceUpdatedAtUnixMs: number;
-  sourceConfig: Record<string, unknown>;
-  localEdits: Record<string, unknown>;
-  effectiveConfig: Record<string, unknown>;
-  composition?: { sourceProfileId?: string; layers: ConfigCompositionLayer[] };
-  runtime: ConfigWorkspaceRuntimeView;
-  lastTransaction?: ConfigTransactionReceipt;
+  profileId: string; profileName: string; binding?: string | null; readOnlyReason?: string | null;
+  sourceUpdatedAtUnixMs: string; sourceJson?: string | null; localEditsJson?: string | null;
+  effectiveJson?: string | null; pendingApply: boolean; pendingOperation?: ConfigWorkspaceOperation | null;
+  composition?: { sourceProfileId?: string; layers: ConfigCompositionLayer[] } | null;
+  runtime: ConfigWorkspaceRuntimeView; lastTransaction?: ConfigTransactionReceipt | null;
 }
-
 export interface ConfigWorkspacePlan extends ConfigPlanApplyResult {
-  effectiveConfig: Record<string, unknown>;
-  effectiveDigest: string;
+  planId: string; binding: string; sourceJson: string; effectiveJson: string; effectiveDigest: string;
+  expiresAtUnixMs: string; runtimeValidated: boolean; applyUnavailableReason?: string | null;
+}
+export interface ConfigWorkspaceSaveResult { state: 'saved_pending_apply'; snapshot: ConfigWorkspaceSnapshot; }
+export interface ConfigWorkspaceOperation {
+  planId: string; state: 'prepared' | 'rejected' | 'submitted_unknown' | 'runtime_confirmed_pending_local' | 'confirmed';
+  receipt?: ConfigTransactionReceipt | null; reason?: string | null;
+}
+export interface ConfigWorkspaceRecoveryReview {
+  planId: string; reviewId: string | null; state: ConfigWorkspaceOperation['state'];
+  canCompleteLocal: boolean; reason: string; receipt: ConfigTransactionReceipt | null;
+  expiresAtUnixMs: string | null;
 }
 
 export interface ConfigCompositionLayer {

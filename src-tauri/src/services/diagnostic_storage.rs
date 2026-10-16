@@ -62,14 +62,6 @@ pub(crate) fn clear(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
     with_storage_lock(|| clear_locked(state))
 }
 
-pub(crate) fn diagnostic_log_paths() -> AppResult<Vec<PathBuf>> {
-    let data_dir = data_dir()?;
-    Ok(all_log_paths_at(
-        &data_dir,
-        core_config::managed_core_log_path()?,
-    ))
-}
-
 pub(crate) fn diagnostic_log_paths_at(data_dir: &Path, core_log_path: PathBuf) -> [PathBuf; 4] {
     [
         data_dir.join("logs").join("gui.log.jsonl"),
@@ -108,7 +100,9 @@ fn clear_locked(state: &AppState) -> AppResult<DebugStorageCleanupResult> {
         }
     }
 
-    clear_debug_frames();
+    if let Err(error) = clear_debug_frames() {
+        record_cleanup_error(&mut result, "ipc-debug-coordination", error);
+    }
     match debug_store::segment_paths(&debug_log_path)
         .iter()
         .try_fold(None, |total, path| {

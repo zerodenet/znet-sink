@@ -109,6 +109,7 @@ fn load(root: &Path) -> AppResult<Registry> {
 }
 
 fn save(root: &Path, registry: &Registry) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     let bytes = serde_json::to_vec(registry).map_err(io::failure)?;
     if bytes.len() > MAX_BYTES {
         return Err(AppError::invalid_argument("插件状态超过容量限制"));
@@ -241,15 +242,8 @@ pub(super) fn revoke(
     Ok(())
 }
 
-pub(super) fn remove_plugin(root: &Path, plugin_id: &str) -> AppResult<()> {
-    let mut registry = load(root)?;
-    if registry.plugins.remove(plugin_id).is_some() {
-        save(root, &registry)?;
-    }
-    Ok(())
-}
-
 pub(super) fn save_directory(root: &Path, directory: &Directory) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     let bytes = serde_json::to_vec(directory).map_err(io::failure)?;
     if bytes.len() > 1024 * 1024 {
         return Err(AppError::invalid_argument("插件登记缓存超过大小限制"));
@@ -317,6 +311,7 @@ fn load_local_trust(root: &Path) -> AppResult<LocalTrust> {
 }
 
 fn save_local_trust(root: &Path, trust: &LocalTrust) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     let bytes = serde_json::to_vec(trust).map_err(io::failure)?;
     if bytes.len() > MAX_BYTES || trust.plugins.len() > 64 {
         return Err(AppError::invalid_argument("本地插件信任记录超过大小限制"));
@@ -335,14 +330,6 @@ pub(super) fn save_local_registration(root: &Path, registration: Registration) -
     let mut trust = load_local_trust(root)?;
     trust.plugins.insert(registration.id.clone(), registration);
     save_local_trust(root, &trust)
-}
-
-pub(super) fn remove_local_registration(root: &Path, plugin_id: &str) -> AppResult<()> {
-    let mut trust = load_local_trust(root)?;
-    if trust.plugins.remove(plugin_id).is_some() {
-        save_local_trust(root, &trust)?;
-    }
-    Ok(())
 }
 
 /// Merge public marketplace metadata with user-approved local trust. Local

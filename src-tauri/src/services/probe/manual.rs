@@ -1,3 +1,4 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProbeEvent};
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -254,8 +255,9 @@ fn log_probe_request(
     target_tag: &str,
     requested_at_unix_ms: u64,
 ) {
-    logs::znet_log_fields(
-        Some(state),
+    logs::znet_host_log_fields(
+        state,
+        HostEvent::NodeProbe(ProbeEvent::Requested),
         LogLevel::Debug,
         format!("应用向内核发送节点测速请求（{target_tag}）"),
         serde_json::json!({
@@ -296,8 +298,15 @@ fn log_probe_response(
             .clone()
             .unwrap_or_else(|| "unreachable".to_string())
     };
-    logs::znet_log_fields(
-        Some(state),
+    logs::znet_host_log_fields(
+        state,
+        HostEvent::NodeProbe(if result.reachable {
+            ProbeEvent::Reachable
+        } else if error_code.is_some() {
+            ProbeEvent::RequestFailed
+        } else {
+            ProbeEvent::Unreachable
+        }),
         if result.reachable {
             LogLevel::Info
         } else {
@@ -649,5 +658,46 @@ pub(super) fn complete_policy_jobs(app_handle: &AppHandle, event: &GuiPolicyProb
             let _ = app_handle.emit(PROBE_JOB_UPDATED_EVENT, update);
         }
         state.probe_runtime().forget(job.id, &event.policy_tag);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn actual_invalid_probe_path_records_processing_and_request_failure_without_remote_claim() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("logs.jsonl");
+        crate::services::log_store::with_test_path(&path, || {
+            let state = AppState::default();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(probe_single(&state, ProbeJobId(1), "   "));
+            assert!(!result.reachable);
+            assert_eq!(
+                result.client_error_code.as_deref(),
+                Some("invalid_argument")
+            );
+            let entries = crate::services::log_store::load_recent_from_path(&path, 10).unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(
+                entries[0].diagnostic_event.unwrap().public_message(),
+                "已收到节点测速请求"
+            );
+            assert_eq!(
+                entries[0].diagnostic_event,
+                Some(HostEvent::NodeProbe(ProbeEvent::Requested))
+            );
+            assert_eq!(
+                entries[1].diagnostic_event,
+                Some(HostEvent::NodeProbe(ProbeEvent::RequestFailed))
+            );
+            assert_ne!(
+                entries[1].diagnostic_event,
+                Some(HostEvent::NodeProbe(ProbeEvent::Unreachable))
+            );
+        });
     }
 }

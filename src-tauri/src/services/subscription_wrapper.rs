@@ -1,13 +1,15 @@
 #[path = "subscription.rs"]
 mod original;
 
-pub(crate) use original::remove_plugin_owned;
 #[cfg(test)]
 pub(crate) use original::{
     apply_managed_to_acceptance_store, complete_managed_sync_in_acceptance_store,
-    remove_managed_from_acceptance_store, update_managed_metadata_in_acceptance_store,
+    remove_managed_from_acceptance_store, should_publish_sync_error,
+    update_managed_metadata_in_acceptance_store,
 };
-pub use original::{ParsedSubscriptionConfig, SyncAllOutcome};
+pub use original::{
+    reset_conditional_cache, ConditionalCacheReset, ParsedSubscriptionConfig, SyncAllOutcome,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -191,6 +193,23 @@ pub async fn sync(app_handle: AppHandle, id: String) -> AppResult<SubscriptionPr
         migrate_profiles(state.inner())?;
     }
     original::sync(app_handle, id).await.map(present_profile)
+}
+
+/// Scheduling consumes the same canonical stored formats as manual sync.
+pub(crate) fn scheduled_profiles(state: &AppState) -> AppResult<Vec<SubscriptionProfile>> {
+    migrate_profiles(state)?;
+    Ok(lock(state.subscriptions(), "subscription")?.clone())
+}
+
+/// Host-only foreground entry; execution and per-ID deduplication stay shared.
+pub(crate) async fn sync_due(
+    app_handle: AppHandle,
+    expected: SubscriptionProfile,
+) -> AppResult<Option<SubscriptionProfile>> {
+    // The selected snapshot comes from the stored domain, not UI presentation.
+    original::sync_due(app_handle, expected)
+        .await
+        .map(|profile| profile.map(present_profile))
 }
 
 pub async fn sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {

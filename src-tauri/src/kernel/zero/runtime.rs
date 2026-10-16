@@ -42,11 +42,18 @@ pub(crate) async fn enable_tun_params(
         return Ok(status);
     }
 
-    #[cfg(windows)]
-    super::wintun_compat::ensure_for_current_runtime().await?;
+    prepare_tun_runtime().await?;
 
     commands::run_command("tun.start", params, options.clone()).await?;
     tun_status(options).await
+}
+
+/// Prepare host dependencies after an authoritative TUN status read. Bound
+/// control callers share this step without rediscovering the runtime endpoint.
+pub(crate) async fn prepare_tun_runtime() -> AppResult<()> {
+    #[cfg(windows)]
+    super::wintun_compat::ensure_for_current_runtime().await?;
+    Ok(())
 }
 
 pub async fn recover_tun(options: Option<CoreIpcOptions>) -> AppResult<GuiTunStatus> {

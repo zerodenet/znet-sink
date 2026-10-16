@@ -17,6 +17,7 @@ fn completed_frame(id: u64, at_ms: u64) -> DebugFrame {
                 }
             }
         }),
+        telemetry: None,
         elapsed_ms: None,
         error: None,
     }

@@ -1,4 +1,12 @@
 import type { Observation, Point } from './history';
+import type { Plane, TrafficSnapshot } from './types';
+
+/** Only advertised, usable planes of the currently browsed resources. */
+export function availablePlanes(snapshots: readonly TrafficSnapshot[]): Plane[] {
+  return [...new Set(snapshots.flatMap(snapshot => snapshot.planes
+    .filter(plane => plane.available_metrics.length > 0)
+    .map(plane => plane.plane)))];
+}
 
 // Presentation only: authoritative cumulative counters and raw rates stay intact.
 export const RATE_WINDOW_MS = 3000;

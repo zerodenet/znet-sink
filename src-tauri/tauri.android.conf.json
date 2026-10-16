@@ -1,0 +1,17 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ZNet Sink",
+        "decorations": true
+      }
+    ]
+  },
+  "bundle": {
+    "android": {
+      "minSdkVersion": 24
+    },
+    "createUpdaterArtifacts": false
+  }
+}

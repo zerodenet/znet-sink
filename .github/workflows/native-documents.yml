@@ -1,0 +1,169 @@
+name: Native document adapters
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-native-documents-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-library:
+    name: Android document library (minimum API 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Install Android compile SDK and tools
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Compile real native plugin and run JVM tests
+        env:
+          NATIVE_IO_ARTIFACT_DIR: native-document-evidence
+        run: |
+          set -o pipefail
+          mkdir -p native-document-evidence
+          scripts/test-native-io-android.sh 2>&1 | tee native-document-evidence/android-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-documents-android-library
+          path: native-document-evidence/
+          if-no-files-found: warn
+
+  ios-unsigned-library:
+    name: iOS document adapter (unsigned Simulator build)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Swift license inventory and actual target derivation
+        run: node scripts/test-license-swift.mjs
+      - name: Locate matching Tauri Swift API
+        run: |
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked > "$RUNNER_TEMP/native-io-metadata.json"
+          python3 - "$RUNNER_TEMP/native-io-metadata.json" <<'PY'
+          import json, pathlib, sys
+          metadata = json.load(open(sys.argv[1]))
+          owner = next(p for p in metadata['packages'] if p['name'] == 'tauri-plugin-znet-native-io')
+          node = next(n for n in metadata['resolve']['nodes'] if n['id'] == owner['id'])
+          tauri_id = next(d['pkg'] for d in node['deps'] if d['name'] == 'tauri')
+          package = next(p for p in metadata['packages'] if p['id'] == tauri_id)
+          api = pathlib.Path(package['manifest_path']).parent / 'mobile/ios-api'
+          links = pathlib.Path('src-tauri/crates/native-io/.tauri')
+          links.mkdir(parents=True, exist_ok=True)
+          (links / 'tauri-api').symlink_to(api)
+          PY
+      - name: Build UIKit adapter with iOS Simulator SDK without signing
+        working-directory: src-tauri/crates/native-io/ios
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/native-document-evidence"
+          xcodebuild -scheme znet-native-io -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/native-io-derived" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$GITHUB_WORKSPACE/native-document-evidence/ios-unsigned-build.log"
+      - name: Inventory actual unsigned Swift library dependencies and SDK provenance
+        shell: bash
+        run: |
+          set -eo pipefail
+          evidence="$GITHUB_WORKSPACE/native-document-evidence"
+          build_log="$evidence/ios-unsigned-build.log"
+          source_packages="$RUNNER_TEMP/native-io-derived/SourcePackages"
+          sdk_root="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          sdk_args=(--sdk-path "$sdk_root")
+          if [ -f "$sdk_root/SDKSettings.json" ]; then
+            sdk_args+=(--sdk-data "$sdk_root/SDKSettings.json")
+          fi
+          lock_args=()
+          native_package="$GITHUB_WORKSPACE/src-tauri/crates/native-io/ios"
+          for candidate in \
+            "$native_package/Package.resolved" \
+            "$native_package/.swiftpm/xcode/package.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
+            "$source_packages/Package.resolved"; do
+            if [ -f "$candidate" ]; then
+              lock_args=(--resolved-file "$candidate")
+              break
+            fi
+          done
+          node scripts/license-swift-targets.mjs --build-log "$build_log" > "$evidence/ios-compiler-targets.txt"
+          archive="$(find "$RUNNER_TEMP/native-io-derived/Build/Products" -type f -path '*-iphonesimulator/*' -name 'libznet-native-io.a' -print -quit)"
+          while IFS= read -r triple; do
+            case "$triple" in
+              aarch64-apple-ios-sim) architecture=arm64 ;;
+              x86_64-apple-ios) architecture=x86_64 ;;
+              *) echo 'Unexpected compiler target'; exit 1 ;;
+            esac
+            metadata="$evidence/ios-cargo-metadata-$triple.json"
+            cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked --filter-platform "$triple" > "$metadata"
+            artifact_args=()
+            if [ -n "$archive" ]; then
+              architectures="$(xcrun lipo -archs "$archive")"
+              if [[ " $architectures " == *" $architecture "* ]]; then
+                sliced="$evidence/libznet-native-io-$architecture.a"
+                if [ "$architectures" = "$architecture" ]; then
+                  cp "$archive" "$sliced"
+                else
+                  xcrun lipo "$archive" -thin "$architecture" -output "$sliced"
+                fi
+                artifact_args=(--artifact "$sliced")
+              fi
+            fi
+            node scripts/license-swift.mjs \
+              --cargo-metadata "$metadata" \
+              --swift-build-path "$source_packages" \
+              --target "$triple" \
+              --build-log "$build_log" \
+              --output "$evidence/ios-licenses-$triple.json" \
+              "${sdk_args[@]}" "${lock_args[@]}" "${artifact_args[@]}"
+            node --input-type=module - "$evidence/ios-licenses-$triple.json" <<'JS'
+          import fs from 'node:fs';
+          const inventory = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          console.log(JSON.stringify({ target: inventory.target, gaps: inventory.gaps }, null, 2));
+          JS
+          done < "$evidence/ios-compiler-targets.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-documents-ios-unsigned
+          path: native-document-evidence/
+          if-no-files-found: warn
+
+  swift-policy:
+    name: Swift bounded IO policies
+    runs-on: ubuntu-latest
+    container: swift:6.1.3-bookworm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test actual Foundation IO policies
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p native-document-evidence
+          swift test --package-path src-tauri/crates/native-io/ios 2>&1 | tee native-document-evidence/swift-policy.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-documents-swift-policy
+          path: native-document-evidence/
+          if-no-files-found: warn

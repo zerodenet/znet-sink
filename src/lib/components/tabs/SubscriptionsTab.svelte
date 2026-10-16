@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Choice } from '$lib/components/ui/choice';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { useMobileNavigation } from '$lib/features/mobile/context';
+  import { getMobilePlatformSnapshot, getMobileSubscriptionScheduleSnapshot } from '$lib/features/mobile/runtime';
+  import { subscriptionScheduling, type SchedulePlatform } from '$lib/features/mobile/subscription-scheduling';
+  import { subscriptionUsage, subscriptionFailureSummary } from '$lib/features/mobile/subscription-usage';
+  import SubscriptionReconciliationDialog from '$lib/components/mobile/SubscriptionReconciliationDialog.svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
   import { LayoutGrid, List } from '@lucide/svelte';
@@ -13,7 +18,9 @@
     upsertSubscription,
     listProxyConfigs,
     syncAllSubscriptions,
+    resetSubscriptionConditionalCache,
   } from '$lib/services/config';
+  import { guiState } from '$lib/services/gui-state.svelte';
   import * as toast from '$lib/services/toast.svelte';
   import * as SegmentedControl from '$lib/components/AppSegmentedControl';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -27,6 +34,23 @@
     ProxyConfigProfile,
     SubscriptionRemovalPreview,
   } from '$lib/types/domain';
+
+  let { mobile = false }: { mobile?: boolean } = $props();
+  let schedulePlatform = $state<SchedulePlatform>(untrack(() => mobile ? 'unknown' : 'desktop'));
+  const mobileNavigation=untrack(()=>mobile ? useMobileNavigation() : null);
+  let pendingNavigation: (() => void) | null = $state(null);
+  let formOriginal = $state('');
+  let discardForm = $state(false);
+  let cacheResetTarget=$state.raw<SubscriptionProfile|null>(null),cacheResetBusy=$state(false),cacheResetSubmitted=$state(false),cacheResetMessage=$state<string|null>(null);
+  const cacheResetAvailable=(sub:SubscriptionProfile)=>!sub.managedSource&&/条件请求记录|本地存储/.test(sub.lastError??'');
+  function previewCacheReset(sub:SubscriptionProfile){cacheResetTarget=structuredClone($state.snapshot(sub));cacheResetSubmitted=false;cacheResetMessage=null;}
+  let reconciliationTarget=$state.raw<SubscriptionProfile|null>(null);
+  async function resetConditionalCache(){
+    const target=cacheResetTarget;if(!target||cacheResetBusy||cacheResetSubmitted)return;cacheResetBusy=true;cacheResetSubmitted=true;
+    try{const result=await resetSubscriptionConditionalCache(target.id,target.updatedAtUnixMs);cacheResetMessage=result.cleared?'该订阅条件记录已清理，配置材料保留。':'该订阅没有条件记录，配置材料保留。';}
+    catch(error){cacheResetMessage=getAppErrorMessage(error,'清理结果未确认，请先核对；不会自动重试。');}
+    finally{cacheResetBusy=false;}
+  }
 
   const FORMAT_OPTIONS = [
     { value: 'auto', label: '自动检测' },
@@ -173,7 +197,7 @@
     try {
       await syncSubscription(id);
       await refresh(false);
-      toast.success('订阅同步完成');
+      toast.success(mobile && !guiState.connection?.coreAvailable ? '订阅材料已同步，运行态待应用' : '订阅同步完成');
     } catch (e) {
       handleAppError(e, '同步订阅失败');
     } finally {
@@ -273,11 +297,13 @@
     editingId = null;
     form = emptyForm();
     formError = null;
+    formOriginal = JSON.stringify(form);
+    discardForm=false;
     showForm = true;
   }
 
   function openEdit(sub: SubscriptionProfile) {
-    if (busy) return;
+    if (busy || sub.managedSource) return;
     editingId = sub.id;
     form = {
       name: sub.name,
@@ -290,11 +316,27 @@
       enabled: sub.enabled,
     };
     formError = null;
+    formOriginal = JSON.stringify(form);
+    discardForm=false;
     showForm = true;
   }
 
+  $effect(() => {
+    if (!mobileNavigation || !showForm) return;
+    return mobileNavigation.guardBeforeLeave(continueNavigation => {
+      if (!showForm) return true;
+      if (saving) return false;
+      if (JSON.stringify(form)!==formOriginal) { pendingNavigation=continueNavigation; discardForm=true; return false; }
+      showForm=false; return true;
+    });
+  });
+  function discardFormDraft() {
+    discardForm=false; showForm=false; formError=null;
+    const resume=pendingNavigation; pendingNavigation=null; resume?.();
+  }
   function closeForm() {
     if (saving) return;
+    if (mobile && JSON.stringify(form) !== formOriginal) { discardForm=true; return; }
     showForm = false;
     formError = null;
   }
@@ -331,25 +373,27 @@
   }
 
   function formatTime(ms?: number): string {
-    if (!ms) return '从未同步';
+    if (ms == null) return '从未同步';
+    if (!Number.isSafeInteger(ms) || ms < 0 || Number.isNaN(new Date(ms).getTime())) return '未确认';
     return new Date(ms).toLocaleString('zh-CN', {
       month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
   }
 
   function formatExpiry(ms?: number): string {
-    if (!ms) return '';
+    if (ms == null) return '未提供';
+    if (!Number.isSafeInteger(ms) || ms < 0 || Number.isNaN(new Date(ms).getTime())) return '未确认';
     const date = new Date(ms);
     return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
   }
 
   function daysUntil(ms?: number): number | null {
-    if (!ms) return null;
+    if (ms == null || !Number.isSafeInteger(ms) || ms < 0 || Number.isNaN(new Date(ms).getTime())) return null;
     const diff = ms - Date.now();
     return Math.ceil(diff / 86_400_000);
   }
 
-  function formatBytes(bytes?: number): string {
+  function formatBytes(bytes?: number | null): string {
     if (bytes === undefined || bytes === null) return '—';
     if (bytes < 1024) return `${bytes} B`;
     const units = ['KB', 'MB', 'GB', 'TB'];
@@ -360,15 +404,6 @@
       unit++;
     }
     return `${value.toFixed(1)} ${units[unit]}`;
-  }
-
-  function usedBytes(sub: SubscriptionProfile): number {
-    return sub.usedBytes ?? ((sub.uploadBytes ?? 0) + (sub.downloadBytes ?? 0));
-  }
-
-  function usagePercent(sub: SubscriptionProfile): number | null {
-    if (!sub.totalBytes) return null;
-    return Math.min(100, (usedBytes(sub) / sub.totalBytes) * 100);
   }
 
   function canonicalFormat(value: string): string {
@@ -401,6 +436,30 @@
   onMount(() => {
     viewMode = loadViewMode();
     let disposed = false;
+    let unlistenSchedule: UnlistenFn | undefined;
+    let scheduleRequest = 0;
+    async function readSchedule() {
+      const request = ++scheduleRequest;
+      try {
+        const platform = await getMobilePlatformSnapshot();
+        if (!platform.mobile) {
+          if (!disposed && request === scheduleRequest) schedulePlatform = 'desktop';
+          return;
+        }
+        const snapshot = await getMobileSubscriptionScheduleSnapshot();
+        if (!disposed && request === scheduleRequest) schedulePlatform = snapshot.storageError ? 'unknown' : 'mobile-foreground';
+      } catch {
+        if (!disposed && request === scheduleRequest) schedulePlatform = 'unknown';
+      }
+    }
+    const resumeSchedule = () => { if (!document.hidden && mobile) void readSchedule(); };
+    if (mobile) {
+      document.addEventListener('visibilitychange', resumeSchedule);
+      void listen('subscriptions:schedule-updated', () => void readSchedule()).then(stop => {
+        if (disposed) stop(); else unlistenSchedule = stop;
+      }).catch(() => {});
+      void readSchedule();
+    }
     let unlisten: UnlistenFn | undefined;
     // Attach before loading so a background completion cannot be missed.
     void listen('subscriptions:updated', () => { void refresh(false); })
@@ -410,7 +469,10 @@
         void refresh();
       })
       .catch(() => { if (!disposed) void refresh(); });
-    return () => { disposed = true; refreshGate.reset(); unlisten?.(); };
+    return () => {
+      disposed = true; scheduleRequest++; refreshGate.reset(); unlisten?.(); unlistenSchedule?.();
+      document.removeEventListener('visibilitychange', resumeSchedule);
+    };
   });
 </script>
 
@@ -489,6 +551,8 @@
         <div class="panel-empty">无匹配结果</div>
       {/if}
       {#each filtered as sub (sub.id)}
+        {@const usage=subscriptionUsage(sub)}
+        {@const failure=subscriptionFailureSummary(sub.lastError)}
         <div class="list-row" class:disabled={!sub.enabled}>
           <div class="row-main">
             <div class="row-top">
@@ -496,9 +560,9 @@
                 size="sm"
                 checked={sub.enabled}
                 onCheckedChange={() => handleToggleEnabled(sub)}
-                title={sub.managedSource ? '启用状态由来源插件管理' : sub.enabled ? '已启用' : '已禁用'}
+                title={sub.managedSource ? '启用状态由来源插件管理' : sub.enabled ? '参与自动同步；手动同步独立可用' : '自动同步已暂停；缓存保留，仍可手动同步'}
                 disabled={busy || Boolean(sub.managedSource)}
-                aria-label={sub.managedSource ? '插件托管订阅' : sub.enabled ? '禁用订阅' : '启用订阅'}
+                aria-label={sub.managedSource ? '插件托管订阅' : sub.enabled ? '暂停自动同步' : '参与自动同步'}
               />
 
               <span class="row-name">{sub.name}</span>
@@ -508,21 +572,20 @@
               {/if}
 
               {#if sub.lastError}
-                <span class="row-tag error-tag">同步失败</span>
-              {:else if !sub.enabled}
-                <span class="row-tag muted-tag">已禁用</span>
+                <span class="row-tag error-tag">{failure?.unknown ? '结果待核对' : '同步失败'}</span>
               {:else if sub.lastSyncAtUnixMs}
-                <span class="row-tag ok-tag">正常</span>
+                <span class="row-tag ok-tag">上次已同步</span>
               {:else}
                 <span class="row-tag muted-tag">未同步</span>
               {/if}
+              {#if !sub.enabled}<span class="row-tag muted-tag">{sub.managedSource ? '来源已停用' : '自动同步已暂停'}</span>{/if}
 
               {#if sub.nodeCount !== undefined}
                 <span class="row-tag info-tag">{sub.nodeCount} 节点</span>
               {/if}
               <span class="row-tag outline-tag">{formatLabel(sub.format)}</span>
               {#if sub.updateIntervalSecs}
-                <span class="row-tag outline-tag" title="自动同步间隔">⏱ 自动</span>
+                <span class="row-tag outline-tag" title="已保存的自动同步周期意图">⏱ {schedulePlatform === 'desktop' ? '自动' : '周期意图'}</span>
               {/if}
             </div>
 
@@ -539,51 +602,58 @@
             {/if}
 
             <div class="row-meta-line">
-              <span>同步: {formatTime(sub.lastSyncAtUnixMs)}</span>
+              <span>最近成功检查: {formatTime(sub.lastSyncAtUnixMs)}</span>
               <span class="row-sep">·</span>
               <span>配置: {proxyConfigName(sub.targetProxyConfigId)}</span>
-              {#if sub.expireAtUnixMs}
+              {#if sub.expireAtUnixMs != null}
                 <span class="row-sep">·</span>
                 <span class:expire-warn={daysUntil(sub.expireAtUnixMs) !== null && daysUntil(sub.expireAtUnixMs)! < 7}>
                   到期: {formatExpiry(sub.expireAtUnixMs)}
                   {#if daysUntil(sub.expireAtUnixMs) !== null}
-                    <span class="expire-days">(剩 {daysUntil(sub.expireAtUnixMs)} 天)</span>
+                    <span class="expire-days">{sub.expireAtUnixMs < Date.now() ? `(已过期 ${Math.abs(daysUntil(sub.expireAtUnixMs)!)} 天)` : `(剩 ${daysUntil(sub.expireAtUnixMs)} 天)`}</span>
                   {/if}
                 </span>
+              {:else}
+                <span>有效期：未提供</span>
               {/if}
             </div>
 
-            {#if sub.totalBytes}
-              <div class="traffic-bar-wrap">
+            {#if mobile && subscriptionScheduling(sub, schedulePlatform)}
+              <p class="row-meta-line" aria-label="订阅调度状态">{subscriptionScheduling(sub, schedulePlatform)}</p>
+            {/if}
+
+              <div class="traffic-bar-wrap" aria-label="来源提供的用量与额度">
+                {#if usage.percent!==null}
                 <div class="traffic-bar-track">
                   <div
                     class="traffic-bar-fill"
-                    class:warn={usagePercent(sub) !== null && usagePercent(sub)! >= 90}
-                    style="width: {usagePercent(sub)}%"
+                    class:warn={usage.percent >= 90}
+                    style="width: {usage.percent}%"
                   ></div>
                 </div>
+                {/if}
                 <span class="traffic-label">
-                  {#if sub.usedBytes !== undefined}
-                    已用 {formatBytes(sub.usedBytes)} / 总量 {formatBytes(sub.totalBytes)}
-                  {:else}
-                    {formatBytes(usedBytes(sub))} / {formatBytes(sub.totalBytes)}
-                    (↑{formatBytes(sub.uploadBytes)} ↓{formatBytes(sub.downloadBytes)})
-                  {/if}
-                  <span class="traffic-percent">{usagePercent(sub)!.toFixed(1)}%</span>
+                  来源已用 {formatBytes(usage.used)} / 总量 {formatBytes(usage.total)}
+                  {#if !usage.aggregate}(↑{formatBytes(usage.upload)} ↓{formatBytes(usage.download)}){/if}
+                  {#if usage.percent!==null}<span class="traffic-percent">{usage.percent.toFixed(1)}%</span>{/if}
+                  {#if usage.overQuota}<span class="expire-warn">已超过来源总量</span>{/if}
                 </span>
               </div>
-            {/if}
+              {#if usage.invalid}<p class="row-meta-line">来源数值无法确认，未用超出安全范围或格式错误的数据计算额度。</p>{/if}
+              <p class="row-meta-line">来源最近提供的用量缓存；额度采样时间未提供，检查时间不等于额度采样时间。</p>
 
-            {#if sub.lastError}
-              <span class="row-error" title={sub.lastError}>{sub.lastError}</span>
+            {#if failure}
+              <span class="row-error" role="status">{failure.message}</span>
             {/if}
+            {#if !sub.managedSource && subscriptionFailureSummary(sub.lastError)?.unknown}<Button variant="outline" onclick={()=>reconciliationTarget=structuredClone($state.snapshot(sub))}>核对未知结果</Button>{/if}
+            {#if cacheResetAvailable(sub)}<Button variant="outline" disabled={busy||cacheResetBusy} onclick={()=>previewCacheReset(sub)}>重置条件请求记录</Button>{/if}
           </div>
 
           <div class="row-actions">
             <Button variant="ghost" size="icon-sm"
 
               onclick={(e: MouseEvent) => { e.stopPropagation(); handleSync(sub.id); }}
-              disabled={busy || !sub.enabled || Boolean(sub.managedSource)}
+              disabled={busy || Boolean(sub.managedSource)}
               title={sub.managedSource ? '由来源插件刷新' : '同步订阅'}
               aria-label={sub.managedSource ? '由来源插件刷新' : '同步订阅'}
             >
@@ -627,7 +697,8 @@
 </div>
 
 <Dialog.Root bind:open={showForm}>
-  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={!saving}>
+  <Dialog.Content class="sm:max-w-[560px]" showCloseButton={false} onEscapeKeydown={event => { event.preventDefault(); closeForm(); }} onInteractOutside={event => { event.preventDefault(); closeForm(); }}>
+    <Button variant="ghost" size="sm" class="absolute top-3 right-3 z-10" disabled={saving} aria-label="关闭订阅编辑器" onclick={closeForm}>关闭</Button>
     <form
       class="subscription-form"
       onsubmit={(event) => {
@@ -697,10 +768,10 @@
           </label>
 
           <div class="form-field">
-            <span class="form-label">启用</span>
+            <span class="form-label">自动同步参与</span>
             <div class="switch-row">
-              <span>{form.enabled ? '参与同步' : '暂停同步'}</span>
-              <Switch bind:checked={form.enabled} disabled={saving} aria-label="启用订阅" />
+              <span>{form.enabled ? '参与自动同步' : '暂停自动同步，缓存保留'}</span>
+              <Switch bind:checked={form.enabled} disabled={saving} aria-label="参与自动同步" />
             </div>
           </div>
         </div>
@@ -817,6 +888,11 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<Dialog.Root bind:open={discardForm}><Dialog.Content><Dialog.Header><Dialog.Title>放弃未保存的修改？</Dialog.Title><Dialog.Description>订阅来源与同步设置尚未保存。继续编辑可保留当前草稿。</Dialog.Description></Dialog.Header><Dialog.Footer><Button variant="outline" onclick={() => { discardForm=false; pendingNavigation=null; }}>继续编辑</Button><Button variant="destructive" onclick={discardFormDraft}>放弃修改</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+<Dialog.Root open={cacheResetTarget!==null} onOpenChange={open=>{if(!open&&!cacheResetBusy)cacheResetTarget=null;}}><Dialog.Content><Dialog.Header><Dialog.Title>重置原订阅的条件请求记录？</Dialog.Title><Dialog.Description>仅清理 {cacheResetTarget?.name} 的 HTTP 条件记录，保留配置、覆盖、同步错误和未知结果。此操作不下载、不提交运行配置；手动同步是独立动作。</Dialog.Description></Dialog.Header>{#if cacheResetMessage}<p role="status">{cacheResetMessage}</p>{/if}<Dialog.Footer><Button variant="outline" disabled={cacheResetBusy} onclick={()=>cacheResetTarget=null}>返回</Button><Button disabled={cacheResetBusy||cacheResetSubmitted} onclick={resetConditionalCache}>清理原订阅条件记录</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
+
+{#if reconciliationTarget}<SubscriptionReconciliationDialog target={reconciliationTarget} onClose={()=>reconciliationTarget=null} onRecovered={()=>refresh(false)} />{/if}
 
 <style>
   .panel-header {

@@ -1,6 +1,6 @@
 pub mod app_config;
 pub mod app_config_store;
-mod app_database;
+pub(crate) mod app_database;
 pub(crate) mod atomic_file;
 pub mod builtin_rules;
 pub mod capability;
@@ -12,8 +12,10 @@ pub mod core_events;
 pub mod core_process;
 pub mod debug_store;
 pub mod diagnostic_storage;
+pub(crate) mod diagnostics;
 pub mod domain_store;
 pub(crate) mod download;
+pub(crate) mod file_history;
 pub mod file_logger;
 pub(crate) mod flow_observation;
 pub mod gui_connection;
@@ -26,6 +28,7 @@ pub(crate) mod kernel_command;
 pub mod kernel_manager;
 pub mod kernel_settings;
 pub mod local_proxy;
+pub mod log_export;
 pub mod log_store;
 pub mod logs;
 #[cfg(target_os = "macos")]
@@ -33,6 +36,7 @@ pub mod macos_privilege;
 pub(crate) mod native_operation;
 pub mod network_probe;
 pub mod node_screen;
+pub(crate) mod ordinary_subscription_recovery;
 pub mod policy_selection;
 pub mod probe;
 pub mod probe_history;
@@ -47,6 +51,7 @@ pub mod rule_overlay;
 pub mod rule_set;
 #[path = "subscription_wrapper.rs"]
 pub mod subscription;
+pub(crate) mod subscription_reconciliation;
 pub mod system_proxy;
 pub mod system_proxy_guard;
 pub(crate) mod text_encoding;
@@ -66,6 +71,8 @@ use std::path::PathBuf;
 /// Single source of truth for the application data directory.
 ///
 /// Resolution order:
+/// Mobile: initialized native private app container only.
+/// Desktop:
 /// 1. `ZNET_SINK_DATA_DIR` env var — development override
 /// 2. Platform-specific standard path:
 ///    - Windows: `%APPDATA%/ZNet Sink`
@@ -76,30 +83,41 @@ use std::path::PathBuf;
 /// production installs. If none of the above paths resolve, this returns
 /// an error so callers can decide how to handle the missing directory.
 pub(crate) fn data_dir() -> AppResult<PathBuf> {
-    if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        if let Some(app_data) = std::env::var_os("APPDATA") {
-            return Ok(PathBuf::from(app_data).join("ZNet Sink"));
-        }
+        return MOBILE_DATA_DIR
+            .get()
+            .cloned()
+            .ok_or_else(|| AppError::internal("mobile private app container is not initialized"));
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-            return Ok(PathBuf::from(config_home).join("znet-sink"));
+        if let Some(path) = std::env::var_os("ZNET_SINK_DATA_DIR") {
+            return Ok(PathBuf::from(path));
         }
-        if let Some(home) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
-        }
-    }
 
-    Err(AppError::internal(
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(app_data) = std::env::var_os("APPDATA") {
+                return Ok(PathBuf::from(app_data).join("ZNet Sink"));
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+                return Ok(PathBuf::from(config_home).join("znet-sink"));
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return Ok(PathBuf::from(home).join(".config").join("znet-sink"));
+            }
+        }
+
+        Err(AppError::internal(
         "cannot determine data directory: set ZNET_SINK_DATA_DIR or ensure APPDATA/HOME is available",
     ))
+    }
 }
 
 pub mod bypass;
@@ -112,3 +130,37 @@ pub(crate) mod schedule_store;
 pub mod network_endpoint;
 
 pub mod traffic_observation;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+static MOBILE_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn install_mobile_data_dir(path: PathBuf) -> AppResult<()> {
+    if !path.is_absolute() {
+        return Err(AppError::internal(
+            "native app container must be an absolute path",
+        ));
+    }
+    match MOBILE_DATA_DIR.get() {
+        Some(existing) if existing == &path => Ok(()),
+        Some(_) => Err(AppError::internal("native app container identity changed")),
+        None => MOBILE_DATA_DIR
+            .set(path)
+            .map_err(|_| AppError::internal("native app container was already initialized")),
+    }
+}
+
+pub mod capture_recovery;
+pub(crate) mod connection_export;
+pub mod endpoint_restoration;
+pub(crate) mod flow_close;
+pub(crate) mod mobile_notifications;
+pub mod mobile_release;
+pub(crate) mod mobile_release_scheduler;
+pub(crate) mod mobile_subscription_scheduler;
+pub mod native_documents;
+pub mod packet_routes;
+pub mod profile_removal;
+pub(crate) mod rule_migration_artifact;
+pub(crate) mod runtime_bridge;
+pub mod settings_transfer;

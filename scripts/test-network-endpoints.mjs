@@ -258,3 +258,80 @@ test('traffic resets, counter gaps and long pauses never fabricate a continuous 
   assert.equal(session.view.catalog.endpoints[0].allowed.inbound,true);
   assert.equal(session.view.error.message,'reconcile failed');
 });
+
+test('runtime override clearing preserves declared ownership preconditions and refuses client configuration overlays', async()=>{
+ const action={operation:'clear_overrides'};
+ const c=catalog(),e=endpoint();e.state_source='runtime_override';
+ assert.equal(operationReason(c,e,action),null);
+ c.localOverrideIds=[e.endpoint_id];assert.match(operationReason(c,e,action),/客户端配置覆盖/);
+ c.localOverrideIds=[];c.editableEndpointIds=[];assert.match(operationReason(c,e,action),/仅可观测/);
+ c.editableEndpointIds=[e.endpoint_id];c.capabilities.features=c.capabilities.features.filter(feature=>feature!=='network_endpoint_control_preconditions_v1');
+ assert.match(operationReason(c,e,action),/前置条件/);
+ const g=gateway();const current=catalog();current.endpoints=[e];g.catalog=async()=>current;
+ let sent;g.control=async input=>{sent=input;return {...e,state_source:'config'};};
+ const session=new EndpointSession(g,()=>{});await session.refresh();await session.act(e,action);
+ assert.equal(sent.action.operation,'clear_overrides');assert.equal(sent.expectedIntentRevision,7);assert.equal(sent.coreInstanceId,'core-1');session.dispose();
+});
+
+test('endpoint navigation resolves actual registry identity and rejects tag collisions or missing scopes',async()=>{
+ const {endpointTrafficTarget,resolveEndpointTraffic}=await import('../src/lib/features/endpoints/traffic-navigation.ts');
+ const {discovery}=await import('../tests/fixtures/traffic.ts');
+ const e={...endpoint(),tag:'same-tag',inbound_tags:[],outbound_tags:[]};
+ const target=endpointTrafficTarget('profile-a',e);
+ const actual=sample({kind:'endpoint',endpoint_id:e.endpoint_id});actual.core_instance_id='core-1';actual.config_revision='1';actual.generation='1';
+ const unrelated=sample({kind:'outbound',tag:'same-tag'});
+ const view={discovery:discovery(),order:[scopeKey(unrelated.scope)],rows:{[scopeKey(unrelated.scope)]:observe(undefined,unrelated,true)},loading:false,stale:false};
+ assert.equal(resolveEndpointTraffic(target,view).key,null);
+ view.order.push(scopeKey(actual.scope));view.rows[scopeKey(actual.scope)]=observe(undefined,actual,true);
+ assert.equal(resolveEndpointTraffic(target,view).key,scopeKey(actual.scope));
+ assert.equal(resolveEndpointTraffic(target,view,false).key,null);
+});
+
+test('endpoint navigation checks instance revision and generation without truncating traffic u64',async()=>{
+ const {endpointTrafficTarget,resolveEndpointTraffic}=await import('../src/lib/features/endpoints/traffic-navigation.ts');
+ const {discovery}=await import('../tests/fixtures/traffic.ts');
+ const e={...endpoint(),inbound_tags:[],outbound_tags:[]};const target=endpointTrafficTarget('profile-a',e);
+ const row=sample({kind:'endpoint',endpoint_id:e.endpoint_id});Object.assign(row,{core_instance_id:e.core_instance_id,config_revision:'1',generation:'1'});
+ row.planes[1].counters.rx_bytes='18446744073709551615';
+ const key=scopeKey(row.scope);const view={discovery:discovery(),order:[key],rows:{[key]:observe(undefined,row,true)},loading:false,stale:false};
+ assert.equal(resolveEndpointTraffic(target,view).key,key);assert.equal(view.rows[key].snapshot.planes[1].counters.rx_bytes,'18446744073709551615');
+ for(const patch of [{core_instance_id:'core-2'},{config_revision:'2'},{generation:'2'},{config_revision:'9007199254740993'}]){view.rows[key]=observe(undefined,{...row,...patch},true);assert.equal(resolveEndpointTraffic(target,view).key,null);}
+ assert.equal(endpointTrafficTarget('profile-a',{...e,config_revision:Number.MAX_SAFE_INTEGER+1}),null);
+ assert.equal(endpointTrafficTarget('profile-a',{...e,generation:Number.MAX_SAFE_INTEGER+1}),null);
+});
+
+test('legacy navigation requires real unambiguous declared role and never bypasses mismatched endpoint generation',async()=>{
+ const {endpointTrafficTarget,resolveEndpointTraffic,matchesEndpointTrafficTarget}=await import('../src/lib/features/endpoints/traffic-navigation.ts');
+ const {discovery}=await import('../tests/fixtures/traffic.ts');
+ const e={...endpoint(),configuration:{origin:'legacy'},inbound_tags:[],outbound_tags:['actual-role']};
+ const target=endpointTrafficTarget('profile-a',e),role=sample({kind:'outbound',tag:'actual-role'});
+ Object.assign(role,{core_instance_id:e.core_instance_id,config_revision:'1'});role.planes=role.planes.filter(p=>p.plane==='inner');
+ const key=scopeKey(role.scope),view={discovery:discovery(),order:[key],rows:{[key]:observe(undefined,role,true)},loading:false,stale:false};
+ const resolved=resolveEndpointTraffic(target,view);assert.equal(resolved.key,key);assert.equal(resolved.role,true);assert.deepEqual(resolved.planes,['inner']);assert.match(resolved.reason,/角色统计/);
+ assert.equal(matchesEndpointTrafficTarget(target,'profile-b',e),false);assert.equal(matchesEndpointTrafficTarget(target,'profile-a',{...e,generation:2}),false);
+ assert.equal(resolveEndpointTraffic(endpointTrafficTarget('profile-a',{...e,outbound_tags:['actual-role','other']}),view).key,null);
+ assert.equal(resolveEndpointTraffic(endpointTrafficTarget('profile-a',{...e,configuration:{origin:'canonical'}}),view).key,null);
+ const wrong=sample({kind:'endpoint',endpoint_id:e.endpoint_id});Object.assign(wrong,{core_instance_id:e.core_instance_id,config_revision:'1',generation:'2'});view.order.push(scopeKey(wrong.scope));view.rows[scopeKey(wrong.scope)]=observe(undefined,wrong,true);
+ assert.equal(resolveEndpointTraffic(target,view).key,null);
+});
+
+test('endpoint client binding requires positive safe host generation and changes across unobserved ABA',async()=>{
+ const {endpointClientBinding}=await import('../src/lib/features/endpoints/traffic-navigation.ts');
+ const base={scope:{profileId:'a',configRevision:1,coreInstanceId:1},scopeGeneration:1};
+ const original=endpointClientBinding(base);assert.equal(typeof original,'string');
+ for(const generation of [undefined,0,-1,1.1,NaN,Infinity,Number.MAX_SAFE_INTEGER+1])assert.equal(endpointClientBinding({...base,scopeGeneration:generation}),undefined);
+ assert.notEqual(endpointClientBinding({...base,scopeGeneration:3}),original);
+ assert.equal(endpointClientBinding({...base,revision:99}),original);
+ assert.match(endpointClientBinding({...base,scope:{...base.scope,configRevision:'18446744073709551615'}}),/18446744073709551615/);
+ for(const revision of ['18446744073709551616','01',Number.MAX_SAFE_INTEGER+1]) assert.equal(endpointClientBinding({...base,scope:{...base.scope,configRevision:revision}}),undefined);
+});
+
+
+test('disabled endpoint statistics entry explains stale host binding and unsafe endpoint identity',async()=>{
+ const {endpointTrafficUnavailableReason}=await import('../src/lib/features/endpoints/traffic-navigation.ts');
+ const e={...endpoint(),inbound_tags:[],outbound_tags:[]};
+ assert.match(endpointTrafficUnavailableReason(e,true,'binding'),/目录未确认/);
+ assert.match(endpointTrafficUnavailableReason(e,false),/运行代次未确认/);
+ assert.match(endpointTrafficUnavailableReason({...e,generation:Number.MAX_SAFE_INTEGER+1},false,'binding'),/安全范围/);
+ assert.equal(endpointTrafficUnavailableReason(e,false,'binding'),null);
+});

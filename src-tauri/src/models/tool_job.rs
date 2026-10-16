@@ -48,6 +48,10 @@ impl ToolJobState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartToolJobRequest {
+    #[serde(default)]
+    pub expected_scope: Option<ClientScope>,
+    #[serde(default)]
+    pub expected_client_revision: Option<u64>,
     pub kind: ToolJobKind,
     #[serde(default)]
     pub params: Value,

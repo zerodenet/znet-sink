@@ -23,6 +23,7 @@ fn status(p: &Value, enabled: bool) -> GuiTunStatus {
 }
 struct Fake(Mutex<Data>);
 struct Data {
+    can_restore_previous: bool,
     snapshot: Snapshot,
     calls: Vec<String>,
     config: Value,
@@ -32,6 +33,7 @@ struct Data {
 impl Fake {
     fn new(enabled: bool, failure: &'static str) -> Self {
         Self(Mutex::new(Data {
+            can_restore_previous: true,
             snapshot: Snapshot {
                 identity: KernelRuntimeIdentity {
                     core_instance_id: "core".into(),
@@ -54,6 +56,9 @@ fn fail(data: &mut Data, step: &str) -> AppResult<()> {
     Ok(())
 }
 impl Backend for Fake {
+    fn can_restore_previous(&self) -> bool {
+        self.0.lock().unwrap().can_restore_previous
+    }
     async fn snapshot(&self) -> AppResult<Snapshot> {
         let d = self.0.lock().unwrap();
         Ok(Snapshot {
@@ -78,6 +83,9 @@ impl Backend for Fake {
             });
         }
         let identity = d.snapshot.identity.clone();
+        if d.failure == "capture_after_apply" {
+            d.snapshot.tun = status(&params("10.99.0.1/24"), true);
+        }
         if d.failure == "instance" {
             d.snapshot.identity.core_instance_id = "other".into();
         }
@@ -171,6 +179,77 @@ async fn rejected_stop_apply_or_start_restores_last_known_profile_and_capture() 
             );
         }
     }
+}
+#[tokio::test]
+async fn fixed_workspace_never_restores_unconfirmed_local_previous_material() {
+    for failure in ["stop", "apply", "start", "partial_start"] {
+        let backend = Fake::new(true, failure);
+        backend.0.lock().unwrap().can_restore_previous = false;
+        let error = run(&backend).await.unwrap_err();
+        assert_eq!(
+            error.details.unwrap()["captureRollback"]["succeeded"],
+            false
+        );
+        let data = backend.0.lock().unwrap();
+        assert!(
+            !data
+                .calls
+                .iter()
+                .any(|call| call == "apply:old" || call == "start:10.77.0.1/24"),
+            "{failure}: {:?}",
+            data.calls
+        );
+        assert_eq!(
+            data.calls
+                .iter()
+                .filter(|call| call.starts_with("apply:"))
+                .count(),
+            usize::from(failure != "stop")
+        );
+    }
+}
+#[tokio::test]
+async fn fixed_workspace_route_only_apply_refuses_mismatched_live_capture_before_commands() {
+    let backend = Fake::new(true, "");
+    {
+        let mut data = backend.0.lock().unwrap();
+        data.can_restore_previous = false;
+        data.snapshot.tun = status(&params("10.99.0.1/24"), true);
+    }
+    let error = apply(
+        &backend,
+        &json!({"test":"old","route":{"final":"old"}}),
+        &json!({"test":"new","route":{"final":"new"}}),
+        &params("10.77.0.1/24"),
+        &params("10.77.0.1/24"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert!(
+        backend.0.lock().unwrap().calls.is_empty(),
+        "stored parameters must not become a live TUN receipt"
+    );
+}
+#[tokio::test]
+async fn fixed_workspace_route_only_apply_checks_live_capture_after_config_receipt() {
+    let backend = Fake::new(true, "capture_after_apply");
+    backend.0.lock().unwrap().can_restore_previous = false;
+    let error = apply(
+        &backend,
+        &json!({"test":"old","route":{"final":"old"}}),
+        &json!({"test":"new","route":{"final":"new"}}),
+        &params("10.77.0.1/24"),
+        &params("10.77.0.1/24"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert_eq!(
+        backend.0.lock().unwrap().calls,
+        ["apply:new"],
+        "late capture changes cannot confirm or trigger restoration"
+    );
 }
 #[tokio::test]
 async fn uncertain_apply_or_replaced_runtime_is_not_replayed_or_rolled_back() {
@@ -325,4 +404,38 @@ async fn optional_capture_facts_are_only_required_when_mutating_capture() {
             if changed { vec![] } else { vec!["apply:new"] }
         );
     }
+}
+
+#[test]
+fn ordinary_confirmation_requires_returned_config_and_capture_fingerprints() {
+    let (_dir, _state, record) = crate::services::ordinary_subscription_recovery::tests::fixture();
+    let receipt = |config: Value, capture: Value| Receipt {
+        identity: KernelRuntimeIdentity {
+            core_instance_id: "original-core".into(),
+            config_revision: 9_007_199_254_740_993,
+        },
+        previous_config: json!({"before":"not-persisted"}),
+        applied_config: config,
+        previous_params: json!({"before":"not-persisted"}),
+        applied_params: capture,
+        options: CoreIpcOptions::default(),
+    };
+    let evidence = crate::services::ordinary_subscription_recovery::confirmation_evidence;
+    let valid = evidence(
+        &record,
+        &receipt(json!({"effective":"known"}), json!({"capture":"known"})),
+    )
+    .unwrap();
+    assert_eq!(valid.core_instance_id, "original-core");
+    assert_eq!(valid.config_revision, 9_007_199_254_740_993);
+    assert!(evidence(
+        &record,
+        &receipt(json!({"effective":"different"}), json!({"capture":"known"}))
+    )
+    .is_err());
+    assert!(evidence(
+        &record,
+        &receipt(json!({"effective":"known"}), json!({"capture":"different"}))
+    )
+    .is_err());
 }

@@ -132,3 +132,344 @@ fn publication_error(failure: PublicationFailure<AppError>) -> AppError {
         }
     }
 }
+
+/// Fixed-preview deletion publication. Hold both collection guards throughout
+/// synchronous compare/write/project/publication so another relationship
+/// writer cannot splice new objects into the user's confirmed target graph.
+/// Never call this while retaining a collection guard or across an await.
+pub(crate) fn commit_relational_if_current(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+) -> AppResult<()> {
+    commit_checked(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        next_subscriptions,
+        false,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Local workspace publication keeps all current runtime-listener ownership.
+/// The caller holds proxy_config_operation; no runtime, retarget or TUN calls.
+pub(crate) fn commit_workspace_if_current(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    binding: &super::workspace::Binding,
+) -> AppResult<()> {
+    let directory = super::workspace::recovery::directory(state)?;
+    commit_checked_with_epoch(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        previous_subscriptions.to_vec(),
+        true,
+        Some(&directory),
+        Some(&binding.rules_digest),
+        Some((&binding.scope, binding.generation)),
+        Some(binding.domain_epoch),
+        Some(binding),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_checked(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    preserve_binding: bool,
+    directory: Option<&std::path::Path>,
+    expected_rules: Option<&str>,
+    expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+) -> AppResult<()> {
+    commit_checked_with_epoch(
+        state,
+        previous_profiles,
+        previous_subscriptions,
+        expected_app,
+        next_profiles,
+        next_subscriptions,
+        preserve_binding,
+        directory,
+        expected_rules,
+        expected_scope,
+        None,
+        None,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn commit_checked_with_epoch(
+    state: &AppState,
+    previous_profiles: &[ProxyConfigProfile],
+    previous_subscriptions: &[SubscriptionProfile],
+    expected_app: &crate::models::app_config::AppConfig,
+    next_profiles: Vec<ProxyConfigProfile>,
+    next_subscriptions: Vec<SubscriptionProfile>,
+    preserve_binding: bool,
+    directory: Option<&std::path::Path>,
+    expected_rules: Option<&str>,
+    expected_scope: Option<(&crate::client_core::ClientScope, u64)>,
+    expected_epoch: Option<i64>,
+    expected_files: Option<&super::workspace::Binding>,
+) -> AppResult<()> {
+    let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
+    let mut subscriptions = lock(state.subscriptions(), "subscription")?;
+    ensure_graph_current(
+        &profiles,
+        &subscriptions,
+        previous_profiles,
+        previous_subscriptions,
+    )?;
+    let rules = if let Some(expected) = expected_rules {
+        let rules = lock(state.rule_sets(), "rule_set")?;
+        if super::workspace::digest(&*rules)? != expected {
+            return Err(super::workspace::conflict());
+        }
+        Some(rules)
+    } else {
+        None
+    };
+    let next_active = next_profiles.iter().find(|p| p.active).cloned();
+    if !preserve_binding {
+        if let Some(active) = &next_active {
+            ensure_managed_system_proxy_compatible(active.content.as_ref())?;
+        }
+    }
+    let active_changed = serde_json::to_value(previous_profiles.iter().find(|p| p.active))
+        .map_err(|_| AppError::internal("profile snapshot encoding failed"))?
+        != serde_json::to_value(next_active.as_ref())
+            .map_err(|_| AppError::internal("profile snapshot encoding failed"))?;
+    if let Some(binding) = expected_files {
+        // Workspace changes no application preference. Hold both file histories
+        // through the relational CAS instead of rewriting an unchanged file.
+        let app = lock(state.app_config(), "app_config")?;
+        if &*app != expected_app {
+            return Err(super::workspace::conflict());
+        }
+        let dir = super::workspace::recovery::directory(state)?;
+        let files = super::workspace::recovery::guard_files(
+            &dir,
+            &binding.app_history,
+            &binding.rules_history,
+            &binding.app_digest,
+            &binding.rules_digest,
+        )?;
+        state.with_client_scope_generation(&binding.scope, binding.generation, || {
+            crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                binding.domain_epoch,
+                &super::workspace::digest(&(previous_profiles, previous_subscriptions))?,
+                &next_profiles,
+                &next_subscriptions,
+            )?;
+            *profiles = next_profiles;
+            *subscriptions = next_subscriptions;
+            Ok(())
+        })?;
+        drop(files);
+        drop(app);
+        drop(rules);
+        drop(subscriptions);
+        drop(profiles);
+        if active_changed {
+            state.client_core_configuration_committed(next_active.as_ref());
+        }
+        return Ok(());
+    }
+    let mut candidate = expected_app.clone();
+    if !preserve_binding {
+        candidate.local_proxy.source_proxy_config_id = None;
+    }
+    let retained: std::collections::HashSet<_> =
+        next_profiles.iter().map(|p| p.id.as_str()).collect();
+    if !preserve_binding {
+        candidate
+            .profile_edits
+            .retain(|id, _| retained.contains(id.as_str()));
+    }
+    let publish = || -> AppResult<()> {
+        {
+            let transaction = CheckedPublication {
+                state,
+                previous_profiles,
+                previous_subscriptions,
+                next_profiles: &next_profiles,
+                next_subscriptions: &next_subscriptions,
+                expected_app,
+                candidate,
+                directory,
+                expected_epoch,
+                published_epoch: std::cell::Cell::new(None),
+            };
+            znet_client_core::publication::publish(&transaction).map_err(publication_error)?;
+        }
+        *profiles = next_profiles;
+        *subscriptions = next_subscriptions;
+        Ok(())
+    };
+    if let Some((scope, generation)) = expected_scope {
+        state.with_client_scope_generation(scope, generation, publish)?;
+    } else {
+        publish()?;
+    }
+    drop(rules);
+    drop(profiles);
+    drop(subscriptions);
+    if active_changed {
+        state.client_core_configuration_committed(next_active.as_ref());
+    }
+    Ok(())
+}
+fn ensure_graph_current(
+    current_profiles: &[ProxyConfigProfile],
+    current_subscriptions: &[SubscriptionProfile],
+    expected_profiles: &[ProxyConfigProfile],
+    expected_subscriptions: &[SubscriptionProfile],
+) -> AppResult<()> {
+    let encode = |p: &[ProxyConfigProfile], s: &[SubscriptionProfile]| {
+        serde_json::to_value((p, s))
+            .map_err(|_| AppError::internal("relationship graph encoding failed"))
+    };
+    if encode(current_profiles, current_subscriptions)?
+        != encode(expected_profiles, expected_subscriptions)?
+    {
+        return Err(AppError::conflict(
+            "profile_removal",
+            "",
+            "配置或订阅关系已变化，请重新预览删除范围",
+        ));
+    }
+    Ok(())
+}
+struct CheckedPublication<'a> {
+    state: &'a AppState,
+    previous_profiles: &'a [ProxyConfigProfile],
+    previous_subscriptions: &'a [SubscriptionProfile],
+    next_profiles: &'a [ProxyConfigProfile],
+    next_subscriptions: &'a [SubscriptionProfile],
+    expected_app: &'a crate::models::app_config::AppConfig,
+    candidate: crate::models::app_config::AppConfig,
+    directory: Option<&'a std::path::Path>,
+    expected_epoch: Option<i64>,
+    published_epoch: std::cell::Cell<Option<i64>>,
+}
+impl Publication for CheckedPublication<'_> {
+    type Error = AppError;
+    fn write(&self) -> AppResult<()> {
+        if let Some(expected_epoch) = self.expected_epoch {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            let next = crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                expected_epoch,
+                &super::workspace::digest(&(self.previous_profiles, self.previous_subscriptions))?,
+                self.next_profiles,
+                self.next_subscriptions,
+            )?;
+            self.published_epoch.set(Some(next));
+            return Ok(());
+        }
+        match self.directory {
+            Some(dir) => domain_store::save_relational_data_to_dir(
+                dir,
+                self.next_profiles,
+                self.next_subscriptions,
+            ),
+            None => domain_store::save_relational_data(self.next_profiles, self.next_subscriptions),
+        }
+    }
+    fn project(&self) -> AppResult<()> {
+        if let Some(dir) = self.directory {
+            return crate::services::app_config::compare_and_replace_local_at(
+                self.state,
+                self.expected_app,
+                self.candidate.clone(),
+                &dir.join("app-config.json"),
+            );
+        }
+        crate::services::app_config::compare_and_replace_local(
+            self.state,
+            self.expected_app,
+            self.candidate.clone(),
+        )
+    }
+    fn restore(&self) -> AppResult<()> {
+        if let Some(epoch) = self.published_epoch.get() {
+            let dir = self
+                .directory
+                .map(std::path::Path::to_path_buf)
+                .map(Ok)
+                .unwrap_or_else(crate::services::data_dir)?;
+            crate::services::app_database::workspace_recovery::save_domain_if_current(
+                &dir,
+                epoch,
+                &super::workspace::digest(&(self.next_profiles, self.next_subscriptions))?,
+                self.previous_profiles,
+                self.previous_subscriptions,
+            )?;
+            return Ok(());
+        }
+        match self.directory {
+            Some(dir) => domain_store::save_relational_data_to_dir(
+                dir,
+                self.previous_profiles,
+                self.previous_subscriptions,
+            ),
+            None => domain_store::save_relational_data(
+                self.previous_profiles,
+                self.previous_subscriptions,
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod removal_cas_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn graph_compare_rejects_an_added_link_before_publication() {
+        let profile: ProxyConfigProfile = serde_json::from_value(json!({"id":"a","name":"a","kernel":"zero","format":"json","path":null,"content":{},"active":true,"updatedAtUnixMs":1,"capabilities":{"hasProxyNodes":false,"hasProxyGroups":false,"hasRouteRules":false,"hasRuleSets":false,"hasSelector":false,"hasUrlTest":false,"featureKeys":[]}})).unwrap();
+        let sub: SubscriptionProfile = serde_json::from_value(json!({"id":"s","name":"s","url":"https://example.invalid","enabled":true,"kernel":"zero","format":"zero","targetProxyConfigId":"a","updatedAtUnixMs":1,"lastSyncAtUnixMs":null,"lastError":null})).unwrap();
+        assert!(ensure_graph_current(
+            std::slice::from_ref(&profile),
+            &[],
+            std::slice::from_ref(&profile),
+            &[]
+        )
+        .is_ok());
+        assert_eq!(
+            ensure_graph_current(
+                std::slice::from_ref(&profile),
+                &[sub],
+                std::slice::from_ref(&profile),
+                &[]
+            )
+            .unwrap_err()
+            .code,
+            "conflict"
+        );
+        let mut changed = profile.clone();
+        changed.content = Some(json!({"outbounds":[]}));
+        assert!(ensure_graph_current(&[changed], &[], &[profile], &[]).is_err());
+    }
+}

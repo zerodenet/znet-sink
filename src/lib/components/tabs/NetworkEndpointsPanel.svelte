@@ -12,16 +12,30 @@
   import EndpointCard from './EndpointCard.svelte';
   import type { TrafficView, TrafficSession } from '$lib/features/traffic/session';
   import { endpointObservation } from '$lib/features/endpoints/observation';
+  import { endpointClientBinding } from '$lib/features/endpoints/traffic-navigation';
   import { supported } from '$lib/features/traffic/policy';
-  let { trafficView, trafficSession }: { trafficView?: TrafficView; trafficSession?: TrafficSession } = $props();
+  let { trafficView, trafficSession, onTraffic, sourceIsVisible = () => true }: { trafficView?: TrafficView; trafficSession?: TrafficSession; sourceIsVisible?: () => boolean; onTraffic?: (visit: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit) => void } = $props();
   const session = new EndpointSession(endpointGateway, (next) => { view = next; });
   let view = $state(session.view);
   let query = $state('');
+  let trafficReturnError = $state<string | null>(null);
+  let returnSequence = 0;
+  function showTraffic(visit: import('$lib/features/endpoints/traffic-navigation').EndpointTrafficVisit) {
+    trafficReturnError = null; returnSequence++;
+    onTraffic?.({ ...visit, restore: async () => {
+      const sequence = ++returnSequence;
+      const verified = await refreshHostAndDirectory();
+      if (!mounted || sequence !== returnSequence || !sourceIsVisible()) return;
+      if (!verified || !visit.isCurrent()) trafficReturnError = '原端点已变化、移除或目录尚未确认，未恢复旧详情；请重新选择当前端点。';
+      else visit.restore();
+    } });
+  }
   const endpoints = $derived((view.catalog?.endpoints ?? []).filter(row => `${row.tag} ${row.protocol} ${row.endpoint_id}`.toLowerCase().includes(query.toLowerCase())));
-  $effect(() => { trafficSession?.watch(endpoints.map(row => endpointObservation(row, trafficView?.rows ?? {}).key)); });
+  $effect(() => { if (sourceIsVisible()) trafficSession?.watch(endpoints.map(row => endpointObservation(row, trafficView?.rows ?? {}).key)); });
   let hostReady = $state(false);
   let hostError = $state<unknown>(null);
-  let hostScope: string | undefined;
+  let hostScope = $state<string | undefined>();
+  let clientBinding = $state<string | undefined>();
   let hostRevision = -1;
   let hostListening = false;
   let scopeSequence = 0;
@@ -34,43 +48,63 @@
     : view.detailsError ? '详情过期' : view.detailsLoading ? '读取详情' : view.loading ? '正在同步' : view.stale ? '待同步' : view.result ? '已生效' : '已同步');
   function scopeKeyOf(snapshot: ClientCoreSnapshot) {
     const { profileId, configRevision, coreInstanceId } = snapshot.scope;
-    return JSON.stringify([profileId ?? null, configRevision, coreInstanceId]);
+    return JSON.stringify([profileId ?? null, configRevision, coreInstanceId, snapshot.scopeGeneration ?? null]);
   }
-  async function refreshHostAndDirectory() {
+  async function refreshHostAndDirectory(): Promise<boolean> {
+    let hostConfirmed = false;
+    let observedBinding: string | undefined;
     const sequence = scopeSequence;
     try {
       const snapshot = await getClientCoreSnapshot();
-      if (!mounted) return;
+      if (!mounted) return false;
       if (sequence === scopeSequence && snapshot.revision >= hostRevision) {
         const next = scopeKeyOf(snapshot);
         if (hostScope !== undefined && hostScope !== next) session.invalidate();
         hostScope = next;
+        clientBinding = endpointClientBinding(snapshot);
+        observedBinding = clientBinding;
         hostRevision = snapshot.revision;
         hostReady = hostListening;
         if (hostListening) hostError = null;
+        hostConfirmed = hostListening && clientBinding !== undefined;
       }
     } catch (error) {
-      if (!mounted) return;
-      if (sequence === scopeSequence) { hostReady = false; hostError = error; }
+      if (!mounted) return false;
+      if (sequence === scopeSequence) { hostReady = false; clientBinding = undefined; hostError = error; }
     }
-    if (mounted) await session.refresh();
+    const directoryConfirmed = mounted && await session.refreshForNavigation();
+    if (!hostConfirmed || !directoryConfirmed || !mounted) return false;
+    // Bracket the directory read. This is a client observation guard, not a remote core CAS.
+    try {
+      const after = await getClientCoreSnapshot();
+      if (!mounted || sequence !== scopeSequence || after.revision < hostRevision) return false;
+      const afterBinding = endpointClientBinding(after);
+      if (afterBinding !== observedBinding) {
+        clientBinding = afterBinding; hostScope = scopeKeyOf(after); hostRevision = after.revision; session.invalidate(); return false;
+      }
+      return true;
+    } catch (error) {
+      if (mounted && sequence === scopeSequence) { hostReady = false; clientBinding = undefined; hostError = error; }
+      return false;
+    }
   }
   onMount(() => {
     mounted = true;
     let unlisten: (() => void) | undefined;
     // Poll only while this management view is mounted and visible. This also
     // works with kernels that have no endpoint event stream yet.
-    const timer = setInterval(() => { if (!document.hidden) void session.refresh(false, true); }, 5000);
-    const focused = () => { void session.refresh(false, true); };
+    const timer = setInterval(() => { if (!document.hidden && sourceIsVisible()) void session.refresh(false, true); }, 5000);
+    const focused = () => { if (sourceIsVisible()) void session.refresh(false, true); };
     window.addEventListener('focus', focused);
     void listen<ClientCoreSnapshot>('client-core:updated', event => {
       if (event.payload.revision < hostRevision) return;
       hostRevision = event.payload.revision;
+      clientBinding = endpointClientBinding(event.payload);
       const next = scopeKeyOf(event.payload);
       scopeSequence++;
       hostReady = true;
       hostError = null;
-      if (hostScope !== next) { hostScope = next; session.invalidate(); void session.refresh(); }
+      if (hostScope !== next) { hostScope = next; session.invalidate(); if (sourceIsVisible()) void session.refresh(); }
     }).then(stop => {
       if (!mounted) { stop(); return; }
       unlisten = stop;
@@ -92,9 +126,14 @@
     <p class="empty">当前内核未声明兼容的端点目录能力。普通节点仍可在策略组和全部节点中使用；升级至支持端点目录的内核后可管理端点。</p>
   {:else if view.catalog}
     <label class="search"><Search size={15} /><Input aria-label="搜索端点" placeholder="搜索端点" bind:value={query} /></label>
+    {#if trafficReturnError}<p role="status">{trafficReturnError}</p>{/if}
     <div class="endpoint-grid">
       {#each endpoints as endpoint (endpoint.core_instance_id + ':' + endpoint.endpoint_id)}
-        <EndpointCard {endpoint} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} detailsError={view.detailsError ?? view.refreshError} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }} />
+        <EndpointCard {endpoint} onTraffic={onTraffic ? showTraffic : undefined} clientBinding={hostReady ? clientBinding : undefined} verifyCurrent={refreshHostAndDirectory} onUserInteraction={()=>{returnSequence++;}} observation={endpointObservation(endpoint, trafficView?.rows ?? {}).observation} observationAvailable={supported(trafficView?.discovery ?? null)} observationStale={trafficView?.stale ?? true} pending={view.busy === endpoint.endpoint_id} traffic={view.traffic[endpoint.endpoint_id]} stale={view.stale} details={view.details?.endpoint_id === endpoint.endpoint_id ? view.details : null} detailsError={view.detailsError ?? view.refreshError} catalog={view.catalog} disabled={!hostReady || view.stale || !!view.busy} inspecting={view.loading || view.detailsLoading} onAction={(row, action) => { void session.act(row, action); }} onInspect={row => { void session.inspect(row); }}
+          onPreviewRestoration={row => session.previewRestoration(row)}
+          onApplyRestoration={(plan, mode) => session.applyRestoration(plan, mode)}
+          onReconcileRestoration={() => session.reconcileRestoration()}
+          restoration={view.restoration?.target.endpointId === endpoint.endpoint_id && view.restoration.target.profileId === view.catalog?.profileId ? view.restoration : null} />
       {:else}<p class="empty">{query ? '无匹配端点' : '当前内核配置没有声明端点'}</p>{/each}
     </div>
   {:else if view.loading}<p class="empty">正在读取内核端点目录…</p>{/if}

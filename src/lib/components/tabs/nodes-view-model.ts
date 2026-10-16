@@ -200,10 +200,11 @@ export function filterNodes(options: {
   groups: PolicyGroup[];
   query: string;
   selectedGroup: string | null;
+  revealTags?: ReadonlySet<string>;
 }): ProxyNode[] {
   const { allNodes, groups, query, selectedGroup } = options;
   const projected = projectNestedGroupNodes(allNodes, groups);
-  const nodes = projected.filter((node) => matchesSearch(node, query) && matchesNodeHealthFilter(node));
+  const nodes = projected.filter((node) => options.revealTags?.has(node.tag) || (matchesSearch(node, query) && matchesNodeHealthFilter(node)));
   if (!selectedGroup) return nodes;
   const group = groups.find((item) => item.name === selectedGroup);
   if (!group) return nodes;

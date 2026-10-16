@@ -1,0 +1,331 @@
+// Reviewable runtime inputs, not an assertion that R8 retains every resolved class.
+// gradle -I scripts/license-gradle.init.gradle :app:generateUniversalReleaseLicenseInventory
+//   -PznetLicenseMergeScript=... -PznetLicenseCargoInventory=... -PznetLicenseFrontendInventory=...
+import groovy.json.JsonOutput
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
+import javax.xml.parsers.DocumentBuilderFactory
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.maven.MavenModule
+import org.gradle.maven.MavenPomArtifact
+import org.gradle.api.attributes.Attribute
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
+
+abstract class ZnetNativeLicenseAssetTask extends DefaultTask {
+    @OutputDirectory abstract DirectoryProperty getAssetDirectory()
+}
+
+class ZnetNativeLicenses {
+    static String hash(byte[] bytes) { MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+    static String fileHash(File file) {
+        def digest = MessageDigest.getInstance('SHA-256')
+        file.withInputStream { stream ->
+            byte[] buffer = new byte[8192]
+            for (int count; (count = stream.read(buffer)) != -1;) digest.update(buffer, 0, count)
+        }
+        digest.digest().encodeHex().toString()
+    }
+    static byte[] bounded(InputStream stream, int maximum) {
+        def output = new ByteArrayOutputStream()
+        byte[] buffer = new byte[8192]
+        for (int count; (count = stream.read(buffer, 0, Math.min(buffer.length, maximum + 1 - output.size()))) != -1;) {
+            if (count == 0) throw new IOException('non-progressing-license-stream')
+            output.write(buffer, 0, count)
+            if (output.size() > maximum) throw new IOException('license-material-over-budget')
+        }
+        output.toByteArray()
+    }
+    static boolean material(String path) {
+        path.tokenize('/').last().toUpperCase(Locale.ROOT) ==~ /(?:.*[-_])?(?:LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT)(?:[._-].*)?/
+    }
+    static String kind(String name) {
+        String leaf = name.tokenize('/').last().toUpperCase(Locale.ROOT)
+        if (leaf.endsWith('.SPDX')) return 'notice' // SPDX metadata is not a complete license body.
+        leaf ==~ /(?:.*[-_])?NOTICE(?:[._-].*)?/ ? 'notice' :
+            leaf ==~ /(?:.*[-_])?COPYRIGHT(?:[._-].*)?/ ? 'copyright' : 'license'
+    }
+    static Map collect(project, configuration, String variant, List artifactCollections) {
+        def entries = []
+        def texts = new TreeMap<String, Map>()
+        def gaps = []
+        def inputs = []
+        project.gradle.startParameter.allInitScripts.findAll { it.name == 'license-gradle.init.gradle' }.each {
+            inputs.add([label:'generator:license-gradle.init.gradle', sha256:fileHash(it)])
+        }
+        if (project.buildFile.isFile()) inputs.add([label:"gradle-project:${project.path}!build-script", sha256:fileHash(project.buildFile)])
+        int totalTextBytes = 0
+        def addText = { byte[] bytes, String name, String source ->
+            // Malformed UTF-8 is never silently replaced and presented as an authoritative text.
+            def text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+            String sha = hash(bytes)
+            String id = "sha256-${sha}"
+            if (!texts.containsKey(id)) {
+                totalTextBytes += bytes.length
+                if (totalTextBytes > 8 * 1024 * 1024) throw new IOException('license-text-total-over-budget')
+                texts[id] = [id:id, text:text, name:name, kind:kind(name), source:source, sha256:sha]
+            }
+            id
+        }
+        def artifacts = artifactCollections.collectMany { it.artifacts.toList() }
+            .sort { "${it.id.componentIdentifier.displayName}:${it.file.name}" }
+        if (artifacts.size() > 2048) throw new GradleException('Native runtime dependency budget exceeded')
+        def componentIds = configuration.incoming.resolutionResult.allComponents.collect { it.id }
+            .findAll { it instanceof ModuleComponentIdentifier }.sort { it.displayName }
+        def poms = [:]
+        def pomResult = project.dependencies.createArtifactResolutionQuery().forComponents(componentIds)
+            .withArtifacts(MavenModule, MavenPomArtifact).execute()
+        pomResult.resolvedComponents.each { component ->
+            component.getArtifacts(MavenPomArtifact).findAll { it instanceof ResolvedArtifactResult }.each {
+                poms[component.id.displayName] = it.file
+            }
+        }
+        def grouped = artifacts.groupBy { artifact ->
+            def component = artifact.id.componentIdentifier
+            (component instanceof ProjectComponentIdentifier ? "gradle-project:${component.projectPath}" :
+                "maven:${component.group}:${component.module}:${component.version}").toString()
+        }
+        grouped.keySet().sort().each { id ->
+            def ownArtifacts = grouped[id]
+            def first = ownArtifacts.first()
+            def component = first.id.componentIdentifier
+            boolean local = component instanceof ProjectComponentIdentifier
+            String name = local ? component.projectPath : component.module
+            String version = local ? String.valueOf(project.rootProject.findProject(component.projectPath)?.version ?: 'unspecified') : component.version
+            def entry = [id:id, ecosystem:local ? 'resource' : 'maven', name:name, version:version,
+                declaredLicense:null, source:local ? "gradle-project:${component.projectPath}" : "maven:${component.displayName}",
+                evidence:[[kind:'resolved-runtime', detail:"${project.path}:${configuration.name}; post-R8 retention unverified"]],
+                licenseTextIds:[], noticeTextIds:[], textStatus:'missing', missing:[]]
+            def collectMaterial = { byte[] bytes, String materialName, String source ->
+                try {
+                    def textId = addText(bytes, materialName, source)
+                    (kind(materialName) == 'license' ? entry.licenseTextIds : entry.noticeTextIds).add(textId)
+                } catch (Exception ignored) { entry.missing.add('license-material-invalid-or-over-budget') }
+            }
+            def selectedArtifactHashes = []
+            ownArtifacts.each { artifact ->
+                File file = artifact.file
+                String artifactLabel = "${id}!${file.name}"
+                if (!file.isFile()) {
+                    entry.missing.add('resolved-artifact-not-built')
+                    return
+                }
+                String sha = fileHash(file)
+                selectedArtifactHashes.add([name:file.name, sha256:sha])
+                inputs.add([label:artifactLabel, sha256:sha])
+                entry.evidence.add([kind:'build-input', detail:"${file.name}; sha256=${sha}"])
+                if (file.name.endsWith('.jar') || file.name.endsWith('.aar')) {
+                    new ZipFile(file).withCloseable { zip ->
+                        zip.entries().toList().sort { it.name }.each { member ->
+                            if (member.directory) return
+                            if (material(member.name)) {
+                                try {
+                                    zip.getInputStream(member).withCloseable { stream ->
+                                        collectMaterial(bounded(stream, 1024 * 1024), member.name, "${artifactLabel}!${member.name}")
+                                    }
+                                } catch (Exception ignored) { entry.missing.add('license-material-invalid-or-over-budget') }
+                            } else if (file.name.endsWith('.aar') && member.name == 'classes.jar') {
+                                // AARs commonly store license/NOTICE inside their classes.jar.
+                                zip.getInputStream(member).withCloseable { input ->
+                                    def nested = new ZipInputStream(new ByteArrayInputStream(bounded(input, 32 * 1024 * 1024)))
+                                    nested.withCloseable {
+                                        for (def child; (child = nested.nextEntry) != null;) {
+                                            if (!child.directory && material(child.name)) {
+                                                collectMaterial(bounded(nested, 1024 * 1024), child.name, "${artifactLabel}!classes.jar!${child.name}")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Bind reviewed publisher materials to the actual selected bytes,
+            // not only GAV. Multi-artifact identities use a deterministic set hash.
+            selectedArtifactHashes = selectedArtifactHashes.unique().sort { it.name }
+            entry.artifactSha256 = selectedArtifactHashes.size() == 1 ? selectedArtifactHashes[0].sha256 :
+                selectedArtifactHashes ? hash(JsonOutput.toJson(selectedArtifactHashes).getBytes(StandardCharsets.UTF_8)) : null
+            File pom = local ? null : poms[component.displayName]
+            if (pom?.isFile()) {
+                String label = "${id}!pom"
+                entry.pomSha256 = fileHash(pom)
+                inputs.add([label:label, sha256:entry.pomSha256])
+                try {
+                    if (pom.length() > 2 * 1024 * 1024) throw new IOException('pom-over-budget')
+                    def factory = DocumentBuilderFactory.newInstance()
+                    factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
+                    factory.setFeature('http://xml.org/sax/features/external-general-entities', false)
+                    factory.setFeature('http://xml.org/sax/features/external-parameter-entities', false)
+                    def document = factory.newDocumentBuilder().parse(pom)
+                    def declarations = document.getElementsByTagName('license')
+                    def seenParents = new HashSet<String>()
+                    // Maven licenses are inherited. Resolve only explicit published parent GAVs,
+                    // never infer a license from another artifact in the same organisation.
+                    for (int depth = 0; declarations.length == 0 && depth < 8; depth++) {
+                        def parentNodes = document.documentElement.getElementsByTagName('parent')
+                        if (parentNodes.length == 0) break
+                        def parent = parentNodes.item(0)
+                        def coordinates = ['groupId', 'artifactId', 'version'].collect { field ->
+                            def nodes = parent.getElementsByTagName(field)
+                            nodes.length ? nodes.item(0).textContent.trim() : ''
+                        }
+                        if (coordinates.any { !(it ==~ /[A-Za-z0-9_.-]{1,256}/) }) break
+                        String parentId = coordinates.join(':')
+                        if (!seenParents.add(parentId)) break
+                        def parentQuery = project.dependencies.createArtifactResolutionQuery()
+                            .forModule(*coordinates).withArtifacts(MavenModule, MavenPomArtifact).execute()
+                        def parentFiles = parentQuery.resolvedComponents.collectMany { resolved ->
+                            resolved.getArtifacts(MavenPomArtifact).findAll { it instanceof ResolvedArtifactResult }.collect { it.file }
+                        }
+                        if (parentFiles.size() != 1 || parentFiles[0].length() > 2 * 1024 * 1024) break
+                        File parentFile = parentFiles[0]
+                        inputs.add([label:"${id}!parent-pom:${parentId}", sha256:fileHash(parentFile)])
+                        entry.evidence.add([kind:'build-input', detail:"POM license inheritance input: ${parentId}"])
+                        document = factory.newDocumentBuilder().parse(parentFile)
+                        declarations = document.getElementsByTagName('license')
+                    }
+                    def names = []
+                    for (int index = 0; index < declarations.length; index++) {
+                        def license = declarations.item(index)
+                        def declaredNames = license.getElementsByTagName('name')
+                        if (declaredNames.length) names.add(declaredNames.item(0).textContent.trim())
+                        def urls = license.getElementsByTagName('url')
+                        if (urls.length) {
+                            String url = urls.item(0).textContent.trim()
+                            def uri = new URI(url)
+                            if (url.length() <= 2048 && uri.scheme in ['http', 'https'] && uri.host && !uri.userInfo && !uri.query) {
+                                entry.evidence.add([kind:'build-input', detail:"POM license URL: ${url}"])
+                            } else entry.missing.add('license-url-unsupported')
+                        }
+                    }
+                    // Preserve publisher wording, without guessing SPDX or alternative/conjunction semantics.
+                    if (names) entry.declaredLicense = names.unique().sort().join(' ; ')
+                } catch (Exception ignored) { entry.missing.add('pom-license-metadata-invalid') }
+            } else if (!local) entry.missing.add('pom-license-metadata-missing')
+            if (local) {
+                def localProject = project.rootProject.findProject(component.projectPath)
+                File sourceRoot = localProject?.projectDir
+                // Actual source materials only; parent declarations are not inferred from Maven group names.
+                for (int level = 0; sourceRoot != null && level < 4; level++, sourceRoot = sourceRoot.parentFile) {
+                    File manifest = new File(sourceRoot, 'Cargo.toml')
+                    if (!manifest.isFile()) continue
+                    String manifestText = manifest.getText('UTF-8')
+                    def packageSection = (manifestText =~ /(?ms)^\[package\]\s*(.*?)(?=^\[|\z)/)
+                    if (packageSection.find()) {
+                        def declared = (packageSection.group(1) =~ /(?m)^license\s*=\s*"([^"]+)"/)
+                        if (declared.find()) entry.declaredLicense = declared.group(1)
+                        def licenseFile = (packageSection.group(1) =~ /(?m)^license-file\s*=\s*"([^"]+)"/)
+                        if (licenseFile.find()) {
+                            File declaredFile = new File(sourceRoot, licenseFile.group(1)).canonicalFile
+                            if (declaredFile.isFile()) {
+                                inputs.add([label:"${id}!declared-license-file", sha256:fileHash(declaredFile)])
+                                declaredFile.withInputStream { collectMaterial(bounded(it, 1024 * 1024), declaredFile.name, "${id}!declared-license-file/${declaredFile.name}") }
+                            } else entry.missing.add('declared-license-file-unreadable')
+                        }
+                    }
+                    inputs.add([label:"${id}!Cargo.toml", sha256:fileHash(manifest)])
+                    sourceRoot.listFiles().findAll { it.isFile() && material(it.name) }.sort { it.name }.each { file ->
+                        file.withInputStream { collectMaterial(bounded(it, 1024 * 1024), file.name, "${id}!source/${file.name}") }
+                    }
+                    break
+                }
+            }
+            entry.licenseTextIds = entry.licenseTextIds.unique().sort()
+            entry.noticeTextIds = entry.noticeTextIds.unique().sort()
+            if (entry.licenseTextIds) entry.textStatus = 'available'
+            else entry.missing.add('license-body-missing')
+            if (!entry.declaredLicense) entry.missing.add('license-declaration-missing')
+            entry.missing = entry.missing.unique().sort()
+            entry.missing.each { gaps.add([ecosystem:entry.ecosystem, id:id, reason:it]) }
+            entries.add(entry)
+        }
+        [schemaVersion:1, target:[platform:'android', triple:'aarch64-linux-android', profile:'release', features:[]],
+            provenance:[kind:'gradle-resolved-release-runtime', inputs:inputs.unique().sort { it.label }],
+            entries:entries.sort { it.id }, texts:texts.values().toList(), gaps:gaps.sort { "${it.ecosystem}:${it.id}:${it.reason}" }]
+    }
+}
+
+gradle.beforeProject { project ->
+    project.pluginManager.withPlugin('com.android.application') {
+        String selectedConfiguration = project.findProperty('znetLicenseConfiguration') ?: 'universalReleaseRuntimeClasspath'
+        String selectedVariant = selectedConfiguration - 'RuntimeClasspath'
+        def components = project.extensions.getByName('androidComponents')
+        components.onVariants(components.selector().withName(selectedVariant)) { selected ->
+            String configurationName = project.findProperty('znetLicenseConfiguration') ?: 'universalReleaseRuntimeClasspath'
+            def configuration = project.configurations.findByName(configurationName)
+            if (configuration == null || !configuration.canBeResolved || !configurationName.toLowerCase(Locale.ROOT).endsWith('releaseruntimeclasspath')) {
+                throw new GradleException('Native license inventory requires a resolvable release runtime classpath')
+            }
+            String variant = configurationName - 'RuntimeClasspath'
+            String suffix = variant.substring(0, 1).toUpperCase(Locale.ROOT) + variant.substring(1)
+            def base = project.layout.buildDirectory.dir("generated/znetLicenses/${variant}").get().asFile
+            File gradleInventory = new File(base, 'gradle/license-inventory.gradle.json')
+            def moduleArtifacts = configuration.incoming.artifactView {
+                componentFilter { it instanceof ModuleComponentIdentifier }
+            }.artifacts
+            def projectArtifacts = configuration.incoming.artifactView {
+                attributes.attribute(Attribute.of('artifactType', String), 'android-classes-jar')
+                componentFilter { it instanceof ProjectComponentIdentifier }
+            }.artifacts
+            def collectTask = project.tasks.register("collect${suffix}NativeLicenses") {
+                group = 'verification'
+                description = 'Collect licenses from the selected Android release runtime inputs'
+                // Always re-resolve current inputs; a stale inventory must not survive dependency changes.
+                outputs.upToDateWhen { false }
+                outputs.file(gradleInventory)
+                dependsOn(moduleArtifacts.artifactFiles, projectArtifacts.artifactFiles)
+                doLast {
+                    def inventory = ZnetNativeLicenses.collect(project, configuration, variant, [moduleArtifacts, projectArtifacts])
+                    gradleInventory.parentFile.mkdirs()
+                    gradleInventory.setText(JsonOutput.prettyPrint(JsonOutput.toJson(inventory)) + '\n', 'UTF-8')
+                }
+            }
+            def aggregate = project.tasks.register("generate${suffix}LicenseInventory", ZnetNativeLicenseAssetTask) { task ->
+                task.assetDirectory.set(project.layout.buildDirectory.dir("generated/znetLicenses/${variant}/assets"))
+                group = 'verification'
+                dependsOn(collectTask)
+                outputs.upToDateWhen { false }
+                doLast {
+                    // addGeneratedSourceDirectory chooses the authoritative output
+                    // location. Read the property here, after AGP has configured it.
+                    File assetDirectory = task.assetDirectory.get().asFile
+                    File nativeInventory = new File(assetDirectory, 'license-inventory.native.json')
+                    String mergePath = project.findProperty('znetLicenseMergeScript')
+                    String cargoPath = project.findProperty('znetLicenseCargoInventory') ?: System.getenv('ZNET_LICENSE_CARGO')
+                    String frontendPath = project.findProperty('znetLicenseFrontendInventory') ?: System.getenv('ZNET_LICENSE_FRONTEND')
+                    def collectorScript = project.gradle.startParameter.allInitScripts.find { it.name == 'license-gradle.init.gradle' }
+                    File materialsCache = project.findProperty('znetLicenseMaterialsCache') ?
+                        project.file(project.findProperty('znetLicenseMaterialsCache')) :
+                        new File(collectorScript.parentFile.parentFile, 'resources/licenses/authoritative-materials.json')
+                    if (![mergePath, cargoPath, frontendPath].every { it && project.file(it).isFile() }) {
+                        throw new GradleException('Prepared Cargo/frontend inventories and native merge script are required')
+                    }
+                    if (!materialsCache.isFile()) throw new GradleException('Native license material cache is required')
+                    assetDirectory.mkdirs()
+                    project.exec {
+                        def arguments = ['node', project.file(mergePath), '--gradle', gradleInventory,
+                            '--cargo', project.file(cargoPath), '--frontend', project.file(frontendPath), '--output', nativeInventory,
+                            '--materials-cache', materialsCache]
+                        String messages = project.findProperty('znetLicenseCargoMessages')
+                        if (messages) arguments.addAll(['--cargo-messages', project.file(messages)])
+                        commandLine arguments
+                    }
+                    if (!nativeInventory.isFile() || nativeInventory.length() > 16 * 1024 * 1024) {
+                        throw new GradleException('Native license inventory missing or over budget')
+                    }
+                }
+            }
+            String rustTask = project.findProperty('znetLicenseRustTask')
+            if (rustTask) aggregate.configure { dependsOn(rustTask) }
+            // Public variant API binds task output to the actual merge input, even
+            // on a clean build. Merely adding a synthetic sourceSet is insufficient.
+            selected.sources.assets.addGeneratedSourceDirectory(aggregate) { it.assetDirectory }
+            project.tasks.matching { it.name == "merge${suffix}Assets" }.configureEach { dependsOn(aggregate) }
+        }
+    }
+}

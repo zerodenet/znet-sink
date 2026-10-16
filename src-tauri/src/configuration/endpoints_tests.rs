@@ -105,3 +105,37 @@ fn endpoint_preferences_delete_only_owned_overrides_and_restore_rollback_snapsho
     prune(&mut next, &HashSet::from(["a", "b"]));
     assert_eq!(next.profile_edits, previous.profile_edits);
 }
+
+#[test]
+fn source_restoration_removes_only_exact_canonical_client_preference() {
+    let source = json!({"endpoints":[{"tag":"a","protocol":{"type":"future"}},{"tag":"b","protocol":{"type":"future"}}],"runtime":{"dns":{"secret":"retained"}}});
+    let row = json!({"endpoint_id":"opaque:a","tag":"a","protocol":"future","configuration":{"origin":"canonical"}});
+    let mut app = AppConfig::default();
+    app.client_edits = Some(BTreeMap::from([("dns".into(), json!({"enabled":true}))]));
+    app.profile_edits.insert("p".into(),BTreeMap::from([("endpoints".into(),json!({"a":{"protocol":"future","enabled":false,"directions":{"inbound":true,"outbound":false}},"b":{"protocol":"future","enabled":false,"directions":null}})),("retained-field".into(),json!("keep"))]));
+    let before = serde_json::to_value(&app).unwrap();
+    let restored = restore_candidate(&app, "p", &source, &row).unwrap();
+    assert!(restored.profile_edits["p"]["endpoints"].get("a").is_none());
+    assert_eq!(
+        restored.profile_edits["p"]["endpoints"]["b"],
+        before["profileEdits"]["p"]["endpoints"]["b"]
+    );
+    assert_eq!(restored.client_edits, app.client_edits);
+    assert_eq!(restored.profile_edits["p"]["retained-field"], json!("keep"));
+    assert_eq!(serde_json::to_value(&app).unwrap(), before);
+    for origin in ["legacy", "unknown"] {
+        let mut other = row.clone();
+        other["configuration"]["origin"] = json!(origin);
+        assert!(restore_candidate(&app, "p", &source, &other).is_err());
+    }
+    let mut reused = row.clone();
+    reused["protocol"] = json!("other");
+    assert!(restore_candidate(&app, "p", &source, &reused).is_err());
+    assert!(restore_candidate(&app, "other-profile", &source, &row).is_err());
+    let mut duplicated = source.clone();
+    duplicated["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .push(source["endpoints"][0].clone());
+    assert!(restore_candidate(&app, "p", &duplicated, &row).is_err());
+}

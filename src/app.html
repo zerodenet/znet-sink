@@ -2,8 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!-- Signed plugin pages use srcdoc only; block URL navigation of all frames. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'none'" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>ZNet Sink</title>
     <!-- Anti-flash: apply theme before first paint & set theme-aware favicon -->
     <script>

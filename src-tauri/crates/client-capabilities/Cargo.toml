@@ -2,6 +2,8 @@
 name = "znet-client-capabilities"
 version = "0.1.0"
 edition = "2021"
+license = "MPL-2.0"
+license-file = "../../../LICENSE"
 publish = false
 
 [features]

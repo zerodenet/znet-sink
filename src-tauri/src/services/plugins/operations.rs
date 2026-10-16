@@ -1,7 +1,7 @@
 use super::*;
 use crate::services::common::now_unix_ms;
 use serde::Deserialize;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager as _;
 use znet_plugin_sandbox::{
     contract::{Capability, LifecycleEvent},
@@ -19,6 +19,20 @@ struct InvocationEnvelope {
     value: serde_json::Value,
 }
 
+/// The guest cannot manufacture platform file selection authority by sending
+/// an absolute path or a string pretending to be a host-issued ticket.
+/// PageFrame's separate system-picker bridge retains its original lease path.
+pub(super) fn validate_vm_sdk_admissibility(call: &Call) -> AppResult<()> {
+    if matches!(call.method, Method::FileRead | Method::FileWrite) {
+        return Err(AppError {
+            code: "plugin_vm_file_unsupported",
+            message: "插件 VM 文件读写尚未接入可信系统文件选择；不能使用脚本提供的路径".into(),
+            details: None,
+        });
+    }
+    Ok(())
+}
+
 fn sdk_dispatcher(
     app: tauri::AppHandle,
     plugin_id: &str,
@@ -32,7 +46,12 @@ fn sdk_dispatcher(
             let call: Call = serde_json::from_str(input)
                 .map_err(|_| AppError::invalid_argument("插件 SDK 请求格式无效"))?;
             observed_method = Some(call.method);
+            validate_vm_sdk_admissibility(&call)?;
             let method = call.method;
+            let request = znet_plugin_sandbox::contract::Request {
+                capability: method.capability(),
+                scope: call.request.scope.clone(),
+            };
             let state = app.state::<crate::state::app_state::AppState>();
             if call.method == Method::SubscriptionApply {
                 let (managed, request) = state
@@ -42,7 +61,11 @@ fn sdk_dispatcher(
                     crate::services::subscription::apply_managed_authorized(
                         app.clone(),
                         managed,
-                        || lease.check(Some(&request)).map_err(io::failure),
+                        || {
+                            lease
+                                .check(Some(&request))
+                                .map_err(super::sdk::invocation_failure)
+                        },
                     ),
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
@@ -54,7 +77,11 @@ fn sdk_dispatcher(
                 return crate::services::subscription::update_managed_metadata_authorized(
                     app.clone(),
                     input,
-                    || lease.check(Some(&request)).map_err(io::failure),
+                    || {
+                        lease
+                            .check(Some(&request))
+                            .map_err(super::sdk::invocation_failure)
+                    },
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
@@ -65,7 +92,11 @@ fn sdk_dispatcher(
                 return crate::services::subscription::complete_managed_sync_authorized(
                     app.clone(),
                     input,
-                    || lease.check(Some(&request)).map_err(io::failure),
+                    || {
+                        lease
+                            .check(Some(&request))
+                            .map_err(super::sdk::invocation_failure)
+                    },
                 )
                 .and_then(|profile| serde_json::to_value(profile).map_err(io::failure));
             }
@@ -79,7 +110,11 @@ fn sdk_dispatcher(
                         subscription_id,
                         remove_associated_config,
                         plugin_id.clone(),
-                        || lease.check(Some(&request)).map_err(io::failure),
+                        || {
+                            lease
+                                .check(Some(&request))
+                                .map_err(super::sdk::invocation_failure)
+                        },
                     ),
                 )
                 .and_then(|outcome| serde_json::to_value(outcome).map_err(io::failure));
@@ -96,6 +131,11 @@ fn sdk_dispatcher(
                 network_proxy,
                 Some(state.inner()),
             )?;
+            let value = if method == Method::BrowserOpen {
+                super::sdk::open_browser_with_lease(&app, lease, &request, value)?
+            } else {
+                value
+            };
             super::notification::deliver_if_post(method, value, |value| {
                 super::notification::publish(&app, value)
             })
@@ -113,13 +153,15 @@ fn sdk_dispatcher(
             )
         {
             let state = app.state::<crate::state::app_state::AppState>();
-            let action = observed_method
-                .map_or_else(|| "sdk_call".to_owned(), |method| format!("sdk.{method:?}"));
+            let action = observed_method.map_or(
+                crate::models::logs::PluginAction::ComponentAction,
+                crate::services::logs::plugin_sdk_action,
+            );
             crate::services::logs::plugin_host_event(
                 state.inner(),
                 &plugin_id,
                 &component_id,
-                &action,
+                action,
                 result.as_ref().map(|_| ()),
             );
         }
@@ -139,8 +181,14 @@ fn sdk_dispatcher(
 }
 
 impl Host {
+    /// Clone this owner's handle before AppState moves into the application.
+    /// Closing it does not close other hosts sharing the global VM budget.
+    pub(crate) fn executor_shutdown_handle(&self) -> runtime::Executor {
+        self.executor.clone()
+    }
+
     pub fn refresh(&self, manager: &Manager) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let directory = match io::directory(manager) {
             Ok(directory) => directory,
             Err(error) => return Err(error),
@@ -157,7 +205,7 @@ impl Host {
         review: Review,
         grants: Vec<Request>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
         if grants.iter().any(|request| !supported(request)) {
             return Err(AppError::invalid_argument("所选权限尚未开放"));
@@ -255,7 +303,7 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn stop(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -276,7 +324,7 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn revoke_permissions(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -306,10 +354,15 @@ impl Host {
         review: Review,
         app: Option<tauri::AppHandle>,
     ) -> AppResult<serde_json::Value> {
+        let plugin = review.key.split_once('/').ok_or_else(stale)?.0;
+        let _activity = self.activity_checked(manager, plugin)?;
+
         let (component, authority, configuration) = {
-            let _operation = self.operation.lock().unwrap();
+            let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
-            self.current_review(manager, &review)?;
+            self.current_review(manager, &review).map_err(|_| {
+                super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+            })?;
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&review.key).ok_or_else(stale)?;
             let mut configuration = loaded
@@ -326,40 +379,29 @@ impl Host {
             )
         };
         let input = serde_json::json!({ "configuration": configuration });
-        let result = if let Some(app) = app {
-            runtime::execute_for_host_with_input_and_sdk(
+        let result = self
+            .executor
+            .execute_reviewed(
                 &component,
                 &authority,
                 input,
-                Arc::new(AtomicBool::new(false)),
-                env!("CARGO_PKG_VERSION"),
-                sdk_dispatcher(
-                    app,
-                    &component.manifest().plugin_id,
-                    &component.manifest().component_id,
-                ),
+                runtime::ReviewedExecution {
+                    registration: review.registration,
+                    revision: review.revision,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    host_version: env!("CARGO_PKG_VERSION").into(),
+                    dispatcher: app.map(|app| {
+                        sdk_dispatcher(
+                            app,
+                            &component.manifest().plugin_id,
+                            &component.manifest().component_id,
+                        )
+                    }),
+                    scheduled: false,
+                },
             )
-        } else {
-            runtime::execute_for_host_with_input(
-                &component,
-                &authority,
-                input,
-                Arc::new(AtomicBool::new(false)),
-                env!("CARGO_PKG_VERSION"),
-            )
-        };
-        result.map_err(|error| {
-            use znet_plugin_sandbox::contract::Error;
-            AppError::invalid_argument(match error {
-                Error::Revoked | Error::Expired | Error::Disabled | Error::PermissionDenied => {
-                    "插件权限已失效，请重新查看权限并确认"
-                }
-                Error::Busy => "此组件正在运行，请稍后重试",
-                Error::Deadline | Error::BudgetExceeded => "插件运行超过资源限制，已停止",
-                Error::Cancelled => "插件运行已停止",
-                _ => "插件运行失败，请检查兼容性或联系发布者",
-            })
-        })
+            .and_then(|receipt| receipt.into_value());
+        result.map_err(super::sdk::invocation_failure)
     }
     pub fn invoke(
         &self,
@@ -370,6 +412,78 @@ impl Host {
         action: String,
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
+        self.invoke_inner(
+            manager,
+            app,
+            plugin_id,
+            component_id,
+            action,
+            payload,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+    }
+    pub fn invoke_reviewed(
+        &self,
+        manager: &Manager,
+        app: Option<tauri::AppHandle>,
+        review: Review,
+        action: String,
+        payload: serde_json::Value,
+        cancelled: Arc<AtomicBool>,
+    ) -> AppResult<serde_json::Value> {
+        let (plugin_id, component_id) = review.key.split_once('/').ok_or_else(stale)?;
+        self.invoke_inner(
+            manager,
+            app,
+            plugin_id,
+            component_id,
+            action,
+            payload,
+            Some(&review),
+            cancelled,
+            None,
+        )
+    }
+    /// Test-only synchronization at a real VM/native SDK callback. The same
+    /// production owning lock, original lease and publication path are used.
+    #[cfg(test)]
+    pub(super) fn invoke_reviewed_with_test_dispatcher(
+        &self,
+        manager: &Manager,
+        review: Review,
+        cancelled: Arc<AtomicBool>,
+        dispatcher: runtime::HostSdkDispatcher,
+    ) -> AppResult<serde_json::Value> {
+        let (plugin_id, component_id) = review.key.split_once('/').ok_or_else(stale)?;
+        self.invoke_inner(
+            manager,
+            None,
+            plugin_id,
+            component_id,
+            "read".into(),
+            serde_json::Value::Null,
+            Some(&review),
+            cancelled,
+            Some(dispatcher),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn invoke_inner(
+        &self,
+        manager: &Manager,
+        app: Option<tauri::AppHandle>,
+        plugin_id: &str,
+        component_id: &str,
+        action: String,
+        payload: serde_json::Value,
+        original_review: Option<&Review>,
+        cancelled: Arc<AtomicBool>,
+        injected_dispatcher: Option<runtime::HostSdkDispatcher>,
+    ) -> AppResult<serde_json::Value> {
+        let _activity = self.activity_checked(manager, plugin_id)?;
+
         if action.is_empty()
             || action.len() > 128
             || !action
@@ -379,10 +493,26 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件页面操作参数无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state) = {
-            let _operation = self.operation.lock().unwrap();
+        let (component, authority, configuration, publisher, plugin_state, binding) = {
+            let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
+            if cancelled.load(Ordering::Acquire) {
+                return Err(super::sdk::invocation_failure(
+                    znet_plugin_sandbox::contract::Error::Cancelled,
+                ));
+            }
             let key = format!("{plugin_id}/{component_id}");
+            let binding = if let Some(review) = original_review {
+                self.current_review(manager, review).map_err(|_| {
+                    super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+                })?
+            } else {
+                manager
+                    .component_snapshots()
+                    .into_iter()
+                    .find(|entry| entry.key == key && !entry.retired)
+                    .ok_or_else(stale)?
+            };
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&key).ok_or_else(stale)?;
             if loaded.component.manifest().plugin_id != plugin_id
@@ -405,6 +535,7 @@ impl Host {
                 configuration,
                 publisher,
                 plugin_state,
+                binding,
             )
         };
         let digest = component.digest().to_owned();
@@ -413,40 +544,33 @@ impl Host {
             "state": plugin_state,
             "invocation": { "action": action, "payload": payload }
         });
-        let output = if let Some(app) = app {
-            runtime::execute_for_host_with_input_and_sdk(
+        let receipt = self
+            .executor
+            .execute_reviewed(
                 &component,
                 &authority,
                 input,
-                Arc::new(AtomicBool::new(false)),
-                env!("CARGO_PKG_VERSION"),
-                sdk_dispatcher(app, plugin_id, component_id),
+                runtime::ReviewedExecution {
+                    registration: binding.registration,
+                    revision: binding.revision,
+                    cancelled,
+                    host_version: env!("CARGO_PKG_VERSION").into(),
+                    dispatcher: app
+                        .map(|app| sdk_dispatcher(app, plugin_id, component_id))
+                        .or(injected_dispatcher),
+                    scheduled: false,
+                },
             )
-        } else {
-            runtime::execute_for_host_with_input(
-                &component,
-                &authority,
-                input,
-                Arc::new(AtomicBool::new(false)),
-                env!("CARGO_PKG_VERSION"),
-            )
-        }
-        .map_err(|error| {
-            use znet_plugin_sandbox::contract::Error;
-            AppError::invalid_argument(match error {
-                Error::Revoked | Error::Expired | Error::Disabled | Error::PermissionDenied => {
-                    "插件尚未启用，或当前操作没有所需权限"
-                }
-                Error::Busy => "插件正在处理另一个操作，请稍后重试",
-                Error::Deadline | Error::BudgetExceeded => "插件操作超过资源限制，已停止",
-                Error::Cancelled => "插件操作已停止",
-                _ => "插件操作失败，请在插件页面查看说明",
-            })
-        })?;
+            .map_err(super::sdk::invocation_failure)?;
+        let output = receipt
+            .value()
+            .map_err(super::sdk::invocation_failure)?
+            .clone();
         let Some(marker) = output
             .as_object()
             .and_then(|object| object.get("znet_plugin_result"))
         else {
+            receipt.check().map_err(super::sdk::invocation_failure)?;
             return Ok(output);
         };
         if marker != 1 {
@@ -457,7 +581,8 @@ impl Host {
         if envelope.znet_plugin_result != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
         let loaded = state.loaded.get(&key).ok_or_else(stale)?;
@@ -471,6 +596,7 @@ impl Host {
             plugin_id,
             envelope.state_updates,
         )?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)
     }
 
@@ -485,14 +611,26 @@ impl Host {
         action: String,
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
+        let _activity = self.activity_checked(
+            app.state::<crate::state::app_state::AppState>()
+                .capabilities(),
+            plugin_id,
+        )?;
+
         if !action.starts_with("lifecycle.scheduled.") {
             return Err(AppError::invalid_argument("插件后台动作无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state) = {
-            let _operation = self.operation.lock().unwrap();
+        let (component, authority, configuration, publisher, plugin_state, binding) = {
+            let _operation = self.operation_guard()?;
             let manager = app.state::<crate::state::app_state::AppState>();
             self.checked_rescan(manager.capabilities())?;
             let key = format!("{plugin_id}/{component_id}");
+            let binding = manager
+                .capabilities()
+                .component_snapshots()
+                .into_iter()
+                .find(|entry| entry.key == key && !entry.retired)
+                .ok_or_else(stale)?;
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&key).ok_or_else(stale)?;
             let mut configuration = loaded
@@ -508,33 +646,46 @@ impl Host {
                 configuration,
                 loaded.publisher_fingerprint.clone(),
                 namespace::runtime_state(&self.root()?, &loaded.publisher_fingerprint, plugin_id)?,
+                binding,
             )
         };
         let digest = component.digest().to_owned();
         let dispatcher = sdk_dispatcher(app.clone(), plugin_id, component_id);
-        let output = runtime::execute_scheduled_for_host_with_input(
-            &component,
-            &authority,
-            serde_json::json!({
-                "configuration": configuration,
-                "state": plugin_state,
-                "invocation": {
-                    "action": action,
-                    "payload": payload,
-                    "now_unix_ms": now_unix_ms()
-                }
-            }),
-            Arc::new(AtomicBool::new(false)),
-            env!("CARGO_PKG_VERSION"),
-            dispatcher,
-        )
-        .map_err(|error| AppError::invalid_argument(format!("插件后台操作失败：{error}")))?;
+        let receipt = self
+            .executor
+            .execute_reviewed(
+                &component,
+                &authority,
+                serde_json::json!({
+                    "configuration": configuration,
+                    "state": plugin_state,
+                    "invocation": {
+                        "action": action,
+                        "payload": payload,
+                        "now_unix_ms": now_unix_ms()
+                    }
+                }),
+                runtime::ReviewedExecution {
+                    registration: binding.registration,
+                    revision: binding.revision,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    host_version: env!("CARGO_PKG_VERSION").into(),
+                    dispatcher: Some(dispatcher),
+                    scheduled: true,
+                },
+            )
+            .map_err(super::sdk::invocation_failure)?;
+        let output = receipt
+            .value()
+            .map_err(super::sdk::invocation_failure)?
+            .clone();
         let envelope: InvocationEnvelope = serde_json::from_value(output)
             .map_err(|_| AppError::invalid_argument("插件返回的状态更新格式无效"))?;
         if envelope.znet_plugin_result != 1 {
             return Err(AppError::invalid_argument("插件返回了不支持的结果协议"));
         }
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
         let loaded = state.loaded.get(&key).ok_or_else(stale)?;
@@ -548,6 +699,7 @@ impl Host {
             plugin_id,
             envelope.state_updates,
         )?;
+        receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)
     }
     /// Run declared bounded startup hooks after the app state is available.
@@ -606,8 +758,37 @@ impl Host {
         key: &str,
         values: BTreeMap<String, String>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        self.configure_inner(manager, key, values, None, Arc::new(AtomicBool::new(false)))
+    }
+    pub fn configure_reviewed(
+        &self,
+        manager: &Manager,
+        review: Review,
+        values: BTreeMap<String, String>,
+        cancelled: Arc<AtomicBool>,
+    ) -> AppResult<Snapshot> {
+        self.configure_inner(manager, &review.key, values, Some(&review), cancelled)
+    }
+    fn configure_inner(
+        &self,
+        manager: &Manager,
+        key: &str,
+        values: BTreeMap<String, String>,
+        original_review: Option<&Review>,
+        cancelled: Arc<AtomicBool>,
+    ) -> AppResult<Snapshot> {
+        let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
+        }
+        if let Some(review) = original_review {
+            self.current_review(manager, review).map_err(|_| {
+                super::sdk::invocation_failure(znet_plugin_sandbox::contract::Error::Revoked)
+            })?;
+        }
         let schema = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -621,81 +802,35 @@ impl Host {
         schema
             .validate_values(&values)
             .map_err(|_| AppError::invalid_argument("插件配置缺少必填项或字段格式无效"))?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
+        }
         manager.revoke_component(key);
         configuration::save(&self.root()?, key, values)?;
         self.rescan(manager, &self.store()?)?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(super::sdk::invocation_failure(
+                znet_plugin_sandbox::contract::Error::Cancelled,
+            ));
+        }
         Ok(self.snapshot(manager))
     }
+    #[cfg(test)]
     pub fn uninstall(
         &self,
-        manager: &Manager,
-        id: &str,
-        cleanup: impl FnOnce() -> AppResult<()>,
+        _manager: &Manager,
+        _id: &str,
+        _cleanup: impl FnOnce() -> AppResult<()>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
-        let (keys, publisher) = {
-            let state = self.state.lock().unwrap();
-            (
-                state
-                    .loaded
-                    .iter()
-                    .filter(|(_, value)| value.component.manifest().plugin_id == id)
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>(),
-                state
-                    .loaded
-                    .values()
-                    .find(|value| value.component.manifest().plugin_id == id)
-                    .map(|value| value.publisher_fingerprint.clone()),
-            )
-        };
-        // Revoke old leases before deleting host-owned projections. Keep the
-        // package and its private data available for retry if cleanup fails.
-        for key in keys {
-            if let Some(loaded) = self.state.lock().unwrap().loaded.get_mut(&key) {
-                local_state::set_enabled(
-                    &self.root()?,
-                    &loaded.publisher_fingerprint,
-                    id,
-                    &loaded.component.manifest().component_id,
-                    false,
-                )?;
-                loaded.consent.enabled = false;
-            }
-            manager.remove_component(&key);
-        }
-        self.remove_plugin_schedules(id)?;
-        self.callbacks.cancel_plugin(id);
-        self.sensitive.clear_plugin(id);
-        if let Err(mut error) = cleanup() {
-            error.message = format!(
-                "卸载清理未完成，插件已停用并保留，请重试：{}",
-                error.message
-            );
-            return Err(error);
-        }
-        io::manage(manager, || self.store()?.uninstall(id).map_err(io::failure))?;
-        configuration::remove_plugin(&self.root()?, id)?;
-        local_state::remove_plugin(&self.root()?, id)?;
-        local_state::remove_local_registration(&self.root()?, id)?;
-        self.remove_plugin_schedules(id)?;
-        self.callbacks.cancel_plugin(id);
-        self.sensitive.clear_plugin(id);
-        self.state.lock().unwrap().directory = local_state::effective_directory(
-            &self.root()?,
-            local_state::load_directory(&self.root()?)?,
-        )?;
-        if let Some(publisher) = publisher {
-            namespace::remove_plugin(&self.root()?, &publisher, id)?;
-        }
-        self.state
-            .lock()
-            .unwrap()
-            .loaded
-            .retain(|_, value| value.component.manifest().plugin_id != id);
-        self.state.lock().unwrap().pages.remove(id);
-        Ok(self.snapshot(manager))
+        Err(AppError {
+            code: "plugin_uninstall_preview_required",
+            message: "卸载必须在主应用预览固定资源并明确确认".into(),
+            details: None,
+        })
     }
+
     fn selected_package(&self, manager: &Manager, path: String) -> AppResult<Vec<u8>> {
         let selected = znet_client_capabilities::files::Selection::from_user_path(path.into());
         let lease = io::lease(manager, BTreeSet::from([selected.permission()]))?;
@@ -704,7 +839,7 @@ impl Host {
             .map_err(io::failure)
     }
     pub fn preview_install(&self, manager: &Manager, path: String) -> AppResult<InstallReview> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
         self.preview_local_bytes(manager, &bytes, &plugin_id)
@@ -715,7 +850,7 @@ impl Host {
         path: String,
         approval_digest: Option<String>,
     ) -> AppResult<Snapshot> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
         self.install_local_bytes(manager, &bytes, &plugin_id, approval_digest.as_deref())
@@ -995,6 +1130,9 @@ impl Host {
         registration: Registration,
         central_directory: Option<Directory>,
     ) -> AppResult<Snapshot> {
+        self.uninstall_available(&registration.id)?;
+        let _exclusive_activity =
+            super::uninstall::storage::Activity::acquire(&self.root()?, &registration.id, true)?;
         let verified = package::verify(bytes, &registration).map_err(io::failure)?;
         let target = Target::native_desktop().map_err(io::failure)?;
         verified

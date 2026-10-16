@@ -100,53 +100,6 @@ fn plan(
     })
 }
 
-pub(crate) async fn remove_plugin_owned(app: AppHandle, plugin_id: &str) -> AppResult<()> {
-    let state = app.state::<AppState>();
-    let profiles = lock(state.proxy_configs(), "proxy_config")?.clone();
-    let subscriptions = lock(state.subscriptions(), "subscription")?.clone();
-    let cleanup = plan(&profiles, &subscriptions, plugin_id)?;
-    if cleanup.configs.is_empty() && cleanup.subscription_ids.is_empty() {
-        return Ok(());
-    }
-    let _syncs = cleanup
-        .subscription_ids
-        .iter()
-        .map(|id| begin_in_flight(state.subscription_syncs(), "subscription", id))
-        .collect::<AppResult<Vec<_>>>()?;
-
-    for config in cleanup.configs {
-        let owner = config
-            .managed_source
-            .expect("cleanup plan contains owned configurations");
-        // Existing runtime removal switches to a remaining configuration, or
-        // stops the core and its managed system proxy if none remains.
-        proxy_config::remove_managed_runtime(app.clone(), config.id, owner).await?;
-    }
-    for subscription_id in &cleanup.subscription_ids {
-        rule_set::remove_managed_subscription_rule_sets(state.inner(), subscription_id)?;
-    }
-    let _operation = state.proxy_config_operation().lock().await;
-    let previous_profiles = lock(state.proxy_configs(), "proxy_config")?.clone();
-    let previous_subscriptions = lock(state.subscriptions(), "subscription")?.clone();
-    let next_subscriptions = previous_subscriptions
-        .iter()
-        .filter(|subscription| {
-            subscription
-                .managed_source
-                .as_ref()
-                .is_none_or(|owner| owner.plugin_id != plugin_id)
-        })
-        .cloned()
-        .collect();
-    crate::configuration::persistence::commit_relational(
-        state.inner(),
-        &previous_profiles,
-        &previous_subscriptions,
-        previous_profiles.clone(),
-        next_subscriptions,
-    )
-}
-
 #[cfg(test)]
 #[path = "plugin_cleanup_tests.rs"]
 mod tests;

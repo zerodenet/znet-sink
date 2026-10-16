@@ -2,7 +2,10 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-use super::{app_database, data_dir};
+use super::{
+    app_database, data_dir,
+    file_history::{self, Domain, HistoryToken},
+};
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     proxy_config::ProxyConfigProfile, rule_set::RuleSetProfile, subscription::SubscriptionProfile,
@@ -33,6 +36,11 @@ pub fn load_all_from_dir(dir: &Path) -> AppResult<DomainStoreData> {
 }
 
 fn load_rule_sets(path: &Path) -> AppResult<Vec<RuleSetProfile>> {
+    let _history = file_history::acquire(path, Domain::RuleSets)?;
+    load_rule_sets_body(path)
+}
+
+fn load_rule_sets_body(path: &Path) -> AppResult<Vec<RuleSetProfile>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -121,7 +129,15 @@ pub fn save_subscriptions_to_dir(dir: &Path, items: &[SubscriptionProfile]) -> A
 }
 
 pub fn save_rule_sets_to_dir(dir: &Path, items: &[RuleSetProfile]) -> AppResult<()> {
-    save_vec(&dir.join(RULE_SETS_FILE), items)
+    let path = dir.join(RULE_SETS_FILE);
+    let content = serde_json::to_vec_pretty(items)
+        .map_err(|_| AppError::internal("rule sets encoding failed"))?;
+    let mut history = file_history::acquire(&path, Domain::RuleSets)?;
+    history.mutate(&content, None, None, || {
+        super::atomic_file::write(&path, &content)
+            .map_err(|_| AppError::internal("rule sets file could not be published"))
+    })?;
+    Ok(())
 }
 
 pub(crate) fn save_relational_data(
@@ -129,6 +145,14 @@ pub(crate) fn save_relational_data(
     subscriptions: &[SubscriptionProfile],
 ) -> AppResult<()> {
     app_database::save_domain_data(&data_dir()?, proxy_configs, subscriptions)
+}
+
+pub(crate) fn save_relational_data_to_dir(
+    dir: &Path,
+    profiles: &[ProxyConfigProfile],
+    subscriptions: &[SubscriptionProfile],
+) -> AppResult<()> {
+    app_database::save_domain_data(dir, profiles, subscriptions)
 }
 
 pub(crate) fn legacy_proxy_configs_path(dir: &Path) -> std::path::PathBuf {
@@ -160,27 +184,33 @@ where
     })
 }
 
-fn save_vec<T>(path: &Path, items: &[T]) -> AppResult<()>
-where
-    T: serde::Serialize,
-{
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| AppError {
-            code: "io_error",
-            message: format!("failed to create data store directory: {error}"),
-            details: Some(serde_json::json!({ "path": parent.display().to_string() })),
-        })?;
+pub(crate) fn current_rule_set_history(dir: &Path) -> AppResult<HistoryToken> {
+    file_history::acquire(&dir.join(RULE_SETS_FILE), Domain::RuleSets)?.token()
+}
+pub(crate) fn read_rule_sets_locked(guard: &file_history::Guard) -> AppResult<Vec<RuleSetProfile>> {
+    if guard.domain() != Domain::RuleSets {
+        return Err(AppError::invalid_argument("incorrect file history domain"));
     }
+    load_rule_sets_body(guard.path())
+}
 
-    let content = serde_json::to_string_pretty(items).map_err(|error| AppError {
-        code: "internal",
-        message: format!("failed to serialize data store: {error}"),
-        details: None,
-    })?;
-
-    fs::write(path, content).map_err(|error| AppError {
-        code: "io_error",
-        message: format!("failed to write data store: {error}"),
-        details: Some(serde_json::json!({ "path": path.display().to_string() })),
-    })
+/// Publish a fixed migration candidate using its original held history guard.
+/// Artifact generations stay on disk: an existing runtime may still map them.
+pub(crate) fn save_rule_sets_owned_locked(
+    guard: &mut file_history::Guard,
+    items: &[RuleSetProfile],
+    owner: &str,
+) -> AppResult<file_history::WriteReceipt> {
+    if guard.domain() != Domain::RuleSets {
+        return Err(AppError::invalid_argument("incorrect file history domain"));
+    }
+    let content = serde_json::to_vec_pretty(items)
+        .map_err(|_| AppError::internal("rule sets encoding failed"))?;
+    let path = guard.path().to_path_buf();
+    guard
+        .mutate(&content, None, Some(owner), || {
+            super::atomic_file::write(&path, &content)
+                .map_err(|_| AppError::internal("rule sets file could not be published"))
+        })
+        .map(|(_, receipt)| receipt)
 }

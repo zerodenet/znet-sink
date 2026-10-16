@@ -22,10 +22,38 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         source_profile_id: inputs.source_profile_id.clone(),
         ..Default::default()
     };
+    let mut profile_rules = if let Some(metadata) = inputs
+        .source_profile_id
+        .as_deref()
+        .and_then(|id| inputs.app.profile_edits.get(id))
+        .and_then(|edits| edits.get("routeRules"))
+    {
+        let projected = super::route_rules::apply(base, metadata)?;
+        report.compare("profile_route_rules", &["/route/rules"], base, &projected);
+        Some(projected)
+    } else {
+        None
+    };
+    if let Some(metadata) = inputs
+        .source_profile_id
+        .as_deref()
+        .and_then(|id| inputs.app.profile_edits.get(id))
+        .and_then(|edits| edits.get("ruleSetReferences"))
+    {
+        let before = profile_rules.as_ref().unwrap_or(base);
+        let after = super::rule_references::apply(base, before, metadata)?;
+        report.compare(
+            "profile_rule_references",
+            &["/route/rules", "/route/bypass", "/runtime/dns/dispatch"],
+            before,
+            &after,
+        );
+        profile_rules = Some(after);
+    }
     report.compare(
         "common_rules",
         &["/route/rule_sets", "/route/rules"],
-        base,
+        profile_rules.as_ref().unwrap_or(base),
         &config,
     );
     report.apply("local_listener", &["/inbounds"], &mut config, |config| {
@@ -86,5 +114,6 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         &mut config,
         |config| preferences::apply_bypass(config, base, &inputs.app),
     )?;
+    super::route_integrity::validate(&config)?;
     Ok(Candidate { config, report })
 }

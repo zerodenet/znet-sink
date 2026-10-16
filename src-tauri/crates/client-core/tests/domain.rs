@@ -8,6 +8,7 @@ use znet_client_core::{
 fn snapshot_contract_serializes_for_the_tauri_bridge() {
     let value = serde_json::to_value(ClientCoreSnapshot {
         revision: SnapshotRevision(7),
+        scope_generation: SnapshotRevision(4),
         scope: ClientScope {
             profile_id: Some(ProfileId("profile-a".to_string())),
             config_revision: ConfigRevision(3),
@@ -22,9 +23,10 @@ fn snapshot_contract_serializes_for_the_tauri_bridge() {
         value,
         json!({
             "revision": 7,
+            "scopeGeneration": 4,
             "scope": {
                 "profileId": "profile-a",
-                "configRevision": 3,
+                "configRevision": "3",
                 "coreInstanceId": 2
             },
             "sourceStatus": "ready",

@@ -50,3 +50,30 @@ fn traffic_events_retain_exact_counts_and_delivery_sequence() {
         u64::MAX.to_string()
     );
 }
+#[test]
+fn traffic_host_snapshot_preserves_provider_clock_and_separate_plane() {
+    let mut host = json!({"scope":{"kind":"host_interface","name":"test-only-interface"},"core_instance_id":"core-a","stats_epoch":"epoch","sampled_at_monotonic_ns":200,"config_revision":1,"planes":[{"plane":"host"}],"activity":{}});
+    host["source_sampled_at_monotonic_ns"] = json!(u64::MAX);
+    wire::snapshot(&host).unwrap();
+    assert_eq!(
+        wire::exact(host.clone())["source_sampled_at_monotonic_ns"],
+        u64::MAX.to_string()
+    );
+    host["scope"] = json!({"kind":"endpoint","endpoint_id":"same-name"});
+    assert!(wire::snapshot(&host).is_err());
+    host["scope"] = json!({"kind":"host_interface","name":"test-only-interface"});
+    host["planes"][0]["plane"] = json!("inner");
+    assert!(wire::snapshot(&host).is_err());
+}
+#[test]
+fn traffic_host_event_uses_its_own_normalized_stream_with_exact_dto() {
+    let value = crate::kernel::zero::events::normalize_event(
+        &json!({"event_type":"stats.host_interfaces_sampled","core_instance_id":"core-a","sequence":u64::MAX,"payload":{"total":1,"scopes":[{"scope":{"kind":"host_interface","name":"test-only-interface"},"source_sampled_at_monotonic_ns":u64::MAX}]}}),
+    );
+    let encoded = serde_json::to_value(value).unwrap();
+    assert_eq!(encoded["eventType"], "traffic.hostInterfacesSampled");
+    assert_eq!(
+        encoded["payload"]["data"]["scopes"][0]["source_sampled_at_monotonic_ns"],
+        u64::MAX.to_string()
+    );
+}

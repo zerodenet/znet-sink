@@ -1,3 +1,4 @@
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ScheduleEvent};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -674,35 +675,6 @@ pub fn kernel_payloads(state: State<'_, AppState>) -> AppResult<Vec<RuleSetKerne
         .collect()
 }
 
-pub fn remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    let id = normalize_required(id, "id")?;
-    let _in_flight = begin_in_flight(state.rule_set_updates(), "rule_set", &id)?;
-    let mut items = lock(state.rule_sets(), "rule_set")?;
-    if items
-        .iter()
-        .any(|item| item.id == id && is_subscription_managed_rule_set(item))
-    {
-        return Err(AppError::invalid_argument(
-            "subscription-managed rules must be removed through their subscription",
-        ));
-    }
-    if items.iter().any(|item| item.id == id && item.built_in) {
-        return Err(AppError::invalid_argument(
-            "built-in rules can be disabled, but not removed",
-        ));
-    }
-    let mut next = items.clone();
-    let before = next.len();
-    next.retain(|item| item.id != id);
-    if next.len() == before {
-        return Err(AppError::not_found("rule_set", id));
-    }
-    // Published generations are intentionally retained: a running kernel may still mmap them.
-    domain_store::save_rule_sets(&next)?;
-    *items = next;
-    Ok(())
-}
-
 fn normalize_source(mut source: RuleSetSource) -> AppResult<RuleSetSource> {
     source.url = normalize_required(source.url, "source.url")?;
     if !source.url.starts_with("https://") && !source.url.starts_with("http://") {
@@ -847,8 +819,9 @@ pub fn spawn_auto_update_scheduler(app: AppHandle) {
         {
             Ok(value) => value,
             Err(error) => {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::RuleSet(ScheduleEvent::StorageLoadFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
@@ -866,8 +839,9 @@ pub fn spawn_auto_update_scheduler(app: AppHandle) {
             )
             .await
             {
-                logs::znet_log_fields(
-                    Some(app.state::<AppState>().inner()),
+                logs::znet_host_log_fields(
+                    app.state::<AppState>().inner(),
+                    HostEvent::RuleSet(ScheduleEvent::StorageSaveFailed),
                     LogLevel::Error,
                     error.message,
                     json!({"operation":"scheduler_storage","scheduler":"rule-sets"}),
@@ -888,8 +862,9 @@ async fn run_auto_update_pass(
     let due = match collect_due_rule_set_attempts(state.inner(), retry_states, now) {
         Ok(attempts) => attempts,
         Err(error) => {
-            logs::znet_log_fields(
-                Some(state.inner()),
+            logs::znet_host_log_fields(
+                state.inner(),
+                HostEvent::RuleSet(ScheduleEvent::CollectDueFailed),
                 LogLevel::Warn,
                 format!(
                     "rule-set auto-update: failed to collect due assets: {}",
@@ -916,8 +891,9 @@ async fn run_auto_update_pass(
             Ok((profile, changed)) => {
                 retry_states.remove(&attempt.id);
                 if let Err(error) = rule_overlay::reconcile_after_rule_change(app.clone()).await {
-                    logs::znet_log_fields(
-                        Some(state.inner()),
+                    logs::znet_host_log_fields(
+                        state.inner(),
+                        HostEvent::RuleSet(ScheduleEvent::RuntimeRecomposeFailed),
                         LogLevel::Warn,
                         format!(
                             "rule-set auto-update: '{}' was stored but runtime recomposition failed: {}",
@@ -933,8 +909,13 @@ async fn run_auto_update_pass(
                         }),
                     );
                 }
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(if changed {
+                        ScheduleEvent::Updated
+                    } else {
+                        ScheduleEvent::Unchanged
+                    }),
                     LogLevel::Info,
                     format!(
                         "rule-set auto-update: '{}' {}",
@@ -956,8 +937,9 @@ async fn run_auto_update_pass(
                 );
             }
             Err(error) if error.code == "conflict" => {
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(ScheduleEvent::SkippedConflict),
                     LogLevel::Debug,
                     format!(
                         "rule-set auto-update: skipped '{}' because an update is already running",
@@ -999,8 +981,13 @@ async fn run_auto_update_pass(
                         true,
                     ),
                 };
-                logs::znet_log_fields(
-                    Some(state.inner()),
+                logs::znet_host_log_fields(
+                    state.inner(),
+                    HostEvent::RuleSet(if retry_exhausted {
+                        ScheduleEvent::RetryLimitReached
+                    } else {
+                        ScheduleEvent::RetryScheduled
+                    }),
                     LogLevel::Warn,
                     message,
                     json!({

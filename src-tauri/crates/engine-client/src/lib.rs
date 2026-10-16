@@ -9,4 +9,5 @@ pub use subscription::{Binding, Endpoint, Subscription, SubscriptionOwner};
 
 pub mod configuration;
 
+pub mod bridge;
 pub mod flow_cleanup;

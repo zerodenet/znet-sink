@@ -24,6 +24,9 @@ pub async fn discover(options: CoreIpcOptions) -> AppResult<Value> {
     Ok(json!({"capabilities":caps,"supported":supported,"transport":"ipc", "admin":true}))
 }
 pub async fn page(input: ListInput, options: CoreIpcOptions) -> AppResult<Value> {
+    if input.include_host_interfaces || input.scopes.iter().any(Scope::is_host) {
+        require_host_support(&discover(options.clone()).await?)?;
+    }
     let value = traffic::query(
         json!({"traffic_stats":input.wire()?}),
         "traffic_stats",
@@ -39,6 +42,9 @@ pub async fn page(input: ListInput, options: CoreIpcOptions) -> AppResult<Value>
     Ok(traffic::wire::exact(value))
 }
 pub async fn get(scope: Scope, options: CoreIpcOptions) -> AppResult<Value> {
+    if scope.is_host() {
+        require_host_support(&discover(options.clone()).await?)?;
+    }
     let value = traffic::query(
         json!({"traffic_stat":{"scope":scope.wire()}}),
         "traffic_stat",
@@ -49,6 +55,8 @@ pub async fn get(scope: Scope, options: CoreIpcOptions) -> AppResult<Value> {
     Ok(traffic::wire::exact(value))
 }
 pub async fn reset(input: ResetInput, options: CoreIpcOptions) -> AppResult<Value> {
+    // Product policy is stricter than kernel reset metadata: host facts are read-only.
+    let params = input.wire()?;
     let discovery = discover(options.clone()).await?;
     let caps = &discovery["capabilities"];
     let features = caps["features"].as_array();
@@ -83,9 +91,34 @@ pub async fn reset(input: ResetInput, options: CoreIpcOptions) -> AppResult<Valu
             "statistics scope is not declared resettable",
         ));
     }
-    let result = traffic::reset(input.wire()?, options).await?;
+    let result = traffic::reset(params, options).await?;
     validate_reset(&result, &input)?;
     Ok(traffic::wire::exact(result))
+}
+fn require_host_support(discovery: &Value) -> AppResult<()> {
+    let caps = &discovery["capabilities"];
+    let declared = caps["features"].as_array().is_some_and(|features| {
+        features
+            .iter()
+            .any(|feature| feature == "traffic_host_interface_statistics_v1")
+    });
+    let compatible = caps["contracts"]["capabilities"]["minimumSupported"] == 1
+        && caps["contracts"]["capabilities"]["current"]
+            .as_u64()
+            .is_some_and(|current| current >= 1);
+    if discovery["supported"] == true
+        && compatible
+        && declared
+        && caps["trafficStatistics"]["host_interface_sampling"] == true
+    {
+        Ok(())
+    } else {
+        Err(AppError {
+            code: "unsupported",
+            message: "当前内核或平台未声明可读的宿主网卡统计".into(),
+            details: None,
+        })
+    }
 }
 fn validate_reset(result: &Value, input: &ResetInput) -> AppResult<()> {
     let snapshots = result["snapshots"]

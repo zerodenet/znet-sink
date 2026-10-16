@@ -260,3 +260,82 @@ async fn traffic_query_only_ipc_falls_back_after_refusal_but_reset_never_replays
         );
     }
 }
+
+#[tokio::test]
+async fn traffic_ipc_host_discovery_is_opt_in_and_reset_never_reaches_transport() {
+    let peer = Peer::new(|request| {
+        if request["request"].get("capabilities").is_some() {
+            let mut caps = capabilities();
+            caps["features"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("traffic_host_interface_statistics_v1"));
+            caps["traffic_statistics"]["host_interface_sampling"] = json!(true);
+            // Even an advertised reset cannot override the client's read-only policy.
+            caps["traffic_statistics"]["resettable_scopes"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("host_interface"));
+            return ok(json!({"capabilities":caps}));
+        }
+        assert!(request["method"].is_null(), "must not send host reset");
+        let query: zero_api::TrafficListQuery =
+            serde_json::from_value(request["request"]["traffic_stats"].clone()).unwrap();
+        assert!(query.include_host_interfaces);
+        let mut host = super::tests::snapshot();
+        host["scope"] = json!({"kind":"host_interface","name":"test-only-interface"});
+        host["planes"][0]["plane"] = json!("host");
+        host["source_sampled_at_monotonic_ns"] = json!(u64::MAX);
+        ok(
+            json!({"traffic_stats":{"core_instance_id":"core-a","config_revision":u64::MAX,"registry_revision":2,"sampled_at_unix_ms":201,"scopes":[host],"total":1,"next_offset":null}}),
+        )
+    });
+    let mut input = input();
+    input.targets[0].scope = Scope::HostInterface {
+        name: "test-only-interface".into(),
+    };
+    assert!(reset(input, peer.options.clone())
+        .await
+        .unwrap_err()
+        .message
+        .contains("只读"));
+    assert!(peer.calls.lock().unwrap().is_empty());
+    let value = page(
+        ListInput {
+            include_host_interfaces: true,
+            ..Default::default()
+        },
+        peer.options.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value["scopes"][0]["scope"]["kind"], "host_interface");
+    assert_eq!(
+        value["scopes"][0]["source_sampled_at_monotonic_ns"],
+        u64::MAX.to_string()
+    );
+}
+
+#[tokio::test]
+async fn traffic_ipc_host_sampler_absence_refuses_before_resource_query() {
+    let peer = Peer::new(|request| {
+        assert!(request["request"].get("capabilities").is_some());
+        ok(json!({"capabilities":capabilities()}))
+    });
+    let error = get(
+        Scope::HostInterface {
+            name: "test-only-interface".into(),
+        },
+        peer.options.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "unsupported");
+    assert!(peer
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|request| request["type"] == "subscribe"
+            || request["request"].get("capabilities").is_some()));
+}

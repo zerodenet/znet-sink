@@ -19,6 +19,27 @@ pub(crate) fn import(
     content: Option<String>,
     path: Option<String>,
 ) -> AppResult<Value> {
+    import_for_platform(
+        manager,
+        content,
+        path,
+        cfg!(any(target_os = "android", target_os = "ios")),
+    )
+}
+
+fn import_for_platform(
+    manager: &Manager,
+    content: Option<String>,
+    path: Option<String>,
+    native_mobile: bool,
+) -> AppResult<Value> {
+    if native_mobile && content.is_none() && path.is_some() {
+        return Err(AppError {
+            code: "mobile_file_import_not_adapted",
+            message: "移动端系统文件授权与内容 URI 读取尚未适配，请粘贴配置内容导入；不会读取桌面文件路径。".into(),
+            details: Some(serde_json::json!({ "alternative": "paste-content" })),
+        });
+    }
     let selected = if content.is_none() {
         path.map(|path| files::Selection::from_user_path(path.into()))
     } else {

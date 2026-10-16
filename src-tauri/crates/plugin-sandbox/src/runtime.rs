@@ -1,3 +1,4 @@
+mod worker;
 pub use crate::bridge::Summary;
 use crate::{
     contract::{Component, Error, Isolation, Target},
@@ -16,6 +17,10 @@ use std::{
         Arc,
     },
     time::{Duration, Instant},
+};
+pub use worker::{
+    ExecutionReceipt, Executor, WorkerSnapshot, GLOBAL_QUEUE_LIMIT, GLOBAL_WORKERS,
+    QUEUE_WAIT_LIMIT,
 };
 
 struct PackageResolver {
@@ -199,12 +204,112 @@ fn execute_inner(
     sdk_dispatcher: Option<HostSdkDispatcher>,
     scheduled: bool,
 ) -> Result<serde_json::Value, Error> {
-    component.compatible(&Target::native_desktop()?, host_version, Isolation::Vm)?;
-    let lease = Arc::new(if scheduled {
-        authority.begin_scheduled(component, cancelled.clone())?
-    } else {
-        authority.begin_cancelled(component, cancelled.clone())?
-    });
+    // Compatibility convenience entry points share the same process budget.
+    static EXECUTOR: std::sync::OnceLock<Executor> = std::sync::OnceLock::new();
+    EXECUTOR
+        .get_or_init(Executor::default)
+        .execute_owned(
+            component,
+            authority,
+            selection,
+            input,
+            cancelled,
+            network_enabled,
+            host_version,
+            sdk_dispatcher,
+            scheduled,
+            None,
+        )?
+        .into_value()
+}
+
+/// Only trusted host adapters construct this binding after validating the
+/// original review under their owning operation lock.
+pub struct ReviewedExecution {
+    pub registration: u64,
+    pub revision: u64,
+    pub cancelled: Arc<AtomicBool>,
+    pub host_version: String,
+    pub dispatcher: Option<HostSdkDispatcher>,
+    pub scheduled: bool,
+}
+impl Executor {
+    pub fn execute_reviewed(
+        &self,
+        component: &Component,
+        authority: &Authority,
+        input: serde_json::Value,
+        reviewed: ReviewedExecution,
+    ) -> Result<ExecutionReceipt, Error> {
+        self.execute_owned(
+            component,
+            authority,
+            None,
+            Some(input),
+            reviewed.cancelled,
+            true,
+            &reviewed.host_version,
+            reviewed.dispatcher,
+            reviewed.scheduled,
+            Some((reviewed.registration, reviewed.revision)),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn execute_owned(
+        &self,
+        component: &Component,
+        authority: &Authority,
+        selection: Option<(String, Summary)>,
+        input: Option<serde_json::Value>,
+        cancelled: Arc<AtomicBool>,
+        network_enabled: bool,
+        host_version: &str,
+        sdk_dispatcher: Option<HostSdkDispatcher>,
+        scheduled: bool,
+        reviewed: Option<(u64, u64)>,
+    ) -> Result<ExecutionReceipt, Error> {
+        component.compatible(&Target::native_desktop()?, host_version, Isolation::Vm)?;
+        let lease =
+            Arc::new(authority.begin_worker(component, cancelled.clone(), scheduled, reviewed)?);
+        let component = component.clone();
+        let open = self.open();
+        let vm_lease = lease.clone();
+        let vm_cancel = cancelled.clone();
+        self.execute(
+            lease,
+            cancelled,
+            Box::new(move || {
+                execute_vm(
+                    &component,
+                    vm_lease,
+                    selection,
+                    input,
+                    vm_cancel,
+                    network_enabled,
+                    sdk_dispatcher,
+                    scheduled,
+                    open,
+                )
+            }),
+        )
+    }
+}
+#[allow(clippy::too_many_arguments)]
+fn execute_vm(
+    component: &Component,
+    lease: Arc<crate::policy::Lease>,
+    selection: Option<(String, Summary)>,
+    input: Option<serde_json::Value>,
+    cancelled: Arc<AtomicBool>,
+    network_enabled: bool,
+    sdk_dispatcher: Option<HostSdkDispatcher>,
+    scheduled: bool,
+    accepting: Arc<AtomicBool>,
+) -> Result<serde_json::Value, Error> {
+    lease
+        .inner
+        .activate_queued_execution()
+        .map_err(crate::policy::map_error)?;
     let limits = &component.manifest.limits;
     let cpu_budget = Duration::from_millis(limits.timeout_ms);
     let cpu_elapsed = Rc::new(Cell::new(Duration::ZERO));
@@ -228,12 +333,13 @@ fn execute_inner(
     }
     let check_lease = lease.clone();
     let check_cancel = cancelled.clone();
+    let check_open = accepting.clone();
     let check_failure = failure.clone();
     let check_cpu_elapsed = cpu_elapsed.clone();
     let check_cpu_resumed = cpu_resumed.clone();
     runtime.set_interrupt_handler(Some(Box::new(move || {
         let reason = check_lease.check(None).err().or_else(|| {
-            if check_cancel.load(Ordering::Relaxed) {
+            if !check_open.load(Ordering::Acquire) || check_cancel.load(Ordering::Relaxed) {
                 Some(Error::Cancelled)
             } else if check_cpu_elapsed
                 .get()
@@ -286,12 +392,13 @@ fn execute_inner(
         let callback_lease = lease.clone();
         let callback_failure = failure.clone();
         let callback_cancel = cancelled.clone();
+        let callback_open = accepting.clone();
         let identity = serde_json::json!({"plugin_id":component.manifest.plugin_id,"component_id":component.manifest.component_id,"digest":component.digest}).to_string();
         let bridge = crate::bridge::Bridge { identity, selection, network_enabled, output_bytes: limits.output_bytes };
         let callback = Function::new(ctx.clone(), move |callback_ctx: rquickjs::Ctx<'_>, input: rquickjs::String<'_>| -> rquickjs::Result<String> {
             let operation = || -> Result<String, Error> {
                 if let Some(error) = callback_failure.get() { return Err(error); }
-                if callback_cancel.load(Ordering::Relaxed) { return Err(Error::Cancelled); }
+                if !callback_open.load(Ordering::Acquire) || callback_cancel.load(Ordering::Relaxed) { return Err(Error::Cancelled); }
                 callback_lease.check(None)?;
                 let input = input.to_cstring().map_err(|_| Error::InvalidOutput)?;
                 if input.len() > 128 * 1024 { return Err(Error::BudgetExceeded); }
@@ -308,6 +415,7 @@ fn execute_inner(
             let sdk_lease = lease.clone();
             let sdk_failure = failure.clone();
             let sdk_cancel = cancelled.clone();
+            let sdk_open = accepting.clone();
             let sdk_cpu_elapsed = cpu_elapsed.clone();
             let sdk_cpu_resumed = cpu_resumed.clone();
             let sdk_calls = Rc::new(Cell::new(0_u32));
@@ -315,7 +423,7 @@ fn execute_inner(
             let callback = Function::new(ctx.clone(), move |callback_ctx: rquickjs::Ctx<'_>, input: rquickjs::String<'_>| -> rquickjs::Result<String> {
                 let operation = || -> Result<String, Error> {
                     if let Some(error) = sdk_failure.get() { return Err(error); }
-                    if sdk_cancel.load(Ordering::Relaxed) { return Err(Error::Cancelled); }
+                    if !sdk_open.load(Ordering::Acquire) || sdk_cancel.load(Ordering::Relaxed) { return Err(Error::Cancelled); }
                     sdk_lease.check(None)?;
                     let next = sdk_calls.get().saturating_add(1);
                     if next > max_calls { return Err(Error::BudgetExceeded); }
@@ -324,7 +432,12 @@ fn execute_inner(
                     if input.len() > 8 * 1024 * 1024 { return Err(Error::BudgetExceeded); }
                     let entered = Instant::now();
                     sdk_cpu_elapsed.set(sdk_cpu_elapsed.get().saturating_add(entered.saturating_duration_since(sdk_cpu_resumed.get())));
-                    let result = dispatcher(&sdk_lease, input.as_str());
+                    // A Rust adapter panic is a fixed failure; no panic payload
+                    // crosses the signed guest or result boundary.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatcher(&sdk_lease, input.as_str())))
+                        .unwrap_or(Err(Error::HostFailure));
+                    sdk_lease.check(None)?;
+                    if !sdk_open.load(Ordering::Acquire) || sdk_cancel.load(Ordering::Acquire) { return Err(Error::Cancelled); }
                     sdk_cpu_resumed.set(Instant::now());
                     result
                 };
@@ -359,7 +472,7 @@ fn execute_inner(
         serde_json::from_str(bytes.as_str()).map_err(|_| Error::InvalidOutput)
     });
     lease.check(None)?;
-    if cancelled.load(Ordering::Relaxed) {
+    if !accepting.load(Ordering::Acquire) || cancelled.load(Ordering::Relaxed) {
         return Err(Error::Cancelled);
     }
     let total_cpu = cpu_elapsed

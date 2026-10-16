@@ -156,8 +156,16 @@ fn version_one_database_is_upgraded_without_changing_existing_metadata() {
         connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        2
+        5
     );
+    let recovery_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM ordinary_subscription_recovery",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(recovery_rows, 0);
     assert_eq!(
         connection
             .query_row(

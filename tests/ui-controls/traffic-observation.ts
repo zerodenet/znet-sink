@@ -6,6 +6,18 @@ const fixture = new FixtureGateway();
 if(params.has('traffic-many-scopes')) fixture.rows.push(...Array.from({length:26},(_,index)=>sample({kind:'outbound',tag:`extra-${index+1}`},index+5)));
 fixture.rows[3].scope = {kind:'endpoint',endpoint_id:'resource:wg-a'};
 fixture.rows[4].scope = {kind:'peer',endpoint_id:'resource:wg-a',peer_id:'peer-1'};
+if(params.has('traffic-host')) {
+  // Fixture-only OS inventory; no interface is invented by product code.
+  fixture.caps.capabilities.features.push('traffic_host_interface_statistics_v1');
+  fixture.caps.capabilities.trafficStatistics!.host_interface_sampling=true;
+  fixture.caps.capabilities.trafficStatistics!.resettable_scopes.push('host_interface');
+  const host=sample({kind:'host_interface',name:'test-only-interface'},5);
+  host.planes=[{...host.planes[1],plane:'host',accounting_basis:'os_interface_counters'}];
+  host.activity={active_stream_flows:null,active_datagram_flows:null,active_packet_routes:null};
+  host.source_sampled_at_monotonic_ns=host.sampled_at_monotonic_ns;
+  host.source_sampled_at_unix_ms=host.sampled_at_unix_ms;
+  fixture.rows.push(host);
+}
 if(params.has('legacy-role-stats')) {
   fixture.rows[3]=sample({kind:'outbound',tag:'wg-a'},3);
   fixture.rows[4]=sample({kind:'outbound',tag:'mesh-b'},4);
@@ -19,10 +31,14 @@ for(const row of fixture.rows) {
   if(row.scope.kind==='endpoint'||row.scope.kind==='peer') row.generation='1';
 }
 if(params.has('missing-endpoint-stat')) fixture.rows=fixture.rows.filter(row=>row.scope.kind!=='endpoint');
+if(params.has('endpoint-inner-only')) fixture.rows[3].planes=fixture.rows[3].planes.filter(row=>row.plane==='inner');
+if(params.has('endpoint-large-counter')) fixture.rows[3].planes.find(row=>row.plane==='inner')!.counters.rx_bytes='18446744073709551615';
 fixture.pageLimit=2;
 if (!enabled) { fixture.caps.supported=false; fixture.caps.capabilities.features=[]; }
 if (params.has('traffic-poll')) fixture.caps.capabilities.trafficStatistics!.automatic_sampling=false;
 fixture.mode=params.get('traffic-reset') ?? 'success';
+window.addEventListener('fixture-traffic-remove-endpoint',()=>{fixture.rows=fixture.rows.filter(row=>row.scope.kind!=='endpoint');fixture.registry=String(BigInt(fixture.registry)+1n);fixture.status?.('gap');});
+window.addEventListener('fixture-traffic-replace-endpoint',()=>{ const row=fixture.rows.find(row=>row.scope.kind==='endpoint'); if(row)row.generation='2';fixture.registry=String(BigInt(fixture.registry)+1n);fixture.status?.('gap'); });
 let subscriptions=0;
 let recoveryDelay=0;
 let recoveryError=false;

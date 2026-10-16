@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { revealItemInDir } from '$lib/services/platform';
+  import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import FlowCloseWorkspace from './FlowCloseWorkspace.svelte';
+  import ConnectionExportDialog from '$lib/components/mobile/ConnectionExportDialog.svelte';
   import type { ConnectionHistorySummary, DebugFrameQuery } from '$lib/types/debug';
   import { historyHeadReplacesWindow } from '$lib/services/connection-history-window';
   import ConnectionHistoryCoverage from '$lib/components/ConnectionHistoryCoverage.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import {
-    closeFlow,
     getAppErrorMessage,
     getGuiDebugFrames,
-    guiCloseConnection,
     handleAppError,
   } from '$lib/services/core';
   import { connectionObservations } from '$lib/features/observations/connections.svelte';
@@ -20,7 +21,7 @@
     buildPersistedConnectionHistory,
     type PersistedConnection,
   } from '$lib/services/connection-history';
-  import { success as showSuccessToast, warning as showWarningToast } from '$lib/services/toast.svelte';
+  import { success as showSuccessToast } from '$lib/services/toast.svelte';
   import ActionConfirmDialog from '$lib/components/ActionConfirmDialog.svelte';
   import ConnectionDetailsDrawer from '$lib/components/ConnectionDetailsDrawer.svelte';
   import * as Tabs from '$lib/components/AppTabs';
@@ -44,7 +45,6 @@
   const HISTORY_BATCH_SIZE = 50;
   const HISTORY_LIMIT = 10_000;
   const LIVE_RENDER_LIMIT = 200;
-  const CLOSE_CONCURRENCY = 8;
 
   let activeTab = $state<'live' | 'history'>('live');
   let searchQuery = $state('');
@@ -56,6 +56,10 @@
   let historySummary = $state<ConnectionHistorySummary | undefined>();
   let exporting = $state(false);
   let exportPath = $state('');
+  let nativeExportOpen = $state(false);
+  let nativeExportQuery = $state.raw<DebugFrameQuery | null>(null);
+  let nativeExportSource = $state<'completed-history' | 'active'>('completed-history');
+  const nativeExport = $derived(mobilePlatform.runtimePlatform !== 'desktop');
   let filtersOpen = $state(false);
   let actionsOpen = $state(false);
 
@@ -80,14 +84,9 @@
   let historySyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   let selectedKey = $state<string | null>(null);
-  let singleConfirmKey = $state<string | null>(null);
-  let closeAllConfirm = $state(false);
-  let closeAllSnapshotIds = $state<string[]>([]);
+  let closeWorkspace = $state<{begin:(from?:'list'|'legacy-row')=>void}>();
   let clearHistoryConfirm = $state(false);
-  let terminatingIds = $state<Set<string>>(new Set());
-  let closingAll = $state(false);
   let clearingHistory = $state(false);
-  let suppressedActiveIds = $state<Set<string>>(new Set());
   let now = $state(Date.now());
 
   const liveView = $derived(buildConnectionView({
@@ -96,7 +95,7 @@
     activeEvents: connectionObservations.activeConnections,
     recentEvents: [],
     limit: 500,
-  }).active.filter((connection) => !suppressedActiveIds.has(connection.flowId)));
+  }).active);
 
   const historyView = $derived(buildConnectionView({
     activeSnapshot: [],
@@ -119,9 +118,6 @@
 
   const selectedConnection = $derived(
     [...liveSource, ...historyView].find((connection) => connectionKey(connection) === selectedKey) ?? null,
-  );
-  const singleConfirmConnection = $derived(
-    liveView.find((connection) => connectionKey(connection) === singleConfirmKey) ?? null,
   );
   const closeAction = $derived(store.interactionSurface.actions.get('core.flow.close'));
   const canCloseConnections = $derived(closeAction?.operable ?? true);
@@ -271,6 +267,11 @@
 
   async function exportHistory() {
     if (exporting) return;
+    if (nativeExport) {
+      try { nativeExportSource='completed-history'; nativeExportQuery = historyQuery(); nativeExportOpen = true; }
+      catch(error) { handleAppError(error,'连接筛选无效'); }
+      return;
+    }
     exporting = true;
     try {
       const result = await invoke<{path: string; records: number}>('gui_connection_history_export', { query: historyQuery() });
@@ -279,6 +280,12 @@
     } catch (error) {
       handleAppError(error, '导出连接记录失败');
     } finally { exporting = false; }
+  }
+
+  function exportActive() {
+    nativeExportSource='active';
+    nativeExportQuery={search:searchQuery.trim()||undefined,protocol:protocolFilter==='all'?undefined:protocolFilter,outbound:outboundFilter==='all'?undefined:outboundFilter};
+    nativeExportOpen=true;
   }
 
   async function revealExport() {
@@ -469,82 +476,6 @@
     }
   }
 
-  function isModeRestricted(error: unknown): boolean {
-    return (error as { code?: string })?.code === 'mode_restricted';
-  }
-
-  async function closeConnection(flowId: string) {
-    try {
-      await guiCloseConnection(flowId);
-    } catch (error) {
-      if (isModeRestricted(error)) await closeFlow(flowId);
-      else throw error;
-    }
-  }
-
-  async function closeSingle(connection: DisplayConnection) {
-    if (terminatingIds.has(connection.flowId)) return;
-    terminatingIds = new Set([...terminatingIds, connection.flowId]);
-    try {
-      await closeConnection(connection.flowId);
-      suppressedActiveIds = new Set([...suppressedActiveIds, connection.flowId]);
-      pausedSnapshot = pausedSnapshot.filter((item) => item.flowId !== connection.flowId);
-      singleConfirmKey = null;
-      if (selectedKey === connectionKey(connection)) selectedKey = null;
-    } catch (error) {
-      handleAppError(error, '终止连接失败');
-    } finally {
-      const next = new Set(terminatingIds);
-      next.delete(connection.flowId);
-      terminatingIds = next;
-    }
-  }
-
-  async function closeAllConnections() {
-    if (closingAll) return;
-    const ids = [...closeAllSnapshotIds];
-    closeAllConfirm = false;
-    closeAllSnapshotIds = [];
-    if (ids.length === 0) {
-      return;
-    }
-
-    closingAll = true;
-    let failed = 0;
-    const closed = new Set<string>();
-    try {
-      for (let index = 0; index < ids.length; index += CLOSE_CONCURRENCY) {
-        const batch = ids.slice(index, index + CLOSE_CONCURRENCY);
-        const results = await Promise.allSettled(batch.map((flowId) => closeConnection(flowId)));
-        results.forEach((result, resultIndex) => {
-          const flowId = batch[resultIndex];
-          if (result.status === 'fulfilled') closed.add(flowId);
-          else failed += 1;
-        });
-      }
-
-      suppressedActiveIds = new Set([...suppressedActiveIds, ...closed]);
-      pausedSnapshot = pausedSnapshot.filter((connection) => !closed.has(connection.flowId));
-      if (failed > 0) {
-        showWarningToast(`已关闭 ${closed.size} 条连接，${failed} 条失败`);
-      } else {
-        showSuccessToast(`已关闭 ${closed.size} 条连接`);
-      }
-    } finally {
-      closingAll = false;
-    }
-  }
-
-  function requestCloseAllConnections() {
-    closeAllSnapshotIds = [...new Set(liveView.map((connection) => connection.flowId))];
-    if (closeAllSnapshotIds.length > 0) closeAllConfirm = true;
-  }
-
-  function dismissCloseAllConnections() {
-    closeAllConfirm = false;
-    closeAllSnapshotIds = [];
-  }
-
   function eventStatusLabel(): string {
     switch (coreEvents.status) {
       case 'subscribed': return '事件流正常';
@@ -618,7 +549,9 @@
   }
 
   function requestSingleTerminate(connection: DisplayConnection) {
-    singleConfirmKey = connectionKey(connection);
+    void connection;
+    selectedKey = null;
+    closeWorkspace?.begin('legacy-row');
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
@@ -672,12 +605,6 @@
     if (nextChangedFlowIds.size !== pausedChangedFlowIds.size) {
       pausedChangedFlowIds = nextChangedFlowIds;
     }
-  });
-
-  $effect(() => {
-    const currentIds = new Set(liveView.map((connection) => connection.flowId));
-    const nextSuppressed = new Set([...suppressedActiveIds].filter((flowId) => currentIds.has(flowId)));
-    if (nextSuppressed.size !== suppressedActiveIds.size) suppressedActiveIds = nextSuppressed;
   });
 
   onMount(() => {
@@ -794,15 +721,15 @@
                 size="sm"
                 class="w-full justify-start text-destructive hover:text-destructive"
                 role="menuitem"
-                disabled={liveView.length === 0 || closingAll || !canCloseConnections}
-                title={canCloseConnections ? '关闭当前全部活动连接' : closeUnavailableReason}
+                disabled={!canCloseConnections}
+                title={canCloseConnections ? '读取宿主实际连接并明确选择，不继承当前展示对象' : closeUnavailableReason}
                 onclick={() => {
                   actionsOpen = false;
-                  requestCloseAllConnections();
+                  closeWorkspace?.begin('list');
                 }}
               >
                 <CircleX data-icon="inline-start" class="size-3.5" />
-                关闭全部连接
+                选择连接关闭
               </Button>
             {:else}
               <Button
@@ -841,15 +768,18 @@
       <Button variant="outline" size="sm" disabled={exporting || historyLoading || Boolean(historyError)} onclick={exportHistory}>
         {exporting ? '导出中…' : '导出筛选记录'}
       </Button>
-      {#if exportPath}
+      {#if exportPath && !nativeExport}
         <Button variant="ghost" size="sm" onclick={revealExport}>打开导出位置</Button>
       {/if}
-      <span class="basis-full break-all text-[10px] text-muted-foreground">{exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
+      <span class="basis-full break-all text-[10px] text-muted-foreground">{nativeExport ? '预览固定筛选的本地完成连接；最多2000条、2MiB。地址及域名会明确提醒，自由文本与凭据排除。' : exportPath || '导出全部符合筛选的本地记录，包含地址、进程和路由信息。'}</span>
     </div>
   {/if}
 
+  <FlowCloseWorkspace bind:this={closeWorkspace}/>
+
   {#if activeTab === 'live'}
     <p class="border-b border-border px-3 py-1 text-[10px] text-muted-foreground">实时视图最多保留 500 条、每次展示前 200 条；不是所有连接的完整存档。</p>
+    {#if nativeExport}<div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2"><Button variant="outline" size="sm" onclick={exportActive}>导出筛选活动连接</Button><span class="text-[10px] text-muted-foreground">按当前搜索、协议与出口读取真实内核快照；暂停展示不代替内核查询。固定后最多2000条、2MiB。</span></div>{/if}
   {/if}
 
   {#if activeTab === 'live' && !canCloseConnections}
@@ -1001,8 +931,8 @@
               variant="outline"
               size="xs"
               class="absolute right-2 top-1/2 h-7 -translate-y-1/2 gap-1 px-2 text-[10px] text-muted-foreground opacity-75 transition-colors hover:border-destructive/40 hover:text-destructive focus-visible:opacity-100 disabled:opacity-45"
-              disabled={!canCloseConnections || terminatingIds.has(connection.flowId)}
-              title={canCloseConnections ? '终止连接' : closeUnavailableReason}
+              disabled={!canCloseConnections}
+              title={canCloseConnections ? '打开真实连接核对选择器，原行不会自动选中' : closeUnavailableReason}
               aria-label={`终止连接 ${connection.destination}`}
               onclick={() => requestSingleTerminate(connection)}
             >
@@ -1036,39 +966,11 @@
     connection={selectedConnection}
     canTerminate={selectedConnection?.origin === 'active' && canCloseConnections}
     terminateUnavailableReason={closeUnavailableReason}
-    terminating={selectedConnection ? terminatingIds.has(selectedConnection.flowId) : false}
+    terminating={false}
     onclose={() => selectedKey = null}
     onrequestterminate={requestSingleTerminate}
   />
 </Tabs.Root>
-
-<ActionConfirmDialog
-  open={Boolean(singleConfirmConnection)}
-  title="终止这个连接？"
-  description={singleConfirmConnection
-    ? `内核将立即关闭到 ${singleConfirmConnection.destination} 的连接，对应应用可能重新建立连接。`
-    : ''}
-  confirmLabel="终止连接"
-  busyLabel="终止中…"
-  busy={singleConfirmConnection ? terminatingIds.has(singleConfirmConnection.flowId) : false}
-  destructive
-  onClose={() => singleConfirmKey = null}
-  onConfirm={() => {
-    if (singleConfirmConnection) return closeSingle(singleConfirmConnection);
-  }}
-/>
-
-<ActionConfirmDialog
-  open={closeAllConfirm}
-  title="关闭当前全部连接？"
-  description={`将只关闭刚才检测到的 ${closeAllSnapshotIds.length} 条活动连接，新建立的连接不受本次操作影响。`}
-  confirmLabel="关闭全部"
-  busyLabel="关闭中…"
-  busy={closingAll}
-  destructive
-  onClose={dismissCloseAllConnections}
-  onConfirm={closeAllConnections}
-/>
 
 <ActionConfirmDialog
   open={clearHistoryConfirm}
@@ -1082,7 +984,10 @@
   onConfirm={clearHistory}
 />
 
+<ConnectionExportDialog bind:open={nativeExportOpen} query={nativeExportQuery} source={nativeExportSource}/>
+
 <style>
+  :global(.connections-shell) :global(button) {min-height:44px;}
   :global(.connections-shell) {
     position: relative;
   }

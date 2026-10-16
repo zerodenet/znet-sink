@@ -1,8 +1,15 @@
 <script lang="ts">
+  import MobileNodesList from '$lib/components/mobile/MobileNodesList.svelte';
+  import { failedProbeTargets, sameProbeScope, controlScope, latestProbeJob } from '$lib/features/nodes/mobile-view';
+  let { mobile = false, locationTarget }: { mobile?: boolean; locationTarget?: MobileLocationTarget } = $props();
+  import { optionalMobileNavigation, optionalMobileRoute } from '$lib/features/mobile/context';
+  import { getMobileLocationSnapshot } from '$lib/features/mobile/location-client';
+  import { locateNodeChain, locationScopeMatches, locationSnapshotMatches, sameLocationRead, type MobileLocationTarget } from '$lib/features/mobile/location';
+  let lastProbeJob = $state<ProbeJobSnapshot | null>(null);
   import { createProbeJobs } from 'virtual:znet-node-probes';
   import { NodeScreenState } from '$lib/features/nodes/screen.svelte';
   import { Button } from '$lib/components/ui/button';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { store } from '$lib/services/store.svelte';
   import { appendLog, getNodeScreenSnapshot, guiSelectPolicy } from '$lib/services/core';
@@ -56,8 +63,42 @@
     }
   }
 
-  const probeJobs = createProbeJobs?.(getNodeScreenSnapshot);
-  const screen = probeJobs ?? new NodeScreenState(getNodeScreenSnapshot);
+  const mobileNavigation=untrack(()=>optionalMobileNavigation());
+  const routeOwner=untrack(()=>optionalMobileRoute());
+  let locationReleased=$state(false),locationConfirmed=$state(false),locationChecking=$state(false),locationError=$state<string|null>(null);
+  let locationAlive=true,locationReadSequence=0,locationActionSequence=0;
+  let wasLocationActive=false;
+  const nodeLocation=$derived(!locationReleased && locationTarget?.kind==='nodes' ? locationTarget : null);
+  const ownPageActive=()=>!!mobileNavigation && mobileNavigation.activeTab===(routeOwner?.tab??'nodes') && (routeOwner ? mobileNavigation.current?.key===routeOwner.key : !mobileNavigation.current);
+  async function readNodeScreen(reason:string) {
+    const target=nodeLocation,sequence=++locationReadSequence;
+    if(!target)return getNodeScreenSnapshot(reason);
+    locationChecking=true;
+    try {
+      const before=await getMobileLocationSnapshot();
+      const next=await getNodeScreenSnapshot(reason);
+      const after=await getMobileLocationSnapshot();
+      if(locationAlive && sequence===locationReadSequence){
+        locationConfirmed=sameLocationRead(before,after) && locationSnapshotMatches(target,before) && locationSnapshotMatches(target,after) && locationScopeMatches(target.binding,next.scope);
+        locationError=locationConfirmed?null:'定位身份已变化；原目标仅供历史核对，请浏览最新列表。';
+      }
+      return next;
+    } catch(error){if(locationAlive && sequence===locationReadSequence){locationConfirmed=false;locationError='定位读取失败；原目标不可执行，请浏览当前配置节点。';}throw error;}
+    finally{if(locationAlive && sequence===locationReadSequence)locationChecking=false;}
+  }
+  const probeJobs = createProbeJobs?.(readNodeScreen);
+  const screen = probeJobs ?? new NodeScreenState(readNodeScreen);
+  const locationChain=$derived(nodeLocation?.selection.kind==='global' && locationConfirmed && screen.nodeScreen ? locateNodeChain(screen.nodeScreen,nodeLocation.binding,nodeLocation.selection.rootTag):null);
+  async function ensureLocated() {
+    const target=nodeLocation;if(!target)return true;
+    if(!locationConfirmed || locationChecking || !ownPageActive())return false;
+    const sequence=++locationActionSequence;
+    locationChecking=true;
+    try {const fresh=await getMobileLocationSnapshot();if(!locationAlive || sequence!==locationActionSequence || !ownPageActive())return false;
+      if(!locationSnapshotMatches(target,fresh)){locationConfirmed=false;locationError='定位身份已变化；原目标仅供历史核对，请浏览最新列表。';return false;}return true;
+    }catch{if(locationAlive){locationConfirmed=false;locationError='定位读取失败；原目标不可执行，请浏览当前配置节点。';}return false;}
+    finally{if(locationAlive)locationChecking=false;}
+  }
 
   // Action state
   let switching = $state<string | null>(null);
@@ -105,12 +146,13 @@
 
   // Kernel connection state
   const isCoreAvailable = $derived(
-    screen.nodeScreen?.sourceStatus === 'ready' || screen.nodeScreen?.sourceStatus === 'degraded',
+    !screen.error && (!nodeLocation || (locationConfirmed && !locationChecking)) && (screen.nodeScreen?.sourceStatus === 'ready' || screen.nodeScreen?.sourceStatus === 'degraded'),
   );
   const probeDisabledReason = $derived(
     !isCoreAvailable ? '内核未就绪，无法测速' : null,
   );
   function refreshNodeScreen(reason: string) { return screen.refresh(reason); }
+  $effect(()=>{const active=!!nodeLocation && ownPageActive();if(active && !wasLocationActive && screen.nodeScreen)untrack(()=>void refreshNodeScreen('location_resume'));wasLocationActive=active;});
   function applyProbeJob(job: ProbeJobSnapshot) { probeJobs?.apply(job); }
 
   function probeScope(job: ProbeJobSnapshot): 'single' | 'batch' | 'policy' {
@@ -121,6 +163,7 @@
   function handleProbeJobUpdate(job: ProbeJobSnapshot) {
     if (!probeJobs || probeJobs.disposed) return;
     applyProbeJob(job);
+    lastProbeJob = latestProbeJob(lastProbeJob,job);
     if (job.state === 'running') return;
 
     // Node observations/history are refreshed only after the authoritative job
@@ -151,9 +194,23 @@
     void screen.attach(listen('client-core:updated', () => {
       void refreshNodeScreen('client_core_updated');
     }));
+    const unregister=mobileNavigation?.guardBeforeLeave(()=>{if(ownPageActive())locationActionSequence++;return true;});
+    const resume=()=>{if(nodeLocation && document.visibilityState==='visible')void refreshNodeScreen('location_foreground');};
+    document.addEventListener('visibilitychange',resume);
+    return()=>{unregister?.();document.removeEventListener('visibilitychange',resume);};
+  });
+
+  onMount(() => {
+    if (!mobile || !probeJobs) return;
+    void refreshMobileProbeRuntime();
+    const timer=setInterval(() => {
+      if (!document.hidden && (drainRecheck || (probeJobs.runtime?.draining ?? 0)>0)) void refreshMobileProbeRuntime();
+    },5000);
+    return () => clearInterval(timer);
   });
 
   onDestroy(() => {
+    locationAlive=false;locationReadSequence++;locationActionSequence++;
     if (hideTimer) clearTimeout(hideTimer);
     screen.dispose();
   });
@@ -335,7 +392,7 @@
   }
 
   async function handleProbe(node: ProxyNode) {
-    if (!probeJobs) return;
+    if (!probeJobs || !await ensureLocated()) return;
     const policyProbe = isUrlTestPolicyNode(node);
     if (!isCoreAvailable) {
       recordProbeFailure({
@@ -351,6 +408,7 @@
       const job = await probeJobs.start({
         kind: policyProbe ? 'manual_policy' : 'outbound',
         targetTags: [node.tag],
+        expectedScope: mobile ? screen.nodeScreen?.scope : undefined,
         timeoutMs: 30_000,
       });
       applyProbeJob(job);
@@ -367,16 +425,23 @@
   }
 
   let stoppingProbes = $state(false);
+  let probeStopPending = $state(false);
+  let drainRecheck = $state(false);
+  async function refreshMobileProbeRuntime() {
+    await probeJobs?.refreshRuntime();
+    if (probeJobs?.runtime?.draining===0) drainRecheck=false;
+  }
   async function handleStopProbes() {
     if (!probeJobs || stoppingProbes) return;
     stoppingProbes = true;
+    if (mobile) { probeStopPending=true; drainRecheck=true; }
     try {
       const results = await Promise.allSettled(activeProbeJobs.map(async job => {
         handleProbeJobUpdate(await probeJobs.cancel(job.id));
       }));
       const failed = results.find(result => result.status === 'rejected');
       if (failed?.status === 'rejected') reportActionError(failed.reason);
-    } finally { stoppingProbes = false; }
+    } finally { stoppingProbes = false; if (mobile) await refreshMobileProbeRuntime(); }
   }
 
   async function handleProbeAll() {
@@ -409,6 +474,46 @@
       });
       reportActionError(message);
     }
+  }
+
+  const mobileScopeKey = $derived(JSON.stringify([screen.nodeScreen?.scope ?? null,nodeLocation?.binding.binding,locationConfirmed]));
+  const retryTargets = $derived(lastProbeJob && screen.nodeScreen ? failedProbeTargets(lastProbeJob, screen.nodeScreen.scope) : []);
+  async function handleMobileSelect(node: ProxyNode, policyTag: string) {
+    if(!await ensureLocated())return;
+    const group = groups.find(candidate => candidate.name === policyTag);
+    if (switching || !isCoreAvailable || !store.isActionOperable('policies.select')) return;
+    if (group?.available===false || group?.kind?.toLowerCase() !== 'selector' || !group.outbounds.some(member => member.tag === node.tag)) {
+      reportActionError('当前组或直接成员已变化，请刷新后重选'); return;
+    }
+    switching=node.id; lastError=null;
+    try {
+      const result=await guiSelectPolicy(policyTag,node.tag,screen.nodeScreen ? controlScope(screen.nodeScreen.scope) : undefined);
+      if (!result.accepted) reportActionError(result.message ?? '此组选择尚未确认');
+      await refreshNodeScreen('mobile_policy_select');
+    } catch (error) { reportActionError(error instanceof Error ? error.message : String(error)); }
+    finally { switching=null; }
+  }
+  async function handleMobileGroupProbe(group: PolicyGroup) {
+    if (!probeJobs || !isCoreAvailable) return;
+    // Snapshot every direct effective outbound, independent of search/filter.
+    const tags=[...new Set(group.outbounds.map(member => member.tag))];
+    if (!tags.length || !groups.some(candidate => candidate.name === group.name)) return;
+    await startMobileProbe('outbound', tags);
+  }
+  async function startMobileProbe(kind: ProbeJobSnapshot['kind'], targetTags: string[]) {
+    if (!probeJobs || !isCoreAvailable || !targetTags.length || !await ensureLocated()) return;
+    lastError=null;
+    try {
+      const job=await probeJobs.start({kind,targetTags,expectedScope:screen.nodeScreen ? controlScope(screen.nodeScreen.scope) : undefined,timeoutMs:Math.min(300_000,Math.max(30_000,15_000+Math.ceil(targetTags.length/8)*15_000))});
+      handleProbeJobUpdate(job);
+    } catch (error) { reportActionError(error instanceof Error ? error.message : String(error)); }
+  }
+  async function handleRetryFailed() {
+    if (!lastProbeJob || !screen.nodeScreen || !sameProbeScope(lastProbeJob.scope, screen.nodeScreen.scope)) {
+      reportActionError('测速所属配置或内核已变化，请在当前配置重新发起'); return;
+    }
+    const targets=failedProbeTargets(lastProbeJob,screen.nodeScreen.scope);
+    await startMobileProbe(lastProbeJob.kind, targets);
   }
 
   let previousMode: string | undefined;
@@ -564,6 +669,10 @@
   }
 </script>
 
+{#if mobile}
+  {#if nodeLocation}<section class="location-notice" aria-label="概览出口定位"><strong>{nodeLocation.selection.kind==='global' ? `定位出口 ${nodeLocation.selection.rootTag}` : nodeLocation.selection.kind==='direct' ? '直连模式' : nodeLocation.selection.kind==='rule' ? '按规则选择出口' : '出口未确认'}</strong><p role="status">{locationError ?? (locationChecking ? '正在核对原出口身份…' : nodeLocation.selection.kind==='unconfirmed' ? '运行态未确认，显示当前配置目录，不指定唯一出口。' : nodeLocation.selection.kind==='rule' ? '不同连接按规则选择；没有唯一全局最终节点。' : nodeLocation.selection.kind==='direct' ? '直连是模式，不会创建或选择一个虚构的 direct 节点。' : locationChain?.reason ?? `已定位实际选择链：${locationChain?.tags.join(' → ')??'未提供'}`)}</p><Button variant="outline" onclick={()=>{locationReleased=true;locationConfirmed=false;locationError=null;void refreshNodeScreen('location_release');}}>浏览当前配置节点</Button></section>{/if}
+  <MobileNodesList {groups} nodes={inventory} bind:query={searchQuery} scopeKey={mobileScopeKey} locationTags={locationConfirmed ? locationChain?.tags??[] : []} ready={isCoreAvailable} busy={switching!==null || locationChecking} probingTags={new Set([...probingNodeTags,...probingPolicyTags])} jobs={activeProbeJobs} error={lastError ?? screen.error} loading={!screen.nodeScreen} onSelect={handleMobileSelect} onProbe={probeJobs ? handleProbe : undefined} onProbeGroup={probeJobs ? handleMobileGroupProbe : undefined} onStop={probeJobs && activeProbeJobs.length ? handleStopProbes : undefined} onRetry={probeJobs && retryTargets.length ? handleRetryFailed : undefined} stopping={stoppingProbes} stopRequested={probeStopPending} draining={probeJobs?.runtime?.draining ?? null} drainingError={probeJobs?.runtimeError ?? null} lastJob={lastProbeJob && screen.nodeScreen && sameProbeScope(lastProbeJob.scope,screen.nodeScreen.scope) ? lastProbeJob : null} historyForTag={tag=>screen.nodeScreen?.nodes.find(node=>node.tag===tag)?.history ?? []}/>
+{:else}
 <div class="nodes-root animate-fade-in">
   <NodesGroupSidebar
     {groups}
@@ -680,6 +789,8 @@
   </div>
 </div>
 
+{/if}
+
 {#if popover.visible && popover.node}
   <div
     bind:this={popoverElement}
@@ -698,6 +809,8 @@
 {/if}
 
 <style>
+  .location-notice { flex-shrink:0; padding:12px; margin:8px 12px; border:1px solid var(--border); border-radius:9px; overflow-wrap:anywhere; }
+  .location-notice p { font-size:.875rem; color:var(--muted-foreground); }
   /* Root layout */
   .nodes-root {
     flex: 1;

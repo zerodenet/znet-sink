@@ -1,12 +1,17 @@
 //! Application composition and service lifecycle, separate from platform UI.
 
-mod commands;
+pub(crate) mod commands;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::lifecycle::{self, phases};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::services::{core_process, network_probe, system_proxy_guard};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::state::app_state::AppState;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::Manager;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn run() {
     // File logger + panic hook — first thing, so every later phase (and any
     // crash) lands in <data_dir>/logs/gui.log.jsonl.
@@ -84,6 +89,7 @@ pub fn run() {
     let shutdown_coord = lifecycle.shutdown_coordinator_mut();
     let shutdown_flag = app_state.shutting_down_handle();
     let capabilities = app_state.capabilities().clone();
+    let plugin_executor = app_state.plugins().executor_shutdown_handle();
     shutdown_coord.register(
         lifecycle::Phase::Runtime,
         "mark_shutting_down",
@@ -91,6 +97,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             crate::services::macos_privilege::begin_shutdown();
             shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let remaining = plugin_executor.close(std::time::Duration::ZERO);
+            if !remaining.drained {
+                eprintln!(
+                    "[ZNet] plugin execution draining: {} active",
+                    remaining.running
+                );
+            }
             capabilities.shutdown();
             eprintln!("[ZNet] shutdown: marking shutdown (watchdog will stop restarting)");
         }),
@@ -135,6 +148,7 @@ pub fn run() {
             }
         }))
         .manage(app_state)
+        .plugin(tauri_plugin_znet_native_io::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
@@ -149,6 +163,13 @@ pub fn run() {
             // must never clear the first client's active proxy marker.
             system_proxy_guard::cleanup_on_startup();
             crate::services::file_logger::line("runtime: setup begin");
+            if let Err(error) = crate::services::data_dir().and_then(|dir| {
+                crate::models::debug::initialize_capture_recovery(
+                    &dir.join("capture-recovery.json"),
+                )
+            }) {
+                crate::services::file_logger::line(&error.message);
+            }
             #[cfg(target_os = "macos")]
             crate::services::plugins::notification::install_foreground_delegate();
             let ipc_observer =
@@ -272,10 +293,24 @@ pub fn run() {
                 Ok(_) => {
                     #[cfg(target_os = "macos")]
                     crate::services::macos_privilege::begin_shutdown();
+                    app_handle.state::<AppState>().shutting_down_handle().store(true, Ordering::SeqCst);
                     api.prevent_exit();
+                    app_handle.state::<AppState>().plugins().close_page_documents();
+                    let plugin_executor = app_handle.state::<AppState>().plugins().executor_shutdown_handle();
+                    plugin_executor.close(std::time::Duration::ZERO);
                     let cleanup_app = app_handle.clone();
                     let cleanup_stage = exit_shutdown_stage.clone();
                     tauri::async_runtime::spawn(async move {
+                        let remaining = tauri::async_runtime::spawn_blocking(move || {
+                            plugin_executor.close(std::time::Duration::from_secs(2))
+                        }).await;
+                        match remaining {
+                            Ok(state) if !state.drained => crate::services::file_logger::line(&format!(
+                                "plugin execution still draining: {} active; native calls were not withdrawn", state.running
+                            )),
+                            Err(_) => crate::services::file_logger::line("plugin execution shutdown result unconfirmed"),
+                            _ => {}
+                        }
                         core_process::shutdown_managed_runtime(cleanup_app.clone()).await;
                         cleanup_stage.store(2, Ordering::SeqCst);
                         cleanup_app.exit(code.unwrap_or(0));
@@ -295,4 +330,9 @@ pub fn run() {
 
     // ── Shutdown: runs after Tauri event loop exits ──
     lifecycle.shutdown();
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn run() {
+    crate::mobile_host::application::run();
 }

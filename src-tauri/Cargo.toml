@@ -1,6 +1,6 @@
 [package]
 name = "gui"
-version = "0.0.2-rc.202610130535"
+version = "0.0.3-dev.202610131010"
 description = "ZNet Sink - 零域网络代理客户端"
 authors = ["ZeroDenet <zerodenet.org>"]
 license = "MPL-2.0"
@@ -17,15 +17,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 serde_json = "1"
+sha2 = "0.10"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 znet-client-core = { path = "crates/client-core" }
 znet-client-capabilities = { path = "crates/client-capabilities" }
 znet-engine-client = { path = "crates/engine-client" }
-tauri = { version = "2", features = ["image-png", "macos-private-api", "tray-icon"] }
+tauri-plugin-znet-native-io = { path = "crates/native-io" }
+tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
@@ -33,7 +34,7 @@ semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "stream", "system-proxy"] }
-rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "hooks", "limits"] }
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 sha2 = "0.10"
 getrandom = "0.3"
@@ -56,11 +57,11 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Threading",
 ] }
 tauri-plugin-dialog = "2.7.1"
-tauri-plugin-process = "2"
-tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
 dirs = "6.0.0"
 zero-rule = { git = "https://github.com/zerodenet/core.git", rev = "c69f417c5a835ab8193924279c5b562e6d244ab8" }
+zero-api = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
+zero-config = { git = "https://github.com/zerodenet/core.git", rev = "e74561f99acca941bfadf0d33e35a5ef08f34086" }
 tauri-plugin-clipboard-manager = { version = "2", default-features = false }
 libc = "0.2"
 
@@ -68,7 +69,10 @@ libc = "0.2"
 tokio = { version = "1", features = ["rt", "test-util", "macros"] }
 
 [workspace]
-members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox"]
+members = ["crates/client-capabilities", "crates/client-core", "crates/engine-client", "crates/plugin-sandbox", "crates/native-io"]
+# The embedded owner must retain core's immutable vendor patches. Its own
+# workspace/checks keep these forks from replacing desktop TLS dependencies.
+exclude = ["crates/mobile-runtime"]
 default-members = [".", "crates/client-core", "crates/engine-client"]
 resolver = "2"
 
@@ -80,6 +84,10 @@ tool-node-probe = []
 acceptance-test-utils = ["znet-client-capabilities/acceptance-test-utils"]
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 znet-plugin-sandbox = { path = "crates/plugin-sandbox" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

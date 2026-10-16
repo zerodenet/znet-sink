@@ -56,12 +56,22 @@ pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
         // Finder and other tools may leave unrelated ordinary files here.
         // Keep examining upgrade-* entries and symlinks as before, so an
         // interrupted transaction cannot be hidden by changing its type.
-        if entry.file_type().map_err(storage_error)?.is_file()
-            && !entry.file_name().to_string_lossy().starts_with("upgrade-")
-        {
+        let file_type = entry.file_type().map_err(storage_error)?;
+        let is_upgrade = entry.file_name().to_string_lossy().starts_with("upgrade-");
+        if file_type.is_file() && !is_upgrade {
             continue;
         }
         let backup = entry.path();
+        // Windows reports file/receipt.json as NotFound while Unix reports
+        // NotADirectory. Do not let either error classify a damaged reserved
+        // transaction entry as an unrelated backup without a receipt.
+        if is_upgrade && !file_type.is_dir() {
+            return Err(AppError {
+                code: "kernel_upgrade_recovery_required",
+                message: format!("内核升级备份类型异常，请先检查备份：{}", backup.display()),
+                details: Some(serde_json::json!({"backupPath": backup})),
+            });
+        }
         if active()
             .lock()
             .map_err(|_| AppError::internal("kernel transaction lock poisoned"))?
@@ -72,7 +82,16 @@ pub fn ensure_no_interrupted_upgrade(backup_root: &Path) -> AppResult<()> {
         let receipt_path = backup.join("receipt.json");
         let bytes = match fs::read(&receipt_path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if is_upgrade {
+                    return Err(AppError {
+                        code: "kernel_upgrade_recovery_required",
+                        message: format!("内核升级记录缺失，请先检查备份：{}", backup.display()),
+                        details: Some(serde_json::json!({"backupPath": backup})),
+                    });
+                }
+                continue;
+            }
             Err(error) => return Err(storage_error(error)),
         };
         let receipt: Receipt = serde_json::from_slice(&bytes).map_err(|_| AppError {

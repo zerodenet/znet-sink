@@ -5,6 +5,7 @@ pub fn plugins_supported() -> bool {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod desktop {
+    use crate::models::logs::PluginAction;
     use crate::{
         errors::AppResult,
         services::plugins::{InstallReview, Review, Snapshot},
@@ -49,7 +50,7 @@ mod desktop {
                 state.inner(),
                 plugin_id,
                 component_id,
-                &format!("sdk.{method:?}"),
+                crate::services::logs::plugin_sdk_action(method),
                 result.as_ref().map(|_| ()),
             );
         }
@@ -63,6 +64,8 @@ mod desktop {
             .await
             .map_err(|_| crate::errors::AppError::internal("插件操作未能完成"))?
     }
+    include!("plugins_page.rs");
+
     #[tauri::command]
     pub fn plugins_snapshot(state: State<'_, AppState>) -> Snapshot {
         state.plugins().snapshot(state.capabilities())
@@ -167,13 +170,41 @@ mod desktop {
                     state,
                     plugin_id,
                     component_id,
-                    "run",
+                    PluginAction::Run,
                     result.as_ref().map(|_| ()),
                 );
             }
             result
         })
         .await
+    }
+    /// All guest-selected VM action names share one component category. An
+    /// action called "uninstall" or "sdk.SubscriptionApply" is still not the
+    /// owning uninstall command or a typed SDK dispatch.
+    fn invoke_component_with_log(
+        state: &AppState,
+        app: Option<AppHandle>,
+        plugin_id: &str,
+        component_id: &str,
+        action: String,
+        payload: serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        let result = state.plugins().invoke(
+            state.capabilities(),
+            app,
+            plugin_id,
+            component_id,
+            action,
+            payload,
+        );
+        crate::services::logs::plugin_host_event(
+            state,
+            plugin_id,
+            component_id,
+            PluginAction::ComponentAction,
+            result.as_ref().map(|_| ()),
+        );
+        result
     }
     #[tauri::command]
     pub async fn plugins_invoke(
@@ -184,31 +215,7 @@ mod desktop {
         payload: serde_json::Value,
     ) -> AppResult<serde_json::Value> {
         blocking(app.clone(), move |state| {
-            let result = state.plugins().invoke(
-                state.capabilities(),
-                Some(app.clone()),
-                &plugin_id,
-                &component_id,
-                action.clone(),
-                payload,
-            );
-            let log_action = if action.len() <= 128
-                && action
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-            {
-                action.as_str()
-            } else {
-                "invalid-action"
-            };
-            crate::services::logs::plugin_host_event(
-                state,
-                &plugin_id,
-                &component_id,
-                log_action,
-                result.as_ref().map(|_| ()),
-            );
-            result
+            invoke_component_with_log(state, Some(app), &plugin_id, &component_id, action, payload)
         })
         .await
     }
@@ -488,16 +495,18 @@ mod desktop {
             let plugin_id = plugin_id.clone();
             let component_id = component_id.clone();
             move |state| {
-                state.plugins().take_protected_material(
+                let activity = state.plugins().activity(&plugin_id)?;
+                let (lease, bytes) = state.plugins().take_protected_material(
                     state.capabilities(),
                     &plugin_id,
                     &component_id,
                     call,
-                )
+                )?;
+                Ok((lease, bytes, activity))
             }
         })
         .await;
-        let (lease, bytes) = match extracted {
+        let (lease, bytes, _activity) = match extracted {
             Ok(value) => value,
             Err(error) => {
                 return sdk_reply_with_log(
@@ -687,24 +696,176 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn plugins_uninstall(app: AppHandle, id: String) -> AppResult<Snapshot> {
-        let cleanup_app = app.clone();
+        let _ = (app, id);
+        Err(crate::errors::AppError {
+            code: "plugin_uninstall_preview_required",
+            message: "卸载必须先在主应用预览固定资源并明确确认；旧直接卸载入口已关闭".into(),
+            details: None,
+        })
+    }
+    fn uninstall_public_error(error: crate::errors::AppError) -> crate::errors::AppError {
+        match error.code {
+            "plugin_uninstall_preflight_rejected"
+            | "plugin_uninstall_pending"
+            | "plugin_uninstall_storage" => error,
+            "not_found" => crate::errors::AppError {
+                code: "not_found",
+                message: "没有可供核对的原卸载记录；未重放任何删除".into(),
+                details: None,
+            },
+            _ => crate::errors::AppError {
+                code: "plugin_uninstall_storage",
+                message: "卸载材料或执行结果无法安全核对；请保留原操作，仅查看记录，不会自动重放"
+                    .into(),
+                details: None,
+            },
+        }
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_preview(
+        app: AppHandle,
+        window: tauri::Window,
+        plugin_id: String,
+    ) -> AppResult<crate::models::plugin_uninstall::Preview> {
+        page_host(&window)?;
         blocking(app, move |state| {
-            let result = state.plugins().uninstall(state.capabilities(), &id, || {
-                tauri::async_runtime::block_on(crate::services::subscription::remove_plugin_owned(
-                    cleanup_app,
-                    &id,
-                ))
-            });
-            crate::services::logs::plugin_host_event(
+            state.plugins().uninstall_preview(state, &plugin_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_execute(
+        app: AppHandle,
+        window: tauri::Window,
+        plan_id: String,
+        operation_id: String,
+        confirm_owned_resources: bool,
+    ) -> AppResult<crate::models::plugin_uninstall::Status> {
+        page_host(&window)?;
+        let state = app.state::<AppState>();
+        let _operation = state.proxy_config_operation().lock().await;
+        blocking(app.clone(), move |state| {
+            let result = state.plugins().uninstall_execute(
                 state,
-                &id,
-                "host",
-                "uninstall",
-                result.as_ref().map(|_| ()),
+                &plan_id,
+                &operation_id,
+                confirm_owned_resources,
             );
+            let failure = crate::errors::AppError {
+                code: "plugin_uninstall_incomplete",
+                message: "原卸载未取得全部固定项目的完成回执".into(),
+                details: None,
+            };
+            if let Ok(status) = &result {
+                crate::services::logs::plugin_host_event(
+                    state,
+                    &status.plugin_id,
+                    "host",
+                    PluginAction::Uninstall,
+                    if status.state == "completed" {
+                        Ok(())
+                    } else {
+                        Err(&failure)
+                    },
+                );
+            }
             result
         })
         .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_status(
+        app: AppHandle,
+        window: tauri::Window,
+        operation_id: String,
+    ) -> AppResult<crate::models::plugin_uninstall::Status> {
+        page_host(&window)?;
+        blocking(app, move |state| {
+            state.plugins().uninstall_status(&operation_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_recent(
+        app: AppHandle,
+        window: tauri::Window,
+    ) -> AppResult<Vec<crate::models::plugin_uninstall::Status>> {
+        page_host(&window)?;
+        blocking(app, move |state| state.plugins().uninstall_recent())
+            .await
+            .map_err(uninstall_public_error)
+    }
+    #[tauri::command]
+    pub async fn plugins_uninstall_discard(
+        app: AppHandle,
+        window: tauri::Window,
+        plan_id: String,
+    ) -> AppResult<()> {
+        page_host(&window)?;
+        blocking(app, move |state| {
+            state.plugins().uninstall_discard(&plan_id)
+        })
+        .await
+        .map_err(uninstall_public_error)
+    }
+    #[cfg(test)]
+    mod diagnostic_tests {
+        use super::*;
+        #[test]
+        fn guest_known_action_name_collisions_are_only_generic_component_attempts() {
+            use crate::models::logs::{HostDiagnosticEvent, HostOutcome};
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("logs.jsonl");
+            crate::services::log_store::with_test_path(&path, || {
+                let state = AppState::default();
+                for action in [
+                    "run",
+                    "uninstall",
+                    "sdk.SubscriptionApply",
+                    "sdk.SubscriptionMetadataUpdate",
+                    "sdk.SubscriptionSyncComplete",
+                    "sdk.SubscriptionRemove",
+                    "sdk.ProtectedLoad",
+                    "scheduled.secret-canary",
+                ] {
+                    let result = invoke_component_with_log(
+                        &state,
+                        None,
+                        "missing.diagnostic.collision",
+                        "worker",
+                        action.into(),
+                        serde_json::json!({"secret":"secret-canary"}),
+                    );
+                    assert!(
+                        result.is_err(),
+                        "No registered component may execute or gain SDK permission"
+                    );
+                    let entry = state.logs().lock().unwrap().last().unwrap().clone();
+                    assert_eq!(
+                        entry.diagnostic_event,
+                        Some(HostDiagnosticEvent::Plugin {
+                            action: PluginAction::ComponentAction,
+                            outcome: HostOutcome::Failed
+                        })
+                    );
+                }
+                let reopened =
+                    crate::services::log_store::load_recent_from_path(&path, 20).unwrap();
+                assert_eq!(reopened.len(), 8);
+                assert!(reopened
+                    .iter()
+                    .all(|entry| entry.diagnostic_event.is_some_and(|event| matches!(
+                        event,
+                        HostDiagnosticEvent::Plugin {
+                            action: PluginAction::ComponentAction,
+                            ..
+                        }
+                    ))));
+            });
+        }
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

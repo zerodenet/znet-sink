@@ -104,7 +104,6 @@ const segmentedConsumers = [
   'src/lib/components/tabs/NodesToolbar.svelte',
   'src/lib/components/tabs/SubscriptionsTab.svelte',
   'src/lib/components/tabs/RulesTab.svelte',
-  'src/lib/components/tabs/ProfilesTab.svelte',
   'src/lib/components/core/LogPanel.svelte',
 ].map(read);
 assert.ok(
@@ -180,10 +179,10 @@ assert.ok(
 );
 assert.ok(
   configEditor.includes('getConfigWorkspaceSnapshot') &&
-    configEditor.includes('snapshot.sourceConfig') &&
-    configEditor.includes('snapshot.effectiveConfig') &&
+    configEditor.includes('snapshot.sourceJson') &&
+    configEditor.includes('snapshot.effectiveJson') &&
     !configEditor.includes('getCoreConfig'),
-  'the Pro config workspace must edit the backend-owned active source and never the read-only core ConfigSnapshot',
+  'the Pro config workspace must use lossless backend-owned source/effective text instead of the read-only core ConfigSnapshot',
 );
 assert.ok(
   overviewTab.includes("store.activeTab = 'nodes'") &&

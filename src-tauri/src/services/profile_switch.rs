@@ -1,3 +1,4 @@
+use crate::models::logs::HostDiagnosticEvent as HostEvent;
 use serde_json::json;
 
 use crate::errors::{AppError, AppResult};
@@ -61,8 +62,9 @@ pub(crate) async fn reconcile(state: &AppState, _options: CoreIpcOptions, bounda
             .iter()
             .map(|(id, error)| json!({"flowId":id,"code":error.code,"message":error.message}))
             .collect();
-        logs::znet_log_fields(
-            Some(state),
+        logs::znet_host_log_fields(
+            state,
+            HostEvent::PreviousConnectionCleanupIncomplete,
             LogLevel::Warn,
             "proxy config switched; previous connection cleanup is incomplete",
             json!({"coreInstanceId":boundary.core_instance_id,"closedCount":report.closed,

@@ -1,4 +1,5 @@
 use crate::errors::{AppError, AppResult};
+use crate::models::logs::{HostDiagnosticEvent as HostEvent, ProcessEvent};
 use crate::models::{
     core_config::CoreConfigSnapshot,
     core_process::{CoreProcessExitReason, CoreProcessState, CoreProcessStatus},
@@ -38,9 +39,9 @@ pub(super) fn spawn_core_child(
         return Err(error);
     }
 
-    let _ = logs::append_entry(
+    let _ = logs::append_host_entry(
         state,
-        LogSource::App,
+        HostEvent::Process(ProcessEvent::Spawning),
         LogLevel::Info,
         format!(
             "core process: spawning {} with args {:?}",
@@ -70,9 +71,9 @@ pub(super) fn spawn_core_child(
             process.status.last_error = Some(message.clone());
             process.status.exited_at_unix_ms = Some(crate::services::common::now_unix_ms());
 
-            let _ = logs::append_entry(
+            let _ = logs::append_host_entry(
                 state,
-                LogSource::Core,
+                HostEvent::Process(ProcessEvent::SpawnFailed),
                 LogLevel::Error,
                 message.clone(),
                 Some(json!({
@@ -159,9 +160,9 @@ pub(super) fn spawn_core_child(
             process.status.exit_reason = Some(CoreProcessExitReason::Exited);
             process.status.last_error = Some(message.clone());
         }
-        let _ = logs::append_entry(
+        let _ = logs::append_host_entry(
             state,
-            LogSource::Core,
+            HostEvent::Process(ProcessEvent::ReadinessFailed),
             LogLevel::Error,
             message.clone(),
             Some(json!({
@@ -208,9 +209,9 @@ pub(super) fn spawn_core_child(
         state.client_core_snapshot(),
     );
 
-    let _ = logs::append_entry(
+    let _ = logs::append_host_entry(
         state,
-        LogSource::App,
+        HostEvent::Process(ProcessEvent::Started),
         LogLevel::Info,
         "core process started".to_string(),
         Some(json!({

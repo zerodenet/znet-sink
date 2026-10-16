@@ -173,3 +173,94 @@ fn host_can_restore_durable_component_consent_without_expiring_an_operation_poli
     assert_eq!(manager.component_snapshots()[0].revision, restored.revision);
     assert!(begin(&admit(&manager, "digest").unwrap()).is_ok());
 }
+
+#[test]
+fn reviewed_begin_cannot_reacquire_consent_after_stop_and_restart() {
+    let manager = Manager::default();
+    let policy = admit(&manager, "same").unwrap();
+    policy.authorize(grants(), Duration::from_secs(60)).unwrap();
+    let reviewed = manager.component_snapshots()[0].revision;
+    let budget = Budget {
+        calls: 1,
+        resource_bytes: 128,
+        timeout: Duration::from_secs(1),
+    };
+    let original = policy
+        .begin_at_revision(budget.clone(), Arc::new(AtomicBool::new(false)), reviewed)
+        .unwrap();
+    policy.revoke();
+    policy.authorize(grants(), Duration::from_secs(60)).unwrap();
+    assert_eq!(original.check(None), Err(Error::Revoked));
+    drop(original);
+    assert!(matches!(
+        policy.begin_at_revision(budget.clone(), Arc::new(AtomicBool::new(false)), reviewed),
+        Err(Error::Revoked)
+    ));
+    let latest = manager.component_snapshots()[0].revision;
+    assert!(policy
+        .begin_at_revision(budget, Arc::new(AtomicBool::new(false)), latest)
+        .is_ok());
+}
+
+#[test]
+fn queued_execution_activates_original_wall_budget_once_without_new_consent() {
+    let manager = Manager::default();
+    let policy = admit(&manager, "same").unwrap();
+    policy.authorize(grants(), Duration::from_secs(60)).unwrap();
+    let revision = manager.component_snapshots()[0].revision;
+    let lease = policy
+        .begin_queued(
+            Budget {
+                calls: 1,
+                resource_bytes: 128,
+                timeout: Duration::from_millis(20),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Some(revision),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(lease.check(None), Ok(()));
+    lease.activate_queued_execution().unwrap();
+    assert_eq!(
+        lease.activate_queued_execution(),
+        Err(Error::InvalidRequest)
+    );
+    assert_eq!(manager.component_snapshots()[0].revision, revision);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(lease.check(None), Err(Error::Deadline));
+}
+#[test]
+fn queue_expiry_and_revocation_cannot_be_renewed_by_activation() {
+    let manager = Manager::default();
+    let policy = admit(&manager, "same").unwrap();
+    policy.authorize(grants(), Duration::from_secs(60)).unwrap();
+    let budget = Budget {
+        calls: 1,
+        resource_bytes: 128,
+        timeout: Duration::from_secs(1),
+    };
+    let lease = policy
+        .begin_queued(
+            budget.clone(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Duration::from_millis(5),
+        )
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    assert_eq!(lease.activate_queued_execution(), Err(Error::Deadline));
+    drop(lease);
+    let lease = policy
+        .begin_queued(
+            budget,
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    policy.revoke();
+    policy.authorize(grants(), Duration::from_secs(60)).unwrap();
+    assert_eq!(lease.activate_queued_execution(), Err(Error::Revoked));
+}

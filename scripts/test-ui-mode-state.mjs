@@ -96,3 +96,23 @@ test('late navigation queries cannot undo the latest endpoint visibility or redi
   assert.equal(store.isNavVisible('endpoints'), false);
   assert.equal(store.activeTab, 'overview');
 });
+
+
+test('mobile projection retains complete navigation and settings without persisting desktop Pro', async () => {
+  const presentations = [];
+  const { store, requests } = harness(async presentation => {
+    presentations.push(presentation);
+    return { navigation: [{ key: 'profiles', visible: false }], actions: [], features: [] };
+  });
+  store.uiMode = 'lite';
+  store.mobilePresentation = true;
+  store.activeTab = 'profiles';
+  await store.refreshInteractionSurface();
+  assert.deepEqual(presentations, ['mobile']);
+  assert.equal(store.activeTab, 'profiles');
+  assert.equal(store.isNavVisible('rules'), true);
+  store.openSettings('tun');
+  assert.equal(store.settingsSection, 'tun');
+  assert.equal(store.uiMode, 'lite');
+  assert.deepEqual(requests, []);
+});

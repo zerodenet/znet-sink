@@ -29,6 +29,10 @@ pub(super) struct Task {
     pub failure_count: u8,
 }
 
+pub(super) struct DueTask {
+    task: Task,
+    installation_generation: u64,
+}
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Registry {
@@ -91,6 +95,7 @@ fn load(root: &Path) -> AppResult<Registry> {
 }
 
 fn save(root: &Path, registry: &Registry) -> AppResult<()> {
+    let _history = super::uninstall::storage::writer(root)?;
     let bytes = serde_json::to_vec(registry).map_err(io::failure)?;
     if bytes.len() > MAX_BYTES {
         return Err(AppError::invalid_argument("插件调度状态超过容量限制"));
@@ -125,7 +130,8 @@ impl Host {
                 "插件后台任务名称、动作或间隔无效（间隔需为 5 分钟至 7 天）",
             ));
         }
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
+        self.ensure_installation_current(plugin_id)?;
         let mut registry = load(&self.root()?)?;
         let task = Task {
             plugin_id: plugin_id.into(),
@@ -148,7 +154,7 @@ impl Host {
         plugin_id: &str,
         component_id: &str,
     ) -> AppResult<Vec<Task>> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         Ok(load(&self.root()?)?
             .tasks
             .into_values()
@@ -161,7 +167,7 @@ impl Host {
         component_id: &str,
         task_id: &str,
     ) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+        let _operation = self.operation_guard()?;
         let mut registry = load(&self.root()?)?;
         if registry
             .tasks
@@ -172,15 +178,7 @@ impl Host {
         }
         Ok(())
     }
-    pub(super) fn remove_plugin_schedules(&self, plugin_id: &str) -> AppResult<()> {
-        let mut registry = load(&self.root()?)?;
-        let before = registry.tasks.len();
-        registry.tasks.retain(|_, task| task.plugin_id != plugin_id);
-        if registry.tasks.len() != before {
-            save(&self.root()?, &registry)?;
-        }
-        Ok(())
-    }
+
     pub(super) fn remove_component_schedules(
         &self,
         plugin_id: &str,
@@ -196,13 +194,13 @@ impl Host {
         }
         Ok(())
     }
-    fn take_due(&self, now: u64) -> AppResult<Vec<Task>> {
-        let _operation = self.operation.lock().unwrap();
+    pub(super) fn take_due(&self, now: u64) -> AppResult<Vec<DueTask>> {
+        let _operation = self.operation_guard()?;
         let schedule_permission = Request {
             capability: Capability::TasksSchedule,
             scope: "self".into(),
         };
-        let enabled: BTreeSet<_> = self
+        let mut enabled: BTreeSet<_> = self
             .state
             .lock()
             .unwrap()
@@ -220,13 +218,36 @@ impl Host {
                 )
             })
             .collect();
+        enabled.retain(|(plugin, _)| self.ensure_installation_current(plugin).is_ok());
+        let generations: BTreeMap<_, _> = self
+            .state
+            .lock()
+            .unwrap()
+            .loaded
+            .values()
+            .map(|l| {
+                (
+                    (
+                        l.component.manifest().plugin_id.clone(),
+                        l.component.manifest().component_id.clone(),
+                    ),
+                    l.installation_generation,
+                )
+            })
+            .collect();
         let mut registry = load(&self.root()?)?;
         let mut due = Vec::new();
         for task in registry.tasks.values_mut() {
             if task.next_run_unix_ms <= now
                 && enabled.contains(&(task.plugin_id.clone(), task.component_id.clone()))
             {
-                due.push(task.clone());
+                let installation_generation = *generations
+                    .get(&(task.plugin_id.clone(), task.component_id.clone()))
+                    .ok_or_else(stale)?;
+                due.push(DueTask {
+                    task: task.clone(),
+                    installation_generation,
+                });
                 task.next_run_unix_ms =
                     now.saturating_add(task.interval_seconds.saturating_mul(1000));
             }
@@ -237,8 +258,22 @@ impl Host {
         Ok(due)
     }
 
-    fn record_schedule_result(&self, task: &Task, succeeded: bool, now: u64) -> AppResult<()> {
-        let _operation = self.operation.lock().unwrap();
+    pub(super) fn record_schedule_result(
+        &self,
+        task: &Task,
+        installation_generation: u64,
+        succeeded: bool,
+        now: u64,
+    ) -> AppResult<()> {
+        let _operation = self.operation_guard()?;
+        self.ensure_installation_current(&task.plugin_id)?;
+        if !self.state.lock().unwrap().loaded.values().any(|l| {
+            l.component.manifest().plugin_id == task.plugin_id
+                && l.component.manifest().component_id == task.component_id
+                && l.installation_generation == installation_generation
+        }) {
+            return Err(stale());
+        }
         let mut registry = load(&self.root()?)?;
         let Some(stored) =
             registry
@@ -280,7 +315,9 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
             };
             match due {
                 Ok(tasks) => {
-                    for task in tasks {
+                    for due in tasks {
+                        let task = due.task;
+                        let installation_generation = due.installation_generation;
                         let task_app = app.clone();
                         let task_plugin_id = task.plugin_id.clone();
                         let task_id = task.task_id.clone();
@@ -296,9 +333,7 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
                             )
                         })
                         .await
-                        .unwrap_or_else(|error| {
-                            Err(AppError::internal(format!("插件后台执行线程失败：{error}")))
-                        });
+                        .unwrap_or_else(|_| Err(AppError::internal("插件后台执行线程失败")));
                         let state = app.state::<crate::state::app_state::AppState>();
                         let declared_failure = result.as_ref().ok().is_some_and(|value| {
                             value.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
@@ -314,11 +349,12 @@ pub(crate) fn spawn(app: tauri::AppHandle) {
                             state.inner(),
                             &task.plugin_id,
                             &task.component_id,
-                            &format!("scheduled.{}", task.action),
+                            crate::models::logs::PluginAction::ScheduledComponentAction,
                             execution_result,
                         );
                         if let Err(error) = state.plugins().record_schedule_result(
                             &task,
+                            installation_generation,
                             succeeded,
                             crate::services::common::now_unix_ms(),
                         ) {
@@ -380,14 +416,19 @@ mod tests {
 
     #[test]
     fn failed_tasks_use_bounded_exponential_retry_and_success_resets_it() {
-        let root = tempfile::tempdir().unwrap();
-        let host = Host {
-            root: Some(root.path().into()),
-            ..Host::default()
-        };
+        let (root, host, _manager) = super::super::tests::setup(false);
+        let installation_generation = host
+            .state
+            .lock()
+            .unwrap()
+            .loaded
+            .values()
+            .next()
+            .unwrap()
+            .installation_generation;
         let task = Task {
             plugin_id: "org.example.plugin".into(),
-            component_id: "worker".into(),
+            component_id: "identity".into(),
             task_id: "refresh".into(),
             action: "refresh".into(),
             interval_seconds: 900,
@@ -403,7 +444,8 @@ mod tests {
             task.clone(),
         );
         save(root.path(), &registry).unwrap();
-        host.record_schedule_result(&task, false, 1_000).unwrap();
+        host.record_schedule_result(&task, installation_generation, false, 1_000)
+            .unwrap();
         let failed = load(root.path())
             .unwrap()
             .tasks
@@ -412,7 +454,8 @@ mod tests {
             .unwrap();
         assert_eq!(failed.failure_count, 1);
         assert_eq!(failed.next_run_unix_ms, 61_000);
-        host.record_schedule_result(&failed, true, 2_000).unwrap();
+        host.record_schedule_result(&failed, installation_generation, true, 2_000)
+            .unwrap();
         let recovered = load(root.path())
             .unwrap()
             .tasks

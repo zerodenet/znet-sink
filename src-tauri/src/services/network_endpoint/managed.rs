@@ -17,6 +17,7 @@ pub enum ManagedAction {
     SetState { enabled: bool },
     SetDirections { directions: Directions },
     Restart {},
+    ClearOverrides {},
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,6 +38,8 @@ pub struct ManagedCatalog {
     pub editable_endpoint_ids: Vec<String>,
     pub local_override_ids: Vec<String>,
     pub configured_addresses: BTreeMap<String, Vec<String>>,
+    pub restoration_targets: Vec<crate::models::endpoint_restoration::RestorationTarget>,
+    pub restoration_unavailable_reason: Option<String>,
 }
 fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
     Ok(lock(state.proxy_configs(), "proxy_config")?
@@ -50,8 +53,23 @@ fn active(state: &AppState) -> AppResult<Option<(String, Value)>> {
         }))
 }
 pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<ManagedCatalog> {
-    let catalog = super::catalog(options).await?;
+    let catalog = super::catalog(options.clone()).await?;
     let source = active(state)?;
+    let (restoration_targets, restoration_unavailable_reason) =
+        match crate::services::endpoint_restoration::remember_catalog(
+            state,
+            source.as_ref().map(|(id, _)| id.as_str()),
+            &catalog.endpoints,
+            options,
+        )
+        .await
+        {
+            Ok(targets) => (targets, None),
+            Err(_) => (
+                Vec::new(),
+                Some("来源恢复的配置回执或绑定尚未确认，请先核对工作区并刷新端点".into()),
+            ),
+        };
     let app = lock(state.app_config(), "app_config")?;
     let mut editable_endpoint_ids = Vec::new();
     let mut local_override_ids = Vec::new();
@@ -76,6 +94,8 @@ pub async fn catalog(state: &AppState, options: CoreIpcOptions) -> AppResult<Man
         editable_endpoint_ids,
         local_override_ids,
         configured_addresses,
+        restoration_targets,
+        restoration_unavailable_reason,
     })
 }
 fn prepare(
@@ -105,6 +125,14 @@ fn prepare(
             persistence: Persistence::RuntimeOnly,
         },
         ManagedAction::Restart {} => Action::Restart {},
+        ManagedAction::ClearOverrides {} => {
+            if endpoints::has_override(app, profile, current) {
+                return Err(AppError::invalid_argument(
+                    "端点存在客户端配置覆盖，请在配置工作区恢复来源并应用",
+                ));
+            }
+            Action::ClearOverrides {}
+        }
     };
     let next = endpoints::candidate(app, profile, source, current, &action)?;
     Ok((
@@ -145,10 +173,15 @@ pub async fn control(
     if !super::supports(&caps, "network_endpoint_control_v1") {
         return Err(super::unsupported("当前内核未声明端点控制能力"));
     }
+    if matches!(input.action, ManagedAction::ClearOverrides {})
+        && !super::supports(&caps, "network_endpoint_control_preconditions_v1")
+    {
+        return Err(super::unsupported("当前内核缺少安全恢复所需的实例前置条件"));
+    }
     let current = super::get(&input.endpoint_id, options.clone()).await?;
     let previous = lock(state.app_config(), "app_config")?.clone();
     let (input, next, revision) = prepare(input, &profile, &source, &current, &previous)?;
-    let changed = !matches!(input.action, Action::Restart {});
+    let changed = !matches!(input.action, Action::Restart {} | Action::ClearOverrides {});
     super::control_params(&input, &current, &caps)?;
     let result = super::direction_transition::apply(input, current, &caps, options, revision).await;
     publish_confirmed(result, || {

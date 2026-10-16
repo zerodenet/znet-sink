@@ -4,7 +4,7 @@ import type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscrip
 import type { AppConfig, AppConfigPatch, KernelSettingsExportResult } from '$lib/types/app-config';
 import type { LogEntry, LogAppend, LogPage, LogQuery } from '$lib/types/logs';
 import type { GuiCapabilitySnapshot, InteractionSurfaceSnapshot } from '$lib/types/capability';
-import type { ClientCoreSnapshot, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
+import type { ClientCoreSnapshot, ClientScope, NodeScreenSnapshot, ConfigProxyNode, SelfTestSnapshot, ConnectionStatus, ProxyModeStatus, CoreOverview, TrafficStats, PolicyGroup, PolicyOutbound, ProxyMode, GuiCoreHealth, GuiZeroCapabilities, GuiFeatureStatus, GuiPolicySelectionResult, GuiConnectionList, GuiConnectionItem, GuiConnectionCloseResult, ConfigWorkspaceApplyInput, ConfigWorkspaceDraftInput, ConfigWorkspaceOperation, ConfigWorkspaceSaveResult, ConfigWorkspacePlan, ConfigWorkspaceSnapshot, ConfigTransactionReceipt } from '$lib/types/gui-api';
 import type { DnsSettingsInput } from '$lib/types/dns';
 
 export type { CoreProcessStatus, CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreConfigSnapshot, CoreConfigExportResult, CoreIpcOptions, AppError, CoreKernelInfo, GuiCapabilitySnapshot, InteractionSurfaceSnapshot };
@@ -299,8 +299,8 @@ export async function getGuiCapabilitiesSnapshot(): Promise<GuiCapabilitySnapsho
   return invoke('gui_capabilities_snapshot');
 }
 
-export async function getGuiInteractionSurfaceSnapshot(): Promise<InteractionSurfaceSnapshot> {
-  return invoke('gui_interaction_surface_snapshot');
+export async function getGuiInteractionSurfaceSnapshot(presentation?: 'desktop' | 'mobile'): Promise<InteractionSurfaceSnapshot> {
+  return invoke('gui_interaction_surface_snapshot', { presentation });
 }
 
 // System proxy
@@ -356,8 +356,8 @@ export async function getGuiProxyModeStatus(): Promise<ProxyModeStatus> {
   return mapProxyModeStatus(raw);
 }
 
-export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false, globalOutbound?: string): Promise<ProxyModeStatus> {
-  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore, globalOutbound } });
+export async function guiSetProxyMode(mode: ProxyMode, restartCore: boolean = false, globalOutbound?: string, expectedScope?: ClientScope): Promise<ProxyModeStatus> {
+  const raw = await invoke<Record<string, unknown>>('gui_set_proxy_mode', { input: { mode, restartCore, globalOutbound, expectedScope } });
   return mapProxyModeStatus(raw);
 }
 
@@ -399,8 +399,8 @@ export async function getGuiZeroCapabilities(): Promise<GuiZeroCapabilities> {
 
 // Policy selection
 
-export async function guiSelectPolicy(policyTag: string, targetTag: string): Promise<GuiPolicySelectionResult> {
-  return invoke('gui_select_policy', { policyTag, targetTag });
+export async function guiSelectPolicy(policyTag: string, targetTag: string, expectedScope?: ClientScope): Promise<GuiPolicySelectionResult> {
+  return invoke('gui_select_policy', { policyTag, targetTag, expectedScope });
 }
 
 
@@ -493,16 +493,32 @@ export async function getConfigWorkspaceSnapshot(): Promise<ConfigWorkspaceSnaps
   return invoke('gui_config_workspace_snapshot');
 }
 
-export async function planConfigWorkspace(
-  sourceConfig: Record<string, unknown>,
-): Promise<ConfigWorkspacePlan> {
-  return invoke('gui_config_workspace_plan', { sourceConfig });
+export async function planConfigWorkspace(input: ConfigWorkspaceDraftInput): Promise<ConfigWorkspacePlan> {
+  return invoke('gui_config_workspace_plan', { input });
 }
-
-export async function applyConfigWorkspace(
-  input: ConfigWorkspaceApplyInput,
-): Promise<ConfigTransactionReceipt> {
+export async function saveConfigWorkspaceLocal(input: ConfigWorkspaceDraftInput): Promise<ConfigWorkspaceSaveResult> {
+  return invoke('gui_config_workspace_save_local', { input });
+}
+export async function formatConfigWorkspace(sourceJson: string): Promise<string> {
+  return invoke('gui_config_workspace_format', { sourceJson });
+}
+export async function validateConfigWorkspace(input: ConfigWorkspaceDraftInput): Promise<{sourceJson: string; effectiveJson: string}> {
+  return invoke('gui_config_workspace_validate', { input });
+}
+export async function applyConfigWorkspace(input: ConfigWorkspaceApplyInput): Promise<ConfigWorkspaceOperation> {
   return invoke('gui_config_workspace_apply', { input });
+}
+export async function inspectConfigWorkspaceOperation(planId: string): Promise<ConfigWorkspaceOperation> {
+  return invoke('gui_config_workspace_operation', { planId });
+}
+export async function discardConfigWorkspacePlan(planId: string): Promise<void> {
+  return invoke('gui_config_workspace_discard', { planId });
+}
+export async function reviewConfigWorkspaceRecovery(planId: string): Promise<import('$lib/types/gui-api').ConfigWorkspaceRecoveryReview> {
+  return invoke('gui_config_workspace_recovery_review', { planId });
+}
+export async function completeConfigWorkspaceLocal(input: { planId: string; reviewId: string }): Promise<ConfigWorkspaceOperation> {
+  return invoke('gui_config_workspace_complete_local', { input });
 }
 
 // Mode hot-switch
@@ -595,8 +611,12 @@ export interface GuiDebugStorageCleanupResult {
   failures: GuiDebugStorageCleanupFailure[];
 }
 
-export async function guiExportDiagnostics(): Promise<GuiDiagnosticExport> {
-  return invoke('gui_export_diagnostics');
+export async function guiExportDiagnostics(planId: string): Promise<GuiDiagnosticExport> {
+  return invoke('gui_export_diagnostics', { planId });
+}
+
+export async function guiDiscardDiagnostics(planId: string): Promise<void> {
+  return invoke('gui_discard_diagnostics', { planId });
 }
 
 export async function guiDebugStorageSummary(): Promise<GuiDebugStorageSummary> {
@@ -845,4 +865,12 @@ export async function applyProfileSettings(profileId: string, changes: Record<st
 export type DebugCaptureStatus = { detailed: boolean; expiresAtMs: number };
 export async function setDebugCapture(enabled?: boolean): Promise<DebugCaptureStatus> {
   return invoke('gui_debug_capture', { enabled });
+}
+
+/** Explicit local metadata reads; never query/apply runtime or grant control. */
+export async function inspectWorkspaceStorage(): Promise<import('$lib/features/storage-inspection/model').WorkspaceStorageInspection> {
+  return invoke('gui_workspace_storage_inspect');
+}
+export async function inspectPacketLedger(): Promise<import('$lib/features/storage-inspection/model').PacketLedgerInspection> {
+  return invoke('gui_packet_ledger_inspect');
 }

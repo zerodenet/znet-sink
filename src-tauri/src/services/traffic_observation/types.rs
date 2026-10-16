@@ -19,19 +19,35 @@ pub enum Scope {
         endpoint_id: String,
         peer_id: String,
     },
+    HostInterface {
+        name: String,
+    },
 }
 impl Scope {
     pub fn wire(&self) -> Value {
-        match self {
-            Self::Global => json!({"kind":"global"}),
-            Self::Inbound { tag } => json!({"kind":"inbound","tag":tag}),
-            Self::Outbound { tag } => json!({"kind":"outbound","tag":tag}),
-            Self::Endpoint { endpoint_id } => json!({"kind":"endpoint","endpoint_id":endpoint_id}),
+        // Reuse Zero's public wire schema; the GUI owns only the lossless bridge.
+        let scope = match self {
+            Self::Global => zero_api::TrafficScope::Global,
+            Self::Inbound { tag } => zero_api::TrafficScope::Inbound { tag: tag.clone() },
+            Self::Outbound { tag } => zero_api::TrafficScope::Outbound { tag: tag.clone() },
+            Self::Endpoint { endpoint_id } => zero_api::TrafficScope::Endpoint {
+                endpoint_id: endpoint_id.clone(),
+            },
             Self::Peer {
                 endpoint_id,
                 peer_id,
-            } => json!({"kind":"peer","endpoint_id":endpoint_id,"peer_id":peer_id}),
-        }
+            } => zero_api::TrafficScope::Peer {
+                endpoint_id: endpoint_id.clone(),
+                peer_id: peer_id.clone(),
+            },
+            Self::HostInterface { name } => {
+                zero_api::TrafficScope::HostInterface { name: name.clone() }
+            }
+        };
+        serde_json::to_value(scope).expect("public traffic scope serialization")
+    }
+    pub fn is_host(&self) -> bool {
+        matches!(self, Self::HostInterface { .. })
     }
 }
 #[derive(Debug, Deserialize, Default)]
@@ -42,6 +58,8 @@ pub struct ListInput {
     pub limit: Option<usize>,
     #[serde(default)]
     pub scopes: Vec<Scope>,
+    #[serde(default)]
+    pub include_host_interfaces: bool,
     pub expected_core_instance_id: Option<String>,
     pub expected_config_revision: Option<String>,
     pub expected_registry_revision: Option<String>,
@@ -54,6 +72,9 @@ impl ListInput {
             ));
         }
         let mut value = json!({"offset":self.offset,"limit":self.limit.unwrap_or(64),"scopes":self.scopes.iter().map(Scope::wire).collect::<Vec<_>>()});
+        if self.include_host_interfaces {
+            value["include_host_interfaces"] = json!(true);
+        }
         if let Some(id) = self.expected_core_instance_id {
             value["expected_core_instance_id"] = json!(id);
         }
@@ -87,6 +108,9 @@ pub struct ResetInput {
 }
 impl ResetInput {
     pub fn wire(&self) -> AppResult<Value> {
+        if self.targets.iter().any(|target| target.scope.is_host()) {
+            return Err(AppError::invalid_argument("宿主网卡统计只读，不能清空"));
+        }
         let mut identities = std::collections::HashSet::new();
         if self.expected_core_instance_id.is_empty()
             || self.operation_id.is_empty()

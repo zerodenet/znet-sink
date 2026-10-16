@@ -533,6 +533,8 @@ mod tests {
 
     fn request(kind: ToolJobKind) -> StartToolJobRequest {
         StartToolJobRequest {
+            expected_scope: None,
+            expected_client_revision: None,
             kind,
             params: serde_json::json!({"target":"example.test"}),
             timeout_ms: Some(5_000),

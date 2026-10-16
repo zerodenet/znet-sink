@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
+import { controlScope } from '$lib/features/nodes/scope';
 import type { StartProbeRequest, ProbeJobSnapshot } from '$lib/types/gui-api';
 export async function startProbeJob(request: StartProbeRequest): Promise<ProbeJobSnapshot> {
-  return invoke('gui_probe_job_start', { request });
+  const {expectedScope, ...input}=request;
+  return invoke('gui_probe_job_start', { request: input, expectedScope: expectedScope ? controlScope(expectedScope) : undefined });
 }
 
 export async function getProbeJob(jobId: number): Promise<ProbeJobSnapshot> {

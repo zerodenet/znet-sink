@@ -33,8 +33,30 @@ impl BoundControl {
         })
     }
     pub(crate) async fn call(&self, frame: Value) -> AppResult<Value> {
+        self.call_with_minimum_response_timeout(frame, None).await
+    }
+    /// Keep command-specific response budgets on the original connection.
+    /// The cloned binding is used only for this request; query budgets and
+    /// endpoint discovery are unchanged, and this method never reconnects.
+    pub(crate) async fn command(&self, method: &str, params: Value) -> AppResult<Value> {
+        self.call_with_minimum_response_timeout(
+            json!({"type":"command","method":method,"params":params}),
+            commands::command_response_timeout(method),
+        )
+        .await
+    }
+    async fn call_with_minimum_response_timeout(
+        &self,
+        frame: Value,
+        minimum: Option<std::time::Duration>,
+    ) -> AppResult<Value> {
+        let mut response_binding = self.binding.clone();
+        if let Some(minimum) = minimum {
+            response_binding.timeout = response_binding.timeout.max(minimum);
+        }
         let result =
-            protocol::request_on_connection(frame, &self.binding, self.connection.clone()).await?;
+            protocol::request_on_connection(frame, &response_binding, self.connection.clone())
+                .await?;
         parsing::unwrap_call_result(result.response, result.error)
     }
     pub(crate) async fn identity(&self) -> AppResult<RuntimeIdentity> {
@@ -103,6 +125,39 @@ impl znet_engine_client::flow_cleanup::FlowControl for BoundControl {
     }
     async fn close(&self, flow_id: &str) -> AppResult<()> {
         self.close_flow(flow_id).await
+    }
+}
+
+impl znet_engine_client::QueryTransport for BoundControl {
+    type Error = AppError;
+    async fn query(&self, request: Value) -> AppResult<Value> {
+        self.call(json!({"type":"query","request":request})).await
+    }
+}
+
+impl znet_engine_client::bridge::BridgeTransport for BoundControl {
+    async fn command(&self, request: zero_api::CommandRequest) -> AppResult<Value> {
+        let mut frame = serde_json::to_value(request)
+            .map_err(|_| AppError::invalid_argument("控制请求编码失败"))?;
+        frame["type"] = json!("command");
+        self.call(frame).await
+    }
+    fn failure_is_rejection(&self, error: &AppError) -> bool {
+        let code = error
+            .details
+            .as_ref()
+            .and_then(|details| details.pointer("/error/code"))
+            .and_then(Value::as_str)
+            .unwrap_or(error.code);
+        matches!(
+            code,
+            "invalid_argument"
+                | "permission_denied"
+                | "feature_disabled"
+                | "unsupported"
+                | "not_found"
+                | "conflict"
+        )
     }
 }
 #[cfg(all(test, unix))]

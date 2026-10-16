@@ -23,7 +23,30 @@ fn malformed_upgrade_entry_still_blocks_launch() {
     let backups = dir.path().join("backups");
     fs::create_dir(&backups).unwrap();
     fs::write(backups.join("upgrade-broken"), b"not a backup directory").unwrap();
-    assert!(ensure_no_interrupted_upgrade(&backups).is_err());
+    assert_eq!(
+        ensure_no_interrupted_upgrade(&backups).unwrap_err().code,
+        "kernel_upgrade_recovery_required"
+    );
+}
+
+#[test]
+fn reserved_upgrade_directory_without_receipt_blocks_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    fs::create_dir_all(backups.join("upgrade-incomplete")).unwrap();
+    assert_eq!(
+        ensure_no_interrupted_upgrade(&backups).unwrap_err().code,
+        "kernel_upgrade_recovery_required"
+    );
+    assert!(BundleTransaction::prepare(dir.path(), &backups, &["zero".into()]).is_err());
+}
+
+#[test]
+fn unrelated_backup_directory_without_receipt_does_not_block_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    fs::create_dir_all(backups.join("unrelated")).unwrap();
+    ensure_no_interrupted_upgrade(&backups).unwrap();
 }
 
 #[cfg(unix)]

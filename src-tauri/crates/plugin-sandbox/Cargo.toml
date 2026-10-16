@@ -2,6 +2,8 @@
 name = "znet-plugin-sandbox"
 version = "0.0.1"
 edition = "2021"
+license = "MPL-2.0"
+license-file = "../../../LICENSE"
 rust-version = "1.87"
 publish = false
 

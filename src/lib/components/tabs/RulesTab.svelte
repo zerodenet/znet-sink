@@ -1,4 +1,10 @@
 <script lang="ts">
+  import RouteRulesWorkspace from './RouteRulesWorkspace.svelte';
+  import RuleSetMigrationDialog from './RuleSetMigrationDialog.svelte';
+  let routeSection=$state(false),routeMounted=$state(false);
+  let routeWorkspace:{requestLeave(next:()=>void):void}|undefined=$state();
+  function selectSection(next:boolean){if(next===routeSection)return;if(busy||showEditor){pageError='请先完成或关闭当前规则集编辑操作。';return;}const change=()=>{routeSection=next;if(next)routeMounted=true;};if(routeSection)routeWorkspace?.requestLeave(change);else change();}
+
   import { getProfileSettings } from '$lib/services/core';
   import {saveProfileSettings, restoreProfileSettings, isLocallyEdited, type ProfileSettings} from '$lib/services/profile-settings';
   let profileSnapshot = $state<ProfileSettings | null>(null);
@@ -25,7 +31,6 @@
     getCommonRuleInjectionStatus,
     getRuleSet,
     listRuleSets,
-    removeRuleSet,
     setCommonRuleBinding,
     updateAllRuleSets,
     updateBuiltinRuleSets,
@@ -52,12 +57,10 @@
   let updatingId = $state<string | null>(null);
   let updatingAll = $state(false);
   let updatingBuiltins = $state(false);
-  let deletingId = $state<string | null>(null);
-  let pendingDelete = $state<RuleSetSummary | null>(null);
+  let migrationDialog:{begin(ruleSetId:string):Promise<void>}|undefined=$state();
   let loadError = $state('');
   let pageError = $state('');
   let editorError = $state('');
-  let deleteError = $state('');
   let showEditor = $state(false);
   let editingId = $state<string | undefined>();
   let name = $state('');
@@ -78,7 +81,7 @@
 
   const sourceCount = $derived(items.filter((item) => item.source).length);
   const readyCount = $derived(items.filter((item) => item.artifact).length);
-  const busy = $derived(saving || updatingId !== null || updatingAll || updatingBuiltins || deletingId !== null || commonSaving || bindingId !== null || loadingDetailId !== null);
+  const busy = $derived(saving || updatingId !== null || updatingAll || updatingBuiltins || commonSaving || bindingId !== null || loadingDetailId !== null);
   const canSave = $derived(
     !busy
       && name.trim().length > 0
@@ -345,29 +348,7 @@
 
   function requestRemove(item: RuleSetSummary) {
     if (busy) return;
-    deleteError = '';
-    pendingDelete = item;
-  }
-
-  function cancelRemove() {
-    if (deletingId) return;
-    pendingDelete = null;
-    deleteError = '';
-  }
-
-  async function confirmRemove() {
-    if (!pendingDelete || busy) return;
-    const id = pendingDelete.id;
-    deletingId = id;
-    try {
-      await removeRuleSet(id);
-      pendingDelete = null;
-      await load(false);
-    } catch (cause) {
-      deleteError = getAppErrorMessage(cause, '删除规则集失败');
-    } finally {
-      deletingId = null;
-    }
+    void migrationDialog?.begin(item.id);
   }
 
   async function updateAll() {
@@ -418,7 +399,9 @@
   }
 </script>
 
-<div class="desk-card rules-root animate-fade-in">
+<div class="rule-sections" aria-label="路由与规则集页面"><Button variant={!routeSection?'secondary':'outline'} onclick={()=>selectSection(false)}>规则集</Button><Button variant={routeSection?'secondary':'outline'} onclick={()=>selectSection(true)}>路由规则</Button></div>
+{#if routeMounted}<div class:hidden={!routeSection} class="route-section"><RouteRulesWorkspace bind:this={routeWorkspace} active={routeSection}/></div>{/if}
+<div class:hidden={routeSection} class="desk-card rules-root animate-fade-in">
   <div class="panel-header">
     <div class="panel-title-group">
       <span class="panel-title">规则集</span>
@@ -891,40 +874,14 @@
   {/snippet}
 </DraggableModal>
 
-<DraggableModal
-  title="删除规则集"
-  description="此操作会删除管理记录和订阅关联；已发布的不可变 ZRS 文件会保留，以免影响仍在映射它的内核进程。"
-  open={pendingDelete !== null}
-  onClose={cancelRemove}
-  closeDisabled={deletingId !== null}
-  width="min(440px, 90vw)"
->
-  <div class="delete-confirmation">
-    <div class="delete-confirmation-icon">
-      <AlertTriangle class="h-5 w-5" />
-    </div>
-    <div class="delete-confirmation-copy">
-      <span class="delete-confirmation-title">确定删除“{pendingDelete?.name}”吗？</span>
-      <span>删除后，引用该规则集的配置可能无法继续正常工作。</span>
-    </div>
-  </div>
-
-  {#if deleteError}
-    <div class="error-banner modal-error" role="alert">
-      <AlertTriangle class="h-3.5 w-3.5" />
-      <span>{deleteError}</span>
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    <Button variant="outline" onclick={cancelRemove} disabled={deletingId !== null}>取消</Button>
-    <Button variant="destructive" onclick={confirmRemove} disabled={deletingId !== null}>
-      {deletingId ? '删除中...' : '确认删除'}
-    </Button>
-  {/snippet}
-</DraggableModal>
+<RuleSetMigrationDialog bind:this={migrationDialog} onSaved={()=>load(false)}/>
 
 <style>
+  .rule-sections{display:flex;gap:8px;flex-wrap:wrap;padding:8px 12px;}
+  .rule-sections :global(button){min-height:44px;}
+  .route-section{flex:1;min-height:0;min-width:0;}
+  .route-section.hidden,.rules-root.hidden{display:none;}
+
   .rules-root {
     flex: 1;
     min-height: 0;
@@ -1341,40 +1298,6 @@
     display: flex;
     align-items: flex-start;
     gap: 12px;
-  }
-
-  .delete-confirmation {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 4px 0;
-  }
-
-  .delete-confirmation-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--destructive) 10%, transparent);
-    color: var(--destructive);
-    flex-shrink: 0;
-  }
-
-  .delete-confirmation-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    color: var(--muted-foreground);
-    font-size: 11.5px;
-    line-height: 1.5;
-  }
-
-  .delete-confirmation-title {
-    color: var(--foreground);
-    font-size: 12.5px;
-    font-weight: 600;
   }
 
   .form-row {

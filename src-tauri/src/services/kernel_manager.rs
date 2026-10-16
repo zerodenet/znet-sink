@@ -123,6 +123,7 @@ pub fn prepare_version(
     install_dir: Option<String>,
     app: AppHandle,
 ) -> AppResult<PreparedKernelInstall> {
+    crate::mobile_host::require_desktop_runtime("kernel_install_version")?;
     let dir = resolve_install_dir(install_dir)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::internal(format!("failed to create install dir: {e}")))?;
@@ -298,6 +299,7 @@ pub fn prepare_version(
 }
 
 pub fn detect_installed_version(config: &AppCoreConfig) -> AppResult<KernelVersionDetect> {
+    crate::mobile_host::require_desktop_runtime("kernel_detect_version")?;
     let _files = install::lock_installed_files()?;
     let executable_path = core_config::resolve_executable_path(config);
 
@@ -419,7 +421,7 @@ fn parse_release(
 ///
 /// We also respect GitHub's `prerelease` flag and explicit nightly/dev/canary
 /// keywords so that mislabeled releases are still routed correctly.
-fn classify_channel(tag: &str, prerelease: bool) -> ReleaseChannel {
+pub(crate) fn classify_channel(tag: &str, prerelease: bool) -> ReleaseChannel {
     let tag_lower = tag.to_ascii_lowercase();
     if tag_lower.contains("nightly") || tag_lower.contains("dev") || tag_lower.contains("canary") {
         ReleaseChannel::Nightly

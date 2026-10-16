@@ -245,3 +245,70 @@ test('upgrade from old capability and downgrade on unsupported query are redisco
 test('misadvertised unsupported query cannot create an immediate rediscovery loop',async()=>{
  const g=new FixtureGateway();let queries=0;g.page=async()=>{queries++;throw{code:'unsupported'};};const s=await started(g);try{assert(queries<=2);assert.equal(s.view.discovery,null);assert(s.view.stale);}finally{s.dispose();}
 });
+
+test('plane controls derive from actual metrics without inventing Flow Inner Outer or Host',async()=>{
+ const {availablePlanes}=await import('../src/lib/features/traffic/presentation.ts');
+ assert.deepEqual(availablePlanes([]),[]);
+ const snapshot=sample();snapshot.planes=snapshot.planes.filter(plane=>plane.plane==='inner');
+ assert.deepEqual(availablePlanes([snapshot]),['inner']);
+ snapshot.planes[0].available_metrics=[];assert.deepEqual(availablePlanes([snapshot]),[]);
+ snapshot.planes[0].available_metrics=['rx_bytes'];snapshot.planes[0].plane='custom';assert.deepEqual(availablePlanes([snapshot,snapshot]),['custom']);
+});
+
+test('background suspends UI polling while shared events remain owned; foreground rechecks and rebaselines',async()=>{
+ let now=10000;const g=new FixtureGateway();const s=await started(g,()=>now);try{
+  const key=scopeKey(scopes[0]);g.advance([0]);g.push([0]);assert(s.view.rows[key].rates['flow.bytes_down']!==null);
+  s.setVisible(false);const queries=g.queries.length;const stops=g.stops;
+  now+=60000;s.tick();g.status('gap');g.advance([0]);g.push([0]);await flush();
+  assert.equal(g.queries.length,queries);assert.equal(g.stops,stops);assert(s.view.stale);
+  assert.equal(s.view.rows[key].rates['flow.bytes_down'],undefined);
+  s.setVisible(true);await flush();assert(g.queries.length>queries);assert.equal(g.stops,stops);
+  assert(!s.view.stale);assert.equal(s.view.rows[key].rates['flow.bytes_down'],null);
+ }finally{s.dispose();}
+});
+
+function hostSample() {
+ const host=sample({kind:'host_interface',name:'test-only-interface'});
+ host.planes=[{...host.planes[1],plane:'host',accounting_basis:'os_interface_counters'}];
+ host.source_sampled_at_monotonic_ns='9007199254740993000';
+ host.source_sampled_at_unix_ms=host.sampled_at_unix_ms;
+ return host;
+}
+test('Host public identity and separate plane are lossless, never an endpoint or Flow alias',()=>{
+ const host=hostSample();host.planes[0].counters.rx_bytes='18446744073709551615';
+ const decoded=snapshot(host);assert.equal(decoded.scope.kind,'host_interface');assert.equal(decoded.scope.name,'test-only-interface');
+ assert.equal(metric(decoded.planes[0],'rx_bytes'),18446744073709551615n);
+ assert.notEqual(scopeKey(host.scope),scopeKey({kind:'endpoint',endpoint_id:host.scope.name}));
+ assert.throws(()=>snapshot({...host,scope:{kind:'endpoint',endpoint_id:'test-only-interface'}}),/Host/);
+ assert.throws(()=>snapshot({...host,planes:[{...host.planes[0],plane:'inner'}]}),/Host/);
+ assert.throws(()=>snapshot({...host,scope:{kind:'host_interface',name:''}}),/身份/);
+});
+test('Host rates use OS source reads, never query timestamps, and unavailable fields remain unknown',()=>{
+ const first=hostSample(),previous=observe(undefined,first,true),next=structuredClone(first);
+ next.sampled_at_monotonic_ns=String(BigInt(first.sampled_at_monotonic_ns)+1_000_000_000n);
+ next.planes[0].counters.rx_bytes=String(BigInt(first.planes[0].counters.rx_bytes)+1000n);
+ assert.equal(observe(previous,next,true).rates['host.rx_bytes'],null);
+ next.source_sampled_at_monotonic_ns=String(BigInt(first.source_sampled_at_monotonic_ns)+2_000_000_000n);
+ assert.equal(observe(previous,next,true).rates['host.rx_bytes'],500);
+ next.source_sampled_at_monotonic_ns=null;assert.equal(observe(previous,next,true).rates['host.rx_bytes'],null);
+ next.planes[0].available_metrics=[];assert.equal(observe(previous,next,true).rates['host.rx_bytes'],null);
+});
+test('Host discovery opts every page in only after exact capability and never creates a reset plan',async()=>{
+ const {hostSupported}=await import('../src/lib/features/traffic/policy.ts');
+ const g=new FixtureGateway();g.caps.capabilities.features.push('traffic_host_interface_statistics_v1');
+ assert(!hostSupported(g.caps));g.caps.capabilities.trafficStatistics.host_interface_sampling=true;assert(hostSupported(g.caps));
+ g.caps.capabilities.trafficStatistics.resettable_scopes.push('host_interface');g.rows.push(hostSample());g.pageLimit=2;
+ const s=await started(g);try{
+  assert(g.queries.length>1);assert(g.queries.every(q=>q.include_host_interfaces===true));
+  const key=scopeKey(g.rows.at(-1).scope);assert.equal(s.view.rows[key].snapshot.planes[0].plane,'host');
+  assert.match(resetReason(g.caps,g.rows.at(-1)),/只读/);assert.throws(()=>s.plan([key]),/只读/);assert.equal(g.commands.length,0);
+  g.caps.capabilities.trafficStatistics.host_interface_sampling=false;g.rows.pop();g.registry='2';await s.refresh(true);
+  assert.equal(s.view.rows[key],undefined);assert.equal(g.queries.at(-1).include_host_interfaces,undefined);
+ }finally{s.dispose();}
+ const rogue=new FixtureGateway();rogue.rows.push(hostSample());const rejected=await started(rogue);try{assert(rejected.view.stale);assert.equal(rejected.view.order.length,0);assert.match(String(rejected.view.error),/未协商/);}finally{rejected.dispose();}
+});
+test('Host event has its own normalized channel and remains an exact Host sample',async()=>{
+ const {TrafficStream}=await import('../src/lib/features/traffic/stream.ts');const stream=new TrafficStream(),received=[],statuses=[];
+ const host=hostSample();stream.receive({generation:1,event:{eventType:'traffic.hostInterfacesSampled',sourceEventType:'stats.host_interfaces_sampled',sequenceExact:'1',coreInstanceId:'core-a',payload:{kind:'trafficObservation',data:{core_instance_id:'core-a',config_revision:host.config_revision,registry_revision:'1',sampled_at_unix_ms:host.sampled_at_unix_ms,scopes:[host],total:1,next_offset:null}}}},e=>received.push(e),s=>statuses.push(s));
+ assert.equal(received.length,1);assert.equal(received[0].payload.scopes[0].scope.kind,'host_interface');assert.deepEqual(statuses,[]);
+});

@@ -2,7 +2,7 @@ use std::time::Duration;
 use tauri::State;
 
 use crate::errors::{AppError, AppResult};
-use crate::models::debug::{clear_debug_frames, DebugFramePage, DebugFrameQuery};
+use crate::models::debug::{DebugFramePage, DebugFrameQuery};
 use crate::services::{connection_history_store, debug_store};
 use crate::state::app_state::AppState;
 
@@ -34,9 +34,19 @@ pub async fn gui_debug_frames(
     .map_err(|error| AppError::internal(format!("debug query worker failed: {error}")))?
 }
 
+fn history_cleanup(scope: Option<&str>) -> AppResult<bool> {
+    match scope {
+        Some(CONNECTION_HISTORY_SCOPE) => Ok(true),
+        None | Some("all" | "debug-capture") => Ok(false),
+        _ => Err(AppError::invalid_argument(
+            "未知清理范围；仅允许调试捕获或明确连接历史",
+        )),
+    }
+}
 #[tauri::command]
 pub async fn gui_debug_clear(state: State<'_, AppState>, scope: Option<String>) -> AppResult<()> {
     let operation_scope = scope.clone().unwrap_or_else(|| "all".into());
+    let history = history_cleanup(scope.as_deref())?;
     crate::services::native_operation::execute_async(
         state.inner(),
         "diagnostic.clear",
@@ -44,12 +54,11 @@ pub async fn gui_debug_clear(state: State<'_, AppState>, scope: Option<String>) 
         Duration::from_secs(30),
         async move {
             tauri::async_runtime::spawn_blocking(move || {
-                if scope.as_deref() == Some(CONNECTION_HISTORY_SCOPE) {
+                if history {
                     return connection_history_store::clear();
                 }
-                clear_debug_frames();
                 debug_store::clear()?;
-                connection_history_store::clear()
+                Ok(())
             })
             .await
             .map_err(|error| AppError::internal(format!("debug clear worker failed: {error}")))?
@@ -81,9 +90,34 @@ pub async fn gui_connection_history_export(
 
 /// Detail capture is a temporary diagnostic session, never enabled at startup.
 #[tauri::command]
-pub fn gui_debug_capture(enabled: Option<bool>) -> crate::models::debug::CaptureStatus {
-    match enabled {
-        Some(enabled) => crate::models::debug::set_capture(enabled),
-        None => crate::models::debug::capture_status(),
+pub async fn gui_debug_capture(
+    state: State<'_, AppState>,
+    window: tauri::Window,
+    enabled: Option<bool>,
+) -> AppResult<crate::models::debug::CaptureStatus> {
+    crate::services::native_documents::require_host(window.label())?;
+    if let Some(enabled) = enabled {
+        crate::services::native_operation::execute_async(
+            state.inner(),
+            "diagnostic.capture",
+            "ipc-detail",
+            Duration::from_secs(15),
+            async { crate::models::debug::set_capture(enabled) },
+        )
+        .await
+    } else {
+        Ok(crate::models::debug::capture_status())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cleanup_scope_never_broadens_to_connection_history() {
+        for scope in [None, Some("all"), Some("debug-capture")] {
+            assert!(!super::history_cleanup(scope).unwrap());
+        }
+        assert!(super::history_cleanup(Some("connection-history")).unwrap());
+        assert!(super::history_cleanup(Some("new-config")).is_err());
     }
 }

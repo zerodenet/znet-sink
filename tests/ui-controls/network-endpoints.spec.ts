@@ -19,6 +19,11 @@ test('endpoint refresh failures and card facts keep the entire directory layout 
     [...panel.querySelectorAll('header,.search,.endpoint-card,.endpoint-card footer')].map(el=>{
       const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};
     }));
+  // Measure after the finite page entrance transition. A cold render can be
+  // visible while its transform is still moving by a fraction of a pixel.
+  await page.locator('.endpoints-panel').evaluate(async () => {
+    await Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
+  });
   const before=await boxes();
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('fixture-endpoint-read-state',{detail:{delay:200,catalogError:true}})));
   await page.clock.runFor(6000);

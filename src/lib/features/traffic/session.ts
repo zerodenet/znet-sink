@@ -1,6 +1,6 @@
 import type { TrafficDiscovery, TrafficGateway, TrafficSnapshot, TrafficPage, TrafficEvent, StreamStatus, ResetInput, ResetSnapshot } from '$lib/features/traffic/types';
 import { scopeKey } from '$lib/features/traffic/types';
-import { supported, samplingSupported, resetReason, errorCode } from '$lib/features/traffic/policy';
+import { supported, samplingSupported, hostSupported, resetReason, errorCode } from '$lib/features/traffic/policy';
 import { inventory } from '$lib/features/traffic/inventory';
 import { observe, rebaseline, type Observation } from '$lib/features/traffic/history';
 
@@ -20,6 +20,8 @@ export interface TrafficView {
 export class TrafficSession {
   view: TrafficView = { discovery: null, rows: {}, order: [], loading: false, stale: true, streaming: false, resetting: false, error: null, result: null };
   private alive = true;
+  private visible = true;
+  private started = false;
   private revision = 0;
   private stop?: () => void;
   private timer?: ReturnType<typeof setInterval>;
@@ -48,12 +50,22 @@ export class TrafficSession {
     this.publish(this.view);
   }
   async start() {
+    this.started = true;
     await this.refresh(true);
     if (!this.alive) return;
     try { this.stop = await this.gateway.subscribe(e => this.event(e), s => this.status(s)); }
     catch { this.status('offline'); }
     if (!this.alive) { this.stop?.(); return; }
     this.timer = setInterval(() => this.tick(), 1000);
+  }
+  /** UI suspension never closes the application-owned event channel. */
+  setVisible(visible: boolean) {
+    if (!this.alive || visible === this.visible) return;
+    this.visible = visible;
+    this.invalidate();
+    this.events.clear();
+    this.pendingRecovery = true;
+    if (visible && this.started) void this.refresh(true);
   }
   watch(keys: string[]) {
     // Retain recently viewed scopes across filters, pagination and navigation.
@@ -69,7 +81,7 @@ export class TrafficSession {
     if (changed) this.emit({ rows });
   }
   private tick() {
-    if (!this.alive || this.view.resetting || this.work) return;
+    if (!this.alive || !this.visible || this.view.resetting || this.work) return;
     if (!supported(this.view.discovery)) {
       if (this.now() - this.lastAttempt >= (this.view.discovery ? 30_000 : 3000)) void this.refresh(true);
       return;
@@ -93,7 +105,7 @@ export class TrafficSession {
       this.emit({ streaming });
       this.invalidate();
       this.pendingRecovery = true;
-      if (!this.view.resetting) void this.refresh(state === 'subscribed');
+      if (this.visible && !this.view.resetting) void this.refresh(state === 'subscribed');
     }
   }
   refresh(rediscover = false): Promise<void> {
@@ -117,7 +129,7 @@ export class TrafficSession {
         }
         const maximum = this.view.discovery!.capabilities.trafficStatistics!.maximum_page_size;
         if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error('内核分页能力无效');
-        const page = await inventory(this.gateway, Math.min(64, maximum), () => this.alive && revision === this.revision);
+        const page = await inventory(this.gateway, Math.min(64, maximum), () => this.alive && revision === this.revision, hostSupported(this.view.discovery));
         if (!this.alive || revision !== this.revision) return;
         this.acceptInventory(page);
         this.lastQuery = this.now();
@@ -133,7 +145,7 @@ export class TrafficSession {
       } finally {
         this.work = undefined;
         this.emit({ loading: false });
-        if (this.alive && this.pendingRecovery && !this.view.resetting) {
+        if (this.alive && this.visible && this.pendingRecovery && !this.view.resetting) {
           this.pendingRecovery = false;
           void this.refresh(true);
         } else if (this.alive && !this.view.stale && !this.view.resetting) {
@@ -172,6 +184,7 @@ export class TrafficSession {
   }
   private event(event: TrafficEvent) {
     if (!this.alive || this.retiredInstances.includes(event.instance) || (this.view.discovery && !supported(this.view.discovery))) return;
+    if (!this.visible) { this.pendingRecovery = true; return; }
     const snapshots = event.type === 'sample' ? (event.payload as TrafficPage).scopes : (event.payload as ResetSnapshot).snapshots;
     if (event.instance !== this.instance || (event.type === 'sample' && (event.payload as TrafficPage).config_revision !== this.config)) {
       this.recover(); return;
@@ -192,6 +205,7 @@ export class TrafficSession {
     }
   }
   private sample(snapshot: TrafficSnapshot) {
+    if(snapshot.scope.kind==='host_interface'&&!hostSupported(this.view.discovery))return;
     const key = scopeKey(snapshot.scope), previous = this.view.rows[key];
     if (this.retiredEpochs.get(key)?.includes(snapshot.stats_epoch)) return;
     if (!previous || snapshot.stats_epoch !== previous.snapshot.stats_epoch || snapshot.generation !== previous.snapshot.generation || snapshot.config_revision !== this.config) {
@@ -207,7 +221,7 @@ export class TrafficSession {
       else { this.revision++; this.emit({ stale: true }); }
     }
     this.pendingRecovery = true;
-    if (!this.work && !this.view.resetting) { this.pendingRecovery = false; void this.refresh(true); }
+    if (this.visible && !this.work && !this.view.resetting) { this.pendingRecovery = false; void this.refresh(true); }
   }
   plan(keys: string[]): ResetInput {
     if (this.view.stale || this.view.loading || this.view.resetting || !this.instance) throw new Error('请先完成统计同步');

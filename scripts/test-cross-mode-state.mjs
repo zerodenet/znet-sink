@@ -51,13 +51,11 @@ assert.ok(
 
 assert.ok(
   configEditor.includes("import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte'")
-    && configEditor.includes('private sourceProfileId: string | null = null')
-    && configEditor.includes('private sourceProfileUpdatedAt: number | null = null')
     && configEditor.includes('proxyConfigSignal.onActiveChanged')
-    && configEditor.includes('reconcileExternalSource()')
-    && configEditor.includes('snapshot.profileId !== this.sourceProfileId')
-    && configEditor.includes('snapshot.sourceUpdatedAtUnixMs !== this.sourceProfileUpdatedAt'),
-  'the singleton Pro config editor must reconcile its source identity instead of retaining a stale profile after Lite switches',
+    && configEditor.includes('reconcileExternalSource()'),
+  // Dirty drafts, opaque binding changes and late results are exercised by
+  // test-config-workspace.mjs; this check only owns cross-mode signal wiring.
+  'the singleton Pro config workspace must subscribe to active-source changes after Lite switches',
 );
 
 assert.ok(
@@ -111,7 +109,7 @@ assert.ok(
     && !appStore.includes("from './gui-state.svelte'")
     && !guiState.includes('async prepareLiteCapture()')
     && appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
-    && appStore.includes("if (this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
+    && appStore.includes("if (!this.mobilePresentation && this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
     && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
   'mode switching must preserve capture state and synchronously apply only the presentation boundary',
