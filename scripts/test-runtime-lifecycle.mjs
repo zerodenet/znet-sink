@@ -76,9 +76,9 @@ assert.ok(
 );
 assert.ok(
   tunShutdown.includes('next.tun.enabled = Some(false);')
-    && coreProcessService.indexOf('clear_saved_tun_intent(')
-      < coreProcessService.indexOf('state.runtime_host().run("shutdown"')
-    && coreProcessService.includes('if let Err(error) = saved_intent'),
+    && coreProcessService.includes('if let Err(error) = saved_intent')
+    && coreProcessService.indexOf('persist_exit_tun_intent(&stop_app);')
+      < coreProcessService.indexOf('state.runtime_host().run("shutdown"'),
   'exit must persist TUN OFF even without an owned child, while storage failure must not abort runtime cleanup',
 );
 

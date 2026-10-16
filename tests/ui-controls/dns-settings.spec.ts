@@ -35,3 +35,18 @@ test('unavailable target inventory does not misreport an existing detour as dele
   await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeEnabled();
   await expect(page.getByText('出站 wg-a 已不存在', { exact: false })).toHaveCount(0);
 });
+
+test('unavailable rule inventory reports an unknown reference instead of a deleted rule', async ({ page }) => {
+  await page.goto('/?panel=dns&mode=rule-read-failure', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('规则集引用暂未确认：Rule inventory unavailable')).toBeVisible();
+  await expect(page.getByText('以下 DNS 分流引用已失效：', { exact: false })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '重试读取', exact: true }).click();
+  await expect(page.getByText('以下 DNS 分流引用已失效：', { exact: false })).toHaveCount(0);
+});
+
+test('confirmed missing rules still block applying DNS configuration', async ({ page }) => {
+  await page.goto('/?panel=dns&mode=rule-missing', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('以下 DNS 分流引用已失效：dler-domestic。请选择现有规则集或删除对应分流。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeDisabled();
+});

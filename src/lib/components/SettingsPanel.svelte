@@ -33,7 +33,7 @@
 
   const sections = $derived.by(() =>
     (store.uiMode === 'lite'
-      ? allSections.filter((section) => section.id !== 'config' && section.id !== 'tun')
+      ? allSections.filter((section) => section.id === activeSection || (section.id !== 'config' && section.id !== 'tun'))
       : allSections
     ).map((section) => ({ ...section, group: sectionGroups[section.id] })),
   );
@@ -55,19 +55,8 @@
     }
   });
 
-  // TUN parameters and the live kernel config editor are Pro-only settings.
-  // Lite consumes the persisted TUN configuration without exposing another
-  // configuration surface.
-  $effect(() => {
-    if (store.uiMode === 'lite' && (activeSection === 'config' || activeSection === 'tun')) {
-      activeSection = 'general';
-      store.settingsSection = 'general';
-    }
-  });
-
   $effect(() => {
     const section = activeSection;
-    if (store.uiMode === 'lite' && (section === 'config' || section === 'tun')) return;
 
     ActivePanel = null;
     panelLoadError = null;

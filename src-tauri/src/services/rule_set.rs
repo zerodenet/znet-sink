@@ -489,15 +489,48 @@ pub(crate) async fn sync_managed_subscription_sources(
         });
     }
 
-    let mut next = current;
+    // Another subscription or manual rule may have completed while downloads
+    // were in flight. Replace only this subscription's namespace.
+    let mut rules = lock(state.rule_sets(), "rule_set")?;
+    let mut next = rules.clone();
     next.retain(|item| !item.id.starts_with(&id_prefix));
     next.extend(prepared);
     domain_store::save_rule_sets(&next)?;
-    *lock(state.rule_sets(), "rule_set")? = next;
+    *rules = next;
     Ok(ManagedRuleSetSyncOutcome {
         artifacts,
         failures,
     })
+}
+
+pub(crate) fn subscription_sources(
+    state: &AppState,
+    subscription_id: &str,
+) -> AppResult<Vec<RuleSetProfile>> {
+    let prefix = managed_rule_set_id_prefix(subscription_id);
+    Ok(lock(state.rule_sets(), "rule_set")?
+        .iter()
+        .filter(|item| item.id.starts_with(&prefix))
+        .cloned()
+        .collect())
+}
+
+// The caller owns subscription_syncs for this subscription. Published ZRS
+// generations are immutable: retain their files so active connections and an
+// uncertain runtime application can continue using the exact referenced data.
+pub(crate) fn restore_subscription_sources(
+    state: &AppState,
+    subscription_id: &str,
+    previous: Vec<RuleSetProfile>,
+) -> AppResult<()> {
+    let prefix = managed_rule_set_id_prefix(subscription_id);
+    let mut rules = lock(state.rule_sets(), "rule_set")?;
+    let mut next = rules.clone();
+    next.retain(|item| !item.id.starts_with(&prefix));
+    next.extend(previous);
+    domain_store::save_rule_sets(&next)?;
+    *rules = next;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

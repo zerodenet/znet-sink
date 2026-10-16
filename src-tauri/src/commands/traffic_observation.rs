@@ -2,7 +2,7 @@ use crate::{
     errors::AppResult,
     models::core::CoreIpcOptions,
     services::{
-        common, core_config, interaction_mode,
+        common, core_config,
         traffic_observation::{self, ListInput, ResetInput, Scope},
     },
     state::app_state::AppState,
@@ -10,7 +10,6 @@ use crate::{
 use serde_json::Value;
 use tauri::State;
 fn options(state: &AppState) -> AppResult<CoreIpcOptions> {
-    interaction_mode::require_pro_mode(state, "traffic_observation")?;
     Ok(core_config::ipc_options_from_app_config(
         &common::lock(state.app_config(), "app_config")?.core,
     ))

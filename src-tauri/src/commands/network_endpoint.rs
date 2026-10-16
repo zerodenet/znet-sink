@@ -1,7 +1,7 @@
 use crate::errors::AppResult;
 use crate::models::core::CoreIpcOptions;
 use crate::services::{
-    common, core_config, interaction_mode,
+    common, core_config,
     network_endpoint::{
         self,
         managed::{self, ManagedCatalog, ManagedInput},
@@ -12,7 +12,6 @@ use serde_json::Value;
 use tauri::State;
 
 fn options(state: &AppState) -> AppResult<CoreIpcOptions> {
-    interaction_mode::require_pro_mode(state, "network_endpoints")?;
     Ok(core_config::ipc_options_from_app_config(
         &common::lock(state.app_config(), "app_config")?.core,
     ))
