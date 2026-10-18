@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {apkLicenseReceipt} from './license-artifact.mjs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {sha256,readTextMaterials,attachMaterials,serializeInventory,safeSource} from './license-common.mjs';
 import {mergeInventories} from './license-native-merge.mjs';
 import {applyMaterialCache,declaredLicenseUrls} from './license-materials.mjs';
@@ -41,9 +42,24 @@ try {
   const unbound=applyMaterialCache({...inventory,entries:[{...missing,evidence:[]}]},cache);
   assert.equal(unbound.entries[0].licenseTextIds.length,0,'no identifier based guessing');
   assert.throws(()=>applyMaterialCache({...inventory,entries:[missing]},{materials:[{...cache.materials[0],text:'tampered'}]}),/digest/);
-  const android={...inventory,target:{platform:'android',profile:'release',features:[]},provenance:{kind:'fixture'},entries:[],texts:[]};
+  const android={...inventory,target:{platform:'android',triple:'aarch64-linux-android',profile:'release',features:[]},provenance:{kind:'fixture'},entries:[],texts:[]};
   assert.throws(()=>mergeInventories(android,{...android,target:{...android.target,platform:'ios'}},{...inventory,provenance:{kind:'fixture'}}),/target/);
   assert.throws(()=>mergeInventories(android,android,{...inventory,target:{...inventory.target,features:['different']},provenance:{kind:'fixture'}}),/feature/);
+  const frontend={...inventory,provenance:{kind:'fixture'}};
+  const debug={...android,target:{...android.target,profile:'debug'}};
+  assert.equal(mergeInventories(android,android,frontend).target.profile,'release');
+  assert.equal(mergeInventories(debug,debug,frontend,[],'debug').target.profile,'debug');
+  assert.throws(()=>mergeInventories(debug,debug,frontend),/target\/profile/,'default Release must reject Debug');
+  for(const [gradle,cargo,profile] of [
+    [android,debug,'debug'],[debug,android,'debug'],[debug,debug,'release'],
+    [android,android,'debug'],[debug,debug,'staging'],
+    [{...debug,target:{...debug.target,platform:'ios'}},debug,'debug'],
+    [{...debug,target:{...debug.target,triple:'x86_64-linux-android'}},debug,'debug'],
+    [debug,{...debug,target:{...debug.target,triple:'x86_64-linux-android'}},'debug'],
+    [{...debug,target:{...debug.target,triple:undefined}},debug,'debug'],
+  ])assert.throws(()=>mergeInventories(gradle,cargo,frontend,[],profile),/target\/profile/);
+  const staging={...android,target:{...android.target,profile:'staging'}};
+  assert.throws(()=>mergeInventories(staging,staging,frontend,[],'staging'),/target\/profile/);
   const frontendPath=join(dir,'frontend.json'),apk=join(dir,'fixture.apk');
   writeFileSync(frontendPath,JSON.stringify(inventory));
   const packaged={...android,target:{...android.target,triple:'aarch64-linux-android'},provenance:{kind:'fixture',inputs:[{label:'frontend-inventory',sha256:sha256(JSON.stringify(inventory))}]},gaps:[]};
@@ -51,5 +67,52 @@ try {
   assert.equal(apkLicenseReceipt(apk,frontendPath).receipt.nativePayloads.length,1);
   writeFileSync(frontendPath,JSON.stringify({...inventory,provenance:{kind:'stale'}}));
   assert.throws(()=>apkLicenseReceipt(apk,frontendPath),/stale frontend/);
-  console.log('License inventory tests: provenance/material/target/artifact assertions passed (including exact UTF-8 BOM bytes)');
+
+  // Exercise the actual CLI merge and APK receipt paths using synthetic ZIP
+  // fixtures only. Real reviewed cache hashes are freshness inputs, not legal
+  // attribution inferred for these fixture packages.
+  const labels=['resources/licenses/frontend-package-materials.json','resources/licenses/rust-package-materials.json'];
+  const cliFrontend={...frontend,provenance:{kind:'fixture',inputs:labels.map(label=>({label,sha256:sha256(readFileSync(new URL(`../${label}`,import.meta.url)))}))}};
+  writeFileSync(frontendPath,JSON.stringify(cliFrontend));
+  const gradlePath=join(dir,'gradle.json'),cargoPath=join(dir,'cargo.json'),mergedPath=join(dir,'native.json');
+  writeFileSync(gradlePath,JSON.stringify(debug));writeFileSync(cargoPath,JSON.stringify(debug));
+  const mergeArgs=[fileURLToPath(new URL('./license-native-merge.mjs',import.meta.url)),'--gradle',gradlePath,'--cargo',cargoPath,'--frontend',frontendPath,'--output',mergedPath,'--materials-cache',fileURLToPath(new URL('../resources/licenses/authoritative-materials.json',import.meta.url))];
+  const run=args=>execFileSync(process.execPath,args,{encoding:'utf8',stdio:'pipe'});
+  assert.throws(()=>run(mergeArgs),/target\/profile/);
+  run([...mergeArgs,'--profile','debug']);
+  const merged=JSON.parse(readFileSync(mergedPath,'utf8'));
+  assert.equal(merged.target.profile,'debug');
+  assert.equal(merged.target.triple,'aarch64-linux-android');
+  assert.throws(()=>run([...mergeArgs,'--profile','staging']),/target\/profile/);
+  const pack=value=>execFileSync('python3',['-c',"import zipfile,sys; a=zipfile.ZipFile(sys.argv[1],'w'); a.writestr('assets/license-inventory.native.json',sys.argv[2]); a.writestr('lib/arm64-v8a/libgui_lib.so',b'synthetic test payload'); a.close()",apk,JSON.stringify(value)]);
+  pack(merged);
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath),/target\/profile/);
+  const receipt=apkLicenseReceipt(apk,frontendPath,null,'debug').receipt;
+  assert.equal(receipt.kind,'actual-debug-android-package-license-receipt');
+  assert.equal(receipt.artifact.sha256,sha256(readFileSync(apk)));
+  assert(receipt.limitation.includes('does not verify signing or installability'));
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath,null,'staging'),/target\/profile/);
+  const receiptPath=join(dir,'receipt.json'),withReceipt=join(dir,'with-receipt.json');
+  const artifactArgs=[fileURLToPath(new URL('./license-artifact.mjs',import.meta.url)),'--apk',apk,'--frontend',frontendPath,'--output',withReceipt,'--receipt',receiptPath];
+  assert.throws(()=>run(artifactArgs),/target\/profile/);
+  run([...artifactArgs,'--profile','debug']);
+  assert.equal(JSON.parse(readFileSync(receiptPath,'utf8')).kind,'actual-debug-android-package-license-receipt');
+  for(const target of [{...merged.target,profile:'release'},{...merged.target,profile:'staging'},{...merged.target,triple:'x86_64-linux-android'},{...merged.target,platform:'ios'}]) {
+    pack({...merged,target});
+    assert.throws(()=>apkLicenseReceipt(apk,frontendPath,null,'debug'),/target\/profile/);
+  }
+  pack(merged);
+  writeFileSync(frontendPath,JSON.stringify({...cliFrontend,provenance:{kind:'stale-debug'}}));
+  assert.throws(()=>apkLicenseReceipt(apk,frontendPath,null,'debug'),/stale frontend/);
+  writeFileSync(frontendPath,JSON.stringify(cliFrontend));
+  pack({...merged,provenance:{...merged.provenance,inputs:merged.provenance.inputs.map(input=>input.label==='resources/licenses/android-package-materials.json'?{...input,sha256:'0'.repeat(64)}:input)}});
+  assert.throws(()=>run([...artifactArgs,'--profile','debug']),/Stale or missing package material input/);
+  writeFileSync(gradlePath,JSON.stringify(android));writeFileSync(cargoPath,JSON.stringify(android));
+  run(mergeArgs);
+  const releaseMerged=JSON.parse(readFileSync(mergedPath,'utf8'));
+  assert.equal(releaseMerged.target.profile,'release');
+  pack(releaseMerged);
+  run(artifactArgs);
+  assert.equal(JSON.parse(readFileSync(receiptPath,'utf8')).kind,'actual-unsigned-android-package-receipt');
+  console.log('License inventory tests: provenance/material/target/artifact assertions passed (including exact UTF-8 BOM bytes and explicit Debug/Release isolation)');
 }finally{rmSync(dir,{recursive:true,force:true});}

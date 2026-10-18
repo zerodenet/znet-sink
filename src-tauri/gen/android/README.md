@@ -12,9 +12,10 @@ keyboard is hidden before navigating. Closing the UI does not issue a VPN stop
 command or own any future native runtime service. Device
 behavior, including Samsung keyboard/gesture combinations, remains unvalidated.
 
-Release and Debug signing configurations are explicitly unset. Building this
-host must not create signing credentials or a debug keystore. The unsigned
-Release artifact is not directly installable and is not a signed distribution.
+Release signing remains unset. The separate Debug variant uses a temporary SDK
+development key, the `.debug` application ID suffix and a Debug label. The shared
+build helper deletes that key on exit and never uploads it. The unsigned Release
+artifact is not directly installable and is not a signed distribution.
 There is no VpnService in this host: the mobile runtime capability snapshot
 continues to explain why VPN forwarding is unavailable. A successful APK build
 cannot satisfy the pending core/platform data-plane acceptance.
@@ -49,3 +50,6 @@ WebViewCompat-discovered provider's application details, an explicit recheck and
 UI close. It does not guess a package name or grant permissions. Provider
 updates may require the OS to restart the app. Original Galaxy S8 firmware and
 actual provider-update behavior remain unvalidated.
+
+For the installable development host and USB/Chrome inspection procedure, see
+[the Debug guide](../../../../docs/gui/android-debug-usb-v0.0.3.md).

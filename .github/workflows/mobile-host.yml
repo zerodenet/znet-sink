@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [develop, main]
   push:
-    branches: [develop, main]
+    branches: [develop, main, feat/mobile-v0.0.3]
   workflow_dispatch:
 
 concurrency:

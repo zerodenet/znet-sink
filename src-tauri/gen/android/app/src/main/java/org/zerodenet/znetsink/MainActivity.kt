@@ -69,6 +69,12 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    // Explicitly disable the process-wide inspector in Release as well. USB
+    // inspection is a development-build capability, never a saved preference.
+    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+    // Wry can set its Rust devtools flag after this creation hook. Attachment
+    // follows that setter, so the installed Android variant remains authoritative.
+    webView.doOnAttach { WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG) }
     hostWebView = webView
     if (!WebViewCompatibility.supported(activeAgent(webView))) {
       // Wry calls this hook BEFORE its URL load/setContentView. Disable modern JS now,

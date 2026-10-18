@@ -21,6 +21,11 @@ abstract class ZnetNativeLicenseAssetTask extends DefaultTask {
 }
 
 class ZnetNativeLicenses {
+    static String profileForVariant(String variant) {
+        if (variant == 'debug' || variant.endsWith('Debug')) return 'debug'
+        if (variant == 'release' || variant.endsWith('Release')) return 'release'
+        throw new GradleException('Native license inventory requires a Debug or Release variant')
+    }
     static String hash(byte[] bytes) { MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
     static String fileHash(File file) {
         def digest = MessageDigest.getInstance('SHA-256')
@@ -50,6 +55,7 @@ class ZnetNativeLicenses {
             leaf ==~ /(?:.*[-_])?COPYRIGHT(?:[._-].*)?/ ? 'copyright' : 'license'
     }
     static Map collect(project, configuration, String variant, List artifactCollections) {
+        String profile = profileForVariant(variant)
         def entries = []
         def texts = new TreeMap<String, Map>()
         def gaps = []
@@ -244,8 +250,8 @@ class ZnetNativeLicenses {
             entry.missing.each { gaps.add([ecosystem:entry.ecosystem, id:id, reason:it]) }
             entries.add(entry)
         }
-        [schemaVersion:1, target:[platform:'android', triple:'aarch64-linux-android', profile:'release', features:[]],
-            provenance:[kind:'gradle-resolved-release-runtime', inputs:inputs.unique().sort { it.label }],
+        [schemaVersion:1, target:[platform:'android', triple:'aarch64-linux-android', profile:profile, features:[]],
+            provenance:[kind:"gradle-resolved-${profile}-runtime", inputs:inputs.unique().sort { it.label }],
             entries:entries.sort { it.id }, texts:texts.values().toList(), gaps:gaps.sort { "${it.ecosystem}:${it.id}:${it.reason}" }]
     }
 }
@@ -253,13 +259,18 @@ class ZnetNativeLicenses {
 gradle.beforeProject { project ->
     project.pluginManager.withPlugin('com.android.application') {
         String selectedConfiguration = project.findProperty('znetLicenseConfiguration') ?: 'universalReleaseRuntimeClasspath'
-        String selectedVariant = selectedConfiguration - 'RuntimeClasspath'
+        if (!selectedConfiguration.endsWith('RuntimeClasspath')) throw new GradleException('Native license inventory requires a runtime classpath')
+        String selectedVariant = selectedConfiguration.substring(0, selectedConfiguration.length() - 'RuntimeClasspath'.length())
+        String selectedProfile = ZnetNativeLicenses.profileForVariant(selectedVariant)
         def components = project.extensions.getByName('androidComponents')
         components.onVariants(components.selector().withName(selectedVariant)) { selected ->
             String configurationName = project.findProperty('znetLicenseConfiguration') ?: 'universalReleaseRuntimeClasspath'
             def configuration = project.configurations.findByName(configurationName)
-            if (configuration == null || !configuration.canBeResolved || !configurationName.toLowerCase(Locale.ROOT).endsWith('releaseruntimeclasspath')) {
-                throw new GradleException('Native license inventory requires a resolvable release runtime classpath')
+            def buildTypeAttribute = configuration?.attributes?.keySet()?.find { it.name == 'com.android.build.api.attributes.BuildTypeAttr' }
+            if (configuration == null || !configuration.canBeResolved || configurationName != "${selected.name}RuntimeClasspath" ||
+                selected.name != selectedVariant || selected.buildType != selectedProfile ||
+                buildTypeAttribute == null || configuration.attributes.getAttribute(buildTypeAttribute).toString() != selectedProfile) {
+                throw new GradleException('Native license inventory requires the matching variant/build-type runtime classpath')
             }
             String variant = configurationName - 'RuntimeClasspath'
             String suffix = variant.substring(0, 1).toUpperCase(Locale.ROOT) + variant.substring(1)
@@ -274,7 +285,7 @@ gradle.beforeProject { project ->
             }.artifacts
             def collectTask = project.tasks.register("collect${suffix}NativeLicenses") {
                 group = 'verification'
-                description = 'Collect licenses from the selected Android release runtime inputs'
+                description = 'Collect licenses from the selected Android variant runtime inputs'
                 // Always re-resolve current inputs; a stale inventory must not survive dependency changes.
                 outputs.upToDateWhen { false }
                 outputs.file(gradleInventory)
@@ -310,7 +321,7 @@ gradle.beforeProject { project ->
                     project.exec {
                         def arguments = ['node', project.file(mergePath), '--gradle', gradleInventory,
                             '--cargo', project.file(cargoPath), '--frontend', project.file(frontendPath), '--output', nativeInventory,
-                            '--materials-cache', materialsCache]
+                            '--materials-cache', materialsCache, '--profile', selectedProfile]
                         String messages = project.findProperty('znetLicenseCargoMessages')
                         if (messages) arguments.addAll(['--cargo-messages', project.file(messages)])
                         commandLine arguments

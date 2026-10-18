@@ -24,3 +24,6 @@ src-tauri/target/
 .claude/
 .codex/
 .opencode/
+
+/android-debug-host-evidence/
+__pycache__/

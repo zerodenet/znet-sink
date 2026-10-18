@@ -86,3 +86,4 @@ const config = await invoke('app_config_get');
 - [Worktree Commit Plan](./worktree-commit-plan.md)
 
 - [客户端配置优先级](./config-precedence.md)：客户端设置覆盖来源配置及公共测速地址。
+- [Android Debug 安装与 USB 调试](./android-debug-usb-v0.0.3.md)：独立开发包、临时签名、WebView 条件和真实验收边界。

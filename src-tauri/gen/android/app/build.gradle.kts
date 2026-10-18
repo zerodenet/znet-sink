@@ -24,15 +24,27 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // The build helper supplies a fresh private directory. Pin the SDK Debug
+    // signer to that directory instead of falling back to the runner's HOME.
+    // Ordinary manual Gradle builds without this variable keep the SDK default.
+    providers.environmentVariable("ANDROID_USER_HOME").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { androidUserHome ->
+            signingConfigs.getByName("debug").storeFile =
+                file(androidUserHome).resolve("debug.keystore")
+        }
     buildTypes {
         getByName("debug") {
-            // This repository does not create signing credentials, including debug keys.
-            signingConfig = null
-            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            // Development signing is isolated from the unsigned Release variant.
+            // CI uses a fresh Android user directory and never retains this key.
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+            packaging {
+                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
                 jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86_64/*.so")

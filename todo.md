@@ -1,5 +1,10 @@
 # 移动适配依赖与暂不支持项
 
+2026-10-18 增补：可安装 Debug 宿主与 USB 调试见 [指南](docs/gui/android-debug-usb-v0.0.3.md)。
+它使用临时开发签名和独立 `.debug` 包，不解除下列内核/VPN/生命周期条件；Android 原始许可
+材料仍有四项缺口。最新 develop `408327df53554c28d5efeda3ece65535cabf783c` 与本工作分支存在
+真实冲突，本批未合并；新增分支 push CI 只验证精确 head，不能用作合并后或设备验收证据。
+
 2026-10-14，v0.0.3，Draft PR #46。这里是依赖协调与解除条件的单一入口；完整 PRD 范围和已实现项沿用 [验收账本](docs/gui/mobile-acceptance-ledger-v0.0.3.md)，不另造完成标准。源码检查不是手机验收，unsupported 占位不计为已完成 VPN。用户已确认内核接入、原生VPN及宿主生命周期装配后置；该优先级不影响其验收条件，当前以独立客户端功能交付。
 
 已核实客户端 develop 为 `fd198ba52711f018334860b8a6704546ccd349fd`；客户端依赖和只读 core 工作树固定 `e74561f99acca941bfadf0d33e35a5ef08f34086`。下列 core 源码证据均针对该固定依赖。`a51c6ce` 的实际桌面 DNS 契约 CI 另验证了 develop `0926da3ea4f51a2b508a0cf31074fc2a1046b8ef`；这不升级客户端依赖，也不证明移动接口或 non-desktop TUN 编译问题已解除。只修改客户端；core 由用户协调其负责人。下列行为要求是建议验收契约，接口名称尚未决定。

@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { sha256,serializeInventory,argumentsOf,verifyMaterialInputs } from './license-common.mjs';
 import {applyMaterialCache,applyPackageMaterialCache} from './license-materials.mjs';
 
-/** @param {any} gradle @param {any} cargo @param {any} frontend @param {any[]} compilerMessages */
-export function mergeInventories(gradle,cargo,frontend,compilerMessages=[]) {
+/** @param {any} gradle @param {any} cargo @param {any} frontend @param {any[]} compilerMessages @param {string} profile */
+export function mergeInventories(gradle,cargo,frontend,compilerMessages=[],profile='release') {
   for(const input of [gradle,cargo,frontend])if(input.schemaVersion!==1||!Array.isArray(input.entries)||!Array.isArray(input.texts))throw new Error('Invalid inventory schema');
-  if(gradle.target.platform!=='android'||cargo.target.platform!=='android'||cargo.target.profile!=='release'||frontend.target.platform!=='frontend')throw new Error('Mismatched native inventory target');
+  if(!['debug','release'].includes(profile)||gradle.target?.platform!=='android'||cargo.target?.platform!=='android'||
+    gradle.target.triple!=='aarch64-linux-android'||cargo.target.triple!==gradle.target.triple||
+    gradle.target.profile!==profile||cargo.target.profile!==profile||frontend.target?.platform!=='frontend')throw new Error('Mismatched native inventory target/profile');
   if(JSON.stringify([...cargo.target.features].sort())!==JSON.stringify([...frontend.target.features].sort()))throw new Error('Frontend/native inventory feature mismatch');
   const rows=[...cargo.entries,...frontend.entries,...gradle.entries].map(/** @param {any} entry */ entry=>structuredClone(entry));
   for(const message of compilerMessages) {
@@ -30,7 +32,7 @@ if(process.argv[1]===fileURLToPath(import.meta.url)) {
   if(!gradle||!cargo||!frontend||!args.output)throw new Error('--gradle, --cargo, --frontend and --output are required');
   const read=/** @param {string} path */ path=>JSON.parse(readFileSync(path,'utf8'));
   const messages=args['cargo-messages']?readFileSync(args['cargo-messages'],'utf8').split('\n').flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}}):[];
-  let inventory=mergeInventories(read(gradle),read(cargo),read(frontend),messages);
+  let inventory=mergeInventories(read(gradle),read(cargo),read(frontend),messages,args.profile||'release');
   verifyMaterialInputs(inventory,fileURLToPath(new URL('../',import.meta.url)),['resources/licenses/frontend-package-materials.json','resources/licenses/rust-package-materials.json']);
   if(args['materials-cache']){inventory=applyMaterialCache(inventory,read(args['materials-cache']));inventory.provenance.inputs.push({label:'resources/licenses/authoritative-materials.json',sha256:sha256(readFileSync(args['materials-cache']))});}
   const packageLabel='resources/licenses/android-package-materials.json';
