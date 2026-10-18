@@ -38,6 +38,7 @@ android {
             // Development signing is isolated from the unsigned Release variant.
             // CI uses a fresh Android user directory and never retains this key.
             signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             manifestPlaceholders["usesCleartextTraffic"] = "false"
             isDebuggable = true
@@ -85,4 +86,3 @@ dependencies {
 }
 
 apply(from = "tauri.build.gradle.kts")
-apply(from = "debug-identity.gradle.kts")
