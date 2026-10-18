@@ -11,9 +11,12 @@ fi
 state=$(mktemp -d "${ZNET_DEBUG_STATE_PARENT:-${RUNNER_TEMP:-/tmp}}/znet-debug.XXXXXXXX")
 trap 'rm -rf -- "$state"' EXIT
 export ANDROID_USER_HOME="$state/android-user"
-export ANDROID_SDK_HOME="$state/android-sdk-user"
+# AGP rejects multiple preference-location variables pointing at different paths.
+# The explicit Debug storeFile and this one current SDK location own all state.
+unset ANDROID_SDK_HOME ANDROID_PREFS_ROOT
 export GRADLE_USER_HOME="$state/gradle"
 mkdir -p "$ANDROID_USER_HOME" "$GRADLE_USER_HOME" android-debug-host-evidence
+printf '%s\n' 'org.gradle.daemon=false' > "$GRADLE_USER_HOME/gradle.properties"
 # A fresh private Gradle home must not silently reuse any user's signing state.
 export CARGO_INCREMENTAL=0
 export PYTHONDONTWRITEBYTECODE=1
@@ -24,6 +27,8 @@ export ZNET_PRODUCT_FEATURES="${ZNET_PRODUCT_FEATURES:-tool-dns,tool-route,tool-
 : "${ANDROID_NDK_HOME:?Pinned Android NDK required}"
 : "${JAVA_HOME:?JDK required}"
 test -x "$JAVA_HOME/bin/java"
+test -x "$JAVA_HOME/bin/javac"
+test -x "$JAVA_HOME/bin/keytool"
 "$JAVA_HOME/bin/java" -version
 grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*27\.3\.13750724[[:space:]]*$' "$ANDROID_NDK_HOME/source.properties"
 tools="$ANDROID_HOME/build-tools/35.0.0"
