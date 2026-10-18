@@ -53,7 +53,7 @@ test ! -e "$ANDROID_USER_HOME/debug.keystore"
 # namespace; Gradle supplies the separate Android .debug application identity.
 pnpm tauri android build --debug --apk --target aarch64 --ci --config '{"build":{"beforeBuildCommand":"","devUrl":null}}' 2>&1 | tee android-debug-host-evidence/debug-build.log
 test -f "$ANDROID_USER_HOME/debug.keystore"
-git diff --exit-code -- src-tauri/Cargo.lock
+git diff --exit-code -- src-tauri/Cargo.lock src-tauri/gen/android/app/build.gradle.kts src-tauri/gen/android/app/debug-identity.gradle.kts
 (
   cd src-tauri/gen/android
   ./gradlew :app:testUniversalDebugUnitTest --no-daemon
