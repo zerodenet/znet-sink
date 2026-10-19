@@ -199,6 +199,11 @@ window.addEventListener('fixture-append-log', () => {
 });
 export const getEffectiveRuleSetOptions = async () => {
   if (new URLSearchParams(location.search).get('mode') === 'rule-read-failure') throw new Error('Rule inventory unavailable');
+  if (new URLSearchParams(location.search).get('mode') === 'client-dns-rules') return [
+    { tag: 'gui-common-domestic', name: '中国大陆域名', source: 'builtin' },
+    { tag: 'gui-common-office', name: '办公域名', source: 'local' },
+    { tag: 'subscription-media', name: '订阅媒体', source: 'subscription' },
+  ];
   return [];
 };
 export const getConfigPolicyGroups = async () => new URLSearchParams(location.search).get('panel') === 'dns'

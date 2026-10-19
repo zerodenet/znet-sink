@@ -176,8 +176,9 @@ pub struct RuleSetKernelPayload {
     pub checksum: u32,
 }
 
-/// A rule-set reference exactly as it appears in the composed Zero config.
-/// DNS dispatch consumes the effective tag, not the GUI resource id.
+/// A configuration-defined or ready client-owned rule-set reference.
+/// DNS dispatch consumes this stable tag; composition materializes referenced
+/// client assets independently of common route-rule injection.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveRuleSetOption {

@@ -11,6 +11,7 @@
   }
 
   import { Choice } from '$lib/components/ui/choice';
+  import { store } from '$lib/services/store.svelte';
   import { onMount } from 'svelte';
   import { openExternalUrl as openLink } from '$lib/services/platform';
   import { AlertTriangle, Database, ExternalLink, LayoutGrid, List, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte';
@@ -422,10 +423,11 @@
   <div class="panel-header">
     <div class="panel-title-group">
       <span class="panel-title">规则集</span>
-      <span class="panel-subtitle">管理规则源与 ZRS 产物</span>
+      <span class="panel-subtitle">统一管理路由与 DNS 分流使用的规则集</span>
     </div>
 
     <div class="header-actions">
+      <Button variant="outline" size="sm" onclick={() => store.openSettings('dns')}>DNS 分流</Button>
       <SegmentedControl.Root
         value={viewMode}
         onValueChange={(value) => setViewMode(value as ViewMode)}
