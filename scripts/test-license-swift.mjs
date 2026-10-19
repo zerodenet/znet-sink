@@ -46,6 +46,8 @@ try {
     return JSON.parse(fs.readFileSync(output));
   };
   const inventory = run();
+  assert.ok(inventory.entries.some((entry) => entry.name === 'tauri-plugin-znet-native-io'));
+  assert.ok(!inventory.entries.some((entry) => entry.name === 'znet-native-io'));
   const remote = inventory.entries.find((entry) => entry.name === 'SwiftRs');
   assert.equal(remote.version, '1.2.3');
   assert.equal(remote.declaredLicense, 'MIT');
@@ -133,6 +135,8 @@ try {
   assert.equal(run(['--build-log', buildLog]).entries.some((entry) => entry.evidence.some((evidence) => evidence.kind === 'compiled')), false);
   fs.writeFileSync(buildLog, 'SDKROOT = iphonesimulator\nSwiftDriver Compilation Tauri normal arm64 -module-name Tauri\n** BUILD SUCCEEDED **\n');
   assert.equal(run(['--build-log', buildLog]).entries.find((entry) => entry.name === 'Tauri').evidence.some((evidence) => evidence.kind === 'compiled'), true);
+  fs.writeFileSync(buildLog, 'SDKROOT = iphonesimulator\nSwiftDriver Compilation znet_native_io normal arm64 -module-name znet_native_io\n** BUILD SUCCEEDED **\n');
+  assert.equal(run(['--build-log', buildLog]).entries.find((entry) => entry.name === 'tauri-plugin-znet-native-io').evidence.some((evidence) => evidence.kind === 'compiled'), true);
   lock.pins[0].state.revision = '0'.repeat(40);
   fs.writeFileSync(path.join(root, 'Package.resolved'), JSON.stringify(lock));
   const stale = run().entries.find((entry) => entry.name === 'SwiftRs');

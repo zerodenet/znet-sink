@@ -149,14 +149,18 @@ const nativeManifest = input(path.join(nativeRoot, 'Package.swift'), 'native-io/
 if (!nativeManifest.includes('.package(name: "Tauri", path: "../.tauri/tauri-api")')) {
   throw new Error('NativeIO Tauri package declaration changed; review inventory mapping');
 }
+if (!nativeManifest.includes(`let package = Package(\n    name: "${host.name}"`)
+    || !nativeManifest.includes(`.library(name: "${host.name}", type: .static`)) {
+  throw new Error('NativeIO Swift package/product does not match the Cargo-derived Tauri link input');
+}
 const nativeFiles = sourceEvidence(nativeRoot, 'native-io');
 const tauriLabel = `cargo:tauri@${tauri.version}/mobile/ios-api`;
 const tauriManifest = input(path.join(tauriApi, 'Package.swift'), `${tauriLabel}/Package.swift`).toString('utf8');
 const tauriFiles = sourceEvidence(tauriApi, tauriLabel);
 inventory.entries.push({
-  id: entryId('znet-native-io', host.version), ecosystem: 'swift', name: 'znet-native-io',
+  id: entryId(host.name, host.version), ecosystem: 'swift', name: host.name,
   version: host.version, declaredLicense: host.license ?? null, source: 'repository:src-tauri/crates/native-io/ios',
-  evidence: [{ kind: 'build-input', detail: 'Repository Swift source package; version and license from owning Cargo package. Apple builds include NativeIoPolicy and znet-native-io; Linux builds include only Foundation policy/tests.' }],
+  evidence: [{ kind: 'build-input', detail: 'Repository Swift package/product identity matches its owning Cargo package; version and license from Cargo. Apple modules remain NativeIoPolicy and znet_native_io; Linux builds include only Foundation policy/tests.' }],
   ...materials(repo, 'repository'), textStatus: 'available', missing: []
 });
 const tauriTexts = materials(tauriRoot, `cargo:tauri@${tauri.version}`);
@@ -321,7 +325,7 @@ const compiledContext = Boolean(log && /\*\* BUILD SUCCEEDED \*\*/.test(log) && 
   && new RegExp(`(?:SwiftCompile|SwiftDriver Compilation)\\b[^\\r\\n]*?\\bnormal\\s+${appleArch}\\b`).test(log));
 if (compiledContext) {
   for (const entry of inventory.entries.filter((item) => item.ecosystem === 'swift')) {
-    const module = entry.name === 'znet-native-io' ? 'znet_native_io' : entry.name;
+    const module = entry.name === host.name ? 'znet_native_io' : entry.name;
     if (log.includes(`-module-name ${module}`) || log.includes(`/Sources/${module}/`)) {
       entry.evidence.push({ kind: 'compiled', detail: `Successful unsigned Xcode build log observes Swift module ${module} for ${triple}; this is library compilation, not application bundle inclusion.` });
     }

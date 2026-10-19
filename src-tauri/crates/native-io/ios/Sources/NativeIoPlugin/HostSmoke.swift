@@ -21,7 +21,7 @@ enum HostSmoke {
 
     #if DEBUG
     private static func evaluate(_ webview: WKWebView, script: String, nonce: String) {
-        webview.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) { result in
+        webview.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success(let value):
                 persist(value, completed: true, webview: webview, nonce: nonce)
