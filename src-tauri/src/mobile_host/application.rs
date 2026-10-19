@@ -64,9 +64,8 @@ pub(crate) fn run() {
                 event: tauri::WindowEvent::Suspended,
                 ..
             } if label == "main" => crate::services::plugins::suspend_native(app),
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
-                crate::services::plugins::suspend_native(app)
-            }
+            tauri::RunEvent::Exit => crate::services::plugins::shutdown_native(app),
+            tauri::RunEvent::ExitRequested { .. } => crate::services::plugins::suspend_native(app),
             _ => {}
         }
         match &event {

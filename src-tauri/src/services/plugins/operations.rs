@@ -704,7 +704,7 @@ impl Host {
                 .as_ref()
                 .map_or_else(BTreeMap::new, |schema| schema.defaults());
             configuration.extend(loaded.configuration.clone());
-            (
+            let prepared = (
                 loaded.component.clone(),
                 loaded.authority.clone().ok_or_else(stale)?,
                 configuration,
@@ -713,7 +713,10 @@ impl Host {
                 binding,
                 self.dispatch_executor()?,
                 self.platform.target()?,
-            )
+            );
+            drop(state);
+            self.mark_scheduled_dispatch(manager.capabilities(), due, now_unix_ms())?;
+            prepared
         };
         let digest = component.digest().to_owned();
         let dispatcher = sdk_dispatcher(app.clone(), plugin_id, component_id);
@@ -726,7 +729,7 @@ impl Host {
                     "state": plugin_state,
                     "invocation": {
                         "action": format!("lifecycle.scheduled.{}", due.task.action),
-                        "payload": {"taskId": due.task.task_id},
+                        "payload": {"taskId": due.task.task_id, "attemptId": due.attempt_id()?},
                         "now_unix_ms": now_unix_ms()
                     }
                 }),

@@ -14,7 +14,7 @@ mod operations;
 pub(crate) mod page_channel;
 mod platform;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) use platform::{recheck_native, resume_native, suspend_native};
+pub(crate) use platform::{recheck_native, resume_native, shutdown_native, suspend_native};
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
@@ -25,6 +25,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 pub use model::{
     ComponentView, InstallReview, PageView, PermissionChangeView, PermissionView, Review, Snapshot,
 };
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use scheduler::spawn as spawn_scheduler;
 use sha2::{Digest, Sha256};
 use std::{
@@ -63,6 +64,7 @@ pub struct Host {
     native_installs: native_install::Plans,
     startup_dispatched: std::sync::atomic::AtomicBool,
     native_vault: Mutex<Option<vault::KeyReader>>,
+    scheduler: Arc<scheduler::Owner>,
 }
 #[derive(Default)]
 struct State {

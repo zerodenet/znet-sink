@@ -1,5 +1,55 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：原生前台插件任务与持久结果屏障
+
+在普通存储提交 `40416941f405bc2692d8839a354334f669c89e41` 后继续，同一 Draft PR #46。
+[前台任务 owner](../gui/mobile-plugin-tasks-v0.0.3.md)复用共享队列与原权限/预算，原生 profile
+核对后唤醒单一 Rust worker；后台封闭原 executor、停止旧代次剩余排队任务，真正 Exit
+释放 worker 的 AppHandle 引用。ExitRequested 保持可恢复暂停，不更改 VPN 生命周期。
+平台与320px页面明确仅前台、OS后台未适配；iOS Release 外部插件限制继续保留。
+
+每任务一个有界 lastAttempt，固定原审阅/安装generation/意图修订/attemptId。队列记录
+先落盘，跨 VM 前保存 dispatch 准备标记；标记不证明 VM 已执行成功。旧 queued 可确认
+取消，旧 running 失去 owner、授权或代次后为 unconfirmed；后者禁止宿主自动新周期或
+换号重放。正常插件结果的显式 ok:false 才沿用后续退避；原执行错误保留未知。明确新保存
+意图不等于确认旧副作用。新增 readonly Rust/TypeScript DTO，新的时间为字符串、缺失
+完成时间为null；旧无历史记录只表示未提供。继续256项/256KiB预算，不承诺无限历史。
+
+共享调度的发布校验进一步移动到临时文件刷盘后、persist之前；CBC批原检查在进入 writer
+之前，本次覆盖等待 IO 阶段的撤权。测试要求真实 staged tempfile 已存在才撤销原 lease。
+VM状态更新仍经原namespace发布边界；重装、同值替换、删除、旧授权不能改变新任务。
+
+最终 locked workspace/all-targets/all-features Rust **1608通过/0失败/6忽略，40组**，
+GUI **1330/0/5**；新增7项 journal、1项原生代次模型及原8项调度回归通过。此前两轮1608及
+退出清理候选1608均保留，最终再复核生命周期和lint作用域修正后的代码。最终Clippy/格式检查通过，既有告警保留；真实 NDKr27d/API24 完整host最终通过。完整前端验证、类型
+0错误/0警告、生产build通过；最终四份插件Chromium共 **69通过/0失败/0重试/0跳过**，
+含320px浅深色20px根字号的任务限制及原安装/页面/授权/卸载流程。首次11项移动host也
+通过。新增iOS宿主Node复核9通过，不称Apple SDK或真机任务运行。未运行本地WebKit。
+
+开发期失败保留：初次模块Owner可见性导致Rust re-export编译错误，按父模块边界修正；
+首次API24因原生暂停访问私有wake字段编译失败，增加窄notify方法，不暴露整个内部状态。
+后续最终NDK复核通过。Clippy发现新增的无效drop(State)，改成词法作用域后重新测试，
+不关闭lint。旧候选结果不代替修正后结果，没有跳过Husky或增大测试重试/超时。
+
+证据：`/workspace/artifacts/mobile-v0.0.3/mobile-task-owner-4041694/`。原生代次/进程owner
+重建为Rust模型测试，浏览器fixture不是真手机任务执行；实际OS后台、Galaxy S8、iPhone、
+锁屏/低内存、原生插件文件/浏览器handoff及受保护运行仍未验收/适配。不能称A19/A21或
+整个移动端完成。新头的Apple构建与CI必须另行观察。
+
+前一头 `cbc7909ebd1b1cc3a41532ffcb78c282e8a60c15` 的push/PR共12工作流全部成功，
+**56成功jobs、2明确跳过的iOS embedded-owner jobs**，Android embedded-owner步骤仍为
+workflow明确关闭。两侧Chromium/WebKit各475通过，0失败/retry/flaky汇总。两侧API24
+emulator各实际执行1项Keystore原语通过，不替代Android Rust/JNI/guest全链或Galaxy S8。
+
+CBC两侧iOS device/Simulator完整App共4jobs成功。实际Simulator VM成功，同PID生命周期
+ready/suspended/ready、generation1/2/3及executor true/false/true：push PID34174，PR PID37251。
+Keychain仍unavailable/accepted:false，仅计安全拒绝。App floor16.4；每包469项许可输入、
+12明确缺口。PR实际编译合并提交f98b53d1be3a3e571a93b64629a8d91067b48755，父为d39+cbc，
+其tree753bcc8669f4fc60fc385dfe97c9ee3c3ccd3b7e与CBC head相同，已通过Git API核对。
+原始console及12工作流最终job清单在`mobile-namespace-cbc7909/`，不冒称本地读到artifact ZIP。
+这些是CBC历史证据，不是当前新代码已通过CI；也不证明此前FAB无回执失败的根因已修复。
+FAB push主CI39327636400实际因后续推送取消，原Simulator失败记录继续保留。
+
 ## 2026-10-19：插件普通存储原授权发布边界
 
 基于 `cbc7909` 继续同一 Draft PR #46。普通 SDK 新增、删除、清空和迁移在等待管理锁后，

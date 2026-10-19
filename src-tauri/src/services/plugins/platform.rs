@@ -14,6 +14,14 @@ pub struct Snapshot {
     pub isolation: &'static str,
     pub secure_storage_adapter: bool,
     pub reason: Option<&'static str>,
+    pub task_scheduling: SchedulingSnapshot,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulingSnapshot {
+    pub mode: &'static str,
+    pub state: &'static str,
+    pub reason: &'static str,
 }
 struct State {
     target: Option<Target>,
@@ -61,7 +69,6 @@ pub(super) fn unsupported_mobile_capability(capability: Capability) -> Option<&'
             Some("移动插件尚未接入绑定原组件授权的系统文件选择票据")
         }
         Capability::BrowserCallback => Some("移动浏览器回调尚未接入原生返回与后台恢复"),
-        Capability::TasksSchedule => Some("移动插件调度尚未接入原生前台协调与系统延期状态"),
         Capability::PersistentSecretsRead
         | Capability::PersistentSecretsWrite
         | Capability::CryptoDeviceUse => {
@@ -191,6 +198,11 @@ impl Context {
             isolation: "bounded-in-process-interpreter",
             secure_storage_adapter: state.secure_vault,
             reason,
+            task_scheduling: SchedulingSnapshot {
+                mode: "foreground-only",
+                state: if phase == "ready" { "available" } else { "deferred" },
+                reason: "仅在应用前台核对到期任务；后台执行尚未适配，不保证执行时间。结果未确认的任务不会自动重试",
+            },
         })
     }
     #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -285,6 +297,7 @@ impl Host {
         // Native suspension must not wait for an installation/catalog network
         // operation holding the management mutex. Seal admission immediately.
         self.platform.suspend();
+        self.scheduler.notify();
         self.native_installs.clear();
         self.uninstalls.invalidate_plans();
         self.close_page_documents();
@@ -376,6 +389,7 @@ fn query_native_profile(app: &tauri::AppHandle, generation: u64) {
             let _ = host.checked_rescan(state.capabilities());
         }
         host.start_enabled_with_app(state.capabilities(), Some(app.clone()));
+        super::scheduler::resume(app.clone());
         record_native_smoke(&app);
         let _ = app.emit("plugins:changed", ());
     });
@@ -389,6 +403,16 @@ pub(crate) fn suspend_native(app: &tauri::AppHandle) {
         .suspend_native();
     record_native_smoke(app);
     let _ = app.emit("plugins:changed", ());
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn shutdown_native(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    suspend_native(app);
+    app.state::<crate::state::app_state::AppState>()
+        .plugins()
+        .scheduler
+        .close();
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -447,6 +471,74 @@ mod tests {
             os: Os::Android,
             arch: Arch::Aarch64,
             device: DeviceClass::Phone,
+        }
+    }
+    #[test]
+    fn native_background_does_not_advance_tasks_and_resume_does_not_replay_unconfirmed_dispatch() {
+        for dispatched in [false, true] {
+            let (root, mut host, manager) = super::super::tests::setup_component(
+                "42",
+                serde_json::json!({"capability":"tasks.schedule","scope":"self"}),
+            );
+            host.platform = mobile();
+            let first = host.platform.request_resume().unwrap().unwrap();
+            host.platform.commit_resume(first, Ok(phone())).unwrap();
+            host.checked_rescan(&manager).unwrap();
+            let row = host.snapshot(&manager).components.remove(0);
+            host.authorize(
+                &manager,
+                row.review.unwrap(),
+                vec![Request {
+                    capability: Capability::TasksSchedule,
+                    scope: "self".into(),
+                }],
+            )
+            .unwrap();
+            host.schedule_put(
+                "org.example.plugin",
+                "identity",
+                "refresh".into(),
+                "refresh".into(),
+                300,
+            )
+            .unwrap();
+            let old = host.take_due(&manager, u64::MAX).unwrap().remove(0);
+            if dispatched {
+                let _operation = host.operation_guard().unwrap();
+                host.mark_scheduled_dispatch(&manager, &old, 1234).unwrap();
+            }
+            let file = root.path().join("schedules.json");
+            let before = std::fs::read(&file).unwrap();
+            host.platform.suspend();
+            assert!(host.take_due(&manager, u64::MAX).is_err());
+            assert_eq!(std::fs::read(&file).unwrap(), before);
+            let resumed = host.platform.request_resume().unwrap().unwrap();
+            host.platform.commit_resume(resumed, Ok(phone())).unwrap();
+            assert!(host.take_due(&manager, u64::MAX - 1).unwrap().is_empty());
+            let tasks = serde_json::to_value(
+                host.schedule_list("org.example.plugin", "identity")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                tasks[0]["lastAttempt"]["state"],
+                if dispatched {
+                    "unconfirmed"
+                } else {
+                    "cancelled"
+                }
+            );
+            {
+                let _operation = host.operation_guard().unwrap();
+                assert!(host.checked_scheduled_due(&manager, &old).is_err());
+            }
+            assert_eq!(
+                host.take_due(&manager, u64::MAX).unwrap().len(),
+                usize::from(!dispatched)
+            );
+            let snapshot = host.platform.snapshot().unwrap();
+            assert_eq!(snapshot.task_scheduling.mode, "foreground-only");
+            assert!(snapshot.task_scheduling.reason.contains("后台执行尚未适配"));
         }
     }
     #[test]

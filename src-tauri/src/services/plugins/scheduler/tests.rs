@@ -52,7 +52,7 @@ fn task_count_limit_preserves_readable_store_and_still_allows_existing_intent_up
         .is_err());
 }
 
-fn scheduled_fixture() -> (tempfile::TempDir, Host, Manager) {
+pub(super) fn scheduled_fixture() -> (tempfile::TempDir, Host, Manager) {
     let fixture = super::super::tests::setup_component(
         "42",
         serde_json::json!({"capability":"tasks.schedule","scope":"self"}),
@@ -61,7 +61,7 @@ fn scheduled_fixture() -> (tempfile::TempDir, Host, Manager) {
     let _ = real_invocation(host, manager);
     fixture
 }
-fn queued(host: &Host, manager: &Manager) -> DueTask {
+pub(super) fn queued(host: &Host, manager: &Manager) -> DueTask {
     host.schedule_put(
         "org.example.plugin",
         "identity",
@@ -158,7 +158,7 @@ fn queued_task_never_borrows_a_replacement_intent_or_reenabled_grant() {
     host.checked_rescan(&manager).unwrap(); // Durable consent restored with a new real epoch.
     let before = fs::read(path(root.path())).unwrap();
     assert!(host
-        .record_scheduled_completion(&manager, &old, true, 1000)
+        .record_scheduled_completion(&manager, &old, Completion::Known(true), 1000)
         .is_err());
     assert_eq!(fs::read(path(root.path())).unwrap(), before);
     {
@@ -185,7 +185,7 @@ fn queued_task_never_borrows_a_replacement_intent_or_reenabled_grant() {
         assert!(host.checked_scheduled_due(&manager, &fresh).is_err());
     }
     assert!(host
-        .record_scheduled_completion(&manager, &fresh, false, 1000)
+        .record_scheduled_completion(&manager, &fresh, Completion::Known(false), 1000)
         .is_err());
     assert_eq!(fs::read(path(root.path())).unwrap(), before);
 }
@@ -230,7 +230,7 @@ fn queued_task_cannot_invoke_same_material_after_actual_store_reinstallation() {
         assert!(host.checked_scheduled_due(&manager, &due).is_err());
     }
     assert!(host
-        .record_scheduled_completion(&manager, &due, true, 1000)
+        .record_scheduled_completion(&manager, &due, Completion::Known(true), 1000)
         .is_err());
     assert_eq!(fs::read(path(root.path())).unwrap(), before);
 }
@@ -306,6 +306,12 @@ fn schedule_mutations_check_original_invocation_again_at_publication() {
         let calls = AtomicUsize::new(0);
         let check = || {
             if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                // This check must occur after IO staging, immediately at persist.
+                assert!(fs::read_dir(root.path()).unwrap().any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tmp")));
                 authority.revoke();
             }
             lease
@@ -343,6 +349,7 @@ fn registry_round_trips_only_bounded_tasks() {
         next_run_unix_ms: 100,
         failure_count: 0,
         revision: String::new(),
+        last_attempt: None,
     };
     let mut registry = Registry {
         schema_version: schema(),
@@ -378,6 +385,7 @@ fn failed_tasks_use_bounded_exponential_retry_and_success_resets_it() {
         next_run_unix_ms: 100,
         failure_count: 0,
         revision: String::new(),
+        last_attempt: None,
     };
     let mut registry = Registry {
         schema_version: schema(),

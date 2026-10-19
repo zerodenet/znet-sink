@@ -521,6 +521,7 @@
   {#if snapshot.platform}
     <div class="plugin-authorization-notice" role="status" aria-label="原生插件宿主">
       <span>{snapshot.platform.reason ?? '受限解释器已就绪；不提供原生崩溃或进程隔离。'}{#if snapshot.platform.target} · {snapshot.platform.target.os} / {snapshot.platform.target.arch} / {snapshot.platform.target.device}{/if}</span>
+      {#if snapshot.platform.taskScheduling}<span>{snapshot.platform.taskScheduling.reason}</span>{/if}
       {#if snapshot.platform.state === 'unavailable'}<Button variant="outline" onclick={async () => { try { snapshot = await pluginApi.recheckHost(); } catch (cause) { error = getAppErrorInfo(cause, '宿主重新核对未确认').message; } }}>重新核对宿主</Button>{/if}
     </div>
   {/if}

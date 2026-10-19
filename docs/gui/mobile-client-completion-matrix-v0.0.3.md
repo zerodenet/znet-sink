@@ -1,5 +1,9 @@
 # PRD V3 客户端完成度与剩余能力
 
+2026-10-19 后续增量：[普通存储发布校验](plugin-sdk.md)及[原生前台插件任务](mobile-plugin-tasks-v0.0.3.md)
+接入原队列，保留原审阅/代次、持久 lastAttempt 与未知屏障。仅前台，不冒充OS后台执行；
+SDK安全存储实际不可用时继续安全拒绝。具体提交/失败/设备结果以验证账本为准。
+
 2026-10-19 继续批次（基线 `2b411b6`）：新增[移动插件前台宿主和原生包审阅](mobile-plugin-foreground-v0.0.3.md)。
 Android API24 完整 Rust 宿主、Linux 固定 VM、系统 IO 库及客户端回归按本批实际记录；
 Apple SDK/Simulator 新检查仍待当前提交 CI，不沿用前批绿色结果。下表的历史“移动未开放”
@@ -37,7 +41,7 @@ CI 的 Debug/unsigned Release 分别校验，不能互相借用结果，也不�
 | A18 | 原连接筛选/暂停/详情/历史/导出、Packet分页保留；新增[宿主实际清单及固定目标批量关闭](flow-close-batch-v0.0.3.md)，六类逐项结果；fulfilled/closed:false不算成功 | 原列表行不自动获得控制资格；未知只读核对原操作。现core关闭wire仅flow_id，不能宣称远端原子revision保护；会话内屏障不替代持久恢复 | **已后置**移动owner/事件恢复；真实手机交付 |
 | A19 | 原日志/有界捕获/任务scope保留；新增[真实路由评估与独立DNS缓存](route-cache-diagnostics-v0.0.3.md)，不再显示逐跳TTL/RTT；继续复用共享jobs | 不从规则目标推断最终叶子或可达；未提供的解析/出口链明确显示。其它A19设备场景仍待验收 | 真实运行采样未接时unsupported；不造数据 |
 | A20 | 签名分发、本地发布者信任、版本权限审阅保留；新增[移动系统包选择与一次性固定字节审阅](mobile-plugin-foreground-v0.0.3.md)，线上安装绑定摘要和原生代次 | 原生选择/安装实际设备结果、失败分阶段和渠道仍须验收 | iOS Release 外部插件分发未验收，Debug 开发包显式审阅；不是全部 core 阻塞 |
-| A21 | 新增原生 Target、前台解释器 owner、旧代次拒绝、配置草稿原 review、页面恢复与通知接受/呈现区分；SDK 沿用原权限/预算 | [原生安全秘密/设备密码学](mobile-plugin-secure-storage-v0.0.3.md)已接入，真实API24/Apple运行结果单独记录；文件票据、浏览器回调、OS 调度、受保护运行加载仍逐项推进 | 当前批 Apple SDK/Simulator 结果见验证记录；同进程解释器不提供 native crash/OOM 隔离 |
+| A21 | 新增原生 Target、前台解释器 owner、旧代次拒绝、配置草稿原 review、页面恢复与通知接受/呈现区分；SDK 沿用原权限/预算 | [原生安全秘密/设备密码学](mobile-plugin-secure-storage-v0.0.3.md)已接入，真实API24/Apple运行结果单独记录；前台任务owner及未知屏障已接入；文件票据、浏览器回调、OS后台调度、受保护运行加载仍逐项推进 | 当前批 Apple SDK/Simulator 结果见验证记录；同进程解释器不提供 native crash/OOM 隔离 |
 | A22 | [固定资源预览与逐项卸载记录](mobile-plugin-uninstall-v0.0.3.md)保留；新预览绑定原生代次，后台使旧计划失效 | 仅证明安全的非活动资源；活动来源仍须明确手动替代或停止，不自动选首项。完整运行替代/停止继续实施 | 移动设备卸载及故障恢复尚未验收，不把前台 owner 接线当作整个 A22 完成 |
 | A23 | 两入口及真实有界目录保留；新增[宿主前台到期检查](mobile-release-foreground-v0.0.3.md)：已保存客户端渠道、单worker deadline、manual/auto去重、真实200/304验证缓存及原偏好owned回执/确认。后台停止发起，旧代次不交付 | 内核仍手动目录；前台与OS后台分别说明。安装器/商店或测试渠道、OS调度及安装后版本确认仍未适配，不把目录检查称作安装成功 | **已后置**runtime/bundle装配；签名/商店发行未授权，设备前后台验收仍待执行 |
 | A24 | 产品/作者/标识/实际客户端版本/链接/许可原文搜索及About测试 | 四项许可资料缺口继续保留，不能用他包版权补齐 | 真实运行/随包Zero版本依赖尚未接入的产物 |

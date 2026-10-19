@@ -11,7 +11,7 @@ async function fixture(page: Page, checked = true) {
       permissions:[],enabled:false,permission_review_required:false,running:false,blocked:null,
       configuration:{configured:true,schema:{title:'来源设置',fields:[{id:'label',label:'来源名称',kind:'text',required:true}]},values:{label:'已确认'}},
     };
-    const snapshot = () => ({checked,components:checked?[structuredClone(component)]:[],notices:[],platform:{state:'ready',target:{os:'android',arch:'aarch64',device:'phone'},generation,executionAllowed:true,externalInstallationAllowed:true,isolation:'bounded-in-process-interpreter',reason:null}});
+    const snapshot = () => ({checked,components:checked?[structuredClone(component)]:[],notices:[],platform:{state:'ready',target:{os:'android',arch:'aarch64',device:'phone'},generation,executionAllowed:true,externalInstallationAllowed:true,isolation:'bounded-in-process-interpreter',reason:null,taskScheduling:{mode:'foreground-only',state:'available',reason:'仅在应用前台核对到期任务；后台执行尚未适配，不保证执行时间。结果未确认的任务不会自动重试'}}});
     const review = {host_generation:generation,plugin_id:'org.example.local',current_version:null,candidate_version:'1.0.0',candidate_digest:'signed-package-digest',publisher:'local-publisher',publisher_fingerprint:'original-publisher-fingerprint',first_install:true,local_trust:true,requested_surfaces:[],requires_approval:true,added_permissions:[],removed_permissions:[]};
     (window as any).mobilePlugin = { calls, changeHost() {
       generation='2'; component.review={...component.review,identity:'replacement',registration:2,revision:1,host_generation:generation};
@@ -155,4 +155,17 @@ for (const theme of ['light','dark']) test(`native installation recovery stays s
   await expect(page.getByText(/已核对安装材料/)).toBeVisible();
   await page.getByRole('button',{name:'返回',exact:true}).click();
   await expect(page.getByRole('button',{name:/本地/})).toBeEnabled();
+});
+
+for (const theme of ['light','dark']) test(`foreground task limitation stays visible at 320px with enlarged ${theme} text`, async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(theme => {
+    document.documentElement.classList.toggle('dark',theme==='dark');
+    document.documentElement.style.fontSize='20px';
+  },theme);
+  const host=page.getByRole('status',{name:'原生插件宿主',exact:true});
+  await expect(host).toContainText('后台执行尚未适配');
+  await expect(host).toContainText('结果未确认的任务不会自动重试');
+  expect(await host.evaluate(e=>e.scrollWidth<=e.clientWidth+1)).toBe(true);
+  expect(await page.evaluate(()=>(window as any).mobilePlugin.calls.some((call:any)=>call.command==='plugins_sdk_call'))).toBe(false);
 });

@@ -37,6 +37,20 @@ export interface ManagedSubscriptionUsage {
   totalBytes: number;
   expireAtUnixMs: number;
 }
+/** Read-only execution facts. A result-unconfirmed attempt is never a replay permit. */
+export interface ScheduledAttempt {
+  id: string;
+  state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'unconfirmed';
+  queuedAtUnixMs: string;
+  dispatchAtUnixMs: string | null;
+  completedAtUnixMs: string | null;
+  observedAtUnixMs: string;
+}
+export interface ScheduledTask {
+  pluginId: string; componentId: string; taskId: string; action: string;
+  intervalSeconds: number; nextRunUnixMs: number; failureCount: number;
+  revision?: string; lastAttempt?: ScheduledAttempt | null;
+}
 export type ErrorCode =
   | 'invalid_request' | 'unsupported' | 'permission_denied' | 'disabled'
   | 'revoked' | 'busy' | 'expired' | 'cancelled' | 'deadline'
@@ -87,9 +101,9 @@ export function createSdk(transport: Transport) {
         call({ capability: 'notifications.post', scope: 'self' }, 'notification_post', { message, ...options }),
     }),
     tasks: Object.freeze({
-      put: (taskId: string, action: string, intervalSeconds: number) => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_put', { taskId, action, intervalSeconds }),
-      list: () => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_list'),
-      delete: (taskId: string) => call({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_delete', { taskId }),
+      put: (taskId: string, action: string, intervalSeconds: number) => call<ScheduledTask>({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_put', { taskId, action, intervalSeconds }),
+      list: () => call<ScheduledTask[]>({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_list'),
+      delete: (taskId: string) => call<boolean>({ capability: 'tasks.schedule', scope: 'self' }, 'schedule_delete', { taskId }),
     }),
     subscriptions: Object.freeze({
       completeSync: (providerId: string, remoteSubscriptionId: string, revision: string) =>
