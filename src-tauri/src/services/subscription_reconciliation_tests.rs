@@ -5,7 +5,7 @@ fn state_fixture() -> AppState {
     let state = AppState::default();
     let source=serde_json::from_value(json!({"id":"ordinary","name":"Source","url":"https://example.invalid/?token=secret-canary","enabled":false,"kernel":"zero","format":"auto","targetProxyConfigId":"material","updatedAtUnixMs":15,"lastSyncAtUnixMs":10,"lastError":UNKNOWN_APPLY_MESSAGE,"policySelections":{"group":"direct"}})).unwrap();
     state.subscriptions().lock().unwrap().push(source);
-    state.proxy_configs().lock().unwrap().push(ProxyConfigProfile {id:"material".into(),name:"Saved".into(),kernel:"zero".into(),format:"zero-json".into(),path:None,content:Some(json!({"inbounds":[],"outbounds":[{"tag":"direct","protocol":{"type":"direct"}}],"route":{"final":{"type":"direct"}}})),active:false,managed_source:None,updated_at_unix_ms:11,capabilities:Default::default()});
+    state.proxy_configs().lock().unwrap().push(ProxyConfigProfile { policy_selections: Default::default(),id:"material".into(),name:"Saved".into(),kernel:"zero".into(),format:"zero-json".into(),path:None,content:Some(json!({"inbounds":[],"outbounds":[{"tag":"direct","protocol":{"type":"direct"}}],"route":{"final":{"type":"direct"}}})),active:false,managed_source:None,updated_at_unix_ms:11,capabilities:Default::default()});
     state
 }
 #[test]

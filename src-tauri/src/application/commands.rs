@@ -299,6 +299,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         app_update_commands::download::app_download_update,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app_update_commands::download::app_install_update,
+        proxy_config_commands::configuration_list,
         proxy_config_commands::proxy_config_list,
         proxy_config_commands::proxy_config_composition_report,
         proxy_config_commands::proxy_config_get,

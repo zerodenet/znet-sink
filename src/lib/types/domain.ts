@@ -8,6 +8,7 @@ export interface ProxyConfigProfile {
   path?: string;
   content?: unknown;
   active: boolean;
+  policySelections?: Record<string, string>;
   managedSource?: ManagedSubscriptionSource;
   updatedAtUnixMs: number;
   capabilities: ProxyConfigCapabilities;

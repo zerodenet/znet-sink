@@ -145,3 +145,14 @@ test('mobile projection retains complete navigation and settings without persist
   assert.equal(store.uiMode, 'lite');
   assert.deepEqual(requests, []);
 });
+
+test('both layouts use one configuration navigation entry and old subscription shortcuts resolve to it', async () => {
+  const {store}=harness();
+  for(const mode of ['lite','pro']) {
+    store.uiMode=mode;
+    assert.equal(store.isNavVisible('profiles'),true);
+    assert.equal(store.isNavVisible('subscriptions'),false);
+    store.openTab('subscriptions');
+    assert.equal(store.activeTab,'profiles');
+  }
+});

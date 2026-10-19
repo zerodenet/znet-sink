@@ -95,6 +95,7 @@ async fn run_fixture() {
                     ));
                 }
                 let next = ProxyConfigProfile {
+                    policy_selections: Default::default(),
                     id: input.id.unwrap(),
                     name: input.name,
                     kernel: "zero".into(),

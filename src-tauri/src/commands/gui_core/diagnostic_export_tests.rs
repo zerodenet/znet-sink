@@ -146,6 +146,7 @@ fn discarded_previews_release_shared_capacity_but_cannot_undo_delivery() {
 
 fn temporary_profile() -> crate::models::proxy_config::ProxyConfigProfile {
     crate::models::proxy_config::ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "transient-profile".into(),
         name: "test fixture".into(),
         kernel: "zero".into(),

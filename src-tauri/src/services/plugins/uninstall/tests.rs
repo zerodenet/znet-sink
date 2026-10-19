@@ -31,6 +31,7 @@ fn fixture(active: bool) -> Fixture {
     let sub = format!("managed-{}", &h[..32]);
     let profile = format!("managed-config-{}", &h[..32]);
     let p = ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: profile.clone(),
         name: "Owned config".into(),
         kernel: "zero".into(),

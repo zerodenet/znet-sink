@@ -29,6 +29,8 @@
   import KernelVersionCard from '$lib/components/core/KernelVersionCard.svelte';
   import RulesTab from '$lib/components/tabs/RulesTab.svelte';
   import TunSettingsPanel from '$lib/components/settings/TunSettingsPanel.svelte';
+  import ProfileMaterials from '$lib/components/configuration/ProfileMaterials.svelte';
+  import SubscriptionSources from '$lib/components/configuration/SubscriptionSources.svelte';
   import ProfilesTab from '$lib/components/tabs/ProfilesTab.svelte';
   import SubscriptionsTab from '$lib/components/tabs/SubscriptionsTab.svelte';
   import { Button } from '$lib/components/ui/button';
@@ -39,6 +41,7 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import { Switch } from '$lib/components/ui/switch';
   import { onMount } from 'svelte';
+  import { listenConfigurationSources } from '$lib/services/configuration-catalog-events';
   let dark = $state(new URLSearchParams(window.location.search).get('theme') === 'dark');
   let showDialog = $state(false);
   let saved = $state('');
@@ -50,9 +53,11 @@
   const options = Array.from({ length: 80 }, (_, index) => ({ value: String(index), label: `选项 ${index}` }));
   $effect(() => { document.documentElement.classList.toggle('dark', dark); });
   onMount(() => {
+    let disposed = false; let stopSources: (() => void) | undefined;
+    void listenConfigurationSources().then(stop => { if(disposed) stop(); else stopSources=stop; });
     const save = (event: Event) => { saved = JSON.stringify((event as CustomEvent).detail); };
     window.addEventListener('fixture-save', save);
-    return () => window.removeEventListener('fixture-save', save);
+    return () => { disposed=true; stopSources?.(); window.removeEventListener('fixture-save', save); };
   });
 </script>
 
@@ -97,7 +102,7 @@
     <Switch aria-label="测试开关" />
   </section>
   <div class="flex h-[650px] min-h-0 flex-col">
-    {#if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}<ProfilesTab />{:else if selectedPanel === 'subscriptions'}<SubscriptionsTab />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
+    {#if selectedPanel === 'capabilities'}<CapabilitiesTab />{:else if selectedPanel === 'plugins'}<PluginsTab />{:else if selectedPanel === 'connections'}<ConnectionInspectorWorkspace />{:else if selectedPanel === 'nodes'}<NodesTab />{:else if selectedPanel === 'dns'}<DnsSettingsPanel />{:else if selectedPanel === 'url-test'}<UrlTestSettingsPanel />{:else if selectedPanel === 'runtime-network'}<RuntimeNetworkSettingsPanel />{:else if selectedPanel === 'tools'}<DiagnosticsPanel />{:else if selectedPanel === 'modules'}<ModuleDiagnosticsFixture />{:else if selectedPanel === 'settings' || selectedPanel === 'logs'}<SettingsLogsFixture />{:else if selectedPanel === 'mode-overview'}<ModeOverviewFixture />{:else if selectedPanel === 'overview'}<OverviewFixture />{:else if selectedPanel === 'profiles'}{#if new URLSearchParams(window.location.search).get('mode')?.startsWith('unified')}<ProfilesTab />{:else}<ProfileMaterials />{/if}{:else if selectedPanel === 'subscriptions'}<SubscriptionSources />{:else if selectedPanel === 'endpoint'}<LocalProxyEndpointPanel />{:else if selectedPanel === 'kernel'}<CoreConfigPanel />{:else if selectedPanel === 'kernel-card'}<KernelVersionCard />{:else if tunPanel}<TunSettingsPanel />{:else}<RulesTab />{/if}
   </div>
   <output aria-label="保存结果">{saved}</output>
 </main>

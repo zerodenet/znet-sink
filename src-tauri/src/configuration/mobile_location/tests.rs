@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 fn profile(id: &str, active: bool) -> ProxyConfigProfile {
     ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: id.into(),
         name: "same visible name".into(),
         kernel: "zero".into(),

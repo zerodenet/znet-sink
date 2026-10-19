@@ -30,6 +30,7 @@ export default defineConfig({
     { find: '$lib/services/gui-state.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/store.svelte', replacement: absolute('./tun-state.svelte.ts') },
     { find: '$lib/services/tun', replacement: absolute('./tun-state.svelte.ts') },
+    { find: '$lib/services/configuration-catalog', replacement: absolute('./configuration-catalog.ts') },
     { find: '$lib/services/config', replacement: absolute('./config.ts') },
     { find: '$lib/services/core', replacement: absolute('./settings-draft-core.ts') },
     { find: '$lib', replacement: absolute('../../src/lib') },

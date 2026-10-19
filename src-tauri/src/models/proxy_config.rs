@@ -13,6 +13,9 @@ pub struct ProxyConfigProfile {
     pub path: Option<String>,
     pub content: Option<Value>,
     pub active: bool,
+    /// Client selector preferences belong to the configuration, independent of its source.
+    #[serde(default)]
+    pub policy_selections: std::collections::BTreeMap<String, String>,
     /// Stable plugin ownership for a configuration projected from a managed
     /// subscription. Manual configurations never populate this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]

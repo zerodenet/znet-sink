@@ -17,7 +17,7 @@
     nodes: () => import('./tabs/NodesTab.svelte'),
     endpoints: () => import('./tabs/EndpointsTab.svelte'),
     profiles: () => import('./tabs/ProfilesTab.svelte'),
-    subscriptions: () => import('./tabs/SubscriptionsTab.svelte'),
+    subscriptions: () => import('./tabs/ProfilesTab.svelte'),
     rules: () => import('./tabs/RulesTab.svelte'),
     connections: () => import('./tabs/ConnectionsTab.svelte'),
     logs: () => import('./tabs/LogsTab.svelte'),

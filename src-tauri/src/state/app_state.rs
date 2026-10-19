@@ -96,7 +96,11 @@ impl AppState {
         logs: Vec<LogEntry>,
     ) -> Self {
         let next_record_id = logs.iter().map(|entry| entry.id).max().unwrap_or(0);
-        let proxy_configs = normalize_proxy_configs(proxy_configs);
+        let mut proxy_configs = normalize_proxy_configs(proxy_configs);
+        crate::services::policy_selection::inherit_legacy_selections(
+            &mut proxy_configs,
+            &subscriptions,
+        );
         let active_profile = proxy_configs.iter().find(|profile| profile.active);
         let active_profile_id = active_profile.map(|profile| ProfileId(profile.id.clone()));
         let config_revision = config_revision(active_profile);
@@ -1270,6 +1274,7 @@ mod tests {
 
     fn proxy_profile(id: &str, active: bool) -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: id.to_string(),
             name: id.to_string(),
             kernel: "zero".to_string(),

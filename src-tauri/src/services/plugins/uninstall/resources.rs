@@ -594,6 +594,7 @@ mod tests {
     }
     fn ordinary(id: &str) -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: id.into(),
             name: id.into(),
             kernel: "zero".into(),

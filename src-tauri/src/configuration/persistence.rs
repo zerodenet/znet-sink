@@ -44,9 +44,13 @@ pub(crate) fn commit_relational(
     state: &AppState,
     previous_profiles: &[ProxyConfigProfile],
     previous_subscriptions: &[SubscriptionProfile],
-    next_profiles: Vec<ProxyConfigProfile>,
+    mut next_profiles: Vec<ProxyConfigProfile>,
     next_subscriptions: Vec<SubscriptionProfile>,
 ) -> AppResult<()> {
+    crate::services::policy_selection::inherit_legacy_selections(
+        &mut next_profiles,
+        &next_subscriptions,
+    );
     let previous_active = previous_profiles.iter().find(|profile| profile.active);
     let next_active = next_profiles.iter().find(|profile| profile.active);
     let active_config_changed = match (previous_active, next_active) {

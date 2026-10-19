@@ -19,6 +19,7 @@ fn rule(tag: &str) -> Value {
 }
 fn profile(id: &str, value: Value) -> ProxyConfigProfile {
     ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: id.into(),
         name: id.into(),
         kernel: "zero".into(),

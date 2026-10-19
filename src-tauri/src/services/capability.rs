@@ -267,8 +267,7 @@ fn navigation_items(
         // 用于选择/激活配置 → 激活后节点菜单自动显示。
         has_config("nodes", "navigation", has_active_config),
         detailed("endpoints", "navigation", is_pro),
-        detailed("profiles", "navigation", is_pro),
-        shared("subscriptions", "navigation"),
+        shared("profiles", "navigation"),
         detailed("rules", "navigation", is_pro),
         detailed("connections", "navigation", is_pro),
         shared("logs", "navigation"),
@@ -545,6 +544,21 @@ mod tests {
         assert!(features
             .iter()
             .any(|item| item.key == "routing" && item.visible));
+    }
+
+    #[test]
+    fn both_modes_expose_one_configuration_entry_without_duplicate_subscription_navigation() {
+        for pro in [false, true] {
+            let items = navigation_items(pro, &[], true, true);
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item.key == "profiles" && item.visible)
+                    .count(),
+                1
+            );
+            assert!(!items.iter().any(|item| item.key == "subscriptions"));
+        }
     }
 
     #[test]

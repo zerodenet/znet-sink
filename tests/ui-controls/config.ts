@@ -122,6 +122,14 @@ if (new URLSearchParams(location.search).get('mode') === 'managed-config') {
 }
 export const listProxyConfigs = async () => { void proxyConfigSignal.revision; if(new URLSearchParams(location.search).get('fixture')==='mobile-location')return mobileLocationProfiles();return new URLSearchParams(location.search).get('fixture')==='rule-migration'
   ? (await import('./rule-migration')).ruleMigrationProfiles() : structuredClone(profileEditorListing(profiles)); };
+export const getProxyConfig = async (id: string) => structuredClone(profiles.find(profile => profile.id === id)!);
+let catalogSources: SubscriptionProfile[] | null = null;
+if (new URLSearchParams(location.search).get('mode')?.startsWith('unified')) {
+  const base = {name:'远端来源',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'work',policySelections:{Proxy:'selected'},updatedAtUnixMs:1};
+  catalogSources=[{...base,id:'source-one',name:'来源一',updateIntervalSecs:3600,userAgent:'Custom-UA'},
+    {...base,id:'source-two',name:'来源二'},
+    {...base,id:'pending',name:'待同步来源',targetProxyConfigId:undefined}];
+}
 let managedLastSync = 1;
 let syncedSourceTarget: string | undefined;
 let recoveredOrdinarySource = false;
@@ -129,6 +137,7 @@ window.addEventListener('fixture-subscription-synced', (event) => {
   managedLastSync = (event as CustomEvent<number>).detail;
 });
 export const listSubscriptions = async (): Promise<SubscriptionProfile[]> => {
+  if(catalogSources) return structuredClone(catalogSources);
   const mode = new URLSearchParams(location.search).get('mode');
   if(mode==='quota-facts')return [
     {id:'unknown',name:'额度已提供但用量未知',totalBytes:100},
@@ -175,12 +184,12 @@ export const syncSubscription = async (id: string): Promise<SubscriptionProfile>
     window.dispatchEvent(new CustomEvent('fixture-subscription-manual-sync',{detail:id}));
     return {...(await listSubscriptions()).find(sub=>sub.id===id)!,lastSyncAtUnixMs:2};
   }
+  if(catalogSources) throw new Error('来源暂时不可达');
   if (new URLSearchParams(location.search).get('mode') !== 'unsynced-source' || id !== 'new-sub') throw new Error('No subscription network calls in this fixture');
   profiles.push({...structuredClone(profiles[0]),id:'synced',name:'新订阅配置',active:false});
   syncedSourceTarget = 'synced';
   return {id,name:'新订阅',url:'https://example.test/sub',enabled:true,kernel:'zero',format:'zero',targetProxyConfigId:'synced',policySelections:{},updatedAtUnixMs:1};
 };
-export const upsertSubscription = async (): Promise<SubscriptionProfile> => { throw new Error('No subscription writes in this fixture'); };
 export const resetSubscriptionConditionalCache=async(id:string,version:number)=>{window.dispatchEvent(new CustomEvent('fixture-subscription-cache-reset',{detail:{id,version}}));return {cleared:true};};
 export const reconcileUnknownSubscription=async(id:string,version:number,profileId:string|null):Promise<import('../../src/lib/services/config').SubscriptionReconciliation>=>{
   window.dispatchEvent(new CustomEvent('fixture-subscription-inspection',{detail:{id,version,profileId}}));
@@ -198,9 +207,29 @@ export const recoverConfirmedSubscriptionLocal=async(id:string,expectedUpdatedAt
   recoveredOrdinarySource=true;
   return (await listSubscriptions()).find(source=>source.id===id)!;
 };
-export const removeSubscription = async () => ({ removedSubscriptionId: '', removedProxyConfigIds: [], removedManagedRuleSetIds: [] });
-export const getSubscriptionRemovalPreview = async () => ({ subscriptionId: '', associatedProxyConfigId: null, canRemoveAssociatedConfig: false, conflictingSubscriptionIds: [], managedRuleSetCount: 0 });
-export const syncAllSubscriptions = async () => ({ total: 0, updated: 0, unchanged: 0, failed: 0 });
+export const upsertSubscription = async (input: import('../../src/lib/types/domain').SubscriptionUpsert): Promise<SubscriptionProfile> => {
+  if(!catalogSources) throw new Error('No subscription writes in this fixture');
+  window.dispatchEvent(new CustomEvent('fixture-save',{detail:input}));
+  const existing=catalogSources.find(source=>source.id===input.id);
+  const updated={...existing,...input,id:input.id??'created',policySelections:existing?.policySelections??{},updatedAtUnixMs:2} as SubscriptionProfile;
+  catalogSources=catalogSources.filter(source=>source.id!==updated.id).concat(updated);return structuredClone(updated);
+};
+export const removeSubscription = async (id: string, removeConfig: boolean) => {
+  if(catalogSources) {
+    const source=catalogSources.find(source=>source.id===id);
+    if(removeConfig&&source?.targetProxyConfigId) profiles.splice(profiles.findIndex(profile=>profile.id===source.targetProxyConfigId),1);
+    catalogSources=catalogSources.filter(source=>source.id!==id);
+    window.dispatchEvent(new CustomEvent('fixture-save',{detail:{id,removeConfig}}));
+  }
+  return {removedProxyConfig:removeConfig,removedManagedRuleSetCount:0};
+};
+export const getSubscriptionRemovalPreview = async (id: string) => {
+  const source=(await listSubscriptions()).find(source=>source.id===id);
+  const target=profiles.find(profile=>profile.id===source?.targetProxyConfigId);
+  return {subscriptionId:id,managedRuleSetCount:0,targetProxyConfig:target?{id:target.id,name:target.name,active:target.active,
+    sharedBySubscriptionCount:(await listSubscriptions()).filter(item=>item.id!==id&&item.targetProxyConfigId===target.id).length}:undefined};
+};
+export const syncAllSubscriptions = async () => ({ total: 0, succeeded: 0, failed: 0 });
 
 export const guiLogPaths = async () => ({ logFile: '/fixture/logs/gui.log.jsonl', coreLogFile: '/fixture/logs/core.log.jsonl', logsDir: '/fixture/logs', dataDir: '/fixture' });
 export const appendLog = async (_input: unknown) => {};
@@ -236,6 +265,11 @@ window.addEventListener('fixture-append-log', () => {
 });
 export const getEffectiveRuleSetOptions = async () => {
   if (new URLSearchParams(location.search).get('mode') === 'rule-read-failure') throw new Error('Rule inventory unavailable');
+  if (new URLSearchParams(location.search).get('mode') === 'client-dns-rules') return [
+    { tag: 'gui-common-domestic', name: '中国大陆域名', source: 'builtin' },
+    { tag: 'gui-common-office', name: '办公域名', source: 'local' },
+    { tag: 'subscription-media', name: '订阅媒体', source: 'subscription' },
+  ];
   return [];
 };
 export const getConfigPolicyGroups = async () => new URLSearchParams(location.search).get('panel') === 'dns'

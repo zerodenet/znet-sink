@@ -22,11 +22,12 @@ export const guiState = $state({
   isSwitchingTun: false,
   tunStatus: { configSource: mode === 'profile' ? 'profile' : 'app', configSourceName: '测试配置' },
   refreshTunStatus: async () => {},
+  refreshNodeStateAfterConfigChange: async () => {},
 });
 window.addEventListener('fixture-mode-changed', event => {
   guiState.proxyMode = {...guiState.proxyMode,currentMode:(event as CustomEvent<string>).detail};
 });
-export const store = $state({ mobilePresentation: false, persistTheme: async (theme: string) => { store.selectedTheme = theme; }, interactionSurface: { actions: new Map(), navigation: new Map() }, isActionOperable: (_action: string) => true, selectedTheme: 'light', isSwitchingUiMode: false, switchUIMode: async (_mode: string) => {}, refreshInteractionSurface: async () => {}, isNavOperable: (_key: string) => true, isNavVisible: (key: string) => store.interactionSurface.navigation.get(key)?.visible ?? (store.uiMode === 'pro' || ['overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings'].includes(key)), uiMode: 'pro' as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openSettings: (_section: string) => {} });
+export const store = $state({ mobilePresentation: false, persistTheme: async (theme: string) => { store.selectedTheme = theme; }, interactionSurface: { actions: new Map(), navigation: new Map() }, isActionOperable: (_action: string) => true, selectedTheme: 'light', isSwitchingUiMode: false, switchUIMode: async (_mode: string) => {}, refreshInteractionSurface: async () => {}, isNavOperable: (_key: string) => true, isNavVisible: (key: string) => store.interactionSurface.navigation.get(key)?.visible ?? (store.uiMode === 'pro' || ['overview', 'nodes', 'profiles', 'logs', 'plugins', 'settings'].includes(key)), uiMode: (mode?.endsWith('-lite') ? 'lite' : 'pro') as 'lite' | 'pro', activeTab: 'settings', settingsSection: 'tun', isInitialized: true, openTab: (tab: string) => { store.activeTab = tab; }, openSettings: (_section: string) => {} });
 export type TunDnsHijackReadiness = {
   state: string; code?: string; message: string;
   features: { tunDualStack: { state: string }; tunDnsHijack: { state: string } };

@@ -261,6 +261,7 @@ pub(crate) fn save(state: &AppState, input: SaveInput) -> AppResult<Saved> {
                 return Err(conflict());
             }
             ProxyConfigProfile {
+                policy_selections: Default::default(),
                 id,
                 name: String::new(),
                 kernel: "zero".into(),

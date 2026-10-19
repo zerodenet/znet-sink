@@ -43,6 +43,7 @@ fn source(references: bool) -> Value {
 fn fixture(references: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let p = ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "profile".into(),
         name: "Ordinary".into(),
         kernel: "zero".into(),

@@ -225,6 +225,7 @@ mod tests {
     use super::*;
     fn profile() -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: "local".into(),
             name: "Local".into(),
             kernel: "zero".into(),

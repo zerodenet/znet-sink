@@ -558,6 +558,7 @@ mod tests {
     }
     fn transient_profile() -> crate::models::proxy_config::ProxyConfigProfile {
         crate::models::proxy_config::ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: "transient".into(),
             name: "fixture".into(),
             kernel: "zero".into(),

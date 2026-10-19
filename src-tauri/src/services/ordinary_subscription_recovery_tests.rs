@@ -4,6 +4,7 @@ pub(crate) fn fixture() -> (tempfile::TempDir, AppState, Record) {
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::default();
     let profile = ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "target".into(),
         name: "old".into(),
         kernel: "zero".into(),

@@ -84,7 +84,7 @@ fn subscription_unexpected_304_is_rejected_and_existing_material_is_untouched() 
         .proxy_configs()
         .lock()
         .unwrap()
-        .push(ProxyConfigProfile {
+        .push(ProxyConfigProfile { policy_selections: Default::default(),
             id: "valid-material".into(),
             name: "Previous valid material".into(),
             kernel: "zero".into(),

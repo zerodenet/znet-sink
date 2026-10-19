@@ -2914,10 +2914,11 @@ fn prepare_synced_proxy_config_upsert(
     // A sync replaces the generated proxy config. Reapply choices that are
     // still valid before hot-loading it; stale choices are omitted, which
     // makes Zero fall back to the selector's first member.
-    crate::services::policy_selection::apply_selections(
-        &mut parsed.content,
-        &subscription.policy_selections,
-    );
+    let mut selections = subscription.policy_selections.clone();
+    if let Some(profile) = existing_profile.as_ref() {
+        selections.extend(profile.policy_selections.clone());
+    }
+    crate::services::policy_selection::apply_selections(&mut parsed.content, &selections);
     Ok(build_synced_proxy_config_upsert(
         subscription,
         target_proxy_config_id,
@@ -3019,7 +3020,9 @@ fn update_sync_success(
     metadata: SyncMetadata,
     synced_at_unix_ms: u64,
 ) -> AppResult<SubscriptionProfile> {
-    let synced_content = lock(state.proxy_configs(), "proxy_config")?
+    let mut profiles = lock(state.proxy_configs(), "proxy_config")?;
+    let mut next_profiles = profiles.clone();
+    let synced_content = profiles
         .iter()
         .find(|profile| profile.id == target_proxy_config_id)
         .and_then(|profile| profile.content.clone());
@@ -3038,7 +3041,11 @@ fn update_sync_success(
         synced_at_unix_ms,
     );
     let updated = subscription.clone();
-    domain_store::save_subscriptions(&next)?;
+    // A formerly unlinked source may already own legacy choices. Publish its
+    // new association and the inherited configuration preferences together.
+    crate::services::policy_selection::inherit_legacy_selections(&mut next_profiles, &next);
+    domain_store::save_relational_data(&next_profiles, &next)?;
+    *profiles = next_profiles;
     *subscriptions = next;
 
     Ok(updated)
@@ -3898,6 +3905,7 @@ mod tests {
         managed_source: Option<ManagedSubscriptionSource>,
     ) -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: id.into(),
             name: id.into(),
             kernel: "zero".into(),

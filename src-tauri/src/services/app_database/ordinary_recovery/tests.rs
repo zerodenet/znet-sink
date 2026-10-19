@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 fn profile(id: &str) -> ProxyConfigProfile {
     ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: id.into(),
         name: id.into(),
         kernel: "zero".into(),

@@ -111,13 +111,13 @@ test('unsynced sources sync before activation and disabled sources remain disabl
   await page.goto('/?panel=mode-overview&mode=unsynced-source');
   const source = page.getByRole('button',{name:'切换配置来源'});
   await source.click();
-  await expect(page.getByRole('option',{name:'停用订阅 · 未同步',exact:true})).toHaveAttribute('data-disabled','');
-  await page.getByRole('option',{name:'新订阅 · 未同步',exact:true}).click();
+  await expect(page.getByRole('option',{name:'停用订阅 · 待更新',exact:true})).toHaveAttribute('data-disabled','');
+  await page.getByRole('option',{name:'新订阅 · 待更新',exact:true}).click();
   await expect(source).toContainText('新订阅配置');
   await expect(page.locator('.lite-entry-current').first()).toHaveText('新订阅配置');
   await source.click();
   await expect(page.getByRole('option',{name:'新订阅配置 · 当前',exact:true})).toBeVisible();
-  await expect(page.getByRole('option',{name:'新订阅 · 未同步',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('option',{name:'新订阅 · 待更新',exact:true})).toHaveCount(0);
 });
 
 test('both views agree on optional IPv6 and required IPv6 failure', async ({page}) => {

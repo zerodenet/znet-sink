@@ -6,6 +6,7 @@ use std::{
 fn fixture() -> (SubscriptionProfile, ProxyConfigProfile) {
     let sub = serde_json::from_value(json!({"id":"ordinary","name":"Source","url":"https://example.invalid/sub?token=secret-canary","enabled":true,"kernel":"zero","format":"auto","userAgent":"custom-canary","targetProxyConfigId":"material","updatedAtUnixMs":10,"lastSyncAtUnixMs":10,"lastError":null,"nodeCount":1,"uploadBytes":5,"policySelections":{"group":"direct"}})).unwrap();
     let profile = ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "material".into(),
         name: "material".into(),
         kernel: "zero".into(),

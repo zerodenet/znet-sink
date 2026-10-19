@@ -145,6 +145,7 @@ fn manual_probe_uses_profile_public_url_and_native_proxy_does_not_add_client_exc
     let mut app = AppConfig::default();
     app.url_test.url = "https://client.test/204".into();
     let profile = crate::models::proxy_config::ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "source".into(),
         name: "source".into(),
         kernel: "zero".into(),

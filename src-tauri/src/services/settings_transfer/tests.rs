@@ -343,6 +343,7 @@ fn shared_normalization_is_stored_in_the_sparse_candidate() {
 #[test]
 fn source_metadata_version_change_rejects_an_otherwise_matching_scope() {
     let profile = crate::models::proxy_config::ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "profile-a".into(),
         name: "A".into(),
         kernel: "zero".into(),

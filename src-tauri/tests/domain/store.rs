@@ -12,6 +12,7 @@ fn domain_store_roundtrips_profiles() {
     domain_store::save_proxy_configs_to_dir(
         &dir,
         &[ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: "proxy-config-1".to_string(),
             name: "Local".to_string(),
             kernel: "zero".to_string(),
@@ -213,6 +214,7 @@ fn isolated_data_dir(name: &str) -> std::path::PathBuf {
 
 fn proxy_profile(id: &str) -> ProxyConfigProfile {
     ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: id.to_string(),
         name: "Local".to_string(),
         kernel: "zero".to_string(),

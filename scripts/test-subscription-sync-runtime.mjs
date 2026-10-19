@@ -7,7 +7,7 @@ function harness(reply, failure) {
   const calls = [], changes = [];
   let tunWrites = 0;
   const deps = {
-    '@tauri-apps/api/core': { invoke: async (command, args) => { calls.push([command, args]); if (failure) throw failure; return reply; } },
+    '@tauri-apps/api/core': { invoke: async (command, args) => { calls.push([command, args]); if (failure) throw failure; return typeof reply === 'function' ? reply(command, args) : reply; } },
     '$lib/features/configuration/profile-activation': { ProfileActivation: class {} },
     './core-events.svelte': { coreEvents: { stop: async () => {}, start: async () => {} } },
     './proxy-config-signal.svelte': { proxyConfigSignal: { markChanged: value => changes.push(['profiles', value]) } },
@@ -49,4 +49,32 @@ test('a failed sync propagates the error without invalidating successful state o
   await assert.rejects(h.service.syncSubscription('subscription'), error);
   assert.deepEqual(h.changes, []);
   assert.equal(h.tunWrites(), 0);
+});
+
+for (const operation of ['upsertProxyConfig','importProxyConfig']) {
+  test(`saving an inactive configuration via ${operation} cannot reconcile or enable TUN`, async()=>{
+    const h=harness({id:'inactive',active:false});
+    await h.service[operation]({name:'saved'});
+    assert.equal(h.tunWrites(),0);
+    assert.deepEqual(h.changes,[['profiles',false],['rules']]);
+  });
+}
+test('removing only a configuration source keeps runtime capture untouched',async()=>{
+  const h=harness({removedProxyConfig:false,removedManagedRuleSetCount:0});
+  await h.service.removeSubscription('source',false);
+  assert.equal(h.tunWrites(),0);
+  assert.deepEqual(h.calls,[['subscription_remove',{id:'source',removeAssociatedConfig:false}]]);
+});
+
+
+test('deleting an inactive configuration never reconciles TUN', async () => {
+  const h=harness(command=>command==='proxy_config_get'?{id:'other',active:false}:undefined);
+  await h.service.removeProxyConfig('other');
+  assert.equal(h.tunWrites(),0);
+  assert.deepEqual(h.calls,[['proxy_config_get',{id:'other'}],['proxy_config_remove',{id:'other'}]]);
+});
+test('deleting an inactive source and its target leaves current capture alone',async()=>{
+  const h=harness(command=>command==='subscription_remove_preview'?{targetProxyConfig:{active:false}}:{removedProxyConfig:true});
+  await h.service.removeSubscription('other',true);
+  assert.equal(h.tunWrites(),0);
 });

@@ -15,6 +15,7 @@ fn source() -> Value {
 }
 fn profile() -> ProxyConfigProfile {
     ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "manual".into(),
         name: "ordinary".into(),
         kernel: "zero".into(),

@@ -6,6 +6,7 @@ pub mod builtin_rules;
 pub mod capability;
 pub(crate) mod common;
 pub(crate) use crate::configuration::apply as config_apply;
+pub mod configuration_catalog;
 pub mod connection_history_store;
 pub mod core_config;
 pub mod core_events;

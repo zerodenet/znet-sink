@@ -54,9 +54,9 @@ assert.ok(
 
 assert.ok(
   profilesTab.includes('$effect(() => {')
-    && profilesTab.includes('refresh();')
-    && profilesTab.includes('listProxyConfigs()'),
-  'ProfilesTab should keep loading through listProxyConfigs so the shared revision re-runs its existing effect',
+    && profilesTab.includes('proxyConfigSignal.revision')
+    && profilesTab.includes('listConfigurations()'),
+  'the unified configuration list should observe the shared revision in both layouts',
 );
 
 assert.ok(

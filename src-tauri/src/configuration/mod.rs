@@ -5,6 +5,7 @@ pub(crate) mod capture_apply;
 pub(crate) mod composition;
 pub(crate) mod dns;
 pub(crate) mod dns_migration;
+pub(crate) mod dns_rule_sets;
 pub(crate) mod mobile_location;
 pub(crate) mod native_validation;
 pub(crate) mod persistence;

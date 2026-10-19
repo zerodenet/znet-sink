@@ -62,17 +62,17 @@ export async function getProxyConfig(id: string): Promise<ProxyConfigProfile> {
 
 export async function upsertProxyConfig(input: ProxyConfigUpsert): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_upsert', { input });
-  proxyConfigSignal.markChanged(true);
+  proxyConfigSignal.markChanged(profile.active);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('profile upsert');
+  if (profile.active) await reconcileTunAfterConfigMutation('profile upsert');
   return profile;
 }
 
 export async function importProxyConfig(input: ProxyConfigImport): Promise<ProxyConfigProfile> {
   const profile = await invoke<ProxyConfigProfile>('proxy_config_import', { input });
-  proxyConfigSignal.markChanged(true);
+  proxyConfigSignal.markChanged(profile.active);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('profile import');
+  if (profile.active) await reconcileTunAfterConfigMutation('profile import');
   return profile;
 }
 
@@ -95,10 +95,11 @@ export function getConfigCompositionReport(): Promise<{sourceProfileId: string |
 }
 
 export async function removeProxyConfig(id: string): Promise<void> {
+  const previous = await getProxyConfig(id);
   await invoke('proxy_config_remove', { id });
   proxyConfigSignal.markChanged(true);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('profile removal');
+  if (previous.active) await reconcileTunAfterConfigMutation('profile removal');
 }
 
 // ── Subscriptions ──
@@ -251,13 +252,16 @@ export async function removeSubscription(
   id: string,
   removeAssociatedConfig = false,
 ): Promise<SubscriptionRemovalOutcome> {
+  const preview = removeAssociatedConfig ? await getSubscriptionRemovalPreview(id) : null;
   const outcome = await invoke<SubscriptionRemovalOutcome>('subscription_remove', {
     id,
     removeAssociatedConfig,
   });
   if (outcome.removedProxyConfig) proxyConfigSignal.markChanged(true);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('subscription removal');
+  if (outcome.removedProxyConfig && preview?.targetProxyConfig?.active) {
+    await reconcileTunAfterConfigMutation('subscription removal');
+  }
   return outcome;
 }
 
