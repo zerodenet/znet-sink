@@ -67,6 +67,8 @@ jobs:
           node scripts/license-rust.mjs --target aarch64-linux-android --profile release --features "$ZNET_PRODUCT_FEATURES" --output "$RUNNER_TEMP/rust-license.json"
           echo "ZNET_LICENSE_INVENTORY=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
           echo "ZNET_REQUIRE_LICENSE_INVENTORY=1" >> "$GITHUB_ENV"
+          echo "TAURI_ZNET_LICENSE_INVENTORY=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"
+          echo "TAURI_ZNET_REQUIRE_LICENSE_INVENTORY=1" >> "$GITHUB_ENV"
           echo "ZNET_LICENSE_FRONTEND=$GITHUB_WORKSPACE/build/license-inventory.frontend.json" >> "$GITHUB_ENV"
           echo "ORG_GRADLE_PROJECT_znetLicenseMergeScript=$GITHUB_WORKSPACE/scripts/license-native-merge.mjs" >> "$GITHUB_ENV"
           echo "ORG_GRADLE_PROJECT_znetLicenseCargoInventory=$RUNNER_TEMP/rust-license.json" >> "$GITHUB_ENV"

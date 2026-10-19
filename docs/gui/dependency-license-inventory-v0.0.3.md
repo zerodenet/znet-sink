@@ -54,7 +54,7 @@
      --features tool-dns,tool-route,tool-node-probe --output "$RUNNER_TEMP/rust-license.json"
    ```
 
-   `ZNET_LICENSE_INVENTORY` 指向此绝对路径；实际发行 job 设置 `ZNET_REQUIRE_LICENSE_INVENTORY=1`。`src-tauri/build_license_inventory.rs` 只读取与检查 target/profile/features、当前 Cargo.toml/Cargo.lock 与 Rust 材料缓存 SHA、正文 SHA/引用预算，然后复制到 OUT_DIR；不运行 Node、不嵌套 cargo、不开网络。strict 仅作用 release；CLI debug 初始化或普通 Cargo 开发编译可以产生带原因的 unavailable stub。
+   `ZNET_LICENSE_INVENTORY` 指向此绝对路径；受控构建设置 `ZNET_REQUIRE_LICENSE_INVENTORY=1`。移动构建同时设置同值的 `TAURI_ZNET_LICENSE_INVENTORY` 与 `TAURI_ZNET_REQUIRE_LICENSE_INVENTORY`，通过锁定 CLI 的 TAURI 前缀白名单进入 Xcode/Gradle 子构建；两种输入冲突拒绝。`src-tauri/build_license_inventory.rs` 只读取与检查 target/profile/features、当前 Cargo.toml/Cargo.lock 与 Rust 材料缓存 SHA、正文 SHA/引用预算，然后复制到 OUT_DIR；不运行 Node、不嵌套 cargo、不开网络。显式 required 同时约束 debug/release；普通未要求清单的开发编译仍可产生带原因的 unavailable stub。
 3. 真实 Tauri Android CLI 的 extra args 是 Cargo args，不用来传 Gradle `-I`。在 job 专用 `GRADLE_USER_HOME` 设置以下绝对路径环境变量，再运行 `node scripts/install-license-android-hook.mjs`：
 
    ```text

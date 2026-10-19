@@ -33,6 +33,10 @@ cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked 
 node scripts/license-rust.mjs --target "$rust_target" --profile debug \
   --features tool-dns,tool-route,tool-node-probe --output "$evidence/rust-license.json"
 export ZNET_LICENSE_INVENTORY="$evidence/rust-license.json"
+export ZNET_REQUIRE_LICENSE_INVENTORY=1
+# The locked mobile CLI explicitly forwards TAURI_* into Xcode's Rust build.
+export TAURI_ZNET_LICENSE_INVENTORY="$ZNET_LICENSE_INVENTORY"
+export TAURI_ZNET_REQUIRE_LICENSE_INVENTORY="$ZNET_REQUIRE_LICENSE_INVENTORY"
 pnpm ios:init 2>&1 | tee "$evidence/init.log"
 # A packaged Debug build uses embedded assets, not Vite or a CI network URL.
 pnpm tauri ios build --debug --target "$cli_target" --ci --no-sign \

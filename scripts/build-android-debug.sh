@@ -41,6 +41,8 @@ pnpm build 2>&1 | tee android-debug-host-evidence/frontend-build.log
 node scripts/license-rust.mjs --target aarch64-linux-android --profile debug --features "$ZNET_PRODUCT_FEATURES" --output "$state/rust-license.json"
 export ZNET_LICENSE_INVENTORY="$state/rust-license.json"
 export ZNET_REQUIRE_LICENSE_INVENTORY=1
+export TAURI_ZNET_LICENSE_INVENTORY="$ZNET_LICENSE_INVENTORY"
+export TAURI_ZNET_REQUIRE_LICENSE_INVENTORY="$ZNET_REQUIRE_LICENSE_INVENTORY"
 export ZNET_LICENSE_FRONTEND="$root/build/license-inventory.frontend.json"
 export ORG_GRADLE_PROJECT_znetLicenseMergeScript="$root/scripts/license-native-merge.mjs"
 export ORG_GRADLE_PROJECT_znetLicenseCargoInventory="$ZNET_LICENSE_INVENTORY"

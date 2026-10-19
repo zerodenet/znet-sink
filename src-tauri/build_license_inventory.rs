@@ -1,17 +1,34 @@
 use sha2::{Digest, Sha256};
 use std::{env, fs, path::Path};
 
+// The mobile CLI forwards TAURI_* through its Xcode/Gradle options channel.
+// Ordinary shell variables can disappear in Xcode's sanitized build process.
+fn build_input(name: &str) -> Result<Option<String>, String> {
+    let direct = env::var(name).ok();
+    let forwarded = env::var(format!("TAURI_{name}")).ok();
+    match (&direct, &forwarded) {
+        (Some(a), Some(b)) if a != b => Err("conflicting-license-build-inputs".into()),
+        _ => Ok(forwarded.or(direct)),
+    }
+}
+
 /// Plain cargo builds need neither Node nor a nested dependency resolution/network step.
 /// Actual release pipelines opt into strict verification of their precollected snapshot.
 pub fn emit(selected_features: &[&str]) {
     println!("cargo:rerun-if-env-changed=ZNET_LICENSE_INVENTORY");
     println!("cargo:rerun-if-env-changed=ZNET_REQUIRE_LICENSE_INVENTORY");
+    println!("cargo:rerun-if-env-changed=TAURI_ZNET_LICENSE_INVENTORY");
+    println!("cargo:rerun-if-env-changed=TAURI_ZNET_REQUIRE_LICENSE_INVENTORY");
     let target = env::var("TARGET").expect("Cargo target");
     let profile = env::var("PROFILE").expect("Cargo profile");
     let output =
         Path::new(&env::var("OUT_DIR").expect("Cargo output")).join("license-inventory.rust.json");
-    let strict =
-        profile == "release" && env::var("ZNET_REQUIRE_LICENSE_INVENTORY").as_deref() == Ok("1");
+    let strict = [
+        "ZNET_REQUIRE_LICENSE_INVENTORY",
+        "TAURI_ZNET_REQUIRE_LICENSE_INVENTORY",
+    ]
+    .iter()
+    .any(|name| env::var(name).as_deref() == Ok("1"));
     let mut features: Vec<String> = selected_features.iter().map(|s| (*s).to_string()).collect();
     if env::var_os("CARGO_FEATURE_ACCEPTANCE_TEST_UTILS").is_some() {
         features.push("acceptance-test-utils".into());
@@ -24,8 +41,9 @@ pub fn emit(selected_features: &[&str]) {
         "gaps":[{"ecosystem":"cargo","reason":reason}]})
     };
     let result = (|| -> Result<serde_json::Value, String> {
-        let path = env::var("ZNET_LICENSE_INVENTORY")
-            .map_err(|_| "precollected-target-inventory-not-provided")?;
+        build_input("ZNET_REQUIRE_LICENSE_INVENTORY")?;
+        let path = build_input("ZNET_LICENSE_INVENTORY")?
+            .ok_or("precollected-target-inventory-not-provided")?;
         println!("cargo:rerun-if-changed={path}");
         let bytes = fs::read(&path).map_err(|_| "precollected-inventory-unreadable")?;
         if bytes.len() > 16 * 1024 * 1024 {
@@ -155,7 +173,7 @@ pub fn emit(selected_features: &[&str]) {
     })();
     let value = match result {
         Ok(value) => value,
-        Err(reason) if strict => panic!("release dependency license inventory rejected: {reason}"),
+        Err(reason) if strict => panic!("required dependency license inventory rejected: {reason}"),
         Err(reason) => unavailable(&reason),
     };
     fs::write(

@@ -38,7 +38,13 @@ try{
  const materialLabel='resources/licenses/rust-package-materials.json';
  if(existsSync(join(root,materialLabel)))prepared.provenance.inputs.push({label:materialLabel,sha256:sha256(readFileSync(join(root,materialLabel)))});
  const input=join(work,'inventory.json');
- const run=(value,extra={})=>{if(value)writeFileSync(input,JSON.stringify(value));return spawnSync(binary,[],{cwd:join(root,'src-tauri'),env:{...process.env,TARGET:'aarch64-linux-android',PROFILE:'release',OUT_DIR:out,ZNET_LICENSE_INVENTORY:input,ZNET_REQUIRE_LICENSE_INVENTORY:'1',...extra},encoding:'utf8'});};
+ const run=(value,extra={})=>{
+  if(value)writeFileSync(input,JSON.stringify(value));
+  const env={...process.env,TARGET:'aarch64-linux-android',PROFILE:'release',OUT_DIR:out,ZNET_LICENSE_INVENTORY:input,ZNET_REQUIRE_LICENSE_INVENTORY:'1'};
+  delete env.TAURI_ZNET_LICENSE_INVENTORY;delete env.TAURI_ZNET_REQUIRE_LICENSE_INVENTORY;
+  for(const [key,value]of Object.entries(extra)){if(value===null)delete env[key];else env[key]=value;}
+  return spawnSync(binary,[],{cwd:join(root,'src-tauri'),env,encoding:'utf8'});
+ };
  if(run(prepared).status!==0)throw new Error('Valid target inventory rejected');
  const reject=value=>{if(run(value).status===0)throw new Error('Invalid release inventory accepted');};
  reject({...prepared,target:{...prepared.target,triple:'aarch64-apple-ios'}});
@@ -52,7 +58,20 @@ try{
  }
  reject({...prepared,texts:[{...prepared.texts[0],text:'tampered'}]});
  reject({...prepared,entries:[{id:'row',licenseTextIds:['absent'],noticeTextIds:[]}]});
- const debug=run(prepared,{PROFILE:'debug'});if(debug.status!==0)throw new Error('Debug initialization must remain available');
+ const debug=run(prepared,{PROFILE:'debug',ZNET_REQUIRE_LICENSE_INVENTORY:'0'});if(debug.status!==0)throw new Error('Optional debug initialization must remain available');
  const stub=JSON.parse(readFileSync(join(out,'license-inventory.rust.json'),'utf8'));if(stub.provenance.kind!=='inventory-unavailable'||stub.entries.length!==0)throw new Error('Debug mismatch falsely claims inventory available');
- console.log('Rust license build hook: matching release, target/features/input SHA/text tamper rejection, honest debug stub passed');
+ const ios={...prepared,target:{...prepared.target,triple:'aarch64-apple-ios-sim',profile:'debug'}};
+ const forwarded={TARGET:'aarch64-apple-ios-sim',PROFILE:'debug',ZNET_LICENSE_INVENTORY:null,ZNET_REQUIRE_LICENSE_INVENTORY:null,TAURI_ZNET_LICENSE_INVENTORY:input,TAURI_ZNET_REQUIRE_LICENSE_INVENTORY:'1'};
+ if(run(ios,forwarded).status!==0)throw new Error('CLI-forwarded required iOS debug inventory rejected');
+ const actual=JSON.parse(readFileSync(join(out,'license-inventory.rust.json'),'utf8'));
+ if(actual.target.triple!==ios.target.triple||actual.target.profile!==ios.target.profile
+  ||JSON.stringify(actual.target.features)!==JSON.stringify(ios.target.features)
+  ||actual.provenance.kind==='inventory-unavailable')throw new Error('Forwarded iOS debug inventory not embedded');
+ for(const extra of [
+  {...forwarded,TAURI_ZNET_LICENSE_INVENTORY:null},
+  {...forwarded,ZNET_LICENSE_INVENTORY:input+'-conflict'},
+  {...forwarded,ZNET_REQUIRE_LICENSE_INVENTORY:'0'},
+ ])if(run(ios,extra).status===0)throw new Error('Required debug inventory accepted missing/conflicting CLI inputs');
+ if(run(prepared,{PROFILE:'debug'}).status===0)throw new Error('Required debug inventory accepted a profile mismatch');
+ console.log('Rust license build hook: direct/CLI-forwarded required debug and release, conflict/missing/target/features/input SHA/text tamper rejection, optional debug stub passed');
 }finally{rmSync(work,{recursive:true,force:true});}
