@@ -8,7 +8,9 @@ let nativeDependencies: [Package.Dependency] = []
 let nativeTargets: [Target] = []
 #else
 let nativeProducts: [Product] = [
-    .library(name: "znet-native-io", type: .static, targets: ["znet-native-io"])
+    // Tauri's SwiftLinker links the static product by the owning Cargo package
+    // name. Keep the module name stable while matching that actual link input.
+    .library(name: "tauri-plugin-znet-native-io", type: .static, targets: ["znet-native-io"])
 ]
 let nativeDependencies: [Package.Dependency] = [
     .package(name: "Tauri", path: "../.tauri/tauri-api")
@@ -20,7 +22,7 @@ let nativeTargets: [Target] = [
 #endif
 
 let package = Package(
-    name: "znet-native-io",
+    name: "tauri-plugin-znet-native-io",
     platforms: [.iOS(.v15)],
     products: nativeProducts,
     dependencies: nativeDependencies,

@@ -18,7 +18,9 @@ evidence="${ZNET_IOS_EVIDENCE_DIR:-$PWD/ios-host-evidence/$variant}"
 mkdir -p "$evidence"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2
 export IPHONEOS_DEPLOYMENT_TARGET=16.4
-export CARGO_PROFILE_DEV_DEBUG=0
+# swift-rs chooses Debug from Cargo's DEBUG (debug-info enabled), not Xcode's
+# configuration. Keep limited symbols so the nonce-gated Debug smoke is built.
+export CARGO_PROFILE_DEV_DEBUG=1
 xcodebuild -version > "$evidence/xcode-version.txt"
 xcrun --sdk "$sdk" --show-sdk-version > "$evidence/sdk-version.txt"
 pnpm tauri ios build --help > "$evidence/locked-cli-build-help.txt"

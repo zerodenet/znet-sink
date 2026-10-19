@@ -81,7 +81,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$GITHUB_WORKSPACE/native-document-evidence"
-          xcodebuild -scheme znet-native-io -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/native-io-derived" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$GITHUB_WORKSPACE/native-document-evidence/ios-unsigned-build.log"
+          xcodebuild -scheme tauri-plugin-znet-native-io -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/native-io-derived" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$GITHUB_WORKSPACE/native-document-evidence/ios-unsigned-build.log"
       - name: Inventory actual unsigned Swift library dependencies and SDK provenance
         shell: bash
         run: |
@@ -106,7 +106,7 @@ jobs:
             fi
           done
           node scripts/license-swift-targets.mjs --build-log "$build_log" > "$evidence/ios-compiler-targets.txt"
-          archive="$(find "$RUNNER_TEMP/native-io-derived/Build/Products" -type f -path '*-iphonesimulator/*' -name 'libznet-native-io.a' -print -quit)"
+          archive="$(find "$RUNNER_TEMP/native-io-derived/Build/Products" -type f -path '*-iphonesimulator/*' -name 'libtauri-plugin-znet-native-io.a' -print -quit)"
           while IFS= read -r triple; do
             case "$triple" in
               aarch64-apple-ios-sim) architecture=arm64 ;;
