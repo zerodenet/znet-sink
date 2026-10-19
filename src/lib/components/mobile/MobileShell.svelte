@@ -5,6 +5,7 @@
   import { store } from '$lib/services/store.svelte';
   import { provideMobileNavigation, type MobilePage, type MobileTab } from '$lib/features/mobile/context';
   import { mobilePlatform } from '$lib/features/mobile/platform.svelte';
+  import { isNestedOverlayEvent } from '$lib/services/overlay-keyboard';
   import MobileMenu from './MobileMenu.svelte';
   import MobileSecondary from './MobileSecondary.svelte';
   let { overview, nodes, configuration }: { overview: Snippet; nodes: Snippet; configuration: Snippet } = $props();
@@ -17,17 +18,23 @@
     navigation.selectTab(tab);
     if (navigation.activeTab === tab) store.activeTab = tab === 'configuration' ? 'profiles' : tab;
   }
-  function back(): boolean {
-    // Open dialogs own return. A closed Portal may still be visible during its
-    // exit animation; it must not consume the next return as an active layer.
-    const dialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'))
+  const popupSelector = '[data-slot="select-content"], [data-slot="popover-content"], [role="listbox"], [role="menu"]';
+  const dialogSelector = '[role="dialog"], [role="alertdialog"]';
+  function activeLayer(selector: string): HTMLElement | undefined {
+    return Array.from(document.querySelectorAll<HTMLElement>(selector))
       .filter(element => element.getAttribute('data-state') !== 'closed' && element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true').at(-1);
-    if (dialog) {
-      dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  }
+  function back(): boolean {
+    // A system return is routed once to the top active layer. Closed portals
+    // still animating out do not own the next return.
+    const layer = activeLayer(popupSelector) ?? activeLayer(dialogSelector);
+    if (layer) {
+      layer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       return true;
     }
     return navigation.back();
   }
+
   $effect(() => {
     const tab = store.activeTab;
     const section = store.settingsSection;
@@ -59,8 +66,10 @@
     const onBack = (event: Event) => { if (back()) event.preventDefault(); };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || !navigation.current) return;
-      if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
-      event.preventDefault(); back();
+      // Real keyboard events already reach the owning menu/dialog. Re-dispatch
+      // would recurse through this document listener and consume the first event.
+      if (isNestedOverlayEvent(event) || activeLayer(popupSelector) || activeLayer(dialogSelector)) return;
+      event.preventDefault(); navigation.back();
     };
     const onPopState = () => { if (navigation.current) back(); };
     navigation.onOpen = () => window.history.pushState({ ...window.history.state, mobileSecondary: true }, '');

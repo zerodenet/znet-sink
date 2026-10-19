@@ -20,3 +20,26 @@ test('Escape inside target menu closes only the menu, not the original migration
 
 test('unknown blocker remains visible and cannot authorize a preview',async({page})=>{await open(page);await page.getByRole('button',{name:'返回规则集',exact:true}).click();await control(page,c=>c.blocker='future_unknown_blocker');await page.getByRole('button',{name:'删除',exact:true}).click();await expect(page.getByLabel('迁移阻止范围')).toContainText('future_unknown_blocker');await expect(page.getByLabel('迁移阻止范围')).toContainText('尚不能安全修改');await page.getByRole('button',{name:'使用本次核对来源'}).click();await expect(page.getByRole('button',{name:'替换规则集',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'预览本地迁移/删除'})).toBeDisabled();expect((await calls(page)).filter((c:any)=>c.kind==='preview'||c.kind==='save')).toHaveLength(0);});
 test('loss of current profile during refresh invalidates old source acknowledgement and selection',async({page})=>{await open(page);await select(page);await control(page,c=>c.noProfile=true);await page.getByRole('button',{name:'重新核对来源',exact:true}).click();await expect(page.getByRole('alert').filter({hasText:'请先选择一份普通配置'})).toBeVisible();await expect(page.getByRole('button',{name:'预览本地迁移/删除'})).toHaveCount(0);await expect(page.getByRole('button',{name:'确认仅保存本地'})).toHaveCount(0);expect((await calls(page)).filter((c:any)=>c.kind==='preview'||c.kind==='save')).toHaveLength(0);await control(page,c=>c.noProfile=false);await page.getByRole('button',{name:'重新核对来源',exact:true}).click();await expect(page.getByRole('button',{name:'使用本次核对来源'})).toBeVisible();await expect(page.getByRole('button',{name:'预览本地迁移/删除'})).toBeDisabled();await expect(page.getByRole('button',{name:'替换规则集',exact:true})).toHaveText('请明确选择替换规则集');});
+
+test('keyboard Escape never redispatches itself while a custom dialog owns a nested menu',async({page})=>{
+ await open(page);await page.getByRole('button',{name:'使用本次核对来源'}).click();
+ await page.getByRole('button',{name:'替换规则集',exact:true}).click();
+ await expect(page.getByRole('listbox')).toBeVisible();
+ await page.evaluate(()=>{(window as any).syntheticEscapeCount=0;document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isTrusted)(window as any).syntheticEscapeCount++;},true);});
+ await page.keyboard.press('Escape');
+ expect(await page.evaluate(()=>(window as any).syntheticEscapeCount)).toBe(0);
+ await expect(page.getByRole('listbox')).toHaveCount(0);
+ await expect(page.getByRole('dialog').getByText('核对规则集引用',{exact:true})).toBeVisible();
+});
+
+test('native Back dispatches one Escape to the menu before its custom parent dialog',async({page})=>{
+ await open(page);await page.getByRole('button',{name:'使用本次核对来源'}).click();
+ await page.getByRole('button',{name:'替换规则集',exact:true}).click();
+ await expect(page.getByRole('listbox')).toBeVisible();
+ await page.evaluate(()=>{(window as any).syntheticEscapeCount=0;document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isTrusted)(window as any).syntheticEscapeCount++;},true);});
+ expect(await page.evaluate(()=>window.dispatchEvent(new CustomEvent('mobile:back',{cancelable:true})))).toBe(false);
+ expect(await page.evaluate(()=>(window as any).syntheticEscapeCount)).toBe(1);
+ await expect(page.getByRole('listbox')).toHaveCount(0);
+ await expect(page.getByRole('dialog').getByText('核对规则集引用',{exact:true})).toBeVisible();
+ expect((await calls(page)).filter((c:any)=>c.kind==='save')).toHaveLength(0);
+});
