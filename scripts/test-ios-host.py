@@ -64,6 +64,18 @@ class HostContracts(unittest.TestCase):
             with self.subTest(patch=patch), self.assertRaises(AssertionError):
                 verify.validate_smoke(dict(self.receipt, **patch), 'a' * 32)
 
+    def test_only_simulator_can_have_certificate_free_ad_hoc_signature(self):
+        unsigned = 'App: code object is not signed at all\n'
+        adhoc = 'Signature=adhoc\nTeamIdentifier=not set\nCodeDirectory flags=0x20002(adhoc,linker-signed)\n'
+        self.assertEqual(verify.validate_signature('iphoneos', 1, unsigned), 'none')
+        self.assertEqual(verify.validate_signature('iphonesimulator', 0, adhoc), 'ad-hoc')
+        for sdk, status, details in [('iphoneos', 0, adhoc), ('iphonesimulator', 1, 'tool failed'),
+                                     ('iphonesimulator', 0, adhoc.replace('not set', 'TEAM')),
+                                     ('iphonesimulator', 0, adhoc + 'Authority=Certificate\n'),
+                                     ('iphonesimulator', 0, 'Signature=unknown\nTeamIdentifier=not set\n')]:
+            with self.subTest(sdk=sdk, details=details), self.assertRaises(AssertionError):
+                verify.validate_signature(sdk, status, details)
+
 
 if __name__ == '__main__':
     unittest.main()

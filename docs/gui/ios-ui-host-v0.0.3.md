@@ -18,11 +18,13 @@ VPN、Packet Tunnel extension、App Group、完整内核接入与原生 VPN 生�
 
 | 范围 | 实际命令与证据 | 不代表 |
 | --- | --- | --- |
-| Simulator 完整 App | `pnpm ios:build:simulator`；标准 init、完整 Rust/Swift/资源链接、无签名 Debug App、实际 Mach-O SDK/架构/入口/插件符号和内嵌前端核对 | 真实 iPhone、签名安装、VPN |
+| Simulator 完整 App | `pnpm ios:build:simulator`；标准 init、完整 Rust/Swift/资源链接、无签名身份的 Debug App、实际 Mach-O SDK/架构/入口/插件符号和内嵌前端核对 | 真实 iPhone、发行签名、VPN |
 | Simulator 启动和烟测 | 安装并启动上一步真实 `.app`，真实 WKWebView 完成 onboarding、四底栏、关于/返回、真实 Rust IPC 与诚实 unsupported/许可状态；nonce 防旧回执；保留 screenshot、launch、JSON | 完整 PRD 或真机生命周期、文件提供者验收 |
 | arm64 设备 SDK | `pnpm ios:build:device`；完整 unsigned iPhoneOS App，单独 SDK/arm64/包内入口核对 | 可安装到未配对 iPhone、provisioning、真机通过 |
 
 构建脚本拒绝签名/Team/API 凭据环境，使用 CLI `--no-sign`，不导入/创建证书、私钥、provisioning 或 Apple 账号，不提交商店、不发布。Simulator/App 构建日志与产物按当前 commit 独立保留；`package-receipt.json` 记录的构建结果与 `simulator-smoke.json` 的执行结果分开。PR workflow 可能检出 GitHub 合成 merge ref；分支 push 的产物回执直接绑定 head。以实际对应 run 的终态和回执为准，脚本存在不计构建已成功。
+
+Apple arm64 Simulator 工具链可在 `--no-sign` 下输出 ad-hoc Mach-O 签名，见 [Apple linker 默认逻辑](https://github.com/apple-oss-distributions/ld64/blob/main/src/ld/Options.cpp)。验证器只在 Simulator 接受 `Signature=adhoc`、无 Team、无 Authority 的结果，单独记录 `signature=ad-hoc`、`unsigned=false`，不称为 unsigned 或设备发行签名；设备 SDK 仍要求真正 unsigned。原始 `codesign-details.txt` 随证据保存，任何证书身份或 provisioning 都拒绝。
 
 烟测仅在 NativeIo 的 **Swift Debug 条件 + 显式 32 位随机 launch nonce + 固定随包测试驱动存在**时运行。普通本机调试不设置该环境变量就不会执行驱动；Release 无执行入口。驱动只通过现有 UI/IPC 操作本次独立 Simulator 容器，不注入代理数据、许可证空清单、采样或假成功，不创建 VPN、不打开系统文件/通知权限。回执仅写固定私有 Caches 路径。CI 首轮前保留 `executionVerified=false`，实际烟测另外产生正向证据。
 

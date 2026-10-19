@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   application:
-    name: Complete unsigned iOS App (${{ matrix.target }})
+    name: Complete iOS App (${{ matrix.target }}, no signing identity)
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -52,7 +52,7 @@ jobs:
           command -v xcodegen || brew install xcodegen
           command -v pod || brew install cocoapods
           xcrun simctl list runtimes
-      - name: Generate and build the complete unsigned main application
+      - name: Generate and build the complete main application without signing credentials
         env:
           ZNET_IOS_EVIDENCE_DIR: ${{ github.workspace }}/ios-host-evidence/${{ matrix.target }}
         run: bash scripts/build-ios-host.sh '${{ matrix.target }}'

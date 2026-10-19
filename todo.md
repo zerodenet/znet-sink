@@ -210,7 +210,7 @@ sourceJson快照、原生校验/格式化和固定来源本地CAS，保存与明
 
 ## CLIENT-10
 
-**iOS 主应用 UI 宿主与调试入口。** 新增锁定 Tauri CLI 标准工程生成、完整 Simulator/iPhoneOS unsigned 主 App 构建、Debug 真实 WKWebView/IPC 烟测及 [本机调试指南](docs/gui/ios-ui-host-v0.0.3.md)。工程与实际执行证据由对应 commit 的 macOS CI 产物确认，不再拿 NativeIo 单库代替完整应用。最低 iOS 16.4。iOS 原生许可读取仍 unavailable，主 App 完整许可资料缺口不因本批脚本存在而解除。
+**iOS 主应用 UI 宿主与调试入口。** 新增锁定 Tauri CLI 标准工程生成、无签名身份的完整 Simulator App/unsigned iPhoneOS App 构建、Debug 真实 WKWebView/IPC 烟测及 [本机调试指南](docs/gui/ios-ui-host-v0.0.3.md)。Simulator 工具链 ad-hoc 与设备 unsigned 分开记录。工程与实际执行证据由对应 commit 的 macOS CI 产物确认，不再拿 NativeIo 单库代替完整应用。最低 iOS 16.4。iOS 原生许可读取仍 unavailable，主 App 完整许可资料缺口不因本批脚本存在而解除。
 
 **继续后置：** Packet Tunnel extension、App Group、内核/原生 VPN 生命周期及 CORE-01/02/05；签名、设备配对、安装和真实 iPhone UI/文件/生命周期验收由用户本机执行。云端不创建账号凭据、证书、私钥或 provisioning，不发布或合并。
 

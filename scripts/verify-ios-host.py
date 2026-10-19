@@ -45,6 +45,19 @@ def command(*args):
     return subprocess.check_output(args, text=True, errors='strict')
 
 
+def validate_signature(sdk, returncode, details):
+    if returncode != 0:
+        assert 'code object is not signed at all' in details, 'codesign inspection failed'
+        return 'none'
+    # Apple arm64 Simulator tools can emit an ad-hoc signature under --no-sign.
+    # It contains no signing identity/certificate; never admit it for device SDK.
+    assert sdk == 'iphonesimulator', 'device application must remain unsigned'
+    assert re.search(r'^Signature=adhoc$', details, re.M), 'unexpected signing identity'
+    assert re.search(r'^TeamIdentifier=not set$', details, re.M), 'unexpected signing team'
+    assert not re.search(r'^Authority=', details, re.M), 'certificate-backed signature forbidden'
+    return 'ad-hoc'
+
+
 def package(args):
     candidates = []
     for app in pathlib.Path(args.root).rglob('*.app'):
@@ -70,14 +83,18 @@ def package(args):
     (proof / 'native-binding-symbols.txt').write_text('\n'.join(line for line in symbols.splitlines() if '_start_app' in line or 'init_plugin_znet_native_io' in line) + '\n')
     (proof / 'app-info.json').write_text(json.dumps(info, indent=2) + '\n')
     assert not (app / 'embedded.mobileprovision').exists(), 'provisioning must remain absent'
-    signature = subprocess.run(['codesign', '-dv', str(app)], capture_output=True)
-    assert signature.returncode != 0, 'expected an unsigned application host'
+    signature = subprocess.run(['codesign', '-dv', '--verbose=4', str(app)], capture_output=True, text=True)
+    details = signature.stdout + signature.stderr
+    (proof / 'codesign-details.txt').write_text(details)
+    signature_kind = validate_signature(args.sdk, signature.returncode, details)
     destination = pathlib.Path(args.copy) / 'ZNetSink.app'
     shutil.copytree(app, destination)
     receipt = dict(schemaVersion=1, commit=command('git', 'rev-parse', 'HEAD').strip(),
                    sdk=args.sdk, architectures=arches, minimumSystemVersion=info['MinimumOSVersion'],
                    applicationId=info['CFBundleIdentifier'], binarySha256=next(iter(digests)),
-                   unsigned=True, frontend='embedded-assets', nativePluginBinding=True,
+                   unsigned=signature_kind == 'none', signature=signature_kind,
+                   signingIdentity='none', noSigningCredentials=True,
+                   frontend='embedded-assets', nativePluginBinding=True,
                    deviceInstalled=False, vpnAccepted=False, executionVerified=False,
                    nativeLicenseStatus='unavailable', app=str(destination.resolve()))
     pathlib.Path(args.output).write_text(json.dumps(receipt, indent=2) + '\n')

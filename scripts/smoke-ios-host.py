@@ -1,4 +1,4 @@
-"""Install/launch the actual unsigned Simulator App and collect bounded evidence."""
+"""Install/launch the actual no-identity Simulator App and collect bounded evidence."""
 import argparse
 import json
 import os
@@ -19,7 +19,8 @@ def run(*args, **kwargs):
 def main(evidence):
     root = pathlib.Path(evidence)
     package = json.loads((root / 'package-receipt.json').read_text())
-    assert package['sdk'] == 'iphonesimulator' and package['unsigned']
+    assert package['sdk'] == 'iphonesimulator' and package['noSigningCredentials']
+    assert package['signingIdentity'] == 'none' and package['signature'] in ('none', 'ad-hoc')
     app = pathlib.Path(package['app'])
     # This driver is copied only into the CI smoke product, never the device app.
     shutil.copyfile(pathlib.Path(__file__).parent.parent / 'src-tauri/apple/ios-host-smoke.js', app / 'ios-host-smoke.js')
@@ -46,6 +47,7 @@ def main(evidence):
                 (root / 'simulator-smoke.json').write_text(json.dumps(value, indent=2) + '\n')
                 run('xcrun', 'simctl', 'io', device, 'screenshot', str(root / 'simulator.png'))
                 verify.validate_smoke(value, nonce)
+                print(json.dumps(value, sort_keys=True))
                 (root / 'simulator.json').write_text(json.dumps(dict(udid=device, name=candidates[0]['name'],
                     simulator=True, deviceAcceptance=False, check='actual-WKWebView-and-Rust-IPC'), indent=2) + '\n')
                 return
