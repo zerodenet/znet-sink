@@ -205,6 +205,18 @@ pub fn requires_desktop_host(command: &str) -> bool {
                 | "kernel_detect_version"
                 | "platform_open_path"
                 | "platform_reveal_path"
+                // Mobile guests use reviewed document channels, not raw
+                // component IDs, desktop paths or unscoped storage commands.
+                | "plugins_invoke"
+                | "plugins_sdk_call"
+                | "plugins_protected_load"
+                | "plugins_page_protected_load"
+                | "plugins_preview_install"
+                | "plugins_install"
+                | "plugins_uninstall"
+                | "plugins_storage_get"
+                | "plugins_storage_put"
+                | "plugins_storage_delete"
         )
 }
 

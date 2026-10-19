@@ -29,6 +29,13 @@ final class NativeIoPolicyTests: XCTestCase {
         expect(.invalidRequest) { try request(purpose: "settings-import").validate(action: .pickRead) }
     }
 
+    func testPluginPackageReadIsBoundedAndCannotBecomeAnExport() throws {
+        let package = NativeIoRequest(operationId: "package", purpose: "plugin-package-import", maximumBytes: 16 * 1024 * 1024)
+        try package.validate(action: .pickRead)
+        expect(.invalidPurpose) { try package.validate(action: .save) }
+        let oversized = NativeIoRequest(operationId: "package", purpose: "plugin-package-import", maximumBytes: 16 * 1024 * 1024 + 1)
+        expect(.invalidMaximumBytes) { try oversized.validate(action: .pickRead) }
+    }
     func testCredentialAcknowledgmentIsExplicitForOrdinaryConfig() throws {
         expect(.credentialsNotAcknowledged) {
             try request(purpose: "ordinary-configuration-export").validate(action: .save)

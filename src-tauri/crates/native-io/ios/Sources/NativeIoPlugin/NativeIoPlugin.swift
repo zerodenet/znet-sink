@@ -65,6 +65,20 @@ final class NativeIoPlugin: Plugin {
         HostSmoke.start(webview)
     }
 
+    @objc public func readHostEnvironment(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            let device: String
+            switch UIDevice.current.userInterfaceIdiom {
+            case .phone: device = "phone"
+            case .pad: device = "tablet"
+            default:
+                invoke.reject("host-environment-unavailable", code: "host-environment-unavailable")
+                return
+            }
+            invoke.resolve(["platform": "ios", "deviceClass": device])
+        }
+    }
+
     override init() {
         super.init()
         // Startup cleanup is ordered before stage creation on the same queue. It removes only

@@ -199,7 +199,9 @@ pub fn run() {
                 let plugin_app = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let state = plugin_app.state::<AppState>();
-                    state.plugins().start_enabled(state.capabilities());
+                    state
+                        .plugins()
+                        .start_enabled_with_app(state.capabilities(), Some(plugin_app.clone()));
                 });
             }
             // A GUI lifetime owns exactly one kernel child. Never probe or

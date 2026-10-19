@@ -322,6 +322,52 @@ fn approve(host: &Host, manager: &Manager) -> Review {
         .unwrap()
 }
 
+#[test]
+fn reviewed_configuration_and_controls_reject_stale_consent_without_replacing_draft_values() {
+    let (root, host, manager) = setup_component_with_configuration(
+        "42",
+        serde_json::json!({"capability":"plugin.self.read","scope":"self"}),
+        serde_json::json!({"title":"Settings","fields":[{"id":"label","label":"Label","kind":"text","required":true}]}),
+    );
+    let original = host.snapshot(&manager).components[0]
+        .review
+        .clone()
+        .unwrap();
+    let values = BTreeMap::from([("label".into(), "confirmed".into())]);
+    host.configure_reviewed(
+        &manager,
+        original.clone(),
+        values.clone(),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    let enabled = approve(&host, &manager);
+    assert!(host
+        .configure_reviewed(
+            &manager,
+            original.clone(),
+            BTreeMap::from([("label".into(), "old draft".into())]),
+            Arc::new(std::sync::atomic::AtomicBool::new(false))
+        )
+        .is_err());
+    assert_eq!(
+        configuration::values(root.path(), &enabled.key).unwrap(),
+        values
+    );
+    assert!(host.stop_reviewed(&manager, &original).is_err());
+    assert!(host
+        .revoke_permissions_reviewed(&manager, &original)
+        .is_err());
+    assert!(host.snapshot(&manager).components[0].enabled);
+    host.stop_reviewed(&manager, &enabled).unwrap();
+    let restarted = approve(&host, &manager);
+    assert!(host.stop_reviewed(&manager, &enabled).is_err());
+    assert!(host.snapshot(&manager).components[0].enabled);
+    host.revoke_permissions_reviewed(&manager, &restarted)
+        .unwrap();
+    assert!(!host.snapshot(&manager).components[0].enabled);
+}
+
 /// Generic installed-package acceptance hook for an external publisher. It is
 /// inert during the ordinary suite and exercises the same local-import path as
 /// the desktop file picker when the two environment variables are provided.

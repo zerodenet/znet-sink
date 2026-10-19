@@ -1,4 +1,4 @@
-//! Desktop component owner. Verified material only; guest IO stays in capability executors.
+//! Component owner. Verified material only; guest IO stays in capability executors.
 mod callback;
 mod configuration;
 mod discovery;
@@ -6,9 +6,15 @@ mod io;
 mod local_state;
 mod model;
 pub(crate) mod namespace;
+pub(crate) mod native_install;
+#[cfg(any(debug_assertions, test))]
+mod native_smoke;
 pub(crate) mod notification;
 mod operations;
 pub(crate) mod page_channel;
+mod platform;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) use platform::{resume_native, suspend_native};
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
@@ -44,7 +50,8 @@ pub struct Host {
     root: Option<std::path::PathBuf>,
     // Serialize installation/catalog changes, never held during VM execution.
     operation: Mutex<()>,
-    executor: znet_plugin_sandbox::runtime::Executor,
+    executor: Mutex<znet_plugin_sandbox::runtime::Executor>,
+    platform: platform::Context,
     restore: Mutex<()>,
     state: Mutex<State>,
     notification_times: Mutex<BTreeMap<String, std::collections::VecDeque<u64>>>,
@@ -53,6 +60,8 @@ pub struct Host {
     sensitive: sensitive::Store,
     page_documents: page_channel::Store,
     uninstalls: uninstall::Owner,
+    native_installs: native_install::Plans,
+    startup_dispatched: std::sync::atomic::AtomicBool,
 }
 #[derive(Default)]
 struct State {
@@ -87,6 +96,7 @@ fn publisher_fingerprint(registration: &Registration) -> AppResult<String> {
 }
 fn supported(request: &Request) -> bool {
     request.capability.accepts_scope(&request.scope)
+        && platform::unsupported_reason(request).is_none()
 }
 fn permission(request: &Request) -> Permission {
     Permission::new(request.capability.as_str(), &request.scope)
@@ -129,6 +139,7 @@ impl Host {
         let state = self.state.lock().unwrap();
         let policies = manager.component_snapshots();
         Snapshot {
+            platform: self.platform.snapshot(),
             checked: state.directory.is_some(),
             notices: state.notices.clone(),
             pages: state
@@ -178,6 +189,7 @@ impl Host {
                             identity: p.identity.clone(),
                             registration: p.registration,
                             revision: p.revision,
+                            host_generation: self.platform.review_generation(),
                         }),
                         permissions: manifest
                             .required
@@ -187,6 +199,7 @@ impl Host {
                                 request: request.clone(),
                                 required: manifest.required.contains(request),
                                 supported: supported(request),
+                                unsupported_reason: platform::unsupported_reason(request),
                                 granted: loaded.consent.grants.contains(request),
                             })
                             .collect(),
@@ -222,11 +235,13 @@ impl Host {
         let Ok(Some(directory)) = local_state::effective_directory(&root, directory) else {
             return;
         };
-        self.state.lock().unwrap().directory = Some(directory);
         let Ok(store) = self.store() else {
             return;
         };
-        let _ = self.rescan(manager, &store);
+        self.state.lock().unwrap().directory = Some(directory);
+        if self.rescan(manager, &store).is_err() {
+            self.retire_loaded(manager);
+        }
     }
     fn retire_loaded(&self, manager: &Manager) {
         let mut state = self.state.lock().unwrap();
@@ -328,13 +343,15 @@ impl Host {
                 let must_suspend = permission_expanded || (consent.enabled && required_unapproved);
                 let blocked = if component
                     .compatible(
-                        &Target::native_desktop().map_err(io::failure)?,
+                        &self.platform.target()?,
                         env!("CARGO_PKG_VERSION"),
                         Isolation::Vm,
                     )
                     .is_err()
                 {
                     Some("此组件不支持当前设备、客户端版本或运行方式".into())
+                } else if let Some(reason) = self.platform.execution_restriction() {
+                    Some(reason.into())
                 } else if manifest.required.iter().any(|r| !supported(r)) {
                     Some("此组件需要客户端尚未开放的权限".into())
                 } else {
@@ -438,6 +455,9 @@ impl Host {
         manager: &Manager,
         review: &Review,
     ) -> AppResult<znet_client_core::capability::ComponentSnapshot> {
+        if review.host_generation != self.platform.review_generation() {
+            return Err(stale());
+        }
         manager
             .component_snapshots()
             .into_iter()

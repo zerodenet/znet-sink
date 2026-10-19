@@ -23,6 +23,22 @@ pub struct NativeLicenseResponse {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostEnvironment {
+    pub platform: String,
+    pub device_class: String,
+}
+impl HostEnvironment {
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    fn validated(self, platform: &str) -> Result<Self> {
+        if self.platform != platform || !matches!(self.device_class.as_str(), "phone" | "tablet") {
+            return Err(Error::InvalidReceipt("invalid_host_environment"));
+        }
+        Ok(self)
+    }
+}
+
 impl NativeLicenseResponse {
     pub fn validated(self) -> Result<Self> {
         if !matches!(self.status.as_str(), "available" | "missing" | "invalid")
@@ -61,6 +77,24 @@ impl<R: Runtime, T: Manager<R>> NativeIoExt<R> for T {
     }
 }
 impl<R: Runtime> NativeIo<R> {
+    /// Read system device facts without a picker or permission prompt.
+    pub fn host_environment(&self) -> Result<HostEnvironment> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let response: HostEnvironment = self
+                .handle
+                .run_mobile_plugin(
+                    "readHostEnvironment",
+                    std::collections::BTreeMap::<String, String>::new(),
+                )
+                .map_err(|_| Error::BridgeResultUnknown)?;
+            response.validated(std::env::consts::OS)
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            Err(Error::Unavailable)
+        }
+    }
     /// Read the fixed packaged license asset. No document picker, path or grant is accepted.
     pub fn license_inventory(&self) -> Result<NativeLicenseResponse> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -149,6 +183,28 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 #[cfg(test)]
 mod license_response_tests {
     use super::*;
+    #[test]
+    fn device_environment_rejects_wrong_os_unknown_shape_and_unexpected_fields() {
+        for body in [
+            r#"{"platform":"ios","deviceClass":"phone"}"#,
+            r#"{"platform":"android","deviceClass":"unknown"}"#,
+        ] {
+            let value: HostEnvironment = serde_json::from_str(body).unwrap();
+            assert!(value.validated("android").is_err());
+        }
+        assert!(serde_json::from_str::<HostEnvironment>(
+            r#"{"platform":"android","deviceClass":"phone","override":true}"#
+        )
+        .is_err());
+        for shape in ["phone", "tablet"] {
+            assert!(HostEnvironment {
+                platform: "android".into(),
+                device_class: shape.into()
+            }
+            .validated("android")
+            .is_ok());
+        }
+    }
     fn response(
         status: &str,
         content: Option<&str>,

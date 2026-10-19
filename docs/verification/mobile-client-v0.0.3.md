@@ -1,5 +1,37 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：移动插件前台宿主（继续批次）
+
+基线 `2b411b6c21c3ad3ef59a7589dc6e2ec85116e03f`；远端 develop 仍为
+`d39ad2787fb05052fa15065853ab71526441ccc3`，已包含在本分支；仍是 Draft PR #46。
+新增范围见[前台宿主契约](../gui/mobile-plugin-foreground-v0.0.3.md)。当前批 Apple
+SDK/Simulator、打包结果和 exact-head CI 尚待实际运行，不沿用上一批12条绿色流程。
+
+开发中已执行：真实 r27d/API24 完整 Android Rust 宿主 check 通过；首次完整 check
+因旧 Release 清单被当前 Debug 拒绝，后按实际 target/profile/features 重新生成后通过。
+后续发现两处日志分类仍被桌面 cfg 排除，修复后完整目标再次通过。以上失败保留在证据中。
+Android 原生 IO 库实际构建和12项JVM测试通过；新增 Swift 策略测试待 Apple SDK CI。
+Linux 完整 Rust 回归1572通过/0失败/6忽略（GUI1297/0/5），固定生产 executor VM
+实际覆盖解释器、身份、未授予拒绝、超时及撤权；这不是手机 VM 运行证明。
+原生恢复代次、一次性签名安装、摘要错误/过期/取消/替换拒绝、旧草稿/控制 review、旧文档
+无法复活均有回归。最后小变更仍重跑相关/全量检查，以本批最终收据为准。
+
+新增3项窄屏 Chromium UI 测试通过，覆盖原审阅草稿、原生包选择/固定凭据和未核对列表；
+首轮两项失败分别为 fixture 对 Svelte Proxy 使用 structuredClone、产品空态条件分支不可达，
+均修复后重跑，不能称首轮全绿。插件/签名管理页完整 Chromium 回归47通过；首轮46通过/
+1失败，为新增未核对空态的安装入口重名，修正后47项重跑通过。完整移动端和 exact-head
+WebKit结果继续记录。类型检查0错误/0警告、移动前端回归、生产构建、许可回归及Clippy已执行；
+最后提交前继续核对变更后的结果，不把源代码断言或模拟UI当成原生验收。
+
+QuickJS两个缺失正文通过实际 `.crate` 校验值及 `.cargo_vcs_info.json` 的固定提交
+`f3039c8d931417049ce6133b3ff4550ca38438a5` 获取原始 LICENSE，缓存保留原文、源URL、
+提交与摘要。Android实际 Rust图417项/3项明确缺口；另有前端声明及Apple实际输入/材料
+缺口按最终产物分别列出，不据此宣称法律合规或最终逐包链接证明。
+
+证据目录：`/workspace/artifacts/mobile-v0.0.3/mobile-plugins-2b411b6/`。真实 Galaxy S8、
+iPhone、系统文件选择交互、通知呈现、低内存/锁屏、VPN/TUN/网络切换、签名发行与完整
+SDK仍未验收；没有操作用户Mac、购买/创建签名凭据、合并或发布。
+
 ## 2026-10-19：develop 整合、主应用许可与本地容量
 
 从 `9c03d26` 整合 develop `d39ad2787fb05052fa15065853ab71526441ccc3`，采用独立

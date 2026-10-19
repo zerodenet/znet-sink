@@ -41,6 +41,16 @@ class NativeIoArgs {
 /** Rust-only local plugin. Rust deliberately registers no JavaScript invoke handler. */
 @TauriPlugin
 class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
+    @Command
+    fun readHostEnvironment(invoke: Invoke) {
+        val width = activity.resources.configuration.smallestScreenWidthDp
+        if (width <= 0 || destroyed.get()) {
+            invoke.reject("host-environment-unavailable")
+            return
+        }
+        invoke.resolve(JSObject().put("platform", "android")
+            .put("deviceClass", if (width >= 600) "tablet" else "phone"))
+    }
     private class Operation(val invoke: Invoke, val args: NativeIoArgs, val action: String) {
         val completed = AtomicBoolean(false)
         val awaitingSystemResult = AtomicBoolean(false)
@@ -196,7 +206,7 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
                 when (action) {
                     "pickRead" -> launch(operation, Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = args.mimeType
+                        type = if (args.purpose == "plugin-package-import") "*/*" else args.mimeType
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }, "pickReadResult")
                     "save" -> launch(operation, Intent(Intent.ACTION_CREATE_DOCUMENT).apply {

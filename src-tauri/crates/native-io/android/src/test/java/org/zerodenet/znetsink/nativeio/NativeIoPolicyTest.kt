@@ -26,6 +26,11 @@ class NativeIoPolicyTest {
         assertEquals("purpose-action-mismatch", validate(action = "pickRead"))
         assertEquals("purpose-action-mismatch", validate(action = "unknown"))
     }
+    @Test fun pluginPackagesAreBoundedReadOnlySystemSelections() {
+        assertNull(validate(action = "pickRead", purpose = "plugin-package-import", budget = 16 * 1024 * 1024L, name = null, body = null))
+        assertEquals("invalid-byte-budget", validate(action = "pickRead", purpose = "plugin-package-import", budget = 16 * 1024 * 1024L + 1, name = null, body = null))
+        assertEquals("purpose-action-mismatch", validate(purpose = "plugin-package-import"))
+    }
 
     @Test fun budgetsUsePurposeSpecificLimits() {
         assertEquals("invalid-byte-budget", validate(budget = 0))

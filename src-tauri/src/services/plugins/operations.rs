@@ -184,7 +184,10 @@ impl Host {
     /// Clone this owner's handle before AppState moves into the application.
     /// Closing it does not close other hosts sharing the global VM budget.
     pub(crate) fn executor_shutdown_handle(&self) -> runtime::Executor {
-        self.executor.clone()
+        self.executor
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub fn refresh(&self, manager: &Manager) -> AppResult<Snapshot> {
@@ -303,7 +306,22 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn stop(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
+        self.stop_checked(manager, key, None)
+    }
+    pub fn stop_reviewed(&self, manager: &Manager, review: &Review) -> AppResult<Snapshot> {
+        self.stop_checked(manager, &review.key, Some(review))
+    }
+    fn stop_checked(
+        &self,
+        manager: &Manager,
+        key: &str,
+        review: Option<&Review>,
+    ) -> AppResult<Snapshot> {
         let _operation = self.operation_guard()?;
+        self.checked_rescan(manager)?;
+        if let Some(review) = review {
+            self.current_review(manager, review)?;
+        }
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -324,7 +342,26 @@ impl Host {
         Ok(self.snapshot(manager))
     }
     pub fn revoke_permissions(&self, manager: &Manager, key: &str) -> AppResult<Snapshot> {
+        self.revoke_permissions_checked(manager, key, None)
+    }
+    pub fn revoke_permissions_reviewed(
+        &self,
+        manager: &Manager,
+        review: &Review,
+    ) -> AppResult<Snapshot> {
+        self.revoke_permissions_checked(manager, &review.key, Some(review))
+    }
+    fn revoke_permissions_checked(
+        &self,
+        manager: &Manager,
+        key: &str,
+        review: Option<&Review>,
+    ) -> AppResult<Snapshot> {
         let _operation = self.operation_guard()?;
+        self.checked_rescan(manager)?;
+        if let Some(review) = review {
+            self.current_review(manager, review)?;
+        }
         let (publisher, plugin_id, component_id) = {
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(key).ok_or_else(stale)?;
@@ -357,7 +394,7 @@ impl Host {
         let plugin = review.key.split_once('/').ok_or_else(stale)?.0;
         let _activity = self.activity_checked(manager, plugin)?;
 
-        let (component, authority, configuration) = {
+        let (component, authority, configuration, executor) = {
             let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             self.current_review(manager, &review).map_err(|_| {
@@ -376,11 +413,11 @@ impl Host {
                 loaded.component.clone(),
                 loaded.authority.clone().ok_or_else(stale)?,
                 configuration,
+                self.dispatch_executor()?,
             )
         };
         let input = serde_json::json!({ "configuration": configuration });
-        let result = self
-            .executor
+        let result = executor
             .execute_reviewed(
                 &component,
                 &authority,
@@ -493,7 +530,7 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件页面操作参数无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state, binding) = {
+        let (component, authority, configuration, publisher, plugin_state, binding, executor) = {
             let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             if cancelled.load(Ordering::Acquire) {
@@ -536,6 +573,7 @@ impl Host {
                 publisher,
                 plugin_state,
                 binding,
+                self.dispatch_executor()?,
             )
         };
         let digest = component.digest().to_owned();
@@ -544,8 +582,7 @@ impl Host {
             "state": plugin_state,
             "invocation": { "action": action, "payload": payload }
         });
-        let receipt = self
-            .executor
+        let receipt = executor
             .execute_reviewed(
                 &component,
                 &authority,
@@ -620,7 +657,7 @@ impl Host {
         if !action.starts_with("lifecycle.scheduled.") {
             return Err(AppError::invalid_argument("插件后台动作无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state, binding) = {
+        let (component, authority, configuration, publisher, plugin_state, binding, executor) = {
             let _operation = self.operation_guard()?;
             let manager = app.state::<crate::state::app_state::AppState>();
             self.checked_rescan(manager.capabilities())?;
@@ -647,12 +684,12 @@ impl Host {
                 loaded.publisher_fingerprint.clone(),
                 namespace::runtime_state(&self.root()?, &loaded.publisher_fingerprint, plugin_id)?,
                 binding,
+                self.dispatch_executor()?,
             )
         };
         let digest = component.digest().to_owned();
         let dispatcher = sdk_dispatcher(app.clone(), plugin_id, component_id);
-        let receipt = self
-            .executor
+        let receipt = executor
             .execute_reviewed(
                 &component,
                 &authority,
@@ -705,7 +742,17 @@ impl Host {
     /// Run declared bounded startup hooks after the app state is available.
     /// A hook receives its plugin's small opaque state snapshot and may return
     /// an atomic state-update envelope. Failures stay isolated to that plugin.
+    #[cfg(test)]
     pub fn start_enabled(&self, manager: &Manager) {
+        self.start_enabled_with_app(manager, None);
+    }
+    pub fn start_enabled_with_app(&self, manager: &Manager, app: Option<tauri::AppHandle>) {
+        if self.platform.require_foreground().is_err()
+            || self.platform.execution_restriction().is_some()
+            || self.startup_dispatched.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
         let snapshot = self.snapshot(manager);
         let lifecycle: Vec<_> = {
             let state = self.state.lock().unwrap();
@@ -726,28 +773,30 @@ impl Host {
                             && component.enabled
                     })
                 })
-                .map(|loaded| {
-                    (
-                        loaded.component.manifest().plugin_id.clone(),
-                        loaded.component.manifest().component_id.clone(),
-                    )
+                .filter_map(|loaded| {
+                    snapshot
+                        .components
+                        .iter()
+                        .find(|component| {
+                            component.plugin_id == loaded.component.manifest().plugin_id
+                                && component.component_id
+                                    == loaded.component.manifest().component_id
+                        })
+                        .and_then(|component| component.review.clone())
                 })
                 .collect()
         };
         let mut notices = Vec::new();
-        for (plugin_id, component_id) in lifecycle {
-            if let Err(error) = self.invoke(
+        for review in lifecycle {
+            if let Err(error) = self.invoke_reviewed(
                 manager,
-                None,
-                &plugin_id,
-                &component_id,
+                app.clone(),
+                review.clone(),
                 "lifecycle.host_start".into(),
                 serde_json::Value::Null,
+                Arc::new(AtomicBool::new(false)),
             ) {
-                notices.push(format!(
-                    "{plugin_id}：后台启动检查失败（{}）",
-                    error.message
-                ));
+                notices.push(format!("{}：启动检查失败（{}）", review.key, error.message));
             }
         }
         self.state.lock().unwrap().notices.extend(notices);
@@ -839,6 +888,7 @@ impl Host {
             .map_err(io::failure)
     }
     pub fn preview_install(&self, manager: &Manager, path: String) -> AppResult<InstallReview> {
+        self.platform.require_installation()?;
         let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
@@ -850,6 +900,7 @@ impl Host {
         path: String,
         approval_digest: Option<String>,
     ) -> AppResult<Snapshot> {
+        self.platform.require_installation()?;
         let _operation = self.operation_guard()?;
         let bytes = self.selected_package(manager, path)?;
         let plugin_id = package::package_id(&bytes).map_err(io::failure)?;
@@ -978,7 +1029,7 @@ impl Host {
         } else {
             vec!["znet-sink.ui.management.v1".into()]
         };
-        let target = Target::native_desktop().map_err(io::failure)?;
+        let target = self.platform.target()?;
         verified
             .compatible(&target, env!("CARGO_PKG_VERSION"))
             .map_err(io::failure)?;
@@ -1063,6 +1114,7 @@ impl Host {
             .as_ref()
             .is_some_and(|package| package.pages.is_empty() && !requested_surfaces.is_empty());
         Ok(InstallReview {
+            host_generation: self.platform.review_generation(),
             plugin_id: verified.id,
             current_version: current.map(|package| package.version),
             candidate_version: verified.version,
@@ -1087,6 +1139,7 @@ impl Host {
         id: &str,
         approval_digest: Option<&str>,
     ) -> AppResult<Snapshot> {
+        self.platform.require_installation()?;
         let (verified, registration) = self.local_candidate(manager, bytes, id)?;
         let current_registration = self
             .state
@@ -1098,7 +1151,9 @@ impl Host {
             .cloned();
         let review =
             self.review_verified(verified, &registration, current_registration.as_ref(), true)?;
-        if review.requires_approval && approval_digest != Some(review.candidate_digest.as_str()) {
+        if (review.requires_approval || approval_digest.is_some())
+            && approval_digest != Some(review.candidate_digest.as_str())
+        {
             return Err(AppError::invalid_argument(
                 "本地安装需要先确认发布者指纹、权限和管理页面声明",
             ));
@@ -1113,8 +1168,11 @@ impl Host {
         id: &str,
         approval_digest: Option<&str>,
     ) -> AppResult<Snapshot> {
+        self.platform.require_installation()?;
         let review = self.preview_bytes(bytes, &directory, id)?;
-        if review.requires_approval && approval_digest != Some(review.candidate_digest.as_str()) {
+        if (review.requires_approval || approval_digest.is_some())
+            && approval_digest != Some(review.candidate_digest.as_str())
+        {
             return Err(AppError::invalid_argument(
                 "新版本申请了新增或扩大权限，请先查看权限变化并明确确认",
             ));
@@ -1130,11 +1188,12 @@ impl Host {
         registration: Registration,
         central_directory: Option<Directory>,
     ) -> AppResult<Snapshot> {
+        let native_generation = self.platform.review_generation();
         self.uninstall_available(&registration.id)?;
         let _exclusive_activity =
             super::uninstall::storage::Activity::acquire(&self.root()?, &registration.id, true)?;
         let verified = package::verify(bytes, &registration).map_err(io::failure)?;
-        let target = Target::native_desktop().map_err(io::failure)?;
+        let target = self.platform.target()?;
         verified
             .compatible(&target, env!("CARGO_PKG_VERSION"))
             .map_err(io::failure)?;
@@ -1174,6 +1233,19 @@ impl Host {
                 local_state::effective_directory(&self.root()?, central)?;
             self.rescan(manager, &store)
         })?;
+        if self
+            .platform
+            .check_review_generation(native_generation.as_deref())
+            .is_err()
+        {
+            return Err(AppError {
+                code: "plugin_install_result_unconfirmed",
+                message:
+                    "安装期间原生宿主已变化，结果未确认；请重新读取已安装版本，不会自动重放安装"
+                        .into(),
+                details: None,
+            });
+        }
         Ok(self.snapshot(manager))
     }
 }

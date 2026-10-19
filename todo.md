@@ -85,9 +85,9 @@
 
 ## CLIENT-04
 
-**插件宿主执行与页面通道：客户端独立边界本轮继续实施，移动未启用。** QuickJS 经宿主所有的有界工作线程运行，保留原授权 epoch 与单组件 busy lease；独立排队期限不延长原执行时限、授权或 SDK 预算。停用、撤权、页面关闭、实例/材料变化和宿主退出拒绝旧启动与晚到交付。在途原生 SDK 可能继续 drain，不声称已撤回。此容器不提供原生崩溃或进程/OOM隔离，要求 process isolation 的组件仍拒绝。
+**插件宿主执行与页面通道：客户端独立边界继续实施。** 2026-10-19 从 `2b411b6` 接通[移动前台宿主、设备准入和系统包审阅](docs/gui/mobile-plugin-foreground-v0.0.3.md)；当前提交的 Apple SDK/Simulator 检查仍待 CI，不借用前批结果。QuickJS 经宿主所有的有界工作线程运行，保留原授权 epoch 与单组件 busy lease；独立排队期限不延长原执行时限、授权或 SDK 预算。停用、撤权、页面关闭、实例/材料变化和宿主退出拒绝旧启动与晚到交付。在途原生 SDK 可能继续 drain，不声称已撤回。此容器不提供原生崩溃或进程/OOM隔离，要求 process isolation 的组件仍拒绝。
 
-签名管理页由宿主原子绑定 HTML 摘要、安装材料和组件 review；opaque 文档 token 只在宿主侧，未知组件 ID 不回退。固定 iframe/channel/代次，后台关闭，前台重建，宿主 frame-src 拒绝 URL 导航；SDK 副作用仍使用原 review admission，文件选择前验证能力，返回后再次核对。VM 无法通过自填路径取得系统选择许可，正式 picker/opaque 票据接入前拒绝 VM 文件读写；管理页保留真实宿主选择流程。原生移动 plugin RPC 未开放，敏感加载仍受既有 runtime-only 链约束，不落普通正文。
+签名管理页由宿主原子绑定 HTML 摘要、安装材料和组件 review；opaque 文档 token 只在宿主侧，未知组件 ID 不回退。固定 iframe/channel/代次，后台关闭，前台重建，宿主 frame-src 拒绝 URL 导航；SDK 副作用仍使用原 review admission，文件选择前验证能力，返回后再次核对。VM 无法通过自填路径取得系统选择许可，正式 picker/opaque 票据接入前拒绝 VM 文件读写；管理页保留真实宿主选择流程。原生移动前台宿主已接入共享审阅文档通道；原始路径/未绑定 invoke 仍拒绝。敏感加载尚未接通真实移动运行态，不落普通正文。
 
 解除条件：在选定 Android/iOS 执行/分发形态下验收真实 SDK IO、非 JIT/所需隔离、权限撤销、原生来源通知、敏感运行材料和前后台生命周期。共享 worker 及浏览器/桌面服务测试不算移动插件执行或 A20–A22 全验收；它不是 CORE 业务。
 

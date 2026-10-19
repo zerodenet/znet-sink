@@ -56,6 +56,8 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         }
         "plugin_system_notification_denied" => ErrorCode::PermissionDenied,
         "plugin_vm_file_unsupported" => ErrorCode::Unsupported,
+        "plugin_platform_unavailable" => ErrorCode::Unsupported,
+        "plugin_host_suspended" => ErrorCode::Cancelled,
         "plugin_notification_rate_limited" | "plugin_log_rate_limited" => ErrorCode::BudgetExceeded,
         "plugin_sdk_deadline" => ErrorCode::Deadline,
         "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
@@ -94,6 +96,7 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         "plugin_vm_file_unsupported" => {
             "插件 VM 文件读写尚未接入可信系统文件选择；不能使用脚本提供的路径".into()
         }
+        "plugin_platform_unavailable" | "plugin_host_suspended" => error.message,
         "invalid_argument"
         | "not_found"
         | "conflict"
@@ -902,6 +905,10 @@ impl Host {
         log_state: Option<&crate::state::app_state::AppState>,
     ) -> AppResult<Value> {
         let _activity = self.activity_checked(manager, plugin_id)?;
+
+        if let Some(reason) = super::platform::unsupported_reason(&call.request) {
+            return Err(super::platform::unavailable(reason));
+        }
 
         validate_page_call(&call)?;
         // BrowserOpen only prepares a checked URL here. The actual OS action

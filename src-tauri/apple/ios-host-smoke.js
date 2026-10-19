@@ -16,6 +16,16 @@ check(platform.mobile && platform.platform === 'ios', 'real-ios-rust-host');
 check(!platform.vpnSupported && !platform.bundledKernelAvailable && platform.adaptationState === 'not-adapted', 'unsupported-vpn');
 const identity = await invoke('plugin:app|identifier');
 check(identity === 'org.zerodenet.znetsink', 'app-identity');
+let pluginHost;
+for (let i = 0; i < 60; i++) {
+  pluginHost = await invoke('plugins_snapshot');
+  if (pluginHost.platform?.state === 'ready') break;
+  await new Promise(resolve => setTimeout(resolve, 250));
+}
+check(pluginHost?.platform?.executionAllowed && pluginHost.platform.target.os === 'ios', 'native-plugin-profile');
+const vm = await invoke('plugins_native_vm_smoke');
+check(vm.executed && vm.identity && vm.ungrantedRejected && vm.deadlineEnforced
+  && vm.revocationEnforced && vm.target.os === 'ios', 'native-plugin-vm');
 const licenses = await invoke('app_license_inventory');
 check(licenses.rust?.target?.platform === 'ios' && licenses.rust.entries.length > 0
   && licenses.rust.provenance?.kind !== 'inventory-unavailable', 'embedded-rust-license-inputs');
@@ -44,7 +54,7 @@ const back = [...document.querySelectorAll('button[aria-label="返回"]')].find(
 check(back, 'return-control'); back.click();
 await wait(() => ![...document.querySelectorAll('.secondary-pane:not(.inactive)')].some(visible), 'return');
 return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: true,
-  aboutAndReturn: true, vpnUnsupported: true, nativeLicenseAvailable: true,
+  aboutAndReturn: true, vpnUnsupported: true, nativeLicenseAvailable: true, nativePluginVm: true,
   applicationId: identity, width: innerWidth, height: innerHeight };
 
 } catch (cause) {

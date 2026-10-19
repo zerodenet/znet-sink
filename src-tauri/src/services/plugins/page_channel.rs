@@ -53,6 +53,7 @@ fn same_review(left: &Review, right: &Review) -> bool {
         && left.identity == right.identity
         && left.registration == right.registration
         && left.revision == right.revision
+        && left.host_generation == right.host_generation
 }
 fn digest(html: &str) -> String {
     format!("{:x}", Sha256::digest(html.as_bytes()))
@@ -97,6 +98,15 @@ impl Store {
             doc.cancelled.store(true, Ordering::Release);
         }
         documents.clear();
+    }
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    pub(super) fn reopen_empty(&self) {
+        let mut documents = self.documents.lock().unwrap();
+        for doc in documents.values() {
+            doc.cancelled.store(true, Ordering::Release);
+        }
+        documents.clear();
+        self.closed.store(false, Ordering::Release);
     }
     fn close(&self, token: &str) {
         if let Some(doc) = self.documents.lock().unwrap().remove(token) {

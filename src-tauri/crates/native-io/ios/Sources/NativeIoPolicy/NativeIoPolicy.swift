@@ -45,7 +45,7 @@ public struct NativeIoRequest: Decodable {
               }) else { throw NativeIoError.invalidOperationId }
         let budget: Int
         switch (action, purpose) {
-        case (.pickRead, "configuration-import"):
+        case (.pickRead, "configuration-import"), (.pickRead, "plugin-package-import"):
             budget = 16 * 1024 * 1024
         case (.pickRead, "settings-import"):
             budget = 2 * 1024 * 1024

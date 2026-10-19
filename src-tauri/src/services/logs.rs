@@ -170,7 +170,6 @@ fn append_record(
 
 /// Classify an attempted SDK operation at its actual typed dispatcher. This is
 /// not a classifier for component invoke action strings, and grants no authority.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn plugin_sdk_action(method: znet_plugin_sandbox::sdk::Method) -> PluginAction {
     use znet_plugin_sandbox::sdk::Method;
     match method {

@@ -10,12 +10,13 @@
   import FieldSelect from '$lib/components/ui/select/field-select.svelte';
   import { Switch } from '$lib/components/ui/switch';
   import { onMount } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
   import { openExternalUrl as openUrl } from '$lib/services/platform';
   import { Choice } from '$lib/components/ui/choice';
   import { Button } from '$lib/components/ui/button';
   import { getAppErrorInfo } from '$lib/services/core';
-  import { pluginApi, readPluginUninstallObservations, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot } from '$lib/services/plugins';
+  import { pluginApi, readPluginUninstallObservations, type PluginComponent, type PluginInstallReview, type PluginPage, type PluginSnapshot, type PluginReview } from '$lib/services/plugins';
   import { canApprove, initialPermissionSelection, requiredPermissionSelection, selectedGrants, supportedPermissionSelection, permissionKey, permissionLabel } from '$lib/services/plugin-permissions';
   import * as toast from '$lib/services/toast.svelte';
   import { pluginNavigation, type PluginNavigationRequest } from '$lib/services/plugin-navigation.svelte';
@@ -54,7 +55,9 @@
   let initialRoute = $state<PluginNavigationRequest | null>(null);
   let detailSection = $state<'manage' | 'permissions' | 'about'>('manage');
   let supported = $state<boolean | null>(null);
+  let panel = $state<HTMLDivElement | null>(null);
   let snapshot = $state<PluginSnapshot>({ checked: false, components: [], notices: [] });
+  const installationAllowed = $derived(!snapshot.platform || snapshot.platform.externalInstallationAllowed);
   let busy = $state(false);
   let runningKey = $state<string | null>(null);
   let message = $state('');
@@ -64,11 +67,13 @@
   let resultDescription = $state('');
   let permissionSelections = $state<Record<string, string[]>>({});
   let configurationDrafts = $state<Record<string, Record<string, string>>>({});
+  let configurationReviews = $state<Record<string, PluginReview | undefined>>({});
   let configurationErrors = $state<Record<string, string>>({});
   let removeOpen = $state(false);
   let removePlugin = $state<InstalledPlugin | null>(null);
   let installOpen = $state(false);
   let localInstallPath = $state('');
+  let localInstallPlan = $state('');
   let localInstallReview = $state<PluginInstallReview | null>(null);
   let localInstallError = $state('');
   let runGeneration = 0;
@@ -122,10 +127,14 @@
     } catch { releaseChannel = 'stable'; }
     void pluginApi.supported().then(async value => { if (!alive) return; supported = value; if (value) { await reload(); void checkUpdates(); } })
       .catch(reason => { error = getAppErrorInfo(reason, '无法读取插件状态').message; });
+    let unlisten: UnlistenFn | undefined;
+    void listen('plugins:changed', () => {
+      if (alive && document.visibilityState === 'visible') void reload(true).catch(() => {});
+    }).then(stop => { if (alive) unlisten = stop; else stop(); }).catch(() => {});
     const timer = setInterval(() => {
-      if (supported && selectedPluginId === null) void reload().catch(() => {});
+      if (supported && selectedPluginId === null && document.visibilityState === 'visible' && panel?.getClientRects().length) void reload().catch(() => {});
     }, 3000);
-    return () => { alive = false; runGeneration++; reloadGeneration++; updateGeneration++; clearInterval(timer); };
+    return () => { alive = false; runGeneration++; reloadGeneration++; updateGeneration++; clearInterval(timer); unlisten?.(); };
   });
   function clearResult() {
     result = ''; resultTitle = ''; resultDescription = '';
@@ -137,6 +146,7 @@
     catch { /* View preference persistence is best effort. */ }
   }
   function openInstallModal() {
+    cancelLocalInstallReview();
     requestedUpdate = null;
     localInstallPath = '';
     localInstallReview = null;
@@ -221,6 +231,19 @@
   }
   async function installLocal() {
     try {
+      if (snapshot.platform) {
+        busy = true; error = ''; message = ''; localInstallError = '';
+        const selection = await pluginApi.pickNativePackage();
+        if (!alive) {
+          if (selection) void pluginApi.cancelNativePackage(selection.plan_id).catch(() => {});
+          return;
+        }
+        if (selection) {
+          localInstallPlan = selection.plan_id;
+          localInstallReview = selection.review;
+        }
+        return;
+      }
       const path = await open({ title: '选择插件包', multiple: false, directory: false, filters: [{ name: 'ZNet Sink 插件', extensions: ['zspkg'] }] });
       if (typeof path !== 'string') return;
       busy = true; error = ''; message = ''; localInstallError = '';
@@ -242,17 +265,22 @@
   }
   function cancelLocalInstallReview() {
     if (busy) return;
+    if (localInstallPlan) void pluginApi.cancelNativePackage(localInstallPlan).catch(() => {});
+    localInstallPlan = '';
     localInstallPath = '';
     localInstallReview = null;
     localInstallError = '';
   }
   async function confirmLocalUpgrade() {
-    if (!localInstallReview || !localInstallPath) return;
+    if (!localInstallReview || (!localInstallPath && !localInstallPlan)) return;
     busy = true; error = ''; message = ''; localInstallError = '';
     try {
-      const next = await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
+      const next = localInstallPlan
+        ? await pluginApi.confirmNativePackage(localInstallPlan, localInstallReview.candidate_digest)
+        : await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
       installationFinished(next, localInstallReview);
       localInstallPath = '';
+      localInstallPlan = '';
       localInstallReview = null;
       toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新');
     } catch (reason) {
@@ -264,6 +292,12 @@
   function componentKey(component: PluginComponent) {
     return component.review?.key ?? `${component.plugin_id}/${component.component_id}`;
   }
+  function loadConfigurationDraft(component: PluginComponent) {
+    const key = componentKey(component);
+    configurationDrafts = { ...configurationDrafts, [key]: { ...component.configuration?.values } };
+    configurationReviews = { ...configurationReviews, [key]: component.review ? $state.snapshot(component.review) : undefined };
+    configurationErrors = { ...configurationErrors, [key]: '' };
+  }
   function openDetails(plugin: InstalledPlugin, tab: typeof detailSection = 'manage', route: PluginNavigationRequest | null = null) {
     reloadGeneration++;
     selectedPluginId = plugin.id;
@@ -271,6 +305,7 @@
     detailSection = tab;
     permissionSelections = Object.fromEntries(plugin.components.map(component => [componentKey(component), initialPermissionSelection(component)]));
     configurationDrafts = Object.fromEntries(plugin.components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
+    configurationReviews = Object.fromEntries(plugin.components.map(component => [componentKey(component), component.review ? $state.snapshot(component.review) : undefined]));
     configurationErrors = {};
     message = ''; error = ''; clearResult();
   }
@@ -316,7 +351,7 @@
     try {
       let next = snapshot;
       for (const component of plugin.components) {
-        if (component.review && (component.enabled || component.running)) next = await pluginApi.stop(component.review.key);
+        if (component.review && (component.enabled || component.running)) next = await pluginApi.stop(component.review.key, component.review);
       }
       snapshot = next;
       message = '插件已停用；已批准权限会在下次启用时继续使用';
@@ -344,6 +379,7 @@
     pendingAuthorization = null;
     permissionSelections = Object.fromEntries(components.map(component => [componentKey(component), initialPermissionSelection(component)]));
     configurationDrafts = Object.fromEntries(components.filter(component => component.configuration).map(component => [componentKey(component), { ...component.configuration!.values }]));
+    configurationReviews = Object.fromEntries(components.map(component => [componentKey(component), component.review ? $state.snapshot(component.review) : undefined]));
     configurationErrors = {};
     clearResult();
   }
@@ -375,13 +411,13 @@
   async function stop(component: PluginComponent) {
     if (!component.review) return;
     ++runGeneration;
-    try { snapshot = await pluginApi.stop(component.review.key); clearResult(); message = '组件已停用；已批准权限仍然保留'; error = ''; }
+    try { snapshot = await pluginApi.stop(component.review.key, component.review); clearResult(); message = '组件已停用；已批准权限仍然保留'; error = ''; }
     catch (reason) { error = getAppErrorInfo(reason, '停用失败').message; }
   }
   async function revokePermissions(component: PluginComponent) {
     if (!component.review) return;
     ++runGeneration;
-    await action(() => pluginApi.revokePermissions(component.review!.key), '组件权限已撤销');
+    await action(() => pluginApi.revokePermissions(component.review!.key, component.review!), '组件权限已撤销');
     const key = componentKey(component);
     permissionSelections = { ...permissionSelections, [key]: [] };
   }
@@ -421,11 +457,15 @@
   async function saveConfiguration(component: PluginComponent) {
     if (!component.review) return;
     const key = componentKey(component);
+    const review = configurationReviews[key];
+    if (!review) return;
     const values = configurationDrafts[key] ?? {};
     if (!configurationValid(component, values)) return;
     busy = true; configurationErrors = { ...configurationErrors, [key]: '' }; message = ''; error = ''; clearResult();
     try {
-      snapshot = await pluginApi.configure(component.review.key, $state.snapshot(values));
+      snapshot = await pluginApi.configure(review.key, $state.snapshot(values), review);
+      const confirmed = snapshot.components.find(candidate => componentKey(candidate) === key);
+      if (confirmed) loadConfigurationDraft(confirmed);
       message = component.enabled ? '配置已保存，组件已按新配置恢复' : '配置已保存';
     } catch (reason) {
       configurationErrors = { ...configurationErrors, [key]: getAppErrorInfo(reason, '保存插件配置失败').message };
@@ -438,19 +478,26 @@
   }
 </script>
 
-<div class="desk-card plugins-panel animate-fade-in">
+<div class="desk-card plugins-panel animate-fade-in" bind:this={panel}>
+  {#if snapshot.platform}
+    <div class="plugin-authorization-notice" role="status" aria-label="原生插件宿主">
+      <span>{snapshot.platform.reason ?? '受限解释器已就绪；不提供原生崩溃或进程隔离。'}{#if snapshot.platform.target} · {snapshot.platform.target.os} / {snapshot.platform.target.arch} / {snapshot.platform.target.device}{/if}</span>
+      {#if snapshot.platform.state === 'unavailable'}<Button variant="outline" onclick={async () => { try { snapshot = await pluginApi.recheckHost(); } catch (cause) { error = getAppErrorInfo(cause, '宿主重新核对未确认').message; } }}>重新核对宿主</Button>{/if}
+    </div>
+  {/if}
   {#if selectedPlugin}
     <div class="plugins-detail-header"><Button variant="ghost" size="sm" onclick={closeDetails}><ArrowLeft size={15} />返回已安装插件</Button><span title={selectedPlugin.name}>{selectedPlugin.name}</span></div>
   {:else}
     <div class="plugins-header">
       <div class="plugins-title-group"><h2>插件管理</h2><p>查看已安装插件，管理状态、权限和设置</p></div>
-      {#if supported}<Button size="sm" disabled={busy || runningKey !== null} onclick={openInstallModal}><Plus size={14} />安装插件</Button>{/if}
+      {#if supported}<Button size="sm" disabled={busy || runningKey !== null || !installationAllowed} onclick={openInstallModal}><Plus size={14} />安装插件</Button>{/if}
     </div>
   {/if}
 
   <div class="plugin-uninstall-entry"><Button variant="outline" size="sm" onclick={() => { removePlugin=null;removeOpen=true; }}>卸载记录</Button></div>
   {#if supported === null}<div class="plugins-empty" role="status">正在读取插件状态…</div>
   {:else if !supported}<div class="plugins-empty"><Puzzle size={28} />当前设备尚未开放插件运行。</div>
+  {:else if snapshot.platform && (snapshot.platform.state === 'starting' || snapshot.platform.state === 'unavailable')}<div class="plugins-empty" role="status">原生设备身份尚未核对，暂不将缓存或空列表视为当前安装结果。</div>
   {:else if selectedPlugin}
     <div class="plugins-detail-scroll" class:plugin-management-active={detailSection === 'manage' && !!selectedManagementPage}>
       {#if updateCandidates[selectedPlugin.id]}
@@ -484,15 +531,15 @@
                     <label class="configuration-field">
                       <span>{field.label}{field.required ? ' *' : ''}</span>
                       {#if field.kind === 'select'}
-                        <FieldSelect aria-label={field.label} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} onValueChange={(value) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: value } }; }} options={field.options} />
+                        <FieldSelect disabled={busy} aria-label={field.label} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} onValueChange={(value) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: value } }; }} options={field.options} />
                       {:else}
-                        <Input aria-label={field.label} type={field.kind === 'https_origin' ? 'url' : 'text'} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} oninput={(event) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: event.currentTarget.value } }; }} placeholder={field.kind === 'https_origin' ? 'https://panel.example.com' : field.kind === 'https_origin_list' ? '["https://panel.example.com"]' : ''} />
+                        <Input disabled={busy} aria-label={field.label} type={field.kind === 'https_origin' ? 'url' : 'text'} value={configurationDrafts[componentKey(component)]?.[field.id] ?? field.default ?? ''} oninput={(event) => { configurationDrafts = { ...configurationDrafts, [componentKey(component)]: { ...(configurationDrafts[componentKey(component)] ?? {}), [field.id]: event.currentTarget.value } }; }} placeholder={field.kind === 'https_origin' ? 'https://panel.example.com' : field.kind === 'https_origin_list' ? '["https://panel.example.com"]' : ''} />
                       {/if}
                       {#if field.description}<small>{field.description}</small>{/if}
                     </label>
                   {/each}
                   {#if configurationErrors[componentKey(component)]}<p class="plugins-error" role="alert">{configurationErrors[componentKey(component)]}</p>{/if}
-                  <div class="plugin-section-actions"><Button size="sm" disabled={busy || !configurationValid(component, configurationDrafts[componentKey(component)] ?? {})} onclick={() => saveConfiguration(component)}>保存配置</Button></div>
+                  <div class="plugin-section-actions"><Button size="sm" disabled={busy || !configurationValid(component, configurationDrafts[componentKey(component)] ?? {})} onclick={() => saveConfiguration(component)}>保存配置</Button><Button size="sm" variant="outline" disabled={busy} onclick={() => loadConfigurationDraft(component)}>放弃草稿并重新载入</Button></div>
                 </div>
               {/if}
               <details class="plugin-diagnostics"><summary>开发诊断</summary><div class="plugin-section-actions">{#if component.enabled}<Button size="sm" variant="outline" onclick={() => stop(component)}><Square size={14} />停用组件</Button>{/if}<Button size="sm" disabled={busy || runningKey !== null || !component.enabled || !!component.blocked} onclick={() => run(component)}><Play size={14} />运行诊断</Button></div>{#if result}<div class="plugins-result" role="status"><strong>{resultTitle}</strong><p>{resultDescription}</p><details><summary>查看技术结果</summary><pre>{result}</pre></details></div>{/if}</details>
@@ -518,7 +565,7 @@
                 </div>
               {/if}
               {#each component.permissions as permission}
-                <label class="permission-row"><Choice checked={(permissionSelections[componentKey(component)] ?? []).includes(permissionKey(permission.request))} onchange={(event) => changePermission(component, permissionKey(permission.request), event.currentTarget.checked)} disabled={!permission.supported || component.enabled} /><span>{permissionLabel(permission.request.capability)}{permission.required ? '（必需）' : '（可选）'}<small>{permission.request.scope === 'self' ? '仅此插件的身份信息' : permission.request.scope}{permission.supported ? '' : ' · 暂不可用'}</small></span></label>
+                <label class="permission-row"><Choice checked={(permissionSelections[componentKey(component)] ?? []).includes(permissionKey(permission.request))} onchange={(event) => changePermission(component, permissionKey(permission.request), event.currentTarget.checked)} disabled={!permission.supported || component.enabled} /><span>{permissionLabel(permission.request.capability)}{permission.required ? '（必需）' : '（可选）'}<small>{permission.request.scope === 'self' ? '仅此插件的身份信息' : permission.request.scope}{permission.supported ? '' : ` · ${permission.unsupported_reason ?? '暂不可用'}`}</small></span></label>
               {/each}
               {#if component.permissions.length === 0}<p class="plugin-muted-block">此组件没有申请宿主访问权限。</p>{/if}
               <div class="plugin-section-actions">{#if component.permissions.some(permission => permission.granted)}<Button size="sm" variant="ghost" disabled={busy} onclick={() => revokePermissions(component)}>撤销已批准权限</Button>{/if}{#if component.enabled}<Button size="sm" variant="outline" onclick={() => stop(component)}><Square size={14} />停用组件</Button>{:else}<Button size="sm" disabled={busy || !canApprove(component, permissionSelections[componentKey(component)] ?? [])} onclick={() => approve(component)}><ShieldCheck size={14} />允许并启用</Button>{/if}</div>
@@ -562,8 +609,8 @@
       {#if pendingAuthorization}<div class="plugin-authorization-notice" role="status"><span>插件包已安装，运行权限尚未确认，因此暂未启用。</span><Button size="sm" onclick={() => openPermissionGuide(pendingAuthorization!)}>检查权限并启用</Button></div>{/if}
       {#if !snapshot.checked}<p class="plugins-notice">请先检查插件登记，再确认访问权限。</p>{/if}
       {#each snapshot.notices as notice}<p class="plugins-notice">{notice}</p>{/each}
-      {#if snapshot.checked && allPlugins.length === 0}
-        <div class="plugins-empty"><Puzzle size={28} /><strong>还没有已安装的插件</strong><p>打开插件市场在线安装，也可以选择本地插件包。</p><Button size="sm" onclick={openInstallModal}><Plus size={14} />安装插件</Button></div>
+      {#if allPlugins.length === 0}
+        <div class="plugins-empty"><Puzzle size={28} /><strong>{snapshot.checked ? '还没有已安装的插件' : '安装状态尚未核对'}</strong><p>{snapshot.checked ? '打开插件市场在线安装，也可以选择本地插件包。' : '当前读取尚未确认，不能将列表视为没有安装。可重新检查，或明确选择插件包。'}</p><Button size="sm" disabled={!installationAllowed} onclick={openInstallModal}>查看安装选项</Button></div>
       {:else if allPlugins.length > 0 && !installedPlugins.length}
         <div class="plugins-empty"><Search size={28} /><p>没有找到匹配的插件。</p><Button variant="ghost" size="sm" onclick={() => { installedQuery = ''; }}>清除搜索</Button></div>
       {:else}

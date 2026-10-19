@@ -160,6 +160,14 @@ fn document_budget_expiry_and_host_shutdown_fail_closed_without_new_lease() {
     assert!(host
         .page_document(&manager, "org.example.page", "manage")
         .is_err());
+    host.page_documents.reopen_empty();
+    assert!(host.page_check(&manager, &doc.document_review).is_err());
+    assert!(binding.check_lease(&lease, Some(&call().request)).is_err());
+    let fresh = host
+        .page_document(&manager, "org.example.page", "manage")
+        .unwrap();
+    assert_ne!(fresh.document_review, doc.document_review);
+    assert!(host.page_check(&manager, &fresh.document_review).is_ok());
 }
 #[test]
 fn foreign_component_review_or_sdk_capability_mismatch_is_rejected() {

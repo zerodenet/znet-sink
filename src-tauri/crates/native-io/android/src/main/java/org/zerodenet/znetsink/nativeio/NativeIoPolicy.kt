@@ -19,7 +19,7 @@ internal object NativeIoPolicy {
         mimeType: String, payloadBase64: String?, credentialsAcknowledged: Boolean,
     ): String? {
         val limit = when (purpose) {
-            "configuration-import", "ordinary-configuration-export" -> 16 * 1024 * 1024L
+            "configuration-import", "plugin-package-import", "ordinary-configuration-export" -> 16 * 1024 * 1024L
             "settings-import", "settings-export" -> 2 * 1024 * 1024L
             "redacted-diagnostic-export" -> 10 * 1024 * 1024L
             else -> return "unsupported-purpose"

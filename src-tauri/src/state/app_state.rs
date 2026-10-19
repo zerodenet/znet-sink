@@ -23,7 +23,6 @@ pub struct AppState {
     /// Distinguishes host lifetimes even when local scope counters restart at 1.
     /// Missing secure entropy disables recovery admission; no weak fallback.
     host_session_id: Option<String>,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     plugins: crate::services::plugins::Host,
     #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
     tool_runtime: crate::services::tool_jobs::ToolRuntime,
@@ -76,7 +75,6 @@ impl Default for AppState {
 }
 
 impl AppState {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) fn plugins(&self) -> &crate::services::plugins::Host {
         &self.plugins
     }
@@ -107,7 +105,6 @@ impl AppState {
 
         Self {
             host_session_id: new_host_session_id(),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             plugins: crate::services::plugins::Host::default(),
             #[cfg(any(feature = "tool-dns", feature = "tool-route"))]
             tool_runtime: crate::services::tool_jobs::ToolRuntime::default(),

@@ -25,18 +25,21 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum ImportPurpose {
     Configuration,
     Settings,
+    PluginPackage,
 }
 impl ImportPurpose {
     fn wire(self) -> &'static str {
         match self {
             Self::Configuration => "configuration-import",
             Self::Settings => "settings-import",
+            Self::PluginPackage => "plugin-package-import",
         }
     }
     fn budget(self) -> u32 {
         match self {
             Self::Configuration => CONFIGURATION_MAX_BYTES,
             Self::Settings => SETTINGS_MAX_BYTES,
+            Self::PluginPackage => 16 * 1024 * 1024,
         }
     }
 }

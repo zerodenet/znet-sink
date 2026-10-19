@@ -53,6 +53,23 @@ pub(crate) fn run() {
         // Only trusted main-window lifecycle events authorize release checks.
         // This owns metadata GETs, never VPN forwarding or installation.
         match &event {
+            tauri::RunEvent::Ready => crate::services::plugins::resume_native(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Resumed,
+                ..
+            } if label == "main" => crate::services::plugins::resume_native(app),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Suspended,
+                ..
+            } if label == "main" => crate::services::plugins::suspend_native(app),
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
+                crate::services::plugins::suspend_native(app)
+            }
+            _ => {}
+        }
+        match &event {
             tauri::RunEvent::Ready => crate::services::mobile_release_scheduler::resume(app),
             tauri::RunEvent::WindowEvent {
                 label,

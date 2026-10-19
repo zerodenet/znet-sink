@@ -46,9 +46,15 @@ impl Host {
         id: &str,
         tag: &str,
         approval_digest: Option<&str>,
+        host_generation: Option<&str>,
         progress: impl Fn(crate::services::download::Progress),
     ) -> AppResult<Snapshot> {
+        self.platform.require_installation()?;
         let _operation = self.operation_guard()?;
+        self.platform.check_review_generation(host_generation)?;
+        if host_generation.is_some() && approval_digest.is_none() {
+            return Err(AppError::invalid_argument("移动安装必须确认已审阅的包摘要"));
+        }
         let directory = io::directory(manager)?;
         let registration = directory.find(id).map_err(io::failure)?;
         let remote = remote(manager)?.with_package_fetch(|url, limit, sha256| {
@@ -66,6 +72,7 @@ impl Host {
         let bytes = remote
             .download(registration, &release)
             .map_err(io::package_failure)?;
+        self.platform.check_review_generation(host_generation)?;
         self.install_bytes(manager, &bytes, directory, id, approval_digest)
     }
     pub fn preview_release(

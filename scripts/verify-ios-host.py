@@ -16,11 +16,25 @@ def validate_smoke(receipt, nonce):
     assert receipt['nativePlugin'] == 'znet-native-io' and receipt['webViewInspectable'] is True
     checks = receipt['checks']
     for key in ['rustIpc', 'nativePresentation', 'fourTabs', 'onboarding', 'aboutAndReturn',
-                'vpnUnsupported', 'nativeLicenseAvailable']:
+                'vpnUnsupported', 'nativeLicenseAvailable', 'nativePluginVm']:
         assert checks[key] is True, f'missing actual UI/IPC check: {key}'
     assert checks['applicationId'] == 'org.zerodenet.znetsink'
     assert 0 < checks['width'] <= 1024 and checks['height'] > 0
     return receipt
+
+
+def validate_plugin_lifecycle(receipts, nonce):
+    assert len(receipts) == 3, 'three actual native lifecycle observations required'
+    generations = []
+    for receipt, phase in zip(receipts, ['ready', 'suspended', 'ready']):
+        assert receipt['schemaVersion'] == 1 and receipt['nonce'] == nonce
+        assert receipt['pid'] > 0 and receipt['pid'] == receipts[0]['pid'], 'app restarted during lifecycle check'
+        platform = receipt['platform']
+        assert platform['state'] == phase and platform['target']['os'] == 'ios'
+        assert receipt['executorAccepting'] is (phase == 'ready'), 'native owner did not seal/reopen admission'
+        generations.append(int(platform['generation']))
+    assert generations[0] < generations[1] < generations[2], 'stale native lifecycle observation'
+    return receipts
 
 
 def validate_package(info, sdk, arches, symbols, build_info, strings):

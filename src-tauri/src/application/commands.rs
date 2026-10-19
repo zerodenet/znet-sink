@@ -102,73 +102,44 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         crate::commands::packet_routes::gui_packet_route_detail,
         crate::commands::packet_routes::gui_close_packet_route,
         plugin_commands::plugins_supported,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_snapshot,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_host_recheck,
+        plugin_commands::plugins_native_vm_smoke,
         plugin_commands::plugins_page,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_document,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_close,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_check,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_configure,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_invoke,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_sdk_call,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_protected_load,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_page_file_preflight,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_refresh,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_authorize,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_configure,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_stop,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_revoke_permissions,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_get,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_put,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_storage_delete,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_run,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_invoke,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_sdk_call,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_protected_load,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_preview_install,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        plugin_commands::plugins_native_package_pick,
+        plugin_commands::plugins_native_package_confirm,
+        plugin_commands::plugins_native_package_cancel,
         plugin_commands::plugins_install,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall_preview,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall_execute,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall_status,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall_discard,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_uninstall_recent,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_catalog,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_releases,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_preview_release,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         plugin_commands::plugins_install_release,
         core_commands::core_ipc_default_endpoint,
         core_commands::core_status,

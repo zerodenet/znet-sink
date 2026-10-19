@@ -41,8 +41,18 @@ pub(super) struct Owner {
     #[cfg(test)]
     fail_after: Mutex<Option<String>>,
 }
+impl Owner {
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    pub(super) fn invalidate_plans(&self) {
+        self.plans
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+}
 #[derive(Clone)]
 struct Prepared {
+    native_generation: Option<String>,
     preview: Preview,
     binding: workspace::Binding,
     root_epoch: storage::Epoch,
@@ -403,6 +413,7 @@ pub(super) struct OperationGuard<'a> {
 impl Host {
     pub(super) fn operation_guard(&self) -> AppResult<OperationGuard<'_>> {
         let memory = self.operation.lock().map_err(|_| storage::error())?;
+        self.platform.require_foreground()?;
         let root = self.root()?;
         std::fs::create_dir_all(&root).map_err(|_| storage::error())?;
         let guard = storage::RootGuard::acquire(&root)?;
@@ -477,6 +488,7 @@ impl Host {
         manager: &Manager,
         plugin: &str,
     ) -> AppResult<storage::Activity> {
+        self.platform.require_foreground()?;
         // Preserve the original authority-retirement boundary before the new
         // material gate can return early. Root reservation ends on return;
         // only the shared invocation lifetime crosses execution/await.
@@ -709,6 +721,7 @@ impl Host {
         plans.insert(
             plan_id,
             Prepared {
+                native_generation: self.platform.review_generation(),
                 preview: preview.clone(),
                 binding: c.binding,
                 root_epoch: epoch,
@@ -969,6 +982,9 @@ impl Host {
         if prepared.deadline <= Instant::now() || !prepared.preview.can_execute {
             return Err(preflight());
         }
+        self.platform
+            .check_review_generation(prepared.native_generation.as_deref())
+            .map_err(|_| preflight())?;
         self.uninstall_available(&prepared.preview.plugin_id)?;
         let _exclusive_activity =
             storage::Activity::acquire(&root, &prepared.preview.plugin_id, true)

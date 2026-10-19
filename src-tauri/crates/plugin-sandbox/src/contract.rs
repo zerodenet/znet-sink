@@ -98,10 +98,17 @@ impl Targets {
 
 impl Target {
     pub fn native_desktop() -> Result<Self, Error> {
+        Self::native_for_device(DeviceClass::Desktop)
+    }
+    /// The caller supplies a device class read by the native host, never guest
+    /// input. OS and ABI always come from this compiled Rust application.
+    pub fn native_for_device(device: DeviceClass) -> Result<Self, Error> {
         let os = match std::env::consts::OS {
             "macos" => Os::Macos,
             "windows" => Os::Windows,
             "linux" => Os::Linux,
+            "android" => Os::Android,
+            "ios" => Os::Ios,
             _ => return Err(Error::IncompatibleDevice),
         };
         let arch = match std::env::consts::ARCH {
@@ -109,11 +116,11 @@ impl Target {
             "aarch64" => Arch::Aarch64,
             _ => return Err(Error::IncompatibleDevice),
         };
-        Ok(Self {
-            os,
-            arch,
-            device: DeviceClass::Desktop,
-        })
+        let target = Self { os, arch, device };
+        target
+            .valid()
+            .then_some(target)
+            .ok_or(Error::IncompatibleDevice)
     }
     fn valid(&self) -> bool {
         let architecture_valid = match self.os {

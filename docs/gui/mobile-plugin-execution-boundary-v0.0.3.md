@@ -34,6 +34,6 @@ Rust adapter panic 经 catch-unwind 转成固定 `HostFailure`，回执不携带
 
 ## 平台边界与验证
 
-本实现是 **同进程 VM/API 隔离**，不隔离 QuickJS 或原生 SDK 的 native crash、OOM、内存漏洞或操作系统强制终止。要求 `Process` 隔离的插件保持拒绝。Android/iOS Target、SDK 平台注册与执行准入未开放，移动插件页面仍显示适配缺口；本改动不创建 VPN、移动原生执行实例或签名凭据。
+本实现是 **同进程 VM/API 隔离**，不隔离 QuickJS 或原生 SDK 的 native crash、OOM、内存漏洞或操作系统强制终止。要求 `Process` 隔离的插件保持拒绝。后续[移动前台宿主批次](mobile-plugin-foreground-v0.0.3.md)增加原生 Target、前台执行准入和明确的逐 SDK 缺口；以该文及统一验证记录为当前范围，不把桌面测试当作移动通过。没有创建 VPN 或签名凭据。
 
 回归覆盖共享并发/队列超限、独立 owner 关闭、排队撤权不 dispatch、在途真实 draining、原 lease busy 与 stop/start ABA、review registration/epoch、SDK 二次调用与晚结果取消、原生 callback panic 固定失败、普通 IO deadline 与 scheduled wall 区分、队列激活一次性与过期拒绝，以及现有包验证/权限/VM 预算/Process 拒绝测试。宿主回归直接调用真实 `run`/`invoke_reviewed`，检查关闭 gate、旧 review 拒绝、取消后的 markerless 结果和 namespace 写入拒绝。该测试范围不替代移动真机或原生崩溃/OOM 隔离验收。

@@ -1,10 +1,15 @@
 #[tauri::command]
 pub fn plugins_supported() -> bool {
-    cfg!(not(any(target_os = "android", target_os = "ios")))
+    cfg!(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux"
+    ))
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod desktop {
+mod host {
     use crate::models::logs::PluginAction;
     use crate::{
         errors::AppResult,
@@ -71,6 +76,32 @@ mod desktop {
         state.plugins().snapshot(state.capabilities())
     }
     #[tauri::command]
+    pub async fn plugins_native_vm_smoke(
+        app: AppHandle,
+        window: tauri::Window,
+    ) -> AppResult<serde_json::Value> {
+        crate::services::native_documents::require_host(window.label())?;
+        #[cfg(debug_assertions)]
+        {
+            blocking(app, |state| state.plugins().native_vm_smoke()).await
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = app;
+            Err(crate::errors::AppError::invalid_argument(
+                "发行构建不提供固定 VM 验收",
+            ))
+        }
+    }
+    #[tauri::command]
+    pub fn plugins_host_recheck(app: AppHandle, window: tauri::Window) -> AppResult<Snapshot> {
+        crate::services::native_documents::require_host(window.label())?;
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        crate::services::plugins::resume_native(&app);
+        let state = app.state::<AppState>();
+        Ok(state.plugins().snapshot(state.capabilities()))
+    }
+    #[tauri::command]
     pub fn plugins_page(
         state: State<'_, AppState>,
         plugin_id: String,
@@ -100,26 +131,68 @@ mod desktop {
         app: AppHandle,
         key: String,
         values: BTreeMap<String, String>,
+        review: Option<Review>,
     ) -> AppResult<Snapshot> {
         blocking(app, move |state| {
-            state
-                .plugins()
-                .configure(state.capabilities(), &key, values)
+            if let Some(review) = review {
+                if review.key != key {
+                    return Err(crate::errors::AppError::invalid_argument(
+                        "插件确认目标已变化",
+                    ));
+                }
+                state.plugins().configure_reviewed(
+                    state.capabilities(),
+                    review,
+                    values,
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                )
+            } else if cfg!(any(target_os = "android", target_os = "ios")) {
+                Err(crate::errors::AppError::invalid_argument(
+                    "移动插件配置需要当前原生宿主的组件确认",
+                ))
+            } else {
+                state
+                    .plugins()
+                    .configure(state.capabilities(), &key, values)
+            }
         })
         .await
     }
     #[tauri::command]
-    pub fn plugins_stop(state: State<'_, AppState>, key: String) -> AppResult<Snapshot> {
-        state.plugins().stop(state.capabilities(), &key)
+    pub fn plugins_stop(
+        state: State<'_, AppState>,
+        key: String,
+        review: Option<Review>,
+    ) -> AppResult<Snapshot> {
+        match review {
+            Some(review) if review.key == key => {
+                state.plugins().stop_reviewed(state.capabilities(), &review)
+            }
+            None if !cfg!(any(target_os = "android", target_os = "ios")) => {
+                state.plugins().stop(state.capabilities(), &key)
+            }
+            _ => Err(crate::errors::AppError::invalid_argument(
+                "插件确认目标或原生宿主已变化，请重新核对",
+            )),
+        }
     }
     #[tauri::command]
     pub fn plugins_revoke_permissions(
         state: State<'_, AppState>,
         key: String,
+        review: Option<Review>,
     ) -> AppResult<Snapshot> {
-        state
-            .plugins()
-            .revoke_permissions(state.capabilities(), &key)
+        match review {
+            Some(review) if review.key == key => state
+                .plugins()
+                .revoke_permissions_reviewed(state.capabilities(), &review),
+            None if !cfg!(any(target_os = "android", target_os = "ios")) => state
+                .plugins()
+                .revoke_permissions(state.capabilities(), &key),
+            _ => Err(crate::errors::AppError::invalid_argument(
+                "插件确认目标或原生宿主已变化，请重新核对",
+            )),
+        }
     }
     #[tauri::command]
     pub async fn plugins_storage_get(
@@ -588,6 +661,97 @@ mod desktop {
         )
     }
     #[tauri::command]
+    pub async fn plugins_native_package_pick(
+        app: AppHandle,
+        window: tauri::Window,
+    ) -> AppResult<Option<crate::services::plugins::native_install::Preview>> {
+        crate::services::native_documents::require_host(window.label())?;
+        use tauri_plugin_znet_native_io::{ImportPurpose, NativeIoExt, ReceiptStatus};
+        let native_app = app.clone();
+        let receipt = tauri::async_runtime::spawn_blocking(move || {
+            native_app
+                .state::<AppState>()
+                .plugins()
+                .require_native_installation()?;
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes)
+                .map_err(|_| crate::errors::AppError::internal("无法创建系统选择操作"))?;
+            let id = bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            native_app
+                .native_io()
+                .pick_read(
+                    &id,
+                    ImportPurpose::PluginPackage,
+                    znet_plugin_sandbox::distribution::MAX_PACKAGE_BYTES as u32,
+                )
+                .map_err(|_| {
+                    crate::errors::AppError::internal(
+                        "系统文件选择结果未确认，请先核对，不会自动重试",
+                    )
+                })
+        })
+        .await
+        .map_err(|_| crate::errors::AppError::internal("系统文件选择未能完成"))??;
+        if receipt.status == ReceiptStatus::Cancelled {
+            return Ok(None);
+        }
+        let bytes = receipt
+            .read_bytes()
+            .map_err(|_| crate::errors::AppError::invalid_argument("插件包读取回执无效"))?
+            .ok_or_else(|| {
+                crate::errors::AppError::invalid_argument(
+                    "系统未完成插件包读取；请检查文件权限或大小后重新选择",
+                )
+            })?;
+        // Only a trusted native resume may reopen the host after the picker.
+        for _ in 0..30 {
+            if app
+                .state::<AppState>()
+                .plugins()
+                .require_native_installation()
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        blocking(app, move |state| {
+            state
+                .plugins()
+                .preview_native_package(state.capabilities(), bytes)
+                .map(Some)
+        })
+        .await
+    }
+    #[tauri::command]
+    pub async fn plugins_native_package_confirm(
+        app: AppHandle,
+        window: tauri::Window,
+        plan_id: String,
+        approval_digest: String,
+    ) -> AppResult<Snapshot> {
+        crate::services::native_documents::require_host(window.label())?;
+        blocking(app, move |state| {
+            state
+                .plugins()
+                .install_native_package(state.capabilities(), &plan_id, &approval_digest)
+        })
+        .await
+    }
+    #[tauri::command]
+    pub fn plugins_native_package_cancel(
+        state: State<'_, AppState>,
+        window: tauri::Window,
+        plan_id: String,
+    ) -> AppResult<()> {
+        crate::services::native_documents::require_host(window.label())?;
+        state.plugins().cancel_native_package(&plan_id);
+        Ok(())
+    }
+    #[tauri::command]
     pub async fn plugins_preview_install(app: AppHandle, path: String) -> AppResult<InstallReview> {
         blocking(app, move |state| {
             state.plugins().preview_install(state.capabilities(), path)
@@ -629,6 +793,7 @@ mod desktop {
         id: String,
         tag: String,
         approval_digest: Option<String>,
+        host_generation: Option<String>,
     ) -> AppResult<Snapshot> {
         let progress_app = app.clone();
         let progress_id = id.clone();
@@ -639,6 +804,7 @@ mod desktop {
                 &id,
                 &tag,
                 approval_digest.as_deref(),
+                host_generation.as_deref(),
                 move |progress| {
                     let percent = progress
                         .bytes_total
@@ -868,5 +1034,4 @@ mod desktop {
         }
     }
 }
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use desktop::*;
+pub use host::*;

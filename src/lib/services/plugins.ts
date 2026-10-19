@@ -19,7 +19,13 @@ export interface PluginSdkReply<T = unknown> {
   version: 1; ok: boolean; value?: T;
   error?: { code: string; message: string; field_path?: string; diagnostics?: string[]; retry_after_ms?: number };
 }
-export interface PluginReview { key: string; identity: string; registration: number; revision: number }
+export interface PluginReview { key: string; identity: string; registration: number; revision: number; host_generation?: string }
+export interface PluginPlatform {
+  state: 'starting' | 'ready' | 'suspended' | 'unavailable' | 'restricted';
+  target: {os: 'android' | 'ios'; arch: string; device: 'phone' | 'tablet'} | null;
+  generation: string; executionAllowed: boolean; externalInstallationAllowed: boolean;
+  isolation: 'bounded-in-process-interpreter'; reason: string | null;
+}
 export interface PluginConfigurationOption { value: string; label: string }
 export interface PluginConfigurationField {
   id: string; label: string; description?: string; kind: 'text' | 'https_origin' | 'https_origin_list' | 'select';
@@ -34,11 +40,11 @@ export interface PluginComponent {
   plugin_id: string; name: string; description?: string; component_id: string; version: string; publisher: string;
   repository?: string; homepage?: string | null; documentation?: string | null; license?: string; surfaces?: string[];
   review: PluginReview | null; enabled: boolean; permission_review_required?: boolean; running: boolean; blocked: string | null;
-  permissions: Array<{ request: PluginPermission; required: boolean; supported: boolean; granted: boolean }>;
+  permissions: Array<{ request: PluginPermission; required: boolean; supported: boolean; granted: boolean; unsupported_reason?: string }>;
   configuration: PluginConfiguration | null;
 }
 export interface PluginPage { plugin_id: string; id: string; title: string; kind: 'management' }
-export interface PluginSnapshot { checked: boolean; components: PluginComponent[]; pages?: PluginPage[]; notices: string[] }
+export interface PluginSnapshot { checked: boolean; components: PluginComponent[]; pages?: PluginPage[]; notices: string[]; platform?: PluginPlatform }
 export interface PluginListing {
   product_id?: string; id: string; name: string; description: string; publisher: { id: string }; repository: string;
   surfaces?: string[]; capabilities?: string[];
@@ -50,6 +56,7 @@ export interface PluginDownloadProgress {
 }
 export interface PluginPermissionChange { component_id: string; request: PluginPermission; required: boolean }
 export interface PluginInstallReview {
+  host_generation?: string;
   plugin_id: string; current_version: string | null; candidate_version: string; candidate_digest: string;
   publisher: string; publisher_fingerprint: string; first_install: boolean; local_trust: boolean;
   requested_surfaces: string[]; requires_approval: boolean;
@@ -62,9 +69,10 @@ export const pluginApi = {
   catalog: () => invoke<PluginListing[]>('plugins_catalog'),
   releases: (id: string) => invoke<PluginRelease[]>('plugins_releases', { id }),
   previewRelease: (id: string, tag: string) => invoke<PluginInstallReview>('plugins_preview_release', { id, tag }),
-  installRelease: (id: string, tag: string, approvalDigest?: string) => invoke<PluginSnapshot>('plugins_install_release', { id, tag, approvalDigest }),
+  installRelease: (id: string, tag: string, approvalDigest?: string, hostGeneration?: string) => invoke<PluginSnapshot>('plugins_install_release', { id, tag, approvalDigest, hostGeneration }),
   supported: () => invoke<boolean>('plugins_supported'),
   snapshot: () => invoke<PluginSnapshot>('plugins_snapshot'),
+  recheckHost: () => invoke<PluginSnapshot>('plugins_host_recheck'),
   page: (pluginId: string, pageId: string) => invoke<string>('plugins_page', { pluginId, pageId }),
   pageDocument: (pluginId:string,pageId:string)=>invoke<PluginPageDocument>('plugins_page_document',{pluginId,pageId}),
   pageClose: (documentReview:string)=>invoke<void>('plugins_page_close',{documentReview}),
@@ -76,11 +84,14 @@ export const pluginApi = {
   pagePreflight: (documentReview:string,review:PluginReview,call:PluginSdkCall)=>invoke<PluginSdkReply<{state:string}>>('plugins_page_file_preflight',{documentReview,review,call}),
   refresh: () => invoke<PluginSnapshot>('plugins_refresh'),
   previewInstall: (path: string) => invoke<PluginInstallReview>('plugins_preview_install', { path }),
+  pickNativePackage: () => invoke<{ plan_id: string; review: PluginInstallReview } | null>('plugins_native_package_pick'),
+  confirmNativePackage: (planId: string, approvalDigest: string) => invoke<PluginSnapshot>('plugins_native_package_confirm', { planId, approvalDigest }),
+  cancelNativePackage: (planId: string) => invoke<void>('plugins_native_package_cancel', { planId }),
   install: (path: string, approvalDigest?: string) => invoke<PluginSnapshot>('plugins_install', { path, approvalDigest }),
   authorize: (review: PluginReview, grants: PluginPermission[]) => invoke<PluginSnapshot>('plugins_authorize', { review, grants }),
-  configure: (key: string, values: Record<string, string>) => invoke<PluginSnapshot>('plugins_configure', { key, values }),
-  stop: (key: string) => invoke<PluginSnapshot>('plugins_stop', { key }),
-  revokePermissions: (key: string) => invoke<PluginSnapshot>('plugins_revoke_permissions', { key }),
+  configure: (key: string, values: Record<string, string>, review?: PluginReview) => invoke<PluginSnapshot>('plugins_configure', { key, values, review }),
+  stop: (key: string, review?: PluginReview) => invoke<PluginSnapshot>('plugins_stop', { key, review }),
+  revokePermissions: (key: string, review?: PluginReview) => invoke<PluginSnapshot>('plugins_revoke_permissions', { key, review }),
   storage: {
     get: (pluginId: string, area: 'state' | 'cache', key: string) => invoke<string | null>('plugins_storage_get', { pluginId, area, key }),
     put: (pluginId: string, area: 'state' | 'cache', key: string, value: string) => invoke<void>('plugins_storage_put', { pluginId, area, key, value }),

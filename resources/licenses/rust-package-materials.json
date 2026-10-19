@@ -902,6 +902,76 @@
     {
       "identity": {
         "ecosystem": "cargo",
+        "name": "rquickjs-core",
+        "version": "0.13.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      "expected": {
+        "manifestSha256": "2a876598dfdae3b57cd230fbacc08e964aaf896e85482f43857e439b705a2c01",
+        "cargoPackageIdSha256": "9bf476c9c28193ee26946ae182cae1ec4ed3cd5fae6524d9195fdb584ee21c68",
+        "registryArchiveSha256": "7c6dbfedfbf458dc119c21ccd032c7527d185210b11a1ae796cd04106e6db280"
+      },
+      "materials": [
+        {
+          "name": "LICENSE",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/DelSkayn/rquickjs/f3039c8d931417049ce6133b3ff4550ca38438a5/LICENSE",
+          "sha256": "976ad3d07927343ab99b31510625acba89eac8e0e517c712925620ddeda91b70",
+          "text": "MIT License\n\nCopyright (c) 2020 Mees Delzenne\nCopyright (c) 2025 Rquickjs Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/DelSkayn/rquickjs/f3039c8d931417049ce6133b3ff4550ca38438a5/LICENSE",
+            "sha256": "976ad3d07927343ab99b31510625acba89eac8e0e517c712925620ddeda91b70",
+            "revision": "f3039c8d931417049ce6133b3ff4550ca38438a5",
+            "member": "LICENSE"
+          }
+        }
+      ],
+      "resolves": [],
+      "acquisition": {
+        "kind": "published-crate-pinned-repository",
+        "registryArchiveSha256": "7c6dbfedfbf458dc119c21ccd032c7527d185210b11a1ae796cd04106e6db280",
+        "vcsRevision": "f3039c8d931417049ce6133b3ff4550ca38438a5",
+        "packagePath": "core"
+      }
+    },
+    {
+      "identity": {
+        "ecosystem": "cargo",
+        "name": "rquickjs-macro",
+        "version": "0.13.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      "expected": {
+        "manifestSha256": "4469323b58646f6fec7b45060de16647c4037999fd4d896ca4f241db25074f5a",
+        "cargoPackageIdSha256": "065f4752009741fda3b06d1309f33fc61eee32c642aad0aaf475c88a2a956549",
+        "registryArchiveSha256": "4446670c6ae57191ac325a4c9675fee5b31172533ad68753f7afa83759f082fd"
+      },
+      "materials": [
+        {
+          "name": "LICENSE",
+          "kind": "license",
+          "source": "https://raw.githubusercontent.com/DelSkayn/rquickjs/f3039c8d931417049ce6133b3ff4550ca38438a5/LICENSE",
+          "sha256": "976ad3d07927343ab99b31510625acba89eac8e0e517c712925620ddeda91b70",
+          "text": "MIT License\n\nCopyright (c) 2020 Mees Delzenne\nCopyright (c) 2025 Rquickjs Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+          "origin": {
+            "url": "https://raw.githubusercontent.com/DelSkayn/rquickjs/f3039c8d931417049ce6133b3ff4550ca38438a5/LICENSE",
+            "sha256": "976ad3d07927343ab99b31510625acba89eac8e0e517c712925620ddeda91b70",
+            "revision": "f3039c8d931417049ce6133b3ff4550ca38438a5",
+            "member": "LICENSE"
+          }
+        }
+      ],
+      "resolves": [],
+      "acquisition": {
+        "kind": "published-crate-pinned-repository",
+        "registryArchiveSha256": "4446670c6ae57191ac325a4c9675fee5b31172533ad68753f7afa83759f082fd",
+        "vcsRevision": "f3039c8d931417049ce6133b3ff4550ca38438a5",
+        "packagePath": "macro"
+      }
+    },
+    {
+      "identity": {
+        "ecosystem": "cargo",
         "name": "selectors",
         "version": "0.36.1",
         "source": "registry+https://github.com/rust-lang/crates.io-index"

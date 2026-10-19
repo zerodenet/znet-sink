@@ -117,16 +117,20 @@ jobs:
       - name: Install pinned Android NDK
         shell: bash
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           test -n "$sdk_root"
           "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION"
           ndk_root="$sdk_root/ndk/$NDK_VERSION"
           native_bin="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "$native_bin" >> "$GITHUB_PATH"
           "$native_bin/aarch64-linux-android24-clang" --version
           printf '%s\n' \
             "ANDROID_NDK_HOME=$ndk_root" \
             "ANDROID_NDK_ROOT=$ndk_root" \
             "CC_aarch64_linux_android=$native_bin/aarch64-linux-android24-clang" \
+            "CXX_aarch64_linux_android=$native_bin/aarch64-linux-android24-clang++" \
             "AR_aarch64_linux_android=$native_bin/llvm-ar" \
             "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$native_bin/aarch64-linux-android24-clang" \
             >> "$GITHUB_ENV"

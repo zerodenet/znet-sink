@@ -73,6 +73,24 @@ def main(evidence):
                         print(json.dumps(value, sort_keys=True), flush=True)
                         print(console.read_text(errors='replace')[-8192:], flush=True)
                         verify.validate_smoke(value, nonce)
+                        lifecycle = container / 'Library/Caches' / bundle / 'znet-plugin-lifecycle-smoke.json'
+                        def observe(phase, after=-1):
+                            deadline = time.monotonic() + 30
+                            while time.monotonic() < deadline:
+                                if lifecycle.is_file():
+                                    observed = json.loads(lifecycle.read_text())
+                                    if observed.get('nonce') == nonce and observed['platform']['state'] == phase and int(observed['platform']['generation']) > after:
+                                        return observed
+                                time.sleep(.25)
+                            raise RuntimeError('actual native plugin lifecycle observation missing: ' + phase)
+                        ready = observe('ready')
+                        run('xcrun', 'simctl', 'launch', device, 'com.apple.Preferences')
+                        suspended = observe('suspended', int(ready['platform']['generation']))
+                        # Bring the same process forward; never terminate/relaunch it.
+                        run('xcrun', 'simctl', 'launch', device, bundle, env=env)
+                        resumed = observe('ready', int(suspended['platform']['generation']))
+                        receipts = verify.validate_plugin_lifecycle([ready, suspended, resumed], nonce)
+                        (root / 'simulator-plugin-lifecycle.json').write_text(json.dumps(receipts, indent=2) + '\n')
                         (root / 'simulator.json').write_text(json.dumps(dict(udid=device, name=candidates[0]['name'],
                             runtime=runtime['identifier'], runtimeVersion=runtime['version'], simulator=True,
                             deviceAcceptance=False, check='actual-WKWebView-and-Rust-IPC'), indent=2) + '\n')

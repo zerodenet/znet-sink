@@ -9,6 +9,14 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_lifecycle_evidence_requires_native_transition_and_same_process(self):
+        receipts = [dict(schemaVersion=1, nonce='a' * 32, pid=42, executorAccepting=phase == 'ready', platform=dict(state=phase, target=dict(os='ios'), generation=str(i + 1))) for i, phase in enumerate(['ready', 'suspended', 'ready'])]
+        verify.validate_plugin_lifecycle(receipts, 'a' * 32)
+        for patch in [dict(pid=43), dict(executorAccepting=True), dict(nonce='b' * 32), dict(platform=dict(state='suspended', target=dict(os='ios'), generation='1'))]:
+            altered = copy.deepcopy(receipts)
+            altered[1].update(patch)
+            with self.subTest(patch=patch), self.assertRaises(AssertionError):
+                verify.validate_plugin_lifecycle(altered, 'a' * 32)
     def test_packaged_inventory_rejects_wrong_sdk_or_missing_materials(self):
         value = dict(schemaVersion=1, target=dict(platform='ios', triple='aarch64-apple-ios-sim', profile='debug'),
                      provenance=dict(kind='ios-application-resolved-input-inventory'), texts=[], gaps=[],
@@ -39,7 +47,7 @@ class HostContracts(unittest.TestCase):
                          CFBundlePackageType='APPL', CFBundleShortVersionString='0.0.3',
                          CFBundleSupportedPlatforms=['iPhoneSimulator'])
         self.checks = dict(rustIpc=True, nativePresentation=True, fourTabs=True, onboarding=True,
-                          aboutAndReturn=True, vpnUnsupported=True, nativeLicenseAvailable=True,
+                          aboutAndReturn=True, vpnUnsupported=True, nativeLicenseAvailable=True, nativePluginVm=True,
                           applicationId='org.zerodenet.znetsink', width=393, height=852)
         self.receipt = dict(schemaVersion=1, nonce='a' * 32, status='completed',
                             bundleIdentifier='org.zerodenet.znetsink', nativePlugin='znet-native-io',

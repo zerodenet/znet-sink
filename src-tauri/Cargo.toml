@@ -24,6 +24,7 @@ tauri-build = { version = "2", features = [] }
 znet-client-core = { path = "crates/client-core" }
 znet-client-capabilities = { path = "crates/client-capabilities" }
 znet-engine-client = { path = "crates/engine-client" }
+znet-plugin-sandbox = { path = "crates/plugin-sandbox" }
 tauri-plugin-znet-native-io = { path = "crates/native-io" }
 tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
@@ -88,7 +89,6 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
-znet-plugin-sandbox = { path = "crates/plugin-sandbox" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "=0.6.2"

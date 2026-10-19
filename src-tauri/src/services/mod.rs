@@ -123,7 +123,6 @@ pub(crate) fn data_dir() -> AppResult<PathBuf> {
 
 pub mod bypass;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod plugins;
 
 pub(crate) mod schedule_store;

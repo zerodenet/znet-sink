@@ -25,6 +25,7 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export ZNET_PRODUCT_FEATURES="${ZNET_PRODUCT_FEATURES:-tool-dns,tool-route,tool-node-probe}"
 : "${ANDROID_HOME:?Android SDK required}"
 : "${ANDROID_NDK_HOME:?Pinned Android NDK required}"
+source scripts/android-plugin-toolchain.sh
 : "${JAVA_HOME:?JDK required}"
 test -x "$JAVA_HOME/bin/java"
 test -x "$JAVA_HOME/bin/javac"
