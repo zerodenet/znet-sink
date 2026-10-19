@@ -653,23 +653,19 @@ impl Host {
     /// Execute a declared scheduled action with the same typed SDK surface as
     /// signed management pages. The scheduler and host stay business-neutral;
     /// the plugin owns the action and protocol.
-    pub fn invoke_scheduled(
+    pub(super) fn invoke_scheduled(
         &self,
         app: tauri::AppHandle,
-        plugin_id: &str,
-        component_id: &str,
-        action: String,
-        payload: serde_json::Value,
+        due: &super::scheduler::DueTask,
     ) -> AppResult<serde_json::Value> {
+        let plugin_id = due.task.plugin_id.as_str();
+        let component_id = due.task.component_id.as_str();
         let _activity = self.activity_checked(
             app.state::<crate::state::app_state::AppState>()
                 .capabilities(),
             plugin_id,
         )?;
 
-        if !action.starts_with("lifecycle.scheduled.") {
-            return Err(AppError::invalid_argument("插件后台动作无效"));
-        }
         let (
             component,
             authority,
@@ -684,12 +680,7 @@ impl Host {
             let manager = app.state::<crate::state::app_state::AppState>();
             self.checked_rescan(manager.capabilities())?;
             let key = format!("{plugin_id}/{component_id}");
-            let binding = manager
-                .capabilities()
-                .component_snapshots()
-                .into_iter()
-                .find(|entry| entry.key == key && !entry.retired)
-                .ok_or_else(stale)?;
+            let binding = self.checked_scheduled_due(manager.capabilities(), due)?;
             let state = self.state.lock().unwrap();
             let loaded = state.loaded.get(&key).ok_or_else(stale)?;
             let mut configuration = loaded
@@ -720,8 +711,8 @@ impl Host {
                     "configuration": configuration,
                     "state": plugin_state,
                     "invocation": {
-                        "action": action,
-                        "payload": payload,
+                        "action": format!("lifecycle.scheduled.{}", due.task.action),
+                        "payload": {"taskId": due.task.task_id},
                         "now_unix_ms": now_unix_ms()
                     }
                 }),
@@ -747,6 +738,11 @@ impl Host {
         }
         let _operation = self.operation_guard()?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
+        self.checked_scheduled_due(
+            app.state::<crate::state::app_state::AppState>()
+                .capabilities(),
+            due,
+        )?;
         let key = format!("{plugin_id}/{component_id}");
         let state = self.state.lock().unwrap();
         let loaded = state.loaded.get(&key).ok_or_else(stale)?;

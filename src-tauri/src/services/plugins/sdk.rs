@@ -1004,12 +1004,13 @@ impl Host {
             }
             Method::SchedulePut => {
                 let args: SchedulePutArgs = decode(call.arguments)?;
-                serde_json::to_value(self.schedule_put(
+                serde_json::to_value(self.schedule_put_checked(
                     plugin_id,
                     component_id,
                     args.task_id,
                     args.action,
                     args.interval_seconds,
+                    &|| lease.check(Some(&call.request)).map_err(invocation_failure),
                 )?)
                 .map_err(io::failure)?
             }
@@ -1019,7 +1020,9 @@ impl Host {
             }
             Method::ScheduleDelete => {
                 let args: ScheduleDeleteArgs = decode(call.arguments)?;
-                self.schedule_delete(plugin_id, component_id, &args.task_id)?;
+                self.schedule_delete_checked(plugin_id, component_id, &args.task_id, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?;
                 Value::Bool(true)
             }
             Method::BrowserOpen => {

@@ -890,7 +890,11 @@ fn unknown_uninstall_does_not_accept_late_scheduler_checkpoint() {
         .host
         .record_schedule_result(&task, generation, false, 1000)
         .is_err());
-    assert!(f.host.take_due(u64::MAX).unwrap().is_empty());
+    assert!(f
+        .host
+        .take_due(f.state.capabilities(), u64::MAX)
+        .unwrap()
+        .is_empty());
     assert_eq!(
         std::fs::read(f.dir.path().join("schedules.json")).unwrap(),
         before
