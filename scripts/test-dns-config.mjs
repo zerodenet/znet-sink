@@ -96,7 +96,7 @@ assert.match(panel, /class="dispatch-dialog-form"/);
 assert.match(panel, /function buildDispatchConditionFromForm\(\): Record<string, unknown>/);
 assert.match(panel, /getEffectiveRuleSetOptions/);
 assert.match(panel, /aria-label="DNS 分流规则集"/);
-assert.match(panel, /只显示当前可用的规则集/);
+assert.match(panel, /可选活动配置和客户端管理的已就绪规则集/);
 assert.match(panel, /<SegmentedControl\.Root value=\{dispatchEditorMode\}[\s\S]*?aria-label="DNS 分流条件编辑方式"/);
 assert.match(panel, /switchDispatchEditorMode\(value as 'form' \| 'json'\)/);
 assert.match(panel, /<SegmentedControl\.Item value="form"/);

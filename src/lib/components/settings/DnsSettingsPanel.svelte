@@ -1184,7 +1184,7 @@
       {/if}
 
       <section class="section">
-        <div class="section-head"><div><div class="section-title">解析分流</div><p>按顺序匹配域名或规则集。</p></div><Button variant="outline" size="sm" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
+        <div class="section-head"><div><div class="section-title">解析分流</div><p>按顺序匹配域名或规则集。</p></div><Button variant="outline" size="sm" aria-label="新增 DNS 分流" onclick={openAddDispatch} disabled={compatibility.features?.dnsSplitDispatch.state === 'unsupported'}><Plus />新增</Button></div>
         <div class="dispatch-list">
           {#each draft.dns.dispatch as rule, index (index)}
             <article class="dispatch-card">
@@ -1381,7 +1381,7 @@
             </label>
             {#if dispatchConditionType === 'rule_set'}
               <label class="dispatch-dialog-field">
-                <span>有效规则集</span>
+                <span>规则集</span>
                 {#if ruleSetOptions.length > 0}
                   <Select.Root
                     type="single"
@@ -1399,13 +1399,14 @@
                       {/each}
                     </Select.Content>
                   </Select.Root>
-                  <small>只显示当前可用的规则集。</small>
+                  <small>可选活动配置和客户端管理的已就绪规则集；DNS 引用不依赖公共路由规则开关。</small>
+                  <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>管理规则集</Button>
                   {#if ruleSetReferencesKnown && dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
                     <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
                   {/if}
                 {:else}
                   <div class="empty-reference">
-                    <span>{ruleSetReferencesKnown ? '当前最终有效配置中没有可选择的规则集。' : '规则集列表暂未读取成功，现有引用尚未确认。'}</span>
+                    <span>{ruleSetReferencesKnown ? '暂无可用规则集，请在规则页添加或更新规则资源。' : '规则集列表暂未读取成功，现有引用尚未确认。'}</span>
                     <Button type="button" variant="outline" size="sm" onclick={() => store.openTab('rules')}>前往规则页</Button>
                   </div>
                 {/if}

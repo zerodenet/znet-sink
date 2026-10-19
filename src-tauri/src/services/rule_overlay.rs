@@ -60,6 +60,7 @@ pub(crate) fn compose_effective_candidate_for(
         selections,
     };
     let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
+    materialize_dns_rule_sets(&mut candidate, &profiles)?;
     if !inputs
         .app
         .client_edits
@@ -117,6 +118,7 @@ pub(crate) fn validate_app_config_candidate(
         Some(&app_config.dns),
         Some(app_config.url_test.tolerance_ms),
         Some(app_config),
+        &profiles,
     )?;
     Ok(())
 }
@@ -136,7 +138,15 @@ fn compose_effective_with(
         enabled
     };
     let config = compose_rules_for(base, enabled, profiles, scoped.overrides.rules)?;
-    finalize_effective_config(state, base, config, dns_override, tolerance_override, None)
+    finalize_effective_config(
+        state,
+        base,
+        config,
+        dns_override,
+        tolerance_override,
+        None,
+        profiles,
+    )
 }
 
 fn finalize_effective_config(
@@ -146,6 +156,7 @@ fn finalize_effective_config(
     dns_override: Option<&AppDnsConfig>,
     tolerance_override: Option<u64>,
     app_override: Option<&AppConfig>,
+    profiles: &[RuleSetProfile],
 ) -> AppResult<Value> {
     let mut app = match app_override {
         Some(app) => app.clone(),
@@ -173,9 +184,24 @@ fn finalize_effective_config(
         supports_tolerance: url_test::supports_tolerance(state),
         selections,
     };
-    let candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
+    let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
+    materialize_dns_rule_sets(&mut candidate, profiles)?;
     state.configuration().record(candidate.report.clone());
     Ok(candidate.config)
+}
+
+fn materialize_dns_rule_sets(
+    candidate: &mut crate::configuration::composition::Candidate,
+    profiles: &[RuleSetProfile],
+) -> AppResult<()> {
+    candidate.report.apply(
+        "dns_rule_assets",
+        &["/route/rule_sets"],
+        &mut candidate.config,
+        |config| {
+            crate::configuration::dns_rule_sets::materialize(config, profiles, verify_artifact)
+        },
+    )
 }
 
 #[cfg(test)]
@@ -239,15 +265,28 @@ pub fn status(state: &AppState) -> AppResult<CommonRuleInjectionStatus> {
 }
 
 pub fn effective_rule_set_options(state: &AppState) -> AppResult<Vec<EffectiveRuleSetOption>> {
-    let Some(config) = current_effective_config(state)? else {
-        return Ok(Vec::new());
-    };
+    // An invalid saved DNS reference must not prevent selecting its replacement.
+    // Include ready client assets even when common route injection is off.
+    let config = active_content(state)?.unwrap_or_else(|| serde_json::json!({}));
     let profiles = common::lock(state.rule_sets(), "rule_set")?;
-    let definitions = config
+    let mut definitions = config
         .pointer("/route/rule_sets")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    for profile in profiles
+        .iter()
+        .filter(|profile| crate::configuration::dns_rule_sets::available(profile))
+    {
+        let artifact = profile.artifact.as_ref().expect("available asset");
+        if !std::path::Path::new(&artifact.path).is_file() {
+            continue;
+        }
+        let tag = common_tag(&profile.id);
+        if !definitions.iter().any(|item| item["tag"] == tag) {
+            definitions.push(serde_json::json!({"tag":tag,"path":artifact.path}));
+        }
+    }
     let mut seen = std::collections::BTreeSet::new();
     let mut options = definitions
         .into_iter()
@@ -420,19 +459,19 @@ fn verify_artifact(
 ) -> AppResult<()> {
     let bytes = fs::read(&artifact.path).map_err(|error| {
         AppError::invalid_argument(format!(
-            "公共规则 '{}' 的 ZRS 文件不可读: {error}",
+            "规则集 '{}' 的 ZRS 文件不可读: {error}",
             profile.name
         ))
     })?;
     let metadata = verify(&bytes, VerifyMode::FullChecksum).map_err(|error| {
         AppError::invalid_argument(format!(
-            "公共规则 '{}' 的 ZRS 校验失败: {error}",
+            "规则集 '{}' 的 ZRS 校验失败: {error}",
             profile.name
         ))
     })?;
     if metadata.body_checksum != artifact.checksum {
         return Err(AppError::invalid_argument(format!(
-            "公共规则 '{}' 的 ZRS 校验值不匹配",
+            "规则集 '{}' 的 ZRS 校验值不匹配",
             profile.name
         )));
     }
@@ -461,6 +500,10 @@ async fn apply_if_running(state: &AppState, config: Option<Value>) -> AppResult<
     )
     .await
 }
+
+#[cfg(test)]
+#[path = "rule_overlay_dns_tests.rs"]
+mod dns_tests;
 
 #[cfg(test)]
 mod tests {
@@ -698,7 +741,7 @@ mod tests {
             assert_eq!(dns["servers"]["cloudflare"]["detour"], target);
         }
     }
-    fn verified_profile(
+    pub(super) fn verified_profile(
         id: &str,
         order: u32,
         action: CommonRuleAction,
