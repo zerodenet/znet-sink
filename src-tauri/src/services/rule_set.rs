@@ -356,6 +356,7 @@ pub(crate) async fn sync_managed_subscription_sources(
 ) -> AppResult<ManagedRuleSetSyncOutcome> {
     let id_prefix = managed_rule_set_id_prefix(subscription_id);
     let current = lock(state.rule_sets(), "rule_set")?.clone();
+    let previous_sources = owned_subscription_sources(&current, subscription_id)?;
     let now = now_unix_ms();
     let mut prepared = Vec::with_capacity(sources.len());
     let mut artifacts = Vec::with_capacity(sources.len());
@@ -490,15 +491,110 @@ pub(crate) async fn sync_managed_subscription_sources(
         });
     }
 
-    let mut next = current;
-    next.retain(|item| !item.id.starts_with(&id_prefix));
-    next.extend(prepared);
+    // Another subscription or manual rule may have completed while downloads
+    // were in flight. Replace only this subscription's namespace.
+    let mut rules = lock(state.rule_sets(), "rule_set")?;
+    if !subscription_sources_match(
+        &owned_subscription_sources(&rules, subscription_id)?,
+        &previous_sources,
+    )? {
+        return Err(AppError::conflict(
+            "rule_set",
+            subscription_id,
+            "订阅规则来源在下载期间发生变化，未覆盖新材料",
+        ));
+    }
+    let next = replace_subscription_sources(&rules, subscription_id, prepared)?;
     domain_store::save_rule_sets(&next)?;
-    *lock(state.rule_sets(), "rule_set")? = next;
+    *rules = next;
     Ok(ManagedRuleSetSyncOutcome {
         artifacts,
         failures,
     })
+}
+
+// A namespace identifies candidates, not ownership. Never overwrite an
+// ordinary/foreign/common asset merely because its id shares the prefix.
+fn owned_subscription_sources(
+    rules: &[RuleSetProfile],
+    subscription_id: &str,
+) -> AppResult<Vec<RuleSetProfile>> {
+    let prefix = managed_rule_set_id_prefix(subscription_id);
+    let mut owned = Vec::new();
+    for rule in rules {
+        let in_namespace = rule.id.strip_prefix(&prefix).is_some_and(|suffix| {
+            suffix.len() == 24
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+        let has_owner = rule.managed_by_subscription_id.as_deref() == Some(subscription_id);
+        if !in_namespace && !has_owner {
+            continue;
+        }
+        if !in_namespace || !has_owner || rule.built_in || rule.common_binding.is_some() {
+            return Err(AppError::conflict(
+                "rule_set",
+                subscription_id,
+                "订阅规则命名空间或归属冲突，未替换任何资源",
+            ));
+        }
+        owned.push(rule.clone());
+    }
+    Ok(owned)
+}
+
+fn subscription_sources_match(
+    left: &[RuleSetProfile],
+    right: &[RuleSetProfile],
+) -> AppResult<bool> {
+    let left =
+        serde_json::to_value(left).map_err(|_| AppError::internal("订阅规则材料无法比较"))?;
+    let right =
+        serde_json::to_value(right).map_err(|_| AppError::internal("订阅规则材料无法比较"))?;
+    Ok(left == right)
+}
+
+fn replace_subscription_sources(
+    current: &[RuleSetProfile],
+    subscription_id: &str,
+    replacement: Vec<RuleSetProfile>,
+) -> AppResult<Vec<RuleSetProfile>> {
+    owned_subscription_sources(current, subscription_id)?;
+    if owned_subscription_sources(&replacement, subscription_id)?.len() != replacement.len() {
+        return Err(AppError::invalid_argument("订阅规则恢复材料归属不一致"));
+    }
+    let mut next = current.to_vec();
+    next.retain(|item| item.managed_by_subscription_id.as_deref() != Some(subscription_id));
+    next.extend(replacement);
+    Ok(next)
+}
+
+pub(crate) fn subscription_sources(
+    state: &AppState,
+    subscription_id: &str,
+) -> AppResult<Vec<RuleSetProfile>> {
+    owned_subscription_sources(&lock(state.rule_sets(), "rule_set")?, subscription_id)
+}
+
+// Caller owns this subscription's in-flight claim and has proved that runtime
+// dispatch has not started. Immutable ZRS files remain available to old readers.
+pub(crate) fn restore_subscription_sources(
+    state: &AppState,
+    subscription_id: &str,
+    previous: Vec<RuleSetProfile>,
+) -> AppResult<()> {
+    let mut rules = lock(state.rule_sets(), "rule_set")?;
+    if subscription_sources_match(
+        &owned_subscription_sources(&rules, subscription_id)?,
+        &previous,
+    )? {
+        return Ok(());
+    }
+    let next = replace_subscription_sources(&rules, subscription_id, previous)?;
+    domain_store::save_rule_sets(&next)?;
+    *rules = next;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1360,6 +1456,74 @@ mod tests {
             last_sync_at_unix_ms: Some(1_000),
             last_error: None,
         }
+    }
+
+    #[test]
+    fn subscription_source_replacement_preserves_concurrent_other_namespaces() {
+        let mut owned = scheduled_profile();
+        owned.id = managed_rule_set_id(&managed_rule_set_id_prefix("source"), "rules");
+        owned.managed_by_subscription_id = Some("source".into());
+        let mut replacement = owned.clone();
+        replacement.updated_at_unix_ms += 1;
+        let mut concurrent = scheduled_profile();
+        concurrent.id = "concurrent-manual".into();
+        let next = replace_subscription_sources(
+            &[owned, concurrent.clone()],
+            "source",
+            vec![replacement.clone()],
+        )
+        .unwrap();
+        assert_eq!(next.len(), 2);
+        assert!(subscription_sources_match(&[next[0].clone()], &[concurrent]).unwrap());
+        assert!(subscription_sources_match(&[next[1].clone()], &[replacement]).unwrap());
+    }
+
+    #[test]
+    fn subscription_source_shared_id_prefix_does_not_hide_a_distinct_owner() {
+        let mut first = scheduled_profile();
+        first.id = managed_rule_set_id(&managed_rule_set_id_prefix("source"), "rules");
+        first.managed_by_subscription_id = Some("source".into());
+        let mut second = scheduled_profile();
+        second.id = managed_rule_set_id(&managed_rule_set_id_prefix("source-next"), "rules");
+        second.managed_by_subscription_id = Some("source-next".into());
+        let current = vec![first.clone(), second.clone()];
+        assert_eq!(
+            owned_subscription_sources(&current, "source")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            owned_subscription_sources(&current, "source-next")
+                .unwrap()
+                .len(),
+            1
+        );
+        let next = replace_subscription_sources(&current, "source", vec![]).unwrap();
+        assert!(subscription_sources_match(&next, &[second]).unwrap());
+    }
+
+    #[test]
+    fn subscription_source_prefix_alone_cannot_authorize_replacement_or_restore() {
+        for owner in [None, Some("another-source".to_string())] {
+            let mut collision = scheduled_profile();
+            collision.id = managed_rule_set_id(&managed_rule_set_id_prefix("source"), "rules");
+            collision.managed_by_subscription_id = owner;
+            assert_eq!(
+                replace_subscription_sources(&[collision], "source", vec![])
+                    .unwrap_err()
+                    .code,
+                "conflict"
+            );
+        }
+        let mut ordinary = scheduled_profile();
+        ordinary.managed_by_subscription_id = Some("source".into());
+        assert_eq!(
+            owned_subscription_sources(&[ordinary], "source")
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
     }
 
     #[test]

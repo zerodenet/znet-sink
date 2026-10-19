@@ -39,7 +39,17 @@ assert.ok(
     && configService.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
     && configService.includes("reconcileTunAfterConfigMutation('profile activation')")
     && !configService.includes('prepareGuiTunForProfileSwitch'),
-  'profile activation/subscription updates must invalidate config-backed surfaces and reconcile client-owned TUN around source changes',
+  'profile activation/subscription updates must invalidate config-backed surfaces while profile activation retains its capture coordination',
+);
+
+const subscriptionSync = configService.slice(configService.indexOf('export async function syncSubscription('), configService.indexOf('export async function resetSubscriptionConditionalCache('));
+const subscriptionSyncAll = configService.slice(configService.indexOf('export async function syncAllSubscriptions('), configService.indexOf('export async function getSubscriptionRemovalPreview('));
+assert.ok(
+  subscriptionSync.includes("invoke<SubscriptionProfile>('subscription_sync'")
+    && subscriptionSyncAll.includes("invoke<SubscriptionSyncAllOutcome>('subscription_sync_all'")
+    && !subscriptionSync.includes('reconcileTunAfterConfigMutation(')
+    && !subscriptionSyncAll.includes('reconcileTunAfterConfigMutation('),
+  'subscription sync must retain backend-owned capture preservation without another frontend TUN reconcile',
 );
 
 assert.ok(
@@ -108,10 +118,13 @@ assert.ok(
   !appStore.includes('prepareLiteCapture')
     && !appStore.includes("from './gui-state.svelte'")
     && !guiState.includes('async prepareLiteCapture()')
-    && appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])")
+    && !appStore.includes("PRO_ONLY_SETTINGS")
     && appStore.includes("if (!this.mobilePresentation && this.uiMode === 'lite' && !LITE_MODE_NAV.has(key)) return false;")
+    && appStore.includes("getGuiInteractionSurfaceSnapshot(this.mobilePresentation ? 'mobile' : 'desktop')")
+    && appStore.includes('openTab(tab: string)')
+    && appStore.includes('returnToPreviousPage()')
     && settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'")
-    && settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'"),
+    && settingsPanel.includes("section.id === activeSection"),
   'mode switching must preserve capture state and synchronously apply only the presentation boundary',
 );
 

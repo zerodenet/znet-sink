@@ -1,4 +1,4 @@
-use crate::errors::{AppError, AppResult};
+use crate::errors::AppResult;
 use crate::services::common::lock;
 use crate::state::app_state::AppState;
 
@@ -12,31 +12,57 @@ pub fn current_ui_mode(state: &AppState) -> AppResult<String> {
 pub fn is_pro_mode(ui_mode: &str) -> bool {
     ui_mode.eq_ignore_ascii_case(UI_MODE_PRO)
 }
-
-pub fn require_pro_mode(state: &AppState, feature: &'static str) -> AppResult<()> {
-    let ui_mode = current_ui_mode(state)?;
-    // Desktop Lite is a presentation choice. Native mobile always exposes
-    // management; each use case retains its own capability/permission checks.
-    if management_mode_allowed(
-        &ui_mode,
-        cfg!(any(target_os = "android", target_os = "ios")),
-    ) {
-        return Ok(());
-    }
-
-    Err(AppError::mode_restricted(feature, UI_MODE_PRO, ui_mode))
-}
-
-fn management_mode_allowed(ui_mode: &str, native_mobile: bool) -> bool {
-    native_mobile || is_pro_mode(ui_mode)
+/// Compatibility hook for callers introduced before UI mode became layout-only.
+/// Desktop and mobile share this behavior. Real host, feature, permission and
+/// resource admission remain the responsibility of each calling use case.
+pub fn require_pro_mode(_state: &AppState, _feature: &'static str) -> AppResult<()> {
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn mobile_presentation_does_not_change_desktop_mode_authority() {
-        assert!(super::management_mode_allowed("lite", true));
-        assert!(!super::management_mode_allowed("lite", false));
-        assert!(super::management_mode_allowed("pro", false));
+    fn desktop_and_mobile_modes_are_layout_only() {
+        for mode in ["lite", "pro"] {
+            let mut config = crate::models::app_config::AppConfig::default();
+            config.ui.ui_mode = mode.into();
+            let state = crate::state::app_state::AppState::new(config);
+            assert!(super::require_pro_mode(&state, "network_endpoints").is_ok());
+            assert!(super::require_pro_mode(&state, "config_workspace").is_ok());
+        }
+    }
+
+    #[test]
+    fn layout_admission_does_not_read_or_mutate_preferences() {
+        let state = crate::state::app_state::AppState::default();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.app_config().lock().unwrap();
+            panic!("poison only this test's preferences");
+        }));
+        assert!(state.app_config().is_poisoned());
+        assert!(super::require_pro_mode(&state, "config_workspace").is_ok());
+    }
+
+    #[test]
+    fn layout_admission_does_not_grant_host_or_capability_authority() {
+        use std::collections::BTreeSet;
+        use znet_client_core::capability::{Error, Permission};
+        for mode in ["lite", "pro"] {
+            let mut config = crate::models::app_config::AppConfig::default();
+            config.ui.ui_mode = mode.into();
+            let state = crate::state::app_state::AppState::new(config);
+            super::require_pro_mode(&state, "config_workspace").unwrap();
+            assert!(crate::services::native_documents::require_host("plugin-page").is_err());
+            let requested = BTreeSet::from([Permission::new("system.documents", "export")]);
+            assert!(matches!(
+                state.capabilities().admit(
+                    "test.no-system-grant".into(),
+                    requested.clone(),
+                    requested,
+                    &BTreeSet::new(),
+                ),
+                Err(Error::AdmissionDenied)
+            ));
+        }
     }
 }

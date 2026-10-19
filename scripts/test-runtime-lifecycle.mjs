@@ -76,10 +76,27 @@ assert.ok(
 );
 assert.ok(
   tunShutdown.includes('next.tun.enabled = Some(false);')
-    && coreProcessService.indexOf('clear_saved_tun_intent(')
-      < coreProcessService.indexOf('state.runtime_host().run("shutdown"')
-    && coreProcessService.includes('if let Err(error) = saved_intent'),
+    && coreProcessService.includes('if let Err(error) = saved_intent')
+    && coreProcessService.indexOf('persist_exit_tun_intent(&stop_app);')
+      < coreProcessService.indexOf('state.runtime_host().run("shutdown"'),
   'exit must persist TUN OFF even without an owned child, while storage failure must not abort runtime cleanup',
+);
+
+const exitCoordinator = read('src-tauri/src/application/shutdown.rs');
+const nativeExit = appRuntime.slice(appRuntime.indexOf('shutdown::complete_final_exit('), appRuntime.indexOf('if let tauri::RunEvent::ExitRequested'));
+const requestedExit = appRuntime.slice(appRuntime.indexOf('if let tauri::RunEvent::ExitRequested'));
+for (const path of [nativeExit, requestedExit]) {
+  assert.ok(
+    path.includes('shutdown::prepare(app_handle)')
+      && path.indexOf('shutdown::prepare(app_handle)') < path.indexOf('shutdown::drain_plugins(plugin_executor).await')
+      && path.indexOf('shutdown::drain_plugins(plugin_executor).await') < path.indexOf('core_process::shutdown_managed_runtime('),
+    'both native and requested exits must seal and drain plugin entry points before runtime teardown',
+  );
+}
+assert.ok(
+  exitCoordinator.indexOf('shutting_down_handle().store(true') < exitCoordinator.indexOf('close_page_documents()')
+    && exitCoordinator.indexOf('close_page_documents()') < exitCoordinator.indexOf('executor.close(std::time::Duration::ZERO)'),
+  'shutdown preparation must block watchdogs, close trusted page channels, and seal new guest calls synchronously',
 );
 
 const connectionWorkspace = read('src/lib/components/tabs/ConnectionInspectorWorkspace.svelte');

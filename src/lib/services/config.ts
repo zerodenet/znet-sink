@@ -117,11 +117,11 @@ export async function upsertSubscription(input: SubscriptionUpsert): Promise<Sub
 
 export async function syncSubscription(id: string): Promise<SubscriptionProfile> {
   const subscription = await invoke<SubscriptionProfile>('subscription_sync', { id });
-  // A sync can create/update the generated proxy profile and may hot-refresh
-  // the active target, so every config-backed surface must reconcile.
+  // The backend updates the linked profile and applies it only when active.
+  // It owns capture preservation in that transaction; syncing an unrelated
+  // subscription must never re-enable a saved but currently stopped TUN.
   proxyConfigSignal.markChanged(true);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('subscription sync');
   return subscription;
 }
 
@@ -240,7 +240,6 @@ export async function syncAllSubscriptions(): Promise<SubscriptionSyncAllOutcome
   const outcome = await invoke<SubscriptionSyncAllOutcome>('subscription_sync_all');
   proxyConfigSignal.markChanged(true);
   ruleSetSignal.markChanged();
-  await reconcileTunAfterConfigMutation('subscription sync all');
   return outcome;
 }
 

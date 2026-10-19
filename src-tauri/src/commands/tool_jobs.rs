@@ -9,7 +9,7 @@ use crate::errors::{AppError, AppResult};
 use crate::kernel::adapter::KernelAdapter;
 use crate::kernel::zero::ZeroAdapter;
 use crate::models::tool_job::{StartToolJobRequest, ToolJobId, ToolJobKind, ToolJobSnapshot};
-use crate::services::{common, core_config, interaction_mode};
+use crate::services::{common, core_config};
 use crate::state::app_state::AppState;
 
 pub const TOOL_JOB_UPDATED_EVENT: &str = "client-core:tool-job-updated";
@@ -61,7 +61,7 @@ pub fn gui_tool_job_start(
     state: State<'_, AppState>,
     request: StartToolJobRequest,
 ) -> AppResult<ToolJobSnapshot> {
-    require_kind_available(state.inner(), request.kind)?;
+    require_kind_available(request.kind)?;
     let job = state.start_client_tool_job(request)?;
     if let Err(error) = state.tool_runtime().checkpoint(state.capabilities()) {
         state.tool_runtime().discard(job.id);
@@ -72,8 +72,7 @@ pub fn gui_tool_job_start(
     Ok(job)
 }
 
-fn require_kind_available(state: &AppState, kind: ToolJobKind) -> AppResult<()> {
-    interaction_mode::require_pro_mode(state, "diagnostic_tool_job")?;
+fn require_kind_available(kind: ToolJobKind) -> AppResult<()> {
     match kind {
         #[cfg(feature = "tool-dns")]
         ToolJobKind::DnsLookup

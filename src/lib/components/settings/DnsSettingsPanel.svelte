@@ -112,6 +112,8 @@
   let dispatchDialogError = $state('');
   let compatibility = $state<DnsKernelCompatibility>({ status: 'unknown' });
   let ruleSetOptions = $state<EffectiveRuleSetOption[]>([]);
+  let ruleSetReferencesKnown = $state(false);
+  let ruleSetReferenceError = $state('');
   let routeTargetOptions = $state<DnsRouteTargetOption[]>([]);
   let routeTargetsKnown = $state(false);
   let advancedOpen = $state(false);
@@ -122,7 +124,7 @@
   let automaticAddressFamilyPolicy = $state<DnsAddressFamilyPolicy>('prefer_ipv4');
   let acceptedDraft = $state.raw<DnsSettingsDraft | null>(null);
   let readNotice = $state<string | null>(null);
-  let alive = true, readGeneration = 0;
+  let alive = true, readGeneration = 0, ruleSetReadGeneration = 0;
   const dirty = $derived(draft !== null && settingsDraftKey(draft) !== settingsDraftKey(acceptedDraft));
   function acceptDraft(next: DnsSettingsDraft) {
     draft = cloneDnsValue(next); acceptedDraft = cloneDnsValue(next);
@@ -140,13 +142,13 @@
   const ruleSetTags = $derived(new Set(ruleSetOptions.map((option) => option.tag)));
   const routeTargetTags = $derived(new Set(routeTargetOptions.map((option) => option.tag)));
   const issues = $derived(draft ? validateDnsDraft(draft, {
-    ruleSetTags,
+    ruleSetTags: ruleSetReferencesKnown ? ruleSetTags : undefined,
     routeTargetTags: routeTargetsKnown ? routeTargetTags : undefined,
     features: compatibility.features,
   }) : []);
   const errors = $derived(issues.filter((issue) => issue.severity === 'error'));
   const warnings = $derived(issues.filter((issue) => issue.severity === 'warning'));
-  const danglingRuleTags = $derived(draft ? draft.dns.dispatch.flatMap((rule) => {
+  const danglingRuleTags = $derived(draft && ruleSetReferencesKnown ? draft.dns.dispatch.flatMap((rule) => {
     const condition = rule.condition;
     const rawTag = condition.type === 'rule_set' ? condition.tag : condition.rule_set;
     const tag = typeof rawTag === 'string' ? rawTag.trim() : '';
@@ -437,8 +439,10 @@
 
   async function load() {
     const generation = ++readGeneration;
+    const ruleGeneration = ++ruleSetReadGeneration;
     const read = captureSettingsDraftRead(acceptedDraft, draft);
     loading = true;
+    ruleSetReferenceError = '';
     error = '';
     errorCode = undefined;
     try {
@@ -446,7 +450,10 @@
         loadGlobalDnsSettings(),
         getDnsKernelCompatibility(),
         getGuiTunStatus().catch(() => null),
-        getEffectiveRuleSetOptions().catch(() => []),
+        getEffectiveRuleSetOptions().then(
+          options => ({ options, error: '' }),
+          cause => ({ options: null, error: getAppErrorMessage(cause, '读取规则集引用失败') }),
+        ),
         Promise.all([getConfigProxyNodes(), getConfigPolicyGroups()]).catch(() => null),
       ]);
       if (!alive || generation !== readGeneration) return false;
@@ -471,7 +478,10 @@
       source = result.source;
       acceptDraft(nextDraft);
       compatibility = kernelCompatibility;
-      ruleSetOptions = effectiveRuleSets;
+      ruleSetReferencesKnown = ruleGeneration === ruleSetReadGeneration && effectiveRuleSets.options !== null;
+      ruleSetOptions = ruleSetReferencesKnown ? effectiveRuleSets.options! : [];
+      ruleSetReferenceError = ruleGeneration === ruleSetReadGeneration
+        ? effectiveRuleSets.error : '读取期间规则集或来源已变化，请重新核对引用。';
       routeTargetsKnown = configTargets !== null;
       routeTargetOptions = configTargets ? dnsRouteTargetOptions(...configTargets) : [];
       jsonDialogOpen = false;
@@ -509,11 +519,34 @@
   }
 
   async function refreshRuleSetReferences() {
+    const generation = readGeneration;
+    const profile = profileSnapshot;
+    const request = ++ruleSetReadGeneration;
+    const current = () => alive && generation === readGeneration
+      && profile === profileSnapshot && request === ruleSetReadGeneration;
     try {
-      ruleSetOptions = await getEffectiveRuleSetOptions();
-    } catch {
-      // Keep the last known options visible; save still performs kernel validation.
+      const options = await getEffectiveRuleSetOptions();
+      if (!current()) return;
+      ruleSetOptions = options;
+      ruleSetReferencesKnown = true;
+      ruleSetReferenceError = '';
+    } catch (cause) {
+      if (!current()) return;
+      ruleSetReferencesKnown = false;
+      ruleSetReferenceError = getAppErrorMessage(cause, '读取规则集引用失败');
+      // Cached options stay visible as history; a failed read cannot prove deletion.
     }
+  }
+
+  function manageRuleSets() {
+    if (dnsNavigation) {
+      const sourceKey = dnsNavigation.current?.key;
+      dnsNavigation.open('rules');
+      // A denied dirty/busy transition keeps its editor and original draft.
+      if (dnsNavigation.current?.key !== sourceKey) {
+        serverDialogOpen = false; dispatchDialogOpen = false; jsonDialogOpen = false;
+      }
+    } else store.openTab('rules');
   }
 
   function resetToAutomaticDefault() {
@@ -958,12 +991,21 @@
     </div>
   {/if}
 
+  {#if ruleSetReferenceError}
+    <div class="issues warning" role="status">
+      <div>规则集引用暂未确认：{ruleSetReferenceError}</div>
+      <div class="inline-actions">
+        <Button variant="outline" size="sm" onclick={manageRuleSets}>管理规则集</Button>
+        <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>重试读取</Button>
+      </div>
+    </div>
+  {/if}
   {#if danglingRuleTags.length > 0}
     <div class="issues error" role="alert">
       <div>以下 DNS 分流引用已失效：{danglingRuleTags.join('、')}。请选择现有规则集或删除对应分流。</div>
       <div class="inline-actions">
-        <Button variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')}>管理规则集</Button>
-        <Button variant="ghost" size="sm" onclick={load}>刷新引用</Button>
+        <Button variant="outline" size="sm" onclick={manageRuleSets}>管理规则集</Button>
+        <Button variant="ghost" size="sm" onclick={refreshRuleSetReferences}>刷新引用</Button>
       </div>
     </div>
   {/if}
@@ -1422,13 +1464,13 @@
                     </Select.Content>
                   </Select.Root>
                   <small>只显示当前可用的规则集。</small>
-                  {#if dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
+                  {#if ruleSetReferencesKnown && dispatchConditionTagDraft && !ruleSetTags.has(dispatchConditionTagDraft)}
                     <div class="reference-warning">当前引用 {dispatchConditionTagDraft} 已失效，请重新选择。</div>
                   {/if}
                 {:else}
                   <div class="empty-reference">
-                    <span>当前最终有效配置中没有可选择的规则集。</span>
-                    <Button type="button" variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')}>前往规则页</Button>
+                    <span>{ruleSetReferencesKnown ? '当前最终有效配置中没有可选择的规则集。' : '规则集列表暂未读取成功，现有引用尚未确认。'}</span>
+                    <Button type="button" variant="outline" size="sm" onclick={manageRuleSets}>前往规则页</Button>
                   </div>
                 {/if}
               </label>

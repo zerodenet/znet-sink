@@ -60,7 +60,7 @@
     <Button variant="outline" size="sm" onclick={() => store.openSettings('core')} disabled={busy}><Settings2 />内核版本</Button>
   {/if}
   {#if context === 'rules'}
-    <Button variant="outline" size="sm" onclick={() => (store.activeTab = 'rules')} disabled={busy}><Settings2 />管理规则</Button>
+    <Button variant="outline" size="sm" onclick={() => store.openTab('rules')} disabled={busy}><Settings2 />管理规则</Button>
   {/if}
   {#if coreRecovery}
     <Button variant="outline" size="sm" onclick={restartCore} disabled={busy || guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isConnecting || guiState.isDisconnecting}><RotateCw />重启内核</Button>

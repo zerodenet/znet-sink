@@ -647,8 +647,136 @@ async fn sync_subscription(
     state: &AppState,
     subscription: SubscriptionProfile,
 ) -> AppResult<SubscriptionProfile> {
+    Box::pin(sync_with_publication(
+        state,
+        subscription,
+        |input, source, next_source| async move {
+            Box::pin(proxy_config::upsert_ordinary_subscription_runtime(
+                app_handle.clone(),
+                input,
+                &source,
+                next_source,
+            ))
+            .await
+        },
+        false,
+    ))
+    .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncPublicationPhase {
+    Preparing,
+    Publishing,
+    Published,
+}
+
+// Shared references cross await points in the native Send task.
+struct SyncPublicationState(std::sync::atomic::AtomicU8);
+impl SyncPublicationState {
+    fn new() -> Self {
+        Self(std::sync::atomic::AtomicU8::new(
+            SyncPublicationPhase::Preparing as u8,
+        ))
+    }
+    fn set(&self, phase: SyncPublicationPhase) {
+        self.0
+            .store(phase as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn get(&self) -> SyncPublicationPhase {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => SyncPublicationPhase::Preparing,
+            2 => SyncPublicationPhase::Published,
+            _ => SyncPublicationPhase::Publishing,
+        }
+    }
+}
+
+// The isolated publisher rejects before writing in the bounded-stack regression.
+// Production never treats a dispatch error as proof that no effects occurred.
+#[cfg(test)]
+async fn sync_with_publish<P, F>(
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    publish: P,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert) -> F,
+    F: std::future::Future<Output = AppResult<ProxyConfigProfile>>,
+{
+    Box::pin(sync_with_publication(
+        state,
+        subscription,
+        |input, _, _| async move {
+            Box::pin(publish(input))
+                .await
+                .map(|profile| (profile, None))
+        },
+        true,
+    ))
+    .await
+}
+
+async fn sync_with_publication<P, F>(
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    publish: P,
+    rejection_has_no_effect: bool,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert, SubscriptionProfile, SubscriptionProfile) -> F,
+    F: std::future::Future<Output = AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)>>,
+{
     crate::services::ordinary_subscription_recovery::require_sync_allowed(state, &subscription.id)?;
     require_confirmed_previous_result(&subscription)?;
+    let previous_rules = rule_set::subscription_sources(state, &subscription.id)?;
+    let id = subscription.id.clone();
+    let phase = SyncPublicationState::new();
+    let result = Box::pin(fetch_and_publish(
+        state,
+        subscription,
+        publish,
+        &phase,
+        rejection_has_no_effect,
+    ))
+    .await;
+    finish_sync_publication(result, phase.get(), || {
+        rule_set::restore_subscription_sources(state, &id, previous_rules)
+    })
+}
+
+fn finish_sync_publication<T>(
+    result: AppResult<T>,
+    phase: SyncPublicationPhase,
+    restore_rules: impl FnOnce() -> AppResult<()>,
+) -> AppResult<T> {
+    if let Err(mut error) = result {
+        // A pending/confirmed runtime operation owns its exact rule history.
+        // Cache-checkpoint failures after success must not undo that material.
+        if phase == SyncPublicationPhase::Preparing {
+            if let Err(rollback) = restore_rules() {
+                error.details = Some(json!({
+                    "cause": error.details,
+                    "ruleSetRollback": {"succeeded": false, "code": rollback.code}
+                }));
+            }
+        }
+        return Err(error);
+    }
+    result
+}
+
+async fn fetch_and_publish<P, F>(
+    state: &AppState,
+    subscription: SubscriptionProfile,
+    publish: P,
+    phase: &SyncPublicationState,
+    rejection_has_no_effect: bool,
+) -> AppResult<SubscriptionProfile>
+where
+    P: FnOnce(ProxyConfigUpsert, SubscriptionProfile, SubscriptionProfile) -> F,
+    F: std::future::Future<Output = AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)>>,
+{
     let user_agent = subscription
         .user_agent
         .clone()
@@ -690,6 +818,7 @@ async fn sync_subscription(
             now_unix_ms(),
             domain_store::save_subscriptions,
         )?;
+        phase.set(SyncPublicationPhase::Published);
         conditional_sync::save(
             state.capabilities().clone(),
             updated.id.clone(),
@@ -721,8 +850,7 @@ async fn sync_subscription(
         expire_at_unix_ms: response.userinfo.expire_ms(),
     };
 
-    let (updated, published) = apply_parsed_subscription(
-        app_handle,
+    let (updated, published) = Box::pin(apply_parsed_subscription(
         state,
         subscription,
         parsed,
@@ -730,8 +858,10 @@ async fn sync_subscription(
         metadata,
         now,
         target_proxy_config_id,
-        None,
-    )
+        publish,
+        phase,
+        rejection_has_no_effect,
+    ))
     .await
     .map_err(sanitized_apply_error)?;
     // Publication and authoritative runtime reconciliation have already succeeded.
@@ -783,8 +913,7 @@ fn sanitized_apply_error(error: AppError) -> AppError {
     }
 }
 
-async fn apply_parsed_subscription(
-    app_handle: &AppHandle,
+async fn apply_parsed_subscription<P, F>(
     state: &AppState,
     subscription: SubscriptionProfile,
     parsed: ParsedSubscriptionConfig,
@@ -792,28 +921,39 @@ async fn apply_parsed_subscription(
     metadata: SyncMetadata,
     now: u64,
     target_proxy_config_id: String,
-    commit_guard: Option<&(dyn Fn() -> AppResult<()> + Send + Sync)>,
-) -> AppResult<(SubscriptionProfile, ProxyConfigProfile)> {
-    let parsed =
-        prepare_parsed_subscription(state, &subscription, parsed, user_agent, commit_guard).await?;
-    ensure_subscription_unchanged(state, &subscription)?;
-    if let Some(guard) = commit_guard {
-        guard()?;
-    }
-
-    let (published, confirmed_source) = upsert_synced_proxy_config(
-        app_handle,
+    publish: P,
+    phase: &SyncPublicationState,
+    rejection_has_no_effect: bool,
+) -> AppResult<(SubscriptionProfile, ProxyConfigProfile)>
+where
+    P: FnOnce(ProxyConfigUpsert, SubscriptionProfile, SubscriptionProfile) -> F,
+    F: std::future::Future<Output = AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)>>,
+{
+    let parsed = Box::pin(prepare_parsed_subscription(
         state,
         &subscription,
-        &target_proxy_config_id,
         parsed,
+        user_agent,
+        None,
+    ))
+    .await?;
+    ensure_subscription_unchanged(state, &subscription)?;
+    let input =
+        prepare_synced_proxy_config_upsert(state, &subscription, &target_proxy_config_id, parsed)?;
+    let next_source = synced_source_candidate(
+        &subscription,
+        &target_proxy_config_id,
+        input.content.as_ref(),
         &metadata,
         now,
-    )
-    .await?;
-    if let Some(guard) = commit_guard {
-        guard()?;
+    );
+    phase.set(SyncPublicationPhase::Publishing);
+    let result = Box::pin(publish(input, subscription.clone(), next_source)).await;
+    if rejection_has_no_effect && result.is_err() {
+        phase.set(SyncPublicationPhase::Preparing);
     }
+    let (published, confirmed_source) = result?;
+    phase.set(SyncPublicationPhase::Published);
     let updated = match confirmed_source {
         Some(source) => source,
         None => update_sync_success(
@@ -2744,34 +2884,6 @@ fn pad_base64(content: &str) -> String {
     padded
 }
 
-async fn upsert_synced_proxy_config(
-    app_handle: &AppHandle,
-    state: &AppState,
-    subscription: &SubscriptionProfile,
-    target_proxy_config_id: &str,
-    parsed: ParsedSubscriptionConfig,
-    metadata: &SyncMetadata,
-    synced_at_unix_ms: u64,
-) -> AppResult<(ProxyConfigProfile, Option<SubscriptionProfile>)> {
-    let input =
-        prepare_synced_proxy_config_upsert(state, subscription, target_proxy_config_id, parsed)?;
-    ensure_subscription_unchanged(state, subscription)?;
-    let next_source = synced_source_candidate(
-        subscription,
-        target_proxy_config_id,
-        input.content.as_ref(),
-        metadata,
-        synced_at_unix_ms,
-    );
-    proxy_config::upsert_ordinary_subscription_runtime(
-        app_handle.clone(),
-        input,
-        subscription,
-        next_source,
-    )
-    .await
-}
-
 fn prepare_synced_proxy_config_upsert(
     state: &AppState,
     subscription: &SubscriptionProfile,
@@ -3285,6 +3397,61 @@ fn record_auto_sync_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_pending_and_confirmed_errors_never_restore_rule_history() {
+        for phase in [
+            SyncPublicationPhase::Publishing,
+            SyncPublicationPhase::Published,
+        ] {
+            let result: AppResult<()> = finish_sync_publication(
+                Err(AppError {
+                    code: "subscription_local_recovery_pending",
+                    message: "pending".into(),
+                    details: None,
+                }),
+                phase,
+                || {
+                    panic!("an uncertain dispatch or completed publication must retain exact rule history")
+                },
+            );
+            assert_eq!(
+                result.unwrap_err().code,
+                "subscription_local_recovery_pending"
+            );
+        }
+        let calls = std::cell::Cell::new(0);
+        let result: AppResult<()> = finish_sync_publication(
+            Err(AppError::invalid_argument(
+                "pre-publication validation rejected",
+            )),
+            SyncPublicationPhase::Preparing,
+            || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, "invalid_argument");
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn subscription_rule_rollback_failure_preserves_code_without_private_details() {
+        let result: AppResult<()> = finish_sync_publication(
+            Err(AppError::invalid_argument("candidate rejected")),
+            SyncPublicationPhase::Preparing,
+            || Err(AppError::internal("secret-canary/private-path")),
+        );
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        assert_eq!(
+            error.details.as_ref().unwrap()["ruleSetRollback"]["succeeded"],
+            false
+        );
+        assert!(!serde_json::to_string(&error)
+            .unwrap()
+            .contains("secret-canary"));
+    }
 
     #[test]
     fn managed_subscription_identity_is_stable_and_provider_namespaced() {
@@ -4553,3 +4720,7 @@ proxy-groups:
 #[cfg(test)]
 #[path = "subscription_capability_tests.rs"]
 mod capability_tests;
+
+#[cfg(test)]
+#[path = "subscription_stack_tests.rs"]
+mod stack_tests;

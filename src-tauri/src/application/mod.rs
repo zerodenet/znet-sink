@@ -1,6 +1,8 @@
 //! Application composition and service lifecycle, separate from platform UI.
 
 pub(crate) mod commands;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod shutdown;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::lifecycle::{self, phases};
@@ -286,31 +288,34 @@ pub fn run() {
 
     let exit_shutdown_stage = shutdown_stage.clone();
     app.run(move |app_handle, event| {
+        shutdown::complete_final_exit(
+            &event,
+            &exit_shutdown_stage,
+            || {
+                core_process::persist_exit_tun_intent(app_handle);
+            },
+            || {
+                crate::services::file_logger::line(
+                    "shutdown: native Exit without ExitRequested; cleaning managed runtime",
+                );
+                let plugin_executor = shutdown::prepare(app_handle);
+                tauri::async_runtime::block_on(async {
+                    shutdown::drain_plugins(plugin_executor).await;
+                    core_process::shutdown_managed_runtime(app_handle.clone()).await;
+                });
+            },
+        );
         if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
             use std::sync::atomic::Ordering;
 
             match exit_shutdown_stage.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
                 Ok(_) => {
-                    #[cfg(target_os = "macos")]
-                    crate::services::macos_privilege::begin_shutdown();
-                    app_handle.state::<AppState>().shutting_down_handle().store(true, Ordering::SeqCst);
                     api.prevent_exit();
-                    app_handle.state::<AppState>().plugins().close_page_documents();
-                    let plugin_executor = app_handle.state::<AppState>().plugins().executor_shutdown_handle();
-                    plugin_executor.close(std::time::Duration::ZERO);
+                    let plugin_executor = shutdown::prepare(app_handle);
                     let cleanup_app = app_handle.clone();
                     let cleanup_stage = exit_shutdown_stage.clone();
                     tauri::async_runtime::spawn(async move {
-                        let remaining = tauri::async_runtime::spawn_blocking(move || {
-                            plugin_executor.close(std::time::Duration::from_secs(2))
-                        }).await;
-                        match remaining {
-                            Ok(state) if !state.drained => crate::services::file_logger::line(&format!(
-                                "plugin execution still draining: {} active; native calls were not withdrawn", state.running
-                            )),
-                            Err(_) => crate::services::file_logger::line("plugin execution shutdown result unconfirmed"),
-                            _ => {}
-                        }
+                        shutdown::drain_plugins(plugin_executor).await;
                         core_process::shutdown_managed_runtime(cleanup_app.clone()).await;
                         cleanup_stage.store(2, Ordering::SeqCst);
                         cleanup_app.exit(code.unwrap_or(0));

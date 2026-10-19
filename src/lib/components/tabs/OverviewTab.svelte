@@ -467,8 +467,7 @@
             class="lite-manage-source"
             onclick={() => {
               if (activeProxyConfig && !activeSubscription) {
-                store.uiMode = 'pro';
-                store.activeTab = 'profiles';
+                store.openTab('profiles');
               } else store.activeTab = 'subscriptions';
             }}
           >

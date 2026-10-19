@@ -169,13 +169,11 @@ assert.ok(
   'Lite fallback navigation should expose the existing nodes page',
 );
 assert.ok(
-  settingsPanel.includes("store.uiMode === 'lite'") &&
+  settingsPanel.includes("section.id === activeSection") &&
     settingsPanel.includes("section.id !== 'config' && section.id !== 'tun'") &&
-    settingsPanel.includes("activeSection === 'config' || activeSection === 'tun'") &&
-    appStore.includes("const PRO_ONLY_SETTINGS = new Set<SettingsSection>(['tun', 'config'])") &&
-    appStore.includes('PRO_ONLY_SETTINGS.has(section)') &&
-    appStore.includes('PRO_ONLY_SETTINGS.has(this.settingsSection)'),
-  'Lite Settings must hide and never mount Pro-only TUN and live kernel config editors',
+    !appStore.includes('PRO_ONLY_SETTINGS') &&
+    appStore.includes('this.settingsSection = section;'),
+  'Lite Settings hide detailed entries but must mount explicitly requested TUN/config settings',
 );
 assert.ok(
   configEditor.includes('getConfigWorkspaceSnapshot') &&
@@ -213,13 +211,10 @@ assert.ok(
 );
 assert.ok(
   proxyConfigCommands.includes('pub async fn proxy_config_set_active') &&
-    !proxyConfigCommands.includes('subscription_id: Option<String>') &&
-    proxyConfigCommands.includes('let subscription_authorized =') &&
-    proxyConfigCommands.includes('subscription.enabled') &&
-    proxyConfigCommands.includes('subscription.target_proxy_config_id.as_deref() == Some(id.as_str())') &&
-    proxyConfigCommands.includes('if !subscription_authorized') &&
-    proxyConfigCommands.includes('interaction_mode::require_pro_mode(state.inner(), "proxyConfig")?'),
-  'Lite may activate only enabled subscription targets while the existing proxy activation IPC signature stays stable',
+    proxyConfigCommands.includes('proxy_config::activate_runtime(app_handle.clone(), id).await') &&
+    !proxyConfigCommands.includes('subscription_authorized') &&
+    !proxyConfigCommands.includes('require_pro_mode'),
+  'profile activation must remain usable in either layout without a subscription-only authorization branch',
 );
 assert.ok(
   !nodesTab.includes("store.uiMode === 'lite' ? 'list' : 'grid'") &&

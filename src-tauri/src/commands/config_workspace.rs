@@ -11,22 +11,21 @@ use crate::{
         core_process::CoreProcessState,
         gui_core::{GuiConfigImpactItem, GuiConfigPlanApplyResult},
     },
-    services::{common, core_config, core_process, interaction_mode, proxy_config},
+    services::{common, core_config, core_process, proxy_config},
     state::app_state::AppState,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use tauri::{AppHandle, Manager, State, Window};
-fn host(state: &AppState, window: &Window) -> AppResult<()> {
-    crate::services::native_documents::require_host(window.label())?;
-    interaction_mode::require_pro_mode(state, "config_workspace")
+fn host(window: &Window) -> AppResult<()> {
+    crate::services::native_documents::require_host(window.label())
 }
 #[tauri::command]
 pub async fn gui_config_workspace_snapshot(
     state: State<'_, AppState>,
     window: Window,
 ) -> AppResult<ConfigWorkspaceSnapshot> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     snapshot(state.inner()).await
 }
 #[tauri::command]
@@ -35,7 +34,7 @@ pub async fn gui_config_workspace_plan(
     window: Window,
     input: ConfigWorkspaceDraftInput,
 ) -> AppResult<ConfigWorkspacePlan> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let _operation = state.proxy_config_operation().lock().await;
     plan(state.inner(), input).await
 }
@@ -45,7 +44,7 @@ pub async fn gui_config_workspace_save_local(
     window: Window,
     input: ConfigWorkspaceDraftInput,
 ) -> AppResult<ConfigWorkspaceSaveResult> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let _operation = state.proxy_config_operation().lock().await;
     workspace::save(state.inner(), input)
 }
@@ -55,7 +54,7 @@ pub fn gui_config_workspace_validate(
     window: Window,
     input: ConfigWorkspaceDraftInput,
 ) -> AppResult<Value> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let (_, source, effective) = workspace::from_input(state.inner(), &input)?;
     Ok(
         json!({"sourceJson":workspace::pretty(&source)?, "effectiveJson":workspace::pretty(&effective)?}),
@@ -73,7 +72,7 @@ pub async fn gui_config_workspace_apply(
     input: ConfigWorkspaceApplyInput,
 ) -> AppResult<ConfigWorkspaceOperation> {
     let state = app_handle.state::<AppState>();
-    host(state.inner(), &window)?;
+    host(&window)?;
     let _operation = state.proxy_config_operation().lock().await;
     apply_locked(state.inner(), input).await
 }
@@ -83,7 +82,7 @@ pub async fn gui_config_workspace_operation(
     window: Window,
     plan_id: String,
 ) -> AppResult<ConfigWorkspaceOperation> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let mut operation = workspace::operation(state.inner(), &plan_id)?;
     // Only the original plan's receipt may be checked; equal digests do not grant authority.
     if let Some(receipt) = &operation.receipt {
@@ -103,7 +102,7 @@ pub async fn gui_config_workspace_recovery_review(
     window: Window,
     plan_id: String,
 ) -> AppResult<ConfigWorkspaceRecoveryReview> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let _operation = state.proxy_config_operation().lock().await;
     recovery_review_locked(state.inner(), &plan_id).await
 }
@@ -175,7 +174,7 @@ pub async fn gui_config_workspace_complete_local(
     window: Window,
     input: ConfigWorkspaceCompleteInput,
 ) -> AppResult<ConfigWorkspaceOperation> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     let _operation = state.proxy_config_operation().lock().await;
     complete_local_locked(state.inner(), input).await
 }
@@ -203,7 +202,7 @@ pub fn gui_config_workspace_discard(
     window: Window,
     plan_id: String,
 ) -> AppResult<()> {
-    host(state.inner(), &window)?;
+    host(&window)?;
     workspace::discard(state.inner(), &plan_id)
 }
 async fn snapshot(state: &AppState) -> AppResult<ConfigWorkspaceSnapshot> {

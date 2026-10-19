@@ -1,6 +1,24 @@
 use crate::{services::common::lock, state::app_state::AppState};
 use tauri::{AppHandle, Manager};
 
+pub(crate) fn persist_exit_tun_intent(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let saved_intent = (|| {
+        let mut config = lock(state.app_config(), "app_config")?;
+        crate::capture::shutdown::clear_saved_tun_intent(
+            &mut config,
+            &crate::services::app_config_store::default_config_path()?,
+        )
+    })();
+    if let Err(error) = saved_intent {
+        state.runtime_host().record_error(error.message.clone());
+        crate::services::file_logger::line(&format!(
+            "shutdown: failed to save TUN OFF; next launch may restore TUN: {}",
+            error.message
+        ));
+    }
+}
+
 /// Run while the event loop and async runtime are alive. The same cross-domain
 /// guard as configuration changes covers capture cleanup and owned child exit.
 pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
@@ -37,20 +55,7 @@ pub async fn shutdown_managed_runtime(app_handle: AppHandle) {
         let state = stop_app.state::<AppState>();
         // Persist OFF even if the core already exited or TUN cleanup fails.
         // A storage failure must not prevent stopping the owned runtime.
-        let saved_intent = (|| {
-            let mut config = lock(state.app_config(), "app_config")?;
-            crate::capture::shutdown::clear_saved_tun_intent(
-                &mut config,
-                &crate::services::app_config_store::default_config_path()?,
-            )
-        })();
-        if let Err(error) = saved_intent {
-            state.runtime_host().record_error(error.message.clone());
-            crate::services::file_logger::line(&format!(
-                "shutdown: failed to save TUN OFF; next launch may restore TUN: {}",
-                error.message
-            ));
-        }
+        persist_exit_tun_intent(&stop_app);
         state.runtime_host().run("shutdown", false, || {
             state.next_core_process_monitor_generation();
             let owned = {

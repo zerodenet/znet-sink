@@ -6,7 +6,7 @@ use crate::kernel::protocol as ipc;
 use crate::kernel::zero::queries;
 use crate::models::core::{CoreCallResult, CoreEndpoint, CoreEventSubscription, CoreIpcOptions};
 use crate::services::common::lock;
-use crate::services::{core_config, core_events, interaction_mode};
+use crate::services::{core_config, core_events};
 use crate::state::app_state::AppState;
 
 #[tauri::command]
@@ -37,7 +37,6 @@ pub async fn core_ipc_query(
     request: Value,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
     ipc::query(request, resolve_options(&state, options)?).await
 }
 
@@ -48,7 +47,6 @@ pub async fn core_ipc_command(
     params: Option<Value>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
     if matches!(method.as_str(), "config.apply" | "config.apply_runtime") {
         return managed_config_command(state.inner(), params.unwrap_or_default(), options, None)
             .await;
@@ -62,7 +60,6 @@ pub async fn core_ipc_request(
     frame: Value,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "rawIpc")?;
     if frame.get("type").and_then(Value::as_str) == Some("command")
         && matches!(
             frame.get("method").and_then(Value::as_str),
@@ -85,7 +82,6 @@ pub async fn core_get_capabilities(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Value> {
-    interaction_mode::require_pro_mode(state.inner(), "diagnostics")?;
     queries::query_value(
         serde_json::json!({"capabilities": {}}),
         "capabilities",
@@ -112,7 +108,6 @@ pub async fn core_get_config(
     state: State<'_, AppState>,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<Value> {
-    interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
     queries::query_value(
         serde_json::json!({"config": {}}),
         "config",
@@ -177,7 +172,6 @@ pub async fn core_probe_policy(
     policy_tag: String,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "policyProbe")?;
     ipc::probe_policy(policy_tag, resolve_options(&state, options)?).await
 }
 
@@ -187,7 +181,6 @@ pub async fn core_close_flow(
     flow_id: String,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "connections")?;
     ipc::close_flow(flow_id, resolve_options(&state, options)?).await
 }
 
@@ -197,7 +190,6 @@ pub async fn core_validate_config(
     config: Value,
     options: Option<CoreIpcOptions>,
 ) -> AppResult<CoreCallResult> {
-    interaction_mode::require_pro_mode(state.inner(), "coreConfig")?;
     ipc::validate_config(config, resolve_options(&state, options)?).await
 }
 

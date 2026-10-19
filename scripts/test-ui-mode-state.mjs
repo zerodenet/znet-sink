@@ -94,7 +94,36 @@ test('late navigation queries cannot undo the latest endpoint visibility or redi
   queries[2](snapshot(false));
   await hide;
   assert.equal(store.isNavVisible('endpoints'), false);
-  assert.equal(store.activeTab, 'overview');
+  assert.equal(store.activeTab, 'endpoints', 'hiding an entry must not revoke an open page');
+});
+
+test('Lite opens hidden rule management and returns to the original DNS settings without changing mode', async () => {
+  const { store, requests } = harness(async () => ({
+    navigation: [{ key: 'settings', visible: true, operable: true }, { key: 'rules', visible: false, operable: true }],
+    actions: [], features: [],
+  }));
+  store.uiMode = 'lite'; store.activeTab = 'settings'; store.settingsSection = 'dns';
+  store.openTab('rules');
+  assert.equal(store.uiMode, 'lite'); assert.equal(store.activeTab, 'rules');
+  await store.refreshInteractionSurface();
+  assert.equal(store.activeTab, 'rules'); assert.equal(store.isNavVisible('rules'), false);
+  assert.equal(store.isNavOperable('rules'), true);
+  store.returnToPreviousPage();
+  assert.equal(store.activeTab, 'settings'); assert.equal(store.settingsSection, 'dns');
+  assert.equal(requests.length, 0, 'context navigation must not persist another layout');
+});
+
+test('explicit advanced settings and open pages survive switching to Lite', async () => {
+  const { store, requests } = harness();
+  store.openSettings('tun');
+  await store.switchUIMode('lite'); await flush();
+  requests[0].finish(); await flush();
+  assert.equal(store.settingsSection, 'tun'); assert.equal(store.activeTab, 'settings');
+  store.openSettings('config');
+  assert.equal(store.settingsSection, 'config');
+  store.openTab('profiles');
+  await store.refreshInteractionSurface();
+  assert.equal(store.activeTab, 'profiles'); assert.equal(store.uiMode, 'lite');
 });
 
 

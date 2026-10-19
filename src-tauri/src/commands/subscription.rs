@@ -30,12 +30,14 @@ pub async fn subscription_sync(
     app_handle: AppHandle,
     id: String,
 ) -> AppResult<SubscriptionProfile> {
-    subscription::sync(app_handle, id).await
+    // Tauri's Release responder retains this future by value. Keep the
+    // download/configuration state on the heap before crossing that boundary.
+    Box::pin(subscription::sync(app_handle, id)).await
 }
 
 #[tauri::command]
 pub async fn subscription_sync_all(app_handle: AppHandle) -> AppResult<SyncAllOutcome> {
-    subscription::sync_all(app_handle).await
+    Box::pin(subscription::sync_all(app_handle)).await
 }
 
 /// Explicit main-host action. Only validator metadata is removed; an unknown

@@ -266,25 +266,21 @@ fn navigation_items(
         // 节点菜单：有活跃配置文件时才可见。Profiles（配置）选项卡在 Lite 和 Pro 模式均可访问，
         // 用于选择/激活配置 → 激活后节点菜单自动显示。
         has_config("nodes", "navigation", has_active_config),
-        pro_only("endpoints", "navigation", is_pro),
-        pro_only("profiles", "navigation", is_pro),
+        detailed("endpoints", "navigation", is_pro),
+        detailed("profiles", "navigation", is_pro),
         shared("subscriptions", "navigation"),
-        pro_only("rules", "navigation", is_pro),
-        pro_only("connections", "navigation", is_pro),
+        detailed("rules", "navigation", is_pro),
+        detailed("connections", "navigation", is_pro),
         shared("logs", "navigation"),
         shared("plugins", "navigation"),
         shared("settings", "navigation"),
-        // Debug tab: Pro-only — exposes low-level IPC/state inspection
-        // that lite-mode users shouldn't see. ui.hiddenMenuKeys can still
-        // hide it per-user in pro mode.
-        pro_only("debug", "navigation", is_pro),
+        // Detailed pages are hidden from compact navigation, but stay usable.
+        detailed("debug", "navigation", is_pro),
     ];
 
     for item in &mut items {
         if item.key == "endpoints" && is_pro && !endpoints_visible {
             item.visible = false;
-            item.operable = false;
-            item.readonly = true;
             item.reason =
                 Some("hidden by endpoint menu preference or active configuration".to_string());
         }
@@ -294,8 +290,6 @@ fn navigation_items(
                 .any(|key| key.eq_ignore_ascii_case(&item.key))
         {
             item.visible = false;
-            item.operable = false;
-            item.readonly = true;
             item.reason = Some("hidden by ui.hiddenMenuKeys".to_string());
         }
     }
@@ -352,28 +346,28 @@ fn action_items(is_pro: bool, zero_features: &[String]) -> Vec<InteractionSurfac
         shared("subscriptions.list", "action"),
         shared("subscriptions.sync", "action"),
         // Lite-mode subscriptions need read-only profile metadata to display
-        // and preserve their target association. Mutating profiles stays Pro-only.
+        // and preserve their target association. Actions are independent of layout.
         shared("proxyConfig.list", "action"),
         shared("proxyConfig.get", "action"),
         shared("proxyMode.status", "action"),
         shared("proxyMode.set", "action"),
         shared("policies.list", "action"),
         shared("policies.select", "action"),
-        pro_only("proxyConfig.import", "action", is_pro),
-        pro_only("proxyConfig.upsert", "action", is_pro),
-        pro_only("proxyConfig.remove", "action", is_pro),
-        pro_only("ruleSets.list", "action", is_pro),
-        pro_only("ruleSets.get", "action", is_pro),
-        pro_only("ruleSets.upsert", "action", is_pro),
-        pro_only("ruleSets.remove", "action", is_pro),
-        pro_only("core.ipc.query", "action", is_pro),
-        pro_only("core.ipc.command", "action", is_pro),
-        pro_only("core.ipc.request", "action", is_pro),
-        pro_only("core.config.get", "action", is_pro),
-        pro_only("core.config.exportActive", "action", is_pro),
-        pro_only("core.config.validate", "action", is_pro),
+        detailed("proxyConfig.import", "action", is_pro),
+        detailed("proxyConfig.upsert", "action", is_pro),
+        detailed("proxyConfig.remove", "action", is_pro),
+        detailed("ruleSets.list", "action", is_pro),
+        detailed("ruleSets.get", "action", is_pro),
+        detailed("ruleSets.upsert", "action", is_pro),
+        detailed("ruleSets.remove", "action", is_pro),
+        detailed("core.ipc.query", "action", is_pro),
+        detailed("core.ipc.command", "action", is_pro),
+        detailed("core.ipc.request", "action", is_pro),
+        detailed("core.config.get", "action", is_pro),
+        detailed("core.config.exportActive", "action", is_pro),
+        detailed("core.config.validate", "action", is_pro),
         #[cfg(feature = "tool-node-probe")]
-        pro_only("core.policy.probe", "action", is_pro),
+        detailed("core.policy.probe", "action", is_pro),
         feature_required(
             "core.connections.list",
             "action",
@@ -419,9 +413,9 @@ fn feature_surface_items(is_pro: bool, zero_features: &[String]) -> Vec<Interact
             zero_features,
             &["policy_snapshot"],
         ),
-        pro_only("proxyConfigManagement", "feature", is_pro),
-        pro_only("routing", "feature", is_pro),
-        pro_only("ruleSets", "feature", is_pro),
+        detailed("proxyConfigManagement", "feature", is_pro),
+        detailed("routing", "feature", is_pro),
+        detailed("ruleSets", "feature", is_pro),
         feature_required(
             "connections",
             "feature",
@@ -459,7 +453,7 @@ fn feature_surface_items(is_pro: bool, zero_features: &[String]) -> Vec<Interact
         ),
         feature_required("mitm", "feature", is_pro, zero_features, &["mitm"]),
         feature_required("diagnostics", "feature", is_pro, zero_features, &["query"]),
-        pro_only("rawIpc", "feature", is_pro),
+        detailed("rawIpc", "feature", is_pro),
     ]
 }
 
@@ -474,12 +468,12 @@ fn shared(key: &str, category: &str) -> InteractionSurfaceItem {
     }
 }
 
-fn pro_only(key: &str, category: &str, is_pro: bool) -> InteractionSurfaceItem {
+fn detailed(key: &str, category: &str, is_pro: bool) -> InteractionSurfaceItem {
     InteractionSurfaceItem {
         key: key.to_string(),
         category: category.to_string(),
         visible: is_pro,
-        operable: is_pro,
+        operable: true,
         readonly: false,
         reason: (!is_pro).then(|| "hidden in lite mode".to_string()),
     }
@@ -503,10 +497,6 @@ fn feature_required(
     zero_features: &[String],
     required_features: &[&str],
 ) -> InteractionSurfaceItem {
-    if !mode_allowed {
-        return pro_only(key, category, false);
-    }
-
     let supported = required_features.iter().any(|required| {
         zero_features
             .iter()
@@ -516,7 +506,7 @@ fn feature_required(
     InteractionSurfaceItem {
         key: key.to_string(),
         category: category.to_string(),
-        visible: true,
+        visible: mode_allowed,
         operable: supported,
         readonly: !supported,
         reason: (!supported).then(|| {
@@ -558,6 +548,46 @@ mod tests {
     }
 
     #[test]
+    fn layout_hides_details_without_revoking_actions_or_kernel_requirements() {
+        for features in [
+            vec![],
+            vec!["query".into(), "flow_snapshot".into(), "tun".into()],
+        ] {
+            for (lite, pro) in [
+                (
+                    action_items(false, &features),
+                    action_items(true, &features),
+                ),
+                (
+                    feature_surface_items(false, &features),
+                    feature_surface_items(true, &features),
+                ),
+            ] {
+                for (lite, pro) in lite.iter().zip(&pro) {
+                    assert_eq!(lite.key, pro.key);
+                    assert_eq!(
+                        lite.operable, pro.operable,
+                        "{} must not depend on layout",
+                        lite.key
+                    );
+                    assert_eq!(lite.readonly, pro.readonly);
+                }
+            }
+        }
+        let unsupported = action_items(false, &[]);
+        let connections = unsupported
+            .iter()
+            .find(|item| item.key == "core.connections.list")
+            .unwrap();
+        assert!(!connections.operable && connections.readonly);
+        let profile = unsupported
+            .iter()
+            .find(|item| item.key == "proxyConfig.upsert")
+            .unwrap();
+        assert!(!profile.visible && profile.operable);
+    }
+
+    #[test]
     fn canonical_zero_snapshot_features_enable_gui_surfaces() {
         let features = vec![
             "runtime_snapshot".to_string(),
@@ -588,18 +618,18 @@ mod tests {
         }
     }
     #[test]
-    fn endpoints_navigation_is_independent_pro_only_and_respects_visibility() {
+    fn endpoints_navigation_is_hidden_in_lite_but_remains_operable() {
         for has_config in [false, true] {
             for pro in [false, true] {
                 let items = navigation_items(pro, &[], has_config, true);
                 let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
                 assert_eq!(endpoint.visible, pro);
-                assert_eq!(endpoint.operable, pro);
+                assert!(endpoint.operable);
             }
         }
         let hidden = navigation_items(true, &["ENDPOINTS".into()], true, true);
         let endpoint = hidden.iter().find(|item| item.key == "endpoints").unwrap();
-        assert!(!endpoint.visible && !endpoint.operable && endpoint.readonly);
+        assert!(!endpoint.visible && endpoint.operable && !endpoint.readonly);
     }
 
     #[test]
@@ -617,7 +647,7 @@ mod tests {
                     );
                     let endpoint = items.iter().find(|item| item.key == "endpoints").unwrap();
                     assert_eq!(endpoint.visible, pro && preference.unwrap_or(declared));
-                    assert_eq!(endpoint.operable, endpoint.visible);
+                    assert!(endpoint.operable);
                 }
             }
         }
@@ -669,7 +699,7 @@ mod tests {
             assert!(plugin.visible && plugin.operable);
             let hidden = navigation_items(pro, &["plugins".into()], false, false);
             let plugin = hidden.iter().find(|item| item.key == "plugins").unwrap();
-            assert!(!plugin.visible && !plugin.operable);
+            assert!(!plugin.visible && plugin.operable);
         }
     }
 }

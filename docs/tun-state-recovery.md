@@ -20,6 +20,12 @@ Core starts but TUN restoration fails, instead of reporting unconditional succes
 Restoration submits at most one start command and polls status after transient
 IPC failures, so a lost reply cannot trigger overlapping starts.
 
+Normal application exit persists TUN OFF before stopping the owned runtime.
+macOS native termination (including Dock/Apple-event quit) may deliver `Exit`
+without `ExitRequested`; that path completes the same cleanup synchronously
+before process termination. A final `Exit` after completed requested-exit cleanup
+does not repeat network cleanup or authorization.
+
 Validation includes production service/store behavior with controlled IPC,
 Rust status decoding and restoration tests, and the existing cross-mode checks.
 Real Wi-Fi/Ethernet switching with the paired Core DHCP permit change remains a

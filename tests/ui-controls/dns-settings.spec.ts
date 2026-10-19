@@ -35,3 +35,44 @@ test('unavailable target inventory does not misreport an existing detour as dele
   await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeEnabled();
   await expect(page.getByText('出站 wg-a 已不存在', { exact: false })).toHaveCount(0);
 });
+
+test('unavailable rule inventory reports an unknown reference instead of a deleted rule', async ({ page }) => {
+  await page.goto('/?panel=dns&mode=rule-read-failure', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('规则集引用暂未确认：Rule inventory unavailable')).toBeVisible();
+  await expect(page.getByText('以下 DNS 分流引用已失效：', { exact: false })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '重试读取', exact: true }).click();
+  await expect(page.getByText('以下 DNS 分流引用已失效：', { exact: false })).toHaveCount(0);
+});
+
+test('confirmed missing rules still block applying DNS configuration', async ({ page }) => {
+  await page.goto('/?panel=dns&mode=rule-missing', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('以下 DNS 分流引用已失效：dler-domestic。请选择现有规则集或删除对应分流。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存并应用', exact: true })).toBeDisabled();
+});
+
+test('mobile DNS rule management keeps the host navigation stack and dirty draft guard', async ({page})=>{
+  await page.setViewportSize({width:320,height:740});
+  await page.goto('/mobile.html?panel=dns&mode=rule-read-failure');
+  await page.getByRole('navigation',{name:'主导航'}).getByRole('button',{name:'更多',exact:true}).click();
+  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'DNS',exact:true}).click();
+  await expect(page.getByText('规则集引用暂未确认：Rule inventory unavailable')).toBeVisible();
+  await page.getByRole('radio',{name:'Fake-IP',exact:true}).click();
+  await page.getByRole('button',{name:'管理规则集',exact:true}).click();
+  const confirmation=page.getByRole('dialog',{name:'放弃未保存的设置？',exact:true});
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button',{name:'继续编辑',exact:true}).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('DNS');
+  await expect(page.getByRole('radio',{name:'Fake-IP',exact:true})).toHaveAttribute('aria-checked','true');
+  await page.getByRole('button',{name:'管理规则集',exact:true}).click();
+  await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('路由与规则集');
+  await page.getByRole('button',{name:'返回',exact:true}).click();
+  await expect(page.locator('.secondary-pane:not(.inactive) .secondary-header h1')).toHaveText('DNS');
+  await expect(page.getByRole('radio',{name:'Fake-IP',exact:true})).toHaveAttribute('aria-checked','false');
+  await expect(page.getByRole('button',{name:'重命名 wg-a-dns',exact:true})).toBeVisible();
+  await expect(page.getByRole('navigation',{name:'主导航'}).getByRole('button')).toHaveCount(4);
+});

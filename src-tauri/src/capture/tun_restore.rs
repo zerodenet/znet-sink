@@ -36,14 +36,7 @@ where
 {
     tokio::time::timeout(timeout, restore_inner(query, enable, timeout, interval))
         .await
-        .unwrap_or_else(|_| {
-            Err(AppError {
-                code: "tun_restore_unconfirmed",
-                message: "TUN restoration deadline elapsed; runtime outcome remains unconfirmed"
-                    .into(),
-                details: None,
-            })
-        })
+        .unwrap_or_else(|_| Err(unconfirmed_timeout(timeout)))
 }
 
 async fn restore_inner<Q, QF, E, EF>(
@@ -83,13 +76,20 @@ where
             Err(error) => Some(error),
         };
         if tokio::time::Instant::now() >= deadline {
-            return Err(error.unwrap_or_else(|| AppError {
-                code: "tun_restore_unconfirmed",
-                message: "Core restarted, but TUN did not confirm that it is running".into(),
-                details: None,
-            }));
+            return Err(error.unwrap_or_else(|| unconfirmed_timeout(timeout)));
         }
         tokio::time::sleep(interval).await;
+    }
+}
+
+fn unconfirmed_timeout(timeout: Duration) -> AppError {
+    AppError {
+        code: "tun_restore_unconfirmed",
+        message: "等待 TUN 就绪超时，本次等待已结束；若仍有系统授权窗口，请取消后重试".into(),
+        details: Some(serde_json::json!({
+            "timeoutMs": timeout.as_millis(),
+            "runtimeOutcome": "unconfirmed",
+        })),
     }
 }
 
