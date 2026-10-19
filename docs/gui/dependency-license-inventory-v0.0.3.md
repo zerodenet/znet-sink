@@ -74,7 +74,7 @@
    ```
 
    缺固定 asset、错误 target、过期 frontend SHA 或缺 native payload 直接失败。外部 receipt 不追溯修改 APK。若没有实际 compiler JSON，则 Rust entries 继续标为 resolved，不能把普通 build log 当各包编译证明。
-5. iOS 收集需传入实际 `--cargo-metadata`、`--swift-build-path`（SourcePackages）、`--build-log`、`--target`，可传 `--resolved-file`、`--sdk-path/--sdk-data`、`--artifact`。目标从实际 Swift compiler `-target`/Mach-O 而不是 runner 名推断；pin/checkout/SDK/architecture 不符不能声明编译成功。当前尚无 iOS application host，Swift 清单作为 unsigned SDK 构建证据，主应用原生 reader 明确 unavailable；不声称该清单已进入 iPhone 产品。
+5. iOS 收集需传入实际 `--cargo-metadata`、`--swift-build-path`（SourcePackages）、`--build-log`、`--target`，可传 `--resolved-file`、`--sdk-path/--sdk-data`、`--artifact`。目标从实际 Swift compiler `-target`/Mach-O 而不是 runner 名推断；pin/checkout/SDK/architecture 不符不能声明编译成功。iOS 主应用标准生成与完整 SDK 检查另见 [UI 宿主](ios-ui-host-v0.0.3.md)；本节 Swift 收集器仍只提供库/SDK 范围证据，主应用原生 reader 明确 unavailable；不声称该清单已进入完整 iPhone 产品。
 
 ## 读取与验证
 

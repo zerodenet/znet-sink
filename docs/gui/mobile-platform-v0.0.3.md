@@ -5,6 +5,8 @@
 本页说明此次客户端代码的实际边界；不把布局、共享 Rust 测试或桌面构建
 视为 Android/iPhone VPN 验收。完整 PRD V3 的网络交付要求仍有效。
 
+2026-10-19 主应用补充：iOS UI 宿主现有锁定 CLI 标准生成、完整 Simulator/设备 SDK 构建与显式 Debug 烟测入口，见 [iOS UI 宿主](ios-ui-host-v0.0.3.md)。本页原有库级/历史检查不代替该批对应 commit 的完整 App CI 回执；Packet Tunnel、内核、签名和真机验收仍分别未完成。
+
 ## 已接入客户端的防误执行边界
 
 - `gui_mobile_platform_snapshot` 是已注册的只读命令，不请求系统 VPN 权限。
