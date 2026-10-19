@@ -29,6 +29,7 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import { Switch } from '$lib/components/ui/switch';
   import { onMount } from 'svelte';
+  import { listenConfigurationSources } from '$lib/services/configuration-catalog-events';
   let dark = $state(new URLSearchParams(window.location.search).get('theme') === 'dark');
   let showDialog = $state(false);
   let saved = $state('');
@@ -40,9 +41,11 @@
   const options = Array.from({ length: 80 }, (_, index) => ({ value: String(index), label: `选项 ${index}` }));
   $effect(() => { document.documentElement.classList.toggle('dark', dark); });
   onMount(() => {
+    let disposed = false; let stopSources: (() => void) | undefined;
+    void listenConfigurationSources().then(stop => { if(disposed) stop(); else stopSources=stop; });
     const save = (event: Event) => { saved = JSON.stringify((event as CustomEvent).detail); };
     window.addEventListener('fixture-save', save);
-    return () => window.removeEventListener('fixture-save', save);
+    return () => { disposed=true; stopSources?.(); window.removeEventListener('fixture-save', save); };
   });
 </script>
 

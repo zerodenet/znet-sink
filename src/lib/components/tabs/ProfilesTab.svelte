@@ -1,854 +1,195 @@
 <script lang="ts">
-  import { Textarea } from '$lib/components/ui/textarea';
-  import { open as openFile } from '@tauri-apps/plugin-dialog';
+  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
+  import { Search, RefreshCw, Plus } from '@lucide/svelte';
   import { store } from '$lib/services/store.svelte';
   import { guiState } from '$lib/services/gui-state.svelte';
-  import { getAppErrorMessage, handleAppError } from '$lib/services/core';
-  import {
-    importProxyConfig,
-    listProxyConfigs,
-    removeProxyConfig,
-    setActiveProxyConfig,
-    upsertProxyConfig,
-  } from '$lib/services/config';
-  import type { ProxyConfigProfile, ProxyConfigUpsert } from '$lib/types/domain';
-  import { Badge } from '$lib/components/ui/badge';
+  import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
+  import { createLatestRequestGate } from '$lib/services/latest-request-gate.js';
+  import { listConfigurations, type ConfigurationEntry } from '$lib/services/configuration-catalog';
+  import { configurationKind, filterConfigurations, pluginLabel } from '$lib/features/configuration/catalog';
+  import { getProxyConfig, removeProxyConfig, setActiveProxyConfig, syncSubscription, syncAllSubscriptions,
+    removeSubscription, getSubscriptionRemovalPreview } from '$lib/services/config';
+  import { getAppErrorMessage } from '$lib/services/core';
+  import * as toast from '$lib/services/toast.svelte';
+  import type { ProxyConfigProfile, SubscriptionProfile, SubscriptionRemovalPreview } from '$lib/types/domain';
+  import ConfigurationEditor from '$lib/components/configuration/ConfigurationEditor.svelte';
+  import SubscriptionEditor from '$lib/components/configuration/SubscriptionEditor.svelte';
+  import ConfigurationSource from '$lib/components/configuration/ConfigurationSource.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import { Switch } from '$lib/components/ui/switch';
-  import { AlertTriangle, FileJson, FolderOpen, Plus, Search, Trash2 } from '@lucide/svelte';
-  import DraggableModal from '$lib/components/DraggableModal.svelte';
-  import * as SegmentedControl from '$lib/components/AppSegmentedControl';
+  import { Choice } from '$lib/components/ui/choice';
+  import * as Segmented from '$lib/components/AppSegmentedControl';
+  import * as Dialog from '$lib/components/ui/dialog';
 
-  type SourceMode = 'file' | 'inline';
-
-  type EditorDraft = {
-    name: string;
-    sourceMode: SourceMode;
-    sourcePath: string;
-    content: string;
-    active: boolean;
-  };
-
-  let configs = $state<ProxyConfigProfile[]>([]);
-  let loading = $state(true);
-  let loadError = $state<string | null>(null);
-  let saving = $state(false);
-  let activatingId = $state<string | null>(null);
-  let removingId = $state<string | null>(null);
-  let deleteTarget = $state<ProxyConfigProfile | null>(null);
-  let query = $state('');
-  let showEditor = $state(false);
-  let editingId = $state<string | null>(null);
-  let editorTitle = $state('新建代理配置');
-  let draft = $state<EditorDraft>(emptyDraft());
-  let validationMessage = $state<string | null>(null);
-  let selectedProfile = $state<ProxyConfigProfile | null>(null);
-
+  let entries = $state<ConfigurationEntry[]>([]);
+  let loading = $state(true); let loadError = $state(''); let operationError = $state('');
+  let busyId = $state<string | null>(null); let query = $state(''); let kind = $state('all');
+  let showCreate = $state(false); let showLocal = $state(false); let showSource = $state(false);
+  let editingProfile = $state<ProxyConfigProfile | null>(null); let editingSource = $state<SubscriptionProfile | null>(null);
+  let localDelete = $state<ConfigurationEntry | null>(null);
+  let sourceDelete = $state<SubscriptionProfile | null>(null);
+  let preview = $state<SubscriptionRemovalPreview | null>(null); let removeConfig = $state(false);
+  let viewing = $state<ProxyConfigProfile | null>(null);
+  const gate = createLatestRequestGate();
+  const filtered = $derived(filterConfigurations(entries, kind, query));
+  const busy = $derived(busyId !== null);
   const canEdit = $derived(store.isActionOperable('proxyConfig.upsert'));
   const canRemove = $derived(store.isActionOperable('proxyConfig.remove'));
-  const filteredConfigs = $derived(filterConfigs(configs, query));
-  const activeProfile = $derived(configs.find((item) => item.active) ?? null);
-  const busy = $derived(saving || activatingId !== null || removingId !== null);
-  const canSave = $derived(canEdit && !saving && draft.name.trim().length > 0 && isDraftReady(draft));
-
-  function emptyDraft(mode: SourceMode = 'file'): EditorDraft {
-    return {
-      name: '',
-      sourceMode: mode,
-      sourcePath: '',
-      content: '{}',
-      active: false,
-    };
-  }
-
-  function filterConfigs(items: ProxyConfigProfile[], value: string): ProxyConfigProfile[] {
-    const term = value.trim().toLowerCase();
-    if (!term) return items;
-
-    return items.filter((item) => {
-      return [item.name, item.id, item.path ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(term);
-    });
-  }
-
-  function stringifyJson(value: unknown): string {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return '{}';
-    }
-  }
-
-  function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return { ok: false, error: '请粘贴代理配置 JSON' };
-    }
-
-    try {
-      return { ok: true, value: JSON.parse(trimmed) };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  function isDraftReady(state: EditorDraft): boolean {
-    if (state.sourceMode === 'file') {
-      return Boolean(state.sourcePath.trim());
-    }
-
-    return parseJson(state.content).ok;
-  }
+  const current = $derived(entries.find(entry => entry.active)?.name ?? '未选择');
 
   async function refresh() {
-    loading = true;
-    loadError = null;
+    const request = gate.begin();
     try {
-      configs = await listProxyConfigs();
-    } catch (error) {
-      loadError = getAppErrorMessage(error, '加载代理配置失败');
-      handleAppError(error, '加载代理配置失败');
-    } finally {
-      loading = false;
-    }
+      const result = await listConfigurations();
+      if (gate.canApply(request)) { entries = result; loadError = ''; }
+    } catch (cause) {
+      if (gate.canApply(request)) loadError = getAppErrorMessage(cause, '加载配置失败');
+    } finally { if (gate.isLatest(request)) loading = false; }
   }
+  $effect(() => { void proxyConfigSignal.revision; untrack(() => { void refresh(); }); });
+  onMount(() => () => gate.reset());
 
-  function openCreate() {
+  async function run(id: string, action: () => Promise<void>) {
     if (busy) return;
-    draft = emptyDraft('file');
-    editingId = null;
-    selectedProfile = null;
-    validationMessage = null;
-    editorTitle = '新建代理配置';
-    showEditor = true;
+    busyId = id; operationError = '';
+    try { await action(); }
+    catch (cause) { operationError = getAppErrorMessage(cause, '配置操作失败'); }
+    finally { await refresh(); busyId = null; }
   }
-
-  function openEdit(profile: ProxyConfigProfile) {
-    if (busy || profile.managedSource) return;
-    draft = {
-      name: profile.name,
-      sourceMode: profile.path ? 'file' : 'inline',
-      sourcePath: profile.path ?? '',
-      content: profile.content !== undefined && profile.content !== null ? stringifyJson(profile.content) : '{}',
-      active: profile.active,
-    };
-    editingId = profile.id;
-    selectedProfile = profile;
-    validationMessage = null;
-    editorTitle = '编辑代理配置';
-    showEditor = true;
+  async function saved() {
+    await refresh();
+    try { await guiState.refreshNodeStateAfterConfigChange(); }
+    catch { toast.warning('配置已保存，但节点状态刷新失败，请稍后刷新查看'); }
   }
-
-  function closeEditor() {
-    if (saving) return;
-    showEditor = false;
-    validationMessage = null;
-  }
-
-  function setSourceMode(mode: SourceMode) {
-    if (draft.sourceMode === mode) return;
-    draft.sourceMode = mode;
-    validationMessage = null;
-
-    if (mode === 'inline' && !draft.content.trim()) {
-      draft.content = selectedProfile?.content !== undefined && selectedProfile?.content !== null
-        ? stringifyJson(selectedProfile.content)
-        : '{}';
-    }
-  }
-
-  async function chooseSourceFile() {
-    const selected = await openFile({
-      title: '选择代理配置文件',
-      multiple: false,
-      directory: false,
-      defaultPath: draft.sourcePath || selectedProfile?.path || undefined,
+  function editLocal(entry?: ConfigurationEntry) {
+    if (entry?.profileId) void run(entry.id, async () => {
+      editingProfile = await getProxyConfig(entry.profileId!); showLocal = true;
     });
-
-    if (typeof selected === 'string' && selected.trim()) {
-      draft.sourcePath = selected.trim();
-      validationMessage = null;
-    }
+    else { editingProfile = null; showLocal = true; }
   }
-
-  async function handleSave() {
-    if (!canSave) return;
-
-    validationMessage = null;
-    saving = true;
-
-    try {
-      if (draft.sourceMode === 'file') {
-        if (!draft.sourcePath.trim()) {
-          validationMessage = '请选择代理配置文件';
-          return;
-        }
-
-        await importProxyConfig({
-          id: editingId ?? undefined,
-          name: draft.name.trim(),
-          path: draft.sourcePath.trim(),
-          active: draft.active,
-        });
-      } else {
-        const parsed = parseJson(draft.content);
-        if (!parsed.ok) {
-          validationMessage = parsed.error;
-          return;
-        }
-
-        const input: ProxyConfigUpsert = {
-          id: editingId ?? undefined,
-          name: draft.name.trim(),
-          content: parsed.value,
-          active: draft.active,
-        };
-        await upsertProxyConfig(input);
-      }
-
-      await refresh();
-
-      // When the saved profile is active, mirror it into GUI state so the
-      // node page picks up the new config without a manual tab switch.
-      if (draft.active) {
-        await guiState.refreshNodeStateAfterConfigChange();
-      }
-
-      saving = false;
-      closeEditor();
-    } catch (error) {
-      saving = false;
-      handleAppError(error, '保存代理配置失败');
-    }
+  function update(source: SubscriptionProfile) {
+    void run(source.id, async () => { await syncSubscription(source.id); toast.success('配置来源已更新'); });
   }
-
-  function requestRemove(profile: ProxyConfigProfile) {
-    if (!canRemove || busy) return;
-    deleteTarget = profile;
+  function activate(entry: ConfigurationEntry) {
+    if (!entry.profileId || !entry.hasContent || !canEdit) return;
+    void run(entry.id, async () => { await setActiveProxyConfig(entry.profileId!); await saved(); toast.success(`已启用 ${entry.name}`); });
   }
-
-  function closeDelete() {
-    if (removingId !== null) return;
-    deleteTarget = null;
+  function requestSourceRemoval(source: SubscriptionProfile) {
+    void run(source.id, async () => { preview = await getSubscriptionRemovalPreview(source.id); sourceDelete = source; removeConfig = false; });
   }
-
-  async function handleRemove() {
-    if (!canRemove || !deleteTarget || busy) return;
-    const target = deleteTarget;
-    removingId = target.id;
-
-    try {
-      await removeProxyConfig(target.id);
-      if (editingId === target.id) {
-        closeEditor();
-      }
-      deleteTarget = null;
-      await refresh();
-      // Removing the active profile makes the backend promote another
-      // profile (or none), so re-sync GUI state to the new active config.
-      await guiState.refreshNodeStateAfterConfigChange();
-    } catch (error) {
-      handleAppError(error, '删除代理配置失败');
-    } finally {
-      removingId = null;
-    }
+  function showContent(entry: ConfigurationEntry) {
+    if (entry.profileId) void run(entry.id, async () => { viewing = await getProxyConfig(entry.profileId!); });
   }
-
-  async function handleSetActive(id: string) {
-    if (!canEdit || busy) return;
-
-    activatingId = id;
-    try {
-      await setActiveProxyConfig(id);
-      await refresh();
-      // Propagate the new active config to GUI state so the node page
-      // and overview render the freshly activated configuration instead
-      // of stale data from the previously active profile.
-      await guiState.refreshNodeStateAfterConfigChange();
-    } catch (error) {
-      handleAppError(error, '切换当前代理配置失败');
-    } finally {
-      activatingId = null;
-    }
-  }
-
-  function formatDate(value: number): string {
-    return new Intl.DateTimeFormat('zh-CN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(value);
-  }
-
-  function getSourceLabel(profile: ProxyConfigProfile): string {
-    if (profile.managedSource) return `由 ${managedPluginLabel(profile.managedSource.pluginId)} 托管`;
-    return profile.path ? '文件' : 'JSON';
-  }
-
-  function managedPluginLabel(pluginId: string): string {
-    if (pluginId === 'org.zerodenet.connect.znet-sink') return 'Connect';
-    const segment = pluginId.split('.').filter(Boolean).at(-1) ?? pluginId;
-    return segment.charAt(0).toUpperCase() + segment.slice(1);
-  }
-
-  function getSaveLabel(): string {
-    return draft.sourceMode === 'file' ? '导入并保存' : '保存配置';
-  }
-
-  $effect(() => {
-    refresh();
-  });
 </script>
 
-<div class="profiles-root animate-fade-in">
-  <div class="toolbar">
+<div class="profiles-root">
+  <header class="toolbar">
     <div class="toolbar-top">
-      <div class="title-block">
-        <div class="title">代理配置</div>
-        <div class="subtitle">导入或粘贴 JSON，并在此启用与管理。</div>
-      </div>
-
-      <div class="toolbar-meta current-block">
-        <span class="current-label">当前配置</span>
-        <span class="current-name">{activeProfile?.name ?? '未设置'}</span>
-        {#if canEdit}
-          <Button size="sm" onclick={openCreate} disabled={loading || busy}>
-            <Plus class="h-3.5 w-3.5" />
-            <span>新建</span>
-          </Button>
-        {/if}
+      <div class="title-block"><h2>配置管理</h2><p>当前配置：{current}</p></div>
+      <div class="current-block">
+        <Button size="sm" variant="outline" disabled={busy || !entries.some(entry => entry.sources.some(source => source.enabled && !source.managedSource))} onclick={() => run('all', async () => {
+          const result = await syncAllSubscriptions();
+          if (result.failed) toast.warning(`更新完成：成功 ${result.succeeded}/${result.total}，失败 ${result.failed}`);
+          else toast.success(`已更新 ${result.succeeded} 个来源`);
+        })}>更新订阅</Button>
+        <Button size="icon" variant="ghost" disabled={busy} onclick={() => refresh()} aria-label="刷新配置列表"><RefreshCw class="size-4" /></Button>
+        {#if canEdit}<Button size="sm" disabled={busy} onclick={() => showCreate = true}><Plus class="size-4" />添加配置</Button>{/if}
       </div>
     </div>
-
-    <div class="toolbar-search">
-      <span class="search-icon">
-        <Search class="h-3.5 w-3.5" />
-      </span>
-      <Input bind:value={query} class="w-[260px] max-w-full pl-8" aria-label="搜索配置" placeholder="搜索名称、ID 或文件路径" />
+    <div class="filters">
+      <Segmented.Root value={kind} onValueChange={(value) => kind = value} aria-label="配置来源类型">
+        <Segmented.Item value="all">全部</Segmented.Item><Segmented.Item value="local">本地</Segmented.Item><Segmented.Item value="subscription">订阅</Segmented.Item><Segmented.Item value="managed">插件托管</Segmented.Item>
+      </Segmented.Root>
+      <div class="toolbar-search"><span class="search-icon"><Search class="size-4" /></span><Input bind:value={query} class="pl-9" aria-label="搜索配置" placeholder="搜索配置或来源名称" /></div>
     </div>
-  </div>
-
+  </header>
   <div class="list-shell">
-    {#if loading}
-      <div class="empty-state">加载中...</div>
-    {:else if loadError}
-      <div class="empty-state error-state" role="alert">
-        <AlertTriangle class="h-5 w-5" />
-        <div class="empty-title">代理配置加载失败</div>
-        <div class="empty-desc">{loadError}</div>
-        <Button variant="outline" onclick={refresh}>重试</Button>
-      </div>
-    {:else if filteredConfigs.length === 0}
-      <div class="empty-state">
-        <div class="empty-title">{query.trim() ? '没有匹配的代理配置' : '还没有代理配置'}</div>
-        <div class="empty-desc">{query.trim() ? '请调整搜索关键词后重试。' : '新建后选择本地文件，或者直接粘贴 JSON。'}</div>
-        {#if canEdit && !query.trim()}
-          <Button onclick={openCreate} disabled={busy}>
-            <Plus class="h-3.5 w-3.5" />
-            <span>新建配置</span>
-          </Button>
-        {/if}
-      </div>
-    {:else}
-      <div class="config-list">
-        {#each filteredConfigs as config (config.id)}
-          <div class="config-row">
-            <button data-slot="surface-button"
-              type="button"
-              class="row-open"
-              onclick={() => openEdit(config)}
-              disabled={busy || Boolean(config.managedSource)}
-              aria-label={config.managedSource ? `插件托管代理配置 ${config.name}` : `编辑代理配置 ${config.name}`}
-            >
-              <div class="row-main">
-              <div class="row-top">
-                <div class="row-title">{config.name}</div>
-                {#if config.active}
-                  <Badge variant="secondary">当前生效</Badge>
-                {:else}
-                  <Badge variant="outline">未启用</Badge>
-                {/if}
-                <Badge variant="outline">{getSourceLabel(config)}</Badge>
-              </div>
-
-              <div class="row-meta">
-                <span class="mono">{config.id}</span>
-                <span>·</span>
-                <span>{formatDate(config.updatedAtUnixMs)}</span>
-                <span>·</span>
-                <span class="row-path">{config.path ?? '内嵌 JSON'}</span>
-                {#if config.managedSource}
-                  <span>·</span>
-                  <span>来源: {config.managedSource.sourceName ?? config.managedSource.providerId}</span>
-                {/if}
-              </div>
-              </div>
-            </button>
-
-            <div class="row-actions">
-              {#if canEdit}
-                {#if config.active}
-                  <Badge variant="secondary">已启用</Badge>
-                {:else}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onclick={() => handleSetActive(config.id)}
-                    disabled={busy}
-                  >
-                    <span>{activatingId === config.id ? '切换中...' : '设为当前'}</span>
-                  </Button>
-                {/if}
-              {/if}
-
-              {#if canRemove && !config.managedSource}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onclick={() => requestRemove(config)}
-                  disabled={busy}
-                  title="删除"
-                  aria-label="删除"
-                >
-                  <Trash2 class="h-3.5 w-3.5" />
-                </Button>
-              {/if}
-            </div>
+    {#if loadError}<div role="alert" class="error">{loadError}<Button variant="outline" size="sm" onclick={() => refresh()}>重试</Button></div>{/if}
+    {#if operationError}<p role="alert" class="error">{operationError}</p>{/if}
+    {#if loading}<p class="empty">正在加载配置…</p>
+    {:else if !filtered.length}<p class="empty">{entries.length ? '没有匹配的配置' : '还没有配置，可添加本地文件、JSON 或订阅。'}</p>
+    {:else}<div class="config-list">
+      {#each filtered as entry (entry.id)}
+        <article class="config-card" class:active={entry.active} aria-label={`配置 ${entry.name}`}>
+          <div class="card-heading"><h3>{entry.name}</h3><span class="badge">{entry.active ? '当前配置' : entry.hasContent ? '已保存' : '待更新'}</span></div>
+          <p class="metadata">{configurationKind(entry) === 'local' ? entry.path ? '本地文件' : '本地 JSON' : configurationKind(entry) === 'managed' ? '插件托管配置' : '订阅配置'} · {entry.format}</p>
+          {#if entry.path}<p class="metadata path">{entry.path}</p>{/if}
+          {#if entry.missingProfile}<p class="error">原关联配置已缺失；来源和策略选择仍保留，可重新更新。</p>{/if}
+          {#if entry.sources.length > 1}<p class="metadata">保留了 {entry.sources.length} 个历史更新来源；它们更新同一份配置。</p>{/if}
+          <div class="card-actions">
+            {#if entry.profileId && entry.hasContent}
+              <Button size="sm" variant={entry.active ? 'secondary' : 'default'} disabled={busy || entry.active || !canEdit} onclick={() => activate(entry)}>{entry.active ? '当前使用' : '启用配置'}</Button>
+              <Button size="sm" variant="outline" disabled={busy} onclick={() => showContent(entry)}>查看内容</Button>
+            {/if}
+            {#if configurationKind(entry) === 'local'}
+              {#if canEdit}<Button size="sm" variant="ghost" disabled={busy} onclick={() => editLocal(entry)}>编辑配置</Button>{/if}
+              {#if canRemove}<Button size="sm" variant="ghost" disabled={busy} onclick={() => localDelete = entry}>删除配置</Button>{/if}
+            {:else if !entry.sources.length && entry.managedSource}
+              <span class="metadata">由 {pluginLabel(entry.managedSource.pluginId)} 托管</span><Button size="sm" variant="outline" onclick={() => store.openTab('plugins')}>前往来源插件</Button>
+            {/if}
           </div>
-        {/each}
-      </div>
-    {/if}
+          {#each entry.sources as source (source.id)}
+            <ConfigurationSource {source} {canRemove} busy={busy || !canEdit} onupdate={() => update(source)} onedit={() => { editingSource = source; showSource = true; }} onremove={() => requestSourceRemoval(source)} onplugin={() => store.openTab('plugins')} />
+          {/each}
+        </article>
+      {/each}
+    </div>{/if}
+    <footer>共 {filtered.length} 份配置</footer>
   </div>
 </div>
 
-<DraggableModal
-  title={editorTitle}
-  description="仅支持固定 JSON 配置。选择文件或直接粘贴内容，解析失败会直接报错。"
-  open={showEditor}
-  onClose={closeEditor}
-  closeDisabled={saving}
-  width="min(680px, 90vw)"
->
-    <div class="form-item">
-      <span class="form-label">名称 <span class="required">*</span></span>
-      <div class="form-input-wrap">
-        <Input bind:value={draft.name} placeholder="例如：香港节点、办公配置" disabled={saving} />
-      </div>
-    </div>
-
-    <div class="form-item">
-      <span class="form-label">导入方式</span>
-      <div class="form-input-wrap">
-      <SegmentedControl.Root
-        value={draft.sourceMode}
-        onValueChange={(value) => setSourceMode(value as SourceMode)}
-        disabled={saving}
-        class="source-switch"
-        aria-label="导入方式"
-      >
-        <SegmentedControl.Item
-          value="file"
-          size="comfortable"
-        >
-          <FolderOpen class="h-3.5 w-3.5" />
-          <span>本地文件</span>
-        </SegmentedControl.Item>
-        <SegmentedControl.Item
-          value="inline"
-          size="comfortable"
-        >
-          <FileJson class="h-3.5 w-3.5" />
-          <span>粘贴 JSON</span>
-        </SegmentedControl.Item>
-      </SegmentedControl.Root>
-      </div>
-    </div>
-
-    {#if draft.sourceMode === 'file'}
-      <div class="form-item">
-        <span class="form-label">配置文件</span>
-        <div class="form-input-wrap">
-        <div class="file-picker-row">
-          <Input value={draft.sourcePath} readonly placeholder="请选择本地配置文件" class="mono" />
-          <Button variant="outline" size="sm" onclick={chooseSourceFile} disabled={saving}>
-            <FolderOpen class="h-3.5 w-3.5" />
-            <span>选择</span>
-          </Button>
-        </div>
-        <div class="form-hint">保存时会直接读取这个文件并解析为 JSON。</div>
-        </div>
-      </div>
-    {:else}
-      <div class="form-item">
-        <span class="form-label">JSON 内容</span>
-        <div class="form-input-wrap">
-          <Textarea
-            bind:value={draft.content}
-            class="font-mono min-h-80"
-            placeholder="粘贴代理配置 JSON..."
-            rows={16}
-            disabled={saving}
-          ></Textarea>
-          <div class="form-hint">不做格式选择，不做内核选择，保存前只检查 JSON 是否可解析。</div>
-        </div>
-      </div>
+{#if showLocal}<ConfigurationEditor profile={editingProfile} onsaved={saved} onclose={() => showLocal = false} />{/if}
+{#if showSource}<SubscriptionEditor source={editingSource} onsaved={saved} onclose={() => showSource = false} />{/if}
+<Dialog.Root bind:open={showCreate}><Dialog.Content>
+  <Dialog.Header><Dialog.Title>添加配置</Dialog.Title><Dialog.Description>选择配置来源，所有配置在同一个列表中管理。</Dialog.Description></Dialog.Header>
+  <Dialog.Body class="grid gap-3">
+    <Button variant="outline" onclick={() => { showCreate = false; editLocal(); }}>本地文件或 JSON</Button>
+    <Button variant="outline" onclick={() => { showCreate = false; editingSource = null; showSource = true; }}>URL 订阅</Button>
+    <Button variant="outline" onclick={() => { showCreate = false; store.openTab('plugins'); }}>插件托管</Button>
+  </Dialog.Body>
+</Dialog.Content></Dialog.Root>
+<Dialog.Root open={!!localDelete} onOpenChange={(value) => { if (!value && !busy) localDelete = null; }}><Dialog.Content>
+  <Dialog.Header><Dialog.Title>删除配置</Dialog.Title><Dialog.Description>删除「{localDelete?.name}」{localDelete?.active ? '，当前配置将由现有切换流程处理' : ''}。此操作不修改客户端全局设置。</Dialog.Description></Dialog.Header>
+  <Dialog.Footer><Button variant="outline" disabled={busy} onclick={() => localDelete = null}>取消</Button><Button variant="destructive" disabled={busy} onclick={() => {
+    if (localDelete?.profileId) void run(localDelete.id, async () => { await removeProxyConfig(localDelete!.profileId!); localDelete = null; await saved(); });
+  }}>确认删除</Button></Dialog.Footer>
+</Dialog.Content></Dialog.Root>
+<Dialog.Root open={!!sourceDelete} onOpenChange={(value) => { if (!value && !busy) sourceDelete = null; }}><Dialog.Content>
+  <Dialog.Header><Dialog.Title>移除订阅来源</Dialog.Title><Dialog.Description>默认保留已生成的配置、策略内容和客户端全局设置，仅停止此来源的后续更新。</Dialog.Description></Dialog.Header>
+  <Dialog.Body>
+    {#if preview?.targetProxyConfig}<label class="flex gap-2"><Choice bind:checked={removeConfig} disabled={busy || preview.targetProxyConfig.sharedBySubscriptionCount > 0} />同时删除配置及此来源的托管规则集</label>
+      {#if preview.targetProxyConfig.sharedBySubscriptionCount > 0}<p>另有 {preview.targetProxyConfig.sharedBySubscriptionCount} 个来源使用此配置，配置将保留。</p>{/if}
     {/if}
-
-    <div class="form-item">
-      <span class="form-label">设为当前</span>
-      <div class="form-input-wrap flex items-center">
-        <span class="switch-copy">{draft.active ? '保存后立即切换到这份配置' : '仅保存，不切换当前配置'}</span>
-        <Switch bind:checked={draft.active} disabled={saving} />
-      </div>
-    </div>
-
-    {#if validationMessage}
-      <div class="validation-row">
-        <AlertTriangle class="h-3.5 w-3.5" />
-        <span>{validationMessage}</span>
-      </div>
-    {/if}
-
-  {#snippet footer()}
-    <Button variant="outline" onclick={closeEditor} disabled={saving}>取消</Button>
-    <Button onclick={handleSave} disabled={!canSave}>
-      <span>{saving ? '保存中...' : getSaveLabel()}</span>
-    </Button>
-  {/snippet}
-</DraggableModal>
-
-<DraggableModal
-  title="删除代理配置"
-  description="删除后无法从应用内恢复。若删除的是当前配置，后端会切换到下一份可用配置；没有其他配置时会停止内核。"
-  open={deleteTarget !== null}
-  onClose={closeDelete}
-  closeDisabled={removingId !== null}
-  width="min(460px, 90vw)"
->
-  {#if deleteTarget}
-    <div class="validation-row" role="alert">
-      <AlertTriangle class="h-4 w-4" />
-      <span>确认删除“{deleteTarget.name}”吗？{deleteTarget.active ? '这是当前生效配置。' : ''}</span>
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    <Button variant="outline" onclick={closeDelete} disabled={removingId !== null}>取消</Button>
-    <Button variant="destructive" onclick={handleRemove} disabled={removingId !== null}>
-      {removingId !== null ? '删除中...' : '确认删除'}
-    </Button>
-  {/snippet}
-</DraggableModal>
-
+    {#if operationError}<p role="alert" class="error">{operationError}</p>{/if}
+  </Dialog.Body>
+  <Dialog.Footer><Button variant="outline" disabled={busy} onclick={() => sourceDelete = null}>取消</Button><Button variant="destructive" disabled={busy} onclick={() => {
+    if (sourceDelete) void run(sourceDelete.id, async () => { await removeSubscription(sourceDelete!.id, removeConfig); sourceDelete = null; await saved(); });
+  }}>确认移除</Button></Dialog.Footer>
+</Dialog.Content></Dialog.Root>
+<Dialog.Root open={!!viewing} onOpenChange={(value) => { if (!value) viewing = null; }}><Dialog.Content class="sm:max-w-2xl">
+  <Dialog.Header><Dialog.Title>{viewing?.name} · 来源内容</Dialog.Title><Dialog.Description>此处展示保存的配置内容。客户端全局覆盖后的最终配置可在设置的高级配置中查看。</Dialog.Description></Dialog.Header>
+  <Dialog.Body><pre class="raw-config">{JSON.stringify(viewing?.content, null, 2)}</pre></Dialog.Body>
+  <Dialog.Footer><Button variant="outline" onclick={() => { viewing = null; store.openSettings('config'); }}>查看最终生效配置</Button><Button onclick={() => viewing = null}>关闭</Button></Dialog.Footer>
+</Dialog.Content></Dialog.Root>
 <style>
-  .profiles-root {
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .toolbar,
-  .list-shell {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
-  }
-
-  .toolbar {
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .toolbar-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .title-block {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .subtitle,
-  .form-hint,
-  .switch-copy {
-    font-size: 11.5px;
-    color: var(--muted-foreground);
-    line-height: 1.5;
-  }
-
-  .toolbar-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .current-block {
-    padding: 0;
-  }
-
-  .current-label {
-    font-size: 11px;
-    color: var(--muted-foreground);
-  }
-
-  .current-name {
-    font-size: 12.5px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .toolbar-search {
-    position: relative;
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted-foreground);
-    pointer-events: none;
-  }
-
-  .list-shell {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .config-list {
-    height: 100%;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .config-row {
-    display: flex;
-    align-items: stretch;
-    gap: 12px;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--border);
-    transition: background 0.12s ease;
-  }
-
-  .config-row:hover {
-    background: var(--muted);
-  }
-
-  .config-row:last-child {
-    border-bottom: 0;
-  }
-
-  .row-open {
-    all: unset;
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    cursor: pointer;
-    border-radius: 6px;
-  }
-
-  .row-open:focus-visible {
-    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
-  }
-
-  .row-open:disabled {
-    cursor: wait;
-    opacity: 0.65;
-  }
-
-  .row-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .row-top {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .row-title {
-    font-size: 12.5px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .row-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 11px;
-    color: var(--muted-foreground);
-  }
-
-  .row-path {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 420px;
-  }
-
-  .mono {
-    font-family: var(--font-mono);
-  }
-
-  .row-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    align-self: center;
-  }
-
-  .empty-state {
-    min-height: 240px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 20px;
-    text-align: center;
-    color: var(--muted-foreground);
-  }
-
-  .empty-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--foreground);
-  }
-
-  .empty-desc {
-    font-size: 11.5px;
-    line-height: 1.5;
-  }
-
-  .error-state {
-    color: var(--destructive);
-  }
-
-  /* Form styles (layout provided by DraggableModal) */
-
-  .form-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .form-label {
-    flex-shrink: 0;
-    width: 72px;
-    padding-top: 7px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--foreground);
-    text-align: right;
-  }
-
-  .form-input-wrap {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .required { color: var(--destructive); }
-
-  .form-hint { margin-top: 4px; }
-
-  :global(.source-switch) {
-    display: inline-grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .file-picker-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .validation-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.2);
-    color: var(--warning);
-    font-size: 11.5px;
-  }
-
-  :global(.sr-only) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  @media (max-width: 600px) {
-    .toolbar-top {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .toolbar-meta {
-      justify-content: flex-start;
-    }
-  }
-
-  @media (max-width: 640px) {
-    .row-actions,
-    .file-picker-row {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    :global(.source-switch) {
-      grid-template-columns: 1fr;
-    }
-
-    .config-row {
-      flex-direction: column;
-    }
-
-    .row-actions {
-      align-self: stretch;
-    }
-
-    .row-path {
-      max-width: none;
-    }
-  }
+  .profiles-root { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:14px; background:var(--card); overflow:hidden; }
+  .toolbar { padding:20px; display:grid; gap:16px; border-bottom:1px solid var(--border); }
+  .toolbar-top,.filters { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  .title-block h2 { font-size:16px; font-weight:600; } .title-block p { color:var(--muted-foreground); font-size:12px; margin-top:5px; overflow-wrap:anywhere; }
+  .current-block { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .toolbar-search { position:relative; width:260px; max-width:100%; flex:0 1 260px; } .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted-foreground); pointer-events:none; }
+  .list-shell { min-height:0; flex:1; overflow:auto; padding:18px 20px; scrollbar-gutter:stable; }
+  .config-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr)); gap:16px; align-items:start; }
+  .config-card { min-width:0; display:grid; gap:12px; padding:16px; border:1px solid var(--border); border-radius:12px; }
+  .config-card.active { border-color:var(--primary); }
+  .card-heading { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; } .card-heading h3 { font-weight:600; overflow-wrap:anywhere; }
+  .badge { font-size:11px; padding:3px 7px; border-radius:5px; background:var(--secondary); color:var(--secondary-foreground); }
+  .metadata { font-size:12px; color:var(--muted-foreground); overflow-wrap:anywhere; } .path { font-family:monospace; }
+  .card-actions { display:flex; flex-wrap:wrap; gap:5px; }
+  .error { color:var(--destructive); font-size:12px; overflow-wrap:anywhere; margin-bottom:8px; }
+  .empty { padding:40px 10px; color:var(--muted-foreground); text-align:center; }
+  footer { padding-top:16px; color:var(--muted-foreground); font-size:12px; }
+  .raw-config { font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  @media(max-width:500px) { .toolbar,.list-shell { padding:14px; } .toolbar-search { width:100%; flex-basis:100%; } }
 </style>

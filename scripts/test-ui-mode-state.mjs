@@ -125,3 +125,14 @@ test('explicit advanced settings and open pages survive switching to Lite', asyn
   await store.refreshInteractionSurface();
   assert.equal(store.activeTab, 'profiles'); assert.equal(store.uiMode, 'lite');
 });
+
+test('both layouts use one configuration navigation entry and old subscription shortcuts resolve to it', async () => {
+  const {store}=harness();
+  for(const mode of ['lite','pro']) {
+    store.uiMode=mode;
+    assert.equal(store.isNavVisible('profiles'),true);
+    assert.equal(store.isNavVisible('subscriptions'),false);
+    store.openTab('subscriptions');
+    assert.equal(store.activeTab,'profiles');
+  }
+});

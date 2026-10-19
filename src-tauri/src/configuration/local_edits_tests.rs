@@ -220,6 +220,7 @@ fn settings_show_bind_address_while_system_proxy_uses_connectable_address() {
     let state = AppState::with_domain_data(
         AppConfig::default(),
         vec![ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: "a".into(),
             name: "a".into(),
             kernel: "zero".into(),

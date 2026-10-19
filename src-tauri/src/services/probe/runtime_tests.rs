@@ -179,6 +179,7 @@ async fn dropping_waiter_reclaims_queue_and_core_loss_retires_policy_wait() {
 
 fn host() -> AppState {
     let profile = crate::models::proxy_config::ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: "test".into(),
         name: "test".into(),
         kernel: "zero".into(),

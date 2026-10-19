@@ -6,19 +6,41 @@ use crate::errors::{AppError, AppResult};
 use crate::services::{common, domain_store};
 use crate::state::app_state::AppState;
 
-/// Persist a successful selector change against the subscription that owns
-/// the active proxy profile. Non-subscription profiles intentionally remain
-/// runtime-only.
-pub fn record_active_subscription_selection(
+/// Additive, idempotent upgrade: configuration choices win, then legacy sources
+/// in their original order. Keep every source and its original choices intact.
+pub(crate) fn inherit_legacy_selections(
+    profiles: &mut [crate::models::proxy_config::ProxyConfigProfile],
+    subscriptions: &[crate::models::subscription::SubscriptionProfile],
+) -> bool {
+    let mut changed = false;
+    for profile in profiles {
+        for source in subscriptions
+            .iter()
+            .filter(|source| source.target_proxy_config_id.as_deref() == Some(profile.id.as_str()))
+        {
+            for (group, target) in &source.policy_selections {
+                if !profile.policy_selections.contains_key(group) {
+                    profile
+                        .policy_selections
+                        .insert(group.clone(), target.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Called under the configuration operation lock after Zero accepts a choice.
+/// Persist against the configuration and mirror existing sources for old SDKs.
+pub fn record_active_configuration_selection(
     state: &AppState,
     policy_tag: &str,
     target_tag: &str,
 ) -> AppResult<bool> {
-    let active = common::lock(state.proxy_configs(), "proxy_config")?
-        .iter()
-        .find(|profile| profile.active)
-        .cloned();
-    let Some(active) = active else {
+    let mut profiles = common::lock(state.proxy_configs(), "proxy_config")?;
+    let mut next_profiles = profiles.clone();
+    let Some(active) = next_profiles.iter_mut().find(|profile| profile.active) else {
         return Ok(false);
     };
     let Some(content) = active.content.as_ref() else {
@@ -29,50 +51,55 @@ pub fn record_active_subscription_selection(
             "policy target '{target_tag}' is not a member of selector '{policy_tag}'"
         )));
     }
-
-    let mut subscriptions = common::lock(state.subscriptions(), "subscription")?;
-    let mut next = subscriptions.clone();
-    let Some(subscription) = next
-        .iter_mut()
-        .find(|item| item.target_proxy_config_id.as_deref() == Some(active.id.as_str()))
-    else {
-        return Ok(false);
-    };
-    subscription
+    active
         .policy_selections
         .insert(policy_tag.to_string(), target_tag.to_string());
-    subscription.updated_at_unix_ms = common::now_unix_ms();
-    domain_store::save_subscriptions(&next)?;
-    *subscriptions = next;
+    let mut subscriptions = common::lock(state.subscriptions(), "subscription")?;
+    let mut next_sources = subscriptions.clone();
+    for source in next_sources
+        .iter_mut()
+        .filter(|source| source.target_proxy_config_id.as_deref() == Some(active.id.as_str()))
+    {
+        source
+            .policy_selections
+            .insert(policy_tag.to_string(), target_tag.to_string());
+    }
+    domain_store::save_relational_data(&next_profiles, &next_sources)?;
+    *profiles = next_profiles;
+    *subscriptions = next_sources;
     Ok(true)
 }
 
 /// Apply saved choices to a config before it is exported or sent to Zero.
-/// Invalid/stale choices are ignored so Zero uses the group's first member.
+/// Invalid/stale choices are ignored so Zero uses its normal selection policy.
 pub(crate) fn saved_selections(
     state: &AppState,
     base: &Value,
 ) -> AppResult<(Option<String>, BTreeMap<String, String>)> {
     let profiles = common::lock(state.proxy_configs(), "proxy_config")?;
-    let profile_id = profiles
+    let profile = profiles
         .iter()
         .find(|profile| profile.active && profile.content.as_ref() == Some(base))
         .or_else(|| {
             profiles
                 .iter()
                 .find(|profile| profile.content.as_ref() == Some(base))
-        })
-        .map(|profile| profile.id.clone());
-    drop(profiles);
-    let Some(profile_id) = profile_id else {
-        return Ok((None, BTreeMap::new()));
-    };
-    let selections = common::lock(state.subscriptions(), "subscription")?
+        });
+    Ok(profile
+        .map(|profile| (Some(profile.id.clone()), profile.policy_selections.clone()))
+        .unwrap_or_else(|| (None, BTreeMap::new())))
+}
+
+/// Explicit configuration identity prevents equal JSON sources sharing choices.
+pub(crate) fn selections_for_profile(
+    state: &AppState,
+    id: &str,
+) -> AppResult<BTreeMap<String, String>> {
+    Ok(common::lock(state.proxy_configs(), "proxy_config")?
         .iter()
-        .find(|item| item.target_proxy_config_id.as_deref() == Some(profile_id.as_str()))
-        .map(|item| item.policy_selections.clone())
-        .unwrap_or_default();
-    Ok((Some(profile_id), selections))
+        .find(|profile| profile.id == id)
+        .map(|profile| profile.policy_selections.clone())
+        .unwrap_or_default())
 }
 
 pub fn retain_valid_selections(selections: &mut BTreeMap<String, String>, config: &Value) {

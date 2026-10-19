@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test('profile toolbar keeps desktop actions on one row at the normal compact window width', async ({ page }) => {
   await page.setViewportSize({ width: 625, height: 650 });
   await page.goto('/?panel=profiles');
-  await expect(page.getByText('代理配置', { exact: true })).toBeVisible();
+  await expect(page.getByText('配置管理', { exact: true })).toBeVisible();
 
   const title = page.locator('.toolbar-top .title-block');
   const actions = page.locator('.toolbar-top .current-block');

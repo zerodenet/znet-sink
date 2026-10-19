@@ -51,3 +51,11 @@ pub fn proxy_config_composition_report(
 ) -> Option<crate::configuration::CompositionReport> {
     state.configuration().report()
 }
+
+/// v0.0.3 configuration aggregate. Legacy commands remain SDK-compatible.
+#[tauri::command]
+pub fn configuration_list(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::services::configuration_catalog::ConfigurationEntry>> {
+    crate::services::configuration_catalog::list(state.inner())
+}

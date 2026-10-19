@@ -89,6 +89,11 @@ pub(crate) fn build_upsert_profiles(
     let capabilities = analyze_capabilities(input.content.as_ref());
 
     let profile = ProxyConfigProfile {
+        policy_selections: previous
+            .iter()
+            .find(|profile| profile.id == id)
+            .map(|profile| profile.policy_selections.clone())
+            .unwrap_or_default(),
         id: id.clone(),
         name,
         kernel,
@@ -306,7 +311,7 @@ async fn upsert_runtime_transition(
             append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
             return Err(error);
         }
-        return Ok(profile);
+        return get(state, profile.id);
     }
 
     let next_active = next_active.ok_or_else(|| {
@@ -350,7 +355,7 @@ async fn upsert_runtime_transition(
                 append_recovery(&mut error, "system proxy", retarget_active(state.clone()));
                 return Err(error);
             }
-            Ok(profile)
+            get(state, profile.id)
         }
         Err(error) => Err(error),
     }
@@ -942,6 +947,7 @@ mod tests {
 
     fn profile(id: &str, active: bool) -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: id.to_string(),
             name: id.to_string(),
             kernel: "zero".to_string(),
@@ -965,6 +971,16 @@ mod tests {
             content: Some(json!({ "updated": true })),
             active,
         }
+    }
+
+    #[test]
+    fn replacing_configuration_content_keeps_its_selector_preferences() {
+        let mut original = profile("kept", true);
+        original
+            .policy_selections
+            .insert("Proxy".into(), "chosen".into());
+        let (_, updated) = build_upsert_profiles(&[original], upsert("kept", None)).unwrap();
+        assert_eq!(updated.policy_selections["Proxy"], "chosen");
     }
 
     #[test]

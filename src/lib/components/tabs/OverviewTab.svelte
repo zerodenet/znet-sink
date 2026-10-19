@@ -5,14 +5,9 @@
   import { overviewTrafficTotals, formatOverviewBytes as formatBytes, formatOverviewSpeed as formatSpeed } from '$lib/services/overview-traffic';
   import { guiState } from '$lib/services/gui-state.svelte';
   import { getAppErrorMessage } from '$lib/services/core';
-  import {
-    listProxyConfigs,
-    listSubscriptions,
-    setActiveProxyConfig,
-    syncSubscription,
-    type ProxyConfigProfile,
-    type SubscriptionProfile,
-  } from '$lib/services/config';
+  import type { ProxyConfigProfile } from '$lib/types/domain';
+  import { listConfigurations, activeConfigurationContent, activateConfiguration, type ConfigurationEntry } from '$lib/services/configuration-catalog';
+  import { configurationOptions, acceptActivatedConfiguration } from '$lib/features/configuration/catalog';
   import { parseNodeName } from '$lib/services/node-utils';
   import { resolveEffectiveNodeSelection } from '$lib/components/tabs/nodes-view-model';
   import * as toast from '$lib/services/toast.svelte';
@@ -73,8 +68,8 @@
     return typeof outbound === 'string' && outbound.trim() ? outbound : null;
   }
 
-  let subscriptions = $state<SubscriptionProfile[]>([]);
-  let proxyConfigs = $state<ProxyConfigProfile[]>([]);
+  let configurations = $state<ConfigurationEntry[]>([]);
+  let activeContent = $state<ProxyConfigProfile | null>(null);
   let sourceLoading = $state(true);
   let sourceError = $state<string | null>(null);
   let modeError = $state<string | null>(null);
@@ -112,15 +107,15 @@
   async function refreshLiteSource() {
     const request = ++sourceRequest;
     sourceLoading = true;
-    const [subscriptionResult, configResult] = await Promise.allSettled([
-      listSubscriptions(),
-      listProxyConfigs(),
-    ]);
-    if (request !== sourceRequest) return;
-    sourceError = configResult.status === 'rejected' ? getAppErrorMessage(configResult.reason, '读取配置来源失败')
-      : subscriptionResult.status === 'rejected' ? getAppErrorMessage(subscriptionResult.reason, '读取订阅来源失败') : null;
-    if (subscriptionResult.status === 'fulfilled') subscriptions = subscriptionResult.value;
-    if (configResult.status === 'fulfilled') proxyConfigs = configResult.value;
+    try {
+      const result = await listConfigurations();
+      const content = await activeConfigurationContent(result);
+      if (request !== sourceRequest) return;
+      configurations = result; activeContent = content; sourceError = null;
+    } catch (cause) {
+      if (request !== sourceRequest) return;
+      sourceError = getAppErrorMessage(cause, '读取配置来源失败');
+    }
     sourceLoading = false;
   }
 
@@ -157,23 +152,11 @@
   const powerOn = $derived(capture.powerOn);
   const hasConfig = $derived(guiState.configNodes.length > 0 || guiState.proxyMode != null);
   const hasNodes = $derived(guiState.policyGroups.length > 0 || guiState.configNodes.length > 0);
-  const activeProxyConfig = $derived(proxyConfigs.find((profile) => profile.active) ?? null);
-  const activeSubscription = $derived.by(() => {
-    const activeId = activeProxyConfig?.id;
-    if (!activeId) return null;
-    return subscriptions.find((subscription) => subscription.targetProxyConfigId === activeId) ?? null;
-  });
-  type SourceOption = { value: string; label: string; profileId?: string; subscriptionId?: string; disabled: boolean };
-  const sourceOptions = $derived<SourceOption[]>([
-    ...proxyConfigs.map((profile) => ({ value: `profile:${profile.id}`, label: profile.name,
-      profileId: profile.id, disabled: profile.content == null })),
-    ...subscriptions.filter((subscription) => !proxyConfigs.some((profile) =>
-      profile.id === subscription.targetProxyConfigId && profile.content != null)).map((subscription) => ({
-      value: `subscription:${subscription.id}`, label: `${subscription.name} · 未同步`,
-      subscriptionId: subscription.id, disabled: !subscription.enabled,
-    })),
-  ]);
-  const activeSourceValue = $derived(activeProxyConfig ? `profile:${activeProxyConfig.id}` : '');
+  const activeEntry = $derived(configurations.find(entry => entry.active) ?? null);
+  const activeProxyConfig = $derived(activeContent);
+  const activeSubscription = $derived(activeEntry?.sources[0] ?? null);
+  const sourceOptions = $derived(configurationOptions(configurations));
+  const activeSourceValue = $derived(activeEntry?.id ?? '');
 
   async function activateSource(id: string) {
     if (!id || activatingSourceId !== null || activeSourceValue === id) return;
@@ -182,17 +165,11 @@
 
     activatingSourceId = id;
     try {
-      let targetId = option.profileId;
-      // Cached and local configurations activate without a subscription fetch.
-      if (!targetId && option.subscriptionId) {
-        const synced = await syncSubscription(option.subscriptionId);
-        targetId = synced.targetProxyConfigId;
-      }
-      if (!targetId) {
-        throw new Error('订阅尚未生成可用配置');
-      }
-
-      const activated = await setActiveProxyConfig(targetId);
+      const entry = configurations.find(item => item.id === id);
+      if (!entry) throw new Error('配置列表已变化，请刷新后重试');
+      const activated = await activateConfiguration(entry);
+      configurations = acceptActivatedConfiguration(configurations, id, activated);
+      activeContent = activated;
       await Promise.allSettled([
         refreshLiteSource(),
         guiState.refreshAll(),
@@ -263,7 +240,7 @@
     if (sourceError) return '配置来源待确认';
     if (activeProxyConfig) return activeProxyConfig.name;
     if (activeSubscription) return activeSubscription.name;
-    return subscriptions.length > 0 ? '选择订阅' : '添加订阅';
+    return configurations.length > 0 ? '选择配置' : '添加配置';
   });
   const sourceMeta = $derived.by(() => {
     if (sourceLoading) return '正在读取当前配置来源';
@@ -277,8 +254,8 @@
         ?? (activeProxyConfig.managedSource ? '插件订阅' : activeProxyConfig.path ? '配置文件' : '本地配置');
       return `${formatSubscriptionFormat(activeProxyConfig.format)} · ${origin}`;
     }
-    if (subscriptions.length > 0) return `${subscriptions.length} 个订阅 · 请选择当前使用来源`;
-    return '暂无订阅来源';
+    if (configurations.length > 0) return `${configurations.length} 份配置 · 请选择当前使用配置`;
+    return '暂无配置';
   });
 
 
@@ -465,11 +442,7 @@
           <button data-slot="surface-button"
             type="button"
             class="lite-manage-source"
-            onclick={() => {
-              if (activeProxyConfig && !activeSubscription) {
-                store.openTab('profiles');
-              } else store.activeTab = 'subscriptions';
-            }}
+            onclick={() => store.openTab('profiles')}
           >
             {sourceOptions.length > 0 ? '管理' : '添加'}
           </button>

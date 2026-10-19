@@ -102,7 +102,6 @@ const segmentedConsumers = [
   'src/lib/components/settings/AppConfigPanel.svelte',
   'src/lib/components/tabs/OverviewTab.svelte',
   'src/lib/components/tabs/NodesToolbar.svelte',
-  'src/lib/components/tabs/SubscriptionsTab.svelte',
   'src/lib/components/tabs/RulesTab.svelte',
   'src/lib/components/tabs/ProfilesTab.svelte',
   'src/lib/components/core/LogPanel.svelte',
@@ -166,7 +165,7 @@ assert.ok(
   'segmented control consumers should not retain page-level selected-state implementations',
 );
 assert.ok(
-  appStore.includes("'overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings'"),
+  appStore.includes("'overview', 'nodes', 'profiles', 'logs', 'plugins', 'settings'"),
   'Lite fallback navigation should expose the existing nodes page',
 );
 assert.ok(
@@ -196,12 +195,12 @@ assert.ok(
   'Lite Overview should resolve the effective leaf node, render its flag asset, and delegate management to NodesTab',
 );
 assert.ok(
-  overviewTab.includes("store.activeTab = 'subscriptions'") &&
+  overviewTab.includes("store.openTab('profiles')") &&
     overviewTab.includes('配置来源') &&
-    overviewTab.includes('listSubscriptions()') &&
+    overviewTab.includes('listConfigurations()') &&
     overviewTab.includes('activateSource') &&
-    overviewTab.includes('syncSubscription(option.subscriptionId)') &&
-    overviewTab.includes('setActiveProxyConfig(targetId)') &&
+    overviewTab.includes('activateConfiguration(entry)') &&
+    overviewTab.includes('configurationOptions(configurations)') &&
     overviewTab.includes('<Select.Root') &&
     overviewTab.includes('class="lite-proxy-segment"') &&
     overviewTab.includes('class="lite-power-orbit"') &&

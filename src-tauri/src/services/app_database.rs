@@ -71,9 +71,19 @@ pub(crate) struct RelationalDomainData {
 pub(crate) fn load_domain_data(dir: &Path) -> AppResult<RelationalDomainData> {
     let mut connection = open(dir)?;
     import_legacy_json_once(&mut connection, dir)?;
+    let transaction = immediate_transaction(&mut connection)?;
+    let mut proxy_configs = load_proxy_configs(&transaction)?;
+    let subscriptions = load_subscriptions(&transaction)?;
+    if crate::services::policy_selection::inherit_legacy_selections(
+        &mut proxy_configs,
+        &subscriptions,
+    ) {
+        replace_proxy_configs(&transaction, &proxy_configs)?;
+    }
+    commit_and_restrict(transaction, dir)?;
     Ok(RelationalDomainData {
-        proxy_configs: load_proxy_configs(&connection)?,
-        subscriptions: load_subscriptions(&connection)?,
+        proxy_configs,
+        subscriptions,
     })
 }
 
@@ -759,8 +769,59 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn configuration_choices_upgrade_once_and_survive_removing_all_sources() {
+        let dir = test_dir("sqlite-configuration-choices-upgrade");
+        let mut profile = proxy_profile("original-config");
+        profile
+            .policy_selections
+            .insert("Client".into(), "existing".into());
+        let mut first = subscription_profile("first", "https://one.test", Some(profile.id.clone()));
+        first
+            .policy_selections
+            .insert("Proxy".into(), "chosen".into());
+        first
+            .policy_selections
+            .insert("Client".into(), "source-cannot-overwrite".into());
+        let mut second =
+            subscription_profile("second", "https://two.test", Some(profile.id.clone()));
+        second
+            .policy_selections
+            .insert("Proxy".into(), "other".into());
+        let sources = vec![first, second];
+        save_domain_data(&dir, &[profile], &sources).unwrap();
+        let migrated = load_domain_data(&dir).unwrap();
+        assert_eq!(migrated.proxy_configs[0].id, "original-config");
+        assert_eq!(
+            migrated.proxy_configs[0].policy_selections["Proxy"],
+            "chosen"
+        );
+        assert_eq!(
+            migrated.proxy_configs[0].policy_selections["Client"],
+            "existing"
+        );
+        assert_eq!(
+            serde_json::to_value(&migrated.subscriptions).unwrap(),
+            serde_json::to_value(&sources).unwrap()
+        );
+        let repeated = load_domain_data(&dir).unwrap();
+        assert_eq!(
+            serde_json::to_value(&repeated.proxy_configs).unwrap(),
+            serde_json::to_value(&migrated.proxy_configs).unwrap()
+        );
+        save_domain_data(&dir, &migrated.proxy_configs, &[]).unwrap();
+        let detached = load_domain_data(&dir).unwrap();
+        assert_eq!(
+            detached.proxy_configs[0].policy_selections["Proxy"],
+            "chosen"
+        );
+        assert!(detached.subscriptions.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn proxy_profile(id: &str) -> ProxyConfigProfile {
         ProxyConfigProfile {
+            policy_selections: Default::default(),
             id: id.to_string(),
             name: "Local".to_string(),
             kernel: "zero".to_string(),

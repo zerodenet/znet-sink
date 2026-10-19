@@ -252,7 +252,7 @@ pub async fn gui_select_policy(
         .await?;
     if result.accepted {
         let selected = result.selected.as_deref().unwrap_or(&target_tag);
-        crate::services::policy_selection::record_active_subscription_selection(
+        crate::services::policy_selection::record_active_configuration_selection(
             state.inner(),
             &policy_tag,
             selected,

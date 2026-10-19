@@ -5,7 +5,8 @@
   import { coreEvents } from '$lib/services/core-events.svelte';
   import { overviewData } from '$lib/services/overview-data.svelte';
   import { proxyConfigSignal } from '$lib/services/proxy-config-signal.svelte';
-  import { listProxyConfigs, setActiveProxyConfig, type ProxyConfigProfile } from '$lib/services/config';
+  import { listConfigurations, activateConfiguration, type ConfigurationEntry } from '$lib/services/configuration-catalog';
+  import { configurationOptions, acceptActivatedConfiguration } from '$lib/features/configuration/catalog';
   import { getAppErrorMessage, getGuiStackStatus } from '$lib/services/core';
   import { requireCommandSuccess } from '$lib/services/command-result';
   import type { GuiFeatureStatus } from '$lib/types/gui-api';
@@ -20,7 +21,7 @@
 
   const operations = new OverviewOperations();
   let { model, trafficUnavailable }: { model: OverviewModel; trafficUnavailable: string | null } = $props();
-  let profiles = $state<ProxyConfigProfile[]>([]);
+  let profiles = $state<ConfigurationEntry[]>([]);
   let profilesLoading = $state(true);
   let profilesError = $state<string | null>(null);
   let stack = $state<GuiFeatureStatus | null>(null);
@@ -32,7 +33,7 @@
   const externalBusy = $derived(guiState.isCoreBusy || guiState.isSwitchingTun || guiState.isSwitchingSystemProxy || guiState.isSwitchingMode || guiState.isSelectingPolicy || guiState.isConnecting || guiState.isDisconnecting || guiState.isInitializing);
   const busy = $derived(!!operations.feedback.pending || externalBusy);
   const selectedProfile = $derived(profiles.find((profile) => profile.active)?.id ?? '');
-  const profileView = $derived({ selected: selectedProfile, loading: profilesLoading, error: profilesError, options: profiles.map((profile) => ({ value: profile.id, label: profile.name })) });
+  const profileView = $derived({ selected: selectedProfile, loading: profilesLoading, error: profilesError, options: configurationOptions(profiles) });
   const network = $derived({ ...networkLocation(guiState.networkProbe), ip: guiState.networkProbe?.ip ?? '', description: [guiState.networkProbe?.country, guiState.networkProbe?.region, guiState.networkProbe?.city, guiState.networkProbe?.isp ?? guiState.networkProbe?.org].filter(Boolean).join(' · '), loading: guiState.networkProbeLoading, error: guiState.networkProbeError });
   const canDisableTun = $derived(guiState.isTunSwitchOn && guiState.canDisableTun);
   const stackReady = $derived(model.ready && stack?.enabled === true);
@@ -42,7 +43,7 @@
     const request = ++profileRequest;
     profilesLoading = true;
     try {
-      const result = await listProxyConfigs();
+      const result = await listConfigurations();
       if (request === profileRequest && !disposed) { profiles = result; profilesError = null; }
       return true;
     } catch (error) {
@@ -82,10 +83,10 @@
       run('profile', async () => {
         let committed = false;
         try {
-          const profile = await setActiveProxyConfig(id);
+          const profile = await activateConfiguration(profiles.find(item => item.id === id)!);
           committed = true;
-          // The command response is authoritative even if a later list read fails.
-          if (!disposed) profiles = profiles.map((item) => item.id === id ? profile : { ...item, active: false });
+          // A confirmed command stays authoritative if the following reads fail.
+          if (!disposed) profiles = acceptActivatedConfiguration(profiles, id, profile);
           const [listed] = await Promise.all([loadProfiles(), guiState.refreshNodeStateAfterConfigChange(), guiState.refreshAll()]);
           if (!listed) throw new Error('配置已切换，但列表刷新失败，请重新检查');
           return `已切换到 ${profile.name}`;

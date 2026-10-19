@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { listenConfigurationSources } from '$lib/services/configuration-catalog-events';
   import { onMount, untrack } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -81,6 +82,11 @@
 
   onMount(() => {
     let unlistenNavigate: UnlistenFn | null = null;
+    let sourceDisposed = false;
+    let unlistenSources: (() => void) | null = null;
+    void listenConfigurationSources().then(stop => {
+      if (sourceDisposed) stop(); else unlistenSources = stop;
+    }).catch(console.warn);
     let unlistenTrayAction: UnlistenFn | null = null;
     const uninstallGlobalErrorTelemetry = installGlobalErrorTelemetry(() => ({
       tab: store.activeTab,
@@ -104,7 +110,7 @@
         store.openSettings(settingsSection);
       } else if (tab) {
         store.isInitialized = true;
-        store.activeTab = tab;
+        store.openTab(tab);
       }
     }).then((unlisten) => {
       unlistenNavigate = unlisten;
@@ -126,6 +132,8 @@
     };
     mediaQuery.addEventListener('change', onSystemThemeChange);
     return () => {
+      sourceDisposed = true;
+      unlistenSources?.();
       mediaQuery.removeEventListener('change', onSystemThemeChange);
       unsubscribeConfigNavigation();
       unlistenNavigate?.();

@@ -10,7 +10,7 @@ test('managed subscription card shows aggregate quota, ratio, expiry and ownersh
   await expect(page.getByText('37.5%', { exact: true })).toBeVisible();
   await expect(page.getByText(/到期:/)).toBeVisible();
   await expect(page.getByText(/剩 \d+ 天/)).toBeVisible();
-  await expect(page.getByRole('button', { name: '由来源插件刷新' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '前往来源插件' })).toBeEnabled();
 });
 
 test('mounted subscription page refreshes the sync time on background completion', async ({ page }) => {

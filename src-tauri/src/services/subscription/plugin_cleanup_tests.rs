@@ -15,6 +15,7 @@ fn owned(
     };
     let (id, config_id) = managed_subscription_ids(plugin, provider, remote);
     let profile = ProxyConfigProfile {
+        policy_selections: Default::default(),
         id: config_id.clone(),
         name: remote.into(),
         kernel: "zero".into(),

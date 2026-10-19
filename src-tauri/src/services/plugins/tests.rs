@@ -51,6 +51,7 @@ impl ExternalManagedAcceptanceStore {
         }
         self.profiles
             .push(crate::models::proxy_config::ProxyConfigProfile {
+                policy_selections: Default::default(),
                 id: "manual-config".into(),
                 name: "Manual active".into(),
                 kernel: "zero".into(),

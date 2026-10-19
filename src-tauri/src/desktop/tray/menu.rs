@@ -55,7 +55,7 @@ pub(crate) fn install(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Er
     let nodes_item = tauri::menu::MenuItemBuilder::new("节点")
         .id("nodes")
         .build(app)?;
-    let subscriptions_item = tauri::menu::MenuItemBuilder::new("订阅")
+    let subscriptions_item = tauri::menu::MenuItemBuilder::new("配置")
         .id("subscriptions")
         .build(app)?;
     let logs_item = tauri::menu::MenuItemBuilder::new("日志")
@@ -129,7 +129,7 @@ pub(crate) fn install(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Er
             "toggle_tun" => emit_tray_action(app, "toggle_tun"),
             "restart_core" => emit_tray_action(app, "restart_core"),
             "nodes" => open_main_window_route(app, "nodes", None),
-            "subscriptions" => open_main_window_route(app, "subscriptions", None),
+            "subscriptions" => open_main_window_route(app, "profiles", None),
             "logs" => open_main_window_route(app, "logs", None),
             "copy_proxy_env" => tray_copy_proxy_environment(app),
             #[cfg(target_os = "windows")]

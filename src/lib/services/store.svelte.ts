@@ -12,7 +12,7 @@ import type { InteractionSurfaceItem } from '$lib/types/capability';
 export type UIMode = 'lite' | 'pro';
 export type SettingsSection = 'general' | 'network' | 'core' | 'tun' | 'dns' | 'config' | 'logs' | 'about';
 
-const LITE_MODE_NAV = new Set(['overview', 'nodes', 'subscriptions', 'logs', 'plugins', 'settings']);
+const LITE_MODE_NAV = new Set(['overview', 'nodes', 'profiles', 'logs', 'plugins', 'settings']);
 
 class AppStateStore {
   isInitialized = $state(false);
@@ -78,8 +78,8 @@ class AppStateStore {
         };
       }
 
-      if (config.ui.defaultRoute && this.isNavVisible(config.ui.defaultRoute)) {
-        this.activeTab = config.ui.defaultRoute;
+      if (config.ui.defaultRoute && this.isNavVisible(config.ui.defaultRoute === 'subscriptions' ? 'profiles' : config.ui.defaultRoute)) {
+        this.activeTab = config.ui.defaultRoute === 'subscriptions' ? 'profiles' : config.ui.defaultRoute;
       }
 
       this.isInitialized = !this.onboardingRequired;
@@ -121,6 +121,7 @@ class AppStateStore {
   }
 
   openTab(tab: string) {
+    if (tab === 'subscriptions') tab = 'profiles';
     if (this.activeTab !== tab && this.isNavVisible(this.activeTab)) {
       this.returnLocation = { tab: this.activeTab, section: this.settingsSection };
     }
@@ -205,6 +206,7 @@ class AppStateStore {
   }
 
   isNavVisible(key: string): boolean {
+    if (key === 'subscriptions') return false;
     // Apply the local mode boundary synchronously. The cached interaction
     // surface still describes the previous mode until its background refresh
     // completes, which can take seconds when the core is busy.

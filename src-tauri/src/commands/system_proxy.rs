@@ -217,6 +217,7 @@ mod tests {
         let state = AppState::with_domain_data(
             AppConfig::default(),
             vec![ProxyConfigProfile {
+                policy_selections: Default::default(),
                 id: "active".to_string(),
                 name: "Active".to_string(),
                 kernel: "zero".to_string(),
