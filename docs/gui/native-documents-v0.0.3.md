@@ -17,6 +17,25 @@ excludes secrets and grants; diagnostic exports use a fixed public metadata whit
 Purpose alone does not prove arbitrary JSON is secret-free: the host serializer
 and redactor remain the authorities for those two payloads.
 
+### Plugin-visible file policy foundation
+
+The Rust, Android and iOS adapters additionally distinguish
+`plugin-visible-file-import` and `plugin-visible-file-export`, each bounded to
+4 MiB. Export ownership must be `PluginVisibleData`: bytes already available to
+the guest, never a protected material handle or ordinary profile. The user must
+acknowledge the credential warning. Only explicit system **save** is permitted;
+this purpose cannot share. JSON, plain text, ZIP and arbitrary binary MIME types
+are permitted only within this separate purpose; settings retain JSON-only
+validation. Protected plugin materials remain rejected for every export purpose.
+
+These are host-only policy primitives, with no WebView invoke handler or new SDK
+capability. Mobile plugin file read/write remains unavailable. Before opening it,
+the client must implement original-grant-bound requests, trusted host approval,
+bounded payload transfer and a fresh-page result handoff across system picker
+suspension. It must not revive the old JavaScript promise, borrow a later grant,
+expose native paths, or replay an uncertain write. Adapter policy tests alone do
+not establish that handoff or system picker acceptance.
+
 The current native diagnostic file contains build/platform contract facts and
 the time, source and level of at most 200 local log records. Messages, fields,
 debug payloads, configuration and subscription contents are excluded. The

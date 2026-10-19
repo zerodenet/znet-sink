@@ -22,23 +22,27 @@ internal object NativeIoPolicy {
             "configuration-import", "plugin-package-import", "ordinary-configuration-export" -> 16 * 1024 * 1024L
             "settings-import", "settings-export" -> 2 * 1024 * 1024L
             "redacted-diagnostic-export" -> 10 * 1024 * 1024L
+            "plugin-visible-file-import", "plugin-visible-file-export" -> 4 * 1024 * 1024L
             else -> return "unsupported-purpose"
         }
         val importing = purpose.endsWith("-import")
         if ((action == "pickRead") != importing || action !in setOf("pickRead", "save", "share")) {
             return "purpose-action-mismatch"
         }
+        if (purpose == "plugin-visible-file-export" && action != "save") return "purpose-action-mismatch"
         if (maximumBytes !in 1..limit) return "invalid-byte-budget"
-        if (mimeType !in setOf("application/json", "text/plain", "application/zip") ||
-            (purpose != "redacted-diagnostic-export" && mimeType != "application/json")) {
-            return "unsupported-mime-type"
+        val allowedMimes = when (purpose) {
+            "redacted-diagnostic-export" -> setOf("application/json", "text/plain", "application/zip")
+            "plugin-visible-file-export" -> setOf("application/json", "text/plain", "application/zip", "application/octet-stream")
+            else -> setOf("application/json")
         }
+        if (mimeType !in allowedMimes) return "unsupported-mime-type"
         if (fileName != null && !leafPattern.matches(fileName)) return "invalid-file-name"
         if (importing) {
             if (payloadBase64 != null || credentialsAcknowledged) return "invalid-import-arguments"
         } else {
             if (fileName == null) return "invalid-file-name"
-            if (purpose == "ordinary-configuration-export" && !credentialsAcknowledged) {
+            if (purpose in setOf("ordinary-configuration-export", "plugin-visible-file-export") && !credentialsAcknowledged) {
                 return "credentials-acknowledgement-required"
             }
             if (payloadBase64 == null) return "missing-payload"

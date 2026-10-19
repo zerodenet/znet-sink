@@ -32,6 +32,21 @@ class NativeIoPolicyTest {
         assertEquals("purpose-action-mismatch", validate(purpose = "plugin-package-import"))
     }
 
+    @Test fun visiblePluginDataUsesItsOwnFourMiBBudgetAndReadOnlyPicker() {
+        assertNull(validate(action="pickRead", purpose="plugin-visible-file-import", budget=4*1024*1024L, name=null, body=null))
+        assertEquals("invalid-byte-budget", validate(action="pickRead", purpose="plugin-visible-file-import", budget=4*1024*1024L+1, name=null, body=null))
+        assertEquals("purpose-action-mismatch", validate(purpose="plugin-visible-file-import"))
+        assertEquals("invalid-import-arguments", validate(action="pickRead", purpose="plugin-visible-file-import", name=null))
+    }
+    @Test fun visiblePluginExportCannotMasqueradeAsProtectedOrAnAcknowledgedShare() {
+        assertEquals("credentials-acknowledgement-required", validate(purpose="plugin-visible-file-export", mime="application/octet-stream"))
+        assertNull(validate(purpose="plugin-visible-file-export", mime="application/octet-stream", acknowledged=true))
+        assertEquals("invalid-byte-budget", validate(purpose="plugin-visible-file-export", budget=4*1024*1024L+1, acknowledged=true))
+        assertEquals("purpose-action-mismatch", validate(action="share", purpose="plugin-visible-file-export", acknowledged=true))
+        assertEquals("unsupported-purpose", validate(purpose="protected-plugin-file-export", acknowledged=true))
+        assertEquals("unsupported-mime-type", validate(purpose="settings-export", mime="application/octet-stream"))
+    }
+
     @Test fun budgetsUsePurposeSpecificLimits() {
         assertEquals("invalid-byte-budget", validate(budget = 0))
         assertEquals("invalid-byte-budget", validate(budget = -1))

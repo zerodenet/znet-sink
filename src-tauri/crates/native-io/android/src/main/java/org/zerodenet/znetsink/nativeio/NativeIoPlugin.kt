@@ -237,7 +237,7 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
                 when (action) {
                     "pickRead" -> launch(operation, Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = if (args.purpose == "plugin-package-import") "*/*" else args.mimeType
+                        type = if (args.purpose in setOf("plugin-package-import", "plugin-visible-file-import")) "*/*" else args.mimeType
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }, "pickReadResult")
                     "save" -> launch(operation, Intent(Intent.ACTION_CREATE_DOCUMENT).apply {

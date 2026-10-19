@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 
 pub const CONFIGURATION_MAX_BYTES: u32 = 16 * 1024 * 1024;
+pub const PLUGIN_DATA_MAX_BYTES: u32 = 4 * 1024 * 1024;
 pub const SETTINGS_MAX_BYTES: u32 = 2 * 1024 * 1024;
 pub const DIAGNOSTIC_MAX_BYTES: u32 = 10 * 1024 * 1024;
 
@@ -26,6 +27,7 @@ pub enum ImportPurpose {
     Configuration,
     Settings,
     PluginPackage,
+    PluginVisibleData,
 }
 impl ImportPurpose {
     fn wire(self) -> &'static str {
@@ -33,6 +35,7 @@ impl ImportPurpose {
             Self::Configuration => "configuration-import",
             Self::Settings => "settings-import",
             Self::PluginPackage => "plugin-package-import",
+            Self::PluginVisibleData => "plugin-visible-file-import",
         }
     }
     fn budget(self) -> u32 {
@@ -40,6 +43,7 @@ impl ImportPurpose {
             Self::Configuration => CONFIGURATION_MAX_BYTES,
             Self::Settings => SETTINGS_MAX_BYTES,
             Self::PluginPackage => 16 * 1024 * 1024,
+            Self::PluginVisibleData => PLUGIN_DATA_MAX_BYTES,
         }
     }
 }
@@ -48,6 +52,7 @@ pub enum ExportPurpose {
     OrdinaryConfiguration,
     RedactedDiagnostic,
     Settings,
+    PluginVisibleData,
 }
 impl ExportPurpose {
     fn wire(self) -> &'static str {
@@ -55,6 +60,7 @@ impl ExportPurpose {
             Self::OrdinaryConfiguration => "ordinary-configuration-export",
             Self::RedactedDiagnostic => "redacted-diagnostic-export",
             Self::Settings => "settings-export",
+            Self::PluginVisibleData => "plugin-visible-file-export",
         }
     }
     fn budget(self) -> u32 {
@@ -62,6 +68,7 @@ impl ExportPurpose {
             Self::OrdinaryConfiguration => CONFIGURATION_MAX_BYTES,
             Self::RedactedDiagnostic => DIAGNOSTIC_MAX_BYTES,
             Self::Settings => SETTINGS_MAX_BYTES,
+            Self::PluginVisibleData => PLUGIN_DATA_MAX_BYTES,
         }
     }
 }
@@ -70,6 +77,8 @@ pub enum ExportOwnership {
     OrdinaryProfile,
     HostGenerated,
     ProtectedPlugin,
+    /// Bytes already supplied by the guest, never a protected material handle.
+    PluginVisibleData,
 }
 
 /// Host-produced export only. Callers must use their secret-excluding settings serializer
@@ -100,9 +109,14 @@ impl PreparedExport {
                 ExportPurpose::RedactedDiagnostic | ExportPurpose::Settings,
                 ExportOwnership::HostGenerated,
             ) => {}
+            (ExportPurpose::PluginVisibleData, ExportOwnership::PluginVisibleData) => {}
             _ => return Err(Error::InvalidRequest("export_ownership_mismatch")),
         }
-        if matches!(purpose, ExportPurpose::OrdinaryConfiguration) && !credentials_acknowledged {
+        if matches!(
+            purpose,
+            ExportPurpose::OrdinaryConfiguration | ExportPurpose::PluginVisibleData
+        ) && !credentials_acknowledged
+        {
             return Err(Error::InvalidRequest("credential_warning_not_acknowledged"));
         }
         if file_name.is_empty()
@@ -114,12 +128,18 @@ impl PreparedExport {
         {
             return Err(Error::InvalidRequest("invalid_file_name"));
         }
-        if !matches!(
-            mime_type,
-            "application/json" | "text/plain" | "application/zip"
-        ) || (!matches!(purpose, ExportPurpose::RedactedDiagnostic)
-            && mime_type != "application/json")
-        {
+        let supported_mime = match purpose {
+            ExportPurpose::RedactedDiagnostic => matches!(
+                mime_type,
+                "application/json" | "text/plain" | "application/zip"
+            ),
+            ExportPurpose::PluginVisibleData => matches!(
+                mime_type,
+                "application/json" | "text/plain" | "application/zip" | "application/octet-stream"
+            ),
+            _ => mime_type == "application/json",
+        };
+        if !supported_mime {
             return Err(Error::InvalidRequest("invalid_mime_type"));
         }
         if bytes.len() > purpose.budget() as usize {
@@ -213,6 +233,16 @@ fn operation_id_valid(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
 }
 impl<'a> Request<'a> {
+    pub(crate) fn validate_action(&self, action: Action) -> Result<()> {
+        let importing = self.purpose.ends_with("-import");
+        if importing != matches!(action, Action::Read)
+            || (self.purpose == "plugin-visible-file-export" && !matches!(action, Action::Save))
+        {
+            return Err(Error::InvalidRequest("purpose_action_mismatch"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn read(id: &'a str, purpose: ImportPurpose, maximum_bytes: u32) -> Result<Self> {
         if !operation_id_valid(id) {
             return Err(Error::InvalidRequest("invalid_operation_id"));
@@ -293,6 +323,105 @@ impl<'a> Request<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_plugin_data_is_bounded_separate_and_requires_user_acknowledgement() {
+        assert!(Request::read(
+            "plugin",
+            ImportPurpose::PluginVisibleData,
+            PLUGIN_DATA_MAX_BYTES
+        )
+        .is_ok());
+        assert!(Request::read(
+            "plugin",
+            ImportPurpose::PluginVisibleData,
+            PLUGIN_DATA_MAX_BYTES + 1
+        )
+        .is_err());
+        for acknowledged in [false, true] {
+            let result = PreparedExport::new(
+                ExportPurpose::PluginVisibleData,
+                ExportOwnership::PluginVisibleData,
+                "selected.bin",
+                "application/octet-stream",
+                vec![0, 255, 1],
+                acknowledged,
+            );
+            assert_eq!(result.is_ok(), acknowledged);
+        }
+        for ownership in [
+            ExportOwnership::ProtectedPlugin,
+            ExportOwnership::HostGenerated,
+            ExportOwnership::OrdinaryProfile,
+        ] {
+            assert!(PreparedExport::new(
+                ExportPurpose::PluginVisibleData,
+                ownership,
+                "selected.bin",
+                "application/octet-stream",
+                vec![1],
+                true
+            )
+            .is_err());
+        }
+        assert!(PreparedExport::new(
+            ExportPurpose::Settings,
+            ExportOwnership::PluginVisibleData,
+            "settings.json",
+            "application/json",
+            vec![],
+            true
+        )
+        .is_err());
+        assert!(PreparedExport::new(
+            ExportPurpose::PluginVisibleData,
+            ExportOwnership::PluginVisibleData,
+            "large.bin",
+            "application/octet-stream",
+            vec![0; PLUGIN_DATA_MAX_BYTES as usize + 1],
+            true
+        )
+        .is_err());
+    }
+    #[test]
+    fn protected_materials_cannot_use_any_export_purpose_including_visible_data() {
+        for purpose in [
+            ExportPurpose::OrdinaryConfiguration,
+            ExportPurpose::Settings,
+            ExportPurpose::RedactedDiagnostic,
+            ExportPurpose::PluginVisibleData,
+        ] {
+            assert!(matches!(
+                PreparedExport::new(
+                    purpose,
+                    ExportOwnership::ProtectedPlugin,
+                    "data.json",
+                    "application/json",
+                    vec![],
+                    true
+                ),
+                Err(Error::InvalidRequest("protected_material_export_forbidden"))
+            ));
+        }
+    }
+    #[test]
+    fn native_plugin_file_dispatch_is_read_or_explicit_save_and_never_share() {
+        let read = Request::read("plugin", ImportPurpose::PluginVisibleData, 1).unwrap();
+        assert!(read.validate_action(Action::Read).is_ok());
+        assert!(read.validate_action(Action::Save).is_err());
+        let export = PreparedExport::new(
+            ExportPurpose::PluginVisibleData,
+            ExportOwnership::PluginVisibleData,
+            "data.bin",
+            "application/octet-stream",
+            vec![],
+            true,
+        )
+        .unwrap();
+        let request = Request::export("plugin", &export).unwrap();
+        assert!(request.validate_action(Action::Save).is_ok());
+        assert!(request.validate_action(Action::Share).is_err());
+        assert!(request.validate_action(Action::Read).is_err());
+    }
     #[test]
     fn protected_and_unacknowledged_exports_are_rejected() {
         assert!(PreparedExport::new(

@@ -5,7 +5,8 @@ mod vault;
 use policy::{Action, Request};
 pub use policy::{
     Error, ExportOwnership, ExportPurpose, ImportPurpose, PreparedExport, Receipt, ReceiptStatus,
-    Result, CONFIGURATION_MAX_BYTES, DIAGNOSTIC_MAX_BYTES, SETTINGS_MAX_BYTES,
+    Result, CONFIGURATION_MAX_BYTES, DIAGNOSTIC_MAX_BYTES, PLUGIN_DATA_MAX_BYTES,
+    SETTINGS_MAX_BYTES,
 };
 use std::sync::Mutex;
 use tauri::{
@@ -216,6 +217,7 @@ impl<R: Runtime> NativeIo<R> {
         self.run(Request::export(operation_id, export)?, Action::Share)
     }
     fn run(&self, request: Request<'_>, action: Action) -> Result<Receipt> {
+        request.validate_action(action)?;
         let _active = self.active.try_lock().map_err(|_| Error::Busy)?;
         #[cfg(any(target_os = "android", target_os = "ios"))]
         {

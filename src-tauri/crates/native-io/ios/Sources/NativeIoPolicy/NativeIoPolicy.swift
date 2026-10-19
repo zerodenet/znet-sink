@@ -49,6 +49,11 @@ public struct NativeIoRequest: Decodable {
             budget = 16 * 1024 * 1024
         case (.pickRead, "settings-import"):
             budget = 2 * 1024 * 1024
+        case (.pickRead, "plugin-visible-file-import"):
+            budget = 4 * 1024 * 1024
+        case (.save, "plugin-visible-file-export"):
+            budget = 4 * 1024 * 1024
+            guard credentialsAcknowledged == true else { throw NativeIoError.credentialsNotAcknowledged }
         case (.save, "ordinary-configuration-export"), (.share, "ordinary-configuration-export"):
             budget = 16 * 1024 * 1024
             guard credentialsAcknowledged == true else {
@@ -74,11 +79,13 @@ public struct NativeIoRequest: Decodable {
                   (65...90).contains(byte) || (97...122).contains(byte)
                     || (48...57).contains(byte) || byte == 45 || byte == 95 || byte == 46
               }) else { throw NativeIoError.invalidFileName }
-        guard let mime = mimeType,
-              ["application/json", "text/plain", "application/zip"].contains(mime),
-              (purpose == "redacted-diagnostic-export" || mime == "application/json") else {
-            throw NativeIoError.invalidMimeType
+        let allowedMimes: [String]
+        switch purpose {
+        case "redacted-diagnostic-export": allowedMimes = ["application/json", "text/plain", "application/zip"]
+        case "plugin-visible-file-export": allowedMimes = ["application/json", "text/plain", "application/zip", "application/octet-stream"]
+        default: allowedMimes = ["application/json"]
         }
+        guard let mime = mimeType, allowedMimes.contains(mime) else { throw NativeIoError.invalidMimeType }
         // Reject oversized encoded input before allocating a decoded buffer. Decode is strict.
         guard let encoded = payloadBase64,
               encoded.utf8.count <= ((maximumBytes + 2) / 3) * 4 else {

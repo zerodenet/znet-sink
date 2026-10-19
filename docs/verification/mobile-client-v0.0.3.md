@@ -1,5 +1,25 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：原生插件可见文件策略基础
+
+在回调原授权加固及返回键修复后，原生IO新增独立的插件可见文件用途，详见
+[原生文档边界](../gui/native-documents-v0.0.3.md)。Rust/Android/iOS共同限制4MiB，
+仅系统读取或明确保存；保存须确认凭据风险，不允许系统分享。Rust另检查字节所有权，
+受保护材料对所有导出用途继续拒绝；二进制MIME不扩大设置或普通配置的契约。
+Rust在占用原生操作锁及调用平台前核对动作与用途。
+
+最终 locked workspace/all-targets/all-features Rust **1624通过/0失败/6忽略，40组**；
+GUI仍为 **1343/0/5**，共享原生IO策略13项通过。真实Android库/JVM/测试APK构建成功，
+JUnit **15通过/0失败/0跳过**（策略14项，安全存储envelope1项）；不是在模拟器执行测试APK。
+locked workspace/all-targets/all-features check/Clippy、NDKr27d/API24完整Rust宿主、
+格式检查通过；本地没有Swift工具链或Apple SDK，本批Swift
+新增测试和iOS编译须由新头CI核对，不沿用旧头成功结果。既有告警保留。
+
+本批没有新增WebView invoke或开放文件SDK。宿主批准、分块传输、原审阅/安装/授权绑定、
+预期系统暂停后的新页面消费及未知写结果屏障仍待实现；移动文件读写继续明确不可用。
+没有系统picker、Galaxy S8、iPhone或真实插件文件交接验收。
+证据：`/workspace/artifacts/mobile-v0.0.3/mobile-file-policy-c56b267/`。
+
 ## 2026-10-19：移动返回键只交付最上层弹层
 
 `450dd95` 的 push 主 CI 成功，但 PR 主 CI 的 WebKit job `118345636704`

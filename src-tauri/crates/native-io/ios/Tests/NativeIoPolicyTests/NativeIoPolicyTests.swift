@@ -36,6 +36,22 @@ final class NativeIoPolicyTests: XCTestCase {
         let oversized = NativeIoRequest(operationId: "package", purpose: "plugin-package-import", maximumBytes: 16 * 1024 * 1024 + 1)
         expect(.invalidMaximumBytes) { try oversized.validate(action: .pickRead) }
     }
+    func testVisiblePluginReadIsBoundedAndCannotBecomeAnExport() throws {
+        let read = NativeIoRequest(operationId: "plugin", purpose: "plugin-visible-file-import", maximumBytes: 4 * 1024 * 1024)
+        try read.validate(action: .pickRead)
+        expect(.invalidPurpose) { try read.validate(action: .save) }
+        let large = NativeIoRequest(operationId: "plugin", purpose: "plugin-visible-file-import", maximumBytes: 4 * 1024 * 1024 + 1)
+        expect(.invalidMaximumBytes) { try large.validate(action: .pickRead) }
+    }
+    func testVisiblePluginExportIsExplicitSaveAndDoesNotBroadenProtectedOrSettingsContracts() throws {
+        expect(.credentialsNotAcknowledged) { try request(purpose: "plugin-visible-file-export", mime: "application/octet-stream").validate(action: .save) }
+        XCTAssertEqual(try request(purpose: "plugin-visible-file-export", mime: "application/octet-stream", acknowledged: true).exportData(action: .save), Data("{}".utf8))
+        expect(.invalidMaximumBytes) { try request(purpose: "plugin-visible-file-export", limit: 4 * 1024 * 1024 + 1, acknowledged: true).validate(action: .save) }
+        expect(.invalidPurpose) { try request(purpose: "plugin-visible-file-export", acknowledged: true).validate(action: .share) }
+        expect(.invalidPurpose) { try request(purpose: "protected-plugin-file-export", acknowledged: true).validate(action: .save) }
+        expect(.invalidMimeType) { try request(mime: "application/octet-stream").validate(action: .save) }
+    }
+
     func testCredentialAcknowledgmentIsExplicitForOrdinaryConfig() throws {
         expect(.credentialsNotAcknowledged) {
             try request(purpose: "ordinary-configuration-export").validate(action: .save)
