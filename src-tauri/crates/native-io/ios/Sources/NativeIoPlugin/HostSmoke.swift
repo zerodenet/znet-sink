@@ -8,11 +8,11 @@ enum HostSmoke {
         #if DEBUG
         guard let nonce = ProcessInfo.processInfo.environment["ZNET_IOS_UI_SMOKE_NONCE"],
               nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }) else { return }
-        print("[ZNet iOS smoke] native plugin accepted explicit launch nonce")
+        diagnostic("native plugin accepted explicit launch nonce")
         guard let scriptURL = Bundle.main.url(forResource: "ios-host-smoke", withExtension: "js"),
               let script = try? String(contentsOf: scriptURL, encoding: .utf8),
               script.utf8.count < 32768 else {
-            print("[ZNet iOS smoke] bounded test driver unavailable")
+            persist(nil, completed: false, webview: webview, nonce: nonce, stage: "driver-unavailable")
             return
         }
         waitForDocument(webview, script: script, nonce: nonce, remaining: 120)
@@ -28,7 +28,7 @@ enum HostSmoke {
             return
         }
         guard remaining > 0 else {
-            persist(nil, completed: false, webview: webview, nonce: nonce)
+            persist(nil, completed: false, webview: webview, nonce: nonce, stage: "document-readiness-timeout")
             return
         }
         let work = DispatchWorkItem { [weak webview] in
@@ -39,7 +39,7 @@ enum HostSmoke {
     }
 
     private static func evaluate(_ webview: WKWebView, script: String, nonce: String) {
-        print("[ZNet iOS smoke] evaluating fixed driver in actual WKWebView")
+        diagnostic("evaluating fixed driver in actual WKWebView")
         webview.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success(let value):
@@ -50,8 +50,15 @@ enum HostSmoke {
         }
     }
 
-    private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String, error: NSError? = nil) {
-        print("[ZNet iOS smoke] actual WebKit callback received")
+    private static func diagnostic(_ message: String) {
+        // Unbuffered fixed test messages survive a failed launch. Never include
+        // navigation URLs, user configuration, WebKit exception text or secrets.
+        FileHandle.standardError.write(Data("[ZNet iOS smoke] \(message)\n".utf8))
+    }
+
+    private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String,
+                                error: NSError? = nil, stage: String = "javascript-callback") {
+        diagnostic(stage)
         var inspectable = false
         if #available(iOS 16.4, *) { inspectable = webview.isInspectable }
         var receipt: [String: Any] = [
@@ -59,7 +66,11 @@ enum HostSmoke {
             "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
             "minimumSystemVersion": Bundle.main.object(forInfoDictionaryKey: "MinimumOSVersion") ?? "",
             "nativePlugin": "znet-native-io", "webViewInspectable": inspectable,
-            "status": completed ? "completed" : "failed"
+            "status": completed ? "completed" : "failed", "stage": stage,
+            "documentScheme": ["tauri", "http", "https", "about"].contains(webview.url?.scheme ?? "")
+                ? webview.url!.scheme! : "absent-or-other",
+            "documentHostIsLocalhost": webview.url?.host == "localhost",
+            "documentIsLoading": webview.isLoading
         ]
         if let checks = checks { receipt["checks"] = checks }
         if !completed { receipt["reason"] = "actual-webview-smoke-failed" }
