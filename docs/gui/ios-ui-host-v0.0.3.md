@@ -28,6 +28,8 @@ Apple arm64 Simulator 工具链可在 `--no-sign` 下输出 ad-hoc Mach-O 签名
 
 烟测仅在 NativeIo 的 **Swift Debug 条件 + 显式 32 位随机 launch nonce + 固定随包测试驱动存在**时运行。普通本机调试不设置该环境变量就不会执行驱动；Release 无执行入口。驱动只通过现有 UI/IPC 操作本次独立 Simulator 容器，不注入代理数据、许可证空清单、采样或假成功，不创建 VPN、不打开系统文件/通知权限。回执仅写固定私有 Caches 路径。CI 首轮前保留 `executionVerified=false`，实际烟测另外产生正向证据。
 
+CI 按实际发现的可用 iPhone 设备选择最高数字版本 runtime，记录实际 OS 与 SDK，收集有界原生 console 并对 boot/launch/回执等待设限。包检查还要求实际 Mach-O 包含 Debug 探针。iOS 18.5 Simulator 存在 [WebKit Swift overlay 已知启动缺陷](https://bugs.webkit.org/show_bug.cgi?id=293831)；历史 18.5 未取得回执不算通过，新 runtime 的通过也不代表 16.4 或 18.5 已验收。应用最低版本仍为 16.4，不通过提高最低版本掩盖未运行项。
+
 ## 用户本机最小步骤
 
 这些步骤由用户在自己的 Mac 执行；本批云端实现没有操作用户 Mac。

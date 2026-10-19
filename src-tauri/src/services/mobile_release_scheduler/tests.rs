@@ -488,6 +488,10 @@ fn real_http_stream_executor_sends_original_etag_and_reuses_body_only_on_304() {
                     Err(e) => panic!("bounded fixture accept failed: {e}"),
                 }
             };
+            // Accepted sockets inherit nonblocking mode on Windows. The
+            // listener stays nonblocking for bounded accept, while request IO
+            // must block with the explicit timeouts below.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

@@ -7,10 +7,14 @@ enum HostSmoke {
     static func start(_ webview: WKWebView) {
         #if DEBUG
         guard let nonce = ProcessInfo.processInfo.environment["ZNET_IOS_UI_SMOKE_NONCE"],
-              nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }),
-              let scriptURL = Bundle.main.url(forResource: "ios-host-smoke", withExtension: "js"),
+              nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }) else { return }
+        print("[ZNet iOS smoke] native plugin accepted explicit launch nonce")
+        guard let scriptURL = Bundle.main.url(forResource: "ios-host-smoke", withExtension: "js"),
               let script = try? String(contentsOf: scriptURL, encoding: .utf8),
-              script.utf8.count < 32768 else { return }
+              script.utf8.count < 32768 else {
+            print("[ZNet iOS smoke] bounded test driver unavailable")
+            return
+        }
         let work = DispatchWorkItem { [weak webview] in
             guard let view = webview else { return }
             evaluate(view, script: script, nonce: nonce)
@@ -21,6 +25,7 @@ enum HostSmoke {
 
     #if DEBUG
     private static func evaluate(_ webview: WKWebView, script: String, nonce: String) {
+        print("[ZNet iOS smoke] evaluating fixed driver in actual WKWebView")
         webview.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success(let value):
@@ -32,6 +37,7 @@ enum HostSmoke {
     }
 
     private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String) {
+        print("[ZNet iOS smoke] actual WebKit callback received")
         var inspectable = false
         if #available(iOS 16.4, *) { inspectable = webview.isInspectable }
         var receipt: [String: Any] = [

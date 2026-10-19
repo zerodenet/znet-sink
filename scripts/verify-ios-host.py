@@ -78,6 +78,7 @@ def package(args):
     build_info = command('xcrun', 'vtool', '-show-build', str(executable))
     embedded = command('strings', str(executable))
     validate_package(info, args.sdk, arches, symbols, build_info, embedded)
+    assert 'ZNET_IOS_UI_SMOKE_NONCE' in embedded, 'Debug native smoke code absent from complete App'
     proof = pathlib.Path(args.copy)
     (proof / 'macho-build.txt').write_text(build_info)
     (proof / 'native-binding-symbols.txt').write_text('\n'.join(line for line in symbols.splitlines() if '_start_app' in line or 'init_plugin_znet_native_io' in line) + '\n')

@@ -4,9 +4,25 @@ import unittest
 from importlib.machinery import SourceFileLoader
 
 verify = SourceFileLoader('verify_ios_host', str(pathlib.Path(__file__).with_name('verify-ios-host.py'))).load_module()
+smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name('smoke-ios-host.py'))).load_module()
 
 
 class HostContracts(unittest.TestCase):
+    def test_runtime_discovery_uses_reported_versions_and_available_phones(self):
+        def runtime(version, available=True):
+            return dict(identifier='com.apple.CoreSimulator.SimRuntime.iOS-' + version.replace('.', '-'),
+                        version=version, isAvailable=available)
+        older, newer, unavailable = runtime('18.5'), runtime('26.2'), runtime('27.0', False)
+        phone = dict(name='iPhone fixture', isAvailable=True, udid='fixture-only')
+        devices = {entry['identifier']: [phone] for entry in [older, newer, unavailable]}
+        selected, phones = smoke.select_runtime([older, unavailable, newer], devices)
+        self.assertEqual(selected, newer)
+        self.assertEqual(phones, [phone])
+        with self.assertRaises(AssertionError):
+            smoke.select_runtime([unavailable], devices)
+        with self.assertRaises(AssertionError):
+            smoke.select_runtime([newer], {newer['identifier']: [dict(phone, isAvailable=False)]})
+
     def setUp(self):
         self.info = dict(CFBundleIdentifier='org.zerodenet.znetsink', MinimumOSVersion='16.4',
                          CFBundlePackageType='APPL', CFBundleShortVersionString='0.0.3',
