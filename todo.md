@@ -85,6 +85,8 @@
 
 ## CLIENT-04
 
+2026-10-19 回调交接前置：[共享callback原作用域/预算](docs/gui/plugin-sdk.md)修复真实旧授权恢复可读旧会话的问题；原安装/授权修订绑定、单调时钟和32/8会话预算已接入。移动文件/浏览器返回与新页面安全交接仍未适配，入口保持阻止，不能借共享loopback解除。
+
 2026-10-19 后续：[普通存储原授权发布校验](docs/gui/plugin-sdk.md)和[原生前台任务owner](docs/gui/mobile-plugin-tasks-v0.0.3.md)已接入；共享注册表保留有界 lastAttempt，dispatch 后缺回执不自动换号重放。前台模式与OS后台未适配分别显示，完整设备任务执行及后台仍待验收。前一 `cbc7909` 的实际 push/PR iOS App/VM/同PID前后台通过，Keychain仍不可用且accepted:false；不借作后续SHA或完整插件验收。
 
 **插件宿主执行与页面通道：客户端独立边界继续实施。** 2026-10-19 从 `2b411b6` 接通[移动前台宿主、设备准入和系统包审阅](docs/gui/mobile-plugin-foreground-v0.0.3.md)；当前提交的 Apple SDK/Simulator 检查仍待 CI，不借用前批结果。QuickJS 经宿主所有的有界工作线程运行，保留原授权 epoch 与单组件 busy lease；独立排队期限不延长原执行时限、授权或 SDK 预算。停用、撤权、页面关闭、实例/材料变化和宿主退出拒绝旧启动与晚到交付。在途原生 SDK 可能继续 drain，不声称已撤回。此容器不提供原生崩溃或进程/OOM隔离，要求 process isolation 的组件仍拒绝。

@@ -54,12 +54,15 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         "unavailable"
         | "plugin_secret_transport"
         | "plugin_system_notification_unavailable"
-        | "plugin_secure_store_unavailable" => ErrorCode::Transport,
+        | "plugin_secure_store_unavailable"
+        | "plugin_callback_unavailable" => ErrorCode::Transport,
         "plugin_system_notification_denied" => ErrorCode::PermissionDenied,
         "plugin_vm_file_unsupported" => ErrorCode::Unsupported,
         "plugin_platform_unavailable" => ErrorCode::Unsupported,
         "plugin_host_suspended" => ErrorCode::Cancelled,
-        "plugin_notification_rate_limited" | "plugin_log_rate_limited" => ErrorCode::BudgetExceeded,
+        "plugin_notification_rate_limited"
+        | "plugin_log_rate_limited"
+        | "plugin_callback_budget" => ErrorCode::BudgetExceeded,
         "plugin_sdk_deadline" => ErrorCode::Deadline,
         "plugin_sdk_result_budget" => ErrorCode::BudgetExceeded,
         "config_apply_uncertain" | "plugin_storage_migration_uncertain" => ErrorCode::Uncertain,
@@ -111,6 +114,8 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
             "系统通知暂不可用，请检查系统通知设置或稍后重试".into()
         }
         "plugin_secure_store_unavailable" => super::vault::unavailable().message,
+        "plugin_callback_unavailable" => "浏览器回调接收通道暂不可用".into(),
+        "plugin_callback_budget" => "浏览器回调会话达到容量限制，请取消旧会话或等待到期".into(),
         "plugin_storage_migration_uncertain" => namespace::MIGRATION_UNCERTAIN.into(),
         _ => "插件宿主拒绝了本次操作".into(),
     };
@@ -1050,20 +1055,32 @@ impl Host {
                 }
                 json!({"url":args.url})
             }
-            Method::CallbackCreate => serde_json::to_value(
-                self.callbacks
-                    .create(format!("{plugin_id}/{component_id}"))?,
-            )
+            Method::CallbackCreate => serde_json::to_value(self.callback_create_checked(
+                manager,
+                plugin_id,
+                component_id,
+                &|| lease.check(Some(&call.request)).map_err(invocation_failure),
+            )?)
             .map_err(io::failure)?,
             Method::CallbackPoll => {
                 let args: CallbackArgs = decode(call.arguments)?;
-                self.callbacks
-                    .poll(&format!("{plugin_id}/{component_id}"), &args.session_id)?
+                self.callback_poll_checked(
+                    manager,
+                    plugin_id,
+                    component_id,
+                    &args.session_id,
+                    &|| lease.check(Some(&call.request)).map_err(invocation_failure),
+                )?
             }
             Method::CallbackCancel => {
                 let args: CallbackArgs = decode(call.arguments)?;
-                self.callbacks
-                    .cancel(&format!("{plugin_id}/{component_id}"), &args.session_id)?;
+                self.callback_cancel_checked(
+                    manager,
+                    plugin_id,
+                    component_id,
+                    &args.session_id,
+                    &|| lease.check(Some(&call.request)).map_err(invocation_failure),
+                )?;
                 Value::Bool(true)
             }
             Method::FileRead => {
