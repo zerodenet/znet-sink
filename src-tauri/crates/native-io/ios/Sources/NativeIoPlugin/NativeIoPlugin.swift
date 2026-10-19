@@ -125,6 +125,7 @@ final class NativeIoPlugin: Plugin {
 
     override init() {
         super.init()
+        HostSmoke.note(.pluginInitialized)
         // Startup cleanup is ordered before stage creation on the same queue. It removes only
         // this adapter's lease root, never Documents, profiles, subscription caches or logs.
         let root = stageRoot

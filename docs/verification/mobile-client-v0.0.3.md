@@ -1,5 +1,25 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：iOS无回执启动诊断
+
+安装回执提交 `fab55c087b4a2b0e73de2fe57d6b97904791f795`：PR完整iOS的device与
+Simulator通过；PR真实console记录同PID35247、ready/suspended/ready代次1/2/3及
+executor true/false/true（[实际job](https://github.com/zerodenet/znet-sink/actions/runs/39327645924/job/118317500636)）。
+VM成功，Keychain仍 unavailable/accepted:false。push device成功，但Simulator完整包
+构建后未收到UI/IPC回执，console为空，原失败与截图artifact保留（[失败job](https://github.com/zerodenet/znet-sink/actions/runs/39327636106/job/118317467369)）。
+此时原因未知，不把另一侧成功当作push通过，也不推断一定是测试环境。
+
+后续只新增显式Debug nonce下的原生初始化、WebView绑定、等待文档、派发驱动及回调阶段
+证据；进度文件与最终收据分开，不能通过UI/IPC验收。只记录固定枚举、PID及协议/加载
+布尔，不包含导航地址、异常正文或配置；缺失、损坏、旧nonce和过大进度不回显原文。
+超时时保留启动器存活/退出码及console大小，成功断言、等待预算和无凭据约束不变。
+没有自动重试或放宽验收。Node驱动9项、Python验证器12项通过；新增进度拒绝最终收据的
+首轮测试误限定异常类型（实际KeyError），修正拒绝断言后重跑。Swift实际SDK仍待此提交CI，
+不将诊断源码当作根因修复或手机验收。
+
+证据：`/workspace/artifacts/mobile-v0.0.3/mobile-install-receipts-1acab71/ios-118317467369.log`
+及同目录成功日志。共享调度安全改动仍是另一批未提交工作，不混入此诊断的旧SHA结论。
+
 ## 2026-10-19：原生包读取回执与安装材料核对
 
 在 `1acab717b3cbd805b6e9862b4f1728631730133d` 上继续。取消不创建计划，读取失败按

@@ -9,6 +9,18 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_progress_is_nonce_scoped_bounded_metadata_and_never_ui_completion(self):
+        value=dict(schemaVersion=1,nonce='a'*32,bundleIdentifier='org.zerodenet.znetsink',pid=42,
+                   stage='waiting-for-document',documentScheme='tauri',documentIsLoading=True,
+                   url='https://private/?token=secret',payload='secret')
+        self.assertEqual(verify.public_startup_progress(value,'a'*32),
+                         dict(stage='waiting-for-document',pid=42,documentScheme='tauri',documentIsLoading=True))
+        self.assertNotIn('secret',json.dumps(verify.public_startup_progress(value,'a'*32)))
+        for patch in [dict(nonce='b'*32),dict(stage='secret'),dict(pid=True),dict(documentScheme='secret'),dict(documentIsLoading='secret')]:
+            with self.subTest(patch=patch),self.assertRaises((AssertionError,KeyError)):
+                verify.public_startup_progress(dict(value,**patch),'a'*32)
+        with self.assertRaises((AssertionError,KeyError)): verify.validate_smoke(value,'a'*32)
+
     def test_lifecycle_console_projection_excludes_all_unselected_native_fields(self):
         receipts = [dict(schemaVersion=1, nonce='a'*32, pid=42, executorAccepting=phase=='ready',
                          token='private-token', platform=dict(state=phase, target=dict(os='ios'),

@@ -4,11 +4,40 @@ import WebKit
 // Not a product success signal. Only Debug plus an explicit per-launch nonce
 // can evaluate the fixed, test-bundle driver. Release has no driver entry point.
 enum HostSmoke {
+    enum Stage: String {
+        case pluginInitialized = "plugin-initialized"
+        case webviewAttached = "webview-attached"
+        case waitingForDocument = "waiting-for-document"
+        case evaluatingDriver = "evaluating-driver"
+        case javascriptReturned = "javascript-returned"
+    }
+    /// Separate progress evidence, never a completed UI/IPC or VPN receipt.
+    static func note(_ stage: Stage, webview: WKWebView? = nil) {
+        #if DEBUG
+        guard let nonce = ProcessInfo.processInfo.environment["ZNET_IOS_UI_SMOKE_NONCE"],
+              nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }),
+              let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        var value: [String: Any] = ["schemaVersion": 1, "nonce": nonce, "stage": stage.rawValue,
+                                   "pid": ProcessInfo.processInfo.processIdentifier,
+                                   "bundleIdentifier": Bundle.main.bundleIdentifier ?? ""]
+        if let view = webview {
+            value["documentScheme"] = ["tauri", "http", "https", "about"].contains(view.url?.scheme ?? "")
+                ? view.url!.scheme! : "absent-or-other"
+            value["documentIsLoading"] = view.isLoading
+        }
+        diagnostic("startup stage: " + stage.rawValue)
+        guard let bytes = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              bytes.count < 4096 else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? bytes.write(to: directory.appendingPathComponent("znet-ios-startup-smoke.json"), options: .atomic)
+        #endif
+    }
     static func start(_ webview: WKWebView) {
         #if DEBUG
         guard let nonce = ProcessInfo.processInfo.environment["ZNET_IOS_UI_SMOKE_NONCE"],
               nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }) else { return }
         diagnostic("native plugin accepted explicit launch nonce")
+        note(.webviewAttached, webview: webview)
         guard let scriptURL = Bundle.main.url(forResource: "ios-host-smoke", withExtension: "js"),
               let script = try? String(contentsOf: scriptURL, encoding: .utf8),
               script.utf8.count < 32768 else {
@@ -21,6 +50,7 @@ enum HostSmoke {
 
     #if DEBUG
     private static func waitForDocument(_ webview: WKWebView, script: String, nonce: String, remaining: Int) {
+        if remaining == 120 { note(.waitingForDocument, webview: webview) }
         // Plugin load precedes navigation. A fixed delay can evaluate in the
         // initial document and lose its async frame when the app URL loads.
         if webview.url?.scheme == "tauri", !webview.isLoading {
@@ -39,6 +69,7 @@ enum HostSmoke {
     }
 
     private static func evaluate(_ webview: WKWebView, script: String, nonce: String) {
+        note(.evaluatingDriver, webview: webview)
         diagnostic("evaluating fixed driver in actual WKWebView")
         webview.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
             switch result {
@@ -58,6 +89,7 @@ enum HostSmoke {
 
     private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String,
                                 error: NSError? = nil, stage: String = "javascript-callback") {
+        if stage == "javascript-callback" { note(.javascriptReturned, webview: webview) }
         diagnostic(stage)
         var inspectable = false
         if #available(iOS 16.4, *) { inspectable = webview.isInspectable }

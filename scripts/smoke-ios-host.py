@@ -32,6 +32,16 @@ def select_runtime(runtimes, devices):
     return max(candidates, key=lambda pair: tuple(int(part) for part in pair[0]['version'].split('.')))
 
 
+def startup_progress(container, nonce):
+    marker = container / 'Library/Caches/znet-ios-startup-smoke.json'
+    try:
+        if not marker.is_file() or marker.stat().st_size > 4096:
+            return None
+        return verify.public_startup_progress(json.loads(marker.read_text()), nonce)
+    except (OSError, ValueError, AssertionError, KeyError, TypeError):
+        return None
+
+
 def main(evidence):
     root = pathlib.Path(evidence)
     package = json.loads((root / 'package-receipt.json').read_text())
@@ -73,6 +83,7 @@ def main(evidence):
                         print(json.dumps(value, sort_keys=True), flush=True)
                         print(console.read_text(errors='replace')[-8192:], flush=True)
                         verify.validate_smoke(value, nonce)
+                        print(json.dumps(dict(nativeStartupProgress=startup_progress(container, nonce))), flush=True)
                         lifecycle = container / 'Library/Caches' / bundle / 'znet-plugin-lifecycle-smoke.json'
                         def observe(phase, after=-1):
                             deadline = time.monotonic() + 30
@@ -100,6 +111,11 @@ def main(evidence):
                     break
                 time.sleep(1)
             run('xcrun', 'simctl', 'io', device, 'screenshot', str(root / 'simulator-timeout.png'))
+            diagnostics = dict(nativeStartupProgress=startup_progress(container, nonce),
+                               launcherRunning=process.poll() is None,
+                               launcherExitCode=process.poll(), consoleBytes=console.stat().st_size)
+            (root / 'simulator-startup-diagnostics.json').write_text(json.dumps(diagnostics, indent=2) + '\n')
+            print(json.dumps(diagnostics), flush=True)
             # This is a fresh test container with no imported profiles/secrets.
             print(console.read_text(errors='replace')[-8192:], flush=True)
             raise RuntimeError('actual Simulator UI/IPC smoke receipt not received; see bounded native console')

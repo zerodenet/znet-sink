@@ -47,6 +47,21 @@ def public_plugin_lifecycle(receipts, nonce):
                  executorAccepting=row['executorAccepting']) for row in verified]
 
 
+def public_startup_progress(value, nonce):
+    """Progress cannot pass as a final smoke receipt or leak arbitrary native fields."""
+    assert value['schemaVersion'] == 1 and value['nonce'] == nonce
+    assert value['bundleIdentifier'] == 'org.zerodenet.znetsink'
+    assert type(value['pid']) is int and 0 < value['pid'] <= 2**31-1
+    assert value['stage'] in ['plugin-initialized', 'webview-attached', 'waiting-for-document',
+                              'evaluating-driver', 'javascript-returned']
+    result = dict(stage=value['stage'], pid=value['pid'])
+    if 'documentScheme' in value:
+        assert value['documentScheme'] in ['tauri', 'http', 'https', 'about', 'absent-or-other']
+        assert type(value['documentIsLoading']) is bool
+        result.update(documentScheme=value['documentScheme'], documentIsLoading=value['documentIsLoading'])
+    return result
+
+
 def validate_package(info, sdk, arches, symbols, build_info, strings):
     assert info['CFBundleIdentifier'] == 'org.zerodenet.znetsink'
     assert info['MinimumOSVersion'] == '16.4', 'iOS application floor changed'
