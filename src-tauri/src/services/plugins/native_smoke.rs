@@ -13,6 +13,7 @@ fn exercise(executor: &Executor, target: Target) -> AppResult<serde_json::Value>
     };
     let mut checks = Vec::new();
     for (id, source, expected) in [
+        ("arithmetic", "6*7", "arithmetic"),
         ("identity", "({answer:6*7,identity:JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))})", "value"),
         ("denied", "hostCall('{\"capability\":\"records.summary.read\",\"scope\":\"selection:smoke\"}')", "denied"),
         ("deadline", "while(true){}", "deadline"),
@@ -32,17 +33,18 @@ fn exercise(executor: &Executor, target: Target) -> AppResult<serde_json::Value>
         }).and_then(|receipt| receipt.into_value());
         let result = run();
         let passed = match expected {
+            "arithmetic" => result.as_ref().is_ok_and(|value| value.as_i64() == Some(42)),
             "value" => result.as_ref().is_ok_and(|value| value["answer"] == 42 && value["identity"]["plugin_id"] == "org.zerodenet.native-smoke"),
             "denied" => matches!(result, Err(Error::PermissionDenied)),
             _ => matches!(result, Err(Error::Deadline)),
         };
-        if !passed {return Err(AppError::internal("固定原生 VM 验证未通过"));}
+        if !passed {return Err(AppError {code:"native_vm_smoke_failed",message:"固定原生 VM 验证未通过".into(),details:Some(serde_json::json!({"fixture":id,"actual":result.as_ref().err().map(|error|format!("{error:?}")).unwrap_or_else(||"unexpected-value".into())}))});}
         authority.revoke();
         if run().is_ok() {return Err(AppError::internal("固定 VM 撤权验证未通过"));}
         checks.push(expected);
     }
     Ok(
-        serde_json::json!({"executed":true,"identity":checks.contains(&"value"),"ungrantedRejected":checks.contains(&"denied"),"deadlineEnforced":checks.contains(&"deadline"),"revocationEnforced":true,"target":target,"isolation":"bounded-in-process-interpreter"}),
+        serde_json::json!({"executed":true,"arithmetic":checks.contains(&"arithmetic"),"identity":checks.contains(&"value"),"ungrantedRejected":checks.contains(&"denied"),"deadlineEnforced":checks.contains(&"deadline"),"revocationEnforced":true,"target":target,"isolation":"bounded-in-process-interpreter"}),
     )
 }
 impl Host {

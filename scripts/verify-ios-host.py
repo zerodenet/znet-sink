@@ -17,7 +17,7 @@ def validate_smoke(receipt, nonce):
     checks = receipt['checks']
     for key in ['rustIpc', 'nativePresentation', 'fourTabs', 'onboarding', 'aboutAndReturn',
                 'vpnUnsupported', 'nativeLicenseAvailable', 'nativePluginVm']:
-        assert checks[key] is True, f'missing actual UI/IPC check: {key}'
+        assert checks.get(key) is True, f'missing actual UI/IPC check: {key}'
     assert checks['applicationId'] == 'org.zerodenet.znetsink'
     assert 0 < checks['width'] <= 1024 and checks['height'] > 0
     return receipt

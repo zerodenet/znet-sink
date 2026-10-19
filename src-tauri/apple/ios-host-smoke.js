@@ -1,3 +1,4 @@
+let stage = 'bootstrap';
 try {
 // Explicit CI-only driver evaluated by the Debug native plugin in the real WKWebView.
 // It uses the existing UI and IPC. It never supplies kernel samples or VPN success.
@@ -11,27 +12,33 @@ const wait = async (read, label) => {
 const check = (value, label) => { if (!value) throw Error(`ui-smoke-${label}`); };
 const visible = element => element && element.getClientRects().length > 0;
 const invoke = await wait(() => window.__TAURI_INTERNALS__?.invoke, 'ipc');
+stage = 'platform';
 const platform = await invoke('gui_mobile_platform_snapshot');
 check(platform.mobile && platform.platform === 'ios', 'real-ios-rust-host');
 check(!platform.vpnSupported && !platform.bundledKernelAvailable && platform.adaptationState === 'not-adapted', 'unsupported-vpn');
+stage = 'identity';
 const identity = await invoke('plugin:app|identifier');
 check(identity === 'org.zerodenet.znetsink', 'app-identity');
 let pluginHost;
+stage = 'plugin-profile';
 for (let i = 0; i < 60; i++) {
   pluginHost = await invoke('plugins_snapshot');
   if (pluginHost.platform?.state === 'ready') break;
   await new Promise(resolve => setTimeout(resolve, 250));
 }
 check(pluginHost?.platform?.executionAllowed && pluginHost.platform.target.os === 'ios', 'native-plugin-profile');
+stage = 'plugin-vm';
 const vm = await invoke('plugins_native_vm_smoke');
-check(vm.executed && vm.identity && vm.ungrantedRejected && vm.deadlineEnforced
+check(vm.executed && vm.arithmetic && vm.identity && vm.ungrantedRejected && vm.deadlineEnforced
   && vm.revocationEnforced && vm.target.os === 'ios', 'native-plugin-vm');
+stage = 'licenses';
 const licenses = await invoke('app_license_inventory');
 check(licenses.rust?.target?.platform === 'ios' && licenses.rust.entries.length > 0
   && licenses.rust.provenance?.kind !== 'inventory-unavailable', 'embedded-rust-license-inputs');
 check(licenses.native.status === 'available' && licenses.native.inventory?.target?.platform === 'ios'
   && licenses.native.inventory.entries.length > 0 && Array.isArray(licenses.native.inventory.gaps), 'native-license-asset');
 // Complete the actual onboarding using its controls; no storage seeding or UI fixture.
+stage = 'ui';
 await wait(() => document.querySelector('nav[aria-label="主导航"]') || document.querySelector('button[aria-label="步骤 4"]'), 'onboarding');
 if (!document.querySelector('nav[aria-label="主导航"]')) {
   document.querySelector('button[aria-label="步骤 4"]').click();
@@ -59,5 +66,10 @@ return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: tr
 
 } catch (cause) {
   const message = String(cause?.message ?? "");
-  return { failedCheck: /^ui-smoke-[a-z-]+$/.test(message) ? message : "ipc-or-script-failed" };
+  const code = typeof cause?.code === 'string' && ['plugin_platform_unavailable','plugin_host_suspended','native_vm_smoke_failed','invalid_argument','internal','permission_denied'].includes(cause.code) ? cause.code : 'unclassified';
+  const actual = typeof cause?.details?.actual === 'string' && ['PermissionDenied','Deadline','Revoked','GuestException','InvalidOutput','UnsupportedIsolation','IncompatibleDevice','IncompatibleVersion','AdmissionDenied','BudgetExceeded','HostFailure','Disabled','Busy','Cancelled','Expired','InvalidManifest','WrongHost','DigestMismatch','unexpected-value'].includes(cause.details.actual) ? cause.details.actual : undefined;
+  const fixture = typeof cause?.details?.fixture === 'string' && ['arithmetic','identity','denied','deadline'].includes(cause.details.fixture) ? cause.details.fixture : undefined;
+  const checks = ['real-ios-rust-host','unsupported-vpn','app-identity','native-plugin-profile','native-plugin-vm','embedded-rust-license-inputs','native-license-asset','four-tabs','native-presentation','return-control'].map(label => `ui-smoke-${label}`);
+  const timeouts = ['ipc','onboarding','start','navigation','tab','about-entry','about','about-identity','return'].map(label => `ui-smoke-timeout-${label}`);
+  return { failedCheck: checks.includes(message) || timeouts.includes(message) ? message : `ui-smoke-${stage}-ipc`, ipcCode: code, ...(actual ? {actual} : {}), ...(fixture ? {fixture} : {}) };
 }

@@ -62,7 +62,7 @@
     "ios:dev": "node scripts/ios-host.mjs dev",
     "ios:build:simulator": "bash scripts/build-ios-host.sh simulator",
     "ios:build:device": "bash scripts/build-ios-host.sh device",
-    "test:ios-host": "node --test scripts/test-ios-host.mjs"
+    "test:ios-host": "node --test scripts/test-ios-host.mjs scripts/test-ios-smoke-driver.mjs"
   },
   "config": {
     "commitizen": {

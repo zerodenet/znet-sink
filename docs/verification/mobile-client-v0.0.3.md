@@ -2,6 +2,14 @@
 
 ## 2026-10-19：移动插件前台宿主（继续批次）
 
+`5a99c4a` 实际 CI：Android Debug push/PR、unsigned Release push、Native documents
+push/PR及Mobile Rust push已成功；iOS PR device SDK包成功，但Simulator实际UI/IPC回执
+失败（`ipc-or-script-failed`）。完整App及QuickJS SDK构建已完成；失败发生在真实运行阶段，
+不能记作移动VM或生命周期通过。原日志保留为本批 `ios-pr-simulator-failure.log`，实际
+Simulator包468条许可输入/12明确缺口。后续诊断提交只增加固定阶段和白名单错误分类，
+另加独立算术检查，不回传异常原文、用户数据或任意错误字段，不降低验收断言。正在推进的
+平台安全存储另为未提交改动，不混入这次失败的既有提交结论。
+
 基线 `2b411b6c21c3ad3ef59a7589dc6e2ec85116e03f`；远端 develop 仍为
 `d39ad2787fb05052fa15065853ab71526441ccc3`，已包含在本分支；仍是 Draft PR #46。
 新增范围见[前台宿主契约](../gui/mobile-plugin-foreground-v0.0.3.md)。当前批 Apple
