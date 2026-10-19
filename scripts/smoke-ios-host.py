@@ -91,6 +91,7 @@ def main(evidence):
                         resumed = observe('ready', int(suspended['platform']['generation']))
                         receipts = verify.validate_plugin_lifecycle([ready, suspended, resumed], nonce)
                         (root / 'simulator-plugin-lifecycle.json').write_text(json.dumps(receipts, indent=2) + '\n')
+                        print(json.dumps(dict(nativePluginLifecycle=verify.public_plugin_lifecycle(receipts, nonce))), flush=True)
                         (root / 'simulator.json').write_text(json.dumps(dict(udid=device, name=candidates[0]['name'],
                             runtime=runtime['identifier'], runtimeVersion=runtime['version'], simulator=True,
                             deviceAcceptance=False, check='actual-WKWebView-and-Rust-IPC'), indent=2) + '\n')

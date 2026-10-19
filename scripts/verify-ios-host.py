@@ -39,6 +39,14 @@ def validate_plugin_lifecycle(receipts, nonce):
     return receipts
 
 
+def public_plugin_lifecycle(receipts, nonce):
+    """Bounded fixed facts only; future native fields never enter console logs."""
+    verified = validate_plugin_lifecycle(receipts, nonce)
+    return [dict(pid=row['pid'], phase=row['platform']['state'],
+                 generation=str(int(row['platform']['generation'])),
+                 executorAccepting=row['executorAccepting']) for row in verified]
+
+
 def validate_package(info, sdk, arches, symbols, build_info, strings):
     assert info['CFBundleIdentifier'] == 'org.zerodenet.znetsink'
     assert info['MinimumOSVersion'] == '16.4', 'iOS application floor changed'

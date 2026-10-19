@@ -28,10 +28,15 @@ async function fixture(page: Page, checked = true) {
           if(args.review.host_generation!==generation)throw {code:'plugin_review_stale',message:'原生宿主已变化，请重新审阅；草稿保留'};
           component.configuration.values=args.values;component.review.revision++;return snapshot();
         }
-        if(command==='plugins_native_package_pick')return {plan_id:'original-plan',review};
+        if(command==='plugins_native_package_pick') {
+          if((window as any).mobilePlugin.pickError)throw (window as any).mobilePlugin.pickError;
+          return (window as any).mobilePlugin.pickCancelled?null:{plan_id:'original-plan',review};
+        }
+        if(command==='plugins_native_package_inspect')return {pluginId:review.plugin_id,state:(window as any).mobilePlugin.inspectionState??'matching',installedVersion:'1.0.0',packageDigest:review.candidate_digest,observedAtUnixMs:'1792431000000'};
         if(command==='plugins_native_package_cancel')return;
         if(command==='plugins_native_package_confirm') {
           if(args.planId!=='original-plan'||args.approvalDigest!=='signed-package-digest')throw Error('wrong original plan');
+          if((window as any).mobilePlugin.confirmError)throw (window as any).mobilePlugin.confirmError;
           return snapshot();
         }
         if(command==='plugins_preview_install'||command==='plugins_install'||command==='plugin:dialog|open')throw Error('desktop path must not be used');
@@ -76,4 +81,78 @@ test('an unverified native catalog is not authoritative empty installation', asy
   await fixture(page,false);
   await expect(page.getByText('安装状态尚未核对',{exact:true})).toBeVisible();
   await expect(page.getByText('还没有已安装的插件',{exact:true})).toHaveCount(0);
+});
+
+test('native selection uncertainty remains visible without a partial plan or installation', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { (window as any).mobilePlugin.pickError={code:'plugin_native_selection_unconfirmed',message:'系统文件读取结果未确认；不会安装或自动重试'}; });
+  await page.getByRole('button',{name:'安装插件',exact:true}).click();
+  await page.getByRole('button',{name:/本地/}).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('读取结果未确认');
+  await expect(page.getByRole('button',{name:'信任并安装',exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).mobilePlugin.calls.filter((call:any)=>call.command==='plugins_native_package_confirm').length)).toBe(0);
+});
+
+test('native selection cancellation preserves the original page without an error or plan', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { (window as any).mobilePlugin.pickCancelled=true; });
+  await page.getByRole('button',{name:'安装插件',exact:true}).click();
+  await page.getByRole('button',{name:/本地/}).click();
+  await expect(page.getByRole('button',{name:/本地/})).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'信任并安装',exact:true})).toHaveCount(0);
+});
+
+test('a consumed native confirmation is never replayed and inspection retains the original target', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { (window as any).mobilePlugin.confirmError={code:'plugin_install_result_unconfirmed',message:'安装结果未确认，请重新读取'}; });
+  await page.getByRole('button',{name:'安装插件',exact:true}).click();
+  await page.getByRole('button',{name:/本地/}).click();
+  await page.getByRole('button',{name:'信任并安装',exact:true}).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('安装结果未确认');
+  await expect(page.getByRole('button',{name:'信任并安装',exact:true})).toBeDisabled();
+  await page.evaluate(()=>(window as any).mobilePlugin.changeHost());
+  await page.getByRole('button',{name:'重新读取安装状态',exact:true}).click();
+  await expect(page.getByText(/已核对安装材料：版本 1.0.0/)).toBeVisible();
+  const calls=await page.evaluate(()=>(window as any).mobilePlugin.calls);
+  expect(calls.filter((call:any)=>call.command==='plugins_native_package_confirm')).toHaveLength(1);
+  expect(calls.find((call:any)=>call.command==='plugins_native_package_inspect').args.target).toEqual({pluginId:'org.example.local',candidateDigest:'signed-package-digest',candidateVersion:'1.0.0',publisherFingerprint:'original-publisher-fingerprint'});
+  expect(calls.some((call:any)=>call.command==='plugins_refresh')).toBe(false);
+});
+
+test('a different installed package is reported without claiming or replaying the intended installation', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { Object.assign((window as any).mobilePlugin,{confirmError:{message:'结果未确认'},inspectionState:'different'}); });
+  await page.getByRole('button',{name:'安装插件',exact:true}).click();
+  await page.getByRole('button',{name:/本地/}).click();
+  await page.getByRole('button',{name:'信任并安装',exact:true}).click();
+  await page.getByRole('button',{name:'重新读取安装状态',exact:true}).click();
+  await expect(page.getByText(/与原审阅材料不同；不会替换或重放安装/)).toBeVisible();
+  await expect(page.getByText(/已核对安装材料/)).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).mobilePlugin.calls.filter((call:any)=>call.command==='plugins_native_package_confirm').length)).toBe(1);
+  await page.getByRole('button',{name:'返回',exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).mobilePlugin.calls.filter((call:any)=>call.command==='plugins_native_package_cancel').map((call:any)=>call.args.planId))).toEqual(['original-plan']);
+});
+
+for (const theme of ['light','dark']) test(`native installation recovery stays scrollable at 320px with enlarged ${theme} text`, async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(theme => {
+    Object.assign((window as any).mobilePlugin,{confirmError:{message:'安装结果未确认，请重新读取'}});
+    document.documentElement.classList.toggle('dark',theme==='dark');
+    document.documentElement.style.fontSize='20px';
+  },theme);
+  await page.getByRole('button',{name:'安装插件',exact:true}).click();
+  await page.getByRole('button',{name:/本地/}).click();
+  await page.getByRole('button',{name:'信任并安装',exact:true}).click();
+  const inspect=page.getByRole('button',{name:'重新读取安装状态',exact:true});
+  await inspect.scrollIntoViewIfNeeded();
+  await expect(inspect).toBeVisible();
+  expect((await inspect.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const dialog=page.getByRole('dialog');
+  expect(await dialog.evaluate(e=>e.scrollWidth<=e.clientWidth+1)).toBe(true);
+  expect(await page.locator('.plugin-local-review-scroll').evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+  await inspect.click();
+  await expect(page.getByText(/已核对安装材料/)).toBeVisible();
+  await page.getByRole('button',{name:'返回',exact:true}).click();
+  await expect(page.getByRole('button',{name:/本地/})).toBeEnabled();
 });

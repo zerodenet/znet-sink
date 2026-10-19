@@ -108,9 +108,10 @@
 .plugin-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px; padding: 14px; border: 1px solid color-mix(in srgb, var(--destructive) 35%, var(--border)); border-radius: 8px; }
 .plugin-danger-zone p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; }
 .plugin-install-modal-body { display: flex; flex: 1; min-height: 0; height: min(680px, calc(100dvh - 180px)); overflow: hidden; }
-.plugin-install-market { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.plugin-install-market { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .plugin-install-hidden { display: none; }
 .plugin-local-review { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.plugin-local-review button { min-height: 44px; }
 .plugin-local-review-nav { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .plugin-local-review-nav > span { color: var(--muted-foreground); font-size: 11px; }
 .plugin-local-review-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 4px; }

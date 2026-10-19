@@ -670,9 +670,9 @@ mod host {
         window: tauri::Window,
     ) -> AppResult<Option<crate::services::plugins::native_install::Preview>> {
         crate::services::native_documents::require_host(window.label())?;
-        use tauri_plugin_znet_native_io::{ImportPurpose, NativeIoExt, ReceiptStatus};
+        use tauri_plugin_znet_native_io::{ImportPurpose, NativeIoExt};
         let native_app = app.clone();
-        let receipt = tauri::async_runtime::spawn_blocking(move || {
+        let selected = tauri::async_runtime::spawn_blocking(move || {
             native_app
                 .state::<AppState>()
                 .plugins()
@@ -684,32 +684,19 @@ mod host {
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
-            native_app
-                .native_io()
-                .pick_read(
+            crate::services::plugins::native_install::selected_bytes(
+                native_app.native_io().pick_read(
                     &id,
                     ImportPurpose::PluginPackage,
                     znet_plugin_sandbox::distribution::MAX_PACKAGE_BYTES as u32,
-                )
-                .map_err(|_| {
-                    crate::errors::AppError::internal(
-                        "系统文件选择结果未确认，请先核对，不会自动重试",
-                    )
-                })
+                ),
+            )
         })
         .await
-        .map_err(|_| crate::errors::AppError::internal("系统文件选择未能完成"))??;
-        if receipt.status == ReceiptStatus::Cancelled {
+        .map_err(|_| crate::errors::AppError::internal("系统文件选择未能完成，未开始安装"))??;
+        let Some(bytes) = selected else {
             return Ok(None);
-        }
-        let bytes = receipt
-            .read_bytes()
-            .map_err(|_| crate::errors::AppError::invalid_argument("插件包读取回执无效"))?
-            .ok_or_else(|| {
-                crate::errors::AppError::invalid_argument(
-                    "系统未完成插件包读取；请检查文件权限或大小后重新选择",
-                )
-            })?;
+        };
         // Only a trusted native resume may reopen the host after the picker.
         for _ in 0..30 {
             if app
@@ -727,6 +714,20 @@ mod host {
                 .plugins()
                 .preview_native_package(state.capabilities(), bytes)
                 .map(Some)
+        })
+        .await
+    }
+    #[tauri::command]
+    pub async fn plugins_native_package_inspect(
+        app: AppHandle,
+        window: tauri::Window,
+        target: crate::services::plugins::native_install::InspectionTarget,
+    ) -> AppResult<crate::services::plugins::native_install::Inspection> {
+        crate::services::native_documents::require_host(window.label())?;
+        blocking(app, move |state| {
+            state
+                .plugins()
+                .inspect_native_installation(state.capabilities(), target)
         })
         .await
     }

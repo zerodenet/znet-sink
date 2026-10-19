@@ -86,6 +86,7 @@ export const pluginApi = {
   refresh: () => invoke<PluginSnapshot>('plugins_refresh'),
   previewInstall: (path: string) => invoke<PluginInstallReview>('plugins_preview_install', { path }),
   pickNativePackage: () => invoke<{ plan_id: string; review: PluginInstallReview } | null>('plugins_native_package_pick'),
+  inspectNativePackage: (review: PluginInstallReview) => invoke<{pluginId:string;state:'matching'|'different'|'not-installed';installedVersion:string|null;packageDigest:string|null;observedAtUnixMs:string}>('plugins_native_package_inspect', { target: { pluginId:review.plugin_id,candidateDigest:review.candidate_digest,candidateVersion:review.candidate_version,publisherFingerprint:review.publisher_fingerprint } }),
   confirmNativePackage: (planId: string, approvalDigest: string) => invoke<PluginSnapshot>('plugins_native_package_confirm', { planId, approvalDigest }),
   cancelNativePackage: (planId: string) => invoke<void>('plugins_native_package_cancel', { planId }),
   install: (path: string, approvalDigest?: string) => invoke<PluginSnapshot>('plugins_install', { path, approvalDigest }),

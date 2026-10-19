@@ -74,8 +74,11 @@
   let installOpen = $state(false);
   let localInstallPath = $state('');
   let localInstallPlan = $state('');
+  let localInstallSubmittedPlan = $state('');
   let localInstallReview = $state<PluginInstallReview | null>(null);
   let localInstallError = $state('');
+  let localInstallInspection = $state('');
+  let localInstallChecking = $state(false);
   let runGeneration = 0;
   let updateGeneration = 0;
   let alive = true;
@@ -134,7 +137,11 @@
     const timer = setInterval(() => {
       if (supported && selectedPluginId === null && document.visibilityState === 'visible' && panel?.getClientRects().length) void reload().catch(() => {});
     }, 3000);
-    return () => { alive = false; runGeneration++; reloadGeneration++; updateGeneration++; clearInterval(timer); unlisten?.(); };
+    return () => {
+      alive = false; runGeneration++; reloadGeneration++; updateGeneration++; clearInterval(timer); unlisten?.();
+      const pending = localInstallPlan || localInstallSubmittedPlan;
+      if (pending) void pluginApi.cancelNativePackage(pending).catch(() => {});
+    };
   });
   function clearResult() {
     result = ''; resultTitle = ''; resultDescription = '';
@@ -150,7 +157,7 @@
     requestedUpdate = null;
     localInstallPath = '';
     localInstallReview = null;
-    localInstallError = '';
+    localInstallError = ''; localInstallInspection = '';
     installOpen = true;
   }
   async function checkUpdates(catalog?: PluginListing[], components = snapshot.components) {
@@ -210,7 +217,7 @@
     snapshot = next;
     installOpen = false;
     requestedUpdate = null;
-    localInstallError = '';
+    localInstallError = ''; localInstallInspection = '';
     const requiresAuthorization = review.first_install || !review.current_version || review.added_permissions.length > 0
       || next.components.some(component => component.plugin_id === review.plugin_id && !component.enabled
         && component.permissions.some(permission => permission.required && !permission.granted));
@@ -232,7 +239,7 @@
   async function installLocal() {
     try {
       if (snapshot.platform) {
-        busy = true; error = ''; message = ''; localInstallError = '';
+        busy = true; error = ''; message = ''; localInstallError = ''; localInstallInspection = '';
         const selection = await pluginApi.pickNativePackage();
         if (!alive) {
           if (selection) void pluginApi.cancelNativePackage(selection.plan_id).catch(() => {});
@@ -246,18 +253,22 @@
       }
       const path = await open({ title: '选择插件包', multiple: false, directory: false, filters: [{ name: 'ZNet Sink 插件', extensions: ['zspkg'] }] });
       if (typeof path !== 'string') return;
-      busy = true; error = ''; message = ''; localInstallError = '';
+      busy = true; error = ''; message = ''; localInstallError = ''; localInstallInspection = '';
       const review = await pluginApi.previewInstall(path);
+      if (!alive) return;
       if (review.requires_approval) {
         localInstallPath = path;
         localInstallReview = review;
         return;
       }
-      snapshot = await pluginApi.install(path);
+      const installed = await pluginApi.install(path);
+      if (!alive) return;
+      snapshot = installed;
       installOpen = false;
       message = '插件已安装';
       toast.success('插件已安装');
     } catch (reason) {
+      if (!alive) return;
       localInstallError = getAppErrorInfo(reason, '本地插件预检失败').message;
       toast.error(localInstallError);
     }
@@ -265,29 +276,57 @@
   }
   function cancelLocalInstallReview() {
     if (busy) return;
-    if (localInstallPlan) void pluginApi.cancelNativePackage(localInstallPlan).catch(() => {});
-    localInstallPlan = '';
+    const pending = localInstallPlan || localInstallSubmittedPlan;
+    if (pending) void pluginApi.cancelNativePackage(pending).catch(() => {});
+    localInstallPlan = ''; localInstallSubmittedPlan = '';
     localInstallPath = '';
     localInstallReview = null;
-    localInstallError = '';
+    localInstallError = ''; localInstallInspection = '';
   }
   async function confirmLocalUpgrade() {
-    if (!localInstallReview || (!localInstallPath && !localInstallPlan)) return;
-    busy = true; error = ''; message = ''; localInstallError = '';
+    const review = localInstallReview;
+    const selectedPath = localInstallPath;
+    if (!review || busy || (!selectedPath && !localInstallPlan)) return;
+    busy = true; error = ''; message = ''; localInstallError = ''; localInstallInspection = '';
+    const nativePlan = localInstallPlan;
+    if (nativePlan) {
+      localInstallSubmittedPlan = nativePlan; // Retained for cancellation only if IPC never reached the host.
+      localInstallPlan = '';
+    }
     try {
-      const next = localInstallPlan
-        ? await pluginApi.confirmNativePackage(localInstallPlan, localInstallReview.candidate_digest)
-        : await pluginApi.install(localInstallPath, localInstallReview.candidate_digest);
-      installationFinished(next, localInstallReview);
+      const next = nativePlan
+        ? await pluginApi.confirmNativePackage(nativePlan, review.candidate_digest)
+        : await pluginApi.install(selectedPath, review.candidate_digest);
+      if (!alive) return;
+      installationFinished(next, review);
+      localInstallSubmittedPlan = '';
       localInstallPath = '';
       localInstallPlan = '';
       localInstallReview = null;
       toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新');
     } catch (reason) {
+      if (!alive) return;
       localInstallError = getAppErrorInfo(reason, '本地插件安装失败').message;
       toast.error(localInstallError);
     }
     finally { busy = false; }
+  }
+  async function inspectLocalInstallation() {
+    const review = localInstallReview;
+    if (!review || busy || localInstallPlan || localInstallPath) return;
+    busy = true; localInstallChecking = true; localInstallInspection = '';
+    try {
+      const value = await pluginApi.inspectNativePackage(review);
+      if (!alive || localInstallReview !== review) return;
+      localInstallError = '';
+      localInstallInspection = value.state === 'matching'
+        ? `已核对安装材料：版本 ${value.installedVersion ?? '—'}、摘要和发布者与原审阅一致。启用和运行权限仍单独确认。`
+        : value.state === 'different'
+          ? `当前安装版本为 ${value.installedVersion ?? '—'}，与原审阅材料不同；不会替换或重放安装。`
+          : '当前未安装此插件。本次确认不会重放；可返回市场重新选择和审阅。';
+    } catch (reason) {
+      if (alive && localInstallReview === review) localInstallError = getAppErrorInfo(reason, '安装状态仍未确认，不会重放安装').message;
+    } finally { busy = false; localInstallChecking = false; }
   }
   function componentKey(component: PluginComponent) {
     return component.review?.key ?? `${component.plugin_id}/${component.component_id}`;
@@ -642,8 +681,9 @@
 >
   <div class="plugin-install-modal-body">
     <div class="plugin-install-market" class:plugin-install-hidden={!!localInstallReview}>
+      {#if localInstallError && !localInstallReview}<p class="plugins-error plugin-install-error" role="alert">{localInstallError}</p>{/if}
       <PluginCatalog installed={snapshot.components} channel={releaseChannel} onchannelchange={selectReleaseChannel} {requestedUpdate} onrefresh={(catalog) => checkUpdates(catalog)} onlocalinstall={installLocal} onmanage={() => { installOpen = false; }} disabled={busy || runningKey !== null} oninstalled={(value, review) => { installationFinished(value, review); toast.success(pendingAuthorization ? '插件已安装，待确认运行权限' : '插件已更新'); }} />
-    </div>
+          </div>
     {#if localInstallReview}
       <div class="plugin-local-review">
         <div class="plugin-local-review-nav"><Button variant="ghost" size="sm" disabled={busy} onclick={cancelLocalInstallReview}><ArrowLeft size={14} />返回插件市场</Button><span>{localInstallReview.first_install ? '确认本地插件来源' : '确认插件更新范围'}</span></div>
@@ -660,9 +700,14 @@
               {/each}
             </div>
             {#if localInstallError}<p class="plugins-error" role="alert">{localInstallError}</p>{/if}
+            {#if localInstallInspection}<p class="plugins-notice" role="status">{localInstallInspection}</p>{/if}
+        {#if !localInstallPlan && !localInstallPath && !busy}
+          <p class="plugins-notice" role="status">本次安装确认已使用，不能重放。可重新读取安装状态，或返回市场重新选择和审阅。</p>
+          <Button variant="outline" disabled={busy} onclick={inspectLocalInstallation}>重新读取安装状态</Button>
+        {/if}
           </section>
         </div>
-        <div class="plugin-local-review-footer"><Button variant="outline" disabled={busy} onclick={cancelLocalInstallReview}>返回</Button><Button disabled={busy} onclick={confirmLocalUpgrade}>{busy ? '正在安装…' : localInstallReview.first_install ? '信任并安装' : '确认并更新'}</Button></div>
+        <div class="plugin-local-review-footer"><Button variant="outline" disabled={busy} onclick={cancelLocalInstallReview}>返回</Button><Button disabled={busy || (!localInstallPlan && !localInstallPath)} onclick={confirmLocalUpgrade}>{busy ? localInstallChecking ? '正在核对…' : '正在安装…' : localInstallReview.first_install ? '信任并安装' : '确认并更新'}</Button></div>
       </div>
     {/if}
   </div>

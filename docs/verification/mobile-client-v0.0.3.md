@@ -1,5 +1,28 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：原生包读取回执与安装材料核对
+
+在 `1acab717b3cbd805b6e9862b4f1728631730133d` 上继续。取消不创建计划，读取失败按
+容量、权限、文件提供者区分；缺回执/非法回执保持结果未确认，原生原因和路径不出桥。
+页面提交后原计划只能用于释放待审阅资源，不能再次确认；关闭/离开也释放仍未提交到宿主
+的计划，不声称撤回已执行安装。迟到的旧页面回执不触发新安装或成功提示。
+
+新增主页面专用只读核对命令：冻结原插件ID、候选版本、摘要和发布者指纹，重读本地登记
+和实际签名包，区分材料一致、不同、未安装和无法核对。不联网、不替换、不改授权/启用，
+也不以组件列表缓存代替包事实。返回时间使用字符串，页面显示核对结果并保持确认不可重放。
+材料一致不等于组件已运行；无登记、签名失败或损坏保留未确认。状态与触控布局见
+[宿主契约](../gui/mobile-plugin-foreground-v0.0.3.md)。
+
+当前本地：7项原生包/回执回归通过，完整 locked Rust workspace/all-targets/all-features
+1588通过/0失败/6忽略（GUI1310/0/5），Clippy及API24完整host通过、告警保留。前端完整
+验证通过，类型0错误/0警告及生产构建成功。新增 UI 首轮5通过/2失败，均为 Toast与面板
+错误的双重alert定位，限定dialog后重跑；记录保留，不称首轮全绿。中间插件全套65项及
+大字号布局全套67项通过，最终计划释放与迟到回执保护后再次核对67项通过，最终类型0错误/0警告及生产构建通过。浏览器fixture不是真机系统选择或安装验收。
+
+证据：`/workspace/artifacts/mobile-v0.0.3/mobile-install-receipts-1acab71/`。本批未改签名
+发行、VPN/TUN或core运行；前一安全存储SHA实际API24原语与Apple结果见下段，不能借用
+为当前提交CI或完整手机验收。
+
 ## 2026-10-19：原生插件安全存储（继续实施）
 
 在 `497250e28084e1dbc476d62e1e509bfe5e129421` 上继续，同一 Draft PR #46；
@@ -15,9 +38,25 @@
 r27d/API24 完整 Rust host check通过，当前 Cargo resolved 图417项/3明确许可缺口；
 不宣称最终逐包链接或法律合规。现有告警保留。
 
+安全存储提交 `1acab717b3cbd805b6e9862b4f1728631730133d` 的 Native documents
+push/PR各4 jobs成功；真实 Android 7.0/API24 emulator instrumentation各执行1项，
+覆盖原生包装、恢复、不可导出、损坏和丢失密钥拒绝替换（[push实际job](https://github.com/zerodenet/znet-sink/actions/runs/39324355239/job/118306216974)、
+[PR实际job](https://github.com/zerodenet/znet-sink/actions/runs/39324361966/job/118306240250)）。
+这是原生存储原语的实际执行，尚不证明 Android Rust/JNI/guest 全链或Galaxy S8。Swift策略
+和 unsigned iOS IO库SDK也已在同SHA通过。随后push/PR完整App的device与Simulator各job
+全部成功（[push Simulator](https://github.com/zerodenet/znet-sink/actions/runs/39324355720/job/118306439519)、
+[PR Simulator](https://github.com/zerodenet/znet-sink/actions/runs/39324361911/job/118306643404)）。
+push产物commit为1acab71；PR产物commit为GitHub测试合并a3d282f（parents d39ad27、
+1acab71，tree与head相同），两份Simulator包各469项许可输入/12明确缺口，不称合规。
+真实WKWebView/Rust回执 nativePluginVm:true；强制执行的同PID Settings切后台/回前台
+验证通过。Keychain实际回执为 unavailable、accepted:false，只计SDK拒绝契约通过，
+**不计Keychain可用**，不推测具体授权错误或创建凭据。Artifact转存URL在本环境返回403，
+未声称读到本地ZIP内生命周期原文；保留GitHubjob、console回执与artifact摘要。后续仅输出
+已验证的PID/phase/generation/executor布尔白名单，方便直接核对而不泄漏新增原生字段。
+
 Android原生库、13项JVM测试及实际隔离测试APK构建通过（82个实际任务）。检查合并清单
-确认测试包、Debug和min24，SDK临时测试签名与发行凭据分开。原生 AndroidKeyStore 尚待
-新CI的实际API24模拟器 instrumentation，不能把JVM或APK编译当作运行成功。首次构建与
+确认测试包、Debug和min24，SDK临时测试签名与发行凭据分开。原生 AndroidKeyStore 的
+独立CI运行记录见上段，不能把JVM或APK编译当作运行成功。首次构建与
 Rust链接因本环境磁盘耗尽失败，保留日志；仅迁移本任务生成缓存到临时盘并保持原路径链接，
 未重置源文件或删除证据，重新构建成功。
 

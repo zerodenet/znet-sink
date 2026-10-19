@@ -104,6 +104,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         plugin_commands::plugins_supported,
         plugin_commands::plugins_snapshot,
         plugin_commands::plugins_host_recheck,
+        plugin_commands::plugins_native_package_inspect,
         plugin_commands::plugins_native_vm_smoke,
         plugin_commands::plugins_page,
         plugin_commands::plugins_page_document,

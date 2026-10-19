@@ -9,6 +9,17 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_lifecycle_console_projection_excludes_all_unselected_native_fields(self):
+        receipts = [dict(schemaVersion=1, nonce='a'*32, pid=42, executorAccepting=phase=='ready',
+                         token='private-token', platform=dict(state=phase, target=dict(os='ios'),
+                         generation=str(index+1), credential='private-credential'))
+                    for index, phase in enumerate(['ready', 'suspended', 'ready'])]
+        projected = verify.public_plugin_lifecycle(receipts, 'a'*32)
+        self.assertEqual([row['generation'] for row in projected], ['1','2','3'])
+        self.assertEqual(set(projected[0]), {'pid','phase','generation','executorAccepting'})
+        self.assertNotIn('private', json.dumps(projected))
+        with self.assertRaises(AssertionError): verify.public_plugin_lifecycle(receipts, 'b'*32)
+
     def test_unavailable_secure_storage_never_counts_as_native_acceptance(self):
         receipt=copy.deepcopy(self.receipt)
         receipt['checks'].update(nativeSecureStorageState='unavailable',nativeSecureStorageAccepted=False)
