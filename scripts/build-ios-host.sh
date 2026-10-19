@@ -46,7 +46,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 const evidence = process.argv[2];
 fs.writeFileSync(path.join(evidence, 'license-config.json'), JSON.stringify({
-  build: {devUrl: null}, bundle: {resources: {
+  // Freeze the frontend already used by the input SDK build and inventory.
+  // Another Vite build can change rendered-chunk evidence even at one source
+  // revision. Keep strict freshness checks instead of comparing stale receipts.
+  build: {devUrl: null, beforeBuildCommand: ''}, bundle: {resources: {
     'resources/builtin-rules/NOTICE.md': 'resources/builtin-rules/NOTICE.md',
     'resources/builtin-rules/LICENSE.meta-rules-dat': 'resources/builtin-rules/LICENSE.meta-rules-dat',
     [path.join(evidence, 'license-inventory.native.json')]: 'license-inventory.native.json'
