@@ -10,6 +10,15 @@ Simulator包468条许可输入/12明确缺口。后续诊断提交只增加固�
 另加独立算术检查，不回传异常原文、用户数据或任意错误字段，不降低验收断言。正在推进的
 平台安全存储另为未提交改动，不混入这次失败的既有提交结论。
 
+诊断头 `5acb40f`：PR Simulator无回执失败单独保留；push Simulator给出真实
+`ui-smoke-plugin-vm-ipc / native_vm_smoke_failed / arithmetic / IncompatibleDevice`
+（[实际job](https://github.com/zerodenet/znet-sink/actions/runs/39317614933/job/118285466536)）。
+原因是共享解释器的最终兼容校验仍重新构造 desktop Target，未使用宿主已核对的移动
+设备。后续修复在原 owning operation 锁内固定并传入 Target，保留实际编译 OS/ABI、
+manifest、版本、权限、预算和隔离校验；legacy desktop入口仍不得猜测手机形态。
+增加 Any-target 声明也不能伪造宿主 ABI 的真实 VM 回归。修复后的 Apple执行结果待新头CI，
+不把先前SDK编译完成算作VM已运行。
+
 基线 `2b411b6c21c3ad3ef59a7589dc6e2ec85116e03f`；远端 develop 仍为
 `d39ad2787fb05052fa15065853ab71526441ccc3`，已包含在本分支；仍是 Draft PR #46。
 新增范围见[前台宿主契约](../gui/mobile-plugin-foreground-v0.0.3.md)。当前批 Apple

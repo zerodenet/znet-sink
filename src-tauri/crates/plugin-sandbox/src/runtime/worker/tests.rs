@@ -74,6 +74,56 @@ fn result_error(result: Result<ExecutionReceipt, Error>) -> Error {
 }
 
 #[test]
+fn reviewed_target_must_match_native_abi_even_for_an_any_device_manifest() {
+    let source = "42";
+    let original = component("native-target", source);
+    let mut manifest = original.manifest().clone();
+    manifest.targets = Targets::Any(AnyTarget::Any);
+    let component = Component::load(&serde_json::to_vec(&manifest).unwrap(), source).unwrap();
+    let manager = Manager::default();
+    let authority = Authority::admit_with_manager(&component, &BTreeSet::new(), &manager).unwrap();
+    authority
+        .authorize(BTreeSet::new(), Duration::from_secs(60))
+        .unwrap();
+    let binding = manager.component_snapshots().into_iter().next().unwrap();
+    let target = Target::native_desktop().unwrap();
+    let mut forged = target.clone();
+    forged.arch = if target.arch == Arch::Aarch64 {
+        Arch::X86_64
+    } else {
+        Arch::Aarch64
+    };
+    let reviewed = |target| ReviewedExecution {
+        target,
+        registration: binding.registration,
+        revision: binding.revision,
+        cancelled: Arc::new(AtomicBool::new(false)),
+        host_version: "0.0.1".into(),
+        dispatcher: None,
+        scheduled: false,
+    };
+    let executor = Executor::default();
+    assert_eq!(
+        result_error(executor.execute_reviewed(
+            &component,
+            &authority,
+            Value::Null,
+            reviewed(forged)
+        )),
+        Error::IncompatibleDevice
+    );
+    assert!(!manager.component_snapshots()[0].running);
+    assert_eq!(
+        executor
+            .execute_reviewed(&component, &authority, Value::Null, reviewed(target))
+            .unwrap()
+            .into_value()
+            .unwrap(),
+        42
+    );
+}
+
+#[test]
 fn shared_budget_rejects_overflow_and_shutdown_reports_real_sdk_draining() {
     let pool = Pool::new(1, 1);
     let first = pool.owner();
@@ -240,6 +290,7 @@ fn reviewed_real_vm_runs_on_worker_and_rejects_registration_and_epoch_changes() 
         Ok("\"real VM\"".into())
     });
     let options = || ReviewedExecution {
+        target: Target::native_desktop().unwrap(),
         registration: review.registration,
         revision: review.revision,
         cancelled: Arc::new(AtomicBool::new(false)),
@@ -293,6 +344,7 @@ fn page_cancel_during_real_sdk_wait_prevents_second_call_and_result_delivery() {
         &a,
         Value::Null,
         ReviewedExecution {
+            target: Target::native_desktop().unwrap(),
             registration: review.registration,
             revision: review.revision,
             cancelled: cancel,
@@ -356,6 +408,7 @@ fn two_worker_slots_are_shared_across_owners_and_queue_wait_preserves_guest_cpu_
             &a,
             Value::Null,
             ReviewedExecution {
+                target: Target::native_desktop().unwrap(),
                 registration: review.registration,
                 revision: review.revision,
                 cancelled: Arc::new(AtomicBool::new(false)),
@@ -397,6 +450,7 @@ fn real_vm_sdk_panic_is_fixed_failure_without_replacing_guest_or_host_permission
         &a,
         Value::Null,
         ReviewedExecution {
+            target: Target::native_desktop().unwrap(),
             registration: review.registration,
             revision: review.revision,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -421,6 +475,7 @@ fn ordinary_slow_sdk_keeps_original_wall_deadline_while_scheduled_keeps_separate
         .unwrap();
     let review = manager.component_snapshots().remove(0);
     let options = |scheduled| ReviewedExecution {
+        target: Target::native_desktop().unwrap(),
         registration: review.registration,
         revision: review.revision,
         cancelled: Arc::new(AtomicBool::new(false)),

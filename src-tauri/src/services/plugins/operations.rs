@@ -394,7 +394,7 @@ impl Host {
         let plugin = review.key.split_once('/').ok_or_else(stale)?.0;
         let _activity = self.activity_checked(manager, plugin)?;
 
-        let (component, authority, configuration, executor) = {
+        let (component, authority, configuration, executor, target) = {
             let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             self.current_review(manager, &review).map_err(|_| {
@@ -414,6 +414,7 @@ impl Host {
                 loaded.authority.clone().ok_or_else(stale)?,
                 configuration,
                 self.dispatch_executor()?,
+                self.platform.target()?,
             )
         };
         let input = serde_json::json!({ "configuration": configuration });
@@ -423,6 +424,7 @@ impl Host {
                 &authority,
                 input,
                 runtime::ReviewedExecution {
+                    target,
                     registration: review.registration,
                     revision: review.revision,
                     cancelled: Arc::new(AtomicBool::new(false)),
@@ -530,7 +532,16 @@ impl Host {
         {
             return Err(AppError::invalid_argument("插件页面操作参数无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state, binding, executor) = {
+        let (
+            component,
+            authority,
+            configuration,
+            publisher,
+            plugin_state,
+            binding,
+            executor,
+            target,
+        ) = {
             let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
             if cancelled.load(Ordering::Acquire) {
@@ -574,6 +585,7 @@ impl Host {
                 plugin_state,
                 binding,
                 self.dispatch_executor()?,
+                self.platform.target()?,
             )
         };
         let digest = component.digest().to_owned();
@@ -588,6 +600,7 @@ impl Host {
                 &authority,
                 input,
                 runtime::ReviewedExecution {
+                    target,
                     registration: binding.registration,
                     revision: binding.revision,
                     cancelled,
@@ -657,7 +670,16 @@ impl Host {
         if !action.starts_with("lifecycle.scheduled.") {
             return Err(AppError::invalid_argument("插件后台动作无效"));
         }
-        let (component, authority, configuration, publisher, plugin_state, binding, executor) = {
+        let (
+            component,
+            authority,
+            configuration,
+            publisher,
+            plugin_state,
+            binding,
+            executor,
+            target,
+        ) = {
             let _operation = self.operation_guard()?;
             let manager = app.state::<crate::state::app_state::AppState>();
             self.checked_rescan(manager.capabilities())?;
@@ -685,6 +707,7 @@ impl Host {
                 namespace::runtime_state(&self.root()?, &loaded.publisher_fingerprint, plugin_id)?,
                 binding,
                 self.dispatch_executor()?,
+                self.platform.target()?,
             )
         };
         let digest = component.digest().to_owned();
@@ -703,6 +726,7 @@ impl Host {
                     }
                 }),
                 runtime::ReviewedExecution {
+                    target,
                     registration: binding.registration,
                     revision: binding.revision,
                     cancelled: Arc::new(AtomicBool::new(false)),

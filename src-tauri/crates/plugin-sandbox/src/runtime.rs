@@ -219,6 +219,7 @@ fn execute_inner(
             sdk_dispatcher,
             scheduled,
             None,
+            Target::native_desktop()?,
         )?
         .into_value()
 }
@@ -226,6 +227,8 @@ fn execute_inner(
 /// Only trusted host adapters construct this binding after validating the
 /// original review under their owning operation lock.
 pub struct ReviewedExecution {
+    /// Native host facts frozen with the original review; never guest input.
+    pub target: Target,
     pub registration: u64,
     pub revision: u64,
     pub cancelled: Arc<AtomicBool>,
@@ -241,6 +244,9 @@ impl Executor {
         input: serde_json::Value,
         reviewed: ReviewedExecution,
     ) -> Result<ExecutionReceipt, Error> {
+        if reviewed.target != Target::native_for_device(reviewed.target.device)? {
+            return Err(Error::IncompatibleDevice);
+        }
         self.execute_owned(
             component,
             authority,
@@ -252,6 +258,7 @@ impl Executor {
             reviewed.dispatcher,
             reviewed.scheduled,
             Some((reviewed.registration, reviewed.revision)),
+            reviewed.target,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -267,8 +274,9 @@ impl Executor {
         sdk_dispatcher: Option<HostSdkDispatcher>,
         scheduled: bool,
         reviewed: Option<(u64, u64)>,
+        target: Target,
     ) -> Result<ExecutionReceipt, Error> {
-        component.compatible(&Target::native_desktop()?, host_version, Isolation::Vm)?;
+        component.compatible(&target, host_version, Isolation::Vm)?;
         let lease =
             Arc::new(authority.begin_worker(component, cancelled.clone(), scheduled, reviewed)?);
         let component = component.clone();

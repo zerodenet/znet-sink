@@ -28,6 +28,7 @@ fn exercise(executor: &Executor, target: Target) -> AppResult<serde_json::Value>
         authority.authorize(BTreeSet::from([permission.clone()]), Duration::from_secs(10)).map_err(io::failure)?;
         let review = manager.component_snapshots().into_iter().find(|row| !row.retired).ok_or_else(stale)?;
         let run = || executor.execute_reviewed(&component, &authority, serde_json::Value::Null, ReviewedExecution {
+            target: target.clone(),
             registration:review.registration, revision:review.revision,
             cancelled:Arc::new(AtomicBool::new(false)), host_version:env!("CARGO_PKG_VERSION").into(), dispatcher:None, scheduled:false,
         }).and_then(|receipt| receipt.into_value());
