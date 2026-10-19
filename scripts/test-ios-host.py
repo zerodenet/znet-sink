@@ -1,4 +1,5 @@
 import copy
+import json
 import pathlib
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -8,6 +9,16 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_packaged_inventory_rejects_wrong_sdk_or_missing_materials(self):
+        value = dict(schemaVersion=1, target=dict(platform='ios', triple='aarch64-apple-ios-sim', profile='debug'),
+                     provenance=dict(kind='ios-application-resolved-input-inventory'), texts=[], gaps=[],
+                     entries=[dict(licenseTextIds=[], noticeTextIds=[])])
+        verify.validate_inventory_asset(json.dumps(value).encode(), 'iphonesimulator')
+        with self.assertRaises(AssertionError):
+            verify.validate_inventory_asset(json.dumps(value).encode(), 'iphoneos')
+        value['entries'][0]['licenseTextIds'] = ['missing']
+        with self.assertRaises(AssertionError):
+            verify.validate_inventory_asset(json.dumps(value).encode(), 'iphonesimulator')
     def test_runtime_discovery_uses_reported_versions_and_available_phones(self):
         def runtime(version, available=True):
             return dict(identifier='com.apple.CoreSimulator.SimRuntime.iOS-' + version.replace('.', '-'),
@@ -28,7 +39,7 @@ class HostContracts(unittest.TestCase):
                          CFBundlePackageType='APPL', CFBundleShortVersionString='0.0.3',
                          CFBundleSupportedPlatforms=['iPhoneSimulator'])
         self.checks = dict(rustIpc=True, nativePresentation=True, fourTabs=True, onboarding=True,
-                          aboutAndReturn=True, vpnUnsupported=True, nativeLicenseUnavailable=True,
+                          aboutAndReturn=True, vpnUnsupported=True, nativeLicenseAvailable=True,
                           applicationId='org.zerodenet.znetsink', width=393, height=852)
         self.receipt = dict(schemaVersion=1, nonce='a' * 32, status='completed',
                             bundleIdentifier='org.zerodenet.znetsink', nativePlugin='znet-native-io',

@@ -17,7 +17,18 @@ pub(crate) struct Candidate {
     pub report: CompositionReport,
 }
 
-pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppResult<Candidate> {
+pub(crate) fn finalize(base: &Value, config: Value, inputs: &Inputs) -> AppResult<Candidate> {
+    finalize_with_assets(base, config, inputs, |_| Ok(()))
+}
+
+/// Resolve verified client assets after all DNS projections and before the
+/// final reference check. Every caller still receives a validated candidate.
+pub(crate) fn finalize_with_assets(
+    base: &Value,
+    mut config: Value,
+    inputs: &Inputs,
+    materialize: impl FnOnce(&mut Candidate) -> AppResult<()>,
+) -> AppResult<Candidate> {
     let mut report = CompositionReport {
         source_profile_id: inputs.source_profile_id.clone(),
         ..Default::default()
@@ -114,6 +125,8 @@ pub(crate) fn finalize(base: &Value, mut config: Value, inputs: &Inputs) -> AppR
         &mut config,
         |config| preferences::apply_bypass(config, base, &inputs.app),
     )?;
-    super::route_integrity::validate(&config)?;
-    Ok(Candidate { config, report })
+    let mut candidate = Candidate { config, report };
+    materialize(&mut candidate)?;
+    super::route_integrity::validate(&candidate.config)?;
+    Ok(candidate)
 }

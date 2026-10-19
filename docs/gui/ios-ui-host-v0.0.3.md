@@ -2,7 +2,7 @@
 
 本批复用现有 Svelte 四底栏、Rust mobile entry、`mobile_host/application.rs` 和 NativeIo Swift 插件，补标准 Tauri 主应用工程的可复现生成、完整 SDK 构建和 Simulator 烟测。最低 **iOS 16.4**；Swift 文档库自己的 15.0 下限不代表主应用下限。版本显示保留完整客户端 dev semver，Apple 数字 bundle version 单独映射。
 
-VPN、Packet Tunnel extension、App Group、完整内核接入与原生 VPN 生命周期继续后置，见 [todo](../../todo.md)。主应用能编译、启动或展示页面不等于这些能力完成。`gui_mobile_platform_snapshot` 仍返回 VPN unsupported、内核未随包可运行。iOS 原生许可 reader 仍明确 unavailable；已有 Swift 清单只覆盖库/SDK 证据，不用空清单伪造完整 App 目录。
+VPN、Packet Tunnel extension、App Group、完整内核接入与原生 VPN 生命周期继续后置，见 [todo](../../todo.md)。主应用能编译、启动或展示页面不等于这些能力完成。`gui_mobile_platform_snapshot` 仍返回 VPN unsupported、内核未随包可运行。iOS 原生许可 reader 现读取固定包内资产；完整宿主构建增加实际 Rust/Vite/各 SwiftPM 输入收集、标准资源再构建与最终资产校验，见[许可清单](dependency-license-inventory-v0.0.3.md)。普通开发构建未生成资产时明确 missing；材料与逐包最终链接证明的缺口仍保留，当前提交的执行结果以 CI 为准。
 
 ## 工程所有权与生成
 
@@ -60,6 +60,6 @@ CI 按实际发现的可用 iPhone 设备选择最高数字版本 runtime，记�
 
 4. Safari Inspector：Mac Safari 开启开发者菜单，iPhone Safari 高级设置开启 Web Inspector；选择 Develop → 对应 Simulator/设备 → ZNet Sink WebView。Debug inspector 可用，Release 不主动启用 devtools Cargo feature。分别在 Safari 看 WebView console/network、在保留的 CLI/Xcode console 看 Rust/native 错误。官方说明见 [Tauri Debug](https://v2.tauri.app/develop/debug/)、[WebKit Inspector](https://webkit.org/web-inspector/enabling-web-inspector/) 和 [Apple Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)。
 
-5. 用户最小验收：记录 iPhone 型号、iOS、Xcode、commit；启动与切后台/前台；核对四底栏、安全区、系统字号、表单软键盘、关于版本与许可 unavailable；取消一次系统文件选择应保留原草稿。未进行的 VPN/锁屏/撤权/网络切换和真实文件提供者场景逐项保留未验收。
+5. 用户最小验收：记录 iPhone 型号、iOS、Xcode、commit；启动与切后台/前台；核对四底栏、安全区、系统字号、表单软键盘、关于版本与实际许可状态（无资产的开发构建为 missing）；取消一次系统文件选择应保留原草稿。未进行的 VPN/锁屏/撤权/网络切换和真实文件提供者场景逐项保留未验收。
 
 CI 的 Simulator `.app` 只用于 Simulator，unsigned iPhoneOS 产品也不能当作已签名可安装包。完整真机验收结果需用户本机反馈；不从截图或库编译推断。

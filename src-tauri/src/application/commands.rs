@@ -279,6 +279,7 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
         gui_events_commands::gui_events_start,
         gui_events_commands::gui_events_stop,
         debug_commands::gui_debug_frames,
+        debug_commands::gui_local_data_summary,
         debug_commands::gui_debug_capture,
         debug_commands::gui_connection_history_export,
         debug_commands::gui_debug_clear,

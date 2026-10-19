@@ -15,6 +15,21 @@ const RECORD_BYTES: usize = 64 * 1024;
 const PAGE_BYTES: usize = 512 * 1024;
 static DEBUG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+pub(crate) fn storage() -> super::local_data::LocalStoreStorage {
+    let _guard = DEBUG_FILE_LOCK.lock().expect("debug file mutex poisoned");
+    super::local_data::inspect(
+        "capture",
+        data_dir().map(|root| {
+            let paths = segment_paths(&root.join("logs/debug.log.jsonl"));
+            (root, paths)
+        }),
+        Some(SEGMENT_BYTES * (ARCHIVE_COUNT as u64 + 1)),
+        None,
+        None,
+        "segment-rotation",
+    )
+}
+
 fn io_error(error: std::io::Error) -> AppError {
     AppError {
         code: "io_error",

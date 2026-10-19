@@ -74,11 +74,15 @@
    ```
 
    缺固定 asset、错误 target、过期 frontend SHA 或缺 native payload 直接失败。外部 receipt 不追溯修改 APK。若没有实际 compiler JSON，则 Rust entries 继续标为 resolved，不能把普通 build log 当各包编译证明。
-5. iOS 收集需传入实际 `--cargo-metadata`、`--swift-build-path`（SourcePackages）、`--build-log`、`--target`，可传 `--resolved-file`、`--sdk-path/--sdk-data`、`--artifact`。目标从实际 Swift compiler `-target`/Mach-O 而不是 runner 名推断；pin/checkout/SDK/architecture 不符不能声明编译成功。iOS 主应用标准生成与完整 SDK 检查另见 [UI 宿主](ios-ui-host-v0.0.3.md)；本节 Swift 收集器仍只提供库/SDK 范围证据，主应用原生 reader 明确 unavailable；不声称该清单已进入完整 iPhone 产品。
+5. iOS 独立库收集仍接受实际 `--cargo-metadata`、`--swift-build-path`（SourcePackages）、`--build-log`、`--target` 和可选 `--resolved-file`、`--sdk-path/--sdk-data`、`--artifact`。它的结果保持库级范围。主应用的 `build-ios-host.sh` 使用独立新 Cargo target 目录先执行真实 SDK build，再由 `license-ios-app.mjs` 从该 target 的实际 SwiftPM workspace 逐一收集 Cargo 图中的 iOS Swift packages：宿主包、Tauri API、实际 SwiftRs pin/checkout 和 SDK imports。每个 registry 宿主的 Swift/法律文件逐字节绑定自己 Cargo.lock 的 archive；不按时间选择旧缓存，不用单个 NativeIO 库清单替代其他插件。
+
+   Rust target/profile/features、Vite 实际 frontend 和 Swift resolved-input 清单组合为固定资源，经同一锁定 CLI 再次构建完整 App。`license-ios-artifact.mjs` 检查实际 `.app/assets/license-inventory.native.json` 与预收集字节完全相同，核对最新 frontend 和三类材料缓存 SHA、正文摘要及引用。第一轮 App 不作为最终包；不在产物事后注入许可证。Simulator 的真实 Rust→Swift IPC smoke 读取包内资料，device SDK unsigned 包仅做产物检查。是否在当前提交实际成功见 CI 与验证记录，Linux fixture 本身不代表 Apple 构建通过。
+
+   这些是解析输入与实际资产包含证据，不证明逐包最终链接保留或签名/安装/手机验收。未观察到 pin/checkout、缺许可声明和材料缺口仍保留；平台 SDK imports 不是第三方许可全文，也不由此声称 Network Extension、运行服务或 VPN 已完成。完整宿主构建见 [UI 宿主](ios-ui-host-v0.0.3.md)。
 
 ## 读取与验证
 
-About 消费前端 fixed JSON、`app_license_inventory` 中的 Rust embedded_snapshot 及原生固定 asset。宿主主窗口准入；Android `readLicenseInventory` 不接收任意路径/URI，也不走 SAF grant。16 MiB 预算和 available/missing/invalid 分开；Desktop/iOS 未实现固定 app asset reader 时保留 unavailable。取消/文件权限与许可只读读取无关。
+About 消费前端 fixed JSON、`app_license_inventory` 中的 Rust embedded_snapshot 及原生固定 asset。宿主主窗口准入；Android/iOS `readLicenseInventory` 不接收任意路径/URI，也不走文档授权。iOS 只读取 Bundle.main 的固定 assets 子目录，读取本身受 16 MiB 加一个 witness byte 限制；available/missing/invalid 分开，无包内清单的普通开发构建返回 missing。Desktop 没有原生 asset adapter 时保留 unavailable。取消/文件权限与许可只读读取无关。
 
 - `node scripts/test-license-inventory.mjs`：SPDX 非全文、UTF-8、依赖目录隔离、摘要篡改、引用缺失、确定性、来源脱敏、明确 POM URL 绑定及 Android target/features 冲突。
 - `pnpm test:licenses` 同时执行包身份/缓存新鲜度回归、实际 Vite/Tailwind 字体与 CSS 构建、Swift 原始 archive/Git blob/SDK 目标校验及 Android 原字节版权截取测试；fixture 通过不表示手机或 Apple 构建已验收。

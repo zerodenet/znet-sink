@@ -28,16 +28,16 @@ test('full build uses no-sign, embedded frontend and separate simulator/device e
   assert.match(read('.github/workflows/ios-app-host.yml'), /target: \[simulator, device\]/);
   assert.equal(JSON.parse(read('src-tauri/tauri.ios.conf.json')).bundle.iOS.minimumSystemVersion, '16.4');
 });
-test('smoke is Debug and launch-nonce gated; real UI/IPC retains unsupported VPN and license gap', () => {
+test('smoke is Debug and launch-nonce gated; real UI/IPC reads the packaged inventory while VPN remains unsupported', () => {
   const swift = read('src-tauri/crates/native-io/ios/Sources/NativeIoPlugin/HostSmoke.swift');
   assert.match(swift, /#if DEBUG/); assert.match(swift, /nonce\.count == 32/);
   assert.match(swift, /Bundle\.main\.url\(forResource: "ios-host-smoke"/);
   const driver = read('src-tauri/apple/ios-host-smoke.js');
   assert.match(driver, /invoke\('gui_mobile_platform_snapshot'\)/);
   assert.match(driver, /!platform\.vpnSupported/);
-  assert.match(driver, /licenses\.native\.status === 'unavailable'/);
+  assert.match(driver, /licenses\.native\.status === 'available'/);
   assert.doesNotMatch(driver, /localStorage|mockResolvedValue|__TAURI_IPC__/);
-  assert.match(read('src-tauri/crates/native-io/src/lib.rs'), /return Err\(Error::Unavailable\)/);
+  assert.match(read('src-tauri/crates/native-io/src/lib.rs'), /"readLicenseInventory"/);
 });
 test('actual verifier negative contracts reject stale receipts, wrong SDK and absent native UI', () => {
   execFileSync('python3', ['-B', 'scripts/test-ios-host.py'], { stdio: 'pipe' });

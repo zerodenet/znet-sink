@@ -65,21 +65,14 @@ impl<R: Runtime> NativeIo<R> {
     pub fn license_inventory(&self) -> Result<NativeLicenseResponse> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         {
-            #[cfg(target_os = "ios")]
-            {
-                return Err(Error::Unavailable);
-            }
-            #[cfg(target_os = "android")]
-            {
-                let response: NativeLicenseResponse = self
-                    .handle
-                    .run_mobile_plugin(
-                        "readLicenseInventory",
-                        std::collections::BTreeMap::<String, String>::new(),
-                    )
-                    .map_err(|_| Error::BridgeResultUnknown)?;
-                response.validated()
-            }
+            let response: NativeLicenseResponse = self
+                .handle
+                .run_mobile_plugin(
+                    "readLicenseInventory",
+                    std::collections::BTreeMap::<String, String>::new(),
+                )
+                .map_err(|_| Error::BridgeResultUnknown)?;
+            response.validated()
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {

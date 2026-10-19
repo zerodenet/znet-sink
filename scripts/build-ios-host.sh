@@ -17,6 +17,9 @@ evidence="${ZNET_IOS_EVIDENCE_DIR:-$PWD/ios-host-evidence/$variant}"
 [[ ! -e "$evidence" ]] || { echo 'Use a fresh evidence directory to avoid stale success.' >&2; exit 1; }
 mkdir -p "$evidence"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2
+# A fresh target directory binds each SwiftPM workspace to this SDK build;
+# never choose among stale build-script outputs using their modification time.
+export CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/znet-ios-$variant.XXXXXX")"
 export IPHONEOS_DEPLOYMENT_TARGET=16.4
 # swift-rs chooses Debug from Cargo's DEBUG (debug-info enabled), not Xcode's
 # configuration. Keep limited symbols so the nonce-gated Debug smoke is built.
@@ -25,12 +28,40 @@ xcodebuild -version > "$evidence/xcode-version.txt"
 xcrun --sdk "$sdk" --show-sdk-version > "$evidence/sdk-version.txt"
 pnpm tauri ios build --help > "$evidence/locked-cli-build-help.txt"
 rustup target add "$rust_target"
+cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked \
+  --filter-platform "$rust_target" > "$evidence/cargo-metadata.json"
+node scripts/license-rust.mjs --target "$rust_target" --profile debug \
+  --features tool-dns,tool-route,tool-node-probe --output "$evidence/rust-license.json"
+export ZNET_LICENSE_INVENTORY="$evidence/rust-license.json"
 pnpm ios:init 2>&1 | tee "$evidence/init.log"
 # A packaged Debug build uses embedded assets, not Vite or a CI network URL.
 pnpm tauri ios build --debug --target "$cli_target" --ci --no-sign \
-  --config '{"build":{"devUrl":null}}' -- --locked 2>&1 | tee "$evidence/app-build.log"
+  --config '{"build":{"devUrl":null}}' -- --locked 2>&1 | tee "$evidence/input-build.log"
+node scripts/license-ios-app.mjs --cargo "$evidence/rust-license.json" \
+  --frontend build/license-inventory.frontend.json --metadata "$evidence/cargo-metadata.json" \
+  --target-dir "$CARGO_TARGET_DIR" --sdk-path "$(xcrun --sdk "$sdk" --show-sdk-path)" \
+  --evidence "$evidence/swift-inventories" --output "$evidence/license-inventory.native.json"
+node --input-type=module - "$evidence" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+const evidence = process.argv[2];
+fs.writeFileSync(path.join(evidence, 'license-config.json'), JSON.stringify({
+  build: {devUrl: null}, bundle: {resources: {
+    'resources/builtin-rules/NOTICE.md': 'resources/builtin-rules/NOTICE.md',
+    'resources/builtin-rules/LICENSE.meta-rules-dat': 'resources/builtin-rules/LICENSE.meta-rules-dat',
+    [path.join(evidence, 'license-inventory.native.json')]: 'license-inventory.native.json'
+  }}
+}));
+JS
+# Rebuild through the same CLI resource pipeline. Do not inject legal assets
+# into the produced App afterwards, or reuse the first build as final evidence.
+pnpm tauri ios build --debug --target "$cli_target" --ci --no-sign \
+  --config "$evidence/license-config.json" -- --locked 2>&1 | tee "$evidence/app-build.log"
 python3 scripts/verify-ios-host.py package --sdk "$sdk" --root src-tauri/gen/apple \
   --output "$evidence/package-receipt.json" --copy "$evidence"
+node scripts/license-ios-artifact.mjs --app "$evidence/ZNetSink.app" \
+  --expected "$evidence/license-inventory.native.json" --frontend build/license-inventory.frontend.json \
+  --output "$evidence/license-package-receipt.json"
 if [[ "$variant" = simulator ]]; then
   python3 scripts/smoke-ios-host.py --evidence "$evidence"
 fi

@@ -8,7 +8,6 @@ import { applyPackageMaterialCache } from './license-materials.mjs';
 import { sha256 as hash, entryId as commonEntryId, readTextMaterials, serializeInventory } from './license-common.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const nativeRoot = path.join(repo, 'src-tauri/crates/native-io/ios');
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index];
@@ -16,7 +15,8 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args.set(key.slice(2), process.argv[index + 1]);
 }
 const allowed = new Set(['cargo-metadata', 'swift-build-path', 'target', 'output', 'build-log',
-  'sdk-data', 'sdk-path', 'artifact', 'resolved-file', 'profile', 'cargo-lock', 'cargo-archive', 'materials-cache']);
+  'sdk-data', 'sdk-path', 'artifact', 'resolved-file', 'profile', 'cargo-lock', 'cargo-archive', 'materials-cache',
+  'host-package', 'application-inputs']);
 for (const key of args.keys()) if (!allowed.has(key)) throw new Error(`Unknown option: ${key}`);
 if (!args.has('cargo-metadata') || !args.has('output')) {
   throw new Error('Required: --cargo-metadata PATH --output PATH');
@@ -112,8 +112,12 @@ function observedHeaders(files, root, sourceLabel) {
   return [...new Set(ids)];
 }
 const metadata = JSON.parse(input(args.get('cargo-metadata'), 'locked-cargo-metadata').toString('utf8'));
-const host = metadata.packages.find((pkg) => pkg.name === 'tauri-plugin-znet-native-io');
-if (!host) throw new Error('Cargo metadata must include tauri-plugin-znet-native-io');
+const hostName = args.get('host-package') ?? 'tauri-plugin-znet-native-io';
+const host = metadata.packages.find((pkg) => pkg.name === hostName);
+if (!host) throw new Error('Cargo metadata must include the requested Swift host');
+const hostRoot = host.manifest_path ? path.dirname(host.manifest_path) : path.join(repo, 'src-tauri/crates/native-io');
+const nativeRoot = path.join(hostRoot, 'ios');
+const applicationInputs = args.get('application-inputs') === '1';
 const node = metadata.resolve?.nodes.find((item) => item.id === host.id);
 const tauriId = node?.deps.find((dep) => dep.name === 'tauri')?.pkg;
 const tauri = metadata.packages.find((pkg) => pkg.id === tauriId);
@@ -145,23 +149,45 @@ function verifyTauriFiles(files) {
 }
 const tauriApi = path.join(tauriRoot, 'mobile/ios-api');
 if (!fs.existsSync(path.join(tauriApi, 'Package.swift'))) throw new Error('Resolved Cargo Tauri source lacks ios-api');
-const nativeManifest = input(path.join(nativeRoot, 'Package.swift'), 'native-io/Package.swift').toString('utf8');
+const hostLabel = `swift-host:${host.name}@${host.version}`;
+const nativeManifest = input(path.join(nativeRoot, 'Package.swift'), `${hostLabel}/Package.swift`).toString('utf8');
 if (!nativeManifest.includes('.package(name: "Tauri", path: "../.tauri/tauri-api")')) {
   throw new Error('NativeIO Tauri package declaration changed; review inventory mapping');
 }
-if (!nativeManifest.includes(`let package = Package(\n    name: "${host.name}"`)
-    || !nativeManifest.includes(`.library(name: "${host.name}", type: .static`)) {
+if (!nativeManifest.includes(`name: "${host.name}"`)
+    || !new RegExp(`\\.library\\(\\s*name:\\s*"${host.name}",\\s*type:\\s*\\.static`).test(nativeManifest)) {
   throw new Error('NativeIO Swift package/product does not match the Cargo-derived Tauri link input');
 }
-const nativeFiles = sourceEvidence(nativeRoot, 'native-io');
+const nativeFiles = sourceEvidence(nativeRoot, hostLabel);
+const hostMaterials = materials(host.source ? hostRoot : repo, host.source ? `cargo:${host.name}@${host.version}` : 'repository');
+// Generic plugin packages are registry inputs too. Bind consumed Swift/legal bytes
+// to their own archive, rather than trusting a matching directory name/version.
+if (host.source) {
+  const locked = cargoLock.split('[[package]]').find(block => block.includes(`name = "${host.name}"`)
+    && block.includes(`version = "${host.version}"`) && block.includes(`source = "${host.source}"`));
+  const checksum = locked?.match(/^checksum = "([a-f0-9]{64})"/m)?.[1];
+  const archive = path.resolve(hostRoot, '../../../cache', path.basename(path.dirname(hostRoot)), `${host.name}-${host.version}.crate`);
+  if (!checksum || !fs.existsSync(archive) || hash(fs.readFileSync(archive)) !== checksum) {
+    throw new Error('Swift host archive does not match Cargo.lock');
+  }
+  input(archive, `locked-cargo-archive:${host.name}@${host.version}`);
+  const legalFiles = inventory.texts.filter(text => text.source.startsWith(`cargo:${host.name}@${host.version}/`))
+    .map(text => path.join(hostRoot, text.source.slice(`cargo:${host.name}@${host.version}/`.length)));
+  for (const file of [path.join(nativeRoot, 'Package.swift'), ...nativeFiles, ...legalFiles]) {
+    const archived = execFileSync('tar', ['-xOf', archive, `${host.name}-${host.version}/${path.relative(hostRoot, file).split(path.sep).join('/')}`], {maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore']});
+    if (!archived.equals(fs.readFileSync(file))) throw new Error('Swift host source differs from its locked archive');
+  }
+}
 const tauriLabel = `cargo:tauri@${tauri.version}/mobile/ios-api`;
 const tauriManifest = input(path.join(tauriApi, 'Package.swift'), `${tauriLabel}/Package.swift`).toString('utf8');
 const tauriFiles = sourceEvidence(tauriApi, tauriLabel);
 inventory.entries.push({
   id: entryId(host.name, host.version), ecosystem: 'swift', name: host.name,
-  version: host.version, declaredLicense: host.license ?? null, source: 'repository:src-tauri/crates/native-io/ios',
-  evidence: [{ kind: 'build-input', detail: 'Repository Swift package/product identity matches its owning Cargo package; version and license from Cargo. Apple modules remain NativeIoPolicy and znet_native_io; Linux builds include only Foundation policy/tests.' }],
-  ...materials(repo, 'repository'), textStatus: 'available', missing: []
+  version: host.version, declaredLicense: host.license ?? null,
+  source: host.source ? `${host.source}#${host.name}@${host.version}/ios` : 'repository:src-tauri/crates/native-io/ios',
+  evidence: [{ kind: 'build-input', detail: `Swift static package/product identity matches owning Cargo package ${host.name}; version and declared license from Cargo, source files hashed separately. This does not prove final-link retention.` }],
+  ...hostMaterials, textStatus: hostMaterials.licenseTextIds.length ? 'available' : 'missing',
+  missing: hostMaterials.licenseTextIds.length ? [] : ['Actual Swift host license text unavailable']
 });
 const tauriTexts = materials(tauriRoot, `cargo:tauri@${tauri.version}`);
 verifyTauriFiles([path.join(tauriApi, 'Package.swift'), ...tauriFiles,
@@ -172,7 +198,7 @@ inventory.entries.push({
   id: entryId('Tauri', tauri.version), ecosystem: 'swift', name: 'Tauri', version: tauri.version,
   declaredLicense: tauri.license ?? null, source: `${tauri.source ?? 'cargo-local'}#tauri@${tauri.version}/mobile/ios-api`,
   evidence: [{ kind: 'resolved-target', detail: `Original Cargo source matches the locked registry identity tauri@${tauri.version}, checksum ${lockedTauri.checksum}; ${verifiedTauriArchive ? 'consumed Swift and legal bytes match that archive' : 'archive byte comparison unavailable'}.` },
-    { kind: 'build-input', detail: 'NativeIO declares the generated local Tauri Swift package dependency.' }],
+    { kind: 'build-input', detail: `${host.name} declares the generated local Tauri Swift package dependency.` }],
   ...tauriTexts, textStatus: tauriTexts.licenseTextIds.length ? 'available' : 'missing',
   missing: tauriTexts.licenseTextIds.length ? [] : ['Actual Tauri license text unavailable']
 });
@@ -283,7 +309,8 @@ if (sdk) {
 }
 const sdkName = sdk?.CanonicalName ?? sdk?.DisplayName ?? 'unobserved-apple-sdk';
 const sdkVersion = sdk?.Version ?? 'unobserved';
-const localModules = new Set(['Tauri', 'NativeIoPolicy', 'SwiftRs']);
+const localModules = new Set(['Tauri', 'NativeIoPolicy', 'SwiftRs',
+  ...[...nativeManifest.matchAll(/\.target\(\s*name:\s*"([^"]+)"/g)].map(match => match[1].replaceAll('-', '_'))]);
 for (const [name, files] of [...imports.entries()].sort(([left], [right]) => left.localeCompare(right))) {
   if (localModules.has(name)) continue;
   const evidence = [{ kind: 'runtime-provided', detail: `Declared source import ${name}; intended Apple platform module, not a bundled Swift package or proof of app linkage.` },
@@ -330,7 +357,7 @@ if (compiledContext) {
       entry.evidence.push({ kind: 'compiled', detail: `Successful unsigned Xcode build log observes Swift module ${module} for ${triple}; this is library compilation, not application bundle inclusion.` });
     }
   }
-} else gap('No validated successful Xcode build log for this iOS target. Foundation-only Linux tests and Swift syntax parsing do not prove UIKit library compilation.');
+} else if (!applicationInputs) gap('No validated successful Xcode build log for this iOS target. Foundation-only Linux tests and Swift syntax parsing do not prove UIKit library compilation.');
 if (args.has('artifact')) {
   const file = args.get('artifact');
   const bytes = fs.readFileSync(file);
@@ -359,8 +386,11 @@ if (args.has('artifact')) {
   if (platform !== expectedPlatform) throw new Error('Swift library object LC_BUILD_VERSION does not establish requested iOS device/simulator target');
   inventory.provenance.artifact = { name: path.basename(file), sha256: hash(bytes) };
   if (!compiledContext) gap('Archive artifact observed, but its iOS target compilation is not validated by the supplied build log.');
-} else gap('No unsigned Swift compiled-library archive supplied. Declared dependencies are not reported as bundled.');
-gap('No generated or verified iOS application host/provider artifact is covered. This inventory does not prove app bundling, SDK framework linkage, signing, or device acceptance.');
+} else if (!applicationInputs) gap('No unsigned Swift compiled-library archive supplied. Declared dependencies are not reported as bundled.');
+if (applicationInputs) {
+  inventory.provenance.kind = 'ios-application-swift-resolved-inputs';
+  inventory.gaps.push({ ecosystem: 'platform', reason: 'Swift source/pins and SDK imports are resolved inputs; per-package final-link retention, signing and device acceptance are not inferred.' });
+} else gap('No generated or verified iOS application host/provider artifact is covered. This inventory does not prove app bundling, SDK framework linkage, signing, or device acceptance.');
 const cacheFile = args.get('materials-cache') ?? path.join(repo, 'resources/licenses/swift-package-materials.json');
 if (fs.existsSync(cacheFile)) {
   const cache = JSON.parse(input(cacheFile, 'resources/licenses/swift-package-materials.json').toString('utf8'));

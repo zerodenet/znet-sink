@@ -155,6 +155,7 @@ pub mod capture_recovery;
 pub(crate) mod connection_export;
 pub mod endpoint_restoration;
 pub(crate) mod flow_close;
+pub mod local_data;
 pub(crate) mod mobile_notifications;
 pub mod mobile_release;
 pub(crate) mod mobile_release_scheduler;

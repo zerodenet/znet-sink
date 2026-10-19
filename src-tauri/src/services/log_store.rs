@@ -13,6 +13,21 @@ const MIN_PERSISTED_LOG_ENTRIES: usize = 5_000;
 const LOG_ROTATE_EVERY: u64 = 100;
 static LOG_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+pub(crate) fn storage(limit: usize) -> super::local_data::LocalStoreStorage {
+    let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
+    super::local_data::inspect(
+        "logs",
+        data_dir().map(|root| {
+            let paths = vec![root.join(LOGS_FILE)];
+            (root, paths)
+        }),
+        None,
+        Some(persisted_limit(limit)),
+        None,
+        "append-rotation",
+    )
+}
+
 pub(crate) fn load_recent(limit: usize) -> AppResult<Vec<LogEntry>> {
     let _guard = LOG_FILE_LOCK.lock().expect("log file mutex poisoned");
     load_recent_from_path(&logs_path()?, limit)

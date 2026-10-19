@@ -17,7 +17,10 @@ check(!platform.vpnSupported && !platform.bundledKernelAvailable && platform.ada
 const identity = await invoke('plugin:app|identifier');
 check(identity === 'org.zerodenet.znetsink', 'app-identity');
 const licenses = await invoke('app_license_inventory');
-check(licenses.native.status === 'unavailable' && licenses.native.inventory === null, 'honest-native-license-gap');
+check(licenses.rust?.target?.platform === 'ios' && licenses.rust.entries.length > 0
+  && licenses.rust.provenance?.kind !== 'inventory-unavailable', 'embedded-rust-license-inputs');
+check(licenses.native.status === 'available' && licenses.native.inventory?.target?.platform === 'ios'
+  && licenses.native.inventory.entries.length > 0 && Array.isArray(licenses.native.inventory.gaps), 'native-license-asset');
 // Complete the actual onboarding using its controls; no storage seeding or UI fixture.
 await wait(() => document.querySelector('nav[aria-label="主导航"]') || document.querySelector('button[aria-label="步骤 4"]'), 'onboarding');
 if (!document.querySelector('nav[aria-label="主导航"]')) {
@@ -41,7 +44,7 @@ const back = [...document.querySelectorAll('button[aria-label="返回"]')].find(
 check(back, 'return-control'); back.click();
 await wait(() => ![...document.querySelectorAll('.secondary-pane:not(.inactive)')].some(visible), 'return');
 return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: true,
-  aboutAndReturn: true, vpnUnsupported: true, nativeLicenseUnavailable: true,
+  aboutAndReturn: true, vpnUnsupported: true, nativeLicenseAvailable: true,
   applicationId: identity, width: innerWidth, height: innerHeight };
 
 } catch (cause) {

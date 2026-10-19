@@ -107,8 +107,12 @@ pub(crate) fn compose_effective_candidate_with_app(
         supports_tolerance: url_test::supports_tolerance(state),
         selections,
     };
-    let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
-    materialize_dns_rule_sets(&mut candidate, &profiles)?;
+    let mut candidate = crate::configuration::composition::finalize_with_assets(
+        base,
+        config,
+        &inputs,
+        |candidate| materialize_dns_rule_sets(candidate, &profiles),
+    )?;
     if !inputs
         .app
         .client_edits
@@ -260,8 +264,12 @@ fn finalize_effective_config(
         supports_tolerance: url_test::supports_tolerance(state),
         selections,
     };
-    let mut candidate = crate::configuration::composition::finalize(base, config, &inputs)?;
-    materialize_dns_rule_sets(&mut candidate, profiles)?;
+    let candidate = crate::configuration::composition::finalize_with_assets(
+        base,
+        config,
+        &inputs,
+        |candidate| materialize_dns_rule_sets(candidate, profiles),
+    )?;
     state.configuration().record(candidate.report.clone());
     Ok(candidate.config)
 }

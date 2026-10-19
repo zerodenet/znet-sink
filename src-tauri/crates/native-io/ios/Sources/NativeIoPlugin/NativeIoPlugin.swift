@@ -84,6 +84,35 @@ final class NativeIoPlugin: Plugin {
     @objc public func save(_ invoke: Invoke) { begin(invoke, action: .save) }
     @objc public func share(_ invoke: Invoke) { begin(invoke, action: .share) }
 
+    /// A fixed application resource; no user path, document grant or permission prompt.
+    @objc public func readLicenseInventory(_ invoke: Invoke) {
+        io.async {
+            guard let url = Bundle.main.url(forResource: "license-inventory.native",
+                                            withExtension: "json", subdirectory: "assets") else {
+                invoke.resolve(["status": "missing", "reason": "license_asset_not_packaged"])
+                return
+            }
+            do {
+                let file = try FileHandle(forReadingFrom: url)
+                defer { try? file.close() }
+                // Cap the read itself, including a witness byte for oversized resources.
+                let data = try file.read(upToCount: 16 * 1024 * 1024 + 1) ?? Data()
+                guard data.count <= 16 * 1024 * 1024,
+                      let text = String(data: data, encoding: .utf8),
+                      let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      value["schemaVersion"] as? Int == 1,
+                      let target = value["target"] as? [String: Any],
+                      target["platform"] as? String == "ios" else {
+                    invoke.resolve(["status": "invalid", "reason": "license_asset_invalid"])
+                    return
+                }
+                invoke.resolve(["status": "available", "content": text])
+            } catch {
+                invoke.resolve(["status": "invalid", "reason": "license_asset_unreadable"])
+            }
+        }
+    }
+
     private func begin(_ invoke: Invoke, action: NativeIoAction) {
         // The wire payload is already resident; prevent another oversized decode/allocation.
         guard invoke.getRawArgs().utf8.count <= 24 * 1024 * 1024 else {

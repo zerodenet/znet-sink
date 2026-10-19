@@ -199,7 +199,7 @@ sourceJson快照、原生校验/格式化和固定来源本地CAS，保存与明
 | A12/A13 | 统一MTU、完整u64 UDP、既有监听IP/端口及LAN影响的固定预览/本地CAS待应用保持。2026-10-16补DNS重命名真实引用扫描、固定预览/明确确认、完整Value与u64保留及原操作未知屏障，见[迁移契约](docs/gui/reference-migrations-v0.0.3.md)。已有全局DNS与单份普通来源可本地保存待应用；跨配置来源晋升、托管/路径来源、带ruleSetReferences来源晋升明确拒绝，保留正文与草稿。跨配置/托管来源迁移、来源投影整合及其它协议/条件字段仍未完成；原生/真机边界不变 |
 | A20–A21插件 | 移动容器/SDK/分发/敏感加载仍是客户端平台工作；本批卸载管理不开放这些执行能力 |
 | A22卸载 | 新增固定安装/发布者/namespace资源与引用预览、主应用确认、原操作逐项回执/剩余/未知/手动状态及目录缺行后可发现的记录入口，见[契约](docs/gui/mobile-plugin-uninstall-v0.0.3.md)。仅非活动且可证明安全范围执行；在用配置须先明确切换/停止后重新预览，不复用旧自动首项。完整运行替代/停止、移动执行及真机仍未验收；只用隔离fixture，不实际卸载用户资源 |
-| A23/本地数据 | 本批落实宿主前台版本目录due执行、已保存客户端渠道、manual/auto去重、真实200/304及偏好原回执确认；不是下载安装。安装器/OS后台调度、设备验收及本地数据真实容量/保留预算与逐项清理仍未完成 |
+| A23/本地数据 | 已有宿主前台版本目录due执行、已保存客户端渠道、manual/auto去重、真实200/304及偏好原回执确认；不是下载安装。2026-10-19 补充三类固定记录文件的真实容量、后端现行保留预算、未知/过期采样和清理后重读，见[本地容量](docs/gui/local-data-capacity-v0.0.3.md)。安装器/OS后台调度、设备验收、单条/导出目录逐项清理和统一可配置预算仍未完成 |
 
 用户明确后置的是native VPN、core接入与宿主生命周期装配；不把这个决定扩大为所有移动
 插件、安装器或用户管理功能已获后置。平台必须允许的发行路径、设备及签名条件仍单独说明。
@@ -210,7 +210,7 @@ sourceJson快照、原生校验/格式化和固定来源本地CAS，保存与明
 
 ## CLIENT-10
 
-**iOS 主应用 UI 宿主与调试入口。** 新增锁定 Tauri CLI 标准工程生成、无签名身份的完整 Simulator App/unsigned iPhoneOS App 构建、Debug 真实 WKWebView/IPC 烟测及 [本机调试指南](docs/gui/ios-ui-host-v0.0.3.md)。Simulator 工具链 ad-hoc 与设备 unsigned 分开记录。工程与实际执行证据由对应 commit 的 macOS CI 产物确认，不再拿 NativeIo 单库代替完整应用。最低 iOS 16.4。iOS 原生许可读取仍 unavailable，主 App 完整许可资料缺口不因本批脚本存在而解除。
+**iOS 主应用 UI 宿主与调试入口。** 新增锁定 Tauri CLI 标准工程生成、无签名身份的完整 Simulator App/unsigned iPhoneOS App 构建、Debug 真实 WKWebView/IPC 烟测及 [本机调试指南](docs/gui/ios-ui-host-v0.0.3.md)。Simulator 工具链 ad-hoc 与设备 unsigned 分开记录。工程与实际执行证据由对应 commit 的 macOS CI 产物确认，不再拿 NativeIo 单库代替完整应用。最低 iOS 16.4。2026-10-19 补固定包内许可 reader、实际 SwiftPM/Cargo/Vite 输入组合与完整 App 二次构建/资产核对；每个提交仍须取得真实 SDK 和 Simulator IPC 证据，已有材料与逐包最终链接证明缺口不因脚本存在而解除。
 
 **继续后置：** Packet Tunnel extension、App Group、内核/原生 VPN 生命周期及 CORE-01/02/05；签名、设备配对、安装和真实 iPhone UI/文件/生命周期验收由用户本机执行。云端不创建账号凭据、证书、私钥或 provisioning，不发布或合并。
 

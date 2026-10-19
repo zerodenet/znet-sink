@@ -16,7 +16,7 @@ def validate_smoke(receipt, nonce):
     assert receipt['nativePlugin'] == 'znet-native-io' and receipt['webViewInspectable'] is True
     checks = receipt['checks']
     for key in ['rustIpc', 'nativePresentation', 'fourTabs', 'onboarding', 'aboutAndReturn',
-                'vpnUnsupported', 'nativeLicenseUnavailable']:
+                'vpnUnsupported', 'nativeLicenseAvailable']:
         assert checks[key] is True, f'missing actual UI/IPC check: {key}'
     assert checks['applicationId'] == 'org.zerodenet.znetsink'
     assert 0 < checks['width'] <= 1024 and checks['height'] > 0
@@ -58,6 +58,24 @@ def validate_signature(sdk, returncode, details):
     return 'ad-hoc'
 
 
+def validate_inventory_asset(data, sdk):
+    assert 0 < len(data) <= 16 * 1024 * 1024, 'iOS license asset budget'
+    inventory = json.loads(data)
+    assert inventory['schemaVersion'] == 1 and inventory['target']['platform'] == 'ios'
+    expected = ['aarch64-apple-ios'] if sdk == 'iphoneos' else ['aarch64-apple-ios-sim', 'x86_64-apple-ios']
+    assert inventory['target']['triple'] in expected and inventory['target']['profile'] == 'debug'
+    assert inventory['entries'] and isinstance(inventory['gaps'], list)
+    assert inventory['provenance']['kind'] == 'ios-application-resolved-input-inventory'
+    materials = set()
+    for text in inventory['texts']:
+        digest = hashlib.sha256(text['text'].encode('utf-8')).hexdigest()
+        assert text['sha256'] == digest and text['id'] == 'sha256-' + digest
+        materials.add(text['id'])
+    for entry in inventory['entries']:
+        assert all(reference in materials for reference in entry['licenseTextIds'] + entry['noticeTextIds'])
+    return inventory
+
+
 def package(args):
     candidates = []
     for app in pathlib.Path(args.root).rglob('*.app'):
@@ -78,6 +96,8 @@ def package(args):
     build_info = command('xcrun', 'vtool', '-show-build', str(executable))
     embedded = command('strings', str(executable))
     validate_package(info, args.sdk, arches, symbols, build_info, embedded)
+    license_bytes = (app / 'assets/license-inventory.native.json').read_bytes()
+    inventory = validate_inventory_asset(license_bytes, args.sdk)
     assert 'ZNET_IOS_UI_SMOKE_NONCE' in embedded, 'Debug native smoke code absent from complete App'
     proof = pathlib.Path(args.copy)
     (proof / 'macho-build.txt').write_text(build_info)
@@ -97,7 +117,9 @@ def package(args):
                    signingIdentity='none', noSigningCredentials=True,
                    frontend='embedded-assets', nativePluginBinding=True,
                    deviceInstalled=False, vpnAccepted=False, executionVerified=False,
-                   nativeLicenseStatus='unavailable', app=str(destination.resolve()))
+                   nativeLicenseStatus='available', nativeLicenseEntries=len(inventory['entries']),
+                   nativeLicenseGaps=len(inventory['gaps']), nativeLicenseSha256=hashlib.sha256(license_bytes).hexdigest(),
+                   app=str(destination.resolve()))
     pathlib.Path(args.output).write_text(json.dumps(receipt, indent=2) + '\n')
     print(json.dumps(receipt))
 

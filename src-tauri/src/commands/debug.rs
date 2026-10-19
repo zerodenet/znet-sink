@@ -9,6 +9,20 @@ use crate::state::app_state::AppState;
 const CONNECTION_HISTORY_SCOPE: &str = "connection-history";
 
 #[tauri::command]
+pub async fn gui_local_data_summary(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+) -> AppResult<crate::services::local_data::LocalDataSummary> {
+    use tauri::Manager;
+    crate::services::native_documents::require_host(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::local_data::summary(app.state::<AppState>().inner())
+    })
+    .await
+    .map_err(|_| AppError::internal("本地容量读取失败；不会执行清理"))?
+}
+
+#[tauri::command]
 pub async fn gui_debug_frames(
     _state: State<'_, AppState>,
     query: Option<DebugFrameQuery>,
