@@ -1,3 +1,4 @@
+try {
 // Explicit CI-only driver evaluated by the Debug native plugin in the real WKWebView.
 // It uses the existing UI and IPC. It never supplies kernel samples or VPN success.
 const wait = async (read, label) => {
@@ -42,3 +43,8 @@ await wait(() => ![...document.querySelectorAll('.secondary-pane:not(.inactive)'
 return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: true,
   aboutAndReturn: true, vpnUnsupported: true, nativeLicenseUnavailable: true,
   applicationId: identity, width: innerWidth, height: innerHeight };
+
+} catch (cause) {
+  const message = String(cause?.message ?? "");
+  return { failedCheck: /^ui-smoke-[a-z-]+$/.test(message) ? message : "ipc-or-script-failed" };
+}

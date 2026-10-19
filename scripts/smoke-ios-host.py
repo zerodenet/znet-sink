@@ -43,9 +43,9 @@ def main(evidence):
         if report.is_file():
             value = json.loads(report.read_text())
             if value.get('nonce') == nonce:
-                verify.validate_smoke(value, nonce)
                 (root / 'simulator-smoke.json').write_text(json.dumps(value, indent=2) + '\n')
                 run('xcrun', 'simctl', 'io', device, 'screenshot', str(root / 'simulator.png'))
+                verify.validate_smoke(value, nonce)
                 (root / 'simulator.json').write_text(json.dumps(dict(udid=device, name=candidates[0]['name'],
                     simulator=True, deviceAcceptance=False, check='actual-WKWebView-and-Rust-IPC'), indent=2) + '\n')
                 return
