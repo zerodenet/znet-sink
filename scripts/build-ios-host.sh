@@ -56,6 +56,10 @@ fs.writeFileSync(path.join(evidence, 'license-config.json'), JSON.stringify({
   }}
 }));
 JS
+# Tauri's archive export renames the product App. A second export into the
+# same archive can collide with that first renamed bundle. Preserve this
+# run's input products as evidence and give the final CLI export a fresh root.
+mv src-tauri/gen/apple/build "$evidence/input-sdk-products"
 # Rebuild through the same CLI resource pipeline. Do not inject legal assets
 # into the produced App afterwards, or reuse the first build as final evidence.
 pnpm tauri ios build --debug --target "$cli_target" --ci --no-sign \
