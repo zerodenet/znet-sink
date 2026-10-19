@@ -60,6 +60,11 @@ final class NativeIoPlugin: Plugin {
     private let stageRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("znet-native-io-leases", isDirectory: true)
 
+    override func load(webview: WKWebView) {
+        super.load(webview: webview)
+        HostSmoke.start(webview)
+    }
+
     override init() {
         super.init()
         // Startup cleanup is ordered before stage creation on the same queue. It removes only

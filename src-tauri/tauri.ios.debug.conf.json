@@ -1,0 +1,4 @@
+{
+  "app": { "windows": [{ "label": "main", "title": "ZNet Sink", "decorations": true, "devtools": true }] },
+  "bundle": { "iOS": { "infoPlist": "apple/Info.debug.plist" } }
+}

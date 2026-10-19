@@ -1,0 +1,65 @@
+name: iOS complete application host
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main, feat/mobile-v0.0.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: znet-ios-application-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  application:
+    name: Complete unsigned iOS App (${{ matrix.target }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [simulator, device]
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ios-complete-${{ matrix.target }}
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Verify host generation and negative artifact contracts
+        run: pnpm test:ios-host
+      - name: Locate Xcode and standard Tauri generator dependencies
+        shell: bash
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          command -v xcodegen || brew install xcodegen
+          command -v pod || brew install cocoapods
+          xcrun simctl list runtimes
+      - name: Generate and build the complete unsigned main application
+        env:
+          ZNET_IOS_EVIDENCE_DIR: ${{ github.workspace }}/ios-host-evidence/${{ matrix.target }}
+        run: bash scripts/build-ios-host.sh '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-complete-${{ matrix.target }}-evidence
+          path: ios-host-evidence/
+          if-no-files-found: warn
+          retention-days: 7

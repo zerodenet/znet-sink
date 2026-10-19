@@ -27,3 +27,5 @@ src-tauri/target/
 
 /android-debug-host-evidence/
 __pycache__/
+/src-tauri/gen/apple/
+/ios-host-evidence/
