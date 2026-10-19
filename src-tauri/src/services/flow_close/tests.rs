@@ -27,6 +27,9 @@ struct Peer {
 }
 impl Peer {
     fn new(count: usize) -> Self {
+        Self::with_timeout(count, Duration::from_millis(500))
+    }
+    fn with_timeout(count: usize, timeout: Duration) -> Self {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let path = dir.path().join("flow.sock");
         let listener = UnixListener::bind(&path).unwrap();
@@ -153,11 +156,11 @@ impl Peer {
         });
         let options = CoreIpcOptions {
             socket: Some(path.to_string_lossy().into_owned()),
-            timeout_ms: Some(500),
+            timeout_ms: Some(timeout.as_millis().try_into().unwrap()),
         };
         state.observations().begin(znet_engine_client::Binding {
             endpoint: crate::kernel::protocol::endpoint_from_options(Some(&options)).unwrap(),
-            timeout: Duration::from_millis(500),
+            timeout,
         });
         Self {
             state,
@@ -337,7 +340,11 @@ fn inventory_is_canonical_lossless_bounded_and_never_uses_default_observation_en
             inventory(&state).await.unwrap_err().code,
             "flow_close_unavailable"
         );
-        let peer = Peer::new(501);
+        // This case serializes a deliberately oversized snapshot while the
+        // workspace's real IPC peers can run concurrently. Its contract is
+        // bounded/lossless identity, not a sub-second performance benchmark.
+        // Other peers retain 500ms, and explicit timeout tests keep their own budget.
+        let peer = Peer::with_timeout(501, Duration::from_secs(5));
         let view = inventory(&peer.state).await.unwrap();
         assert_eq!(view.targets.len(), 500);
         assert!(view.truncated);

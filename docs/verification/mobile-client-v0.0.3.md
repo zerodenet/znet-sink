@@ -1,5 +1,33 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：develop 整合、主应用许可与本地容量
+
+从 `9c03d26` 整合 develop `d39ad2787fb05052fa15065853ab71526441ccc3`，采用独立
+工作分支的非快进合并；仍是同一 Draft PR #46，不推 develop。统一桌面配置目录、配置级
+策略选择和 DNS 共享资产与既有移动两分段、无损文本编辑、固定删除预览和未知回执链共存。
+DNS 资产在最终引用校验之前物化，失败仍拒绝不完整候选，不关闭引用完整性校验。
+
+新增 iOS 固定许可 reader 与两轮标准 CLI 构建：首轮收集本次 target 的 Cargo/Vite/各
+SwiftPM 真实输入，次轮通过资源流水线打包，最终核对包内字节、最新材料、SDK 与实际 IPC。
+不在 App 产物上事后注入法律文件。库级清单、主应用 resolved-input 资产、Simulator
+执行和 unsigned device-SDK 包仍分别记录；脚本存在或 Linux fixture 不算 Apple 验收。
+四项已审计原文/声明缺口及最终逐包链接证明限制保持，见[许可说明](../gui/dependency-license-inventory-v0.0.3.md)。
+
+新增三个记录域的真实 metadata 容量与后端现行保留预算，保留未知/真实零/过期采样及独立
+清理后重读。没有读取正文、自动清理或修改配置，范围与未完成的逐项管理见
+[容量契约](../gui/local-data-capacity-v0.0.3.md)。
+
+本批云端完整前端验证通过，类型检查 0 错误/0 警告，生产构建成功。单线程 locked
+workspace/all-features Rust 完整验证 1562通过/0失败/7忽略（GUI1288/0/5）；fmt、
+workspace/all-targets/all-features check 与 Clippy 通过并保留既有警告。真实 Rust 许可
+hook 的输入/摘要拒绝验证通过。一次并发全量测试的501条大快照夹具500ms超时，后续仅为
+此大快照改用5s预算，再跑并发全量；其他夹具和显式超时预算不变，不删改安全断言。
+
+32项受影响浏览器检查及14项修正文案/状态定位后的路由与本地容量检查通过。完整浏览器
+及当前头的 CI、SDK 包、Simulator实际版本、产物摘要和未运行项以 PR 最新段为准；旧头
+证据均为历史。Android API24/Galaxy S8 与 iOS16.4 的目标不变，未声称真实手机或 VPN
+验收。没有修改 core、操作用户 Mac、创建 Apple 凭据、合并或发布。
+
 ## 2026-10-18：可安装 Debug 宿主
 
 本批从 `8810cc15607f100d628e5c5e350bf359cdc33b93` 继续，保留 DNS 固定预览/事务保护。
