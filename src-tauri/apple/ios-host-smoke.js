@@ -31,6 +31,12 @@ stage = 'plugin-vm';
 const vm = await invoke('plugins_native_vm_smoke');
 check(vm.executed && vm.arithmetic && vm.identity && vm.ungrantedRejected && vm.deadlineEnforced
   && vm.revocationEnforced && vm.target.os === 'ios', 'native-plugin-vm');
+const storage = vm.secureStorage;
+const storageAccepted = storage?.state === 'available';
+check(storageAccepted
+  ? storage.roundTrip && storage.lostKeyRejected && storage.plaintextFallbackRejected
+  : storage?.state === 'unavailable' && storage.permissionsGated && storage.roundTrip === false,
+  'native-secure-storage-contract');
 stage = 'licenses';
 const licenses = await invoke('app_license_inventory');
 check(licenses.rust?.target?.platform === 'ios' && licenses.rust.entries.length > 0
@@ -62,14 +68,15 @@ check(back, 'return-control'); back.click();
 await wait(() => ![...document.querySelectorAll('.secondary-pane:not(.inactive)')].some(visible), 'return');
 return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: true,
   aboutAndReturn: true, vpnUnsupported: true, nativeLicenseAvailable: true, nativePluginVm: true,
+  nativeSecureStorageContract: true, nativeSecureStorageAccepted: storageAccepted, nativeSecureStorageState: storage.state,
   applicationId: identity, width: innerWidth, height: innerHeight };
 
 } catch (cause) {
   const message = String(cause?.message ?? "");
-  const code = typeof cause?.code === 'string' && ['plugin_platform_unavailable','plugin_host_suspended','native_vm_smoke_failed','invalid_argument','internal','permission_denied'].includes(cause.code) ? cause.code : 'unclassified';
+  const code = typeof cause?.code === 'string' && ['plugin_platform_unavailable','plugin_host_suspended','plugin_secure_store_unavailable','native_vm_smoke_failed','invalid_argument','internal','permission_denied'].includes(cause.code) ? cause.code : 'unclassified';
   const actual = typeof cause?.details?.actual === 'string' && ['PermissionDenied','Deadline','Revoked','GuestException','InvalidOutput','UnsupportedIsolation','IncompatibleDevice','IncompatibleVersion','AdmissionDenied','BudgetExceeded','HostFailure','Disabled','Busy','Cancelled','Expired','InvalidManifest','WrongHost','DigestMismatch','unexpected-value'].includes(cause.details.actual) ? cause.details.actual : undefined;
   const fixture = typeof cause?.details?.fixture === 'string' && ['arithmetic','identity','denied','deadline'].includes(cause.details.fixture) ? cause.details.fixture : undefined;
-  const checks = ['real-ios-rust-host','unsupported-vpn','app-identity','native-plugin-profile','native-plugin-vm','embedded-rust-license-inputs','native-license-asset','four-tabs','native-presentation','return-control'].map(label => `ui-smoke-${label}`);
+  const checks = ['real-ios-rust-host','unsupported-vpn','app-identity','native-plugin-profile','native-plugin-vm','native-secure-storage-contract','embedded-rust-license-inputs','native-license-asset','four-tabs','native-presentation','return-control'].map(label => `ui-smoke-${label}`);
   const timeouts = ['ipc','onboarding','start','navigation','tab','about-entry','about','about-identity','return'].map(label => `ui-smoke-timeout-${label}`);
   return { failedCheck: checks.includes(message) || timeouts.includes(message) ? message : `ui-smoke-${stage}-ipc`, ipcCode: code, ...(actual ? {actual} : {}), ...(fixture ? {fixture} : {}) };
 }

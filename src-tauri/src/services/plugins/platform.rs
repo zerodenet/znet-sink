@@ -12,6 +12,7 @@ pub struct Snapshot {
     pub execution_allowed: bool,
     pub external_installation_allowed: bool,
     pub isolation: &'static str,
+    pub secure_storage_adapter: bool,
     pub reason: Option<&'static str>,
 }
 struct State {
@@ -20,6 +21,7 @@ struct State {
     foreground: bool,
     pending: bool,
     failed: bool,
+    secure_vault: bool,
 }
 pub(super) struct Context {
     mobile: bool,
@@ -40,6 +42,7 @@ impl Default for Context {
                 foreground: !mobile,
                 pending: mobile,
                 failed: false,
+                secure_vault: !mobile,
             }),
         }
     }
@@ -61,18 +64,32 @@ pub(super) fn unsupported_mobile_capability(capability: Capability) -> Option<&'
         Capability::TasksSchedule => Some("移动插件调度尚未接入原生前台协调与系统延期状态"),
         Capability::PersistentSecretsRead
         | Capability::PersistentSecretsWrite
-        | Capability::CryptoDeviceUse => Some("移动插件持久秘密尚未接入平台安全存储"),
+        | Capability::CryptoDeviceUse => {
+            Some("当前原生安全存储接口尚未确认，不能降级为普通文件主密钥")
+        }
         _ => None,
     }
 }
-pub(super) fn unsupported_reason(request: &Request) -> Option<&'static str> {
-    if cfg!(any(target_os = "android", target_os = "ios")) {
-        unsupported_mobile_capability(request.capability)
-    } else {
-        None
-    }
-}
 impl Context {
+    pub(super) fn unsupported_reason(&self, request: &Request) -> Option<&'static str> {
+        if !self.mobile {
+            return None;
+        }
+        if matches!(
+            request.capability,
+            Capability::PersistentSecretsRead
+                | Capability::PersistentSecretsWrite
+                | Capability::CryptoDeviceUse
+        ) && self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .secure_vault
+        {
+            return None;
+        }
+        unsupported_mobile_capability(request.capability)
+    }
     pub(super) fn check_review_generation(&self, generation: Option<&str>) -> AppResult<()> {
         if self.mobile && self.review_generation().as_deref() != generation {
             return Err(unavailable("原生插件宿主已变化，请重新审阅后操作"));
@@ -172,6 +189,7 @@ impl Context {
             execution_allowed: phase == "ready",
             external_installation_allowed: phase == "ready",
             isolation: "bounded-in-process-interpreter",
+            secure_storage_adapter: state.secure_vault,
             reason,
         })
     }
@@ -193,8 +211,37 @@ impl Context {
         state.failed = false;
         Ok(Some(state.generation))
     }
-    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    #[cfg(test)]
     fn commit_resume(&self, generation: u64, target: AppResult<Target>) -> AppResult<bool> {
+        self.commit_profile(generation, target, false)
+    }
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    fn request_recheck(&self) -> AppResult<Option<u64>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| unavailable("无法核对原生插件宿主"))?;
+        if !state.foreground {
+            return Err(unavailable("应用仍在原生后台，请返回前台后重新核对"));
+        }
+        if state.pending || state.target.is_some() {
+            return Ok(None);
+        }
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| unavailable("插件宿主代次已耗尽"))?;
+        state.pending = true;
+        state.failed = false;
+        Ok(Some(state.generation))
+    }
+    #[cfg(any(target_os = "android", target_os = "ios", test))]
+    fn commit_profile(
+        &self,
+        generation: u64,
+        target: AppResult<Target>,
+        secure_vault: bool,
+    ) -> AppResult<bool> {
         let mut state = self
             .state
             .lock()
@@ -207,10 +254,12 @@ impl Context {
             Ok(target) => {
                 state.target = Some(target);
                 state.failed = false;
+                state.secure_vault = secure_vault;
             }
             Err(_) => {
                 state.target = None;
                 state.failed = true;
+                state.secure_vault = false;
             }
         }
         Ok(true)
@@ -246,19 +295,35 @@ impl Host {
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn resume_native(app: &tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
-    use tauri_plugin_znet_native_io::NativeIoExt;
+    use tauri::Manager;
     let state = app.state::<crate::state::app_state::AppState>();
     let host = state.plugins();
     let Ok(Some(generation)) = host.platform.request_resume() else {
         return;
     };
+    query_native_profile(app, generation);
+}
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn recheck_native(app: &tauri::AppHandle) -> AppResult<()> {
+    use tauri::Manager;
+    let state = app.state::<crate::state::app_state::AppState>();
+    if let Some(generation) = state.plugins().platform.request_recheck()? {
+        query_native_profile(app, generation);
+    }
+    Ok(())
+}
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn query_native_profile(app: &tauri::AppHandle, generation: u64) {
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_znet_native_io::NativeIoExt;
     let _ = app.emit("plugins:changed", ());
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let target = app
-            .native_io()
-            .host_environment()
+        let environment = app.native_io().host_environment();
+        let secure_vault = environment
+            .as_ref()
+            .is_ok_and(|value| value.secure_vault_api);
+        let target = environment
             .map_err(|_| unavailable("原生设备身份读取未确认"))
             .and_then(|environment| {
                 let device = match environment.device_class.as_str() {
@@ -276,9 +341,28 @@ pub(crate) fn resume_native(app: &tauri::AppHandle) {
                 .operation
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if !matches!(host.platform.commit_resume(generation, target), Ok(true)) {
+            if !matches!(
+                host.platform
+                    .commit_profile(generation, target, secure_vault),
+                Ok(true)
+            ) {
                 return;
             }
+            let reader = if secure_vault {
+                let native_app = app.clone();
+                Some(Arc::new(move |create| {
+                    native_app
+                        .native_io()
+                        .plugin_vault_master(create)
+                        .map_err(|_| super::vault::unavailable())
+                }) as super::vault::KeyReader)
+            } else {
+                None
+            };
+            *host
+                .native_vault
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = reader;
             let mut executor = host
                 .executor
                 .lock()
@@ -354,6 +438,7 @@ mod tests {
                 foreground: false,
                 pending: true,
                 failed: false,
+                secure_vault: false,
             }),
         }
     }
@@ -363,6 +448,46 @@ mod tests {
             arch: Arch::Aarch64,
             device: DeviceClass::Phone,
         }
+    }
+    #[test]
+    fn secure_sdk_requires_fresh_native_api_admission_and_keeps_other_gates() {
+        let context = mobile();
+        let request = Request {
+            capability: Capability::PersistentSecretsRead,
+            scope: "self".into(),
+        };
+        assert!(context.unsupported_reason(&request).is_some());
+        let first = context.request_resume().unwrap().unwrap();
+        assert!(context.commit_profile(first, Ok(phone()), true).unwrap());
+        assert!(context.unsupported_reason(&request).is_none());
+        assert!(context
+            .unsupported_reason(&Request {
+                capability: Capability::FilesSelectionRead,
+                scope: "user".into()
+            })
+            .is_some());
+        context.suspend();
+        let next = context.request_resume().unwrap().unwrap();
+        assert!(context.commit_profile(next, Ok(phone()), false).unwrap());
+        assert!(context.unsupported_reason(&request).is_some());
+        assert!(!context.commit_profile(first, Ok(phone()), true).unwrap());
+        assert!(context.unsupported_reason(&request).is_some());
+    }
+    #[test]
+    fn ui_recheck_cannot_create_foreground_authority_or_commit_after_suspend() {
+        let context = mobile();
+        assert!(context.request_recheck().is_err());
+        assert_eq!(context.snapshot().unwrap().state, "starting");
+        let native = context.request_resume().unwrap().unwrap();
+        assert!(context.request_recheck().unwrap().is_none());
+        context
+            .commit_resume(native, Err(unavailable("missing")))
+            .unwrap();
+        let query = context.request_recheck().unwrap().unwrap();
+        context.suspend();
+        assert!(context.request_recheck().is_err());
+        assert!(!context.commit_resume(query, Ok(phone())).unwrap());
+        assert_eq!(context.snapshot().unwrap().state, "suspended");
     }
     #[test]
     fn background_and_resume_reject_a_late_native_profile() {

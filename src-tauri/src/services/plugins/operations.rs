@@ -210,7 +210,7 @@ impl Host {
     ) -> AppResult<Snapshot> {
         let _operation = self.operation_guard()?;
         self.checked_rescan(manager)?;
-        if grants.iter().any(|request| !supported(request)) {
+        if grants.iter().any(|request| !self.supported(request)) {
             return Err(AppError::invalid_argument("所选权限尚未开放"));
         }
         let current = self.current_review(manager, &review)?;

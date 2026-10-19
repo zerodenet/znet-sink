@@ -51,9 +51,10 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         "invalid_argument" => ErrorCode::InvalidRequest,
         "not_found" => ErrorCode::NotFound,
         "conflict" => ErrorCode::Busy,
-        "unavailable" | "plugin_secret_transport" | "plugin_system_notification_unavailable" => {
-            ErrorCode::Transport
-        }
+        "unavailable"
+        | "plugin_secret_transport"
+        | "plugin_system_notification_unavailable"
+        | "plugin_secure_store_unavailable" => ErrorCode::Transport,
         "plugin_system_notification_denied" => ErrorCode::PermissionDenied,
         "plugin_vm_file_unsupported" => ErrorCode::Unsupported,
         "plugin_platform_unavailable" => ErrorCode::Unsupported,
@@ -109,6 +110,7 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
         "plugin_system_notification_unavailable" => {
             "系统通知暂不可用，请检查系统通知设置或稍后重试".into()
         }
+        "plugin_secure_store_unavailable" => super::vault::unavailable().message,
         _ => "插件宿主拒绝了本次操作".into(),
     };
     Failure {
@@ -906,7 +908,7 @@ impl Host {
     ) -> AppResult<Value> {
         let _activity = self.activity_checked(manager, plugin_id)?;
 
-        if let Some(reason) = super::platform::unsupported_reason(&call.request) {
+        if let Some(reason) = self.platform.unsupported_reason(&call.request) {
             return Err(super::platform::unavailable(reason));
         }
 
@@ -1251,7 +1253,9 @@ impl Host {
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
-                match self.vault_get(plugin_id, &args.key)? {
+                match self.vault_get_checked(plugin_id, &args.key, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })? {
                     Some(value) => json!({"valueBase64":STANDARD.encode(value.as_slice())}),
                     None => Value::Null,
                 }
@@ -1262,13 +1266,18 @@ impl Host {
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
-                let value = args
-                    .value_base64
-                    .ok_or_else(|| AppError::invalid_argument("缺少凭据内容"))?;
-                let value = STANDARD
-                    .decode(value)
-                    .map_err(|_| AppError::invalid_argument("凭据内容不是有效的 Base64"))?;
-                self.vault_put(plugin_id, &args.key, &value)?;
+                let value = zeroize::Zeroizing::new(
+                    args.value_base64
+                        .ok_or_else(|| AppError::invalid_argument("缺少凭据内容"))?,
+                );
+                let value = zeroize::Zeroizing::new(
+                    STANDARD
+                        .decode(value.as_bytes())
+                        .map_err(|_| AppError::invalid_argument("凭据内容不是有效的 Base64"))?,
+                );
+                self.vault_put_checked(plugin_id, &args.key, &value, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?;
                 Value::Bool(true)
             }
             Method::PersistentSecretDelete => {
@@ -1277,7 +1286,9 @@ impl Host {
                     .check(Some(&call.request))
                     .map_err(invocation_failure)?;
                 let args: PersistentSecretArgs = decode(call.arguments)?;
-                Value::Bool(self.vault_delete(plugin_id, &args.key)?)
+                Value::Bool(self.vault_delete_checked(plugin_id, &args.key, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?)
             }
             Method::CryptoKeyGenerate => {
                 let _operation = self.operation_guard()?;
@@ -1286,13 +1297,17 @@ impl Host {
                     .map_err(invocation_failure)?;
                 let args: CryptoKeyArgs = decode(call.arguments)?;
                 let vault_key = format!("keys/{}", args.key_name);
-                let seed = match self.vault_get(plugin_id, &vault_key)? {
+                let seed = match self.vault_get_checked(plugin_id, &vault_key, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })? {
                     Some(value) => value,
                     None => {
-                        let mut seed = vec![0u8; 32];
+                        let mut seed = zeroize::Zeroizing::new(vec![0u8; 32]);
                         getrandom::fill(&mut seed).map_err(io::failure)?;
-                        self.vault_put(plugin_id, &vault_key, &seed)?;
-                        zeroize::Zeroizing::new(seed)
+                        self.vault_put_checked(plugin_id, &vault_key, &seed, &|| {
+                            lease.check(Some(&call.request)).map_err(invocation_failure)
+                        })?;
+                        seed
                     }
                 };
                 let seed: [u8; 32] = seed
@@ -1315,7 +1330,9 @@ impl Host {
                     )
                     .map_err(|_| AppError::invalid_argument("待签名数据不是有效的 Base64"))?;
                 let seed = self
-                    .vault_get(plugin_id, &format!("keys/{}", args.key_name))?
+                    .vault_get_checked(plugin_id, &format!("keys/{}", args.key_name), &|| {
+                        lease.check(Some(&call.request)).map_err(invocation_failure)
+                    })?
                     .ok_or_else(|| {
                         AppError::not_found("plugin_device_key", args.key_name.clone())
                     })?;
@@ -1675,6 +1692,19 @@ fn method_matches(method: Method, capability: Capability) -> bool {
 mod tests {
     use super::*;
     use znet_plugin_sandbox::distribution::package::{PageKind, VerifiedPage};
+
+    #[test]
+    fn secure_store_failure_is_transport_without_native_details_or_false_regrant() {
+        let failure = public_failure(AppError {
+            code: "plugin_secure_store_unavailable",
+            message: "/private/native-key-token".into(),
+            details: None,
+        });
+        assert_eq!(failure.code, ErrorCode::Transport);
+        assert_eq!(failure.message, super::super::vault::unavailable().message);
+        assert!(failure.diagnostics.is_empty());
+        assert!(failure.field_path.is_none());
+    }
 
     #[test]
     fn vm_file_failure_is_explicit_unsupported_without_echoing_guest_path() {

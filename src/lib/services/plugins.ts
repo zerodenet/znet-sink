@@ -25,6 +25,7 @@ export interface PluginPlatform {
   target: {os: 'android' | 'ios'; arch: string; device: 'phone' | 'tablet'} | null;
   generation: string; executionAllowed: boolean; externalInstallationAllowed: boolean;
   isolation: 'bounded-in-process-interpreter'; reason: string | null;
+  secureStorageAdapter?: boolean;
 }
 export interface PluginConfigurationOption { value: string; label: string }
 export interface PluginConfigurationField {

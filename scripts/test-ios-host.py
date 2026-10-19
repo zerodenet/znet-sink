@@ -9,6 +9,12 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_unavailable_secure_storage_never_counts_as_native_acceptance(self):
+        receipt=copy.deepcopy(self.receipt)
+        receipt['checks'].update(nativeSecureStorageState='unavailable',nativeSecureStorageAccepted=False)
+        verify.validate_smoke(receipt,'a'*32)
+        receipt['checks']['nativeSecureStorageAccepted']=True
+        with self.assertRaises(AssertionError): verify.validate_smoke(receipt,'a'*32)
     def test_lifecycle_evidence_requires_native_transition_and_same_process(self):
         receipts = [dict(schemaVersion=1, nonce='a' * 32, pid=42, executorAccepting=phase == 'ready', platform=dict(state=phase, target=dict(os='ios'), generation=str(i + 1))) for i, phase in enumerate(['ready', 'suspended', 'ready'])]
         verify.validate_plugin_lifecycle(receipts, 'a' * 32)
@@ -48,6 +54,7 @@ class HostContracts(unittest.TestCase):
                          CFBundleSupportedPlatforms=['iPhoneSimulator'])
         self.checks = dict(rustIpc=True, nativePresentation=True, fourTabs=True, onboarding=True,
                           aboutAndReturn=True, vpnUnsupported=True, nativeLicenseAvailable=True, nativePluginVm=True,
+                          nativeSecureStorageContract=True, nativeSecureStorageAccepted=True, nativeSecureStorageState='available',
                           applicationId='org.zerodenet.znetsink', width=393, height=852)
         self.receipt = dict(schemaVersion=1, nonce='a' * 32, status='completed',
                             bundleIdentifier='org.zerodenet.znetsink', nativePlugin='znet-native-io',

@@ -83,7 +83,11 @@ mod host {
         crate::services::native_documents::require_host(window.label())?;
         #[cfg(debug_assertions)]
         {
-            blocking(app, |state| state.plugins().native_vm_smoke()).await
+            let native_app = app.clone();
+            blocking(app, move |state| {
+                state.plugins().native_vm_smoke(Some(native_app))
+            })
+            .await
         }
         #[cfg(not(debug_assertions))]
         {
@@ -97,7 +101,7 @@ mod host {
     pub fn plugins_host_recheck(app: AppHandle, window: tauri::Window) -> AppResult<Snapshot> {
         crate::services::native_documents::require_host(window.label())?;
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        crate::services::plugins::resume_native(&app);
+        crate::services::plugins::recheck_native(&app)?;
         let state = app.state::<AppState>();
         Ok(state.plugins().snapshot(state.capabilities()))
     }

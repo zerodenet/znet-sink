@@ -14,7 +14,7 @@ mod operations;
 pub(crate) mod page_channel;
 mod platform;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) use platform::{resume_native, suspend_native};
+pub(crate) use platform::{recheck_native, resume_native, suspend_native};
 mod scheduler;
 pub(crate) mod sdk;
 mod sensitive;
@@ -62,6 +62,7 @@ pub struct Host {
     uninstalls: uninstall::Owner,
     native_installs: native_install::Plans,
     startup_dispatched: std::sync::atomic::AtomicBool,
+    native_vault: Mutex<Option<vault::KeyReader>>,
 }
 #[derive(Default)]
 struct State {
@@ -94,10 +95,6 @@ fn publisher_fingerprint(registration: &Registration) -> AppResult<String> {
         .map_err(io::failure)?;
     Ok(format!("{:x}", Sha256::digest(key)))
 }
-fn supported(request: &Request) -> bool {
-    request.capability.accepts_scope(&request.scope)
-        && platform::unsupported_reason(request).is_none()
-}
 fn permission(request: &Request) -> Permission {
     Permission::new(request.capability.as_str(), &request.scope)
 }
@@ -124,6 +121,10 @@ fn ensure_newer(store: &Store, registration: &Registration, candidate: &str) -> 
     Ok(())
 }
 impl Host {
+    fn supported(&self, request: &Request) -> bool {
+        request.capability.accepts_scope(&request.scope)
+            && self.platform.unsupported_reason(request).is_none()
+    }
     fn root(&self) -> AppResult<PathBuf> {
         #[cfg(test)]
         if let Some(root) = &self.root {
@@ -198,8 +199,8 @@ impl Host {
                             .map(|request| PermissionView {
                                 request: request.clone(),
                                 required: manifest.required.contains(request),
-                                supported: supported(request),
-                                unsupported_reason: platform::unsupported_reason(request),
+                                supported: self.supported(request),
+                                unsupported_reason: self.platform.unsupported_reason(request),
                                 granted: loaded.consent.grants.contains(request),
                             })
                             .collect(),
@@ -214,6 +215,11 @@ impl Host {
         }
     }
     fn restore_cached(&self, manager: &Manager) {
+        // A verified in-memory catalog needs no disk reservation. In-flight
+        // native SDK IO may hold that reservation and must not freeze readers.
+        if self.state.lock().unwrap().directory.is_some() {
+            return;
+        }
         let Ok(root) = self.root() else {
             return;
         };
@@ -352,7 +358,7 @@ impl Host {
                     Some("此组件不支持当前设备、客户端版本或运行方式".into())
                 } else if let Some(reason) = self.platform.execution_restriction() {
                     Some(reason.into())
-                } else if manifest.required.iter().any(|r| !supported(r)) {
+                } else if manifest.required.iter().any(|r| !self.supported(r)) {
                     Some("此组件需要客户端尚未开放的权限".into())
                 } else {
                     None

@@ -1,5 +1,35 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-19：原生插件安全存储（继续实施）
+
+在 `497250e28084e1dbc476d62e1e509bfe5e129421` 上继续，同一 Draft PR #46；
+新增[原生安全存储契约](../gui/mobile-plugin-secure-storage-v0.0.3.md)。AndroidKeyStore
+包装主密钥、iOS ThisDeviceOnly Keychain 与私有 native-io 桥接入原 SDK；真实 API 准入
+不等于操作成功。移动不编译桌面明文主密钥后端，既有身份丢失/变化、损坏和旧格式拒绝
+替换或降级。原 lease 在原生 IO 前后重查；UI 重新检查不创造原生前台权限。
+
+本地已执行：完整 locked workspace/all-targets/all-features Rust 第一轮1583通过/0失败/
+6忽略（GUI1305/0/5），最后新增固定安全错误分类后插件回归109通过/0失败；随后将新建设备
+种子在失败路径也置于 Zeroizing，最终全套1584通过/0失败/6忽略（GUI1306/0/5）。
+最终Clippy、fmt与API24 host再次通过，现有告警保留。真实 NDK
+r27d/API24 完整 Rust host check通过，当前 Cargo resolved 图417项/3明确许可缺口；
+不宣称最终逐包链接或法律合规。现有告警保留。
+
+Android原生库、13项JVM测试及实际隔离测试APK构建通过（82个实际任务）。检查合并清单
+确认测试包、Debug和min24，SDK临时测试签名与发行凭据分开。原生 AndroidKeyStore 尚待
+新CI的实际API24模拟器 instrumentation，不能把JVM或APK编译当作运行成功。首次构建与
+Rust链接因本环境磁盘耗尽失败，保留日志；仅迁移本任务生成缓存到临时盘并保持原路径链接，
+未重置源文件或删除证据，重新构建成功。
+
+iOS新增严格请求/Debug nonce专用Keychain account与清理、真实AEAD及丢失密钥拒绝检查。
+Linux未运行Swift、UIKit或Keychain。JS驱动9项、Python验证器10项通过；缺API时必须返回
+unavailable/accepted:false并阻止三类SDK角色，该分支不算安全存储可用。实际Apple SDK、
+Simulator VM/生命周期/安全存储收据及exact-head CI待提交后运行，不沿用旧SHA结果。
+
+证据：`/workspace/artifacts/mobile-v0.0.3/mobile-vault-5a99c4a/`。Galaxy S8/iPhone、锁屏、
+重启、低内存、备份/恢复、签名发行未验收；无用户Mac、账号或发行凭据操作。文件票据、
+浏览器回调、系统调度和受保护运行加载仍逐项继续，不把它们整体归为core或已获后置。
+
 ## 2026-10-19：移动插件前台宿主（继续批次）
 
 `5a99c4a` 实际 CI：Android Debug push/PR、unsigned Release push、Native documents

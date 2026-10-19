@@ -1,6 +1,7 @@
 //! Host-only native document boundary. There are deliberately no WebView plugin commands.
 //! Run blocking methods on a worker thread; system controllers outlive page navigation.
 mod policy;
+mod vault;
 use policy::{Action, Request};
 pub use policy::{
     Error, ExportOwnership, ExportPurpose, ImportPurpose, PreparedExport, Receipt, ReceiptStatus,
@@ -28,6 +29,8 @@ pub struct NativeLicenseResponse {
 pub struct HostEnvironment {
     pub platform: String,
     pub device_class: String,
+    #[serde(default)]
+    pub secure_vault_api: bool,
 }
 impl HostEnvironment {
     #[cfg(any(target_os = "android", target_os = "ios", test))]
@@ -77,6 +80,84 @@ impl<R: Runtime, T: Manager<R>> NativeIoExt<R> for T {
     }
 }
 impl<R: Runtime> NativeIo<R> {
+    #[cfg(all(target_os = "ios", debug_assertions))]
+    pub fn plugin_vault_master_smoke(
+        &self,
+        nonce: &str,
+        create: bool,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+        if nonce.len() != 32
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(Error::InvalidRequest("invalid_smoke_scope"));
+        }
+        let response: vault::Response = self
+            .handle
+            .run_mobile_plugin(
+                "readPluginVaultMaster",
+                &vault::Request {
+                    create,
+                    smoke_nonce: Some(nonce.into()),
+                },
+            )
+            .map_err(|_| Error::BridgeResultUnknown)?;
+        response.take(create)
+    }
+    #[cfg(all(target_os = "ios", debug_assertions))]
+    pub fn plugin_vault_smoke_cleanup(&self, nonce: &str) -> Result<()> {
+        if nonce.len() != 32
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(Error::InvalidRequest("invalid_smoke_scope"));
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Cleared {
+            status: String,
+            reason: Option<String>,
+        }
+        let response: Cleared = self
+            .handle
+            .run_mobile_plugin(
+                "clearPluginVaultSmoke",
+                &vault::Request {
+                    create: false,
+                    smoke_nonce: Some(nonce.into()),
+                },
+            )
+            .map_err(|_| Error::BridgeResultUnknown)?;
+        if response.status == "cleared" && response.reason.is_none() {
+            Ok(())
+        } else {
+            Err(Error::Unavailable)
+        }
+    }
+    /// Host-only platform vault key; never registered as a WebView command.
+    pub fn plugin_vault_master(&self, create: bool) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let response: vault::Response = self
+                .handle
+                .run_mobile_plugin(
+                    "readPluginVaultMaster",
+                    &vault::Request {
+                        create,
+                        smoke_nonce: None,
+                    },
+                )
+                .map_err(|_| Error::BridgeResultUnknown)?;
+            response.take(create)
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let _ = create;
+            Err(Error::Unavailable)
+        }
+    }
     /// Read system device facts without a picker or permission prompt.
     pub fn host_environment(&self) -> Result<HostEnvironment> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -199,7 +280,8 @@ mod license_response_tests {
         for shape in ["phone", "tablet"] {
             assert!(HostEnvironment {
                 platform: "android".into(),
-                device_class: shape.into()
+                device_class: shape.into(),
+                secure_vault_api: false,
             }
             .validated("android")
             .is_ok());

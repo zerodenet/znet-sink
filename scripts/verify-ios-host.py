@@ -16,9 +16,11 @@ def validate_smoke(receipt, nonce):
     assert receipt['nativePlugin'] == 'znet-native-io' and receipt['webViewInspectable'] is True
     checks = receipt['checks']
     for key in ['rustIpc', 'nativePresentation', 'fourTabs', 'onboarding', 'aboutAndReturn',
-                'vpnUnsupported', 'nativeLicenseAvailable', 'nativePluginVm']:
+                'vpnUnsupported', 'nativeLicenseAvailable', 'nativePluginVm', 'nativeSecureStorageContract']:
         assert checks.get(key) is True, f'missing actual UI/IPC check: {key}'
     assert checks['applicationId'] == 'org.zerodenet.znetsink'
+    assert checks['nativeSecureStorageState'] in ['available', 'unavailable']
+    assert checks['nativeSecureStorageAccepted'] is (checks['nativeSecureStorageState'] == 'available'), 'unsupported storage cannot be accepted'
     assert 0 < checks['width'] <= 1024 and checks['height'] > 0
     return receipt
 

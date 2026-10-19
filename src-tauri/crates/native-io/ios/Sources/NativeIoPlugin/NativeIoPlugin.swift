@@ -6,6 +6,12 @@ import UIKit
 import UniformTypeIdentifiers
 import WebKit
 
+private struct NativeHostEnvironment: Encodable {
+    let platform: String
+    let deviceClass: String
+    let secureVaultApi: Bool
+}
+
 private final class NativeOperation: NSObject, UIDocumentPickerDelegate,
     UIAdaptivePresentationControllerDelegate {
     let request: NativeIoRequest
@@ -57,6 +63,8 @@ final class NativeIoPlugin: Plugin {
     private var active: NativeOperation?
     private var foregroundObserver: NSObjectProtocol?
     private let io = DispatchQueue(label: "org.zerodenet.znetsink.native-io", qos: .userInitiated)
+    private let vaultAdmission = NSLock()
+    private var vaultReading = false
     private let stageRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("znet-native-io-leases", isDirectory: true)
 
@@ -75,7 +83,43 @@ final class NativeIoPlugin: Plugin {
                 invoke.reject("host-environment-unavailable", code: "host-environment-unavailable")
                 return
             }
-            invoke.resolve(["platform": "ios", "deviceClass": device])
+            let accessible = UIApplication.shared.isProtectedDataAvailable
+            self.io.async {
+                invoke.resolve(NativeHostEnvironment(platform: "ios", deviceClass: device, secureVaultApi: accessible && NativeVault.available()))
+            }
+        }
+    }
+    @objc public func readPluginVaultMaster(_ invoke: Invoke) {
+        guard invoke.getRawArgs().utf8.count <= 128,
+              let request = try? invoke.parseArgs(NativeVaultRequest.self) else {
+            invoke.reject("invalid-secure-store-request", code: "invalid-secure-store-request")
+            return
+        }
+        withVault(invoke) { NativeVault.load(create: request.create, smokeNonce: request.smokeNonce) }
+    }
+    #if DEBUG
+    @objc public func clearPluginVaultSmoke(_ invoke: Invoke) {
+        guard invoke.getRawArgs().utf8.count <= 128,
+              let request = try? invoke.parseArgs(NativeVaultRequest.self), !request.create,
+              let nonce = request.smokeNonce else {
+            invoke.reject("invalid-secure-store-request", code: "invalid-secure-store-request"); return
+        }
+        withVault(invoke) { NativeVault.clearSmoke(nonce) }
+    }
+    #endif
+    private func withVault(_ invoke: Invoke, _ operation: @escaping () -> [String: String]) {
+        vaultAdmission.lock()
+        let admitted = !vaultReading
+        if admitted { vaultReading = true }
+        vaultAdmission.unlock()
+        guard admitted else {
+            invoke.resolve(["status": "unavailable", "reason": "secure-store-unavailable"])
+            return
+        }
+        io.async {
+            let receipt = operation()
+            self.vaultAdmission.lock(); self.vaultReading = false; self.vaultAdmission.unlock()
+            invoke.resolve(receipt)
         }
     }
 

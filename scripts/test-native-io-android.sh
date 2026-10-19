@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Compile the real Tauri Android plugin and JVM tests. No app/APK, signing or device claim.
+# Compile the real plugin/JVM and isolated test APK. Runtime requires the explicit emulator flag.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 validation_root="$(mktemp -d "${TMPDIR:-/tmp}/znet-native-io-android.XXXXXX")"
 trap 'rm -rf "$validation_root"' EXIT
+# Any SDK test signing key belongs solely to this disposable test home.
+export ANDROID_USER_HOME="$validation_root/android-user"
+unset ANDROID_SDK_HOME ANDROID_PREFS_ROOT
+mkdir -p "$ANDROID_USER_HOME"
 cargo metadata --manifest-path "$repo_root/src-tauri/Cargo.toml" --format-version 1 --locked > "$validation_root/metadata.json"
 python3 - "$repo_root" "$validation_root" <<'PY'
 import json, os, pathlib, sys
@@ -28,7 +32,11 @@ subprojects { layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(
 (root / 'gradle.properties').write_text('android.useAndroidX=true\norg.gradle.workers.max=2\norg.gradle.jvmargs=-Xmx1536m\n')
 PY
 result=0
-"${GRADLE_CMD:-gradle}" -p "$validation_root" :native-io:testDebugUnitTest :native-io:assembleDebug --no-daemon || result=$?
+tasks=(:native-io:testDebugUnitTest :native-io:assembleDebug :native-io:assembleDebugAndroidTest)
+if [[ "${NATIVE_IO_ANDROID_RUNTIME_TESTS:-0}" == 1 ]]; then
+    tasks+=(:native-io:connectedDebugAndroidTest)
+fi
+"${GRADLE_CMD:-gradle}" -p "$validation_root" "${tasks[@]}" --no-daemon || result=$?
 if [[ -n "${NATIVE_IO_ARTIFACT_DIR:-}" ]]; then
     mkdir -p "$NATIVE_IO_ARTIFACT_DIR"
     [[ ! -d "$validation_root/outputs/native-io" ]] || cp -R "$validation_root/outputs/native-io" "$NATIVE_IO_ARTIFACT_DIR/android-library"

@@ -29,6 +29,8 @@
 | `crypto.session.use` | `self` | 对短期句柄执行 HMAC-SHA256 或 ChaCha20-Poly1305 校验解密；解密结果仍为短期句柄 |
 | `runtime.protected.load` | `active-runtime` | 一次性消费 `material` 句柄，完成配置合成、校验与 runtime-only 应用；只返回安全运行态投影 |
 
+移动端 `secrets.persistent.read/write` 和 `crypto.device.use` 使用[原生安全存储适配](mobile-plugin-secure-storage-v0.0.3.md)，仅在原生 API 核对后开放；安全存储故障不降级普通文件、不替换既有密钥，实际运行验收单独记录。
+
 普通插件存储不等同于安全保险箱。长期敏感内容必须由插件或远端服务生成密文/不透明信封后再保存。客户端负责命名空间、容量、原子性和生命周期，不定义业务密钥、Connect 加密协议或 ZBoard 登录流程。
 
 通知生产回执增加 `delivery: { accepted: true, presentation: "unconfirmed" }`，表示宿主已提交，

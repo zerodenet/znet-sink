@@ -49,7 +49,7 @@ fn exercise(executor: &Executor, target: Target) -> AppResult<serde_json::Value>
     )
 }
 impl Host {
-    pub fn native_vm_smoke(&self) -> AppResult<serde_json::Value> {
+    pub fn native_vm_smoke(&self, _app: Option<tauri::AppHandle>) -> AppResult<serde_json::Value> {
         let nonce = std::env::var("ZNET_IOS_UI_SMOKE_NONCE").unwrap_or_default();
         if !cfg!(target_os = "ios")
             || nonce.len() != 32
@@ -69,7 +69,62 @@ impl Host {
                 self.platform.review_generation(),
             )
         };
-        let result = exercise(&executor, target)?;
+        let mut result = exercise(&executor, target)?;
+        #[cfg(target_os = "ios")]
+        {
+            use tauri_plugin_znet_native_io::NativeIoExt;
+            let available = self
+                .platform
+                .unsupported_reason(&Request {
+                    capability: Capability::PersistentSecretsRead,
+                    scope: "self".into(),
+                })
+                .is_none();
+            if available {
+                let app = _app.ok_or_else(stale)?;
+                let root = tempfile::Builder::new()
+                    .prefix("znet-vault-acceptance-")
+                    .tempdir()
+                    .map_err(|_| super::vault::unavailable())?;
+                let read_app = app.clone();
+                let read_nonce = nonce.clone();
+                let reader: super::vault::KeyReader = Arc::new(move |create| {
+                    read_app
+                        .native_io()
+                        .plugin_vault_master_smoke(&read_nonce, create)
+                        .map_err(|_| super::vault::unavailable())
+                });
+                super::vault::exercise_platform_vault(
+                    root.path(),
+                    &reader,
+                    &|| {
+                        app.native_io()
+                            .plugin_vault_smoke_cleanup(&nonce)
+                            .map_err(|_| super::vault::unavailable())
+                    },
+                    &|| self.platform.check_review_generation(generation.as_deref()),
+                )?;
+                result["secureStorage"] = serde_json::json!({"state":"available","roundTrip":true,"lostKeyRejected":true,"plaintextFallbackRejected":true});
+            } else {
+                let gated = [
+                    Capability::PersistentSecretsRead,
+                    Capability::PersistentSecretsWrite,
+                    Capability::CryptoDeviceUse,
+                ]
+                .into_iter()
+                .all(|capability| {
+                    self.platform
+                        .unsupported_reason(&Request {
+                            capability,
+                            scope: "self".into(),
+                        })
+                        .is_some()
+                });
+                result["secureStorage"] = serde_json::json!({"state":"unavailable","permissionsGated":gated,"roundTrip":false});
+            }
+        }
+        #[cfg(not(target_os = "ios"))]
+        let _ = &mut result;
         self.platform
             .check_review_generation(generation.as_deref())?;
         Ok(result)
@@ -86,6 +141,6 @@ mod tests {
     }
     #[test]
     fn ordinary_debug_launch_cannot_request_native_acceptance() {
-        assert!(Host::default().native_vm_smoke().is_err());
+        assert!(Host::default().native_vm_smoke(None).is_err());
     }
 }

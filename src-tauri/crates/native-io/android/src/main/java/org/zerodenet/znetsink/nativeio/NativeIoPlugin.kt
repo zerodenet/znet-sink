@@ -41,6 +41,33 @@ class NativeIoArgs {
 /** Rust-only local plugin. Rust deliberately registers no JavaScript invoke handler. */
 @TauriPlugin
 class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
+    private val vault by lazy { NativeVault(activity.applicationContext) }
+    private val readingVault = AtomicBoolean(false)
+    @Command
+    fun readPluginVaultMaster(invoke: Invoke) {
+        val raw = invoke.getArgs()
+        if (raw.keys().asSequence().any { it != "create" } || raw.opt("create") !is Boolean || destroyed.get()) {
+            invoke.reject("invalid-secure-store-request"); return
+        }
+        val create = raw.getBoolean("create")
+        if (!readingVault.compareAndSet(false, true)) {
+            invoke.resolve(JSObject().put("status", "unavailable").put("reason", "secure-store-unavailable")); return
+        }
+        try { worker.execute {
+            try {
+                check(!destroyed.get())
+                val key = vault.load(create)
+                if (key == null) invoke.resolve(JSObject().put("status", "missing"))
+                else try { invoke.resolve(JSObject().put("status", "available").put("keyBase64", Base64.encodeToString(key, Base64.NO_WRAP))) }
+                finally { key.fill(0) }
+            } catch (_: Exception) {
+                invoke.resolve(JSObject().put("status", "unavailable").put("reason", "secure-store-unavailable"))
+            } finally { readingVault.set(false) }
+        } } catch (_: RejectedExecutionException) {
+            readingVault.set(false)
+            invoke.resolve(JSObject().put("status", "unavailable").put("reason", "secure-store-unavailable"))
+        }
+    }
     @Command
     fun readHostEnvironment(invoke: Invoke) {
         val width = activity.resources.configuration.smallestScreenWidthDp
@@ -48,8 +75,12 @@ class NativeIoPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("host-environment-unavailable")
             return
         }
-        invoke.resolve(JSObject().put("platform", "android")
-            .put("deviceClass", if (width >= 600) "tablet" else "phone"))
+        try { worker.execute {
+            if (destroyed.get()) invoke.reject("host-environment-unavailable")
+            else invoke.resolve(JSObject().put("platform", "android")
+                .put("deviceClass", if (width >= 600) "tablet" else "phone")
+                .put("secureVaultApi", vault.available()))
+        } } catch (_: RejectedExecutionException) { invoke.reject("host-environment-unavailable") }
     }
     private class Operation(val invoke: Invoke, val args: NativeIoArgs, val action: String) {
         val completed = AtomicBoolean(false)

@@ -8,6 +8,7 @@ android {
     compileSdk = 36
     defaultConfig {
         minSdk = 24
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
     compileOptions {
@@ -22,4 +23,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.0")
     implementation(project(":tauri-android"))
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
