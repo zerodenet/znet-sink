@@ -71,6 +71,7 @@ def main(evidence):
                         (root / 'simulator-smoke.json').write_text(json.dumps(value, indent=2) + '\n')
                         run('xcrun', 'simctl', 'io', device, 'screenshot', str(root / 'simulator.png'))
                         print(json.dumps(value, sort_keys=True), flush=True)
+                        print(console.read_text(errors='replace')[-8192:], flush=True)
                         verify.validate_smoke(value, nonce)
                         (root / 'simulator.json').write_text(json.dumps(dict(udid=device, name=candidates[0]['name'],
                             runtime=runtime['identifier'], runtimeVersion=runtime['version'], simulator=True,

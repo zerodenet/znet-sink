@@ -15,28 +15,42 @@ enum HostSmoke {
             print("[ZNet iOS smoke] bounded test driver unavailable")
             return
         }
-        let work = DispatchWorkItem { [weak webview] in
-            guard let view = webview else { return }
-            evaluate(view, script: script, nonce: nonce)
-        }
-        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + .seconds(3), execute: work)
+        waitForDocument(webview, script: script, nonce: nonce, remaining: 120)
         #endif
     }
 
     #if DEBUG
+    private static func waitForDocument(_ webview: WKWebView, script: String, nonce: String, remaining: Int) {
+        // Plugin load precedes navigation. A fixed delay can evaluate in the
+        // initial document and lose its async frame when the app URL loads.
+        if webview.url?.scheme == "tauri", !webview.isLoading {
+            evaluate(webview, script: script, nonce: nonce)
+            return
+        }
+        guard remaining > 0 else {
+            persist(nil, completed: false, webview: webview, nonce: nonce)
+            return
+        }
+        let work = DispatchWorkItem { [weak webview] in
+            guard let view = webview else { return }
+            waitForDocument(view, script: script, nonce: nonce, remaining: remaining - 1)
+        }
+        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + .milliseconds(500), execute: work)
+    }
+
     private static func evaluate(_ webview: WKWebView, script: String, nonce: String) {
         print("[ZNet iOS smoke] evaluating fixed driver in actual WKWebView")
         webview.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success(let value):
                 persist(value, completed: true, webview: webview, nonce: nonce)
-            case .failure:
-                persist(nil, completed: false, webview: webview, nonce: nonce)
+            case .failure(let error):
+                persist(nil, completed: false, webview: webview, nonce: nonce, error: error as NSError)
             }
         }
     }
 
-    private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String) {
+    private static func persist(_ checks: Any?, completed: Bool, webview: WKWebView, nonce: String, error: NSError? = nil) {
         print("[ZNet iOS smoke] actual WebKit callback received")
         var inspectable = false
         if #available(iOS 16.4, *) { inspectable = webview.isInspectable }
@@ -49,6 +63,10 @@ enum HostSmoke {
         ]
         if let checks = checks { receipt["checks"] = checks }
         if !completed { receipt["reason"] = "actual-webview-smoke-failed" }
+        if let error = error {
+            receipt["errorDomain"] = error.domain == "WKErrorDomain" ? "WKErrorDomain" : "native-webview-error"
+            receipt["errorCode"] = error.code
+        }
         // Fixed private cache output; no arbitrary path or user material.
         guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
               let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]),
