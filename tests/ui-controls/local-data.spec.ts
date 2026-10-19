@@ -20,6 +20,6 @@ test('cleanup uses only the explicitly confirmed local history scope and refresh
   expect(await page.evaluate(()=>(window as any).localDataFixture.calls.filter((call:string)=>call.startsWith('gui_debug_clear')))).toEqual([]);
   await page.getByRole('button',{name:'清理本地完成连接历史',exact:true}).click();
   await page.getByRole('button',{name:'确认清理',exact:true}).click();
-  await expect(page.getByRole('status')).toContainText('本地完成连接历史清理已确认');
+  await expect(page.locator('.local-data').getByRole('status')).toContainText('本地完成连接历史清理已确认');
   expect(await page.evaluate(()=>(window as any).localDataFixture.calls.filter((call:string)=>call.startsWith('gui_debug_clear')))).toEqual(['gui_debug_clear:connection-history']);
 });
