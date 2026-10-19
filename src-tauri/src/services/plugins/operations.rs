@@ -541,6 +541,7 @@ impl Host {
             binding,
             executor,
             target,
+            publication_review,
         ) = {
             let _operation = self.operation_guard()?;
             self.checked_rescan(manager)?;
@@ -577,6 +578,13 @@ impl Host {
             configuration.extend(loaded.configuration.clone());
             let publisher = loaded.publisher_fingerprint.clone();
             let plugin_state = namespace::runtime_state(&self.root()?, &publisher, plugin_id)?;
+            let publication_review = Review {
+                key: binding.key.clone(),
+                identity: binding.identity.clone(),
+                registration: binding.registration,
+                revision: binding.revision,
+                host_generation: self.platform.review_generation(),
+            };
             (
                 loaded.component.clone(),
                 loaded.authority.clone().ok_or_else(stale)?,
@@ -586,6 +594,7 @@ impl Host {
                 binding,
                 self.dispatch_executor()?,
                 self.platform.target()?,
+                publication_review,
             )
         };
         let digest = component.digest().to_owned();
@@ -640,11 +649,16 @@ impl Host {
             return Err(stale());
         }
         drop(state);
-        namespace::apply_runtime_updates(
+        namespace::apply_runtime_updates_checked(
             &self.root()?,
             &publisher,
             plugin_id,
             envelope.state_updates,
+            &|| {
+                receipt.check().map_err(super::sdk::invocation_failure)?;
+                self.current_review(manager, &publication_review)?;
+                Ok(())
+            },
         )?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)
@@ -750,11 +764,20 @@ impl Host {
             return Err(stale());
         }
         drop(state);
-        namespace::apply_runtime_updates(
+        namespace::apply_runtime_updates_checked(
             &self.root()?,
             &publisher,
             plugin_id,
             envelope.state_updates,
+            &|| {
+                receipt.check().map_err(super::sdk::invocation_failure)?;
+                self.checked_scheduled_due(
+                    app.state::<crate::state::app_state::AppState>()
+                        .capabilities(),
+                    due,
+                )?;
+                Ok(())
+            },
         )?;
         receipt.check().map_err(super::sdk::invocation_failure)?;
         Ok(envelope.value)

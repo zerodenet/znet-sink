@@ -1,5 +1,6 @@
 //! Opaque, host-isolated plugin data. The host enforces ownership, quotas and
-//! atomicity but deliberately does not interpret or decrypt plugin values.
+//! single-file publication but deliberately does not interpret or decrypt
+//! plugin values. Content/schema migration has an explicit partial-state error.
 
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -15,6 +16,8 @@ const MAX_VALUE_BYTES: usize = 128 * 1024;
 const MAX_STATE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUNTIME_STATE_BYTES: usize = 8 * 1024;
+pub(super) const MIGRATION_UNCERTAIN: &str =
+    "插件存储内容已写入，但版本标记未确认；请先读取内容与版本，不要自动重试迁移";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,11 +142,12 @@ fn load_metadata(root: &Path, publisher: &str, plugin_id: &str) -> AppResult<Met
     }
 }
 
-fn save_metadata(
+fn save_metadata_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     metadata: &Metadata,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
     let _history = super::uninstall::storage::writer(root)?;
     if metadata.state_schema == 0 || metadata.cache_schema == 0 {
@@ -154,9 +158,15 @@ fn save_metadata(
     let mut temporary = tempfile::NamedTempFile::new_in(&directory).map_err(io::failure)?;
     temporary.write_all(&bytes).map_err(io::failure)?;
     temporary.as_file().sync_all().map_err(io::failure)?;
+    let destination = metadata_path(root, publisher, plugin_id)?;
+    check()?;
     temporary
-        .persist(metadata_path(root, publisher, plugin_id)?)
+        .persist(destination)
         .map_err(|error| io::failure(error.error))?;
+    #[cfg(unix)]
+    File::open(directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(io::failure)?;
     Ok(())
 }
 
@@ -200,12 +210,13 @@ fn validate(values: &Values, area: Area) -> AppResult<usize> {
     Ok(total)
 }
 
-fn save(
+fn save_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     area: Area,
     values: &Values,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
     let _history = super::uninstall::storage::writer(root)?;
     validate(values, area)?;
@@ -217,8 +228,10 @@ fn save(
     let mut temporary = tempfile::NamedTempFile::new_in(&directory).map_err(io::failure)?;
     temporary.write_all(&bytes).map_err(io::failure)?;
     temporary.as_file().sync_all().map_err(io::failure)?;
+    let destination = file(root, publisher, plugin_id, area)?;
+    check()?;
     temporary
-        .persist(file(root, publisher, plugin_id, area)?)
+        .persist(destination)
         .map_err(|error| io::failure(error.error))?;
     #[cfg(unix)]
     File::open(directory)
@@ -240,35 +253,37 @@ pub(super) fn get(
     Ok(load(root, publisher, plugin_id, area)?.0.get(key).cloned())
 }
 
-pub(super) fn put(
+pub(super) fn put_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     area: Area,
     key: String,
     value: String,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
     if !safe_key(&key) {
         return Err(AppError::invalid_argument("插件状态键无效"));
     }
     let mut values = load(root, publisher, plugin_id, area)?;
     values.0.insert(key, value);
-    save(root, publisher, plugin_id, area, &values)
+    save_checked(root, publisher, plugin_id, area, &values, check)
 }
 
-pub(super) fn delete(
+pub(super) fn delete_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     area: Area,
     key: &str,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
     if !safe_key(key) {
         return Err(AppError::invalid_argument("插件状态键无效"));
     }
     let mut values = load(root, publisher, plugin_id, area)?;
     if values.0.remove(key).is_some() {
-        save(root, publisher, plugin_id, area, &values)?;
+        save_checked(root, publisher, plugin_id, area, &values, check)?;
     }
     Ok(())
 }
@@ -295,19 +310,31 @@ pub(super) fn export(
     Ok((version, load(root, publisher, plugin_id, area)?.0))
 }
 
-pub(super) fn clear(root: &Path, publisher: &str, plugin_id: &str, area: Area) -> AppResult<()> {
-    save(root, publisher, plugin_id, area, &Values::default())
-}
-
-pub(super) fn migrate(
+pub(super) fn clear_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     area: Area,
-    from: u32,
-    to: u32,
-    values: BTreeMap<String, String>,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
+    save_checked(root, publisher, plugin_id, area, &Values::default(), check)
+}
+
+pub(super) struct Migration {
+    pub from: u32,
+    pub to: u32,
+    pub values: BTreeMap<String, String>,
+}
+
+pub(super) fn migrate_checked(
+    root: &Path,
+    publisher: &str,
+    plugin_id: &str,
+    area: Area,
+    migration: Migration,
+    check: &dyn Fn() -> AppResult<()>,
+) -> AppResult<()> {
+    let Migration { from, to, values } = migration;
     if from == 0 || to <= from || to > from.saturating_add(1) {
         return Err(AppError::invalid_argument("插件存储迁移必须逐版本向前执行"));
     }
@@ -321,12 +348,12 @@ pub(super) fn migrate(
     }
     let values = Values(values);
     validate(&values, area)?;
-    save(root, publisher, plugin_id, area, &values)?;
+    save_checked(root, publisher, plugin_id, area, &values, check)?;
     metadata.set_version(area, to);
-    if let Err(error) = save_metadata(root, publisher, plugin_id, &metadata) {
+    if save_metadata_checked(root, publisher, plugin_id, &metadata, check).is_err() {
         return Err(AppError {
             code: "plugin_storage_migration_uncertain",
-            message: format!("插件存储内容已写入，但版本标记保存失败：{}", error.message),
+            message: MIGRATION_UNCERTAIN.into(),
             details: None,
         });
     }
@@ -348,11 +375,12 @@ pub(super) fn runtime_state(
     Ok(values.0)
 }
 
-pub(super) fn apply_runtime_updates(
+pub(super) fn apply_runtime_updates_checked(
     root: &Path,
     publisher: &str,
     plugin_id: &str,
     updates: BTreeMap<String, Option<String>>,
+    check: &dyn Fn() -> AppResult<()>,
 ) -> AppResult<()> {
     if updates.len() > 32 || updates.keys().any(|key| !safe_key(key)) {
         return Err(AppError::invalid_argument("插件运行态更新无效"));
@@ -368,7 +396,29 @@ pub(super) fn apply_runtime_updates(
             }
         }
     }
-    save(root, publisher, plugin_id, Area::State, &values)
+    save_checked(root, publisher, plugin_id, Area::State, &values, check)
+}
+
+#[cfg(test)]
+pub(super) fn put(
+    root: &Path,
+    publisher: &str,
+    plugin_id: &str,
+    area: Area,
+    key: String,
+    value: String,
+) -> AppResult<()> {
+    put_checked(root, publisher, plugin_id, area, key, value, &|| Ok(()))
+}
+
+#[cfg(test)]
+pub(super) fn apply_runtime_updates(
+    root: &Path,
+    publisher: &str,
+    plugin_id: &str,
+    updates: BTreeMap<String, Option<String>>,
+) -> AppResult<()> {
+    apply_runtime_updates_checked(root, publisher, plugin_id, updates, &|| Ok(()))
 }
 
 impl Host {
@@ -389,15 +439,46 @@ impl Host {
         key: String,
         value: String,
     ) -> AppResult<()> {
+        self.storage_put_checked(plugin_id, area, key, value, &|| Ok(()))
+    }
+
+    pub(super) fn storage_put_checked(
+        &self,
+        plugin_id: &str,
+        area: Area,
+        key: String,
+        value: String,
+        check: &dyn Fn() -> AppResult<()>,
+    ) -> AppResult<()> {
         let _operation = self.operation_guard()?;
+        check()?;
         let publisher = self.namespace_publisher(plugin_id)?;
-        put(&self.root()?, &publisher, plugin_id, area, key, value)
+        put_checked(
+            &self.root()?,
+            &publisher,
+            plugin_id,
+            area,
+            key,
+            value,
+            check,
+        )
     }
 
     pub fn storage_delete(&self, plugin_id: &str, area: Area, key: &str) -> AppResult<()> {
+        self.storage_delete_checked(plugin_id, area, key, &|| Ok(()))
+    }
+
+    pub(super) fn storage_delete_checked(
+        &self,
+        plugin_id: &str,
+        area: Area,
+        key: &str,
+        check: &dyn Fn() -> AppResult<()>,
+    ) -> AppResult<()> {
         let _operation = self.operation_guard()?;
+        check()?;
         let publisher = self.namespace_publisher(plugin_id)?;
-        delete(&self.root()?, &publisher, plugin_id, area, key)
+        delete_checked(&self.root()?, &publisher, plugin_id, area, key, check)
     }
 
     pub fn storage_list(&self, plugin_id: &str, area: Area) -> AppResult<Vec<String>> {
@@ -417,9 +498,19 @@ impl Host {
     }
 
     pub fn storage_clear(&self, plugin_id: &str, area: Area) -> AppResult<()> {
+        self.storage_clear_checked(plugin_id, area, &|| Ok(()))
+    }
+
+    pub(super) fn storage_clear_checked(
+        &self,
+        plugin_id: &str,
+        area: Area,
+        check: &dyn Fn() -> AppResult<()>,
+    ) -> AppResult<()> {
         let _operation = self.operation_guard()?;
+        check()?;
         let publisher = self.namespace_publisher(plugin_id)?;
-        clear(&self.root()?, &publisher, plugin_id, area)
+        clear_checked(&self.root()?, &publisher, plugin_id, area, check)
     }
 
     pub fn storage_migrate(
@@ -430,54 +521,22 @@ impl Host {
         to: u32,
         values: BTreeMap<String, String>,
     ) -> AppResult<()> {
+        self.storage_migrate_checked(plugin_id, area, Migration { from, to, values }, &|| Ok(()))
+    }
+
+    pub(super) fn storage_migrate_checked(
+        &self,
+        plugin_id: &str,
+        area: Area,
+        migration: Migration,
+        check: &dyn Fn() -> AppResult<()>,
+    ) -> AppResult<()> {
         let _operation = self.operation_guard()?;
+        check()?;
         let publisher = self.namespace_publisher(plugin_id)?;
-        migrate(&self.root()?, &publisher, plugin_id, area, from, to, values)
+        migrate_checked(&self.root()?, &publisher, plugin_id, area, migration, check)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn migration_is_versioned_bounded_and_exportable() {
-        let root = tempfile::tempdir().unwrap();
-        let mut values = BTreeMap::new();
-        values.insert("session/envelope".into(), STANDARD.encode(b"opaque"));
-        migrate(
-            root.path(),
-            "publisher",
-            "org.example.plugin",
-            Area::State,
-            1,
-            2,
-            values.clone(),
-        )
-        .unwrap();
-        let (version, exported) =
-            export(root.path(), "publisher", "org.example.plugin", Area::State).unwrap();
-        assert_eq!(version, 2);
-        assert_eq!(exported, values);
-        assert!(migrate(
-            root.path(),
-            "publisher",
-            "org.example.plugin",
-            Area::State,
-            1,
-            2,
-            BTreeMap::new()
-        )
-        .is_err());
-        assert!(migrate(
-            root.path(),
-            "publisher",
-            "org.example.plugin",
-            Area::State,
-            2,
-            4,
-            BTreeMap::new()
-        )
-        .is_err());
-    }
-}
+mod tests;

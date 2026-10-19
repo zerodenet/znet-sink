@@ -117,7 +117,7 @@ fn signed_page_resources_render_without_filesystem_or_network_urls() {
 // Fixtures exercise the real Host, which checks the compiled client version.
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn registration() -> Registration {
-    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read","subscriptions.manage","tasks.schedule"]})).unwrap()
+    serde_json::from_value(serde_json::json!({"id":"org.example.plugin","repository":"https://github.com/example/plugin","publisher":{"id":"example","public_key":STANDARD.encode(ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key().to_bytes())},"name":"Example","description":"Test","license":"MIT","maintainers":["example"],"release_source":{"type":"github-releases","metadata_asset":"marketplace-entry.json"},"surfaces":[],"capabilities":["plugin.self.read","network.get","network.request","network.configured.request","records.summary.read","subscriptions.manage","tasks.schedule","plugin.storage.write"]})).unwrap()
 }
 pub(super) fn setup(unsupported: bool) -> (tempfile::TempDir, Host, Manager) {
     let source = "JSON.parse(hostCall('{\"capability\":\"plugin.self.read\",\"scope\":\"self\"}'))";

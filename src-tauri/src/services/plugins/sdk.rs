@@ -111,6 +111,7 @@ pub(crate) fn public_failure(error: AppError) -> Failure {
             "系统通知暂不可用，请检查系统通知设置或稍后重试".into()
         }
         "plugin_secure_store_unavailable" => super::vault::unavailable().message,
+        "plugin_storage_migration_uncertain" => namespace::MIGRATION_UNCERTAIN.into(),
         _ => "插件宿主拒绝了本次操作".into(),
     };
     Failure {
@@ -972,12 +973,16 @@ impl Host {
             }
             Method::StoragePut => {
                 let args: StoragePutArgs = decode(call.arguments)?;
-                self.storage_put(plugin_id, args.area, args.key, args.value)?;
+                self.storage_put_checked(plugin_id, args.area, args.key, args.value, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?;
                 Value::Bool(true)
             }
             Method::StorageDelete => {
                 let args: StorageGetArgs = decode(call.arguments)?;
-                self.storage_delete(plugin_id, args.area, &args.key)?;
+                self.storage_delete_checked(plugin_id, args.area, &args.key, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?;
                 Value::Bool(true)
             }
             Method::StorageList => {
@@ -991,12 +996,23 @@ impl Host {
             }
             Method::StorageClear => {
                 let args: StorageAreaArgs = decode(call.arguments)?;
-                self.storage_clear(plugin_id, args.area)?;
+                self.storage_clear_checked(plugin_id, args.area, &|| {
+                    lease.check(Some(&call.request)).map_err(invocation_failure)
+                })?;
                 Value::Bool(true)
             }
             Method::StorageMigrate => {
                 let args: StorageMigrationArgs = decode(call.arguments)?;
-                self.storage_migrate(plugin_id, args.area, args.from, args.to, args.values)?;
+                self.storage_migrate_checked(
+                    plugin_id,
+                    args.area,
+                    namespace::Migration {
+                        from: args.from,
+                        to: args.to,
+                        values: args.values,
+                    },
+                    &|| lease.check(Some(&call.request)).map_err(invocation_failure),
+                )?;
                 Value::Bool(true)
             }
             Method::NotificationPost => {
