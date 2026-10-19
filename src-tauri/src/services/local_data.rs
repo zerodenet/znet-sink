@@ -110,9 +110,9 @@ mod tests {
         let root = temp.path().to_path_buf();
         fs::create_dir_all(root.join("logs")).unwrap();
         let file = root.join("logs/owned");
-        assert_eq!(sizes(&root, &[file.clone()]), Ok((0, 0)));
+        assert_eq!(sizes(&root, std::slice::from_ref(&file)), Ok((0, 0)));
         fs::write(&file, b"secret-body-not-returned").unwrap();
-        assert_eq!(sizes(&root, &[file.clone()]), Ok((24, 1)));
+        assert_eq!(sizes(&root, std::slice::from_ref(&file)), Ok((24, 1)));
         let value = inspect(
             "logs",
             Ok((root.clone(), vec![file])),

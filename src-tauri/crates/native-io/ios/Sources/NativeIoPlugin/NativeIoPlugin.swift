@@ -93,12 +93,10 @@ final class NativeIoPlugin: Plugin {
                 return
             }
             do {
-                let file = try FileHandle(forReadingFrom: url)
-                defer { try? file.close() }
-                // Cap the read itself, including a witness byte for oversized resources.
-                let data = try file.read(upToCount: 16 * 1024 * 1024 + 1) ?? Data()
-                guard data.count <= 16 * 1024 * 1024,
-                      let text = String(data: data, encoding: .utf8),
+                // Reuse the tested chunked reader, including its witness byte
+                // and short-read handling; metadata alone does not bound IO.
+                let data = try BoundedNativeIo.read(url: url, maximumBytes: 16 * 1024 * 1024)
+                guard let text = String(data: data, encoding: .utf8),
                       let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       value["schemaVersion"] as? Int == 1,
                       let target = value["target"] as? [String: Any],

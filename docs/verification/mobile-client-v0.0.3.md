@@ -21,12 +21,18 @@ SwiftPM 真实输入，次轮通过资源流水线打包，最终核对包内字
 workspace/all-features Rust 完整验证 1562通过/0失败/7忽略（GUI1288/0/5）；fmt、
 workspace/all-targets/all-features check 与 Clippy 通过并保留既有警告。真实 Rust 许可
 hook 的输入/摘要拒绝验证通过。一次并发全量测试的501条大快照夹具500ms超时，后续仅为
-此大快照改用5s预算，再跑并发全量；其他夹具和显式超时预算不变，不删改安全断言。
+此大快照改用5s预算，再跑并发全量也为1562通过/0失败/7忽略；其他夹具和显式超时
+预算不变，不删改安全断言。
 
-32项受影响浏览器检查及14项修正文案/状态定位后的路由与本地容量检查通过。完整浏览器
-及当前头的 CI、SDK 包、Simulator实际版本、产物摘要和未运行项以 PR 最新段为准；旧头
+32项受影响浏览器检查及14项修正文案/状态定位后的路由与本地容量检查通过。整批 Chromium
+初跑452/464通过，12项均在旧规则页说明文字断言处失败，修正后已包含在上述14项复验中；
+没有将初跑写成一次全绿。当前头的完整 CI、SDK 包、Simulator实际版本、产物摘要和未运行项以 PR 最新段为准；旧头
 证据均为历史。Android API24/Galaxy S8 与 iOS16.4 的目标不变，未声称真实手机或 VPN
 验收。没有修改 core、操作用户 Mac、创建 Apple 凭据、合并或发布。
+
+2026-10-19 16:24 UTC：[GitHub 官方状态](https://www.githubstatus.com/api/v2/summary.json)记录 Actions/Pages/Webhooks 降级，当前头的
+push/PR 共12条工作流仍 queued、未分配 runner。此时没有当前头的 SDK/App/APK 产物或
+Simulator 执行证据；历史 iOS26.2 结果不能移作本批通过，等待外部服务恢复后继续核对。
 
 ## 2026-10-18：可安装 Debug 宿主
 
