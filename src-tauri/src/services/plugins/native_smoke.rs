@@ -76,6 +76,7 @@ impl Host {
             // Isolated Debug evidence runs even when the production adapter is
             // gated. It never supplies a key or changes that admission result.
             let diagnostics = _app
+                .as_ref()
                 .ok_or_else(stale)?
                 .native_io()
                 .plugin_vault_smoke_diagnostics(&nonce)

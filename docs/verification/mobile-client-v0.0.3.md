@@ -26,6 +26,11 @@ check/Clippy、NDKr27d/API24完整宿主通过，既有告警保留。Node drive
 真实 iPhone、Galaxy S8、锁屏/重启、文件/浏览器交接及系统 VPN/内核装配仍未验收。
 证据：`/workspace/artifacts/mobile-v0.0.3/ios-vault-diagnostics-24c5a2f/`。
 
+08d979a 首轮 iOS device job118406983248在实际iOS Rust编译时报E0382：新增诊断提前
+消费了Option<AppHandle>，后续原有正向检查再次使用。改为诊断只借用句柄；保留首轮日志，
+修正提交的真实SDK/App结果继续单独核对。此失败尚未运行Keychain探测，不能归因账号、
+签名或某个OSStatus。同期Swift策略与iOS IO适配器SDK构建通过，也不替代完整App结果。
+
 前一 `24c5a2f` 的12工作流最终均成功；PR主CI首轮Windows job118365411856在45分钟
 边界取消，Release **65通过/1忽略**，后续readiness未完成。只重跑该job，attempt2
 118382652443同SHA成功，Release仍65/1，实际released-kernel readiness **2通过**。
