@@ -15,28 +15,43 @@ permissions:
   contents: read
 
 jobs:
-  shared-mobile-targets:
+  shared-android-target:
     # Explicit manual validation; routine CI does not build mobile artifacts.
     if: github.event_name == 'workflow_dispatch'
-    name: Shared Rust (${{ matrix.target }})
+    name: Shared Rust (aarch64-linux-android)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [aarch64-linux-android, aarch64-apple-ios]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: shared-${{ matrix.target }}
+          key: shared-aarch64-linux-android
       - name: Check shared workflow contracts for mobile target
         # No native IO, Tauri host, extension, signing or device claim.
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked -p znet-client-core -p znet-engine-client --target "${{ matrix.target }}"
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked -p znet-client-core -p znet-engine-client --target "aarch64-linux-android"
+
+  shared-ios-target:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
+    name: Shared Rust (aarch64-apple-ios)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: shared-aarch64-apple-ios
+      - name: Check shared workflow contracts for mobile target
+        # No native IO, Tauri host, extension, signing or device claim.
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked -p znet-client-core -p znet-engine-client --target "aarch64-apple-ios"
 
   embedded-runtime:
     name: Embedded Proxy ownership and real forwarding

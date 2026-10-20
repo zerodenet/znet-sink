@@ -80,6 +80,11 @@ rustls-platform-verifier-android 的各自限制。保留未知与来源，不�
 rulesets 列表为空，不能替代完整权限审计。保留触发/名称避免潜在 required 检查缺席，
 不绕过受限接口，不改规则；合并时仍以 GitHub 实际 required 状态为准。
 
+首次 `5c6248c` 的实际跳过记录显示矩阵未展开，名称保留了原表达式。为避免具体目标的
+旧检查缺席，两个共享 Rust target 和 iOS simulator/device App 改为独立静态名称 job；
+保持原先展开后的四个名称、命令、架构、缓存/证据和手动条件，不新增成功替身。
+宿主契约改为逐个核对两种 App 构建及证据，不再只匹配矩阵声明。
+
 ### 明确手动入口及默认分支限制
 
 上述各工作流保留 `workflow_dispatch`。GitHub 要求工作流定义存在于默认分支，才可

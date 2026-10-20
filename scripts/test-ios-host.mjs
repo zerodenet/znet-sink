@@ -25,7 +25,12 @@ test('full build uses no-sign, embedded frontend and separate simulator/device e
   assert.match(build, /rust_target=aarch64-apple-ios; cli_target=aarch64/);
   assert.match(build, /Refusing signing environment/);
   assert.match(build, /export CARGO_PROFILE_DEV_DEBUG=1/);
-  assert.match(read('.github/workflows/ios-app-host.yml'), /target: \[simulator, device\]/);
+  const workflow=read('.github/workflows/ios-app-host.yml');
+  for(const target of ['simulator','device']) {
+    assert.ok(workflow.includes(`name: Complete iOS App (${target}, no signing identity)`));
+    assert.ok(workflow.includes(`run: bash scripts/build-ios-host.sh '${target}'`));
+    assert.ok(workflow.includes(`name: ios-complete-${target}-evidence`));
+  }
   assert.equal(JSON.parse(read('src-tauri/tauri.ios.conf.json')).bundle.iOS.minimumSystemVersion, '16.4');
 });
 test('smoke is Debug and launch-nonce gated; real UI/IPC reads the packaged inventory while VPN remains unsupported', () => {
