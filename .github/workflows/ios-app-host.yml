@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   application:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Complete iOS App (${{ matrix.target }}, no signing identity)
     runs-on: macos-15
     timeout-minutes: 60

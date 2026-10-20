@@ -48,6 +48,7 @@ const config = await invoke('app_config_get');
 ## 文档索引
 
 - [移动客户端 v0.0.3 验证边界](../verification/mobile-client-v0.0.3.md)
+- [PR #46 合并范围、CI门槛与剩余风险](../verification/pr46-merge-readiness.md)
 - [移动运行与 core 接口交接](./mobile-platform-v0.0.3.md)
 - [端点统计定位与来源返回](./endpoint-statistics-navigation-v0.0.3.md)
 - [Packet 真实分页与关闭屏障](./packet-route-pagination-v0.0.3.md)

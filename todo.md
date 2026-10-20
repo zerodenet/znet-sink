@@ -1,9 +1,13 @@
 # 移动适配依赖与暂不支持项
 
-2026-10-18 增补：可安装 Debug 宿主与 USB 调试见 [指南](docs/gui/android-debug-usb-v0.0.3.md)。
-它使用临时开发签名和独立 `.debug` 包，不解除下列内核/VPN/生命周期条件；Android 原始许可
-材料仍有四项缺口。最新 develop `408327df53554c28d5efeda3ece65535cabf783c` 与本工作分支存在
-真实冲突，本批未合并；新增分支 push CI 只验证精确 head，不能用作合并后或设备验收证据。
+2026-10-20 合并范围核对：实际 develop 为 `d39ad2787fb05052fa15065853ab71526441ccc3`，
+已包含在工作分支；原“408327d 冲突尚未整合”的当前状态说明已过期。PR #46 当前为 open、
+非 Draft，本次不转换状态、不合并或发布。详见[合并审计与门禁](docs/verification/pr46-merge-readiness.md)。
+当前专注 Android API24 / Galaxy S8，iOS专项暂停并保留既有代码与诊断；VPN/内核装配后置。
+未提交文件票据草稿已隔离保留，不带入本PR、不开放SDK，不以其测试结果作为本PR证据。
+完整移动App、SDK/NDK交叉编译、原生库/模拟器改为显式手动；常规保留桌面、共享Rust、
+前端/类型/契约及宿主JVM/Swift纯策略。许可四项缺口、WebView111条件和真机验收仍保留。
+Debug宿主及USB资料见[指南](docs/gui/android-debug-usb-v0.0.3.md)，不等于签名发行或设备通过。
 
 2026-10-14，v0.0.3，Draft PR #46。这里是依赖协调与解除条件的单一入口；完整 PRD 范围和已实现项沿用 [验收账本](docs/gui/mobile-acceptance-ledger-v0.0.3.md)，不另造完成标准。源码检查不是手机验收，unsupported 占位不计为已完成 VPN。用户已确认内核接入、原生VPN及宿主生命周期装配后置；该优先级不影响其验收条件，当前以独立客户端功能交付。
 

@@ -15,7 +15,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  jvm-policy:
+    name: Android policies (host JVM, no SDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Test original bounded IO policies and pure crypto envelope
+        env:
+          NATIVE_IO_ARTIFACT_DIR: native-jvm-policy-evidence
+        run: bash scripts/test-native-io-jvm.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-jvm-policy
+          path: native-jvm-policy-evidence/
+          if-no-files-found: warn
+
   android-keystore-runtime:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Android Keystore runtime (API 24 emulator)
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -58,6 +84,8 @@ jobs:
           if-no-files-found: warn
 
   android-library:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Android document library (minimum API 24)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -92,6 +120,8 @@ jobs:
           if-no-files-found: warn
 
   ios-unsigned-library:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: iOS document adapter (unsigned Simulator build)
     runs-on: macos-15
     timeout-minutes: 20

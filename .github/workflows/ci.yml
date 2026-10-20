@@ -83,6 +83,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check explicit mobile build policy and retained routine gates
+        run: node --test scripts/test-workflow-policy.mjs
+
       - name: Run feature ownership and diagnostics regression
         run: pnpm test:feature-owners
 

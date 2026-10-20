@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   shared-mobile-targets:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Shared Rust (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -100,6 +102,8 @@ jobs:
           if-no-files-found: warn
 
   android-rust-host:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Android Rust host (API 24)
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   unsigned-arm64-host:
+    # Explicit manual validation; routine CI does not build mobile artifacts.
+    if: github.event_name == 'workflow_dispatch'
     name: Android arm64 unsigned host (minimum API 24)
     runs-on: ubuntu-latest
     timeout-minutes: 40
