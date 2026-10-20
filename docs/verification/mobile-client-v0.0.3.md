@@ -1,5 +1,19 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-20：实际 Keychain 拒绝与构建 App 元数据取证
+
+`6fd3dc42b5784bcfccc1d369b5ba261752bff6ea` 修正后，云端 PR Simulator
+job **118410447966** 的实际回执为 protected-data=true；生产 probe、隔离 probe、
+创建前读取均 OSStatus=-34018。停止在 readBeforeCreate，创建/回读/清理未执行，
+roundTrip=false，SDK unavailable/accepted:false。保留原始日志，不能称为 Keychain
+正向验收，也不能由此推出必须购买开发者会员。08d 首次编译失败继续单独保留。
+
+为按 Apple DTS 建议核对实际构建物，完整 App 验证器增加只读 entitlement 摘要，
+不改签名或生产准入。摘要只含固定状态、存在/匹配布尔值及数量，拒绝畸形与过大 plist；
+检查失败不会假装空 entitlement。Python **14通过**（新增1项边界用例），Node宿主
+组合 **11通过**。本地无 Apple SDK，真实构建物摘要待本提交云端 CI，不能由 fixture
+推断实际 App 内容。原生文件票据仍在独立工作区开发，未随此批开放 SDK。
+
 ## 2026-10-20：iOS Debug 隔离 Keychain 分阶段诊断
 
 基于 `24c5a2f33645309ce0697ebe758483961beddd05`，同一 Draft PR #46。

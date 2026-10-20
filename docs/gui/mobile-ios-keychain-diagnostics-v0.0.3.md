@@ -40,3 +40,17 @@ Rust DTO 拒绝额外字段、不一致的阶段、未执行却有 OSStatus 和�
 SDK 或真实 Keychain 运行环境。实际 gate/OSStatus/创建/回读必须来自本提交的云端 iOS
 Simulator smoke。其结果不替代真实 iPhone、锁屏/重启、卸载重装或生产发行环境验收。
 原生文件票据、浏览器返回、系统 VPN/Packet Tunnel/内核装配继续各自的范围与缺口。
+
+`6fd3dc4` 的云端 PR Simulator job `118410447966` 实际读到 protected-data=true，
+生产 probe、隔离 availability probe 及创建前读取均返回 **-34018**。停止在
+`readBeforeCreate`，随机材料、创建、回读、清理均未执行，roundTrip=false；SDK 仍为
+unavailable/accepted:false。这是实际拒绝事实，不是成功存取证据。
+
+[Apple DTS 的诊断说明](https://developer.apple.com/forums/thread/114456)将该错误解释为
+`errSecMissingEntitlement`，要求检查构建后的 App，而非项目里的 entitlement 输入。
+因此完整 App 验证器增加只读 `codesign -d --entitlements -`，回执只公开固定状态、
+App ID/Team ID 是否存在、bundle 后缀是否匹配、Keychain/App Group 数量与首项是否匹配
+App ID。未知字段、标识符原值、原始 plist 和工具 stderr 不进入此摘要。读取失败、
+空输出、畸形数据与已解析的空字典分别记录；它们不授予权限或改变 smoke 验收判断。
+不重签 App，不创建凭据或填入模拟 Team ID，也不据此要求购买开发者会员。
+该摘要需由后续实际 SDK 构建产生，本地 fixture 不证明真实 App 的 entitlement 内容。

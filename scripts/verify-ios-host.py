@@ -7,6 +7,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+from xml.parsers.expat import ExpatError
 from ios_keychain_diagnostics import validate_keychain_diagnostics
 
 
@@ -117,6 +118,51 @@ def validate_inventory_asset(data, sdk):
     return inventory
 
 
+def public_entitlements(returncode, output, signature_kind):
+    """Inspect the built App only; never print arbitrary entitlement values.
+
+    These are diagnostic facts, not a grant or a Keychain acceptance result.
+    Missing/failed inspection must remain distinguishable from an empty plist.
+    """
+    result = dict(state='inspection-failed', codeSignExitStatus=returncode,
+                  signature=signature_kind, applicationIdentifierPresent=None,
+                  applicationIdentifierMatchesBundle=None, teamIdentifierPresent=None,
+                  keychainAccessGroupCount=None, applicationGroupCount=None,
+                  firstKeychainGroupMatchesApplicationIdentifier=None)
+    if returncode != 0:
+        return result
+    if not output.strip():
+        result['state'] = 'absent'
+        return result
+    if len(output) > 64 * 1024:
+        result['state'] = 'invalid'
+        return result
+    try:
+        values = plistlib.loads(output)
+        assert type(values) is dict
+        application = values.get('application-identifier')
+        team = values.get('com.apple.developer.team-identifier')
+        assert application is None or type(application) is str
+        assert team is None or type(team) is str
+        groups = values.get('keychain-access-groups', [])
+        shared = values.get('com.apple.security.application-groups', [])
+        assert type(groups) is list and type(shared) is list
+        assert len(groups) <= 256 and len(shared) <= 256
+        assert all(type(value) is str and 0 < len(value) <= 1024 for value in groups + shared)
+        assert all(value is None or 0 < len(value) <= 1024 for value in (application, team))
+    except (ValueError, TypeError, AssertionError, plistlib.InvalidFileException, ExpatError):
+        result['state'] = 'invalid'
+        return result
+    result.update(state='inspected', applicationIdentifierPresent=application is not None,
+                  applicationIdentifierMatchesBundle=(application.endswith('.org.zerodenet.znetsink')
+                      if application is not None else None),
+                  teamIdentifierPresent=team is not None, keychainAccessGroupCount=len(groups),
+                  applicationGroupCount=len(shared),
+                  firstKeychainGroupMatchesApplicationIdentifier=(groups[0] == application
+                      if groups and application is not None else None))
+    return result
+
+
 def package(args):
     candidates = []
     for app in pathlib.Path(args.root).rglob('*.app'):
@@ -149,6 +195,13 @@ def package(args):
     details = signature.stdout + signature.stderr
     (proof / 'codesign-details.txt').write_text(details)
     signature_kind = validate_signature(args.sdk, signature.returncode, details)
+    # Apple DTS requires built-product entitlements, not the project input file.
+    # Read-only: no re-signing, credentials, team identifiers or fallback groups.
+    entitlements = subprocess.run(['codesign', '-d', '--entitlements', '-', str(app)],
+                                 capture_output=True)
+    entitlement_summary = public_entitlements(entitlements.returncode, entitlements.stdout,
+                                              signature_kind)
+    (proof / 'built-entitlements-summary.json').write_text(json.dumps(entitlement_summary, indent=2) + '\n')
     destination = pathlib.Path(args.copy) / 'ZNetSink.app'
     shutil.copytree(app, destination)
     receipt = dict(schemaVersion=1, commit=command('git', 'rev-parse', 'HEAD').strip(),
@@ -156,6 +209,7 @@ def package(args):
                    applicationId=info['CFBundleIdentifier'], binarySha256=next(iter(digests)),
                    unsigned=signature_kind == 'none', signature=signature_kind,
                    signingIdentity='none', noSigningCredentials=True,
+                   builtEntitlements=entitlement_summary,
                    frontend='embedded-assets', nativePluginBinding=True,
                    deviceInstalled=False, vpnAccepted=False, executionVerified=False,
                    nativeLicenseStatus='available', nativeLicenseEntries=len(inventory['entries']),

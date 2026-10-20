@@ -1,6 +1,7 @@
 import copy
 import json
 import pathlib
+import plistlib
 import unittest
 from importlib.machinery import SourceFileLoader
 
@@ -9,6 +10,34 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_built_entitlements_are_bounded_public_facts_not_signing_or_keychain_acceptance(self):
+        secret = 'SECRET-CANARY'
+        values = {'application-identifier': secret + '.org.zerodenet.znetsink',
+                  'com.apple.developer.team-identifier': secret,
+                  'keychain-access-groups': [secret + '.org.zerodenet.znetsink'],
+                  'com.apple.security.application-groups': ['group.' + secret],
+                  'future-private-field': secret}
+        result = verify.public_entitlements(0, plistlib.dumps(values), 'ad-hoc')
+        self.assertEqual(result['state'], 'inspected')
+        self.assertTrue(result['applicationIdentifierMatchesBundle'])
+        self.assertTrue(result['firstKeychainGroupMatchesApplicationIdentifier'])
+        self.assertEqual(result['keychainAccessGroupCount'], 1)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertNotIn('accepted', json.dumps(result).lower())
+        empty = verify.public_entitlements(0, plistlib.dumps({}), 'ad-hoc')
+        self.assertEqual(empty['keychainAccessGroupCount'], 0)
+        self.assertFalse(empty['applicationIdentifierPresent'])
+        self.assertIsNone(empty['applicationIdentifierMatchesBundle'])
+        for code, data, expected in [(1, b'', 'inspection-failed'), (0, b'', 'absent'),
+                                     (0, b'x'*65537, 'invalid'), (0, b'not a plist', 'invalid'),
+                                     (0, b'<?xml version="1.0"?><plist><dict><key>broken', 'invalid'),
+                                     (0, plistlib.dumps({'keychain-access-groups':'secret'}), 'invalid'),
+                                     (0, plistlib.dumps({'application-identifier':False}), 'invalid')]:
+            with self.subTest(code=code, expected=expected):
+                result=verify.public_entitlements(code, data, 'none')
+                self.assertEqual(result['state'], expected)
+                self.assertIsNone(result['keychainAccessGroupCount'])
+
     def test_isolated_positive_diagnostics_do_not_promote_unavailable_storage(self):
         receipt=copy.deepcopy(self.receipt)
         receipt['checks'].update(nativeSecureStorageState='unavailable',nativeSecureStorageAccepted=False)
