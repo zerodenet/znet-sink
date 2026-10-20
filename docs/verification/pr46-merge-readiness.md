@@ -25,6 +25,29 @@ GitHub 当次读取为 open、draft=false、mergeable=true，最终提交的检�
 不进入本 PR 的提交、门禁或完成统计；其测试结果也不作为本 PR 的验证证据。
 浏览器原生返回等新功能不继续扩展。
 
+### 合并门禁发现的 Windows 握手失败
+
+`02d823c` 的 PR 主 CI 通过，但 push 主 CI 的 Windows2025 真实内核测试
+[`118440095736`](https://github.com/zerodenet/znet-sink/actions/runs/39365091502/job/118440095736)
+失败：`real_kernel_bind_failure_is_never_reported_ready` 在发送 runtime apply 前，
+写 subscribe 返回 `BrokenPipe` / OS 232。该测试主动要求先收到订阅确认，未把连接
+失败算作预期的配置拒绝。另一个真实生命周期测试通过；同头其余三项 Windows job
+通过，不能以这些绿色覆盖失败，也未通过盲目重跑或忽略测试处理。
+
+客户端已有订阅确认前读取关闭的最多三次握手重连，但同阶段写关闭原先被归为终止。
+本轮因此额外修复客户端 IPC：仅对初始 subscribe 的真实写入/flush 关闭错误进入原有
+有界重连；所有尝试仍共享原截止时间。超时、权限、无进展写入、确认拒绝/畸形回执
+保持终止；收到确认后业务命令失败不重连、不重放、不获取新绑定。没有修改 core，
+没有延长 deadline 或放宽真实内核断言。新增跨宿主确定性故障测试覆盖初始/部分写入、
+flush、Interrupted、原预算、终止错误，并在 Windows 核对 OS 232 分类；既有真实
+Unix 握手、三次上限、拒绝及不重放测试保留。最终 Windows 实际验证以修复头 CI 为准，
+不能由单元故障注入推断真实内核或 Galaxy S8 已验收。
+
+本地 `cargo test --locked --all-features --lib kernel::connection:: -- --test-threads=1`
+实际 **18通过、0失败、0忽略**，覆盖原真实 Unix 传输夹具及新增生产写入路径故障注入。
+Windows OS 232 专项在本地 Linux 未执行，保留给 Windows CI。新测试首次编译出现
+pattern guard 移动 `details` 的 E0507，改为只借用后通过，未删除断言。
+
 ## 已交付与仍未完成
 
 | 范围 | 已提交代码及抽审结论 | 尚未完成及影响 |
