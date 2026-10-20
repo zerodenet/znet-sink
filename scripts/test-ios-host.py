@@ -9,6 +9,27 @@ smoke = SourceFileLoader('smoke_ios_host', str(pathlib.Path(__file__).with_name(
 
 
 class HostContracts(unittest.TestCase):
+    def test_isolated_positive_diagnostics_do_not_promote_unavailable_storage(self):
+        receipt=copy.deepcopy(self.receipt)
+        receipt['checks'].update(nativeSecureStorageState='unavailable',nativeSecureStorageAccepted=False)
+        def step(status): return dict(attempted=True,osStatus=status)
+        value=receipt['checks']['nativeKeychainDiagnostics']
+        value.update(protectedDataAvailable=True,stopStage='completed',roundTrip=True,readBackMatches=True,
+                     lastHostAdmission=dict(protectedDataAvailable=True,probe=step(-50),apiAvailable=False),
+                     availabilityProbe=step(-50),readBeforeCreate=step(-25300),random=step(0),
+                     create=step(0),readAfterCreate=step(0),cleanup=step(0))
+        verify.validate_smoke(receipt,'a'*32)
+        self.assertFalse(receipt['checks']['nativeSecureStorageAccepted'])
+        value['protectedDataAvailable']=False
+        value['lastHostAdmission']=dict(protectedDataAvailable=False,
+            probe=dict(attempted=False,osStatus=None),apiAvailable=False)
+        verify.validate_smoke(receipt,'a'*32)
+        self.assertFalse(receipt['checks']['nativeSecureStorageAccepted'])
+        for key in ('keyBase64','account','url'):
+            altered=copy.deepcopy(value);altered[key]='secret-canary'
+            with self.assertRaises(AssertionError): verify.validate_keychain_diagnostics(altered)
+        altered=copy.deepcopy(value);altered['create']['attempted']=False
+        with self.assertRaises(AssertionError): verify.validate_keychain_diagnostics(altered)
     def test_progress_is_nonce_scoped_bounded_metadata_and_never_ui_completion(self):
         value=dict(schemaVersion=1,nonce='a'*32,bundleIdentifier='org.zerodenet.znetsink',pid=42,
                    stage='waiting-for-document',documentScheme='tauri',documentIsLoading=True,
@@ -79,6 +100,11 @@ class HostContracts(unittest.TestCase):
                           aboutAndReturn=True, vpnUnsupported=True, nativeLicenseAvailable=True, nativePluginVm=True,
                           nativeSecureStorageContract=True, nativeSecureStorageAccepted=True, nativeSecureStorageState='available',
                           applicationId='org.zerodenet.znetsink', width=393, height=852)
+        skipped=dict(attempted=False,osStatus=None)
+        self.checks['nativeKeychainDiagnostics']=dict(schemaVersion=1,isolated=True,
+            protectedDataAvailable=False,lastHostAdmission=None,readBackMatches=None,
+            stopStage='protectedDataGate',roundTrip=False,
+            **{key:dict(skipped) for key in ('availabilityProbe','readBeforeCreate','random','create','readAfterCreate','cleanup')})
         self.receipt = dict(schemaVersion=1, nonce='a' * 32, status='completed',
                             bundleIdentifier='org.zerodenet.znetsink', nativePlugin='znet-native-io',
                             webViewInspectable=True, checks=self.checks)

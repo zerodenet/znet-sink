@@ -73,6 +73,13 @@ impl Host {
         #[cfg(target_os = "ios")]
         {
             use tauri_plugin_znet_native_io::NativeIoExt;
+            // Isolated Debug evidence runs even when the production adapter is
+            // gated. It never supplies a key or changes that admission result.
+            let diagnostics = _app
+                .ok_or_else(stale)?
+                .native_io()
+                .plugin_vault_smoke_diagnostics(&nonce)
+                .map_err(|_| AppError::internal("隔离 Keychain 诊断回执不可用"))?;
             let available = self
                 .platform
                 .unsupported_reason(&Request {
@@ -122,6 +129,8 @@ impl Host {
                 });
                 result["secureStorage"] = serde_json::json!({"state":"unavailable","permissionsGated":gated,"roundTrip":false});
             }
+            result["secureStorage"]["diagnostics"] =
+                serde_json::to_value(diagnostics).map_err(io::failure)?;
         }
         #[cfg(not(target_os = "ios"))]
         let _ = &mut result;

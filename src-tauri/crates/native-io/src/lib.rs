@@ -2,6 +2,8 @@
 //! Run blocking methods on a worker thread; system controllers outlive page navigation.
 mod policy;
 mod vault;
+#[cfg(any(test, all(target_os = "ios", debug_assertions)))]
+mod vault_diagnostics;
 use policy::{Action, Request};
 pub use policy::{
     Error, ExportOwnership, ExportPurpose, ImportPurpose, PreparedExport, Receipt, ReceiptStatus,
@@ -13,6 +15,8 @@ use tauri::{
     plugin::{Builder, TauriPlugin},
     Manager, Runtime,
 };
+#[cfg(any(test, all(target_os = "ios", debug_assertions)))]
+pub use vault_diagnostics::VaultSmokeDiagnostics;
 
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_znet_native_io);
@@ -81,6 +85,27 @@ impl<R: Runtime, T: Manager<R>> NativeIoExt<R> for T {
     }
 }
 impl<R: Runtime> NativeIo<R> {
+    #[cfg(all(target_os = "ios", debug_assertions))]
+    pub fn plugin_vault_smoke_diagnostics(&self, nonce: &str) -> Result<VaultSmokeDiagnostics> {
+        if nonce.len() != 32
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(Error::InvalidRequest("invalid_smoke_scope"));
+        }
+        let response: VaultSmokeDiagnostics = self
+            .handle
+            .run_mobile_plugin(
+                "inspectPluginVaultSmoke",
+                &vault::Request {
+                    create: false,
+                    smoke_nonce: Some(nonce.into()),
+                },
+            )
+            .map_err(|_| Error::BridgeResultUnknown)?;
+        response.validate()
+    }
     #[cfg(all(target_os = "ios", debug_assertions))]
     pub fn plugin_vault_master_smoke(
         &self,

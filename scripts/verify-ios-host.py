@@ -7,6 +7,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+from ios_keychain_diagnostics import validate_keychain_diagnostics
 
 
 def validate_smoke(receipt, nonce):
@@ -21,6 +22,7 @@ def validate_smoke(receipt, nonce):
     assert checks['applicationId'] == 'org.zerodenet.znetsink'
     assert checks['nativeSecureStorageState'] in ['available', 'unavailable']
     assert checks['nativeSecureStorageAccepted'] is (checks['nativeSecureStorageState'] == 'available'), 'unsupported storage cannot be accepted'
+    validate_keychain_diagnostics(checks['nativeKeychainDiagnostics'])
     assert 0 < checks['width'] <= 1024 and checks['height'] > 0
     return receipt
 

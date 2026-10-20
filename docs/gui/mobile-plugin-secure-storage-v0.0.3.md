@@ -51,3 +51,7 @@ SDK 角色必须全部阻止，收据标记 unavailable/accepted:false；该分�
 
 准确结果见[验证记录](../verification/mobile-client-v0.0.3.md)。真实 iPhone、Galaxy S8、
 锁屏、重启、卸载/重装、系统备份恢复、低内存及发行签名环境仍需独立验收。
+
+2026-10-20 增加[Debug 隔离 Keychain 分阶段诊断](mobile-ios-keychain-diagnostics-v0.0.3.md)：
+区分生产 protected-data gate、probe 是否执行及 OSStatus、创建/回读/清理；原生产拒绝
+边界不变。诊断不读取主密钥或用户数据，不返回材料，也不预设账号/签名根因。

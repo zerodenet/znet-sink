@@ -1,4 +1,5 @@
 let stage = 'bootstrap';
+let nativeKeychainDiagnostics;
 try {
 // Explicit CI-only driver evaluated by the Debug native plugin in the real WKWebView.
 // It uses the existing UI and IPC. It never supplies kernel samples or VPN success.
@@ -37,6 +38,47 @@ check(storageAccepted
   ? storage.roundTrip && storage.lostKeyRejected && storage.plaintextFallbackRejected
   : storage?.state === 'unavailable' && storage.permissionsGated && storage.roundTrip === false,
   'native-secure-storage-contract');
+// Select fixed diagnostic facts explicitly; native exceptions, keys and future
+// bridge fields cannot enter the public receipt through object spreading.
+const diagnostic = storage.diagnostics;
+const diagnosticStages = ['scope','protectedDataGate','readBeforeCreate','random','create','readAfterCreate','cleanup','completed'];
+const diagnosticCheck = condition => check(condition, 'native-keychain-diagnostics');
+const diagnosticStep = value => {
+  diagnosticCheck(value && typeof value.attempted === 'boolean');
+  const status = value.osStatus ?? null;
+  diagnosticCheck(value.attempted ? Number.isInteger(status) && status >= -2147483648 && status <= 2147483647 : status === null);
+  return {attempted:value.attempted,osStatus:status};
+};
+diagnosticCheck(diagnostic?.schemaVersion === 1 && diagnostic.isolated === true
+  && typeof diagnostic.protectedDataAvailable === 'boolean' && typeof diagnostic.roundTrip === 'boolean'
+  && diagnosticStages.includes(diagnostic.stopStage)
+  && diagnostic.roundTrip === (diagnostic.stopStage === 'completed')
+  && [null,undefined,true,false].includes(diagnostic.readBackMatches));
+let admission = null;
+if (diagnostic.lastHostAdmission != null) {
+  const value = diagnostic.lastHostAdmission;
+  diagnosticCheck(typeof value.protectedDataAvailable === 'boolean' && typeof value.apiAvailable === 'boolean');
+  const probe = diagnosticStep(value.probe);
+  diagnosticCheck((value.protectedDataAvailable || !probe.attempted)
+    && value.apiAvailable === (value.protectedDataAvailable && probe.attempted && [0,-25300].includes(probe.osStatus)));
+  admission = {protectedDataAvailable:value.protectedDataAvailable,probe,apiAvailable:value.apiAvailable};
+}
+const projectedKeychainDiagnostics = {
+  schemaVersion:1,isolated:true,protectedDataAvailable:diagnostic.protectedDataAvailable,
+  lastHostAdmission:admission,availabilityProbe:diagnosticStep(diagnostic.availabilityProbe),
+  readBeforeCreate:diagnosticStep(diagnostic.readBeforeCreate),random:diagnosticStep(diagnostic.random),
+  create:diagnosticStep(diagnostic.create),readAfterCreate:diagnosticStep(diagnostic.readAfterCreate),
+  cleanup:diagnosticStep(diagnostic.cleanup),readBackMatches:diagnostic.readBackMatches ?? null,
+  stopStage:diagnostic.stopStage,roundTrip:diagnostic.roundTrip,
+};
+if (diagnostic.stopStage === 'protectedDataGate') diagnosticCheck(!diagnostic.protectedDataAvailable
+  && ['availabilityProbe','readBeforeCreate','random','create','readAfterCreate','cleanup'].every(key=>!projectedKeychainDiagnostics[key].attempted));
+diagnosticCheck((diagnostic.readBackMatches != null) === (projectedKeychainDiagnostics.readAfterCreate.osStatus === 0));
+if (diagnostic.roundTrip) diagnosticCheck(projectedKeychainDiagnostics.availabilityProbe.attempted
+  && projectedKeychainDiagnostics.readBeforeCreate.osStatus === -25300
+  && ['random','create','readAfterCreate'].every(key=>projectedKeychainDiagnostics[key].osStatus === 0)
+  && diagnostic.readBackMatches === true && [0,-25300].includes(projectedKeychainDiagnostics.cleanup.osStatus));
+nativeKeychainDiagnostics = projectedKeychainDiagnostics;
 stage = 'licenses';
 const licenses = await invoke('app_license_inventory');
 check(licenses.rust?.target?.platform === 'ios' && licenses.rust.entries.length > 0
@@ -69,6 +111,7 @@ await wait(() => ![...document.querySelectorAll('.secondary-pane:not(.inactive)'
 return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: true,
   aboutAndReturn: true, vpnUnsupported: true, nativeLicenseAvailable: true, nativePluginVm: true,
   nativeSecureStorageContract: true, nativeSecureStorageAccepted: storageAccepted, nativeSecureStorageState: storage.state,
+  nativeKeychainDiagnostics,
   applicationId: identity, width: innerWidth, height: innerHeight };
 
 } catch (cause) {
@@ -76,7 +119,7 @@ return { rustIpc: true, nativePresentation: true, fourTabs: true, onboarding: tr
   const code = typeof cause?.code === 'string' && ['plugin_platform_unavailable','plugin_host_suspended','plugin_secure_store_unavailable','native_vm_smoke_failed','invalid_argument','internal','permission_denied'].includes(cause.code) ? cause.code : 'unclassified';
   const actual = typeof cause?.details?.actual === 'string' && ['PermissionDenied','Deadline','Revoked','GuestException','InvalidOutput','UnsupportedIsolation','IncompatibleDevice','IncompatibleVersion','AdmissionDenied','BudgetExceeded','HostFailure','Disabled','Busy','Cancelled','Expired','InvalidManifest','WrongHost','DigestMismatch','unexpected-value'].includes(cause.details.actual) ? cause.details.actual : undefined;
   const fixture = typeof cause?.details?.fixture === 'string' && ['arithmetic','identity','denied','deadline'].includes(cause.details.fixture) ? cause.details.fixture : undefined;
-  const checks = ['real-ios-rust-host','unsupported-vpn','app-identity','native-plugin-profile','native-plugin-vm','native-secure-storage-contract','embedded-rust-license-inputs','native-license-asset','four-tabs','native-presentation','return-control'].map(label => `ui-smoke-${label}`);
+  const checks = ['real-ios-rust-host','unsupported-vpn','app-identity','native-plugin-profile','native-plugin-vm','native-secure-storage-contract','native-keychain-diagnostics','embedded-rust-license-inputs','native-license-asset','four-tabs','native-presentation','return-control'].map(label => `ui-smoke-${label}`);
   const timeouts = ['ipc','onboarding','start','navigation','tab','about-entry','about','about-identity','return'].map(label => `ui-smoke-timeout-${label}`);
-  return { failedCheck: checks.includes(message) || timeouts.includes(message) ? message : `ui-smoke-${stage}-ipc`, ipcCode: code, ...(actual ? {actual} : {}), ...(fixture ? {fixture} : {}) };
+  return { failedCheck: checks.includes(message) || timeouts.includes(message) ? message : `ui-smoke-${stage}-ipc`, ipcCode: code, ...(actual ? {actual} : {}), ...(fixture ? {fixture} : {}), ...(nativeKeychainDiagnostics ? {nativeKeychainDiagnostics} : {}) };
 }

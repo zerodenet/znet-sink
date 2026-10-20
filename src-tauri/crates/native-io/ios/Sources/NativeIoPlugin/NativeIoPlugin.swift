@@ -85,7 +85,7 @@ final class NativeIoPlugin: Plugin {
             }
             let accessible = UIApplication.shared.isProtectedDataAvailable
             self.io.async {
-                invoke.resolve(NativeHostEnvironment(platform: "ios", deviceClass: device, secureVaultApi: accessible && NativeVault.available()))
+                invoke.resolve(NativeHostEnvironment(platform: "ios", deviceClass: device, secureVaultApi: NativeVault.available(protectedDataAvailable: accessible)))
             }
         }
     }
@@ -98,6 +98,28 @@ final class NativeIoPlugin: Plugin {
         withVault(invoke) { NativeVault.load(create: request.create, smokeNonce: request.smokeNonce) }
     }
     #if DEBUG
+    @objc public func inspectPluginVaultSmoke(_ invoke: Invoke) {
+        guard invoke.getRawArgs().utf8.count <= 128,
+              let request = try? invoke.parseArgs(NativeVaultRequest.self), !request.create,
+              let nonce = request.smokeNonce, NativeVault.diagnosticScopeAllowed(nonce) else {
+            invoke.reject("invalid-vault-diagnostic-scope", code: "invalid-vault-diagnostic-scope"); return
+        }
+        vaultAdmission.lock()
+        let admitted = !vaultReading
+        if admitted { vaultReading = true }
+        vaultAdmission.unlock()
+        guard admitted else {
+            invoke.reject("secure-store-busy", code: "secure-store-busy"); return
+        }
+        DispatchQueue.main.async {
+            let accessible = UIApplication.shared.isProtectedDataAvailable
+            self.io.async {
+                let result = NativeVault.inspectSmoke(nonce: nonce, protectedDataAvailable: accessible)
+                self.vaultAdmission.lock(); self.vaultReading = false; self.vaultAdmission.unlock()
+                invoke.resolve(result)
+            }
+        }
+    }
     @objc public func clearPluginVaultSmoke(_ invoke: Invoke) {
         guard invoke.getRawArgs().utf8.count <= 128,
               let request = try? invoke.parseArgs(NativeVaultRequest.self), !request.create,

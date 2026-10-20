@@ -1,8 +1,23 @@
 import Foundation
 import Security
+import NativeIoPolicy
 
 /// ThisDeviceOnly, no iCloud sharing, no UI authentication prompt. No raw key file.
 enum NativeVault {
+    #if DEBUG
+    private static let admissionLock = NSLock()
+    private static var admission: NativeVaultAdmission?
+    static func lastAdmission() -> NativeVaultAdmission? {
+        admissionLock.lock(); defer { admissionLock.unlock() }
+        return admission
+    }
+    static func diagnosticScopeAllowed(_ nonce: String) -> Bool { smokeAllowed(nonce) }
+    static func diagnosticSelection(_ nonce: String) -> [String: Any]? {
+        guard var selection = query(smokeNonce: nonce) else { return nil }
+        selection[kSecAttrAccount as String] = "diagnostic-" + nonce
+        return selection
+    }
+    #endif
     private static func smokeAllowed(_ nonce: String) -> Bool {
         #if DEBUG
         return nonce.count == 32 && nonce.allSatisfy({ "0123456789abcdef".contains($0) })
@@ -25,14 +40,25 @@ enum NativeVault {
             kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
     }
-    static func available() -> Bool {
-        guard var selection = query(smokeNonce: nil) else { return false }
+    static func probeStatus(_ query: [String: Any]) -> OSStatus {
+        var selection = query
         // Check API authority without returning or creating key material.
         selection[kSecReturnData as String] = false
         selection[kSecReturnAttributes as String] = true
         selection[kSecMatchLimit as String] = kSecMatchLimitOne
-        let status = SecItemCopyMatching(selection as CFDictionary, nil)
-        return status == errSecSuccess || status == errSecItemNotFound
+        return SecItemCopyMatching(selection as CFDictionary, nil)
+    }
+    static func available(protectedDataAvailable: Bool) -> Bool {
+        let selection = protectedDataAvailable ? query(smokeNonce: nil) : nil
+        let status = selection.map { probeStatus($0) }
+        let available = status == errSecSuccess || status == errSecItemNotFound
+        #if DEBUG
+        admissionLock.lock()
+        admission = NativeVaultAdmission(protectedDataAvailable: protectedDataAvailable,
+                                         status: status, apiAvailable: available)
+        admissionLock.unlock()
+        #endif
+        return available
     }
     static func load(create: Bool, smokeNonce: String? = nil) -> [String: String] {
         guard let query = Self.query(smokeNonce: smokeNonce) else { return unavailable() }

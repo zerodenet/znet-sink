@@ -1,5 +1,38 @@
 # v0.0.3 移动客户端适配验证记录
 
+## 2026-10-20：iOS Debug 隔离 Keychain 分阶段诊断
+
+基于 `24c5a2f33645309ce0697ebe758483961beddd05`，同一 Draft PR #46。
+[诊断契约](../gui/mobile-ios-keychain-diagnostics-v0.0.3.md)区分最近生产 protected-data
+gate、原 metadata probe 是否执行及 OSStatus，与独立临时条目的 probe、创建前读取、
+随机材料、创建、回读、清理。Debug 环境 nonce 精确匹配才可执行，不读写正常 master
+或用户数据，不生成 Apple 签名凭据或配置 entitlement。原生产 query 与拒绝条件保持。
+
+独立探测可在生产 gate 拦截时访问自己的临时条目，让系统给出实际状态；不解除系统
+保护或 SDK 准入。隔离匹配回读与清理成功也不自动改成 SDK accepted:true。OSStatus
+只以 Int32 传递，未执行保持缺失/null；没有 key、account、URL、令牌或异常描述字段。
+Rust 严格校验阶段，JS 显式投影，Python 验证公开回执；后续 UI 失败仍可保留安全诊断。
+原生桥缺回执不自动重复。已有不可用日志不能证明根因是账号、签名或某一系统错误。
+
+最终 locked workspace/all-targets/all-features Rust **1627通过/0失败/6忽略，40组**，
+GUI **1343/0/5**，native-io策略及诊断 **16/0/0**（新增3项诊断约束）。fmt、workspace
+check/Clippy、NDKr27d/API24完整宿主通过，既有告警保留。Node driver **6/0**、Python
+宿主验证 **13/0**、iOS宿主Node组合 **11/0**，类型 **0错误/0警告**；最终回归包括隔离
+正向事实与生产安全拒绝并存、未执行却伪造status/成功、额外秘密字段及后续失败的安全投影。
+早期与最终日志分别保留。本批未修改应用Svelte/TS页面，不借用旧浏览器运行冒充新测试。
+
+本地没有 Swift/UIKit/Security SDK；新增 Swift 模型测试、实际原生 gate/OSStatus/创建/
+回读/清理和完整 App 必须由本提交云端 CI 核对，不能预先声称 Keychain 正向存取通过。
+真实 iPhone、Galaxy S8、锁屏/重启、文件/浏览器交接及系统 VPN/内核装配仍未验收。
+证据：`/workspace/artifacts/mobile-v0.0.3/ios-vault-diagnostics-24c5a2f/`。
+
+前一 `24c5a2f` 的12工作流最终均成功；PR主CI首轮Windows job118365411856在45分钟
+边界取消，Release **65通过/1忽略**，后续readiness未完成。只重跑该job，attempt2
+118382652443同SHA成功，Release仍65/1，实际released-kernel readiness **2通过**。
+首次取消与重跑日志分别保留，没有修改超时或断言。其四侧Chromium/WebKit各479通过、
+无浏览器重试；两侧iOS实际VM/同PID生命周期成功，Keychain均unavailable/accepted:false。
+这些是旧头实际结果，不是本次新增诊断已经在真实 Keychain 运行的证据。
+
 ## 2026-10-19：原生插件可见文件策略基础
 
 在回调原授权加固及返回键修复后，原生IO新增独立的插件可见文件用途，详见

@@ -89,6 +89,11 @@
 
 2026-10-19 后续：[普通存储原授权发布校验](docs/gui/plugin-sdk.md)和[原生前台任务owner](docs/gui/mobile-plugin-tasks-v0.0.3.md)已接入；共享注册表保留有界 lastAttempt，dispatch 后缺回执不自动换号重放。前台模式与OS后台未适配分别显示，完整设备任务执行及后台仍待验收。前一 `cbc7909` 的实际 push/PR iOS App/VM/同PID前后台通过，Keychain仍不可用且accepted:false；不借作后续SHA或完整插件验收。
 
+2026-10-20 优先补[Keychain 隔离诊断](docs/gui/mobile-ios-keychain-diagnostics-v0.0.3.md)，
+保留生产 gate，记录 probe 执行与 OSStatus、创建/读取/清理阶段。未取得本提交实际
+Simulator 回执前不推断根因，不把购买开发者账号作为客户端开发前置；诊断成功也不
+自动开放 SDK。其后继续原授权文件票据、新页面恢复交接与浏览器原生返回。
+
 **插件宿主执行与页面通道：客户端独立边界继续实施。** 2026-10-19 从 `2b411b6` 接通[移动前台宿主、设备准入和系统包审阅](docs/gui/mobile-plugin-foreground-v0.0.3.md)；当前提交的 Apple SDK/Simulator 检查仍待 CI，不借用前批结果。QuickJS 经宿主所有的有界工作线程运行，保留原授权 epoch 与单组件 busy lease；独立排队期限不延长原执行时限、授权或 SDK 预算。停用、撤权、页面关闭、实例/材料变化和宿主退出拒绝旧启动与晚到交付。在途原生 SDK 可能继续 drain，不声称已撤回。此容器不提供原生崩溃或进程/OOM隔离，要求 process isolation 的组件仍拒绝。
 
 签名管理页由宿主原子绑定 HTML 摘要、安装材料和组件 review；opaque 文档 token 只在宿主侧，未知组件 ID 不回退。固定 iframe/channel/代次，后台关闭，前台重建，宿主 frame-src 拒绝 URL 导航；SDK 副作用仍使用原 review admission，文件选择前验证能力，返回后再次核对。VM 无法通过自填路径取得系统选择许可，正式 picker/opaque 票据接入前拒绝 VM 文件读写；管理页保留真实宿主选择流程。原生移动前台宿主已接入共享审阅文档通道；原始路径/未绑定 invoke 仍拒绝。敏感加载尚未接通真实移动运行态，不落普通正文。
