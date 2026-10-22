@@ -248,9 +248,9 @@ export async function enableGuiTun(): Promise<GuiManagedTunStatus> {
   await updateAppConfig({ tun: { enabled: true } });
 
   try {
-    if (!current.enabled) {
-      await invoke('gui_tun_enable');
-    }
+    // Explicit user enable may prepare host DNS authority, including repair of
+    // an already-running TUN. Background reconciliation never passes this flag.
+    await invoke('gui_tun_enable', { authorizeHostDns: true });
     const confirmed = await getGuiTunStatus();
     if (!confirmed.enabled || !confirmed.healthy) throw { code: 'tun_start_unconfirmed', message: 'Zero 未确认 TUN 已健康启动' };
     return confirmed;

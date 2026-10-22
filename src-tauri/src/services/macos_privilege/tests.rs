@@ -9,23 +9,32 @@ use super::{
 };
 
 #[test]
-fn background_dns_refresh_never_launches_a_new_authorizer() {
+fn dns_installation_and_refresh_cannot_obtain_fresh_authority() {
     let mut slot = None;
-    let error = dns_helper(&mut slot, false, || {
-        panic!("background refresh must not authorize")
-    })
-    .unwrap_err();
-    assert!(error.message.contains("后台刷新不会请求新授权"));
-    assert!(slot.is_none());
+    // First install, target replacement after a health flap, and repeated
+    // polls all use this same noninteractive channel acquisition boundary.
+    for _ in 0..3 {
+        let error = dns_helper(&mut slot).unwrap_err();
+        assert!(error.message.contains("后台维护不会请求新授权"));
+        assert!(slot.is_none());
+    }
 }
 
 #[test]
 fn background_dns_refresh_reuses_authority_obtained_for_proxy_operations() {
     let (parent, worker) = helper_channel(1, true);
     let mut slot = Some(parent);
-    let stream = dns_helper(&mut slot, false, || panic!("reuse the network helper")).unwrap();
+    let stream = dns_helper(&mut slot).unwrap();
     assert!(request(stream, &commands()).unwrap().success);
     worker.join().unwrap();
+}
+
+#[test]
+fn explicit_authorization_health_check_does_not_modify_network_preferences() {
+    let response = super::run_networksetup_as_root(&[]);
+    assert!(response.success);
+    assert!(response.stdout.is_empty());
+    assert!(response.stderr.is_empty());
 }
 
 fn commands() -> Vec<Vec<String>> {

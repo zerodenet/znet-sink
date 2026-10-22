@@ -320,6 +320,7 @@ pub async fn gui_tun_status(state: State<'_, AppState>) -> AppResult<GuiTunStatu
 pub async fn gui_tun_enable(
     app_handle: AppHandle,
     state: State<'_, AppState>,
+    authorize_host_dns: Option<bool>,
 ) -> AppResult<GuiTunStatus> {
     let _operation = state.proxy_config_operation().lock().await;
     crate::services::native_operation::execute_async(
@@ -331,11 +332,19 @@ pub async fn gui_tun_enable(
             ensure_core_ready(app_handle, state.clone()).await?;
             let tun = { common::lock(state.app_config(), "app_config")?.tun.clone() };
             let opts = default_opts(state.inner());
-            zero::runtime::enable_tun_params(
-                crate::configuration::preferences::tun_params(state.inner(), tun)?,
-                Some(opts),
-            )
-            .await
+            let params = crate::configuration::preferences::tun_params(state.inner(), tun)?;
+            if authorize_host_dns == Some(true)
+                && params
+                    .get("dns_hijack")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                && zero::runtime::tun_status(Some(opts.clone()))
+                    .await?
+                    .supported
+            {
+                crate::capture::dns::prepare_user_action().await?;
+            }
+            zero::runtime::enable_tun_params(params, Some(opts)).await
         },
     )
     .await
@@ -349,7 +358,14 @@ pub async fn gui_tun_recover(state: State<'_, AppState>) -> AppResult<GuiTunStat
         "system.tun",
         "recover",
         Duration::from_secs(60),
-        zero::runtime::recover_tun(Some(default_opts(state.inner()))),
+        async {
+            let opts = default_opts(state.inner());
+            let tun = zero::runtime::tun_status(Some(opts.clone())).await?;
+            if tun.enabled && tun.auto_route && tun.dns_hijack {
+                crate::capture::dns::prepare_user_action().await?;
+            }
+            zero::runtime::recover_tun(Some(opts)).await
+        },
     )
     .await
 }

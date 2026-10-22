@@ -192,6 +192,18 @@ pub(crate) fn retry_failed() -> AppResult<()> {
     }
     Ok(())
 }
+
+/// Called by explicit UI enable/recovery, never by the periodic controller.
+pub(crate) async fn prepare_user_action() -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    tokio::task::spawn_blocking(|| {
+        crate::services::macos_privilege::authorize_network_helper()?;
+        retry_failed()
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))??;
+    Ok(())
+}
 fn record_failure(tun: &GuiTunStatus, pid: u32, message: String) -> AppResult<()> {
     let mut state = STATE
         .lock()

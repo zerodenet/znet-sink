@@ -163,42 +163,44 @@ pub(crate) fn set_tun_dns(
     server: Option<&str>,
     pid: u32,
 ) -> AppResult<()> {
-    update_tun_dns(interface, server, pid, true)
+    // Installation/replacement is also driven by the background DNS monitor.
+    // A missing helper must never turn that maintenance into an auth prompt.
+    update_tun_dns(interface, server, pid)
+}
+
+/// Only an explicit user enable/recovery command may obtain fresh authority.
+pub(crate) fn authorize_network_helper() -> AppResult<()> {
+    let mut slot = helper_slot()
+        .lock()
+        .map_err(|_| AppError::internal("macOS networksetup helper lock is poisoned"))?;
+    // An empty fixed command list is a no-op health check. It detects a dead
+    // helper before reusing its cached channel and changes no host settings.
+    execute_with_helper(
+        &mut slot,
+        || !SHUTTING_DOWN.load(Ordering::SeqCst),
+        launch_authorized_helper,
+        &[],
+    )
 }
 
 pub(crate) fn refresh_tun_dns(interface: &str, server: &str, pid: u32) -> AppResult<()> {
-    update_tun_dns(Some(interface), Some(server), pid, false)
+    update_tun_dns(Some(interface), Some(server), pid)
 }
 
-fn dns_helper(
-    slot: &mut Option<UnixStream>,
-    may_authorize: bool,
-    launch: impl FnOnce() -> AppResult<UnixStream>,
-) -> AppResult<&mut UnixStream> {
-    if slot.is_none() {
-        if !may_authorize {
-            return Err(AppError::internal(
-                "已授权的网络 helper 不可用，请手动重试；后台刷新不会请求新授权",
-            ));
-        }
-        *slot = Some(launch()?);
-    }
-    Ok(slot.as_mut().unwrap())
+fn dns_helper(slot: &mut Option<UnixStream>) -> AppResult<&mut UnixStream> {
+    slot.as_mut().ok_or_else(|| {
+        AppError::internal("已授权的网络 helper 不可用，请手动恢复 TUN；后台维护不会请求新授权")
+    })
 }
 
-fn update_tun_dns(
-    interface: Option<&str>,
-    server: Option<&str>,
-    pid: u32,
-    may_authorize: bool,
-) -> AppResult<()> {
+fn update_tun_dns(interface: Option<&str>, server: Option<&str>, pid: u32) -> AppResult<()> {
     let mut slot = helper_slot()
         .lock()
         .map_err(|_| AppError::internal("DNS helper lock poisoned"))?;
     if interface.is_none() && slot.is_none() {
         return Ok(());
     }
-    let stream = dns_helper(&mut slot, may_authorize, launch_authorized_helper)?;
+    let stream = dns_helper(&mut slot)?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| AppError::internal(error.to_string()))?;

@@ -23,9 +23,11 @@ function loadService(file, dependencies) {
 function tunService({ status, stop, start = () => {}, recover = () => {}, profile = {}, settings = { tun: { enabled: true } } }) {
   const config = settings;
   const calls = [];
+  const requests = [];
   const service = loadService('tun.ts', {
     '@tauri-apps/api/core': {
-      async invoke(command) {
+      async invoke(command, args) {
+        requests.push({command, args});
         if (command === 'proxy_config_list') return [{ active: true, content: profile }];
         if (command === 'gui_tun_status') return status();
         if (command === 'gui_tun_recover') { calls.push('recover'); return recover(); }
@@ -45,7 +47,7 @@ function tunService({ status, stop, start = () => {}, recover = () => {}, profil
       tunDnsHijack: { state: 'supported' }, tunDnsSystemAuto: { state: 'supported' },
     }) },
   });
-  return { service, config, calls };
+  return { service, config, calls, requests };
 }
 
 const snapshot = (enabled, desiredEnabled = enabled) => ({ enabled, desiredEnabled, supported: true });
@@ -59,7 +61,7 @@ test('TUN readiness and enable use effective DNS settings instead of raw fallbac
   });
   assert.equal((await service.inspectTunDnsHijackReadiness()).state, 'ready');
   assert.equal((await service.enableGuiTun()).healthy, true);
-  assert.deepEqual(calls, ['save:true']);
+  assert.deepEqual(calls, ['save:true', 'start']);
 });
 
 test('unreachable runtime: explicit OFF persists before stop and survives failure', async () => {
@@ -185,9 +187,36 @@ for (const profileOwned of [false, true]) {
 }
 
 test('healthy enabled TUN can confirm an explicit enable', async () => {
-  const { service, calls } = tunService({ status: () => ({ ...snapshot(true), healthy: true }) });
+  const { service, calls, requests } = tunService({ status: () => ({ ...snapshot(true), healthy: true }) });
   assert.equal((await service.enableGuiTun()).healthy, true);
-  assert.deepEqual(calls, ['save:true']);
+  assert.deepEqual(calls, ['save:true', 'start']);
+  assert.deepEqual(requests.find(request => request.command === 'gui_tun_enable').args, {authorizeHostDns:true});
+});
+
+test('background TUN replay never requests permission to authorize host DNS', async () => {
+  let running = false;
+  const {service, requests} = tunService({
+    status: () => ({...snapshot(running), healthy:running}),
+    start: () => {running = true; return {...snapshot(true), healthy:true};},
+  });
+  assert.equal((await service.reconcileGuiTunRuntime()).enabled, true);
+  const request = requests.find(request => request.command === 'gui_tun_enable');
+  assert.equal(request.args?.authorizeHostDns, undefined);
+  await service.reconcileGuiTunRuntime();
+  assert.equal(requests.filter(request => request.command === 'gui_tun_enable').length, 1);
+});
+
+test('refusing explicit DNS authorization does not leave a new TUN ON intent for background replay', async () => {
+  const refusal = {code:'authorization_denied', message:'User declined administrator authorization'};
+  const {service, config, requests} = tunService({
+    status: () => ({...snapshot(false), healthy:false}),
+    settings: {tun:{enabled:false}},
+    start: () => {throw refusal;},
+  });
+  await assert.rejects(service.enableGuiTun(), error => error === refusal);
+  assert.equal(config.tun.enabled, false);
+  assert.equal((await service.reconcileGuiTunRuntime()).enabled, false);
+  assert.equal(requests.filter(request => request.command === 'gui_tun_enable').length, 1);
 });
 
 
