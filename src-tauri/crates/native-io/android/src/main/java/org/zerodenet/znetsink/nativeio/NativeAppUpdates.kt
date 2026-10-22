@@ -44,6 +44,9 @@ object NativeAppUpdates {
                     try {
                         require(!activity.isFinishing && !activity.isDestroyed && activity.hasWindowFocus())
                         synchronized(lock) {
+                            // A saved confirmation token can outlive its abandoned system session.
+                            // Reconcile again at the user's tap, not just at the last rendered snapshot.
+                            if (action == "confirm") reconcile(activity)
                             val current = load(activity)
                             when (action) {
                                 "settings" -> {
@@ -295,7 +298,7 @@ object NativeAppUpdates {
         }
         if (state == "installed-confirmed") { current.put("state", "unknown").put("reason", "installed-package-changed"); save(context, current) }
         if (state == "awaiting-user" && confirmation(context, current) == null) { current.put("state", "unknown").put("reason", "system-confirmation-lost-recheck-or-cancel"); save(context, current) }
-        if (state in setOf("installing", "preparing-install", "unknown")) {
+        if (state in setOf("installing", "preparing-install", "awaiting-user", "unknown")) {
             val id = current.optInt("sessionId", -1)
             if (id < 0 || context.packageManager.packageInstaller.getSessionInfo(id) == null) {
                 current.put("state", "unknown").put("reason", "session-missing-installed-version-unconfirmed"); save(context, current)

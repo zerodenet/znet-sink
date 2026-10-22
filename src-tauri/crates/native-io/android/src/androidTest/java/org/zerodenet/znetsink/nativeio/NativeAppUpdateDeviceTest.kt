@@ -85,4 +85,50 @@ class NativeAppUpdateDeviceTest {
             } finally { try { installer.abandonSession(sessionId) } finally { journal.delete(); backup.delete() } }
         }
     }
+    @Test fun missingInstallerSessionInvalidatesAnOtherwiseLiveConfirmationToken() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext.createDeviceProtectedStorageContext()
+        synchronized(NativeAppUpdates.lock) {
+            val directory = File(context.noBackupFilesDir, "app-update")
+            val journal = File(directory, "operation.json")
+            val backup = File(directory, "operation.json.bak")
+            assumeFalse(journal.exists() || backup.exists())
+            val installer = context.packageManager.packageInstaller
+            val initialSessions = installer.mySessions.map { it.sessionId }.toSet()
+            val params = android.content.pm.PackageInstaller.SessionParams(android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            params.setAppPackageName(context.packageName)
+            val sessionId = installer.createSession(params)
+            // Real app-owned unsent token: its existence alone proves no installer/session state.
+            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).setPackage(context.packageName)
+                .setData(android.net.Uri.parse("znet-test-install://missing-session/$sessionId"))
+            val token = android.app.PendingIntent.getActivity(context, sessionId, intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+            val operationId = "e2695293-5580-4eec-9437-a1e6b2622222"
+            try {
+                val record = JSONObject().put("schema", 1).put("operationId", operationId)
+                    .put("sha256", "a".repeat(64)).put("assetName", "client.apk").put("version", "1.1.0")
+                    .put("assetUrl", "https://github.com/zerodenet/znet-sink/releases/download/v1.1.0/client.apk")
+                    .put("size", 100).put("downloaded", 100).put("createdAt", System.currentTimeMillis())
+                    .put("attempts", 1).put("seen", org.json.JSONArray()).put("state", "awaiting-user")
+                    .put("sessionId", sessionId).put("callbackToken", "f2695293-5580-4eec-9437-a1e6b2622222")
+                    .put("confirmationIdentity", intent.cloneFilter().toUri(0))
+                NativeAppUpdates.save(context, record)
+                installer.abandonSession(sessionId) // No APK written/committed; intentionally no final callback.
+                val deadline = System.nanoTime() + 2_000_000_000L
+                while (installer.getSessionInfo(sessionId) != null && System.nanoTime() < deadline) Thread.sleep(20)
+                assertNull(installer.getSessionInfo(sessionId))
+                assertNotNull(android.app.PendingIntent.getActivity(context, sessionId, intent,
+                    android.app.PendingIntent.FLAG_NO_CREATE or android.app.PendingIntent.FLAG_IMMUTABLE))
+                val result = NativeAppUpdates.snapshot(context)
+                assertEquals("unknown", result.getString("state"))
+                assertEquals(operationId, result.getString("operationId"))
+                assertFalse(result.getBoolean("confirmationAvailable"))
+                assertEquals(initialSessions, installer.mySessions.map { it.sessionId }.toSet())
+            } finally {
+                token.cancel()
+                try { installer.abandonSession(sessionId) } catch (_: Exception) { }
+                journal.delete(); backup.delete()
+            }
+        }
+    }
+
 }

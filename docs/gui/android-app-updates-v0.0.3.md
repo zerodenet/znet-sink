@@ -53,7 +53,7 @@ target API35+ 使用显式私有 receiver 的 mutable callback PendingIntent，�
 
 STATUS_PENDING_USER_ACTION 保存系统持有的确认 PendingIntent 和过滤身份，只有用户在可见、有焦点的宿主页面
 点击后才打开该系统 Intent；后台 receiver 不启动 Activity。普通进程重建后可重新取得 OS 票据，
-重启后 OS 票据已失效时明确显示未知，要求核对或取消，不合成替代安装确认 Intent。
+重启后 OS 票据已失效时明确显示未知，要求核对或取消，不合成替代安装确认 Intent。票据仍存活也不能替代真实 session 核对：系统 session 消失时转 UNKNOWN，确认点击时再次核对，不能用上次快照重放。
 
 API26+ 先读 canRequestPackageInstalls。没有许可时显示原因；用户可明确打开此应用的系统安装设置。
 API24–25 显示系统确认/安全设置判断，不能猜测未知来源已经开启。代码不更改未知来源、安全开关或静默许可。
